@@ -1,0 +1,14 @@
+{
+	"packageName":"SourceVault",
+	"files":[
+		"SourceVault.wl",
+		"SourceVault_promptrouter.wl"
+	],
+	"directories":[
+		"SourceVault_info"
+	],
+	"excludePatterns":[
+		"SourceVault_info\/history\/",
+		"SourceVault_info\/references\/"
+	]
+}

@@ -1,0 +1,69 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[      1980,         61]
+NotebookOptionsPosition[      1485,         43]
+NotebookOutlinePosition[      1900,         60]
+CellTagsIndexPosition[      1857,         57]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+
+Cell[CellGroupData[{
+Cell["Design notes", "Section",
+ CellChangeTimes->{{3.9826229394005833`*^9, 3.98262294408243*^9}, {
+  3.982623201331497*^9, 
+  3.9826232064407177`*^9}},ExpressionUUID->"aaa51d95-0277-9249-8532-\
+e1c6ef100aaf"],
+
+Cell["\<\
+$packageDirectory/<<PackageName>>_info/design \:306e\:30d5\:30a1\:30a4\:30eb\
+\:306f\:3001\:3053\:306e\:30d1\:30c3\:30b1\:30fc\:30b8(\:30d1\:30af\:30ec\
+\:30c3\:30c8)\:3092\:8a2d\:8a08\:904b\:7528\:3059\:308b\:306b\:3042\:305f\
+\:3063\:3066\:306e\:5404\:7a2e\:30e1\:30e2\:3092\:683c\:7d0d\:3059\:308b\:3002\
+\:3053\:306e\:30d5\:30a9\:30eb\:30c0\:306e\:30d5\:30a1\:30a4\:30eb\:306f\:3059\
+\:3079\:3066GitHub\:30ea\:30dd\:30b8\:30c8\:30ea\:306b\:540c\:671f\:3055\:308c\
+\:308b\:3002\
+\>", "Text",
+ CellChangeTimes->{{3.982622950463997*^9, 3.982623057086584*^9}, {
+  3.982623158309963*^9, 
+  3.9826232702075424`*^9}},ExpressionUUID->"45b055d0-74a9-4947-bf54-\
+5b9bdde3b4dd"]
+}, Open  ]]
+},
+WindowSize->{886, 875},
+WindowMargins->{{Automatic, 189.5}, {Automatic, 233}},
+FrontEndVersion->"14.3 for Microsoft Windows (64-bit) (2025\:5e747\:67088\
+\:65e5)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"d24db182-8b2e-214b-bc15-7a2898b3d3ea"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[CellGroupData[{
+Cell[576, 22, 209, 4, 66, "Section",ExpressionUUID->"aaa51d95-0277-9249-8532-e1c6ef100aaf"],
+Cell[788, 28, 681, 12, 55, "Text",ExpressionUUID->"45b055d0-74a9-4947-bf54-5b9bdde3b4dd"]
+}, Open  ]]
+}
+]
+*)
+
