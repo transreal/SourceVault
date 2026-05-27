@@ -331,6 +331,9 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultExecutePromptRoute[prompt, opts]` | PromptRoute の手動 / テスト / 診断用 API。route を解決し、診断 `Association` を返す。 |
 | `SourceVaultLookup[topic, key]` | Compiled Registry から値を取得。 |
 | `SourceVaultResolve[topic, intent]` | Compiled Registry + Seed fallback で最適な値を返す。Availability / Freshness / Class 優先順位。 |
+| `SourceVaultListModels[provider]` | 指定 provider の選択可能な全モデル ID を列挙（Compiled Registry 優先、Seed fallback）。`SourceVaultResolve` が intent 単位で 1 件を返すのに対し、カタログ全体を返す。 |
+| `SourceVaultRefreshModelRegistry[opts]` | クラウド (anthropic/openai)・ローカル (LM Studio)・ChatGPT Codex CLI のエンドポイントからモデル一覧を取得し Compiled Model Registry を更新。`Providers` オプションで対象を限定。 |
+| `ClaudeResolveModel[provider, intent]` | `SourceVaultResolve["Model", ...]` の互換 wrapper。provider と intent から具体的なモデルを解決。 |
 | `SourceVaultClaimStoreCompact[]` | claim JSONL を dedup + 圧縮。 |
 | `$SourceVaultVersion` | パッケージバージョン文字列。 |
 | `$SourceVaultRoots` | PrivateVault のルートパス（Association）。 |

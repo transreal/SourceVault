@@ -441,6 +441,11 @@ ClaudeResolveModel::usage =
   "ClaudeResolveModel[provider, intent] \:306f SourceVaultResolve[\"Model\", ...] \:306e\:4e92\:63db wrapper (\:4ed5\:69d8\:66f8 \\:00a7 5.4)\:3002\n" <>
   "\:65e7 WikiDBResolveModel \:306e\:7f6e\:304d\:63db\:3048\:3068\:3057\:3066\:5229\:7528\:3067\:304d\:308b\:3002";
 
+SourceVaultListModels::usage =
+  "SourceVaultListModels[provider] \:306f\:6307\:5b9a provider \:306b\:767b\:9332\:3055\:308c\:305f\:9078\:629e\:53ef\:80fd\:306a\:5168\:30e2\:30c7\:30eb ID \:30ea\:30b9\:30c8\:3092\:8fd4\:3059\:3002\n" <>
+  "SourceVaultResolve \:304c intent \:5358\:4f4d\:306e\:6700\:9069 1 \:4ef6\:3092\:8fd4\:3059\:306e\:306b\:5bfe\:3057\:3001\:3053\:308c\:306f catalog \:3092\:5217\:6319\:3059\:308b (\:4f8b: \:30d1\:30ec\:30c3\:30c8\:306e\:30e2\:30c7\:30eb\:9078\:629e)\:3002\n" <>
+  "compiled registry \:3092\:512a\:5148\:3057\:3001\:7121\:3051\:308c\:3070 seed \:306b fallback\:3002Availability \:304c Unavailable \:306e\:30a8\:30f3\:30c8\:30ea\:306f\:9664\:5916\:3002";
+
 SourceVaultListRegistries::usage =
   "SourceVaultListRegistries[opts] \:306f\:767b\:9332\:6e08\:307f registry topic \:3068 channel \:3092\:8fd4\:3059\:3002\n" <>
   "Options: \"Channel\" -> \"public\" | \"private\" | All (\:30c7\:30d5\:30a9\:30eb\:30c8 All)";
@@ -876,6 +881,49 @@ SourceVaultEnsureNotebookUUIDFolder::usage =
 (* Private implementation *)
 
 
+
+(* ===================================================================
+   Phase 2a: DirectiveRepository source kind
+   (Codex integration spec 5th review, sections 11.1 / 11.2)
+   Registers and snapshots a Claude Directives repository as a
+   SourceVault source. Depends on ClaudeDirectives` but does not add
+   it to BeginPackage (no new hard dependency); each function loads
+   it lazily via Needs.
+   =================================================================== *)
+
+SourceVaultRegisterDirectiveRepository::usage =
+  "SourceVaultRegisterDirectiveRepository[root] registers a Claude Directives repository (a directory) as a DirectiveRepository source. Returns <|\"Status\", \"RepoId\", \"Root\", \"Path\", \"Registration\"|>. The RepoId is derived deterministically from the repository root path.";
+
+SourceVaultIndexDirectiveRepository::usage =
+  "SourceVaultIndexDirectiveRepository[root] indexes a Claude Directives repository: it computes the file inventory and manifest hash via ClaudeDirectives` and writes a DirectiveRepository snapshot record. Auto-registers the repository if needed. Returns <|\"Status\", \"RepoId\", \"SnapshotId\", \"ManifestHash\", \"FileCount\", \"Path\", \"Snapshot\"|>.";
+
+SourceVaultDirectiveRepositoryStatus::usage =
+  "SourceVaultDirectiveRepositoryStatus[root] reports whether a Claude Directives repository is registered, how many snapshots exist, and whether the latest snapshot's manifest hash matches the repository on disk. Status is one of \"NotRegistered\", \"RegisteredNotIndexed\", \"UpToDate\", \"Stale\".";
+
+SourceVaultCurrentDirectiveSnapshot::usage =
+  "SourceVaultCurrentDirectiveSnapshot[root] returns the most recent DirectiveRepository snapshot record for a repository, or an association with Status -> \"NoSnapshot\" if none exists.";
+
+SourceVaultDiffDirectiveSnapshots::usage =
+  "SourceVaultDiffDirectiveSnapshots[old, new] compares two DirectiveRepository snapshot records (or snapshot file paths) by RelativePath/ContentHash and returns <|\"Status\", \"Added\", \"Removed\", \"Changed\", \"UnchangedCount\", \"ManifestHashChanged\"|>.";
+
+
+(* ===================================================================
+   Phase 2b: HarnessMaterialization bundle kind + stale judgement
+   (Codex integration spec 5th review, sections 11.3 / 11.4)
+   Registers a materialized harness as a SourceVault bundle and
+   separates canonical-snapshot staleness from runtime-environment
+   change. Depends on ClaudeDirectives` (lazy Needs only).
+   =================================================================== *)
+
+SourceVaultRegisterHarnessMaterialization::usage =
+  "SourceVaultRegisterHarnessMaterialization[target, files, meta] registers a materialized harness as a HarnessMaterialization bundle. target is \"Codex\" or \"ClaudeCLI\"; files is the list of generated file paths; meta supplies HarnessMode, DirectiveRoot, DirectiveRepositorySnapshotId, DirectiveRepositoryManifestHash, RuntimeEnvironmentHash, PermissionProfileHash and Generator. Returns <|\"Status\", \"BundleId\", \"Path\", \"Bundle\"|>. The bundle is stored under the SourceVault bundles directory and is readable with SourceVaultBundleGet.";
+
+SourceVaultDirectiveSnapshotStaleQ::usage =
+  "SourceVaultDirectiveSnapshotStaleQ[bundle] reports whether the canonical Claude Directives snapshot a HarnessMaterialization bundle was built from is stale, by comparing the bundle's DirectiveRepositoryManifestHash with the current repository hash. Returns <|\"Stale\", \"Reason\", \"RecordedManifestHash\", \"CurrentManifestHash\"|>. A stale snapshot means the harness should be regenerated.";
+
+SourceVaultHarnessRuntimeEnvironmentChangedQ::usage =
+  "SourceVaultHarnessRuntimeEnvironmentChangedQ[bundle, currentEnv] reports whether the runtime environment (permission profile, temp project path, attachments) of a HarnessMaterialization bundle has changed. currentEnv may carry precomputed PermissionProfileHash / RuntimeEnvironmentHash, or raw PermissionProfile / RuntimeEnvironment associations to be hashed. A runtime-environment change requires config.toml regeneration but does NOT make the canonical snapshot stale.";
+
 Begin["`Private`"];
 
 (* iL: $Language-based JA/EN switch *)
@@ -968,7 +1016,8 @@ ClearAll[
   iSVFreshnessToken, iSVSnapshotInfoForSource,
   iSVSourceDescriptorFromPath, iSVCheckSourceFreshness,
   iSVRelinkDir, iSVRelinkLogPath, iSVContentHashOf, iSVHeaderUUIDOf,
-  iSVProbeEndpoint, iSVFetchModelIds, iSVMergeModelRegistry,
+  iSVProbeEndpoint, iSVFetchModelIds, iSVFetchCodexModelIds,
+  iSVMergeModelRegistry,
   iSVResolveLocalKey, iSVPrivateModelTuple, iSVResolveLocalEndpoint,
   iSVPathSlash, iSVPathMatchKey, iSVRootMatchCands,
   iIngestEnsureNotebookUUID
@@ -5212,17 +5261,51 @@ iModelSeedEntries[] := {
   <|"Kind" -> "Model", "Provider" -> "lmstudio", "Intent" -> "extraction",
     "ModelId" -> "qwen-local", "Availability" -> "Available",
     "Class" -> "Light-Local", "Capabilities" -> {"Reasoning"},
+    "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
+  (* chatgptcodex seed entries: disaster-recovery fallback only
+     (spec section 2.5). Production truth comes from the compiled
+     registry refreshed via `codex debug models`. The slugs below
+     are the visibility:list models observed in the Codex CLI
+     model catalog; SourceVault keeps a minimal set, not the full
+     catalog. LLMs must not edit these directly. *)
+  <|"Kind" -> "Model", "Provider" -> "chatgptcodex", "Intent" -> "heavy",
+    "ModelId" -> "gpt-5.5", "Availability" -> "Available",
+    "Class" -> "Heavy-Cloud", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
+    "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
+  <|"Kind" -> "Model", "Provider" -> "chatgptcodex", "Intent" -> "code-heavy",
+    "ModelId" -> "gpt-5.3-codex", "Availability" -> "Available",
+    "Class" -> "Heavy-Cloud", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>
 };
 
-(* \:30d6\:30fc\:30c8\:30b9\:30c8\:30e9\:30c3\:30d7: seeds/model-seed.json \:304c\:306a\:3051\:308c\:3070\:4f5c\:308b\:3002
+(* \:30d6\:30fc\:30c8\:30b9\:30c8\:30e9\:30c3\:30d7: seeds/model-registry-seed.json \:3092\:7528\:610f\:3059\:308b\:3002
+   \:30d5\:30a1\:30a4\:30eb\:304c\:7121\:3044\:5834\:5408\:306f\:65b0\:898f\:4f5c\:6210\:3002\:30d5\:30a1\:30a4\:30eb\:304c\:3042\:3063\:3066\:3082\:3001
+   \:30b3\:30fc\:30c9\:4e0a\:306e\:6b63\:672c iModelSeedEntries[] \:3068\:5185\:5bb9\:304c\:9055\:3046\:5834\:5408\:306f\:66f8\:304d\:76f4\:3059\:3002
+   \:3053\:308c\:306f LLM \:306b\:3088\:308b\:81ea\:52d5\:66f4\:65b0\:3067\:306f\:306a\:304f\:3001review \:6e08\:307f\:30b3\:30fc\:30c9\:5b9a\:7fa9\:3078\:306e
+   \:8ffd\:5f93\:3067\:3042\:308a\:3001\:4ed5\:69d8 \[Section] 2.5 \:306b\:53cd\:3057\:306a\:3044\:3002\:65b0\:3057\:3044 provider \:306e
+   seed \:3092\:8ffd\:52a0\:3057\:305f\:3068\:304d\:65e7\:30d5\:30a1\:30a4\:30eb\:304c\:6b8b\:308b\:554f\:984c\:3092\:9632\:3050\:3002
    \:30d1\:30c3\:30b1\:30fc\:30b8\:521d\:671f\:5316\:6642\:306b 1 \:56de\:547c\:3076\:3002 *)
 iBootstrapDefaultSeeds[] :=
-  Module[{seedPath},
+  Module[{seedPath, current, want, keyOf},
     seedPath = iSeedPath["model-registry"];
+    want = iModelSeedEntries[];
     If[!FileExistsQ[seedPath],
-      iSaveRegistryEntries[seedPath, iModelSeedEntries[]]
-    ]
+      iSaveRegistryEntries[seedPath, want];
+      Return[seedPath]];
+    (* file exists: rewrite only when its set of {Provider, Intent,
+       ModelId} triples differs from the code seed. A stable-key
+       comparison avoids false positives from JSON round-trip
+       differences (key ordering, Null encoding). *)
+    current = iLoadRegistryEntries[seedPath];
+    keyOf = Function[e,
+      If[AssociationQ[e],
+        {Lookup[e, "Provider", ""], ToString[Lookup[e, "Intent", ""]],
+         Lookup[e, "ModelId", ""]},
+        e]];
+    If[!ListQ[current] ||
+        Sort[keyOf /@ current] =!= Sort[keyOf /@ want],
+      iSaveRegistryEntries[seedPath, want]];
+    seedPath
   ];
 
 (* === Public API === *)
@@ -5301,6 +5384,42 @@ SourceVaultResolve[kind_String, query_Association,
 ClaudeResolveModel[provider_String, intent_String] :=
   SourceVaultResolve["Model",
     <|"Provider" -> provider, "Intent" -> intent|>];
+
+(* SourceVaultListModels[provider] returns every selectable model
+   id registered for a provider, deduplicated, compiled registry
+   preferred over seed. Unlike SourceVaultResolve (which resolves a
+   single best model for an intent) this enumerates the catalog --
+   e.g. for a palette model picker. Unavailable entries are
+   dropped. Returns a list of strings (possibly empty). *)
+Options[SourceVaultListModels] = {
+  "Channel" -> "public",
+  "AllowSeed" -> True
+};
+
+SourceVaultListModels[provider_String, opts:OptionsPattern[]] :=
+  Module[{channel, allowSeed, topic, compiledEntries, seedEntries,
+          entries, ids},
+    iEnsureRoots[];
+    iBootstrapDefaultSeeds[];
+    channel = OptionValue["Channel"];
+    allowSeed = TrueQ[OptionValue["AllowSeed"]];
+    topic = "model-registry";
+    compiledEntries = iLoadRegistryEntries[
+      iCompiledPath[topic, channel]];
+    entries = Select[compiledEntries,
+      Lookup[#, "Provider", ""] === provider &];
+    If[Length[entries] === 0 && allowSeed,
+      seedEntries = iLoadRegistryEntries[iSeedPath[topic]];
+      entries = Select[seedEntries,
+        Lookup[#, "Provider", ""] === provider &]];
+    entries = Select[entries,
+      Lookup[#, "Availability", "Unknown"] =!= "Unavailable" &];
+    ids = DeleteDuplicates @ Select[
+      Map[Lookup[#, "ModelId", Missing[]] &, entries],
+      StringQ];
+    ids
+  ];
+SourceVaultListModels[___] := {};
 
 Options[SourceVaultListRegistries] = {"Channel" -> All};
 
@@ -8936,7 +9055,16 @@ If[!AssociationQ[SourceVault`$SourceVaultModelEndpoints],
       "Kind" -> "Cloud", "AuthProvider" -> "openai"|>,
     "lmstudio" -> <|
       "ModelsURL" -> "http://127.0.0.1:1234/v1/models",
-      "Kind" -> "Local", "AuthProvider" -> None|>
+      "Kind" -> "Local", "AuthProvider" -> None|>,
+    (* chatgptcodex: the ChatGPT Codex CLI exposes its model
+       catalog through `codex debug models` (JSON on stdout),
+       not an HTTP /v1/models endpoint. Kind "CodexCLI" routes
+       SourceVaultRefreshModelRegistry to the CLI fetch path.
+       "Exe" is the codex executable name/path; the CLI is run
+       via cmd /c so it is resolved against the full user PATH. *)
+    "chatgptcodex" -> <|
+      "Kind" -> "CodexCLI", "Exe" -> "codex",
+      "AuthProvider" -> None|>
   |>];
 
 (* short-timeout reachability probe; returns an Association.
@@ -8995,6 +9123,49 @@ iSVFetchModelIds[url_String, headers_List] :=
           data],
         _Missing]|>
   ];
+
+(* fetch the ChatGPT Codex model catalog via `codex debug models`.
+   The CLI prints JSON {"models":[{"slug":..,"visibility":..}, ...]}
+   to stdout. Entries with visibility "hide" are internal and are
+   dropped; the slug is the id accepted by config.toml's model key.
+   The CLI is run through cmd /c so the codex executable is resolved
+   against the full user PATH (a bare RunProcess[{"codex",...}] does
+   not see the user's PATH on Windows). Returns the same shape as
+   iSVFetchModelIds: <|"Status"->"OK"|"Failed", "ModelIds"->{..}|>. *)
+iSVFetchCodexModelIds[exe_String] :=
+  Module[{cmd, run, out, data, models, slugs},
+    cmd = If[$OperatingSystem === "Windows",
+      {"cmd", "/c", exe, "debug", "models"},
+      {exe, "debug", "models"}];
+    run = Quiet @ TimeConstrained[
+      Check[RunProcess[cmd, All], $Failed], 30, $Failed];
+    If[!AssociationQ[run],
+      Return[<|"Status" -> "Failed", "Reason" -> "RunProcessFailed"|>]];
+    If[Lookup[run, "ExitCode", 1] =!= 0,
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "CodexExitCode" <>
+          ToString[Lookup[run, "ExitCode", "?"]]|>]];
+    out = Lookup[run, "StandardOutput", ""];
+    If[!StringQ[out] || out === "",
+      Return[<|"Status" -> "Failed", "Reason" -> "EmptyOutput"|>]];
+    data = Quiet @ Check[
+      Developer`ReadRawJSONString[out], $Failed];
+    If[!AssociationQ[data],
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "JSONParseFailed"|>]];
+    models = Lookup[data, "models", {}];
+    If[!ListQ[models],
+      Return[<|"Status" -> "Failed", "Reason" -> "NoModelsArray"|>]];
+    slugs = Cases[models,
+      m_Association /;
+        (StringQ[Lookup[m, "slug", Missing[]]] &&
+         Lookup[m, "visibility", "list"] =!= "hide") :>
+        Lookup[m, "slug"]];
+    slugs = DeleteDuplicates @ Select[slugs, StringQ];
+    <|"Status" -> "OK", "ModelIds" -> slugs|>
+  ];
+iSVFetchCodexModelIds[___] :=
+  <|"Status" -> "Failed", "Reason" -> "BadArguments"|>;
 
 (* === Public API: SourceVaultModelEndpointStatus === *)
 
@@ -9184,6 +9355,37 @@ SourceVaultRefreshModelRegistry[opts:OptionsPattern[]] :=
                 "Reason" -> "CloudExcluded"|>];
             Return[Null, Module]];
 
+          (* CodexCLI provider: the ChatGPT Codex model catalog is
+             obtained from `codex debug models`, not an HTTP
+             endpoint. Fetch here and skip the URL-based path. *)
+          If[kind === "CodexCLI",
+            Module[{exe, cresult, centries},
+              exe = Lookup[cfg, "Exe", "codex"];
+              cresult = iSVFetchCodexModelIds[
+                If[StringQ[exe], exe, "codex"]];
+              If[Lookup[cresult, "Status", ""] =!= "OK",
+                AppendTo[perProvider,
+                  <|"Provider" -> provider, "Result" -> "Failed",
+                    "Reason" ->
+                      Lookup[cresult, "Reason", "Unknown"]|>];
+                Return[Null, Module]];
+              centries = Map[
+                Function[mid,
+                  <|"Provider" -> provider,
+                    "ModelId" -> mid,
+                    "Endpoint" -> "codex-cli:debug-models",
+                    "Class" -> "Heavy-Cloud",
+                    "Availability" -> "Available",
+                    "Source" -> "auto-fetch",
+                    "Intent" -> Null,
+                    "FetchedAt" -> ts|>],
+                Lookup[cresult, "ModelIds", {}]];
+              fetched = Join[fetched, centries];
+              AppendTo[perProvider,
+                <|"Provider" -> provider, "Result" -> "OK",
+                  "ModelCount" -> Length[centries]|>]];
+            Return[Null, Module]];
+
           (* obtain auth header for cloud providers via the
              NBAccess key API (never SystemCredential directly) *)
           headers = {};
@@ -9248,8 +9450,20 @@ SourceVaultRefreshModelRegistry[opts:OptionsPattern[]] :=
               "ModelCount" -> Length[entries]|>]]],
       providers];
 
-    existing = Module[{c = iCompiledLoadModelRegistry[]},
-      If[ListQ[c], c, SourceVault`$SourceVaultSeedModelRegistry]];
+    (* read the existing compiled registry from the SAME json path
+       that SourceVaultResolve / SourceVaultListModels read. The
+       legacy iCompiledLoadModelRegistry (.wl) path is not used:
+       refresh and resolve must agree on one storage location, or
+       a refresh never becomes visible to resolve. When no compiled
+       registry exists yet, fall back to the json seed registry
+       (iBootstrapDefaultSeeds has already created it). *)
+    existing = Module[{compiledPath, seedPath, c},
+      compiledPath = iCompiledPath["model-registry", "public"];
+      c = iLoadRegistryEntries[compiledPath];
+      If[ListQ[c] && c =!= {}, c,
+        seedPath = iSeedPath["model-registry"];
+        Module[{s = iLoadRegistryEntries[seedPath]},
+          If[ListQ[s], s, {}]]]];
     merged = iSVMergeModelRegistry[existing, fetched];
 
     If[dryRun,
@@ -9258,7 +9472,14 @@ SourceVaultRefreshModelRegistry[opts:OptionsPattern[]] :=
         "PerProvider" -> perProvider,
         "WouldMergeTotal" -> Length[merged]|>]];
 
-    savedPath = iCompiledSaveModelRegistry[merged];
+    (* save to the json compiled registry path. iSaveRegistryEntries
+       is the writer used by the rest of the Stage 6b registry code;
+       it keeps refresh output readable by SourceVaultResolve. *)
+    Module[{saveResult},
+      saveResult = iSaveRegistryEntries[
+        iCompiledPath["model-registry", "public"], merged];
+      savedPath = Lookup[saveResult, "Path",
+        iCompiledPath["model-registry", "public"]]];
 
     <|"Status" -> "OK",
       "RefreshedAt" -> ts,
@@ -11134,6 +11355,440 @@ SourceVault`iPreflightContextResolver[_] := Missing["InvalidPath"];
    SourceVault -> claudecode. *)
 ClaudeCode`$ClaudeCloudSendPreflightContextResolver =
   SourceVault`iPreflightContextResolver;
+
+
+(* ===================================================================
+   Phase 2a: DirectiveRepository source kind
+   Spec 5th review: sections 11.1 / 11.2.
+   Snapshot store layout:
+     <PrivateVault>/directive-repositories/<repoId>/registration.json
+     <PrivateVault>/directive-repositories/<repoId>/snapshot-<id>.json
+   =================================================================== *)
+
+(* ---- store layout ---- *)
+
+iDirRepoStoreDir[] :=
+  Module[{d},
+    d = FileNameJoin[{SourceVault`$SourceVaultRoots["PrivateVault"],
+      "directive-repositories"}];
+    iEnsureDir[d];
+    d];
+
+(* deterministic repo id from the repository root path *)
+iDirRepoId[root_String] :=
+  "dirrepo-" <> StringTake[
+    ToLowerCase[Hash[ExpandFileName[root], "SHA256", "HexString"]],
+    UpTo[16]];
+
+iDirRepoDir[repoId_String] :=
+  Module[{d},
+    d = FileNameJoin[{iDirRepoStoreDir[], repoId}];
+    iEnsureDir[d];
+    d];
+
+(* snapshot id: manifest-hash tail + millisecond timestamp *)
+iMakeDirSnapshotId[manifestHash_] :=
+  Module[{h},
+    h = StringReplace[ToLowerCase[ToString[manifestHash]],
+      RegularExpression["[^a-z0-9]"] -> ""];
+    h = If[StringLength[h] >= 12, StringTake[h, -12], h];
+    "dirsnap-" <> h <> "-" <>
+      ToString[Round[AbsoluteTime[] * 1000]]];
+
+(* ---- JSON I/O (SourceVault style: RawJSON + ISO8859-1) ---- *)
+
+iDirRepoWriteJSON[path_String, assoc_Association] :=
+  Module[{sanitized, json, strm},
+    sanitized = iSanitizeForJSON[assoc];
+    json = Quiet @ ExportString[sanitized, "RawJSON",
+      "Compact" -> False];
+    If[!StringQ[json],
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "JSONEncodeFailed", "Path" -> path|>]];
+    iEnsureDir[DirectoryName[path]];
+    strm = Quiet[OpenWrite[path, BinaryFormat -> True]];
+    If[Head[strm] =!= OutputStream,
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "OpenWriteFailed", "Path" -> path|>]];
+    BinaryWrite[strm, StringToByteArray[json, "UTF-8"]];
+    Close[strm];
+    <|"Status" -> "OK", "Path" -> path|>];
+
+iDirRepoReadJSON[path_String] :=
+  Module[{rawBytes, content, parsed},
+    If[!FileExistsQ[path], Return[Missing["NotFound"]]];
+    rawBytes = Quiet[ReadByteArray[path]];
+    If[!ByteArrayQ[rawBytes], Return[Missing["ReadFailed"]]];
+    content = Quiet[ByteArrayToString[rawBytes, "UTF-8"]];
+    If[!StringQ[content], Return[Missing["DecodeFailed"]]];
+    parsed = Quiet[ImportString[content, "RawJSON"]];
+    If[ListQ[parsed] && !AssociationQ[parsed],
+      parsed = Association[parsed]];
+    If[AssociationQ[parsed], parsed, Missing["ParseFailed"]]];
+
+(* ---- snapshot enumeration ---- *)
+
+iDirSnapshotPaths[repoId_String] :=
+  Module[{d, files},
+    d = iDirRepoDir[repoId];
+    files = FileNames["snapshot-*.json", d];
+    SortBy[files, FileDate[#, "Modification"] &]];
+
+iLatestDirSnapshotRecord[repoId_String] :=
+  Module[{paths},
+    paths = iDirSnapshotPaths[repoId];
+    If[paths === {},
+      Missing["NoSnapshot"],
+      iDirRepoReadJSON[Last[paths]]]];
+
+(* ---- SourceVaultRegisterDirectiveRepository (spec 11.1) ---- *)
+
+SourceVaultRegisterDirectiveRepository[
+    root_String, opts:OptionsPattern[]] :=
+  Module[{repoId, regPath, regRecord, saveRes},
+    Needs["ClaudeDirectives`"];
+    iEnsureRoots[];
+    If[!DirectoryQ[root],
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "RootNotADirectory", "Root" -> root|>]];
+    repoId = iDirRepoId[root];
+    regRecord = <|
+      "Kind"            -> "DirectiveRepositoryRegistration",
+      "RepoId"          -> repoId,
+      "Root"            -> ExpandFileName[root],
+      "CanonicalFormat" -> "ClaudeDirectives",
+      "Tool"            -> "claudecode_directives",
+      "RegisteredAt"    -> DateString[Now]|>;
+    regPath = FileNameJoin[{iDirRepoDir[repoId],
+      "registration.json"}];
+    saveRes = iDirRepoWriteJSON[regPath, regRecord];
+    If[Lookup[saveRes, "Status", ""] === "OK",
+      <|"Status"       -> "OK",
+        "RepoId"       -> repoId,
+        "Root"         -> ExpandFileName[root],
+        "Path"         -> regPath,
+        "Registration" -> regRecord|>,
+      <|"Status" -> "Failed",
+        "Reason" -> Lookup[saveRes, "Reason", "Unknown"],
+        "RepoId" -> repoId|>]];
+
+SourceVaultRegisterDirectiveRepository[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+(* ---- SourceVaultIndexDirectiveRepository (spec 11.1 / 11.2) ---- *)
+
+SourceVaultIndexDirectiveRepository[
+    root_String, opts:OptionsPattern[]] :=
+  Module[{repoId, regPath, inv, manifestHash, snapId, snapRecord,
+          snapPath, saveRes},
+    Needs["ClaudeDirectives`"];
+    iEnsureRoots[];
+    If[!DirectoryQ[root],
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "RootNotADirectory", "Root" -> root|>]];
+    repoId = iDirRepoId[root];
+    regPath = FileNameJoin[{iDirRepoDir[repoId],
+      "registration.json"}];
+    If[!FileExistsQ[regPath],
+      SourceVaultRegisterDirectiveRepository[root]];
+
+    inv = ClaudeDirectives`ClaudeDirectiveFileInventory[root];
+    If[FailureQ[inv] || !ListQ[inv],
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "InventoryFailed", "RepoId" -> repoId|>]];
+    manifestHash =
+      ClaudeDirectives`ClaudeDirectiveRepositoryHash[root];
+
+    snapId = iMakeDirSnapshotId[manifestHash];
+    snapRecord = <|
+      "Kind"            -> "DirectiveRepository",
+      "CanonicalFormat" -> "ClaudeDirectives",
+      "Root"            -> ExpandFileName[root],
+      "RepoId"          -> repoId,
+      "SnapshotId"      -> snapId,
+      "Files"           -> inv,
+      "FileCount"       -> Length[inv],
+      "ManifestHash"    -> manifestHash,
+      "CreatedAt"       -> DateString[Now],
+      "Tool"            -> "claudecode_directives"|>;
+    snapPath = FileNameJoin[{iDirRepoDir[repoId],
+      "snapshot-" <> snapId <> ".json"}];
+    saveRes = iDirRepoWriteJSON[snapPath, snapRecord];
+    If[Lookup[saveRes, "Status", ""] === "OK",
+      <|"Status"       -> "OK",
+        "RepoId"       -> repoId,
+        "SnapshotId"   -> snapId,
+        "ManifestHash" -> manifestHash,
+        "FileCount"    -> Length[inv],
+        "Path"         -> snapPath,
+        "Snapshot"     -> snapRecord|>,
+      <|"Status" -> "Failed",
+        "Reason" -> Lookup[saveRes, "Reason", "Unknown"],
+        "RepoId" -> repoId|>]];
+
+SourceVaultIndexDirectiveRepository[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+(* ---- SourceVaultCurrentDirectiveSnapshot (spec 11.1) ---- *)
+
+SourceVaultCurrentDirectiveSnapshot[
+    root_String, opts:OptionsPattern[]] :=
+  Module[{repoId, rec},
+    iEnsureRoots[];
+    repoId = iDirRepoId[root];
+    rec = iLatestDirSnapshotRecord[repoId];
+    If[AssociationQ[rec],
+      rec,
+      <|"Status" -> "NoSnapshot",
+        "RepoId" -> repoId, "Root" -> root|>]];
+
+SourceVaultCurrentDirectiveSnapshot[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+(* ---- SourceVaultDirectiveRepositoryStatus (spec 11.4) ---- *)
+
+SourceVaultDirectiveRepositoryStatus[
+    root_String, opts:OptionsPattern[]] :=
+  Module[{repoId, regPath, registered, snapCount, latest,
+          snapHash, currentHash, upToDate, status},
+    Needs["ClaudeDirectives`"];
+    iEnsureRoots[];
+    repoId = iDirRepoId[root];
+    regPath = FileNameJoin[{iDirRepoDir[repoId],
+      "registration.json"}];
+    registered = FileExistsQ[regPath];
+    snapCount  = Length[iDirSnapshotPaths[repoId]];
+    latest     = iLatestDirSnapshotRecord[repoId];
+    snapHash = If[AssociationQ[latest],
+      Lookup[latest, "ManifestHash", Missing["NotAvailable"]],
+      Missing["NoSnapshot"]];
+    currentHash = If[DirectoryQ[root],
+      ClaudeDirectives`ClaudeDirectiveRepositoryHash[root],
+      Missing["RootMissing"]];
+    upToDate = StringQ[snapHash] && StringQ[currentHash] &&
+      snapHash === currentHash;
+    status = Which[
+      !registered,        "NotRegistered",
+      snapCount === 0,    "RegisteredNotIndexed",
+      upToDate,           "UpToDate",
+      True,               "Stale"];
+    <|
+      "Status"              -> status,
+      "RepoId"              -> repoId,
+      "Root"                -> root,
+      "Registered"          -> registered,
+      "SnapshotCount"       -> snapCount,
+      "LatestSnapshotId"    -> If[AssociationQ[latest],
+        Lookup[latest, "SnapshotId", Missing["NotAvailable"]],
+        Missing["NoSnapshot"]],
+      "LatestManifestHash"  -> snapHash,
+      "CurrentManifestHash" -> currentHash,
+      "UpToDate"            -> upToDate
+    |>];
+
+SourceVaultDirectiveRepositoryStatus[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+(* ---- SourceVaultDiffDirectiveSnapshots (spec 11.1) ---- *)
+
+SourceVaultDiffDirectiveSnapshots[old_, new_, opts:OptionsPattern[]] :=
+  Module[{oldRec, newRec, oldFiles, newFiles, oldMap, newMap,
+          oldKeys, newKeys, added, removed, changed, unchanged},
+    oldRec = Which[
+      AssociationQ[old], old,
+      StringQ[old],      iDirRepoReadJSON[old],
+      True,              $Failed];
+    newRec = Which[
+      AssociationQ[new], new,
+      StringQ[new],      iDirRepoReadJSON[new],
+      True,              $Failed];
+    If[!AssociationQ[oldRec] || !AssociationQ[newRec],
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "InvalidSnapshotArguments"|>]];
+    oldFiles = Lookup[oldRec, "Files", {}];
+    newFiles = Lookup[newRec, "Files", {}];
+    If[!ListQ[oldFiles], oldFiles = {}];
+    If[!ListQ[newFiles], newFiles = {}];
+    oldMap = Association[
+      (Lookup[#, "RelativePath", ""] ->
+        Lookup[#, "ContentHash", ""]) & /@ oldFiles];
+    newMap = Association[
+      (Lookup[#, "RelativePath", ""] ->
+        Lookup[#, "ContentHash", ""]) & /@ newFiles];
+    oldKeys = Keys[oldMap];
+    newKeys = Keys[newMap];
+    added   = Complement[newKeys, oldKeys];
+    removed = Complement[oldKeys, newKeys];
+    changed = Select[Intersection[oldKeys, newKeys],
+      oldMap[#] =!= newMap[#] &];
+    unchanged = Select[Intersection[oldKeys, newKeys],
+      oldMap[#] === newMap[#] &];
+    <|
+      "Status"              -> "OK",
+      "Added"               -> Sort[added],
+      "Removed"             -> Sort[removed],
+      "Changed"             -> Sort[changed],
+      "UnchangedCount"      -> Length[unchanged],
+      "ManifestHashChanged" ->
+        (Lookup[oldRec, "ManifestHash", Missing["a"]] =!=
+         Lookup[newRec, "ManifestHash", Missing["b"]])
+    |>];
+
+SourceVaultDiffDirectiveSnapshots[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+
+(* ===================================================================
+   Phase 2b: HarnessMaterialization bundle kind + stale judgement
+   Spec 5th review: sections 11.3 / 11.4.
+   The bundle is written with iDirRepoWriteJSON (UTF-8) so that a
+   non-ASCII DirectiveRoot path round-trips correctly and the bundle
+   is still readable via the UTF-8 iBundleLoad path.
+   =================================================================== *)
+
+(* ---- canonical, order-independent hash of an environment value ---- *)
+
+iCanonicalSort[a_Association] := KeySort[iCanonicalSort /@ a];
+iCanonicalSort[l_List]        := iCanonicalSort /@ l;
+iCanonicalSort[x_]            := x;
+
+iCanonicalAssocHash[expr_] :=
+  Module[{json},
+    json = Quiet @ ExportString[
+      iSanitizeForJSON[iCanonicalSort[expr]],
+      "RawJSON", "Compact" -> True];
+    If[!StringQ[json], Return[Missing["HashFailed"]]];
+    "sha256-" <> ToLowerCase[Hash[json, "SHA256", "HexString"]]];
+
+(* resolve a runtime-environment hash from currentEnv: use a
+   precomputed <hashKey> if present, else hash the raw <dataKey> *)
+iHarnessEnvHash[envAssoc_Association, dataKey_String, hashKey_String] :=
+  Which[
+    StringQ[Lookup[envAssoc, hashKey, Null]],
+      Lookup[envAssoc, hashKey],
+    KeyExistsQ[envAssoc, dataKey],
+      iCanonicalAssocHash[Lookup[envAssoc, dataKey]],
+    True,
+      Missing["NotProvided"]];
+
+iHarnessEnvHash[___] := Missing["NotProvided"];
+
+(* ---- SourceVaultRegisterHarnessMaterialization (spec 11.3) ---- *)
+
+SourceVaultRegisterHarnessMaterialization[
+    target_String, files_List, meta_Association] :=
+  Module[{bundleId, defaultFn, bundle, saveRes},
+    iEnsureRoots[];
+    If[!MemberQ[{"Codex", "ClaudeCLI"}, target],
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "InvalidTarget", "Target" -> target|>]];
+    bundleId = iMakeBundleId["harness-" <> ToLowerCase[target]];
+    defaultFn = If[target === "Codex",
+      "ClaudeDirectiveMaterializeCodexHarness",
+      "ClaudeDirectiveMaterializeClaudeHarness"];
+    bundle = <|
+      "BundleId"     -> bundleId,
+      "Kind"         -> "HarnessMaterialization",
+      "Target"       -> target,
+      "HarnessMode"  -> Lookup[meta, "HarnessMode", "Generated"],
+      "GeneratedFiles" -> files,
+      "GeneratedAt"  -> DateString[Now],
+      "DirectiveRoot" ->
+        Lookup[meta, "DirectiveRoot", Missing["NotProvided"]],
+      "DirectiveRepositorySnapshotId" ->
+        Lookup[meta, "DirectiveRepositorySnapshotId",
+          Missing["NotProvided"]],
+      "DirectiveRepositoryManifestHash" ->
+        Lookup[meta, "DirectiveRepositoryManifestHash",
+          Missing["NotProvided"]],
+      "RuntimeEnvironmentHash" ->
+        Lookup[meta, "RuntimeEnvironmentHash",
+          Missing["NotProvided"]],
+      "PermissionProfileHash" ->
+        Lookup[meta, "PermissionProfileHash",
+          Missing["NotProvided"]],
+      "Generator" -> Lookup[meta, "Generator", <|
+        "Package"  -> "claudecode_directives",
+        "Function" -> defaultFn,
+        "HarnessMaterializationMode" ->
+          Lookup[meta, "HarnessMaterializationMode",
+            "BootstrapIndexSkills"]|>]
+    |>;
+    (* UTF-8 write (iDirRepoWriteJSON) so a non-ASCII DirectiveRoot
+       survives the round trip; iBundleLoad reads UTF-8 too *)
+    saveRes = iDirRepoWriteJSON[iBundlePath[bundleId], bundle];
+    If[Lookup[saveRes, "Status", ""] === "OK",
+      <|"Status"   -> "OK",
+        "BundleId" -> bundleId,
+        "Path"     -> Lookup[saveRes, "Path", ""],
+        "Bundle"   -> bundle|>,
+      <|"Status" -> "Failed",
+        "Reason" -> Lookup[saveRes, "Reason", "Unknown"],
+        "BundleId" -> bundleId|>]];
+
+SourceVaultRegisterHarnessMaterialization[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+(* ---- SourceVaultDirectiveSnapshotStaleQ (spec 11.4) ---- *)
+
+SourceVaultDirectiveSnapshotStaleQ[bundle_Association] :=
+  Module[{root, recordedHash, currentHash, stale},
+    Needs["ClaudeDirectives`"];
+    recordedHash = Lookup[bundle, "DirectiveRepositoryManifestHash",
+      Missing["NotAvailable"]];
+    root = Lookup[bundle, "DirectiveRoot", Missing["NotAvailable"]];
+    If[!StringQ[root] || !DirectoryQ[root],
+      Return[<|
+        "Stale"  -> Missing["RootUnavailable"],
+        "Reason" -> "DirectiveRoot not available; cannot compare.",
+        "RecordedManifestHash" -> recordedHash,
+        "CurrentManifestHash"  -> Missing["RootUnavailable"]|>]];
+    currentHash =
+      ClaudeDirectives`ClaudeDirectiveRepositoryHash[root];
+    stale = StringQ[recordedHash] && StringQ[currentHash] &&
+      recordedHash =!= currentHash;
+    <|
+      "Stale"  -> stale,
+      "Reason" -> If[stale,
+        "CanonicalDirectiveSnapshotStale", "UpToDate"],
+      "RecordedManifestHash" -> recordedHash,
+      "CurrentManifestHash"  -> currentHash
+    |>];
+
+SourceVaultDirectiveSnapshotStaleQ[___] :=
+  <|"Stale" -> $Failed, "Reason" -> "InvalidArguments"|>;
+
+(* ---- SourceVaultHarnessRuntimeEnvironmentChangedQ (spec 11.4) ---- *)
+
+SourceVaultHarnessRuntimeEnvironmentChangedQ[
+    bundle_Association, currentEnv_Association] :=
+  Module[{recPerm, recEnv, curPerm, curEnv, permChanged, envChanged},
+    recPerm = Lookup[bundle, "PermissionProfileHash",
+      Missing["NotAvailable"]];
+    recEnv  = Lookup[bundle, "RuntimeEnvironmentHash",
+      Missing["NotAvailable"]];
+    curPerm = iHarnessEnvHash[currentEnv,
+      "PermissionProfile", "PermissionProfileHash"];
+    curEnv  = iHarnessEnvHash[currentEnv,
+      "RuntimeEnvironment", "RuntimeEnvironmentHash"];
+    permChanged = StringQ[recPerm] && StringQ[curPerm] &&
+      recPerm =!= curPerm;
+    envChanged  = StringQ[recEnv] && StringQ[curEnv] &&
+      recEnv =!= curEnv;
+    <|
+      "Changed" -> (permChanged || envChanged),
+      "Reason"  -> If[permChanged || envChanged,
+        "RuntimeEnvironmentChanged", "Unchanged"],
+      "PermissionProfileChanged"  -> permChanged,
+      "RuntimeEnvironmentChanged" -> envChanged,
+      "RecordedPermissionProfileHash"  -> recPerm,
+      "CurrentPermissionProfileHash"   -> curPerm,
+      "RecordedRuntimeEnvironmentHash" -> recEnv,
+      "CurrentRuntimeEnvironmentHash"  -> curEnv
+    |>];
+
+SourceVaultHarnessRuntimeEnvironmentChangedQ[___] :=
+  <|"Changed" -> $Failed, "Reason" -> "InvalidArguments"|>;
 
 End[];   (* `Private` *)
 

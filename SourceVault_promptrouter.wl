@@ -182,6 +182,17 @@ SourceVaultProposePromptRoute::usage =
   "SourceVaultProposePromptRoute[prompt_String, opts] is the ClaudeEval-facing PromptRouter API (spec v11 5.3). It resolves a schedule prompt to an UNEVALUATED proposal expression -- HoldComplete[SourceVaultUpcomingSchedule[..., \"FilterSpec\" -> <|...|>]] -- and returns a PromptRouteProposal Association carrying it under \"ProposedExpression\". It never evaluates the expression; the ClaudeEval bridge passes only that field to the Runtime for head-based validation. A non-schedule prompt yields Status NotDispatched.";
 
 
+
+(* ===================================================================
+   Phase 2.2: provider trust-domain classification (spec 12)
+   Classifies ChatGPT Codex as a cloud-backed CLI (TrustDomain Cloud)
+   so that the existing PrivacyLevel >= 0.5 floor (spec 12.3) blocks
+   automatic Codex selection for private prompts.
+   =================================================================== *)
+
+SourceVaultClassifyProviderTrustDomain::usage =
+  "SourceVaultClassifyProviderTrustDomain[label] maps a provider or route label to a TrustDomain (spec 12.2). \"chatgptcodex\" / \"ChatGPTCodexCLI\" / \"ClaudeCodeCLI\" / \"CloudLLM\" classify as \"Cloud\"; \"LocalOnly\" as \"Local\"; \"PrivateLLM\" as \"Private\". Ambiguous or unknown labels (e.g. LocalOpenAICompatible, ExternalAPI) return Missing[\"UnclassifiedTrustDomain\"] so the host resolver must declare TrustDomain explicitly. ChatGPT Codex is a cloud-backed CLI: its filesystem sandbox is local but its LLM inference is in the cloud.";
+
 Begin["`Private`"];
 
 (* ------------------------------------------------------------
@@ -2012,7 +2023,7 @@ SourceVaultResolveModelForPromptRouter[query_Association,
     (* spec 12.4 / 12.1.1-4: at PrivacyLevel >= 0.5 a model that
        cannot be confirmed Local/Private must not be used *)
     resolvedDomain = If[AssociationQ[raw],
-      Lookup[raw, "TrustDomain", Missing["Unknown"]],
+      iResolveRawTrustDomain[raw],
       Missing["Unknown"]];
 
     If[privLevel >= 0.5 &&
@@ -2567,6 +2578,66 @@ SourceVaultProposePromptRoute[___] :=
   <|"Type" -> "PromptRouteProposal",
     "Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
 
+
+
+(* ===================================================================
+   Phase 2.2: provider trust-domain classification (spec 12.2)
+   Fallback classification used only when the host resolver does not
+   declare TrustDomain itself; an explicit TrustDomain always wins.
+   =================================================================== *)
+
+(* spec 12.2 mapping: provider/route label -> TrustDomain.
+   Only confidently-classifiable labels are mapped; ambiguous ones
+   (LocalOpenAICompatible, ExternalAPI) stay Missing so they are
+   treated conservatively by the PrivacyLevel >= 0.5 floor. *)
+iClassifyProviderTrustDomain[label_String] :=
+  Module[{lc},
+    lc = ToLowerCase[StringTrim[label]];
+    Which[
+      MemberQ[{"chatgptcodex", "codex", "chatgptcodexcli",
+               "chatgpt codex cli", "chatgpt-codex",
+               "chatgpt codex"}, lc],
+        "Cloud",
+      MemberQ[{"cloudllm", "cloud llm", "claudecodecli",
+               "claude code cli", "claudecode", "anthropic",
+               "openai"}, lc],
+        "Cloud",
+      MemberQ[{"privatellm", "private llm", "private"}, lc],
+        "Private",
+      MemberQ[{"localonly", "local only", "local",
+               "localonlyllm"}, lc],
+        "Local",
+      True,
+        Missing["UnclassifiedTrustDomain"]]];
+
+iClassifyProviderTrustDomain[_] :=
+  Missing["UnclassifiedTrustDomain"];
+
+(* resolve a TrustDomain from a host-resolver result: an explicit
+   TrustDomain wins; otherwise fall back to label classification *)
+iResolveRawTrustDomain[raw_Association] :=
+  Module[{td, label},
+    td = Lookup[raw, "TrustDomain", Missing["NotProvided"]];
+    If[StringQ[td], Return[td]];
+    label = SelectFirst[
+      {Lookup[raw, "Provider", Null],
+       Lookup[raw, "ProviderLabel", Null],
+       Lookup[raw, "Route", Null],
+       Lookup[raw, "Model", Null]},
+      StringQ, Null];
+    If[StringQ[label],
+      iClassifyProviderTrustDomain[label],
+      Missing["Unknown"]]];
+
+iResolveRawTrustDomain[_] := Missing["Unknown"];
+
+(* ---- SourceVaultClassifyProviderTrustDomain (spec 12.2) ---- *)
+
+SourceVaultClassifyProviderTrustDomain[label_String] :=
+  iClassifyProviderTrustDomain[label];
+
+SourceVaultClassifyProviderTrustDomain[___] :=
+  Missing["UnclassifiedTrustDomain"];
 
 End[];
 
