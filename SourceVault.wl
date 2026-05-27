@@ -975,6 +975,7 @@ ClearAll[
   iNotebookSummaryPath, iLoadNotebookSummaryRecord, iSaveNotebookSummaryRecord,
   iComputeNotebookSummaryStatus,
   iBuildNotebookSummaryPrompt, iCallSummaryLLM, iExtractFirstCellTexts,
+  iSVCellConfidentialTag,
   iSVLooksLikeLLMError,
   iSVResolveTodoTarget, iSVCheckMTimeCache,
   iNotebookRefFromPath, iReadNotebookExpr, iCellTextExtract,
@@ -997,6 +998,7 @@ ClearAll[
   (* Step 3: Upcoming schedule *)
   iSVResolveScope, iSVUpcomingMatches, iSVEnsureSummary, iSVSummaryShort,
   iSVKeywordsCell, iSVSummaryCell, iSVTitleTipBody,
+  iSVScheduleSummaryCell, iSVPublishableCell,
   iSVFormatScheduleDataset, iSVScheduleNormalRecords,
   iSVScheduleFilterFieldType, iSVScheduleFilterCanonicalField,
   iSVScheduleFilterOpWhitelist, iSVScheduleFilterEvalField,
@@ -7256,6 +7258,28 @@ SourceVaultNotebookSummaryStatus[path_String, opts:OptionsPattern[]] :=
    ============================================================ *)
 
 (* notebook \:306e\:5148\:982d\:8907\:6570 cell \:304b\:3089\:30c6\:30ad\:30b9\:30c8\:3092\:62bd\:51fa (Title/Section/Text/Input) *)
+(* Stage 9 P1 ext: read the explicit confidentiality tag from a raw
+   Cell expression (TaggingRules > "claudecode" > "confidential").
+   Works on file-loaded cells, so the summary builder can drop
+   confidential cells up front instead of relying on the LLM. *)
+iSVCellConfidentialTag[c_] :=
+  Module[{tr = Missing[], cc, conf},
+    If[SymbolName[Head[c]] =!= "Cell", Return[Missing[]]];
+    Scan[
+      Function[o,
+        If[(Head[o] === Rule || Head[o] === RuleDelayed) &&
+            Head[o[[1]]] === Symbol &&
+            SymbolName[o[[1]]] === "TaggingRules",
+          tr = o[[2]]]],
+      List @@ c];
+    If[MissingQ[tr] || !(ListQ[tr] || AssociationQ[tr]),
+      Return[Missing[]]];
+    cc = Lookup[tr, "claudecode", {}];
+    If[!(ListQ[cc] || AssociationQ[cc]), Return[Missing[]]];
+    conf = Lookup[cc, "confidential", Missing[]];
+    conf
+  ];
+
 iExtractFirstCellTexts[path_String, maxCells_Integer:8] :=
   Module[{readResult, nbExpr, cells, texts = {}, count = 0},
     readResult = iReadNotebookExpr[path];
@@ -7272,7 +7296,8 @@ iExtractFirstCellTexts[path_String, maxCells_Integer:8] :=
             If[(StringQ[style] || (ListQ[style] && Length[style] > 0 && StringQ[First[style]])) &&
                 MemberQ[{"Title", "Subtitle", "Chapter", "Section", "Subsection",
                   "Subsubsection", "Text", "Input", "Code", "InitializationCell"},
-                  If[StringQ[style], style, First[style]]],
+                  If[StringQ[style], style, First[style]]] &&
+                iSVCellConfidentialTag[c] =!= True,
               text = iCellTextExtract[c];
               If[StringQ[text] && StringLength[text] > 0,
                 AppendTo[texts, <|
@@ -7497,6 +7522,16 @@ SourceVaultNotebookSummary[path_String, opts:OptionsPattern[]] :=
     If[!FileExistsQ[abs],
       Return[<|"Status" -> "Failed", "Reason" -> "FileNotFound",
         "Path" -> abs|>]];
+    (* Stage 9 P1 ext: refuse summary generation for a notebook
+       explicitly declared NOT cloud-publishable. The summary is, by
+       design, schema-level info that may reach cloud services, so a
+       deny-declared notebook must not get one at all. *)
+    If[Quiet @ Check[NBAccess`NBGetCloudPublishable[abs],
+         Missing["ReadFailed"]] === False,
+      Return[<|"Status" -> "Refused",
+        "Reason" -> "CloudPublishDenied",
+        "Path" -> abs,
+        "Detail" -> "\:3053\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306f\:516c\:958b\:7981\:6b62\:306b\:8a2d\:5b9a\:3055\:308c\:3066\:3044\:308b\:305f\:3081\:8981\:7d04\:3092\:751f\:6210\:3057\:307e\:305b\:3093\:3002"|>]];
     forceRefresh = OptionValue["ForceRefresh"];
     maxLength = OptionValue["MaxLength"];
     language = OptionValue["Language"];
@@ -8101,6 +8136,44 @@ iSVTitleTipBody[summary_, keywords_] :=
     ""
   ];
 
+(* Stage 9 P1 Step 9 ext: Summary column cell.
+   Receives the already-resolved status string (OK / Missing / Failed,
+   computed by the caller exactly as the old Privacy column did) plus a
+   tooltip body. Kept free of any in-function Association lookup so the
+   displayed value cannot silently fall through to "?". *)
+iSVScheduleSummaryCell[statusStr_, tip_] :=
+  Module[{label, color},
+    {label, color} = Switch[statusStr,
+      "OK",      {"OK",      GrayLevel[0.2]},
+      "Missing", {"Missing", GrayLevel[0.55]},
+      "Failed",  {"Failed",  RGBColor[0.7, 0.15, 0.15]},
+      _,         {ToString[statusStr], GrayLevel[0.55]}];
+    If[StringQ[tip] && StringTrim[tip] =!= "",
+      Tooltip[
+        Style[label, FontFamily -> "Yu Gothic UI", color],
+        Pane[Style[tip, FontFamily -> "Yu Gothic UI"],
+          ImageSize -> {UpTo[380], Automatic}]],
+      Style[label, FontFamily -> "Yu Gothic UI", color]]
+  ];
+
+(* Stage 9 P1 Step 9 ext: Publishable column cell.
+   Renders the notebook-level cloud-publish declaration read via
+   NBAccess`NBGetCloudPublishable (True / False / Missing).
+   Wording and colors are kept in sync with the palette
+   (iCloudPaletteLabel / iCloudPaletteColor in claudecode.wl). *)
+iSVPublishableCell[realPath_] :=
+  Module[{state, label, color},
+    state = If[StringQ[realPath] && FileExistsQ[realPath],
+      Quiet @ Check[NBAccess`NBGetCloudPublishable[realPath],
+        Missing["ReadFailed"]],
+      Missing["NoPath"]];
+    {label, color} = Which[
+      state === True,  {"\:516c\:958b\:8a31\:53ef", RGBColor[0.25, 0.55, 0.75]},
+      state === False, {"\:516c\:958b\:7981\:6b62", RGBColor[0.6, 0.4, 0.3]},
+      True,            {"\:672a\:6307\:5b9a",        GrayLevel[0.55]}];
+    Style[label, FontFamily -> "Yu Gothic UI", color]
+  ];
+
 (* enriched records \:3092 Dataset \:5f62\:5f0f\:306b\:6574\:5f62 *)
 (* ---- Step 3 Hotfix 3: styled date / open button helpers ---- *)
 
@@ -8257,8 +8330,8 @@ If[!ValueQ[$iSVScheduleCache], $iSVScheduleCache = <||>];
 (* record \[Rule] \:8868\:793a\:7528 row (Association)\:3002\:30ad\:30e3\:30c3\:30b7\:30e5\:3082\:3053\:3053\:3067\:5224\:5b9a\:3002 *)
 iSVRowFromRecord[record_Association, today_, refresh_, fallback_,
     useCache_] :=
-  Module[{path, symPath, mtime, cached, header, summary, statusLabel,
-          dlResolved, nrResolved, sortKey},
+  Module[{path, symPath, realPath, mtime, cached, header, summary,
+          statusLabel, dlResolved, nrResolved, sortKey},
     path = Lookup[record, "Path", Lookup[record, "OriginalPath", ""]];
     symPath = If[StringQ[path] && path =!= "",
       iSVSymbolicPath[path], {"<ABS>", ""}];
@@ -8273,6 +8346,12 @@ iSVRowFromRecord[record_Association, today_, refresh_, fallback_,
 
     header = Lookup[record, "Header", <||>];
     summary = iSVEnsureSummaryInline[record, refresh, fallback];
+    realPath = Module[{p =
+        If[ListQ[symPath], iSVResolvePath[symPath], Missing[]]},
+      Which[
+        StringQ[p] && FileExistsQ[p], p,
+        StringQ[path] && FileExistsQ[path], path,
+        True, Missing["NoPath"]]];
     statusLabel = iSVStatusFromRecord[record];
 
     dlResolved = iSVResolveReviewDate[
@@ -8301,12 +8380,16 @@ iSVRowFromRecord[record_Association, today_, refresh_, fallback_,
             StringQ[Lookup[record, "Title", Null]],
               iSVCleanTitle @ Lookup[record, "Title"],
             True, iSVCleanTitle @ FileBaseName[path]],
-          symPath, path,
-          iSVTitleTipBody[summary, Lookup[header, "Keywords", {}]]],
+          symPath, path],
         "Dir" -> iSVDirButtonSym[symPath, path],
         "OpenTodos" -> Lookup[record, "OpenTodoCount", 0],
         "Status" -> statusLabel,
-        "Privacy" -> Lookup[summary, "Status", "?"],
+        "Summary" -> iSVScheduleSummaryCell[
+          If[AssociationQ[summary],
+            Lookup[summary, "Status", "?"], "?"],
+          iSVTitleTipBody[summary,
+            Lookup[header, "Keywords", {}]]],
+        "Publishable" -> iSVPublishableCell[realPath],
         "_SortKey" -> If[Head[nrResolved] === DateObject,
           AbsoluteTime[nrResolved],
           -Infinity]   (* NextReview \:7121\:3057\:306f\:6700\:5f8c\:306b (ReverseSort \:6642) *)
@@ -8544,7 +8627,7 @@ iSVFormatScheduleDataset[records_List, today_, refresh_, fallback_,
     rows = ReverseSortBy[rows, #["_SortKey"] &];
     rows = Map[KeyDrop[#, "_SortKey"] &, rows];
     cols = {"Deadline", "NextReview", "Title", "Dir",
-            "OpenTodos", "Status", "Privacy"};
+            "OpenTodos", "Status", "Summary", "Publishable"};
     body = Map[
       Function[r, Map[Lookup[r, #, ""] &, cols]],
       rows];
