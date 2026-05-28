@@ -63,7 +63,11 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultPromptPrivacyAllowsCloudRouter",
   "SourceVault`SourceVaultResolveModelForPromptRouter",
   "SourceVault`SourceVaultPromptReprocessPlan",
-  "SourceVault`SourceVaultProposePromptRoute"
+  "SourceVault`SourceVaultProposePromptRoute",
+  "SourceVault`SourceVaultClassifyProviderTrustDomain",
+  "SourceVault`SaveLastPrompt",
+  "SourceVault`SourceVaultSearchPromptRoutes",
+  "SourceVault`SourceVaultFormatPromptRouteList"
 ]];
 
 (* ------------------------------------------------------------
@@ -192,6 +196,15 @@ SourceVaultProposePromptRoute::usage =
 
 SourceVaultClassifyProviderTrustDomain::usage =
   "SourceVaultClassifyProviderTrustDomain[label] maps a provider or route label to a TrustDomain (spec 12.2). \"chatgptcodex\" / \"ChatGPTCodexCLI\" / \"ClaudeCodeCLI\" / \"CloudLLM\" classify as \"Cloud\"; \"LocalOnly\" as \"Local\"; \"PrivateLLM\" as \"Private\". Ambiguous or unknown labels (e.g. LocalOpenAICompatible, ExternalAPI) return Missing[\"UnclassifiedTrustDomain\"] so the host resolver must declare TrustDomain explicitly. ChatGPT Codex is a cloud-backed CLI: its filesystem sandbox is local but its LLM inference is in the cloud.";
+
+SaveLastPrompt::usage =
+  "SaveLastPrompt[memo_String] saves the most recent successful ClaudeEval / ContinueEval prompt run as a named PromptRoute so it can be searched and re-run later. memo is a free-text note (e.g. \"this function only works where an LLM is available\") stored in the route's Memo field and shown in the prompt table. Options: \"Channel\" -> \"public\"|\"private\"|\"local\" (default Automatic, resolved from privacy), \"Encrypt\" -> False (encryption of prompt/memo/target at rest is NOT YET IMPLEMENTED; passing True returns Status NotImplemented), \"DryRun\" -> False, \"RouteId\" -> Automatic. Privacy is tracked via SourceVaultResolvePromptPrivacy; raw prompt/function are stored in plaintext by default since they rarely need secrecy, but PrivacyLevel and CloudFallback are recorded on the route.";
+
+SourceVaultSearchPromptRoutes::usage =
+  "SourceVaultSearchPromptRoutes[query_String, opts] returns saved PromptRoutes whose prompt examples or memo contain query as a substring (partial match, like SourceVaultFindNotebooks Keywords). query \"\" matches all. Options: \"CreatedAt\" -> <|\"From\"->_,\"To\"->_|> and \"UpdatedAt\" -> <|\"From\"->_,\"To\"->_|> filter by definition / last-updated date (same date-range form as the notebook query API); \"Channel\" -> All|\"public\"|\"private\"|\"local\"; \"IncludeSeed\" -> True. Returns a List of route Associations (does not execute anything).";
+
+SourceVaultFormatPromptRouteList::usage =
+  "SourceVaultFormatPromptRouteList[routes_List, opts] renders saved PromptRoutes as a Grid (columns: Prompt, Memo, Target, CreatedAt, UpdatedAt, Privacy) with three action buttons per row: Preview (dry-run, shows what would execute without running it), Run (executes the route now), and ToInput (writes the saved function-call expression into a new Input cell). Mirrors SourceVaultFormatNotebookList. The default display format for prompt-route lists requested in a prompt.";
 
 Begin["`Private`"];
 
@@ -2638,6 +2651,419 @@ SourceVaultClassifyProviderTrustDomain[label_String] :=
 
 SourceVaultClassifyProviderTrustDomain[___] :=
   Missing["UnclassifiedTrustDomain"];
+
+(* ===================================================================
+   Phase D (UI scope): SaveLastPrompt / SearchPromptRoutes /
+   FormatPromptRouteList
+
+   spec 10.1 / 10.2 / 21.7. These build on the existing capture,
+   privacy, registry, and execute APIs:
+   - SourceVaultCaptureLastPromptRun   (last successful run)
+   - SourceVaultResolvePromptPrivacy   (privacy tracking)
+   - SourceVaultRegisterPromptRoute    (atomic registry write)
+   - SourceVaultListPromptRoutes       (read registry)
+   - SourceVaultExecutePromptRoute     (run a route)
+
+   NOTE (handoff): "Encrypt" -> True is a placeholder. Encryption of
+   prompt / memo / target at rest (spec physical-storage-extension
+   section 1.2, KeyRef "SourceVault:master:v1") is NOT implemented.
+   No master-key infrastructure exists yet in NBAccess or SourceVault.
+   Until that lands, SaveLastPrompt with "Encrypt" -> True returns
+   Status NotImplemented rather than silently storing plaintext.
+   =================================================================== *)
+
+iSVPRSaveDir[] :=
+  FileNameJoin[{
+    SourceVault`$SourceVaultRoots["PrivateVault"],
+    "promptrouter", "saved"}];
+
+(* derive a stable-ish route id from the prompt + timestamp *)
+iSVPRMakeSavedRouteId[prompt_String] :=
+  "promptroute-saved-" <>
+    StringTake[Hash[iSVPRNormalizePrompt[prompt], "SHA256", "HexString"], 12];
+iSVPRMakeSavedRouteId[_] :=
+  "promptroute-saved-" <> StringTake[CreateUUID[], 8];
+
+(* extract the expression/function the run produced, as a string
+   suitable for writing into an Input cell. Falls back gracefully. *)
+iSVPRRunTargetExpr[run_Association] :=
+  Module[{route, target, expr},
+    route  = Lookup[run, "Route", <||>];
+    If[!AssociationQ[route], route = <||>];
+    target = Lookup[run, "Target", Lookup[route, "Target", <||>]];
+    If[!AssociationQ[target], target = <||>];
+    expr = Which[
+      StringQ[Lookup[run, "ProposedExpressionString", Missing[]]],
+        Lookup[run, "ProposedExpressionString"],
+      StringQ[Lookup[run, "TargetExprString", Missing[]]],
+        Lookup[run, "TargetExprString"],
+      AssociationQ[target] &&
+        StringQ[Lookup[target, "FunctionSymbol", Missing[]]],
+        Lookup[target, "FunctionSymbol"] <> "[]",
+      True, Missing["NoTargetExpr"]];
+    expr];
+iSVPRRunTargetExpr[_] := Missing["NoTargetExpr"];
+
+Options[SaveLastPrompt] = {
+  "Channel" -> Automatic,
+  "Encrypt" -> False,
+  "DryRun"  -> False,
+  "RouteId" -> Automatic
+};
+
+SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
+  Module[{encrypt, channel, dryRun, routeId, capture, run, rawPrompt,
+          privComponents, privRes, privLevel, cloudFallback, allowedDomains,
+          ts, targetExpr, route, regResult},
+
+    encrypt = TrueQ[OptionValue[SaveLastPrompt, {opts}, "Encrypt"]];
+    (* handoff: encryption-at-rest is not implemented yet *)
+    If[encrypt,
+      Return[<|"Status" -> "NotImplemented",
+        "Reason" -> "EncryptionAtRestNotImplemented",
+        "Hint" ->
+          "Saving prompt/memo/target encrypted at rest is a future " <>
+          "feature (KeyRef SourceVault:master:v1, AES256). No master-key " <>
+          "infrastructure exists yet. Save in plaintext or wait for the " <>
+          "encryption phase."|>]];
+
+    dryRun  = TrueQ[OptionValue[SaveLastPrompt, {opts}, "DryRun"]];
+    routeId = OptionValue[SaveLastPrompt, {opts}, "RouteId"];
+
+    (* fetch the last successful prompt run *)
+    capture = SourceVaultCaptureLastPromptRun[];
+    If[!AssociationQ[capture] ||
+       Lookup[capture, "Status", ""] =!= "OK",
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "NoLastPromptRun",
+        "Hint" ->
+          "No recent successful ClaudeEval / ContinueEval run found to save."|>]];
+    run = Lookup[capture, "PromptRun", <||>];
+    If[!AssociationQ[run],
+      Return[<|"Status" -> "Failed", "Reason" -> "BadPromptRun"|>]];
+
+    (* raw prompt: prefer stored raw, else fall back to hash note *)
+    rawPrompt = Lookup[run, "RawPrompt", Missing["NotStored"]];
+    If[!StringQ[rawPrompt],
+      rawPrompt = Lookup[run, "PromptText", Missing["NotStored"]]];
+
+    (* privacy tracking (spec 11): resolve from whatever the run
+       recorded; default components are empty -> level 0.0 *)
+    privComponents = Lookup[run, "Privacy", <||>];
+    If[!AssociationQ[privComponents], privComponents = <||>];
+    privRes = SourceVaultResolvePromptPrivacy[privComponents];
+    privLevel      = Lookup[privRes, "PrivacyLevel", 0.0];
+    cloudFallback  = Lookup[privRes, "CloudFallback", "Ask"];
+    allowedDomains = Lookup[privRes, "AllowedTrustDomains", Automatic];
+
+    (* channel: explicit option wins; else privacy-derived. A
+       prompt that cannot go to the cloud is saved to the private
+       channel so the search index keeps it out of cloud routing. *)
+    channel = OptionValue[SaveLastPrompt, {opts}, "Channel"];
+    If[channel === Automatic || !StringQ[channel],
+      channel = If[NumericQ[privLevel] && privLevel >= 0.5,
+        "private", "public"]];
+
+    ts = iSVPRTimestamp[];
+    If[!StringQ[routeId] || routeId === "",
+      routeId = iSVPRMakeSavedRouteId[
+        If[StringQ[rawPrompt], rawPrompt, memo]]];
+
+    targetExpr = iSVPRRunTargetExpr[run];
+
+    (* build the PromptRoute. We store the raw prompt as an Example
+       and the memo as a first-class field for searching/display.
+       Plaintext is acceptable here per design: functions/memos
+       rarely need secrecy. PrivacyLevel/CloudFallback are recorded
+       so the router still respects privacy at match time. *)
+    route = <|
+      "Type"         -> "PromptRoute",
+      "RouteId"      -> routeId,
+      "RouteVersion" -> 1,
+      "SchemaVersion"-> 1,
+      "Memo"         -> memo,
+      "CreatedAt"    -> ts,
+      "UpdatedAt"    -> ts,
+      "Matcher" -> <|
+        "Kind" -> "SavedPrompt",
+        "PromptFingerprints" ->
+          {Lookup[run, "PromptHash", Missing["NoHash"]]},
+        "Examples" ->
+          If[StringQ[rawPrompt], {rawPrompt}, {}]
+      |>,
+      "Target" ->
+        Module[{tgt = Lookup[run, "Target", Null],
+                rt = Lookup[run, "Route", Null]},
+          Which[
+            AssociationQ[tgt], tgt,
+            AssociationQ[rt] && AssociationQ[Lookup[rt, "Target", Null]],
+              rt["Target"],
+            True, <||>]],
+      "TargetExprString" ->
+        If[StringQ[targetExpr], targetExpr, Missing["NoTargetExpr"]],
+      "Privacy" -> <|
+        "PrivacyLevel"        -> privLevel,
+        "PrivacyOrigin"       -> Lookup[privRes, "PrivacyOrigin", {}],
+        "AllowedTrustDomains" -> allowedDomains,
+        "CloudFallback"       -> cloudFallback,
+        "RawPromptStored"     -> StringQ[rawPrompt],
+        "PromptStorageClass"  -> "Plaintext"
+      |>
+    |>;
+
+    If[dryRun,
+      Return[<|"Status" -> "DryRun", "RouteId" -> routeId,
+        "Channel" -> channel, "Memo" -> memo,
+        "PrivacyLevel" -> privLevel, "Route" -> route|>]];
+
+    regResult = SourceVaultRegisterPromptRoute[
+      route, "DryRun" -> False, "Channel" -> channel];
+    If[Lookup[regResult, "Status", ""] =!= "OK",
+      Return[<|"Status" -> "Failed",
+        "Reason" -> Lookup[regResult, "Reason", "RegisterFailed"],
+        "RouteId" -> routeId, "Channel" -> channel|>]];
+
+    <|"Status" -> "OK", "RouteId" -> routeId, "Channel" -> channel,
+      "Memo" -> memo, "PrivacyLevel" -> privLevel,
+      "Action" -> Lookup[regResult, "Action", "Added"]|>
+  ];
+
+SaveLastPrompt[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "Expected SaveLastPrompt[memo_String, opts]."|>;
+
+(* ---------- search ---------- *)
+
+(* parse a date-range Association <|"From"->_, "To"->_|> into a pair
+   of DateObjects. Accepts date strings or DateObjects. Missing parts
+   become -inf / +inf. Returns {fromDO|None, toDO|None}. *)
+iSVPRParseDateRange[spec_] :=
+  Module[{from, to, toDO},
+    If[!AssociationQ[spec], Return[{None, None}]];
+    toDO = Function[v,
+      Which[
+        MatchQ[v, _DateObject], v,
+        StringQ[v], Quiet @ Check[DateObject[v], None],
+        True, None]];
+    from = toDO[Lookup[spec, "From", Missing[]]];
+    to   = toDO[Lookup[spec, "To", Missing[]]];
+    {from, to}];
+
+(* test a route's CreatedAt/UpdatedAt against a parsed range *)
+iSVPRRouteDateInRange[route_Association, field_String, spec_] :=
+  Module[{from, to, raw, d},
+    If[!AssociationQ[spec], Return[True]];
+    {from, to} = iSVPRParseDateRange[spec];
+    If[from === None && to === None, Return[True]];
+    raw = Lookup[route, field, Missing[]];
+    d = Which[
+      MatchQ[raw, _DateObject], raw,
+      StringQ[raw], Quiet @ Check[DateObject[raw], Missing[]],
+      True, Missing[]];
+    If[!MatchQ[d, _DateObject], Return[False]];
+    And[
+      from === None || DateObjectQ[from] && (from <= d),
+      to   === None || DateObjectQ[to]   && (d <= to)]];
+iSVPRRouteDateInRange[_, _, _] := True;
+
+(* substring match over prompt examples + memo *)
+iSVPRRouteTextMatch[route_Association, query_String] :=
+  Module[{matcher, examples, memo, pool},
+    If[query === "", Return[True]];
+    matcher  = Lookup[route, "Matcher", <||>];
+    examples = If[AssociationQ[matcher],
+      Lookup[matcher, "Examples", {}], {}];
+    If[!ListQ[examples], examples = {}];
+    memo = Lookup[route, "Memo", ""];
+    pool = DeleteCases[
+      Join[Select[examples, StringQ],
+           {If[StringQ[memo], memo, ""],
+            Lookup[route, "RouteId", ""]}],
+      ""];
+    AnyTrue[pool, StringContainsQ[#, query] &]];
+iSVPRRouteTextMatch[_, _] := False;
+
+Options[SourceVaultSearchPromptRoutes] = {
+  "Channel"     -> All,
+  "IncludeSeed" -> True,
+  "CreatedAt"   -> Missing[],
+  "UpdatedAt"   -> Missing[]
+};
+
+SourceVaultSearchPromptRoutes[query_String, opts:OptionsPattern[]] :=
+  Module[{channel, includeSeed, createdSpec, updatedSpec, channels,
+          routes},
+    channel     = OptionValue[SourceVaultSearchPromptRoutes, {opts}, "Channel"];
+    includeSeed = TrueQ[OptionValue[
+      SourceVaultSearchPromptRoutes, {opts}, "IncludeSeed"]];
+    createdSpec = OptionValue[SourceVaultSearchPromptRoutes, {opts}, "CreatedAt"];
+    updatedSpec = OptionValue[SourceVaultSearchPromptRoutes, {opts}, "UpdatedAt"];
+
+    channels = Which[
+      channel === All, {"public", "private", "local"},
+      StringQ[channel], {channel},
+      ListQ[channel], Select[channel, StringQ],
+      True, {"public"}];
+
+    routes = Join @@ Map[
+      Function[ch,
+        With[{r = Quiet @ Check[
+            SourceVaultListPromptRoutes[
+              "Channel" -> ch, "IncludeSeed" -> includeSeed], {}]},
+          If[ListQ[r], Select[r, AssociationQ], {}]]],
+      channels];
+
+    (* dedupe by RouteId *)
+    routes = DeleteDuplicatesBy[routes,
+      Lookup[#, "RouteId", CreateUUID[]] &];
+
+    Select[routes,
+      Function[rt,
+        iSVPRRouteTextMatch[rt, query] &&
+        iSVPRRouteDateInRange[rt, "CreatedAt", createdSpec] &&
+        iSVPRRouteDateInRange[rt, "UpdatedAt", updatedSpec]]]
+  ];
+
+SourceVaultSearchPromptRoutes[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" ->
+      "Expected SourceVaultSearchPromptRoutes[query_String, opts]."|>;
+
+(* ---------- format / display ---------- *)
+
+(* one example prompt string for display (first example or memo) *)
+iSVPRRouteDisplayPrompt[route_Association] :=
+  Module[{matcher, examples},
+    matcher  = Lookup[route, "Matcher", <||>];
+    examples = If[AssociationQ[matcher],
+      Lookup[matcher, "Examples", {}], {}];
+    If[ListQ[examples] && Length[examples] > 0 && StringQ[First[examples]],
+      First[examples],
+      Lookup[route, "RouteId", ""]]];
+iSVPRRouteDisplayPrompt[_] := "";
+
+(* the function-call expression string for the ToInput button *)
+iSVPRRouteInputExpr[route_Association] :=
+  Module[{te, target, sym},
+    te = Lookup[route, "TargetExprString", Missing[]];
+    If[StringQ[te], Return[te]];
+    target = Lookup[route, "Target", <||>];
+    sym = If[AssociationQ[target],
+      Lookup[target, "FunctionSymbol", Missing[]], Missing[]];
+    If[StringQ[sym], sym <> "[]", "(* no target expression *)"]];
+iSVPRRouteInputExpr[_] := "(* no target expression *)";
+
+(* privacy label, env-independent English word *)
+iSVPRPrivacyLabel[route_Association] :=
+  Module[{lv},
+    lv = Lookup[Lookup[route, "Privacy", <||>], "PrivacyLevel", 0.0];
+    Which[
+      !NumericQ[lv], "Unknown",
+      lv >= 0.75, "Secret",
+      lv >= 0.5,  "Private",
+      lv > 0.0,   "Restricted",
+      True,       "Public"]];
+iSVPRPrivacyLabel[_] := "Unknown";
+
+Options[SourceVaultFormatPromptRouteList] = {};
+
+SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
+  Module[{filtered, cols, header, body},
+    filtered = Select[routes, AssociationQ];
+    If[filtered === {},
+      Return[Style[
+        "\:8a72\:5f53\:3059\:308b\:4fdd\:5b58\:6e08\:307f\:30d7\:30ed\:30f3\:30d7\:30c8\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
+        FontFamily -> "Yu Gothic UI"]]];
+    cols = {"Prompt", "Memo", "Target", "CreatedAt", "UpdatedAt",
+            "Privacy", "Actions"};
+    header = Map[
+      Style[#, Bold, FontFamily -> "Yu Gothic UI"] &, cols];
+    body = Map[
+      Function[rt,
+        Module[{prompt, memo, targetSym, created, updated, privLabel,
+                routeId, channel, inputExpr},
+          prompt   = iSVPRRouteDisplayPrompt[rt];
+          memo     = Lookup[rt, "Memo", ""];
+          targetSym = Lookup[Lookup[rt, "Target", <||>],
+            "FunctionSymbol", ""];
+          created  = Lookup[rt, "CreatedAt", ""];
+          updated  = Lookup[rt, "UpdatedAt", ""];
+          privLabel = iSVPRPrivacyLabel[rt];
+          routeId  = Lookup[rt, "RouteId", ""];
+          channel  = Lookup[rt, "_Channel", "public"];
+          inputExpr = iSVPRRouteInputExpr[rt];
+          {
+            Style[prompt, FontFamily -> "Yu Gothic UI"],
+            Style[If[StringQ[memo], memo, ""],
+              FontFamily -> "Yu Gothic UI", GrayLevel[0.35]],
+            Style[targetSym, FontFamily -> "Courier"],
+            Style[ToString[created], FontFamily -> "Yu Gothic UI",
+              FontSize -> 10],
+            Style[ToString[updated], FontFamily -> "Yu Gothic UI",
+              FontSize -> 10],
+            Style[privLabel, FontFamily -> "Yu Gothic UI",
+              Which[
+                privLabel === "Public", GrayLevel[0.5],
+                privLabel === "Restricted", RGBColor[0.6, 0.5, 0.2],
+                True, RGBColor[0.7, 0.15, 0.15]]],
+            Row[{
+              (* Preview: dry-run, shows what would execute *)
+              Button[
+                Style["Preview", FontFamily -> "Yu Gothic UI", FontSize -> 10],
+                With[{rid = routeId},
+                  MessageDialog[
+                    Column[{
+                      Style["Preview (dry-run): " <> rid, Bold],
+                      Quiet @ Check[
+                        SourceVaultExecutePromptRoute[
+                          iSVPRRouteDisplayPrompt[rt], "DryRun" -> True],
+                        "(preview failed)"]}]]],
+                Appearance -> "Frameless",
+                BaseStyle -> {"Hyperlink"},
+                Method -> "Queued"],
+              "  ",
+              (* Run: execute now *)
+              Button[
+                Style["Run", FontFamily -> "Yu Gothic UI", FontSize -> 10,
+                  RGBColor[0.15, 0.45, 0.30]],
+                With[{p = iSVPRRouteDisplayPrompt[rt]},
+                  SourceVaultExecutePromptRoute[p]],
+                Appearance -> "Frameless",
+                BaseStyle -> {"Hyperlink"},
+                Method -> "Queued"],
+              "  ",
+              (* ToInput: write the saved function-call into a new
+                 Input cell (does not evaluate it) *)
+              Button[
+                Style["ToInput", FontFamily -> "Yu Gothic UI", FontSize -> 10,
+                  RGBColor[0.2, 0.38, 0.65]],
+                With[{ie = inputExpr},
+                  Module[{target = InputNotebook[]},
+                    If[Head[target] === NotebookObject,
+                      NBAccess`NBWriteInputCellAndMaybeEvaluate[
+                        target, ie, False]]]],
+                Appearance -> "Frameless",
+                BaseStyle -> {"Hyperlink"},
+                Method -> "Queued"]
+            }]
+          }]],
+      filtered];
+    Grid[
+      Prepend[body, header],
+      Frame -> All,
+      FrameStyle -> Directive[GrayLevel[0.85]],
+      Background -> {None, {GrayLevel[0.92], {White}}},
+      Alignment -> {Left, Center},
+      Spacings -> {1.2, 0.7},
+      BaseStyle -> {FontFamily -> "Yu Gothic UI"}
+    ]
+  ];
+
+SourceVaultFormatPromptRouteList[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" ->
+      "Expected SourceVaultFormatPromptRouteList[routes_List, opts]."|>;
+
 
 End[];
 
