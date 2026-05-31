@@ -1008,6 +1008,8 @@ ClearAll[
   iSVVersionSortKey, iSVAssignIntentsToFetched,
   iSVNormalizeRegistryTopic,
   iSVMirrorAnthropicToClaudecode, iSVResolveIntentToTuple,
+  iSVModelIntentMapPath, iSVSaveModelIntentMap, iSVLoadModelIntentMap,
+  iSVValidIntentSpec,
   iLog, iWarn, iVerbose,
   iReadStringSymbol, iCwd, iPackageDir,
   iResolveDropboxRoot, iResolveRoots, iEnsureRoots, iEnsureDir,
@@ -5700,6 +5702,57 @@ $iSVModelIntentMap = <|
     {"openai", "heavy"}}
 |>;
 
+(* intent \:30de\:30c3\:30d4\:30f3\:30b0\:306e\:6c38\:7d9a\:5316 (2026-05-31 \:8ffd\:52a0)\:3002
+   \:4ee5\:524d\:306f $iSVModelIntentMap \:304c\:30ed\:30fc\:30c9\:6bce\:306b\:30c7\:30d5\:30a9\:30eb\:30c8\:521d\:671f\:5316\:3055\:308c\:308b\:3060\:3051\:3067\:3001
+   SourceVaultSetModelIntent \:306e\:5909\:66f4\:304c\:30e1\:30e2\:30ea\:4e0a\:306e\:307f\:3002\:518d\:8d77\:52d5\:30fb\:518d\:30ed\:30fc\:30c9\:3067
+   \:8a2d\:5b9a\:304c\:6d88\:3048\:3066\:3044\:305f\:3002PrivateVault/config/model-intent-map.json \:306b\:6c38\:7d9a\:5316\:3059\:308b\:3002
+   provider/intent \:306f ASCII \:306e\:307f\:306a\:306e\:3067 RawJSON \:5f80\:5fa9\:306f\:5b89\:5168\:3002 *)
+iSVModelIntentMapPath[] :=
+  Module[{d},
+    d = FileNameJoin[{SourceVault`$SourceVaultRoots["PrivateVault"], "config"}];
+    iEnsureDir[d];
+    FileNameJoin[{d, "model-intent-map.json"}]
+  ];
+
+(* \:30c7\:30a3\:30b9\:30af\:3078\:4fdd\:5b58\:3002\:5931\:6557\:3057\:3066\:3082\:30e1\:30e2\:30ea\:4e0a\:306e\:5024\:306f\:6709\:52b9\:306a\:307e\:307e\:7d99\:7d9a\:3002 *)
+iSVSaveModelIntentMap[] :=
+  Quiet @ Check[
+    If[AssociationQ[$iSVModelIntentMap],
+      iSaveJSON[iSVModelIntentMapPath[], $iSVModelIntentMap]; True,
+      False],
+    False];
+
+(* \:30c7\:30a3\:30b9\:30af\:304b\:3089\:5fa9\:5143\:3057\:3066\:30c7\:30d5\:30a9\:30eb\:30c8\:306b\:30de\:30fc\:30b8\:3002
+   \:30ad\:30fc\:6bce\:306b\:4e0a\:66f8\:304d (\:5b58\:5728\:3057\:306a\:3044\:30ad\:30fc\:306f\:30c7\:30d5\:30a9\:30eb\:30c8\:5024\:3092\:7dad\:6301)\:3002
+   \:8aad\:307f\:8fbc\:3093\:3060\:5024\:306e\:578b\:3092\:691c\:8a3c\:3057\:3001\:4e0d\:6b63\:306a\:30a8\:30f3\:30c8\:30ea\:306f\:7121\:8996\:3059\:308b\:3002 *)
+iSVLoadModelIntentMap[] :=
+  Module[{path, loaded},
+    path = Quiet @ Check[iSVModelIntentMapPath[], $Failed];
+    If[!StringQ[path] || !FileExistsQ[path], Return[$iSVModelIntentMap, Module]];
+    loaded = Quiet @ iLoadJSONFromFile[path];
+    If[!AssociationQ[loaded], Return[$iSVModelIntentMap, Module]];
+    KeyValueMap[
+      Function[{k, v},
+        If[MemberQ[{"$ClaudeModel", "$ClaudeDocModel",
+                    "$ClaudePrivateModel", "$ClaudeFallbackModels"}, k] &&
+           iSVValidIntentSpec[k, v],
+          $iSVModelIntentMap[k] = v]],
+      loaded];
+    $iSVModelIntentMap
+  ];
+
+(* spec \:306e\:578b\:691c\:8a3c\:3002$ClaudeFallbackModels \:306f {{provider,intent},...}\:3001
+   \:305d\:308c\:4ee5\:5916\:306f {provider,intent}\:3002JSON \:5f80\:5fa9\:5f8c\:306f List \:306b\:306a\:308b\:306e\:3067 ListQ \:3067\:5224\:5b9a\:3002 *)
+iSVValidIntentSpec["$ClaudeFallbackModels", v_] :=
+  ListQ[v] && AllTrue[v, ListQ[#] && Length[#] >= 2 &&
+    StringQ[#[[1]]] && StringQ[#[[2]]] &];
+iSVValidIntentSpec[_String, v_] :=
+  ListQ[v] && Length[v] >= 2 && StringQ[v[[1]]] && StringQ[v[[2]]];
+iSVValidIntentSpec[___] := False;
+
+(* \:30ed\:30fc\:30c9\:6642\:306b\:30c7\:30a3\:30b9\:30af\:304b\:3089\:5fa9\:5143 (\:30c7\:30d5\:30a9\:30eb\:30c8\:521d\:671f\:5316\:306e\:5f8c) *)
+Quiet @ Check[iSVLoadModelIntentMap[], Null];
+
 (* intent \:30de\:30c3\:30d4\:30f3\:30b0\:306e\:8aad\:307f\:53d6\:308a\:516c\:958b\:95a2\:6570\:3002NBAccess`NBSyncClaudeModelVars \:304c
    \:3053\:308c\:3092\:8aad\:3093\:3067\:30e2\:30c7\:30eb\:89e3\:6c7a\:30fb\:4ee3\:5165\:3092\:884c\:3046\:3002intent \:5272\:308a\:5f53\:3066\:81ea\:4f53\:306f
    SourceVault \:304c\:7ba1\:8f96\:3057\:3001NBAccess \:306f\:8aad\:307f\:53d6\:308b\:3060\:3051\:3002 *)
@@ -5723,10 +5776,12 @@ SourceVaultSetModelIntent[variable_String, spec_, opts:OptionsPattern[]] :=
       Return[<|"Status" -> "Failed", "Reason" -> "UnknownVariable",
         "Variable" -> variable|>]];
     $iSVModelIntentMap[variable] = spec;
+    (* \:30c7\:30a3\:30b9\:30af\:306b\:6c38\:7d9a\:5316 (\:518d\:8d77\:52d5\:5f8c\:3082\:8a2d\:5b9a\:304c\:6b8b\:308b) *)
+    iSVSaveModelIntentMap[];
     (* \:5373\:5ea7\:306b\:5b9f\:5909\:6570\:3078\:53cd\:6620 (Private \:5185\:306a\:306e\:3067\:5b8c\:5168\:4fee\:98fe) *)
     SourceVault`SourceVaultAssignClaudeModels[];
     <|"Status" -> "OK", "Variable" -> variable, "Spec" -> spec,
-      "Note" -> "intent updated and applied to live variable"|>
+      "Note" -> "intent updated, persisted to disk, and applied to live variable"|>
   ];
 SourceVaultSetModelIntent[___] :=
   <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
