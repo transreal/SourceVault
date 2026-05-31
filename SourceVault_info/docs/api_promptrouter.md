@@ -1,214 +1,126 @@
-# SourceVault_promptrouter API リファレンス
+# api_promptrouter — SourceVault PromptRouter API リファレンス
 
-SourceVault` 拡張パッケージ。PromptRouter（プロンプト→ルート解決・実行・履歴・登録・プライバシ伝播）機能を提供する。SourceVault.wl の bootstrap から Get[] で読み込まれ、独立パッケージではない。ClaudeRuntime / ClaudeOrchestrator への hard-depend なし（弱呼び出しのみ）。
+SourceVault` コンテキスト拡張。独立パッケージではなく `SourceVault.wl` の bootstrap から `Get[]` でロードされる。`Needs["ClaudeRuntime`"]` / `Needs["ClaudeOrchestrator`"]` は呼ばず、可用性は実行時に公開シンボル名から検出する。ロードは冪等。関連: [SourceVault](https://github.com/transreal/SourceVault), [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime), [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator)。
 
-関連: [SourceVault](https://github.com/transreal/SourceVault), [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime), [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator), [NBAccess](https://github.com/transreal/NBAccess)
+PromptRoute は決定論的に prompt をコール可能関数へ振り分けるレジストリエントリ。PromptRun は実行履歴で、append-only JSONL（`<PrivateVault>/promptrouter/runs/prompt-runs.jsonl`）に保存されコンパイル済みレジストリには書かれない。
 
-## 変数
+## ステータス / 可用性
 
 ### $SourceVaultPromptRouterVersion
 型: String
 PromptRouter 拡張のバージョン文字列。
 
-## ステータス / 可用性
-
 ### SourceVaultPromptRouterStatus[] → Association
-拡張のバージョン・実装フェーズ・claudecode / SourceVault / ClaudeRuntime / ClaudeOrchestrator の可用性、ClaudeEval 自動 dispatch の有効状態を返す。
+拡張のバージョン・実装フェーズ、claudecode / SourceVault / ClaudeRuntime / ClaudeOrchestrator の可用性、自動 ClaudeEval ディスパッチが現在アクティブかを記述した Association を返す。
 
-### SourceVaultPromptRouterAvailableQ[] → Bool
-PromptRouter 拡張自体が SourceVault` context に読み込まれていれば True。ClaudeRuntime/ClaudeOrchestrator の有無は問わない。
+### SourceVaultPromptRouterAvailableQ[] → True|False
+拡張自体が SourceVault` コンテキストにロード済みなら True。ClaudeRuntime / ClaudeOrchestrator の存在は含意しない。
 
-### SourceVaultPromptRouterActiveQ[caller] → Bool
-caller からの要求を PromptRouter が処理すべきか。caller: "Manual" | "ClaudeEval" | Automatic（Automatic は "ClaudeEval" 扱い）。Manual API は常時有効。Automatic ClaudeEval dispatch は ClaudeOrchestrator が読み込まれているときのみ有効。
+### SourceVaultPromptRouterActiveQ[caller] → True|False
+指定 caller のリクエストを PromptRouter が処理すべきなら True。caller は `"Manual"` | `"ClaudeEval"` | `Automatic`（既定 Automatic、`"ClaudeEval"` 扱い）。Manual API は拡張ロード時は常にアクティブ。自動 ClaudeEval ディスパッチは ClaudeOrchestrator もロード済みのときのみアクティブ。
 
 ## ルート解決 / 実行
 
 ### SourceVaultResolvePromptRoute[prompt, opts]
-prompt を実行せずにルート決定 Association に解決する（dry-run）。
-→ Association（Status / Decision / RouteId / Target / Parameters / Privacy 等）
-Options:
-- "DryRun" -> False
-- "AllowLLMRouter" -> Automatic
-- "AllowWorkflow" -> Automatic
-- "PrivacyLevel" -> Automatic
-- "StorePrompt" -> "HashOnly" ("HashOnly" | "PrivateRaw" | "Off")
-- "FallbackToClaudeEval" -> True
-- "Caller" -> Automatic
+prompt をルート判定 Association へ解決（実行はしない）。決定論的 FunctionRoute マッチ、見つからなければ字句検索フォールバックを行う。
+→ Association（Status / Decision / 抽出された正準パラメータ等）
+Options: "DryRun" -> False, "AllowLLMRouter" -> Automatic, "AllowWorkflow" -> Automatic, "PrivacyLevel" -> Automatic, "StorePrompt" -> "HashOnly", "FallbackToClaudeEval" -> True, "Caller" -> Automatic
 
 ### SourceVaultExecutePromptRoute[prompt, opts]
-ルート解決→adapter→allowlist チェック→ReadOnly callable のみ dispatch→PromptRun 記録。未 dispatch のときは `<|"Status" -> "NotDispatched", ...|>` を返し、ClaudeEval weak-call は legacy ルートにフォールバック。
-→ Association
-Options: SourceVaultResolvePromptRoute と同じ
+ルートを解決し実行（resolve → adapter → allowlist チェック → ReadOnly コール可能のみディスパッチ → PromptRun 記録）。manual / test / diagnostics API で評価してよい。
+→ Association（ディスパッチ不可時 `<|"Status" -> "NotDispatched", ...|>` で ClaudeEval にフォールバック）
+Options: SourceVaultResolvePromptRoute と同一
 
-### SourceVaultRouteExplain[prompt, opts] → String | Association
-prompt がどう routing されるかの人間可読な説明を返す。
+### SourceVaultRouteExplain[prompt, opts] → String|Association
+prompt がどう振り分けられるかの人間可読な説明を返す。
 
 ### SourceVaultProposePromptRoute[prompt_String, opts]
-ClaudeEval 向け PromptRouter API（spec v11 5.3）。schedule プロンプトを未評価の proposal 式 `HoldComplete[SourceVaultUpcomingSchedule[..., "FilterSpec" -> <|...|>]]` に解決し、PromptRouteProposal Association（"ProposedExpression" キー）として返す。式は評価しない。非 schedule プロンプトでは Status "NotDispatched"。
-→ Association
+ClaudeEval 向け API。schedule prompt を未評価の提案式 `HoldComplete[SourceVaultUpcomingSchedule[..., "FilterSpec" -> <|...|>]]` に解決し、それを `"ProposedExpression"` に持つ PromptRouteProposal Association を返す。式は決して評価しない。schedule 以外の prompt は Status NotDispatched。
+→ Association（"ProposedExpression" フィールドを持つ）
+prompt の日付範囲（「今日から3日」「今月」）は Period オプションに、その他の絞り込み（「未完了 todo」「今週の締切」）は FilterSpec リテラル Association（spec 5.4.3 の閉じた DSL: Kind And/Or/Not/Field、ホワイトリスト Op、スキーマフィールド名のみ）になる。
 
-## PromptRun 履歴（append-only JSONL）
+## PromptRun 履歴 / 記録
 
 ### SourceVaultPromptRunRecord[prompt, routeDecision, result, opts]
-PromptRun を `<PrivateVault>/promptrouter/runs/prompt-runs.jsonl` に追記する。registry には書き込まない。raw prompt はデフォルト未保存（hash のみ）。
-→ `<|"Status" -> "OK"|"DryRun"|"Skipped"|"Failed", "RunId" -> _, "Record" -> _|>`
-Options:
-- "StorePrompt" -> "HashOnly" ("PrivateRaw" | "Off" も可)
-- "PrivacyLevel" -> 0.0
-- "PrivacyOrigin" -> {}
-- "AllowedTrustDomains" -> Automatic
-- "CloudFallback" -> "Ask"
-- "Dependencies" -> <||>
-- "ModelResolution" -> <||>
-- "DryRun" -> False
+PromptRun レコードを append-only JSONL ストアに追記する。生の prompt テキストは既定で保存せずハッシュのみ保持。
+→ `<|"Status" -> "OK"|"DryRun"|"Skipped"|"Failed", "RunId" -> ..., "Record" -> ...|>`
+Options: "StorePrompt" -> "HashOnly" ("PrivateRaw" | "Off" も可), "PrivacyLevel" -> 0.0, "PrivacyOrigin" -> {}, "AllowedTrustDomains" -> Automatic, "CloudFallback" -> "Ask", "Dependencies" -> <||>, "ModelResolution" -> <||>, "DryRun" -> False
 
-### SourceVaultPromptRunHistory[opts] → List[Association]
-PromptRun 履歴を newest-first で返す。
-Options:
-- "MaxResults" -> Automatic
-- "RouteId" -> Automatic
-- "Decision" -> Automatic
-- "Since" -> Automatic（ISO 日時文字列、Timestamp >= Since を残す）
+### SourceVaultPromptRunHistory[opts] → List
+append-only ストアから PromptRun レコードのリストを新しい順で返す。
+Options: "MaxResults" -> Automatic, "RouteId" -> Automatic, "Decision" -> Automatic, "Since" -> Automatic (ISO 日時文字列; Timestamp >= Since を保持)
 
-### SourceVaultCaptureLastPromptRun[opts] → Association
-最新の PromptRun を `<|"Status" -> "OK", "PromptRun" -> _|>` で返す。履歴空のときは Status "NoPromptRun"。
+### SourceVaultCaptureLastPromptRun[opts]
+履歴から最新の PromptRun を返す。
+→ `<|"Status" -> "OK", "PromptRun" -> ...|>` または履歴が空なら Status NoPromptRun
+Options: なし
 
 ### SourceVaultPromotePromptRun[runId_String, opts]
-PromptRun を分類（spec 10.3）し、deterministic ヒットならその route の Matcher に fingerprint と raw 例を強化追加する。workflow trace / LLM-only run は分類のみで auto-promote しない。
-→ Association（Status / Classification 等）
-Options:
-- "DryRun" -> True（rule 103 デフォルト）
-- "Confirm" -> False
-- "Channel" -> "public"
+記録済み PromptRun を分類（spec 10.3）し、決定論的ルートヒットの場合のみそのルートの Matcher を run の fingerprint と生例で強化する。WorkflowRouteDraft / NeedsReview は分類のみで自動昇格しない。
+→ Association（Status / Classification / Reason 等）
+Options: "DryRun" -> True (既定, rule 103), "Confirm" -> False, "Channel" -> "public"
 
-## Callable Allowlist
-
-### SourceVaultCallableAllowlistRegistry[] → Association
-SourceVault 所有の callable allowlist。FunctionId をキーに、raw Symbol / UseAsFunctionRoute / UseAsHandlerRef / SideEffectClass / OwnerPackage を保持。現在 `SourceVaultUpcomingSchedule` と `SourceVaultFindNotebooks` のみ登録。
-
-### SourceVaultCallableAllowlistView[] → Association
-SourceVault 所有 allowlist と、ClaudeOrchestrator が読み込まれていればその handler allowlist を弱呼び出しで取得しマージしたビュー。SourceVault 所有エントリがキー衝突時に優先。FunctionRoute dispatch / HandlerRef 解決の参照元。
-
-## PromptRoute 登録 / 取得
+## レジストリ書き込み / 読み出し
 
 ### SourceVaultRegisterPromptRoute[route_Association, opts]
-PromptRoute を compiled prompt-route-registry に追加または置換。atomic write（encode→verify→tmp→rename, Windows-safe）。
-→ Association（WrittenCount / SkippedCount / ByAction / Topic / Channel / Path）
-Options:
-- "DryRun" -> True（rule 103 デフォルト、計画のみ報告）
-- "Confirm" -> False
-- "Channel" -> "public"
+PromptRoute を compiled prompt-route-registry に追加/置換。DryRun -> False で atomic write（encode → verify → tmp → rename）。
+→ Association（WrittenCount / SkippedCount / ByAction / Topic / Channel / Path 集計）
+Options: "DryRun" -> True (既定, rule 103, 計画のみ報告し書き込まない), "Channel" -> "public"
 
-### SourceVaultListPromptRoutes[opts] → List[Association]
-channel の PromptRoute 群を返す。
-Options:
-- "Channel" -> "public"
-- "IncludeSeed" -> True（registry に無い RouteId について built-in seed を追加）
+### SourceVaultListPromptRoutes[opts] → List
+channel の PromptRoute を返す。IncludeSeed -> True ならレジストリに未登録の RouteId について組み込み seed ルートを追加する。
+Options: "IncludeSeed" -> True, "Channel" -> "public"
 
 ### SourceVaultGetPromptRoute[routeId_String, opts] → Association
-RouteId の PromptRoute を返す。無ければ Status "NotFound"。
+指定 RouteId の PromptRoute を返す。無ければ Status NotFound の Association。
+Options: "Channel" -> "public", "IncludeSeed" -> True
 
-### SourceVaultSearchPromptRoutes[query_String, opts] → List[Association]
-保存済み PromptRoute のうち prompt 例 / memo に query を部分一致で含むものを返す。query "" は全件。
-Options:
-- "CreatedAt" -> <|"From" -> _, "To" -> _|>
-- "UpdatedAt" -> <|"From" -> _, "To" -> _|>
-- "Channel" -> All | "public" | "private" | "local"
-- "IncludeSeed" -> True
+## コール可能 allowlist
 
-例: `SourceVaultSearchPromptRoutes["schedule", "Channel" -> "private", "UpdatedAt" -> <|"From" -> "2026-01-01"|>]`
+### SourceVaultCallableAllowlistRegistry[] → Association
+SourceVault 所有のコール可能 allowlist。FunctionId をキーに raw Symbol / UseAsFunctionRoute / UseAsHandlerRef / SideEffectClass / OwnerPackage を保持。SourceVault.wl に実在するコール可能のみ登録（現状 SourceVaultUpcomingSchedule, SourceVaultFindNotebooks）。raw シンボルを含むため JSON レジストリには書かれない。引数を渡すと Status Failed。
 
-### SourceVaultFormatPromptRouteList[routes_List, opts] → Grid
-保存済み PromptRoute を Grid（列: Prompt, Memo, Target, CreatedAt, UpdatedAt, Privacy）で描画。各行に Preview（dry-run 表示）/ Run（即実行）/ ToInput（保存済み式を新 Input cell に書き出し）の 3 ボタン。
+### SourceVaultCallableAllowlistView[] → Association
+SourceVault 所有 allowlist と、ClaudeOrchestrator ロード時はその handler allowlist（弱呼び出し）をマージした論理ビュー。FunctionRoute ディスパッチと HandlerRef 解決が参照する。キー衝突時は SourceVault 所有エントリが優先。引数を渡すと Status Failed。
 
-## Prompt 保存
-
-### SaveLastPrompt[memo_String, opts]
-直近成功した ClaudeEval / ContinueEval prompt run を名前付き PromptRoute として保存する。memo は自由テキスト注記。privacy は SourceVaultResolvePromptPrivacy で追跡。raw prompt / function はデフォルトで平文保存（PrivacyLevel と CloudFallback は記録）。
-→ Association
-Options:
-- "Channel" -> Automatic（privacy から resolve、"public" | "private" | "local"）
-- "Encrypt" -> False（True 指定時は Status "NotImplemented"。at-rest 暗号化は未実装）
-- "DryRun" -> False
-- "RouteId" -> Automatic
-
-## プライバシ伝播
+## プライバシー / 信頼ドメイン / モデル解決
 
 ### SourceVaultResolvePromptPrivacy[components_Association, opts]
-prompt の privacy 寄与（cell / prompt text / 依存 notebook / model 実行 floor / result / user override）を Max 合成し PrivacyLevel と関連メタデータを返す（spec 11.2）。SecretCell または PrivateModelExecution が True なら level を 0.75 以上に引き上げ、AllowedTrustDomains を {"Local", "Private"} に制限、CloudFallback を "Deny" に設定（spec 11.3 / 11.4）。
-→ `<|"Type" -> "PromptPrivacyResolution", "PrivacyLevel" -> _, "PrivacyOrigin" -> _, "AllowedTrustDomains" -> _, "CloudFallback" -> _, "RawPromptStored" -> False, "PromptStorageClass" -> "HashOnly", "CloudRouterAllowed" -> _, "RouterVersion" -> _|>`
+prompt のプライバシー寄与を単一 PrivacyLevel（全コンポーネントの Max, spec 11.2）に統合し AllowedTrustDomains / CloudFallback / CloudRouterAllowed メタを付与する。SecretCell または PrivateModelExecution コンポーネントはレベルを最低 0.75 に引き上げ、AllowedTrustDomains を {"Local","Private"} に、CloudFallback を "Deny" に制限。
+→ Association（"PrivacyLevel" / "PrivacyOrigin" / "AllowedTrustDomains" / "CloudFallback" / "CloudRouterAllowed" 等）
+Options: なし
+components の数値キー: "PromptCellPrivacyLevel", "PromptTextPrivacyLevel", "NotebookDependencyPrivacyLevel", "ModelExecutionPrivacyFloor", "ResultPrivacyLevel", "UserSpecifiedPrivacyLevel"（欠損は 0.0）、bool キー: "SecretCell", "PrivateModelExecution"
 
-入力 components キー: "PromptCellPrivacyLevel", "PromptTextPrivacyLevel", "NotebookDependencyPrivacyLevel", "ModelExecutionPrivacyFloor", "ResultPrivacyLevel", "UserSpecifiedPrivacyLevel"（数値、Max 合成）、"SecretCell" (Bool)、"PrivateModelExecution" (Bool)。
-
-### SourceVaultPromptPrivacyAllowsCloudRouter[level] → Bool
-PrivacyLevel が 0.5 未満（cloud-send 境界、spec 11.5）のときのみ True。引数は数値または privacy-resolution Association。非数値入力は False。
-
-### SourceVaultClassifyProviderTrustDomain[label_String]
-provider / route ラベルを TrustDomain にマップ（spec 12.2）。
-→ "Cloud" | "Local" | "Private" | Missing["UnclassifiedTrustDomain"]
-
-マッピング:
-- "Cloud": "chatgptcodex" / "codex" / "chatgptcodexcli" / "chatgpt codex" / "cloudllm" / "claudecodecli" / "claude code cli" / "claudecode" / "anthropic" / "openai"
-- "Local": "localonly" / "local only" / "local" / "localonlyllm"
-- "Private": "privatellm" / "private llm" / "private"
-- 他（"LocalOpenAICompatible" / "ExternalAPI" など）: Missing["UnclassifiedTrustDomain"]
-
-## Model 解決
+### SourceVaultPromptPrivacyAllowsCloudRouter[level] → True|False
+PrivacyLevel が 0.5 のクラウド送信境界未満のときのみ True（spec 11.5）。引数はレベル数値または privacy-resolution Association。非数値入力は unsafe 扱いで False。
 
 ### SourceVaultResolveModelForPromptRouter[query_Association, opts]
-model resolver の contract 層（spec 12）。query を full contract に normalise し、host の `SourceVault\`SourceVaultResolve["Model", nq]` を弱呼び出しする。resolver 不在 / 結果分類不能なら Status "NeedsModelClassification" を返す。PrivacyLevel >= 0.5 で Local/Private と確認できないモデルは cloud fallback せず Status "NeedsPrivateModel" を返す（spec 12.4）。
-→ Association（Status / Requested / Resolved / FallbackKind / CloudFallbackUsed / RouterVersion）
+モデルリゾルバ契約層（spec 12）。query を完全な ModelIntent / WeightClass / PrivacyLevel / AllowedTrustDomains / CloudFallback / RequiredCapabilities / DegradationPolicy 契約に正規化し、ホストリゾルバ `SourceVault`SourceVaultResolve["Model", query]` を弱呼び出しする。リゾルバ不在または結果が分類不能なら NeedsModelClassification を返す。PrivacyLevel >= 0.5 で未確認（非 Local/Private）モデルはクラウドフォールバックせず NeedsPrivateModel を返す。
+→ Association（Status / Requested / Resolved / FallbackKind / CloudFallbackUsed 等）。String ModelIntent 欠如時は Status Failed (MissingModelIntent)
+Options: なし
+query 既定: "ModelIntent" -> "router", "WeightClass" -> Automatic, "PrivacyLevel" -> 0.0, "AllowedTrustDomains" -> Automatic, "CloudFallback" -> "Ask", "RequiredCapabilities" -> {"TextIn","TextOut"}, "DegradationPolicy" -> "Flexible"
 
-入力 query キー（normaliser がデフォルト補完）:
-- "ModelIntent" (String, 必須。例 "router")
-- "WeightClass" -> Automatic
-- "PrivacyLevel" -> 0.0
-- "AllowedTrustDomains" -> Automatic
-- "CloudFallback" -> "Ask"
-- "RequiredCapabilities" -> {"TextIn", "TextOut"}
-- "DegradationPolicy" -> "Flexible"
+### SourceVaultClassifyProviderTrustDomain[label] → String|Missing
+プロバイダ/ルートラベルを TrustDomain にマッピング（spec 12.2）。"chatgptcodex" / "ChatGPTCodexCLI" / "ClaudeCodeCLI" / "CloudLLM" / "anthropic" / "openai" → "Cloud"; "LocalOnly" / "local" → "Local"; "PrivateLLM" / "private" → "Private"。曖昧/未知（LocalOpenAICompatible, ExternalAPI 等）は `Missing["UnclassifiedTrustDomain"]`。ChatGPT Codex はクラウドバックの CLI（sandbox はローカルだが推論はクラウド）。
 
-ModelIntent が String でなければ Status "Failed", Reason "MissingModelIntent"。
+## 再処理計画
 
-## Reprocess Plan
+### SourceVaultPromptReprocessPlan[opts]
+PromptRoute レジストリを走査し stale ルート（SchemaVersion / CompiledRegistryVersion 不一致、または StaleRouteIds オプション指定）を読み取り専用の再処理計画として返す。再処理は決して行わない。
+→ Association（stale ルートと分類: ReadOnly FunctionRoute → "AutoRecomputable", Intent/TabularQuery → "OnDemandRefresh", WorkflowRoute → "NeedsApproval"）
+Options: "StaleRouteIds" -> {}, "Channel" -> "public"
 
-### SourceVaultPromptReprocessPlan[opts] → Association
-PromptRoute registry を走査し、stale な route（SchemaVersion / CompiledRegistryVersion 不一致、または StaleRouteIds 指定）の read-only 再処理計画を返す（spec 14.2 / 14.3）。何も再処理しない（計画のみ）。
+## プロンプト保存 / 検索 / 表示 (Phase D UI)
 
-分類ポリシ（spec 14.3）:
-- FunctionRoute かつ ReadOnly callable → "AutoRecomputable"
-- Intent ルート → "OnDemandRefresh"
-- TabularQuery → "OnDemandRefresh"
-- WorkflowRoute / WorkflowTemplate → "NeedsApproval"
-- 不明 / 不正 → "NeedsApproval"
+### SaveLastPrompt[memo_String, opts]
+直近の成功した ClaudeEval / ContinueEval prompt run を名前付き PromptRoute として保存し、後で検索・再実行可能にする。memo は自由記述のメモで route の Memo フィールドに保存されテーブルに表示される。プライバシーは SourceVaultResolvePromptPrivacy で追跡。生 prompt/function は既定で平文保存だが PrivacyLevel と CloudFallback は route に記録される。
+→ Association（Status / RouteId 等）
+Options: "Channel" -> Automatic ("public"|"private"|"local", privacy から解決), "Encrypt" -> False (at-rest 暗号化は未実装; True は Status NotImplemented を返す), "DryRun" -> False, "RouteId" -> Automatic
 
-Options:
-- "StaleRouteIds" -> {}（明示的に stale 扱いする RouteId 群）
-- "Channel" -> "public"
+### SourceVaultSearchPromptRoutes[query_String, opts] → List
+prompt 例または memo に query を部分文字列として含む保存済み PromptRoute を返す（SourceVaultFindNotebooks Keywords と同様の部分一致）。query "" は全件マッチ。実行はしない。
+Options: "CreatedAt" -> <|"From"->_,"To"->_|> (定義日でフィルタ), "UpdatedAt" -> <|"From"->_,"To"->_|> (最終更新日でフィルタ), "Channel" -> All ("public"|"private"|"local"), "IncludeSeed" -> True
 
-## ルート決定 Association の主要キー（参考）
-
-- "Status": "OK" | "NotDispatched" | "NotFound" | "Failed"
-- "Decision": "DeterministicMatch" | "LexicalMatch" | "LexicalCandidates" | "NotImplemented" 等
-- "RouteId": String
-- "Target": `<|"Kind" -> "Function"|"Intent"|"TabularQuery"|"Workflow"|..., "FunctionId" -> _, "IntentId" -> _, "AdapterFunctionId" -> _|>`
-- "Parameters": Association（canonical parameters; PeriodDays / ScopeRef / OpenTodos / DateField 等）
-- "Privacy": Association（PrivacyLevel / AllowedTrustDomains / CloudFallback）
-- "ApproximateRoute": Bool（ReviewQueue で PeriodDays 指定時 True）
-
-## Adapter 変換規則（参考）
-
-Function target: canonical params → 実 Options
-- SourceVaultUpcomingSchedule: PeriodDays(Integer>0) → "Period" -> Quantity[n,"Days"]、ScopeRef.Name → "Scope"
-- SourceVaultFindNotebooks: OpenTodos=True → "OpenTodos"->True、DateField="Deadline" → "Deadline"->"DueSoon"、DateField="NextReview" → "NextReview"->"DueSoon"
-
-Intent target (spec 25.3 / 25.4):
-- "ReviewQueue" → SourceVaultFindNotebooks, Options `<|"NextReview"->"DueSoon"|>`（OpenTodos=True で追加、PeriodDays 指定で ApproximateRoute=True）
-- "OpenTodoList" → SourceVaultFindNotebooks, Options `<|"OpenTodos"->True|>`
-
-## 注意
-
-- raw prompt は本層では一切保存しない（hash のみ）。raw 保存は明示的別 opt。
-- 書き込み API は DryRun -> True がデフォルト（rule 103）。
-- compiled registry 書き込みは encode → verify → tmp → rename の atomic 操作（UTF-8 一貫）。
-- ClaudeRuntime / ClaudeOrchestrator 不在環境でも読み込み・動作する（弱呼び出しのみ）。
+### SourceVaultFormatPromptRouteList[routes_List, opts] → Grid
+保存済み PromptRoute を Grid（列: Prompt, Memo, Target, CreatedAt, UpdatedAt, Privacy）として描画。各行に 3 ボタン: Preview（dry-run, 実行せず内容表示）、Run（即実行）、ToInput（保存済み関数呼び出し式を新規 Input セルに書き込む）。SourceVaultFormatNotebookList をミラー。prompt で要求された prompt-route リストの既定表示形式。
+例: SourceVaultFormatPromptRouteList[SourceVaultSearchPromptRoutes["schedule"]]

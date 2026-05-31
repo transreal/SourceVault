@@ -446,6 +446,11 @@ SourceVaultListModels::usage =
   "SourceVaultResolve \:304c intent \:5358\:4f4d\:306e\:6700\:9069 1 \:4ef6\:3092\:8fd4\:3059\:306e\:306b\:5bfe\:3057\:3001\:3053\:308c\:306f catalog \:3092\:5217\:6319\:3059\:308b (\:4f8b: \:30d1\:30ec\:30c3\:30c8\:306e\:30e2\:30c7\:30eb\:9078\:629e)\:3002\n" <>
   "compiled registry \:3092\:512a\:5148\:3057\:3001\:7121\:3051\:308c\:3070 seed \:306b fallback\:3002Availability \:304c Unavailable \:306e\:30a8\:30f3\:30c8\:30ea\:306f\:9664\:5916\:3002";
 
+SourceVaultModelContextLength::usage =
+  "SourceVaultModelContextLength[provider, modelId] \:306f\:30e2\:30c7\:30eb\:306b\:7d10\:3065\:304f ContextLength \:3092\:8fd4\:3059\:3002\n" <>
+  "SourceVaultSetModel[..., \"ContextLength\" -> n] \:3067\:6c38\:7d9a\:5316\:3055\:308c\:305f\:5024\:3002\n" <>
+  "LM Studio \:7b49\:30ed\:30fc\:30ab\:30eb LLM \:306e context_length \:306b\:4f7f\:3046\:3002\:672a\:8a2d\:5b9a\:306a\:3089 None\:3002";
+
 SourceVaultListRegistries::usage =
   "SourceVaultListRegistries[opts] \:306f\:767b\:9332\:6e08\:307f registry topic \:3068 channel \:3092\:8fd4\:3059\:3002\n" <>
   "Options: \"Channel\" -> \"public\" | \"private\" | All (\:30c7\:30d5\:30a9\:30eb\:30c8 All)";
@@ -892,6 +897,42 @@ SourceVaultModelEndpointStatus::usage =
 SourceVaultDetectLocalModels::usage =
   "SourceVaultDetectLocalModels[opts] \:306f\:30ed\:30fc\:30ab\:30eb LLM \:30b5\:30fc\:30d0\:30fc (LM Studio \:7b49\:3001OpenAI \:4e92\:63db /v1/models) \:304b\:3089\:30e2\:30c7\:30eb\:4e00\:89a7\:3092\:63a8\:6e2c\:3059\:308b\:3002API \:30ad\:30fc\:4e0d\:8981\:3002\n\:30aa\:30d7\:30b7\:30e7\:30f3: Provider (\:65e2\:5b9a \"lmstudio\") / Endpoint (\:65e2\:5b9a\:306f ClaudeCode`$ClaudePrivateModel \:306e url \:3092\:512a\:5148\:3001\:7121\:3051\:308c\:3070 $SourceVaultModelEndpoints \:306e\:8a2d\:5b9a)\:3002\:30b5\:30fc\:30d0\:30fc\:304c\:30ad\:30fc\:4fdd\:8b77\:6709\:52b9\:306a\:5834\:5408\:3001API \:30ad\:30fc\:306f NBAccess`NBGetLocalLLMAPIKey \:7d4c\:7531\:3067\:81ea\:52d5\:89e3\:6c7a\:3055\:308c\:308b (\:4e8b\:524d\:306b NBStoreLocalLLMAPIKey \:3067\:767b\:9332)\:3002\n\:623b\:308a\:5024: <|\"Status\" -> \"OK\"|\"Offline\", \"Provider\" -> _, \"Endpoint\" -> _, \"Models\" -> {_String..}|>\:3002";
 
+SourceVaultSetModel::usage =
+  "SourceVaultSetModel[provider, intent, modelId, opts] \:306f compiled model registry \:306b\n" <>
+  "\:624b\:52d5\:3067 1 \:30a8\:30f3\:30c8\:30ea\:3092\:66f8\:304d\:8fbc\:3080 (API \:30ad\:30fc\:4e0d\:8981)\:3002Source -> \"manual\" \:3067\:4fdd\:5b58\:3057\:3001\:540c (provider,\n" <>
+  "intent) \:306e\:65e2\:5b58\:30a8\:30f3\:30c8\:30ea\:3092\:7f6e\:304d\:63db\:3048\:308b\:3002\:30aa\:30d5\:30e9\:30a4\:30f3\:74b0\:5883\:3084 API \:30ad\:30fc\:672a\:767b\:9332\:74b0\:5883\:3067\:6700\:65b0\:30e2\:30c7\:30eb\:3092\n" <>
+  "\:56fa\:5b9a\:3057\:305f\:3044\:3068\:304d\:3001\:307e\:305f\:306f\:81ea\:52d5\:53d6\:5f97\:3067\:304d\:306a\:3044\:30e2\:30c7\:30eb\:3092\:6307\:5b9a\:3057\:305f\:3044\:3068\:304d\:306b\:4f7f\:3046\:3002\n" <>
+  "\:30aa\:30d7\:30b7\:30e7\:30f3: Channel (\:65e2\:5b9a public) / Class (\:65e2\:5b9a Automatic=\:63a8\:8ad6) / Capabilities (\:65e2\:5b9a Automatic)\:3002\n" <>
+  "\:4f8b: SourceVaultSetModel[\"anthropic\", \"heavy\", \"claude-opus-4-8\"]";
+
+SourceVaultClearModelRegistry::usage =
+  "SourceVaultClearModelRegistry[opts] \:306f compiled model registry \:3092\:524a\:9664\:3057\:3001\:6b21\:56de\:30a2\:30af\:30bb\:30b9\:6642\:306b\n" <>
+  "seed (\:30b3\:30fc\:30c9\:5185\:306e\:6700\:65b0 iModelSeedEntries) \:304b\:3089\:518d\:69cb\:7bc9\:3055\:305b\:308b\:3002compiled \:306b\:53e4\:3044 seed \:30b3\:30d4\:30fc\n" <>
+  "(\:4f8b: \:904e\:53bb\:306b\:30b3\:30d4\:30fc\:3055\:308c\:305f claude-opus-4-7) \:304c\:6b8b\:3063\:3066 ClaudeResolveModel \:304c\:53e4\:3044 ID \:3092\:8fd4\:3057\n" <>
+  "\:7d9a\:3051\:308b\:3068\:304d\:306e\:5fa9\:65e7\:7528\:3002seed \:81ea\:4f53\:306f\:6d88\:3055\:306a\:3044\:3002\:30aa\:30d7\:30b7\:30e7\:30f3: Channel (\:65e2\:5b9a public)\:3002\n" <>
+  "\:4f8b: SourceVaultClearModelRegistry[]";
+
+SourceVaultSetModelIntent::usage =
+  "SourceVaultSetModelIntent[variable, spec] \:306f SourceVault \:304c\:9078\:629e\:3059\:308b\:30e2\:30c7\:30eb\:306e intent \:5272\:308a\:5f53\:3066\:3092\n" <>
+  "\:5909\:66f4\:3059\:308b\:3002variable: \"$ClaudeModel\" | \"$ClaudeDocModel\" | \"$ClaudePrivateModel\" |\n" <>
+  "\"$ClaudeFallbackModels\"\:3002spec: {provider, intent} (\:4f8b {\"anthropic\", \"heavy\"})\:3001\n" <>
+  "FallbackModels \:306f {{provider,intent}, ...}\:3002\:8a2d\:5b9a\:5f8c SourceVaultAssignClaudeModels[] \:3092\:547c\:3093\:3067\n" <>
+  "\:5b9f\:5909\:6570\:306b\:53cd\:6620\:3059\:308b\:3002\:3053\:306e\:95a2\:6570\:306f $NBApprovalHeads \:306b\:767b\:9332\:3055\:308c\:3001ClaudeEval \:7d4c\:7531\:3067\:306f\n" <>
+  "Hold -> Approve \:304c\:5fc5\:8981 (\:30e2\:30c7\:30eb\:9078\:629e\:306e\:5909\:66f4\:306f\:691c\:8a3c\:5bfe\:8c61)\:3002\n" <>
+  "\:4f8b: SourceVaultSetModelIntent[\"$ClaudeModel\", {\"anthropic\", \"heavy\"}]";
+
+SourceVaultModelIntentMap::usage =
+  "SourceVaultModelIntentMap[] \:306f\:5909\:6570\:540d -> intent spec \:306e\:30de\:30c3\:30d4\:30f3\:30b0\:3092\:8fd4\:3059\:8aad\:307f\:53d6\:308a\:516c\:958b\:95a2\:6570\:3002\n" <>
+  "NBAccess`NBSyncClaudeModelVars \:304c\:3053\:308c\:3092\:8aad\:3093\:3067\:30e2\:30c7\:30eb\:5909\:6570\:3092\:89e3\:6c7a\:30fb\:4ee3\:5165\:3059\:308b\:3002\n" <>
+  "\:4f8b: <|\"$ClaudeModel\" -> {\"claudecode\",\"code-heavy\"}, ...|>";
+
+SourceVaultAssignClaudeModels::usage =
+  "SourceVaultAssignClaudeModels[opts] \:306f intent \:30de\:30c3\:30d4\:30f3\:30b0 (SourceVault) \:3068\:4fe1\:983c\:30ed\:30fc\:30ab\:30eb\:30b5\:30fc\:30d0\n" <>
+  "(NBAccess`NBResolveLocalServer) \:304b\:3089 $ClaudeModel / $ClaudeDocModel / $ClaudePrivateModel /\n" <>
+  "$ClaudeFallbackModels \:3092\:8a2d\:5b9a\:3059\:308b\:3002SourceVault \:30ed\:30fc\:30c9\:6642\:306b\:81ea\:52d5\:5b9f\:884c\:3055\:308c\:308b\:3002\n" <>
+  "\:30ed\:30fc\:30ab\:30eb\:30b5\:30fc\:30d0\:306e IP/URL \:306f NBAccess \:304c\:5b89\:5168\:306b\:89e3\:6c7a (\:672a\:77e5\:30b5\:30d6\:30cd\:30c3\:30c8\:306f localhost \:306e\:307f)\:3001\n" <>
+  "\:30e2\:30c7\:30eb\:540d\:306f ClaudeResolveModel \:306e intent \:89e3\:6c7a\:306b\:3088\:308b\:3002\:30aa\:30d7\:30b7\:30e7\:30f3: Verbose (\:65e2\:5b9a False)\:3002";
+
 SourceVaultRefreshModelRegistry::usage =
   "SourceVaultRefreshModelRegistry[opts] \:306f\:30af\:30e9\:30a6\:30c9 (anthropic/openai) \:3068\:30ed\:30fc\:30ab\:30eb (LM Studio) \:306e\:30a8\:30f3\:30c9\:30dd\:30a4\:30f3\:30c8\:304b\:3089\:30e2\:30c7\:30eb\:4e00\:89a7\:3092\:53d6\:5f97\:3057\:3001compiled model registry \:3092\:66f4\:65b0\:3059\:308b\:3002\n\:30af\:30e9\:30a6\:30c9\:306e API \:30ad\:30fc\:306f NBAccess`NBGetAPIKey \:7d4c\:7531\:3067\:53d6\:5f97\:3057\:3001\:30ad\:30fc\:304c\:7121\:3044 provider \:306f\:30b9\:30ad\:30c3\:30d7\:3059\:308b\:3002\n\:53d6\:5f97\:3057\:305f\:30a8\:30f3\:30c8\:30ea\:306f Source -> \"auto-fetch\" \:3067\:30de\:30fc\:30af\:3057\:3001\:65e2\:5b58\:306e seed/manual \:30a8\:30f3\:30c8\:30ea\:306f\:6e29\:5b58\:3057\:3066\:30de\:30fc\:30b8\:3059\:308b\:3002\n\:30aa\:30d7\:30b7\:30e7\:30f3: Providers (\:65e2\:5b9a All) / IncludeCloud (\:65e2\:5b9a Automatic) / DryRun (\:65e2\:5b9a False)\:3002\nregistry \:30a8\:30f3\:30c8\:30ea\:306f {Provider, ModelId, Endpoint, Class, Availability, Source} \:5f62\:5f0f\:3002\n\:623b\:308a\:5024: <|\"Status\" -> _, \"FetchedCount\" -> _, \"RegistryTotal\" -> _, \"PerProvider\" -> _, \"RegistryPath\" -> _|>\:3002";
 
@@ -962,6 +1003,11 @@ iL[ja_String, en_String] := If[$Language === "Japanese", ja, en];
    \:307e\:305f\:30ea\:30ed\:30fc\:30c9\:6642\:306b\:53e4\:5b9a\:7fa9\:304c\:6b8b\:3089\:306a\:3044\:3088\:3046 ClearAll \:3059\:308b *)
 ClearAll[
   iL,
+  iSVStandardFont,
+  iSVParseModelVersion, iSVInferModelIntentClass, iSVCompareVersions,
+  iSVVersionSortKey, iSVAssignIntentsToFetched,
+  iSVNormalizeRegistryTopic,
+  iSVMirrorAnthropicToClaudecode, iSVResolveIntentToTuple,
   iLog, iWarn, iVerbose,
   iReadStringSymbol, iCwd, iPackageDir,
   iResolveDropboxRoot, iResolveRoots, iEnsureRoots, iEnsureDir,
@@ -1048,11 +1094,28 @@ ClearAll[
   iSVSourceDescriptorFromPath, iSVCheckSourceFreshness,
   iSVRelinkDir, iSVRelinkLogPath, iSVContentHashOf, iSVHeaderUUIDOf,
   iSVProbeEndpoint, iSVFetchModelIds, iSVFetchCodexModelIds,
+  iSVParseModelVersion, iSVInferModelIntentClass, iSVCompareVersions,
+  iSVAssignIntentsToFetched, iSVVersionSortKey, iSVMirrorAnthropicToClaudecode,
   iSVMergeModelRegistry,
+  iSVNormalizeRegistryTopic,
   iSVResolveLocalKey, iSVPrivateModelTuple, iSVResolveLocalEndpoint,
   iSVPathSlash, iSVPathMatchKey, iSVRootMatchCands,
   iIngestEnsureNotebookUUID
 ];
+
+(* \:6a19\:6e96\:30d5\:30a9\:30f3\:30c8 (2026-05-31 \:8ffd\:52a0)\:3002
+   \:91cd\:8981: \:3053\:306e\:5b9a\:7fa9\:306f\:5fc5\:305a\:4e0a\:306e ClearAll[...] \:30d6\:30ed\:30c3\:30af\:306e\:5f8c\:308d\:306b\:7f6e\:304f\:3053\:3068\:3002
+   ClearAll \:30ea\:30b9\:30c8\:306b iSVStandardFont \:304c\:542b\:307e\:308c\:308b\:305f\:3081\:3001\:5b9a\:7fa9\:3092 ClearAll \:3088\:308a
+   \:524d\:306b\:7f6e\:304f\:3068 ClearAll \:304c\:5b9a\:7fa9\:3092\:6d88\:53bb\:3057\:3001iSVStandardFont[] \:304c\:672a\:5b9a\:7fa9\:306b\:306a\:308b\:3002
+   (\:305d\:308c\:304c\u300c\:95a2\:6570\:304c\:8a55\:4fa1\:3055\:308c\:305a\:5165\:529b\:304c\:305d\:306e\:307e\:307e\:8fd4\:308b\u300d\:539f\:56e0\:3060\:3063\:305f\u3002)
+   ClaudeCode`$ClaudeStandardFont \:304c\:5b9a\:7fa9\:6e08\:306a\:3089\:305d\:306e\:5024\:3092\:3001\:672a\:30ed\:30fc\:30c9\:30fb
+   \:672a\:5b9a\:7fa9\:30fb\:975e\:6587\:5b57\:5217\:306a\:3089 "Yu Gothic UI" \:3092\:8fd4\:3059\:3002 *)
+iSVStandardFont[] :=
+  Module[{val},
+    val = Quiet[ToExpression["ClaudeCode`$ClaudeStandardFont"]];
+    If[StringQ[val] && StringLength[val] > 0, val, "Yu Gothic UI"]
+  ];
+iSVStandardFont[___] := "Yu Gothic UI";
 
 (* ============================================================
    0. \:30ed\:30b0\:51fa\:529b\:30e6\:30fc\:30c6\:30a3\:30ea\:30c6\:30a3
@@ -1677,13 +1740,13 @@ iAuthorizeMaterialize[obj_Association, sinkSpec_] :=
 If[!ListQ[SourceVault`$SourceVaultSeedModelRegistry],
   SourceVault`$SourceVaultSeedModelRegistry = {
     <|"Provider" -> "anthropic", "Intent" -> "heavy",
-      "ModelId" -> "claude-opus-4-7", "Class" -> "Heavy-Cloud",
+      "ModelId" -> "claude-opus-4-8", "Class" -> "Heavy-Cloud",
       "Availability" -> "Available", "Source" -> "seed"|>,
     <|"Provider" -> "anthropic", "Intent" -> "math-extraction-heavy",
-      "ModelId" -> "claude-opus-4-7", "Class" -> "Heavy-Cloud",
+      "ModelId" -> "claude-opus-4-8", "Class" -> "Heavy-Cloud",
       "Availability" -> "Available", "Source" -> "seed"|>,
     <|"Provider" -> "anthropic", "Intent" -> "code-heavy",
-      "ModelId" -> "claude-opus-4-7", "Class" -> "Heavy-Cloud",
+      "ModelId" -> "claude-opus-4-8", "Class" -> "Heavy-Cloud",
       "Availability" -> "Available", "Source" -> "seed"|>,
     <|"Provider" -> "anthropic", "Intent" -> "sonnet",
       "ModelId" -> "claude-sonnet-4-6", "Class" -> "Mid-Cloud",
@@ -5253,7 +5316,20 @@ iRegistryEntryMatchesQuery[entry_Association, query_] :=
   Sort key tuple \:3092\:8fd4\:3059\:3002
 *)
 iRegistryResolveOrder[entry_Association] :=
-  Module[{availOrder, freshOrder, classOrder},
+  Module[{srcOrder, availOrder, freshOrder, classOrder,
+          versionOrder, suffixOrder, src, policy},
+    (* Stage 9 P1.5: Source \:512a\:5148\:5ea6\:3092\:6700\:512a\:5148\:30ad\:30fc\:306b\:3059\:308b\:3002
+       manual (SourceVaultSetModel \:660e\:793a\:6307\:5b9a) > auto-fetch (Refresh \:53d6\:5f97) >
+       seed (\:30b3\:30fc\:30c9\:306e\:30c7\:30d5\:30a9\:30eb\:30c8)\:3002\:30e6\:30fc\:30b6\:30fc\:304c\:660e\:793a\:6307\:5b9a\:3057\:305f\:30e2\:30c7\:30eb\:304c
+       Refresh \:3084 seed \:306b\:4e0a\:66f8\:304d\:3055\:308c\:305a\:78ba\:5b9f\:306b\:9078\:3070\:308c\:308b\:3088\:3046\:306b\:3059\:308b\:3002
+       Source \:30d5\:30a3\:30fc\:30eb\:30c9\:304c\:7121\:3044\:53e4\:3044\:30a8\:30f3\:30c8\:30ea\:306f PolicySource \:304b\:3089\:63a8\:5b9a\:3002 *)
+    src = Lookup[entry, "Source", ""];
+    policy = Lookup[entry, "PolicySource", ""];
+    srcOrder = Which[
+      src === "manual" || StringMatchQ[policy, "manual:" ~~ ___], 0,
+      src === "auto-fetch" || StringMatchQ[policy, "auto-fetch:" ~~ ___], 1,
+      StringMatchQ[policy, "seed:" ~~ ___], 2,
+      True, 1];
     availOrder = Switch[Lookup[entry, "Availability", "Unknown"],
       "Available", 0, "Deprecated", 1, "Unknown", 2, _, 3];
     freshOrder = Switch[Lookup[entry, "Freshness", "Unknown"],
@@ -5261,7 +5337,17 @@ iRegistryResolveOrder[entry_Association] :=
     classOrder = Switch[Lookup[entry, "Class", "Unknown"],
       "Heavy-Cloud", 0, "Heavy-Local", 1,
       "Light-Cloud", 2, "Light-Local", 3, _, 4];
-    {availOrder, freshOrder, classOrder}
+    (* Stage 9 P1.5: \:540c\:3058 provider/intent \:306b\:8907\:6570\:5019\:88dc\:304c\:3042\:308b\:3068\:304d
+       (seed \:306e opus-4-7 \:3068 auto-fetch \:306e opus-4-8 \:7b49)\:3001
+       \:30d0\:30fc\:30b8\:30e7\:30f3\:756a\:53f7\:304c\:5927\:304d\:3044 (\:65b0\:3057\:3044) \:307b\:3069\:512a\:5148\:3059\:308b\:3002
+       SortBy \:306f\:6607\:9806\:306a\:306e\:3067\:8ca0\:5024\:5316\:3057\:3066\:300c\:5927\:304d\:3044\:307b\:3069\:5148\:982d\:300d\:306b\:3002
+       \:307e\:305f preview/beta \:7b49 suffix \:4ed8\:304d\:306f\:5f8c\:65b9\:306b\:56de\:3059\:3002 *)
+    versionOrder = -iSVVersionSortKey[
+      Part[iSVParseModelVersion[Lookup[entry, "ModelId", ""]], 2]];
+    suffixOrder = If[
+      TrueQ[Part[iSVParseModelVersion[Lookup[entry, "ModelId", ""]], 3]],
+      1, 0];
+    {srcOrder, availOrder, freshOrder, suffixOrder, versionOrder, classOrder}
   ];
 
 (* \:30c7\:30d5\:30a9\:30eb\:30c8 model seed entries (\:30d6\:30fc\:30c8\:30b9\:30c8\:30e9\:30c3\:30d7\:7528):
@@ -5274,11 +5360,11 @@ iModelSeedEntries[] := {
     "Class" -> "Heavy-Local", "Capabilities" -> {"Reasoning", "Code"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "claudecode", "Intent" -> "code-heavy",
-    "ModelId" -> "claude-opus-4-7", "Availability" -> "Available",
+    "ModelId" -> "claude-opus-4-8", "Availability" -> "Available",
     "Class" -> "Heavy-Local", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "anthropic", "Intent" -> "heavy",
-    "ModelId" -> "claude-opus-4-7", "Availability" -> "Available",
+    "ModelId" -> "claude-opus-4-8", "Availability" -> "Available",
     "Class" -> "Heavy-Cloud", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "anthropic", "Intent" -> "extraction",
@@ -5388,6 +5474,8 @@ SourceVaultResolve[kind_String, query_Association,
     topic = OptionValue["Topic"];
     If[topic === Automatic || !StringQ[topic],
       topic = ToLowerCase[kind] <> "-registry"];
+    (* Stage 9 P1.5: \:660e\:793a Topic \:3082\:6b63\:898f\:5316\:3057\:3066\:66f8\:304d\:8fbc\:307f\:7d4c\:8def\:3068\:7d71\:4e00 *)
+    topic = iSVNormalizeRegistryTopic[topic];
     
     compiledEntries = iLoadRegistryEntries[iCompiledPath[topic, channel]];
     candidates = Select[compiledEntries,
@@ -5437,10 +5525,16 @@ SourceVaultListModels[provider_String, opts:OptionsPattern[]] :=
     topic = "model-registry";
     compiledEntries = iLoadRegistryEntries[
       iCompiledPath[topic, channel]];
+    If[!ListQ[compiledEntries], compiledEntries = {}];
     entries = Select[compiledEntries,
       Lookup[#, "Provider", ""] === provider &];
+    (* Stage 9 P1.5: compiled \:304c\:7a7a\:30fb\:8aad\:307f\:8fbc\:307f\:5931\:6557\:30fb\:5f53\:8a72 provider \:7121\:3057\:306e
+       \:3044\:305a\:308c\:3067\:3082 seed \:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3059\:308b (allowSeed \:6642)\:3002
+       \:4ee5\:524d\:306f compiled \:304c\:5b58\:5728\:3057\:3066\:3082\:7a7a\:30ea\:30b9\:30c8\:306e\:3068\:304d\:306b 2 \:56de\:76ee {} \:306b\:306a\:308b
+       \:4e0d\:5b89\:5b9a\:6027\:304c\:3042\:3063\:305f\:305f\:3081\:3001Length 0 \:5224\:5b9a\:3092\:78ba\:5b9f\:306b\:884c\:3046\:3002 *)
     If[Length[entries] === 0 && allowSeed,
       seedEntries = iLoadRegistryEntries[iSeedPath[topic]];
+      If[!ListQ[seedEntries], seedEntries = {}];
       entries = Select[seedEntries,
         Lookup[#, "Provider", ""] === provider &]];
     entries = Select[entries,
@@ -5451,6 +5545,292 @@ SourceVaultListModels[provider_String, opts:OptionsPattern[]] :=
     ids
   ];
 SourceVaultListModels[___] := {};
+
+(* Stage 9 P1.5: provider + modelId \:304b\:3089 ContextLength \:3092\:89e3\:6c7a\:3059\:308b\:516c\:958b\:95a2\:6570\:3002
+   claudecode \:304c $ClaudePrivateModel = {provider, modelId, url} \:306e context_length \:3092
+   \:5f15\:304f\:305f\:3081\:306b\:4f7f\:3046\:3002\:30ec\:30b8\:30b9\:30c8\:30ea\:306b ContextLength \:5c5e\:6027\:304c\:306a\:3051\:308c\:3070 None\:3002
+   \:91cd\:8981: modelId \:5b8c\:5168\:4e00\:81f4\:306e\:307f\:3092\:8fd4\:3059\:3002context_length \:306f\:30e2\:30c7\:30eb\:30fb\:74b0\:5883\:6bce\:306b
+   \:7570\:306a\:308b\:306e\:3067\:3001\:5225\:30e2\:30c7\:30eb\:306e\:5024\:3092\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3067\:8fd4\:3059\:3068\:8aa4\:3063\:305f\:9577\:3055\:3092\:9001\:308b
+   \:5371\:967a\:304c\:3042\:308b\:3002\:5b8c\:5168\:4e00\:81f4\:304c\:7121\:3051\:308c\:3070 None (\:30b0\:30ed\:30fc\:30d0\:30eb/\:65e2\:5b9a\:306b\:59d4\:306d\:308b)\:3002 *)
+Options[SourceVaultModelContextLength] = {"Channel" -> "public"};
+SourceVaultModelContextLength[provider_String, modelId_String,
+    opts:OptionsPattern[]] :=
+  Module[{channel, path, entries, exact, cl},
+    channel = OptionValue["Channel"];
+    path = iCompiledPath["model-registry", channel];
+    entries = iLoadRegistryEntries[path];
+    If[!ListQ[entries], Return[None]];
+    (* modelId \:5b8c\:5168\:4e00\:81f4\:30a8\:30f3\:30c8\:30ea\:306e\:307f (\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:306a\:3057) *)
+    exact = Select[entries,
+      Lookup[#, "Provider", ""] === provider &&
+        Lookup[#, "ModelId", ""] === modelId &];
+    cl = FirstCase[exact,
+      e_ /; IntegerQ[Lookup[e, "ContextLength", None]] :>
+        Lookup[e, "ContextLength"], None];
+    If[IntegerQ[cl], cl, None]
+  ];
+SourceVaultModelContextLength[___] := None;
+
+(* ============================================================
+   Stage 9 P1.5: \:30e2\:30c7\:30eb\:30ec\:30b8\:30b9\:30c8\:30ea\:306e\:624b\:52d5\:4e0a\:66f8\:304d / \:30af\:30ea\:30a2\:3002
+
+   API \:30ad\:30fc\:304c\:7121\:3044\:74b0\:5883\:3084\:3001compiled registry \:306b\:53e4\:3044 seed \:30b3\:30d4\:30fc\:304c
+   \:7269\:7406\:7684\:306b\:6b8b\:3063\:3066\:3044\:308b\:5834\:5408\:306e\:305f\:3081\:306e\:3001\:30e6\:30fc\:30b6\:30fc\:304c\:660e\:793a\:7684\:306b\:547c\:3076\:95a2\:6570\:3002
+   \:3069\:3061\:3089\:3082\:81ea\:52d5\:5b9f\:884c\:3057\:306a\:3044\:3002
+   ============================================================ *)
+
+(* SourceVaultSetModel[provider, intent, modelId]:
+   compiled registry \:306b\:624b\:52d5\:3067 1 \:30a8\:30f3\:30c8\:30ea\:3092\:66f8\:304d\:8fbc\:3080 (API \:30ad\:30fc\:4e0d\:8981)\:3002
+   \:65e2\:5b58\:306e\:540c (provider, intent) auto-fetch/seed \:30a8\:30f3\:30c8\:30ea\:3088\:308a\:512a\:5148\:3055\:308c\:308b
+   \:3088\:3046 Source -> "manual"\:3001Freshness -> "Fresh" \:3067\:4fdd\:5b58\:3059\:308b\:3002
+   \:30aa\:30d5\:30e9\:30a4\:30f3\:74b0\:5883\:3084 API \:30ad\:30fc\:672a\:767b\:9332\:74b0\:5883\:3067\:6700\:65b0\:30e2\:30c7\:30eb\:3092\:56fa\:5b9a\:3057\:305f\:3044\:3068\:304d\:306b\:4f7f\:3046\:3002 *)
+Options[SourceVaultSetModel] = {
+  "Channel" -> "public",
+  "Class" -> Automatic,
+  "Capabilities" -> Automatic,
+  "ContextLength" -> Automatic
+};
+
+SourceVaultSetModel[provider_String, intent_String, modelId_String,
+  opts:OptionsPattern[]] :=
+  Module[{channel, class, caps, ctxLen, infer, topic, path, existing,
+          newEntry, merged, saveResult},
+    iEnsureRoots[];
+    iBootstrapDefaultSeeds[];
+    channel = OptionValue["Channel"];
+    class = OptionValue["Class"];
+    caps = OptionValue["Capabilities"];
+    ctxLen = OptionValue["ContextLength"];
+    infer = iSVInferModelIntentClass[provider, modelId];
+    If[class === Automatic,
+      class = Lookup[infer, "Class", "Unknown"]];
+    If[caps === Automatic,
+      caps = Lookup[infer, "Capabilities", {"Reasoning"}]];
+    topic = "model-registry";
+    path = iCompiledPath[topic, channel];
+    existing = iLoadRegistryEntries[path];
+    If[!ListQ[existing], existing = {}];
+    (* \:540c (provider, intent) \:306e\:65e2\:5b58\:30a8\:30f3\:30c8\:30ea\:306f\:9664\:53bb\:3057\:3066\:7f6e\:304d\:63db\:3048\:308b *)
+    existing = Select[existing,
+      !(Lookup[#, "Provider", ""] === provider &&
+        Lookup[#, "Intent", ""] === intent) &];
+    newEntry = <|
+      "Kind" -> "Model",
+      "Provider" -> provider,
+      "Intent" -> intent,
+      "ModelId" -> modelId,
+      "Class" -> class,
+      "Capabilities" -> caps,
+      "Availability" -> "Available",
+      "Freshness" -> "Fresh",
+      "Source" -> "manual",
+      "PolicySource" -> "manual:set-model"|>;
+    (* Stage 9 P1.5: ContextLength \:5c5e\:6027\:3092\:6c38\:7d9a\:5316 (\:30e2\:30c7\:30eb\:30fb\:74b0\:5883\:4f9d\:5b58\:3002
+       \:6574\:6570\:304c\:6307\:5b9a\:3055\:308c\:305f\:3068\:304d\:306e\:307f\:8a18\:9332\:3002LM Studio \:7b49\:30ed\:30fc\:30ab\:30eb LLM \:306e
+       context_length \:306b\:4f7f\:308f\:308c\:308b\:3002Automatic \:306a\:3089\:8a18\:9332\:3057\:306a\:3044) *)
+    If[IntegerQ[ctxLen] && ctxLen > 0,
+      newEntry = Append[newEntry, "ContextLength" -> ctxLen]];
+    merged = Append[existing, newEntry];
+    saveResult = iSaveRegistryEntries[path, merged];
+    <|"Status" -> "OK", "Provider" -> provider, "Intent" -> intent,
+      "ModelId" -> modelId, "Class" -> class,
+      "ContextLength" -> If[IntegerQ[ctxLen] && ctxLen > 0, ctxLen, None],
+      "RegistryPath" -> Lookup[saveResult, "Path", path],
+      "RegistryTotal" -> Length[merged]|>
+  ];
+SourceVaultSetModel[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "SourceVaultSetModel[provider_String, intent_String, modelId_String, opts]"|>;
+
+(* SourceVaultClearModelRegistry[]:
+   compiled model registry \:3092\:524a\:9664\:3057\:3001\:6b21\:56de\:30a2\:30af\:30bb\:30b9\:6642\:306b seed (\:30b3\:30fc\:30c9\:5185\:306e
+   \:6700\:65b0 iModelSeedEntries) \:304b\:3089\:518d\:69cb\:7bc9\:3055\:305b\:308b\:3002compiled \:306b\:53e4\:3044 seed \:30b3\:30d4\:30fc
+   (\:4f8b: \:904e\:53bb\:306b\:30b3\:30d4\:30fc\:3055\:308c\:305f claude-opus-4-7) \:304c\:6b8b\:3063\:3066 ClaudeResolveModel \:304c
+   \:53e4\:3044 ID \:3092\:8fd4\:3057\:7d9a\:3051\:308b\:3068\:304d\:306e\:5fa9\:65e7\:7528\:3002seed \:81ea\:4f53\:306f\:6d88\:3055\:306a\:3044\:3002 *)
+Options[SourceVaultClearModelRegistry] = {"Channel" -> "public"};
+
+SourceVaultClearModelRegistry[opts:OptionsPattern[]] :=
+  Module[{channel, topic, path, existed},
+    iEnsureRoots[];
+    channel = OptionValue["Channel"];
+    topic = "model-registry";
+    path = iCompiledPath[topic, channel];
+    existed = FileExistsQ[path];
+    If[existed, Quiet @ DeleteFile[path]];
+    (* seed \:3092\:518d\:30d6\:30fc\:30c8\:30b9\:30c8\:30e9\:30c3\:30d7 (seed \:30d5\:30a1\:30a4\:30eb\:304c\:30b3\:30fc\:30c9 seed \:3068\:4e00\:81f4\:3059\:308b\:3088\:3046\:66f4\:65b0) *)
+    iBootstrapDefaultSeeds[];
+    <|"Status" -> "OK", "Channel" -> channel,
+      "CompiledExisted" -> existed, "ClearedPath" -> path,
+      "Note" -> "compiled cleared; next resolve rebuilds from seed"|>
+  ];
+SourceVaultClearModelRegistry[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+(* ============================================================
+   Stage 9 P1.5: Claude \:30e2\:30c7\:30eb\:5909\:6570\:306e\:8d77\:52d5\:6642\:81ea\:52d5\:5272\:308a\:5f53\:3066\:3002
+
+   $ClaudeModel / $ClaudeDocModel / $ClaudePrivateModel /
+   $ClaudeFallbackModels \:3092 SourceVault \:30ed\:30fc\:30c9\:6642\:306b\:81ea\:52d5\:8a2d\:5b9a\:3059\:308b\:3002
+
+   \:8cac\:52d9\:5206\:96e2:
+   - intent (\:3069\:306e provider \:306e\:4f55\:7528\:30e2\:30c7\:30eb\:304b) \:306f SourceVault \:304c\:7ba1\:7406\:3057\:3001
+     ClaudeResolveModel[provider, intent] \:3067\:30e2\:30c7\:30eb ID \:306b\:89e3\:6c7a\:3059\:308b\:3002
+   - \:30ed\:30fc\:30ab\:30eb\:30b5\:30fc\:30d0\:306e IP / URL (\:30bb\:30ad\:30e5\:30ea\:30c6\:30a3\:5883\:754c) \:306f NBAccess \:306e
+     NBResolveLocalServer[] \:304c\:73fe\:5728\:306e\:30de\:30b7\:30f3\:74b0\:5883\:304b\:3089\:5b89\:5168\:306b\:89e3\:6c7a\:3059\:308b\:3002
+     \:672a\:77e5\:30b5\:30d6\:30cd\:30c3\:30c8\:3067\:306f localhost \:306e\:307f (NBAccess \:5074\:3067\:4fdd\:8a3c)\:3002
+   - SourceVault \:306f\:3053\:306e 2 \:3064\:3092\:7d44\:307f\:5408\:308f\:305b\:3066\:5b9f\:5909\:6570\:3092\:8a2d\:5b9a\:3059\:308b\:3002
+
+   intent \:5272\:308a\:5f53\:3066\:81ea\:4f53\:306e\:5909\:66f4\:306f SourceVaultSetModelIntent \:3067\:884c\:3044\:3001
+   \:3053\:306e\:95a2\:6570\:306f $NBApprovalHeads \:306b\:767b\:9332\:3055\:308c\:308b\:306e\:3067 ClaudeEval \:304b\:3089
+   \:547c\:3076\:3068 Hold -> Approve UI \:304c\:51fa\:308b (\:30e2\:30c7\:30eb\:5909\:66f4\:306f\:8981\:627f\:8a8d\:64cd\:4f5c)\:3002
+   ============================================================ *)
+
+(* \:5909\:6570\:540d -> intent spec \:306e\:30c7\:30d5\:30a9\:30eb\:30c8\:30de\:30c3\:30d4\:30f3\:30b0\:3002
+   spec = {provider, intent}\:3002$ClaudePrivateModel \:306f\:7279\:5225\:6271\:3044
+   (provider=local\:3001URL \:306f NBAccess \:89e3\:6c7a) \:306a\:306e\:3067 intent \:306e\:307f\:6301\:3064\:3002
+   \:30ed\:30fc\:30c9\:306e\:305f\:3073\:306b\:7121\:6761\:4ef6\:3067\:518d\:521d\:671f\:5316\:3059\:308b (\:30ab\:30fc\:30cd\:30eb\:306b\:6b8b\:3063\:305f\:53e4\:3044
+   \:5024\:306b\:5f71\:97ff\:3055\:308c\:306a\:3044\:3088\:3046\:306b)\:3002\:30e6\:30fc\:30b6\:30fc\:5909\:66f4\:306f\:8d77\:52d5\:30d5\:30a1\:30a4\:30eb\:3067
+   SourceVaultSetModelIntent \:3092\:547c\:3093\:3067\:884c\:3046\:3002 *)
+$iSVModelIntentMap = <|
+  "$ClaudeModel"        -> {"claudecode", "code-heavy"},
+  "$ClaudeDocModel"     -> {"claudecode", "extraction"},
+  "$ClaudePrivateModel" -> {"lmstudio", "extraction"},
+  "$ClaudeFallbackModels" -> {
+    {"anthropic", "heavy"},
+    {"openai", "heavy"}}
+|>;
+
+(* intent \:30de\:30c3\:30d4\:30f3\:30b0\:306e\:8aad\:307f\:53d6\:308a\:516c\:958b\:95a2\:6570\:3002NBAccess`NBSyncClaudeModelVars \:304c
+   \:3053\:308c\:3092\:8aad\:3093\:3067\:30e2\:30c7\:30eb\:89e3\:6c7a\:30fb\:4ee3\:5165\:3092\:884c\:3046\:3002intent \:5272\:308a\:5f53\:3066\:81ea\:4f53\:306f
+   SourceVault \:304c\:7ba1\:8f96\:3057\:3001NBAccess \:306f\:8aad\:307f\:53d6\:308b\:3060\:3051\:3002 *)
+SourceVaultModelIntentMap[] :=
+  If[AssociationQ[$iSVModelIntentMap], $iSVModelIntentMap, <||>];
+
+Options[SourceVaultSetModelIntent] = {};
+
+(* SourceVaultSetModelIntent[variable, spec]:
+   SourceVault \:304c\:9078\:629e\:3059\:308b\:30e2\:30c7\:30eb\:306e intent \:5272\:308a\:5f53\:3066\:3092\:5909\:66f4\:3059\:308b\:3002
+   variable: "$ClaudeModel" | "$ClaudeDocModel" | "$ClaudePrivateModel" |
+             "$ClaudeFallbackModels"
+   spec: {provider, intent} (FallbackModels \:306f {{provider,intent}, ...})
+   \:3053\:306e\:95a2\:6570\:306f $NBApprovalHeads \:306b\:767b\:9332\:3055\:308c\:3001ClaudeEval \:7d4c\:7531\:3067\:306f
+   Hold -> Approve \:304c\:5fc5\:8981 (\:30e2\:30c7\:30eb\:9078\:629e\:306e\:5909\:66f4\:306f\:691c\:8a3c\:5bfe\:8c61)\:3002
+   \:8a2d\:5b9a\:5f8c\:306b SourceVaultAssignClaudeModels[] \:3092\:547c\:3093\:3067\:5b9f\:5909\:6570\:306b\:53cd\:6620\:3059\:308b\:3002 *)
+SourceVaultSetModelIntent[variable_String, spec_, opts:OptionsPattern[]] :=
+  Module[{},
+    If[!MemberQ[{"$ClaudeModel", "$ClaudeDocModel",
+                 "$ClaudePrivateModel", "$ClaudeFallbackModels"}, variable],
+      Return[<|"Status" -> "Failed", "Reason" -> "UnknownVariable",
+        "Variable" -> variable|>]];
+    $iSVModelIntentMap[variable] = spec;
+    (* \:5373\:5ea7\:306b\:5b9f\:5909\:6570\:3078\:53cd\:6620 (Private \:5185\:306a\:306e\:3067\:5b8c\:5168\:4fee\:98fe) *)
+    SourceVault`SourceVaultAssignClaudeModels[];
+    <|"Status" -> "OK", "Variable" -> variable, "Spec" -> spec,
+      "Note" -> "intent updated and applied to live variable"|>
+  ];
+SourceVaultSetModelIntent[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "SourceVaultSetModelIntent[variable_String, spec]"|>;
+
+(* spec {provider, intent} \:3092 SourceVaultResolve \:3067\:89e3\:6c7a\:3057
+   {provider, modelId} \:3092\:8fd4\:3059\:3002\:89e3\:6c7a\:5931\:6557\:6642\:306f\:8a73\:7d30\:7406\:7531\:4ed8\:304d Missing\:3002
+   \:5b9a\:7fa9\:76f4\:524d\:306b ClearAll \:3057\:3066\:53e4\:3044\:5b9a\:7fa9\:306e\:6b8b\:5b58\:3092\:9632\:3050 (\:30ab\:30fc\:30cd\:30eb\:518d\:30ed\:30fc\:30c9\:5bfe\:7b56)\:3002 *)
+ClearAll[iSVResolveIntentToTuple];
+iSVResolveIntentToTuple[spec_] :=
+  Module[{provider, intent, resolved, mid},
+    (* \:30ac\:30fc\:30c9: List \:3067 2 \:8981\:7d20\:4ee5\:4e0a\:3002Part \:30a2\:30af\:30bb\:30b9\:3092\:5b89\:5168\:306b\:3002 *)
+    If[!ListQ[spec] || Length[spec] < 2,
+      Return[Missing["BadSpec", spec]]];
+    provider = spec[[1]];
+    intent = spec[[2]];
+    (* provider/intent \:304c\:6587\:5b57\:5217\:3067\:306a\:3051\:308c\:3070\:3001ToString \:3067\:5f37\:5236\:5909\:63db\:3092\:8a66\:307f\:308b
+       (\:30b7\:30f3\:30dc\:30eb\:7b49\:304c\:6df7\:5165\:3057\:3066\:3082\:6551\:6e08\:3001\:65e7\:7248\:3068\:306e\:4e92\:63db\:6027) *)
+    If[!StringQ[provider], provider = ToString[provider]];
+    If[!StringQ[intent], intent = ToString[intent]];
+    If[provider === "" || intent === "",
+      Return[Missing["EmptySpec", spec]]];
+    (* Private \:5185\:304b\:3089\:306e\:547c\:3073\:51fa\:3057\:306a\:306e\:3067\:516c\:958b\:30b7\:30f3\:30dc\:30eb\:3092\:5b8c\:5168\:4fee\:98fe\:3059\:308b\:3002
+       \:5b9f\:4f53\:306e SourceVaultResolve \:3092\:76f4\:63a5\:547c\:3076 (\:30e9\:30c3\:30d1\:30fc\:7d4c\:7531\:306e
+       \:30b3\:30f3\:30c6\:30ad\:30b9\:30c8\:89e3\:6c7a\:554f\:984c\:3092\:56de\:907f)\:3002 *)
+    resolved = Quiet @ SourceVault`SourceVaultResolve["Model",
+      <|"Provider" -> provider, "Intent" -> intent|>];
+    If[!AssociationQ[resolved],
+      Return[Missing["Unresolved", {provider, intent}]]];
+    mid = Lookup[resolved, "ModelId", Missing[]];
+    If[!StringQ[mid],
+      Return[Missing["NoModelId", {provider, intent}]]];
+    {provider, mid}];
+
+(* SourceVaultAssignClaudeModels[]:
+   intent \:30de\:30c3\:30d4\:30f3\:30b0 (SourceVault) \:3068\:4fe1\:983c\:30ed\:30fc\:30ab\:30eb\:30b5\:30fc\:30d0 (NBAccess) \:304b\:3089
+   ClaudeCode \:306e\:5b9f\:5909\:6570\:3092\:8a2d\:5b9a\:3059\:308b\:3002SourceVault \:30ed\:30fc\:30c9\:6642\:306b\:81ea\:52d5\:5b9f\:884c\:3002 *)
+Options[SourceVaultAssignClaudeModels] = {"Verbose" -> False};
+
+SourceVaultAssignClaudeModels[opts:OptionsPattern[]] :=
+  Module[{verbose, report = <||>, mainSpec, docSpec, privSpec,
+          fbSpec, mainTuple, docTuple, localServer, privModel,
+          privTuple, fbResolved},
+    verbose = TrueQ[OptionValue["Verbose"]];
+
+    (* --- $ClaudeModel --- *)
+    mainSpec = Lookup[$iSVModelIntentMap, "$ClaudeModel",
+      {"claudecode", "code-heavy"}];
+    mainTuple = iSVResolveIntentToTuple[mainSpec];
+    If[ListQ[mainTuple],
+      ClaudeCode`$ClaudeModel = mainTuple;
+      report["$ClaudeModel"] = mainTuple,
+      report["$ClaudeModel_FAILED"] =
+        <|"Spec" -> mainSpec, "Result" -> mainTuple|>];
+
+    (* --- $ClaudeDocModel --- *)
+    docSpec = Lookup[$iSVModelIntentMap, "$ClaudeDocModel",
+      {"claudecode", "extraction"}];
+    docTuple = iSVResolveIntentToTuple[docSpec];
+    If[ListQ[docTuple],
+      ClaudeCode`$ClaudeDocModel = docTuple;
+      report["$ClaudeDocModel"] = docTuple,
+      report["$ClaudeDocModel_FAILED"] =
+        <|"Spec" -> docSpec, "Result" -> docTuple|>];
+
+    (* --- $ClaudePrivateModel ---
+       provider/URL \:306f NBAccess \:306e\:4fe1\:983c\:30b5\:30fc\:30d0\:89e3\:6c7a (\:30bb\:30ad\:30e5\:30ea\:30c6\:30a3\:5883\:754c)\:3001
+       \:30e2\:30c7\:30eb\:540d\:306f SourceVault \:306e intent \:89e3\:6c7a\:3002\:4e21\:8005\:3092\:7d44\:307f\:5408\:308f\:305b\:308b\:3002 *)
+    localServer = Quiet @ Check[
+      NBAccess`NBResolveLocalServer[], <||>];
+    privSpec = Lookup[$iSVModelIntentMap, "$ClaudePrivateModel",
+      {"lmstudio", "extraction"}];
+    privTuple = iSVResolveIntentToTuple[privSpec];
+    If[AssociationQ[localServer] &&
+       StringQ[Lookup[localServer, "URL", Missing[]]],
+      Module[{prov, url, mid},
+        prov = Lookup[localServer, "Provider", "lmstudio"];
+        url = Lookup[localServer, "URL", "http://127.0.0.1:1234"];
+        mid = If[ListQ[privTuple] && Length[privTuple] >= 2,
+          privTuple[[2]], Missing[]];
+        (* \:30e2\:30c7\:30eb\:540d\:304c\:89e3\:6c7a\:3067\:304d\:308c\:3070\:305d\:308c\:3092\:3001\:3067\:304d\:306a\:3051\:308c\:3070 provider \:65e2\:5b9a\:306b\:4efb\:305b\:308b *)
+        privModel = If[StringQ[mid],
+          {prov, mid, url},
+          {prov, url}];
+        ClaudeCode`$ClaudePrivateModel = privModel;
+        report["$ClaudePrivateModel"] = privModel;
+        report["LocalServerTrusted"] =
+          Lookup[localServer, "Trusted", False]]];
+
+    (* --- $ClaudeFallbackModels --- *)
+    fbSpec = Lookup[$iSVModelIntentMap, "$ClaudeFallbackModels", {}];
+    If[ListQ[fbSpec],
+      fbResolved = DeleteCases[
+        Map[iSVResolveIntentToTuple, fbSpec],
+        _Missing];
+      If[fbResolved =!= {},
+        ClaudeCode`$ClaudeFallbackModels = fbResolved;
+        report["$ClaudeFallbackModels"] = fbResolved]];
+
+    If[verbose, Print["[SourceVaultAssignClaudeModels] ", report]];
+    <|"Status" -> "OK", "Assigned" -> report|>
+  ];
+SourceVaultAssignClaudeModels[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
 
 Options[SourceVaultListRegistries] = {"Channel" -> All};
 
@@ -5509,6 +5889,17 @@ SourceVaultRegistryStatus[topic_String, opts:OptionsPattern[]] :=
       "LastModified" -> lastMod|>
   ];
 
+(* Stage 9 P1.5: registry topic \:6b63\:898f\:5316\:3002\:8aad\:307f\:53d6\:308a (SourceVaultResolve) \:3068
+   \:66f8\:304d\:8fbc\:307f (SourceVaultCompileRegistry / SourceVaultSetModel) \:304c\:540c\:4e00\:30d5\:30a1\:30a4\:30eb\:3092
+   \:6307\:3059\:3088\:3046\:7d71\:4e00\:3059\:308b\:3002\:65e2\:306b "-registry" \:3067\:7d42\:308f\:308b\:306a\:3089\:305d\:306e\:307e\:307e\:3001
+   \:305d\:3046\:3067\:306a\:3051\:308c\:3070 ToLowerCase[topic] <> "-registry"\:3002
+   \:4f8b: "Model" -> "model-registry", "model-registry" -> "model-registry"\:3002 *)
+iSVNormalizeRegistryTopic[topic_String] :=
+  If[StringEndsQ[topic, "-registry"],
+    topic,
+    ToLowerCase[topic] <> "-registry"];
+iSVNormalizeRegistryTopic[other_] := other;
+
 Options[SourceVaultCompileRegistry] = {
   "Channel" -> "public",
   "Sources" -> {},
@@ -5518,13 +5909,20 @@ Options[SourceVaultCompileRegistry] = {
 SourceVaultCompileRegistry[topic_String, entries_List,
   opts:OptionsPattern[]] :=
   Module[{channel, sources, policySource, enriched, path, saveResult,
-          ts},
+          ts, normTopic},
     iEnsureRoots[];
     channel = OptionValue["Channel"];
     sources = OptionValue["Sources"];
     policySource = OptionValue["PolicySource"];
     ts = DateString[DateObject[]];
-    
+    (* Stage 9 P1.5: topic \:3092\:6b63\:898f\:5316\:3057\:3066\:8aad\:307f\:53d6\:308a\:7d4c\:8def (SourceVaultResolve /
+       SourceVaultSetModel) \:3068\:540c\:4e00\:30d5\:30a1\:30a4\:30eb\:3092\:6307\:3059\:3088\:3046\:306b\:3059\:308b\:3002
+       \:904e\:53bb\:306b SourceVaultCompileRegistry["Model", ...] (\:5927\:6587\:5b57) \:3067\:547c\:3076\:3068
+       Model.json \:304c\:3067\:304d\:3001model-registry.json \:3092\:8aad\:3080\:89e3\:6c7a\:7d4c\:8def\:3068\:98df\:3044\:9055\:3046
+       \:5b64\:5150\:30d5\:30a1\:30a4\:30eb\:554f\:984c\:304c\:3042\:3063\:305f\:3002\:6b63\:898f\:5316\:30eb\:30fc\:30eb:
+       \:65e2\:306b "-registry" \:3067\:7d42\:308f\:308b\:306a\:3089\:305d\:306e\:307e\:307e\:3001\:305d\:3046\:3067\:306a\:3051\:308c\:3070
+       ToLowerCase[topic] <> "-registry" (\:4f8b: "Model" -> "model-registry")\:3002 *)
+    normTopic = iSVNormalizeRegistryTopic[topic];
     (* \:5404 entry \:306b CompiledAt / Sources / PolicySource \:3092\:88dc\:3046 *)
     enriched = Map[Function[e,
       Module[{m = If[AssociationQ[e], e, <||>]},
@@ -5536,11 +5934,11 @@ SourceVaultCompileRegistry[topic_String, entries_List,
           m = Append[m, "PolicySource" -> policySource]];
         m]], entries];
     
-    path = iCompiledPath[topic, channel];
+    path = iCompiledPath[normTopic, channel];
     saveResult = iSaveRegistryEntries[path, enriched];
     If[Lookup[saveResult, "Status", ""] === "OK",
       <|"Status" -> "OK",
-        "Topic" -> topic,
+        "Topic" -> normTopic,
         "Channel" -> channel,
         "Path" -> path,
         "Count" -> Length[enriched]|>,
@@ -8317,9 +8715,9 @@ iSVKeywordsCell[keywords_] :=
     label = StringRiffle[shown, ", "] <>
       If[hidden > 0, " +" <> ToString[hidden], ""];
     Tooltip[
-      Style[label, FontFamily -> "Yu Gothic UI"],
+      Style[label, FontFamily -> iSVStandardFont[]],
       Column[
-        Style[#, FontFamily -> "Yu Gothic UI"] & /@ kws]]
+        Style[#, FontFamily -> iSVStandardFont[]] & /@ kws]]
   ];
 iSVKeywordsCell[_] := "";
 
@@ -8333,23 +8731,23 @@ iSVKeywordsCell[_] := "";
 iSVSummaryCell[summary_] :=
   Module[{status, full, short},
     If[!AssociationQ[summary],
-      Return[Style["", FontFamily -> "Yu Gothic UI"]]];
+      Return[Style["", FontFamily -> iSVStandardFont[]]]];
     status = Lookup[summary, "Status", ""];
     If[status =!= "OK",
       Return[Style[iSVSummaryShort[summary],
-        FontFamily -> "Yu Gothic UI", GrayLevel[0.5]]]];
+        FontFamily -> iSVStandardFont[], GrayLevel[0.5]]]];
     full = Lookup[summary, "Summary", ""];
     If[!StringQ[full] || StringTrim[full] === "",
       Return[Style["(\:672a\:8981\:7d04)",
-        FontFamily -> "Yu Gothic UI", GrayLevel[0.5]]]];
+        FontFamily -> iSVStandardFont[], GrayLevel[0.5]]]];
     short = If[StringLength[full] > 40,
       StringTake[full, 38] <> "\[Ellipsis]", full];
     Tooltip[
-      Style[short, FontFamily -> "Yu Gothic UI"],
-      Pane[Style[full, FontFamily -> "Yu Gothic UI"],
+      Style[short, FontFamily -> iSVStandardFont[]],
+      Pane[Style[full, FontFamily -> iSVStandardFont[]],
         ImageSize -> {UpTo[380], Automatic}]]
   ];
-iSVSummaryCell[_] := Style["", FontFamily -> "Yu Gothic UI"];
+iSVSummaryCell[_] := Style["", FontFamily -> iSVStandardFont[]];
 
 (* Stage 9 P1 Step 9: Title \:30c4\:30fc\:30eb\:30c1\:30c3\:30d7\:306e\:672c\:6587\:6587\:5b57\:5217\:3092\:7d44\:307f\:7acb\:3066\:308b\:3002
    - Summary \:304c\:3042\:308c\:3070 (Status=OK \:304b\:3064\:7a7a\:3067\:306a\:3044) \:8981\:7d04\:5168\:6587\:3092\:8fd4\:3059
@@ -8383,10 +8781,10 @@ iSVScheduleSummaryCell[statusStr_, tip_] :=
       _,         {ToString[statusStr], GrayLevel[0.55]}];
     If[StringQ[tip] && StringTrim[tip] =!= "",
       Tooltip[
-        Style[label, FontFamily -> "Yu Gothic UI", color],
-        Pane[Style[tip, FontFamily -> "Yu Gothic UI"],
+        Style[label, FontFamily -> iSVStandardFont[], color],
+        Pane[Style[tip, FontFamily -> iSVStandardFont[]],
           ImageSize -> {UpTo[380], Automatic}]],
-      Style[label, FontFamily -> "Yu Gothic UI", color]]
+      Style[label, FontFamily -> iSVStandardFont[], color]]
   ];
 
 (* Stage 9 P1 Step 9 ext: Publishable column cell.
@@ -8407,7 +8805,7 @@ iSVPublishableCell[realPath_] :=
       state === True,  {"Public",      RGBColor[0.25, 0.55, 0.75]},
       state === False, {"Private",     RGBColor[0.6, 0.4, 0.3]},
       True,            {"Unspecified", GrayLevel[0.55]}];
-    Style[label, FontFamily -> "Yu Gothic UI", color]
+    Style[label, FontFamily -> iSVStandardFont[], color]
   ];
 
 (* enriched records \:3092 Dataset \:5f62\:5f0f\:306b\:6574\:5f62 *)
@@ -8438,25 +8836,30 @@ iSVStyledDate[value_, mtime_] :=
   ];
 
 (* Title \:30dc\:30bf\:30f3: \:30af\:30ea\:30c3\:30af\:3067 SystemOpen \:3057\:30ce\:30fc\:30c8\:3092\:958b\:304f
-   ShowStringCharacters -> False \:3067\:5f15\:7528\:7b26\:3092\:62bc\:3055\:3048\:308b *)
+   ShowStringCharacters -> False \:3067\:5f15\:7528\:7b26\:3092\:62bc\:3055\:3048\:308b
+   2026-05-31 fix: Style[..., "Hyperlink", FontFamily -> ...] \:306e\:5f62\:3067\:3001
+   "Hyperlink" \:30b9\:30bf\:30a4\:30eb (\:8272\:30fb\:30b5\:30a4\:30ba\:30fb\:4e0b\:7dda) \:3092\:7d99\:627f\:3057\:3064\:3064 FontFamily \:3060\:3051\:3092\:5f8c\:7f6e\:3067\:4e0a\:66f8\:304d\:3059\:308b\:3002
+   ("Hyperlink" \:3092 BaseStyle \:306b\:5165\:308c\:308b\:3068\:30c6\:30ad\:30b9\:30c8\:306e\:30d5\:30a9\:30f3\:30c8\:304c\:6238\:308b\:304c\:3001
+    Style \:5185\:306e\:540c\:968e\:5c64\:3067\:6307\:5b9a\:3059\:308c\:3070\:5f8c\:52dd\:3061\:3067\:30d5\:30a9\:30f3\:30c8\:304c\:52b9\:304f\:3002) *)
 iSVTitleButton[title_, path_] :=
-  If[StringQ[path] && FileExistsQ[path],
-    Button[Style[title, FontFamily -> "Yu Gothic UI",
-        ShowStringCharacters -> False],
-      SystemOpen[path],
-      Appearance -> "Frameless",
-      BaseStyle -> {"Hyperlink"}],
-    Style[title, FontFamily -> "Yu Gothic UI",
-      ShowStringCharacters -> False]];
+  With[{ff = iSVStandardFont[]},
+    If[StringQ[path] && FileExistsQ[path],
+      Button[Style[title, "Hyperlink", FontFamily -> ff,
+          ShowStringCharacters -> False],
+        SystemOpen[path],
+        Appearance -> "Frameless"],
+      Style[title, FontFamily -> ff,
+        ShowStringCharacters -> False]]];
 
 (* Dir \:30dc\:30bf\:30f3: \:30af\:30ea\:30c3\:30af\:3067\:89aa\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:3092\:958b\:304f *)
 iSVDirButton[path_] :=
-  If[StringQ[path] && FileExistsQ[path],
-    Button[Style["\:958b\:304f", ShowStringCharacters -> False],
-      SystemOpen[DirectoryName[path]],
-      Appearance -> "Frameless",
-      BaseStyle -> {"Hyperlink"}],
-    ""];
+  With[{ff = iSVStandardFont[]},
+    If[StringQ[path] && FileExistsQ[path],
+      Button[Style["\:958b\:304f", "Hyperlink", FontFamily -> ff,
+          ShowStringCharacters -> False],
+        SystemOpen[DirectoryName[path]],
+        Appearance -> "Frameless"],
+      ""]];
 
 (* \:6b8b\:8ab2\:984c 1: \:30af\:30ed\:30b9 PC \:5bfe\:5fdc\:306e Title / Dir \:30dc\:30bf\:30f3\:3002
    symPath (iSVSymbolicPath \:306e\:623b\:308a List) \:3092 Button \:306b\:4fdd\:6301\:3057\:3001
@@ -8487,52 +8890,56 @@ iSVDirButton[path_] :=
    Button \:304c\:30af\:30ea\:30c3\:30af\:3092\:76f4\:63a5\:53d7\:3051\:53d6\:308b\:3088\:3046\:306b\:3059\:308b
    (Tooltip \:306f\:5916\:5074\:3067\:30db\:30d0\:30fc\:8868\:793a\:5c02\:7528)\:3002 *)
 iSVTitleButtonSym[title_, symPath_, origPath_String, tipBody_:""] :=
-  Module[{disp, tipContent, core},
+  Module[{disp, tipContent, core, ff},
+    ff = iSVStandardFont[];
     disp = If[StringQ[title] && StringLength[title] > 28,
       StringTake[title, 26] <> "\[Ellipsis]", title];
     tipContent = If[StringQ[tipBody] && StringTrim[tipBody] =!= "",
       Column[{
-        Style[ToString[title], Bold, FontFamily -> "Yu Gothic UI"],
-        Pane[Style[tipBody, FontFamily -> "Yu Gothic UI"],
+        Style[ToString[title], Bold, FontFamily -> ff],
+        Pane[Style[tipBody, FontFamily -> ff],
           ImageSize -> {UpTo[380], Automatic}]}],
       (* tipBody \:7121\:3057: \:5f93\:6765\:901a\:308a title + \:30d1\:30b9\:540d *)
       Column[{
-        Style[ToString[title], Bold, FontFamily -> "Yu Gothic UI"],
+        Style[ToString[title], Bold, FontFamily -> ff],
         Style[origPath, GrayLevel[0.4]]}]];
     (* Button \:3092\:5185\:5074\:3001Tooltip \:3092\:5916\:5074\:306b\:3059\:308b\:3002
-       \:3053\:308c\:306b\:3088\:308a Button \:304c\:30af\:30ea\:30c3\:30af\:3092 1 \:56de\:3067\:53d7\:3051\:53d6\:308b\:3002 *)
-    core = If[StringQ[origPath] && FileExistsQ[origPath],
-      Button[
-        Style[disp, FontFamily -> "Yu Gothic UI",
-          ShowStringCharacters -> False],
-        Module[{p},
-          p = If[ListQ[symPath], iSVResolvePath[symPath], Missing[]];
-          Which[
-            StringQ[p] && FileExistsQ[p], SystemOpen[p],
-            StringQ[origPath] && FileExistsQ[origPath], SystemOpen[origPath],
-            True, Null]],
-        Appearance -> "Frameless",
-        BaseStyle -> {"Hyperlink"}],
-      Style[disp, FontFamily -> "Yu Gothic UI",
-        ShowStringCharacters -> False]];
+       \:3053\:308c\:306b\:3088\:308a Button \:304c\:30af\:30ea\:30c3\:30af\:3092 1 \:56de\:3067\:53d7\:3051\:53d6\:308b\:3002
+       2026-05-31 fix: Button \:306f\:30e9\:30d9\:30eb\:3092 Hold \:3059\:308b\:305f\:3081 iSVStandardFont[] \:304c
+       \:672a\:8a55\:4fa1\:306e\:307e\:307e StyleBox \:306b\:7126\:304d\:8fbc\:307e\:308c\:3001FontFamily \:304c\:52b9\:304b\:306a\:3044\:3002
+       Module \:5185\:3067\:5148\:306b ff \:306b\:6587\:5b57\:5217\:8a55\:4fa1\:3057\:3001\:305d\:306e\:6587\:5b57\:5217\:3092\:57cb\:3081\:8fbc\:3080\:3002 *)
+    core = With[{ff2 = ff},
+      If[StringQ[origPath] && FileExistsQ[origPath],
+        Button[
+          Style[disp, "Hyperlink", FontFamily -> ff2,
+            ShowStringCharacters -> False],
+          Module[{p},
+            p = If[ListQ[symPath], iSVResolvePath[symPath], Missing[]];
+            Which[
+              StringQ[p] && FileExistsQ[p], SystemOpen[p],
+              StringQ[origPath] && FileExistsQ[origPath], SystemOpen[origPath],
+              True, Null]],
+          Appearance -> "Frameless"],
+        Style[disp, FontFamily -> ff2,
+          ShowStringCharacters -> False]]];
     Tooltip[core, tipContent]
   ];
 
 iSVDirButtonSym[symPath_, origPath_String] :=
-  If[StringQ[origPath] && FileExistsQ[origPath],
-    Button[
-      Style["\:958b\:304f", FontFamily -> "Yu Gothic UI",
-        ShowStringCharacters -> False],
-      Module[{p},
-        p = If[ListQ[symPath], iSVResolvePath[symPath], Missing[]];
-        Which[
-          StringQ[p] && FileExistsQ[p], SystemOpen[DirectoryName[p]],
-          StringQ[origPath] && FileExistsQ[origPath],
-            SystemOpen[DirectoryName[origPath]],
-          True, Null]],
-      Appearance -> "Frameless",
-      BaseStyle -> {"Hyperlink"}],
-    ""];
+  With[{ff = iSVStandardFont[]},
+    If[StringQ[origPath] && FileExistsQ[origPath],
+      Button[
+        Style["\:958b\:304f", "Hyperlink", FontFamily -> ff,
+          ShowStringCharacters -> False],
+        Module[{p},
+          p = If[ListQ[symPath], iSVResolvePath[symPath], Missing[]];
+          Which[
+            StringQ[p] && FileExistsQ[p], SystemOpen[DirectoryName[p]],
+            StringQ[origPath] && FileExistsQ[origPath],
+              SystemOpen[DirectoryName[origPath]],
+            True, Null]],
+        Appearance -> "Frameless"],
+      ""]];
 
 (* \:30d5\:30a1\:30a4\:30eb\:540d\:30d9\:30fc\:30b9\:306e\:30bf\:30a4\:30c8\:30eb\:6587\:5b57\:5217\:304b\:3089 yyyymmdd- \:30d7\:30ec\:30d5\:30a3\:30c3\:30af\:30b9\:3092\:524a\:9664 *)
 iSVCleanTitle[s_String] :=
@@ -8862,7 +9269,15 @@ iSVApplyScheduleFilterSpec[_, _] := $Failed;
 
 iSVFormatScheduleDataset[records_List, today_, refresh_, fallback_,
     useCache_] :=
-  Module[{rows, cols, header, body},
+  Module[{rows, cols, header, body, fontName, gridExpr},
+    (* 2026-05-31 fix: iSVStandardFont[] \:304c Button \:30e9\:30d9\:30eb\:7b49\:306e Hold / box \:5316\:6587\:8108\:3067
+       \:672a\:8a55\:4fa1\:306e\:307e\:307e StyleBox \:306b\:7126\:304d\:8fbc\:307e\:308c\:3001FontFamily -> iSVStandardFont[] \:304c
+       \:30d5\:30ed\:30f3\:30c8\:30a8\:30f3\:30c9\:3067\:7121\:8996\:3055\:308c\:308b\:554f\:984c\:3078\:306e\:6839\:6cbb\:7b56\:3002
+       Grid \:5168\:4f53\:3092\:7d44\:307f\:7acb\:3066\:305f\:5f8c\:3001\:6b8b\:5b58\:3059\:308b iSVStandardFont[] \:3092\:78ba\:5b9a\:6587\:5b57\:5217\:306b
+       \:4e00\:62ec\:7f6e\:63db\:3057\:3066\:304b\:3089\:8fd4\:3059\:3002\:5404\:30bb\:30eb\:95a2\:6570\:5074\:3067\:8a55\:4fa1\:3055\:308c\:3066\:3044\:3066\:3082\:7f6e\:63db\:306f\:7121\:5bb3\:3002 *)
+    fontName = iSVStandardFont[];
+    If[!StringQ[fontName] || StringLength[fontName] == 0,
+      fontName = "Yu Gothic UI"];
     rows = Map[
       iSVRowFromRecord[#, today, refresh, fallback, useCache] &,
       records];
@@ -8876,18 +9291,22 @@ iSVFormatScheduleDataset[records_List, today_, refresh_, fallback_,
     If[body === {},
       Return[Style[
         "\:8a72\:5f53\:3059\:308b notebook \:306f\:3042\:308a\:307e\:305b\:3093\:3002",
-        FontFamily -> "Yu Gothic UI"]]];
+        FontFamily -> fontName]]];
     header = Map[
-      Style[#, Bold, FontFamily -> "Yu Gothic UI"] &, cols];
-    Grid[
+      Style[#, Bold, FontFamily -> fontName] &, cols];
+    gridExpr = Grid[
       Prepend[body, header],
       Frame -> All,
       FrameStyle -> Directive[GrayLevel[0.85]],
       Background -> {None, {GrayLevel[0.92], {White}}},
       Alignment -> {Left, Center},
       Spacings -> {1.2, 0.7},
-      BaseStyle -> {FontFamily -> "Yu Gothic UI"}
-    ]
+      BaseStyle -> {FontFamily -> fontName}
+    ];
+    (* \:6b8b\:5b58\:3059\:308b\:672a\:8a55\:4fa1\:306e iSVStandardFont[] \:3092\:6587\:5b57\:5217\:306b\:7f6e\:63db (Hold \:56de\:907f)\:3002
+       \:5de6\:8fba\:306f HoldPattern \:3067\:5305\:307f\:3001\:30eb\:30fc\:30eb\:69cb\:7bc9\:6642\:306b iSVStandardFont[] \:304c
+       \:8a55\:4fa1\:3055\:308c\:3066\:7121\:610f\:5473\:306a\:30eb\:30fc\:30eb\:306b\:306a\:308b\:306e\:3092\:9632\:3050\:3002 *)
+    gridExpr /. HoldPattern[iSVStandardFont[]] -> fontName
   ];
 
 
@@ -9707,6 +10126,199 @@ SourceVaultDetectLocalModels[opts:OptionsPattern[]] :=
    Existing seed/manual entries are kept; an auto-fetch entry
    replaces a prior auto-fetch entry with the same
    {Provider, ModelId}. *)
+(* ============================================================
+   Stage 9 P1.5: fetch \:3057\:305f\:30e2\:30c7\:30eb\:3078\:306e Intent/Class \:63a8\:8ad6\:4ed8\:4e0e\:3001
+   \:540c\:7cfb\:6700\:5927\:30d0\:30fc\:30b8\:30e7\:30f3\:81ea\:52d5\:9078\:629e\:3001claudecode \:3078\:306e \:30df\:30e9\:30fc\:3002
+
+   \:8a2d\:8a08 (rule 03): \:30e2\:30c7\:30eb ID \:3092\:30cf\:30fc\:30c9\:30b3\:30fc\:30c9\:3057\:306a\:3044\:3002/v1/models
+   \:304c\:8fd4\:3059 ID \:3092\:89e3\:91c8\:3057\:3066 intent \:306b\:5272\:308a\:5f53\:3066\:308b\:3002\:30d0\:30fc\:30b8\:30e7\:30f3\:756a\:53f7\:306f
+   ID \:304b\:3089\:62bd\:51fa\:3057\:3066\:6570\:5024\:6bd4\:8f03\:3057\:3001\:540c family \:306e\:6700\:5927\:7248\:3092 heavy \:7b49\:306b
+   \:6607\:683c\:3059\:308b\:3002preview/beta/rc \:30b5\:30d5\:30a3\:30c3\:30af\:30b9\:4ed8\:304d\:306f\:5b89\:5b9a\:7248\:9078\:629e\:304b\:3089\:9664\:5916\:3002
+   ============================================================ *)
+
+(* model id \:304b\:3089\:30d5\:30a1\:30df\:30ea\:540d\:3068\:30d0\:30fc\:30b8\:30e7\:30f3\:3092\:62bd\:51fa\:3002
+   "claude-opus-4-8"      -> {"claude-opus", {4,8}, False}
+   "claude-opus-4-8-1m"   -> {"claude-opus", {4,8}, True (suffix\:6709)}
+   "claude-sonnet-4-6"    -> {"claude-sonnet", {4,6}, False}
+   "gpt-5.5"              -> {"gpt", {5,5}, False}
+   \:623b\:308a\:5024 {family_String, version_List, hasSuffix_Bool}\:3002
+   \:89e3\:91c8\:4e0d\:80fd\:306a\:3089 {id, {}, False}\:3002 *)
+iSVParseModelVersion[id_String] :=
+  Module[{m, family, nums, rest, hasSuffix},
+    (* \:6570\:5b57\:3068\:30c9\:30c3\:30c8/\:30cf\:30a4\:30d5\:30f3\:3067\:533a\:5207\:3089\:308c\:305f\:30d0\:30fc\:30b8\:30e7\:30f3\:90e8\:3092\:63a2\:3059 *)
+    m = StringCases[id,
+      RegularExpression["^([a-zA-Z][a-zA-Z]*(?:-[a-zA-Z]+)*)-(\\d+(?:[.-]\\d+)*)(.*)$"]
+        :> {"$1", "$2", "$3"}];
+    If[Length[m] === 0,
+      Return[{id, {}, False}]];
+    {family, rest, hasSuffix} = First[m];
+    nums = ToExpression /@ StringSplit[rest, {".", "-"}];
+    nums = Select[nums, IntegerQ];
+    (* \:65e5\:4ed8\:30b5\:30d5\:30a3\:30c3\:30af\:30b9 (YYYYMMDD = 5 \:6841\:4ee5\:4e0a) \:306f\:30d0\:30fc\:30b8\:30e7\:30f3\:6bd4\:8f03\:304b\:3089\:9664\:5916\:3059\:308b\:3002
+       \:4f8b: claude-opus-4-5-20251101 \:306f {4,5} \:3068\:3057\:3066\:6271\:3044\:3001\:65e5\:4ed8 20251101 \:306f
+       \:7121\:8996\:3059\:308b\:3002\:3053\:308c\:304c\:7121\:3044\:3068 sortkey \:304c\:6841\:3042\:3075\:308c\:3057\:3066 4-5-\:65e5\:4ed8\:7248\:304c
+       4-8 \:3088\:308a\:5927\:304d\:3044\:3068\:8aa4\:5224\:5b9a\:3055\:308c\:308b\:30d0\:30b0\:304c\:51fa\:3066\:3044\:305f\:3002
+       \:65e5\:4ed8\:4ed8\:304d ID \:306f\:30d4\:30f3\:7559\:3081\:7248\:306a\:306e\:3067 hasSuffix=True \:6271\:3044\:306b\:3057\:3001
+       \:30a8\:30a4\:30ea\:30a2\:30b9 (claude-opus-4-8 \:306e\:3088\:3046\:306a\:65e5\:4ed8\:7121\:3057) \:3092\:6700\:65b0\:3068\:3057\:3066\:512a\:5148\:3059\:308b\:3002 *)
+    If[AnyTrue[nums, # >= 10000 &], hasSuffix = hasSuffix <> "datestamp"];
+    nums = Select[nums, # < 10000 &];
+    (* suffix \:306b\:82f1\:5b57 (preview/beta/rc/1m \:7b49) \:307e\:305f\:306f\:65e5\:4ed8\:304c\:3042\:308c\:3070 hasSuffix=True *)
+    hasSuffix = StringMatchQ[hasSuffix, RegularExpression[".*[a-zA-Z].*"]];
+    {family, nums, hasSuffix}];
+iSVParseModelVersion[_] := {"", {}, False};
+
+(* model id \:304b\:3089 intent \:3068 class \:3092\:63a8\:8ad6\:3059\:308b\:3002
+   provider \:3054\:3068\:306b\:3001\:30d5\:30a1\:30df\:30ea\:540d\:3067 intent \:3092\:5272\:308a\:5f53\:3066\:308b\:3002 *)
+iSVInferModelIntentClass[provider_String, id_String] :=
+  Module[{family, lc},
+    {family} = Take[iSVParseModelVersion[id], 1];
+    lc = ToLowerCase[id];
+    Which[
+      (* Anthropic / claudecode: opus=heavy(code-heavy), sonnet=extraction,
+         haiku=light *)
+      StringContainsQ[lc, "opus"],
+        <|"Intent" -> If[provider === "claudecode", "code-heavy", "heavy"],
+          "Class" -> If[provider === "claudecode", "Heavy-Local", "Heavy-Cloud"],
+          "Capabilities" -> {"Reasoning", "Code", "ToolUse"}|>,
+      StringContainsQ[lc, "sonnet"],
+        <|"Intent" -> "extraction",
+          "Class" -> If[provider === "claudecode", "Heavy-Local", "Heavy-Cloud"],
+          "Capabilities" -> {"Reasoning", "Code"}|>,
+      StringContainsQ[lc, "haiku"],
+        <|"Intent" -> "light",
+          "Class" -> "Light-Cloud",
+          "Capabilities" -> {"Reasoning"}|>,
+      (* OpenAI: gpt-5 \:7cfb = heavy (\:305f\:3060\:3057 gpt-oss \:306f\:30ed\:30fc\:30ab\:30eb\:306a\:306e\:3067\:9664\:5916) *)
+      StringContainsQ[lc, "gpt"] && !StringContainsQ[lc, "gpt-oss"],
+        <|"Intent" -> "heavy",
+          "Class" -> "Heavy-Cloud",
+          "Capabilities" -> {"Reasoning", "Code", "ToolUse"}|>,
+      (* \:30ed\:30fc\:30ab\:30eb provider (lmstudio \:7b49) \:306e\:30e2\:30c7\:30eb\:306f extraction \:306b\:5272\:308a\:5f53\:3066\:308b\:3002
+         qwen / llama / gemma / mistral \:7b49\:30ed\:30fc\:30ab\:30eb\:30e2\:30c7\:30eb\:306f\:540d\:524d\:304c\:591a\:69d8\:306a\:306e\:3067\:3001
+         provider \:3067\:5224\:5b9a\:3059\:308b\:3002\:3053\:308c\:304c\:7121\:3044\:3068 Refresh \:3057\:3066\:3082 intent \:304c Null \:306e\:307e\:307e
+         extraction \:306b\:6607\:683c\:3055\:308c\:305a\:3001seed \:30c7\:30d5\:30a9\:30eb\:30c8 (qwen-local) \:304c\:6b8b\:308b (B-1 \:3092\:59a8\:3052\:308b)\:3002 *)
+      provider === "lmstudio" || StringContainsQ[lc, "qwen"] ||
+        StringContainsQ[lc, "llama"] || StringContainsQ[lc, "gemma"] ||
+        StringContainsQ[lc, "mistral"] || StringContainsQ[lc, "gpt-oss"],
+        <|"Intent" -> "extraction",
+          "Class" -> "Local",
+          "Capabilities" -> {"Reasoning"}|>,
+      (* \:305d\:308c\:4ee5\:5916\:306f intent \:672a\:78ba\:5b9a (\:4e00\:89a7\:306b\:306f\:6b8b\:308b\:304c\:6607\:683c\:3055\:308c\:306a\:3044) *)
+      True,
+        <|"Intent" -> Null, "Class" -> "Unknown",
+          "Capabilities" -> {"Reasoning"}|>]];
+iSVInferModelIntentClass[_, _] := <|"Intent" -> Null, "Class" -> "Unknown"|>;
+
+(* \:30d0\:30fc\:30b8\:30e7\:30f3\:756a\:53f7\:30ea\:30b9\:30c8\:306e\:8f9e\:66f8\:5f0f\:6bd4\:8f03\:3002a > b \:306a\:3089 1, a < b \:306a\:3089 -1, \:7b49\:3057\:3044\:306a\:3089 0 *)
+iSVCompareVersions[a_List, b_List] :=
+  Module[{la = Length[a], lb = Length[b], n, i, av, bv},
+    n = Max[la, lb];
+    Catch[
+      Do[
+        av = If[i <= la, a[[i]], 0];
+        bv = If[i <= lb, b[[i]], 0];
+        Which[av > bv, Throw[1], av < bv, Throw[-1]],
+        {i, n}];
+      0]];
+iSVCompareVersions[_, _] := 0;
+
+(* fetched \:30a8\:30f3\:30c8\:30ea\:7fa4\:306b intent/class \:3092\:4ed8\:4e0e\:3057\:3001\:540c provider\:00d7family\:00d7intent \:3067
+   \:6700\:5927\:30d0\:30fc\:30b8\:30e7\:30f3\:306e\:3082\:306e\:3060\:3051\:3092\:300c\:6b63\:898f intent \:30a8\:30f3\:30c8\:30ea\:300d\:306b\:6607\:683c\:3059\:308b\:3002
+   - \:5168 fetched \:30a8\:30f3\:30c8\:30ea\:306f "Availability"->"Available" \:306e\:5019\:88dc\:3068\:3057\:3066\:6b8b\:3059
+     (Intent=Null \:306e\:307e\:307e\:3002SourceVaultListModels \:3067\:4e00\:89a7\:306b\:51fa\:308b)
+   - \:5404 (provider, intent) \:306b\:3064\:3044\:3066\:6700\:5927\:30d0\:30fc\:30b8\:30e7\:30f3\:306e 1 \:4ef6\:306b Intent \:3092\:8a2d\:5b9a
+   - preview/beta/rc/suffix \:4ed8\:304d (hasSuffix=True) \:306f intent \:6607\:683c\:306e\:5bfe\:8c61\:5916
+     (\:4e00\:89a7\:306b\:306f\:6b8b\:308b\:304c heavy \:7b49\:306b\:306f\:9078\:3070\:308c\:306a\:3044) *)
+iSVAssignIntentsToFetched[fetched_List] :=
+  Module[{withMeta, byKey, promoted, base},
+    (* (1) \:5404\:30a8\:30f3\:30c8\:30ea\:306b family/version/suffix \:3068\:63a8\:8ad6 intent \:3092\:4ed8\:4e0e *)
+    withMeta = Map[
+      Function[e,
+        Module[{provider, id, pv, family, version, hasSuffix, infer},
+          provider = Lookup[e, "Provider", ""];
+          id = Lookup[e, "ModelId", ""];
+          pv = iSVParseModelVersion[id];
+          {family, version, hasSuffix} = pv;
+          infer = iSVInferModelIntentClass[provider, id];
+          <|"Entry" -> e, "Provider" -> provider, "ModelId" -> id,
+            "Family" -> family, "Version" -> version,
+            "HasSuffix" -> hasSuffix,
+            "InferIntent" -> Lookup[infer, "Intent", Null],
+            "InferClass" -> Lookup[infer, "Class", "Unknown"],
+            "InferCaps" -> Lookup[infer, "Capabilities", {"Reasoning"}]|>]],
+      fetched];
+    (* (2) intent \:304c\:63a8\:8ad6\:3067\:304d\:4e14\:3064 suffix \:7121\:3057\:306e\:3082\:306e\:3092 (provider,intent) \:3067
+       \:30b0\:30eb\:30fc\:30d4\:30f3\:30b0\:3057\:3001\:6700\:5927\:30d0\:30fc\:30b8\:30e7\:30f3\:3092\:9078\:3076 *)
+    byKey = GroupBy[
+      Select[withMeta,
+        StringQ[#["InferIntent"]] && !TrueQ[#["HasSuffix"]] &],
+      {#["Provider"], #["InferIntent"]} &];
+    promoted = Association @ KeyValueMap[
+      Function[{key, group},
+        Module[{best},
+          best = First @ SortBy[group,
+            -iSVVersionSortKey[#["Version"]] &];
+          key -> best]],
+      byKey];
+    (* (3) base: \:5168 fetched \:3092 Intent=Null \:306e\:307e\:307e (\:4e00\:89a7\:7528)\:3002
+       promoted \:306b\:8a72\:5f53\:3059\:308b (provider,modelid) \:306f Intent \:4ed8\:304d\:306b\:7f6e\:63db *)
+    base = Map[
+      Function[m,
+        Module[{e = m["Entry"], key, isPromoted},
+          key = {m["Provider"], m["InferIntent"]};
+          isPromoted = StringQ[m["InferIntent"]] &&
+            KeyExistsQ[promoted, key] &&
+            promoted[key]["ModelId"] === m["ModelId"] &&
+            !TrueQ[m["HasSuffix"]];
+          If[isPromoted,
+            <|e,
+              "Intent" -> m["InferIntent"],
+              "Class" -> m["InferClass"],
+              "Capabilities" -> m["InferCaps"],
+              "Kind" -> "Model",
+              "PolicySource" -> "auto-fetch:max-version"|>,
+            (* \:975e\:6607\:683c\:30a8\:30f3\:30c8\:30ea\:306f Class \:3060\:3051\:63a8\:8ad6\:5024\:3067\:88dc\:5b8c\:3001Intent \:306f Null \:306e\:307e\:307e *)
+            <|e, "Class" -> m["InferClass"]|>]]],
+      withMeta];
+    base];
+iSVAssignIntentsToFetched[_] := {};
+
+(* SortBy \:7528\:306e\:6570\:5024\:30ad\:30fc: \:30d0\:30fc\:30b8\:30e7\:30f3 {4,8} \:3092 4*1000+8 \:306e\:3088\:3046\:306a\:5358\:8abf\:5024\:306b\:3002
+   \:5404\:6841\:3092 1000 \:9032\:3067\:91cd\:307f\:4ed8\:3051 (\:5341\:5206\:5927\:304d\:3044\:57fa\:6570)\:3002 *)
+iSVVersionSortKey[version_List] :=
+  Module[{v = Select[version, IntegerQ]},
+    If[v === {}, 0,
+      Total @ MapIndexed[
+        #1 * 1000^(Length[v] - First[#2]) &, v]]];
+iSVVersionSortKey[_] := 0;
+
+(* anthropic provider \:306e auto-fetch \:30a8\:30f3\:30c8\:30ea\:3092 claudecode provider \:306b
+   \:30df\:30e9\:30fc\:3059\:308b\:3002Claude Code CLI \:306f\:7121\:8ab2\:91d1\:3060\:304c claude model list \:304c\:7121\:3044\:306e\:3067\:3001
+   anthropic /v1/models \:3067\:5f97\:305f\:6700\:65b0\:30e2\:30c7\:30eb ID \:3092\:305d\:306e\:307e\:307e claudecode \:306e
+   \:5019\:88dc\:3068\:3059\:308b (claude --model <id> \:3067\:4f7f\:3048\:308b)\:3002
+   intent \:306f claudecode \:7528\:306b\:518d\:30de\:30c3\:30d4\:30f3\:30b0 (opus->code-heavy)\:3002 *)
+iSVMirrorAnthropicToClaudecode[entries_List] :=
+  Module[{anthropicFetched, mirrored},
+    anthropicFetched = Select[entries,
+      Lookup[#, "Provider", ""] === "anthropic" &&
+      Lookup[#, "Source", ""] === "auto-fetch" &];
+    mirrored = Map[
+      Function[e,
+        Module[{id = Lookup[e, "ModelId", ""], infer},
+          infer = iSVInferModelIntentClass["claudecode", id];
+          <|e,
+            "Provider" -> "claudecode",
+            "Intent" -> Lookup[e, "Intent", Null] /.
+              (* anthropic intent \:3092 claudecode intent \:306b\:5909\:63db *)
+              {"heavy" -> "code-heavy"},
+            "Class" -> Lookup[infer, "Class", "Heavy-Local"],
+            "Endpoint" -> "claude-code-cli",
+            "Source" -> "auto-fetch:mirror-anthropic",
+            "PolicySource" -> "auto-fetch:mirror-anthropic"|>]],
+      anthropicFetched];
+    mirrored];
+iSVMirrorAnthropicToClaudecode[_] := {};
+
 iSVMergeModelRegistry[existing_List, fetched_List] :=
   Module[{kept, fetchedKeys, merged},
     fetchedKeys = Map[
@@ -9748,7 +10360,7 @@ SourceVaultRefreshModelRegistry[opts:OptionsPattern[]] :=
 
     Scan[
       Function[provider,
-        Module[{cfg, kind, url, authProvider, key, headers,
+        Module[{cfg, kind, url, authProvider, headers,
                 result, entries},
           cfg = Lookup[eps, provider, <||>];
           kind = Lookup[cfg, "Kind", "Unknown"];
@@ -9793,30 +10405,49 @@ SourceVaultRefreshModelRegistry[opts:OptionsPattern[]] :=
                   "ModelCount" -> Length[centries]|>]];
             Return[Null, Module]];
 
-          (* obtain auth header for cloud providers via the
-             NBAccess key API (never SystemCredential directly) *)
-          headers = {};
-          If[kind === "Cloud" && StringQ[authProvider],
-            key = Quiet @ Check[
-              NBAccess`NBGetAPIKey[authProvider], $Failed];
-            If[!StringQ[key] || key === "",
+          (* Cloud provider: API \:30ad\:30fc\:3092\:4f7f\:3046\:51e6\:7406\:306f NBAccess \:306b\:9589\:3058\:8fbc\:3081\:308b\:3002
+             NBListProviderModels \:306f\:5185\:90e8\:3067 SystemCredential \:304b\:3089\:30ad\:30fc\:3092\:8aad\:307f\:3001
+             \:30e2\:30c7\:30eb\:540d\:30ea\:30b9\:30c8 (\:79d8\:533f\:6027\:306a\:3057) \:3060\:3051\:3092\:8fd4\:3059\:306e\:3067\:3001SourceVault \:5074\:306f
+             PrivacySpec / AccessLevel \:3092\:6307\:5b9a\:305b\:305a\:306b\:547c\:3079\:308b (\:8a2d\:8a08\:65b9\:91dd)\:3002 *)
+          If[kind === "Cloud",
+            Module[{listResult, cloudIds},
+              listResult = Quiet @ Check[
+                NBAccess`NBListProviderModels[
+                  If[StringQ[authProvider], authProvider, provider]],
+                <|"Status" -> "Failed", "Models" -> {}|>];
+              If[Lookup[listResult, "Status", ""] =!= "OK",
+                AppendTo[perProvider,
+                  <|"Provider" -> provider,
+                    "Result" -> If[
+                      Lookup[listResult, "Status", ""] === "NoAPIKey",
+                      "Skipped", "Failed"],
+                    "Reason" -> Lookup[listResult, "Reason",
+                      Lookup[listResult, "Status", "Unknown"]]|>];
+                Return[Null, Module]];
+              cloudIds = Lookup[listResult, "Models", {}];
+              entries = Map[
+                Function[mid,
+                  <|"Provider" -> provider,
+                    "ModelId" -> mid,
+                    "Endpoint" -> url,
+                    "Class" -> "Unknown",
+                    "Availability" -> "Available",
+                    "Source" -> "auto-fetch",
+                    "Intent" -> Null,
+                    "FetchedAt" -> ts|>],
+                Select[cloudIds, StringQ]];
+              fetched = Join[fetched, entries];
               AppendTo[perProvider,
-                <|"Provider" -> provider, "Result" -> "Skipped",
-                  "Reason" -> "NoAPIKey"|>];
-              Return[Null, Module]];
-            headers = Which[
-              authProvider === "anthropic",
-                {"x-api-key" -> key,
-                 "anthropic-version" -> "2023-06-01"},
-              authProvider === "openai",
-                {"Authorization" -> "Bearer " <> key},
-              True, {}]];
+                <|"Provider" -> provider, "Result" -> "OK",
+                  "ModelCount" -> Length[entries]|>]];
+            Return[Null, Module]];
 
           (* local provider: $ClaudePrivateModel url takes
              priority over the config default; key resolved via
              NBAccess (NBGetLocalLLMAPIKey). API keys are
              NBAccess's responsibility; the key is sent only as
              a header and is never logged. *)
+          headers = {};
           If[kind === "Local",
             url = iSVResolveLocalEndpoint[provider, Null, cfg];
             Module[{baseUrl, localKey},
@@ -9856,6 +10487,12 @@ SourceVaultRefreshModelRegistry[opts:OptionsPattern[]] :=
             <|"Provider" -> provider, "Result" -> "OK",
               "ModelCount" -> Length[entries]|>]]],
       providers];
+
+    (* Stage 9 P1.5: fetch \:3057\:305f\:30e2\:30c7\:30eb\:306b intent/class \:3092\:63a8\:8ad6\:4ed8\:4e0e\:3057\:3001
+       \:540c family \:6700\:5927\:30d0\:30fc\:30b8\:30e7\:30f3\:3092 intent \:306b\:6607\:683c\:3059\:308b\:3002\:3055\:3089\:306b anthropic \:306e
+       \:6700\:65b0\:30e2\:30c7\:30eb\:3092 claudecode (\:7121\:8ab2\:91d1 CLI) provider \:306b\:30df\:30e9\:30fc\:3059\:308b\:3002 *)
+    fetched = iSVAssignIntentsToFetched[fetched];
+    fetched = Join[fetched, iSVMirrorAnthropicToClaudecode[fetched]];
 
     (* read the existing compiled registry from the SAME json path
        that SourceVaultResolve / SourceVaultListModels read. The
@@ -11817,7 +12454,10 @@ iDirRepoWriteJSON[path_String, assoc_Association] :=
     If[Head[strm] =!= OutputStream,
       Return[<|"Status" -> "Failed",
         "Reason" -> "OpenWriteFailed", "Path" -> path|>]];
-    BinaryWrite[strm, StringToByteArray[json, "UTF-8"]];
+    BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
+    (* Stage 9 P1.5 utf8fix: ExportString["RawJSON"] \:306e\:623b\:308a\:5024\:306f UTF-8 byte \:306e
+       Latin-1 \:8868\:73fe\:306a\:306e\:3067 ISO8859-1 \:3067 byte \:5316 (\:65e7 UTF-8 \:306f\:4e8c\:91cd encode)\:3002
+       \:8aad\:307f\:53d6\:308a iDirRepoReadJSON \:306e ByteArrayToString[..., "UTF-8"] \:3068\:6574\:5408\:3002 *)
     Close[strm];
     <|"Status" -> "OK", "Path" -> path|>];
 
@@ -12207,7 +12847,7 @@ EndPackage[];
    ============================================================ *)
 
 SourceVault`$SourceVaultVersion =
-  "2026-05-28-stage-9-p1.5-format-keywords-promptsave";
+  "2026-05-29-stage-9-p1.5-model-registry-autoupdate";
 
 (* $SourceVaultWorkerPromptAutoDetect \:30c7\:30d5\:30a9\:30eb\:30c8\:5024 (P3) *)
 If[!ValueQ[SourceVault`$SourceVaultWorkerPromptAutoDetect],
@@ -12234,7 +12874,12 @@ If[AssociationQ[ClaudeCode`$ClaudePackageKeywordMap],
      "SourceVaultUpcomingSchedule", "SourceVaultIndexNotebook",
      "SourceVaultExtractNotebookHeader", "SourceVaultNotebookSummary",
      "SaveLastPrompt", "SourceVaultSearchPromptRoutes",
-     "SourceVaultFormatPromptRouteList"}];
+     "SourceVaultFormatPromptRouteList",
+     "\:30e2\:30c7\:30eb", "model", "ClaudeResolveModel",
+     "SourceVaultRefreshModelRegistry", "SourceVaultListModels",
+     "SourceVaultSetModel", "SourceVaultClearModelRegistry",
+     "SourceVaultSetModelIntent", "SourceVaultAssignClaudeModels",
+     "SourceVaultModelIntentMap"}];
 
 
 (* ============================================================
@@ -12318,4 +12963,34 @@ If[!TrueQ[SourceVault`Private`$iSVDisablePromptRouterAutoLoad],
       <|"Status" -> "Failed",
         "Reason" -> "BootstrapException"|>
   ]
+];
+
+
+(* ============================================================
+   Stage 9 P1.5: \:30e2\:30c7\:30eb\:5909\:6570\:306e\:8d77\:52d5\:6642\:81ea\:52d5\:5272\:308a\:5f53\:3066\:3068\:627f\:8a8d\:767b\:9332 (appended)
+   ============================================================ *)
+
+(* SourceVaultSetModelIntent \:3092 $NBApprovalHeads \:306b\:767b\:9332\:3059\:308b\:3002
+   ClaudeEval \:3067\:30e2\:30c7\:30eb\:9078\:629e\:3092\:5909\:66f4\:3059\:308b\:30d7\:30ed\:30f3\:30d7\:30c8\:3092\:5b9f\:884c\:3059\:308b\:3068
+   Hold -> Approve UI \:304c\:51fa\:308b (\:30e2\:30c7\:30eb\:5909\:66f4\:306f\:691c\:8a3c\:5bfe\:8c61)\:3002 *)
+If[TrueQ[Quiet @ Check[
+    ListQ[NBAccess`$NBApprovalHeads], False]],
+  If[!MemberQ[NBAccess`$NBApprovalHeads, "SourceVaultSetModelIntent"],
+    NBAccess`$NBApprovalHeads = Append[
+      NBAccess`$NBApprovalHeads, "SourceVaultSetModelIntent"]]];
+
+(* \:30ed\:30fc\:30c9\:6642\:306b\:30e2\:30c7\:30eb\:5909\:6570\:3092\:81ea\:52d5\:5272\:308a\:5f53\:3066 (Q1: \:81ea\:52d5\:5b9f\:884c\:53ef)\:3002
+   \:5b9f\:4ee3\:5165\:306f NBAccess`NBSyncClaudeModelVars \:304c\:62c5\:3046 (\:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:5883\:754c)\:3002
+   SourceVault \:306f NBAccess \:3092 Needs \:3057\:3066\:3044\:308b\:306e\:3067\:3001SourceVault \:304c\:5b58\:5728\:3059\:308b
+   \:6642\:70b9\:3067 NBAccess \:3082\:5fc5\:305a\:5b58\:5728\:3059\:308b\:3002claudecode.wl \:306e\:30cf\:30fc\:30c9\:30b3\:30fc\:30c9\:3055\:308c\:305f
+   \:73fe\:72b6\:8a18\:8ff0\:306f\:6b8b\:308a\:3001\:305d\:306e\:4e0a\:306b NBSyncClaudeModelVars \:304c\:4e0a\:66f8\:304d\:3059\:308b\:3002
+   \:5931\:6557\:3057\:3066\:3082\:30ed\:30fc\:30c9\:306f\:7d99\:7d9a\:3059\:308b\:3002 *)
+Quiet @ Check[
+  SourceVault`Private`$iSVSyncResult =
+    If[Length[Names["NBAccess`NBSyncClaudeModelVars"]] > 0,
+      NBAccess`NBSyncClaudeModelVars[],
+      (* NBAccess \:304c\:7121\:3051\:308c\:3070 (\:901a\:5e38\:8d77\:304d\:306a\:3044\:304c\:5b89\:5168\:5074) SourceVault \:5358\:4f53\:3067\:4ee3\:5165 *)
+      SourceVault`SourceVaultAssignClaudeModels[]],
+  SourceVault`Private`$iSVSyncResult =
+    <|"Status" -> "Failed", "Reason" -> "SyncException"|>
 ];

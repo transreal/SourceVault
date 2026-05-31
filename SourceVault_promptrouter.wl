@@ -696,7 +696,10 @@ iSVPRAppendRunJSONL[record_Association] :=
     If[Head[strm] =!= OutputStream,
       Return[<|"Status" -> "Failed",
         "Reason" -> "OpenAppendFailed", "Path" -> path|>]];
-    BinaryWrite[strm, StringToByteArray[line <> "\n", "UTF-8"]];
+    BinaryWrite[strm, StringToByteArray[line <> "\n", "ISO8859-1"]];
+    (* Stage 9 P1.5 utf8fix: ExportString["RawJSON"] \:306e\:623b\:308a\:5024\:306f
+       UTF-8 byte \:306e Latin-1 \:8868\:73fe\:306a\:306e\:3067 ISO8859-1 \:3067 byte \:5316\:3002
+       \:65e7 UTF-8 \:306f\:4e8c\:91cd encode (SourceVault.wl JSONL \:5074\:3068\:540c\:3058 ISO8859-1 \:306b\:7d71\:4e00)\:3002 *)
     Close[strm];
     <|"Status" -> "OK", "Path" -> path|>
   ];
@@ -1511,9 +1514,15 @@ iSVPRAtomicWriteRegistry[path_String, entries_List] :=
     If[Head[strm] =!= OutputStream,
       Return[<|"Status" -> "Failed",
         "Reason" -> "OpenTmpFailed", "Path" -> path|>]];
-    BinaryWrite[strm, StringToByteArray[json, "UTF-8"]];
-    (* UTF-8 to stay consistent with the iLoadRegistryEntries
-       read path; ISO8859-1 corrupts non-ASCII route keywords. *)
+    BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
+    (* Stage 9 P1.5 utf8fix: ExportString["RawJSON"] \:306e\:623b\:308a\:5024 String \:306f\:3001
+       \:5404 codepoint \:304c\:65e2\:306b UTF-8 byte sequence \:306e Latin-1 \:8868\:73fe\:306b\:306a\:3063\:3066\:3044\:308b\:3002
+       \:3088\:3063\:3066 ISO8859-1 (1 codepoint = 1 byte) \:3067 byte \:5316\:3059\:308c\:3070
+       String \:5185\:90e8\:306e UTF-8 byte \:304c\:305d\:306e\:307e\:307e\:30d5\:30a1\:30a4\:30eb\:306b\:843d\:3061\:3001
+       \:8aad\:307f\:53d6\:308a\:306e ByteArrayToString[..., "UTF-8"] \:3068\:6574\:5408\:3059\:308b\:3002
+       \:65e7: StringToByteArray[json, "UTF-8"] \:306f\:4e8c\:91cd encode \:306b\:306a\:308a\:3001
+       \:65e5\:672c\:8a9e\:306e Memo / Examples \:7b49\:304c\:6587\:5b57\:5316\:3051\:3057\:3066\:3044\:305f
+       (model-registry \:5074\:306e iSaveRegistryEntries \:3068\:540c\:3058 ISO8859-1 \:306b\:7d71\:4e00)\:3002 *)
     Close[strm];
     (* Windows-safe rename: remove the existing target first *)
     If[FileExistsQ[path], Quiet[DeleteFile[path]]];
