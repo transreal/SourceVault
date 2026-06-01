@@ -564,8 +564,12 @@ SourceVaultExecutePromptRoute[prompt_String,
         "Reason" -> "NotUsableAsFunctionRoute",
         "Adapter" -> adapter|>]]];
 
-    (* only ReadOnly callables auto-dispatch; others need approval *)
-    If[Lookup[callable, "SideEffectClass", "Unknown"] =!= "ReadOnly",
+    (* ReadOnly \:307e\:305f\:306f SafeCreate (\:65b0\:898f\:30d5\:30a1\:30a4\:30eb\:751f\:6210\:306e\:307f\:30fb\:65e2\:5b58\:975e\:7834\:58ca) \:306f\:81ea\:52d5\:8d77\:52d5\:3002
+       \:305d\:306e\:4ed6\:306e\:526f\:4f5c\:7528 (\:524a\:9664\:30fb\:4e0a\:66f8\:304d\:7b49) \:306f\:5f93\:6765\:901a\:308a\:627f\:8a8d\:5f85\:3061\:3002
+       SafeCreate \:306f\:30e6\:30fc\:30b6\:304c\:660e\:793a\:7684\:306b\:6307\:793a\:3057\:305f\:5834\:5408\:306e\:307f\:30de\:30c3\:30c1\:3059\:308b\:30ad\:30fc\:30ef\:30fc\:30c9 route \:306b\:9650\:308a\:3001
+       \:65e2\:5b58\:30d5\:30a1\:30a4\:30eb\:3092\:4e0a\:66f8\:304d\:305b\:305a\:9023\:756a\:56de\:907f\:3059\:308b\:5b9f\:88c5\:3092\:524d\:63d0\:3068\:3059\:308b\:3002 *)
+    If[!MemberQ[{"ReadOnly", "SafeCreate"},
+        Lookup[callable, "SideEffectClass", "Unknown"]],
       Return[Join[base, <|
         "Status" -> "NeedsApproval",
         "Reason" -> "NonReadOnlySideEffect",
@@ -962,6 +966,16 @@ SourceVaultCallableAllowlistRegistry[] :=
       "UseAsHandlerRef"    -> True,
       "SideEffectClass"    -> "ReadOnly",
       "OwnerPackage"       -> "SourceVault"
+    |>,
+    "SourceVaultNewNotebook" -> <|
+      "FunctionId"         -> "SourceVaultNewNotebook",
+      "Symbol"             -> SourceVaultNewNotebook,
+      "UseAsFunctionRoute" -> True,
+      "UseAsHandlerRef"    -> True,
+      (* \:65b0\:898f\:30d5\:30a1\:30a4\:30eb\:751f\:6210\:306e\:307f\:30fb\:65e2\:5b58\:975e\:7834\:58ca (\:9023\:756a\:56de\:907f) \:306a\:306e\:3067 SafeCreate\:3002
+         \:30e6\:30fc\:30b6\:304c\:660e\:793a\:7684\:306b\:300c\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:300d\:3068\:6307\:793a\:3057\:305f\:6642\:306b\:81ea\:52d5\:8d77\:52d5\:3055\:308c\:308b\:3002 *)
+      "SideEffectClass"    -> "SafeCreate",
+      "OwnerPackage"       -> "SourceVault"
     |>
   |>;
 
@@ -1183,6 +1197,25 @@ iSVPRSeedPromptRoutes[] :=
         "Kind"             -> "Intent",
         "IntentId"         -> "OpenTodoList",
         "AdapterFunctionId"-> "SourceVaultFindNotebooks"
+      |>,
+      "Privacy" -> <|"PrivacyLevel" -> 0.0|>,
+      "Source"  -> "SeedBuiltIn"
+    |>,
+    <|
+      "Type"         -> "PromptRoute",
+      "RouteId"      -> "seed-function-newnotebook-v1",
+      "RouteVersion" -> 1,
+      "SchemaVersion"-> 1,
+      "Matcher" -> <|
+        "Kind"        -> "DeterministicPattern",
+        (* \"\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\" / \"\:65b0\:3057\:3044\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\" \:7b49\:3002
+           \:90e8\:5206\:4e00\:81f4 (KeywordsAny) \:306a\:306e\:3067\"\:3092\"\:6709\:7121\:30fb\:524d\:5f8c\:6587\:8a00\:3092\:554f\:308f\:305a\:62fe\:3046\:3002 *)
+        "KeywordsAny" -> {"\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af", "\:65b0\:3057\:3044\:30ce\:30fc\:30c8\:30d6\:30c3\:30af",
+          "\:65b0\:898f notebook", "new notebook"}
+      |>,
+      "Target" -> <|
+        "Kind"       -> "Function",
+        "FunctionId" -> "SourceVaultNewNotebook"
       |>,
       "Privacy" -> <|"PrivacyLevel" -> 0.0|>,
       "Source"  -> "SeedBuiltIn"
@@ -2540,16 +2573,75 @@ Options[SourceVaultProposePromptRoute] = {
   "Caller" -> "ClaudeEval"
 };
 
+(* schedule \:4ee5\:5916\:306e\:30d7\:30ed\:30f3\:30d7\:30c8\:3092 seed route \:30c6\:30fc\:30d6\:30eb\:3067\:89e3\:6c7a\:3057\:3001Function route \:304c
+   \:78ba\:5b9a\:3057\:305f\:5834\:5408\:306b held \:63d0\:6848\:5f0f\:3092\:8fd4\:3059\:3002\:78ba\:5b9a\:3057\:306a\:3044\:30fb\:5bfe\:8c61\:5916\:306a\:3089
+   Missing[] \:3092\:8fd4\:3057\:3001\:547c\:3073\:51fa\:3057\:5074\:304c NotDispatched \:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3059\:308b\:3002
+   - SourceVaultResolvePromptRoute \:3067 Status==Matched \:304b\:3064 Target.Kind==Function \:3092\:8981\:6c42
+   - FunctionId \:304c allowlist (View) \:306b\:5b58\:5728\:3057\:3001UseAsFunctionRoute==True \:304b\:3064
+     SideEffectClass \:304c ReadOnly / SafeCreate \:3067\:3042\:308b\:3053\:3068\:3092\:8981\:6c42 (\:5371\:967a\:306a\:526f\:4f5c\:7528\:306f\:81ea\:52d5\:8d77\:52d5\:3057\:306a\:3044)
+   - \:5f15\:6570\:306f\:7121\:3057 (FunctionId[]) \:3067 held \:5316\:3002\:73fe\:72b6 SourceVaultNewNotebook \:306f\:30aa\:30d7\:30b7\:30e7\:30f3\:7121\:3057\:3067\:52d5\:304f\:3002 *)
+iSVPRProposeFunctionRoute[prompt_String] :=
+  Module[{decision, target, fid, callable, sym, sideEffect, held},
+    decision = Quiet @ Check[
+      SourceVaultResolvePromptRoute[prompt], $Failed];
+    If[!AssociationQ[decision] ||
+        Lookup[decision, "Status", ""] =!= "Matched",
+      Return[Missing["NoFunctionRoute"]]];
+    target = Lookup[decision, "Target", <||>];
+    If[!AssociationQ[target] ||
+        Lookup[target, "Kind", ""] =!= "Function",
+      Return[Missing["NotFunctionTarget"]]];
+    fid = Lookup[target, "FunctionId", Missing[]];
+    If[!StringQ[fid], Return[Missing["NoFunctionId"]]];
+    callable = iSVPRResolveCallable[fid];
+    If[!AssociationQ[callable], Return[Missing["NotInAllowlist"]]];
+    If[!TrueQ[callable["UseAsFunctionRoute"]],
+      Return[Missing["NotUsableAsFunctionRoute"]]];
+    sideEffect = Lookup[callable, "SideEffectClass", "Unknown"];
+    If[!MemberQ[{"ReadOnly", "SafeCreate"}, sideEffect],
+      (* \:5371\:967a\:306a\:526f\:4f5c\:7528: \:81ea\:52d5\:63d0\:6848\:305b\:305a NotDispatched \:306b\:843d\:3068\:3059 *)
+      Return[Missing["NonAutoDispatchSideEffect"]]];
+    sym = Lookup[callable, "Symbol", Missing[]];
+    If[MissingQ[sym], Return[Missing["NoSymbol"]]];
+    (* \:5f15\:6570\:7121\:3057\:547c\:3073\:51fa\:3057\:3092 held \:5316 (sym \:306f\:8a55\:4fa1\:3055\:305b\:305a\:30b7\:30f3\:30dc\:30eb\:306e\:307e\:307e\:6271\:3046) *)
+    held = With[{s = sym}, HoldComplete[s[]]];
+    <|
+      "Type"     -> "PromptRouteProposal",
+      "Status"   -> "Proposed",
+      "Prompt"   -> prompt,
+      "Decision" -> <|
+        "RouteId" -> Lookup[decision, "RouteId", Missing[]],
+        "Method"  -> "DeterministicFunctionRoute",
+        "FunctionId" -> fid|>,
+      "ProposedExpression" -> held,
+      "ValidationHints" -> <|
+        "ExpectedHeads" -> {sym},
+        "SideEffectClass" -> sideEffect|>,
+      "RouterPhase"   -> iSVPRImplementationPhase[],
+      "RouterVersion" -> $SourceVaultPromptRouterVersion
+    |>
+  ];
+iSVPRProposeFunctionRoute[_] := Missing["BadPrompt"];
+
 SourceVaultProposePromptRoute[prompt_String,
                               opts:OptionsPattern[]] :=
   Module[{isSchedule, periodInfo, periodDays, filterSpec,
-          scopeSym, proposal, anchorNote},
-    (* only schedule prompts are handled by this builder *)
+          scopeSym, proposal, anchorNote, fnProposal},
+    (* schedule prompts: \:5f93\:6765\:901a\:308a SourceVaultUpcomingSchedule \:63d0\:6848 *)
     isSchedule = StringContainsQ[prompt,
       "\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb"] ||
       StringContainsQ[prompt, "\:4e88\:5b9a"] ||
       StringContainsQ[prompt, "schedule"];
     If[!isSchedule,
+      (* \:30b9\:30b1\:30b8\:30e5\:30fc\:30eb\:4ee5\:5916\:306f seed route \:30c6\:30fc\:30d6\:30eb (SourceVaultResolvePromptRoute) \:3067
+         \:89e3\:6c7a\:3092\:8a66\:307f\:308b\:3002Function route \:304c\:78ba\:5b9a\:3057\:3001\:305d\:306e FunctionId \:304c allowlist \:3067
+         ReadOnly / SafeCreate \:306a\:3089\:3001\:305d\:306e\:95a2\:6570\:547c\:3073\:51fa\:3057\:3092 held \:63d0\:6848\:3068\:3057\:3066\:8fd4\:3059\:3002
+         \:3053\:308c\:306b\:3088\:308a\:300c\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:300d\:7b49\:306e\:975e\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb\:30d7\:30ed\:30f3\:30d7\:30c8\:3082
+         PromptRouter \:7d4c\:7531\:3067\:6240\:5b9a\:306e\:95a2\:6570\:306b\:30eb\:30fc\:30c6\:30a3\:30f3\:30b0\:3055\:308c\:308b\:3002
+         \:89e3\:6c7a\:3067\:304d\:306a\:3051\:308c\:3070\:5f93\:6765\:901a\:308a NotDispatched \:3092\:8fd4\:3057 LLM \:751f\:6210\:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3002 *)
+      fnProposal = iSVPRProposeFunctionRoute[prompt];
+      If[AssociationQ[fnProposal],
+        Return[fnProposal]];
       Return[<|"Type" -> "PromptRouteProposal",
         "Status" -> "NotDispatched",
         "Reason" -> "NotASchedulePrompt",

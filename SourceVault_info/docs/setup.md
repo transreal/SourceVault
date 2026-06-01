@@ -185,6 +185,39 @@ $ClaudeModel = {"lmstudio", "qwen3-coder-30b-instruct"}
 
 ---
 
+## ノートブック用スタイルシートとテンプレートの配置
+
+SourceVault が管理するノートブックは、`NotebookStatus` スタイルのセルにヘッダ情報を、`TodoItem_x` スタイルのセルに Todo を保持します。これらを正しい見た目で表示するための専用スタイルシート **`SourceVault default.nb`** が、Mathematica のスタイルシートディレクトリに配置されています。
+
+このスタイルシートを**新規ノートブックのテンプレート**として `Templates` フォルダにコピーしておくと、`ClaudeEval["新規ノートブックを"]` や `SourceVaultNewNotebook[]` でテンプレートをもとに新規ノートブックを生成できます。
+
+```mathematica
+(* Templates フォルダが無ければ先に作成 *)
+If[!DirectoryQ[FileNameJoin[{$packageDirectory, "Templates"}]],
+  CreateDirectory[FileNameJoin[{$packageDirectory, "Templates"}]]
+];
+
+(* スタイルシートをテンプレートとしてコピー *)
+CopyFile[
+ FileNameJoin[{$UserBaseDirectory, "SystemFiles", "FrontEnd",
+   "StyleSheets", "SourceVault default.nb"}],
+ FileNameJoin[$packageDirectory, "Templates",
+  "SourceVault notebook template.nb"]]
+```
+
+コピー後、テンプレートの `NotebookStatus` セルが既定の書式になっていることを確認してください。
+
+```mathematica
+<|"Keywords" -> {"template"},
+  "Deadline" -> DateObject[{2026, 1, 1}],
+  "NextReview" -> Quantity[1, "Weeks"],
+  "Status" -> "Todo"|>
+```
+
+`SourceVaultNewNotebook` は、この `Deadline` / `NextReview` を生成日（今日）に置換した未保存の新規ノートブックを開きます。ノートブックの書式・新規作成の詳細は user_manual の「Notebook Management」を参照してください。
+
+---
+
 ## 動作確認
 
 ### バージョン確認

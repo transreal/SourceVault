@@ -530,7 +530,7 @@ SourceVaultFindNotebooks::usage =
   "Options:\n" <>
   "  \"OpenTodos\" -> True | False (\:672a\:5b8c\:4e86 Todo \:3092\:542b\:3080 / \:542b\:307e\:306a\:3044 notebook)\n" <>
   "  \"NextReview\" -> \"Today\" | \"Overdue\" | \"ThisWeek\" | \"DueSoon\" | <|\"From\" -> _, \"To\" -> _|>\n" <>
-  "    \:203b \"Today\" \:306f\:53b3\:5bc6\:306b\:4eca\:65e5\:306e\:307f\:3001\"ThisWeek\"/\"DueSoon\" \:306f\:4eca\:65e5+\:9031\:5185+\:671f\:9650\:5207\:308c\:3092\:5305\:3080\n" <>
+  "    \:203b \"Today\" \:306f\:53b3\:5bc6\:306b\:4eca\:65e5\:306e\:307f\:3001\"ThisWeek\"/\"DueSoon\" \:306f\:4eca\:65e5\:00b17\:65e5\:4ee5\:5185 (\:4eca\:9031\:5185\:306b\:904e\:304e\:305f\:671f\:9650\:5207\:308c\:3082\:542b\:3080\:304c\:9060\:3044\:904e\:53bb\:306f\:9664\:5916)\:3001\"Overdue\" \:306f\:671f\:9650\:5207\:308c\:5168\:90e8\n" <>
   "  \"Deadline\" -> \"Today\" | \"Overdue\" | \"ThisWeek\" | \"DueSoon\" | <|\"From\" -> _, \"To\" -> _|>\n" <>
   "  \"Keywords\" -> {_String, ...} | _String -- \:90e8\:5206\:4e00\:81f4\:691c\:7d22\n" <>
   "    \:691c\:7d22\:5bfe\:8c61: Header.Keywords + Header.Title + FileBaseName[Path] + \:89aa\:30d5\:30a9\:30eb\:30c0\:540d\n" <>
@@ -539,9 +539,19 @@ SourceVaultFindNotebooks::usage =
   "  \"Status\" -> \"Todo\" | \"Done\" | \"Done\" | _String\n" <>
   "  \"Scope\" -> \"Today\" \:8907\:5408\:30d5\:30a3\:30eb\:30bf: (NextReview==\:4eca\:65e5) | (Deadline==\:4eca\:65e5) | (Path \:306b YYYYMMDD \:5f62\:5f0f\:3067\:4eca\:65e5\:3092\:542b\:3080) \:306e OR\n" <>
   "    \:203b NoReviewDate / NoDeadline \:306f\:30ec\:30d3\:30e5\:30fc\:4e0d\:8981\:6271\:3044\:3001Scope \"Today\" \:306b\:306f\:542b\:307e\:308c\:306a\:3044\n" <>
+  "  \"ForceReindex\" -> True | False (\:65e2\:5b9a False) -- True \:306a\:3089 mtime/\:30cf\:30c3\:30b7\:30e5 cache \:3092\:7121\:8996\:3057\:5168 notebook \:3092\:518d index\:3002\n" <>
+  "    notebook \:3092\:7de8\:96c6\:3057\:305f\:306e\:306b\:7d50\:679c\:304c\:53e4\:3044 (Deadline/NextReview/Status \:304c\:66f4\:65b0\:3055\:308c\:306a\:3044) \:5834\:5408\:306b\:4f7f\:3046\:3002\n" <>
   "  \"Format\" -> True | False (\:65e2\:5b9a False) -- True \:306a\:3089\:7d50\:679c\:3092 SourceVaultFormatNotebookList \:3067\n" <>
   "    \:30b9\:30b1\:30b8\:30e5\:30fc\:30eb\:8868\:3068\:540c\:5f62\:5f0f\:306e Grid \:306b\:3057\:3066\:8fd4\:3059\:3002\:4e00\:89a7\:8868\:793a\:7528\:30b7\:30e7\:30fc\:30c8\:30ab\:30c3\:30c8\:3002\n" <>
-  "\:623b\:308a\:5024: {<|NotebookRef, OriginalPath, Title, Header, ReviewState, ...|>, ...}";
+  "\:623b\:308a\:5024: {record, ...}\:3002\:5404 record \:306f Association \:3067\:6b21\:306e\:30ad\:30fc\:3092\:6301\:3064:\n" <>
+  "  \"Path\" / \"OriginalPath\" -> notebook \:306e\:5b9f\:30d5\:30a1\:30a4\:30eb\:30d1\:30b9 (\:540c\:5024\:30a8\:30a4\:30ea\:30a2\:30b9)\n" <>
+  "  \"Title\" -> \:30bf\:30a4\:30c8\:30eb (Header.Title \:307e\:305f\:306f FileBaseName)\n" <>
+  "  \"NotebookRef\" -> \:53c2\:7167\:30ad\:30fc, \"Header\" -> Header Association (Keywords/Deadline/NextReview/Status/Title)\n" <>
+  "  \"Todos\" -> {<|\"Text\", \"Status\"(Open|Done|Pass), ...|>, ...} (\:62bd\:51fa\:6e08\:307f todo \:672c\:4f53)\n" <>
+  "  \"TodoCount\" / \"OpenTodoCount\" / \"DoneTodoCount\" / \"PassTodoCount\" -> _Integer\n" <>
+  "  \"ReviewState\" / \"DeadlineState\" -> _String, \"Lint\" -> {...}\n" <>
+  "  \:203b todo \:9805\:76ee\:81ea\:4f53\:3092\:5217\:6319\:3057\:305f\:3044\:5834\:5408\:306f record[\"Todos\"] \:3092\:4f7f\:3046\:3002\n" <>
+  "    SourceVaultExtractNotebookTodos[record[\"Path\"]] \:3067\:3082\:53d6\:308c\:308b\:304c\:3001\:518d\:62bd\:51fa\:3068\:306a\:308b\:305f\:3081 record[\"Todos\"] \:63a8\:5968\:3002";
 
 SourceVaultNotebookLint::usage =
   "SourceVaultNotebookLint[record] \:306f notebook record (\:307e\:305f\:306f path) \:306b\:5bfe\:3057\:3066 lint \:30c1\:30a7\:30c3\:30af\:3092\:884c\:3046\:3002\n" <>
@@ -680,6 +690,31 @@ SourceVaultFormatNotebookList::usage =
   "  \"UseCache\" -> True                       - in-memory cache \:3092\:6d3b\:7528\n" <>
   "\:623b\:308a\:5024: Grid (\:884c={Deadline, NextReview, Title, Dir, OpenTodos, Status, Summary, Publishable})\:3002\n" <>
   "ClaudeEval \:306a\:3069\:3067 notebook list \:3092\:8868\:793a\:3059\:308b\:969b\:306e\:65e2\:5b9a\:30d5\:30a9\:30fc\:30de\:30c3\:30c8\:95a2\:6570\:3002";
+
+SourceVaultFindTodos::usage =
+  "SourceVaultFindTodos[opts] \:306f\:6761\:4ef6\:306b\:5408\:3046 notebook \:306e todo \:9805\:76ee\:3092\:30d5\:30e9\:30c3\:30c8\:306a List \:3067\:8fd4\:3059\:3002\n" <>
+  "SourceVaultFindNotebooks \:3068\:540c\:3058 notebook \:691c\:7d22\:30aa\:30d7\:30b7\:30e7\:30f3 (OpenTodos / NextReview / Deadline / Keywords / Title / Status / Scope) \:3092\:53d7\:3051\:3001\n" <>
+  "\:30de\:30c3\:30c1\:3057\:305f\:5404 notebook \:306e todo \:30bb\:30eb\:3092 1 \:884c 1 \:9805\:76ee\:306b\:5c55\:958b\:3059\:308b\:3002\n" <>
+  "\:300c\:4eca\:9031\:671f\:9650\:306e todo \:3092\:30ea\:30b9\:30c8\:300d\:306e\:3088\:3046\:306a todo \:5358\:4f4d\:306e\:8981\:6c42\:306b\:306f notebook \:5358\:4f4d\:306e FindNotebooks \:3067\:306f\:306a\:304f\:3053\:3061\:3089\:3092\:4f7f\:3046\:3002\n" <>
+  "Options:\n" <>
+  "  \"TodoStatus\" -> \"Open\" | \"Done\" | \"Pass\" | All (\:65e2\:5b9a \"Open\" -- \:5c55\:958b\:5f8c\:306e todo \:3092\:3055\:3089\:306b status \:3067\:7d5e\:308b)\n" <>
+  "  \:305d\:306e\:4ed6\:306f SourceVaultFindNotebooks \:3068\:5171\:901a (OpenTodos / NextReview / Deadline / Keywords / Title / Status / Scope)\n" <>
+  "  \"Format\" -> True | False (\:65e2\:5b9a False) -- True \:306a\:3089 Grid \:8868\:793a\n" <>
+  "\:623b\:308a\:5024: {<|\"Title\", \"Path\", \"NotebookRef\", \"Deadline\", \"NextReview\", \"ReviewState\", \"DeadlineState\",\n" <>
+  "  \"TodoText\", \"TodoStatus\", \"TodoStrikeThrough\"|>, ...}\:3002Format->True \:306e\:3068\:304d\:306f Grid\:3002";
+
+SourceVaultNewNotebook::usage =
+  "SourceVaultNewNotebook[opts] \:306f\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:304b\:3089\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092 CreateNotebook \:3067\:958b\:304f\:3002\n" <>
+  "\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8 ($packageDirectory/Templates/SourceVault notebook template.nb) \:3092\:8907\:88fd\:3057\:3001\n" <>
+  "NotebookStatus \:30bb\:30eb\:306e Deadline \:3068 NextReview \:3092\:751f\:6210\:65e5 (\:65e2\:5b9a: \:4eca\:65e5) \:306b\:7f6e\:63db\:3057\:3066\n" <>
+  "\:672a\:4fdd\:5b58\:306e\:65b0\:898f\:30a6\:30a3\:30f3\:30c9\:30a6\:3068\:3057\:3066\:8868\:793a\:3059\:308b (\:30d5\:30a1\:30a4\:30eb\:306b\:306f\:4fdd\:5b58\:3057\:306a\:3044)\:3002\n" <>
+  "Deadline/NextReview \:306f DateObject[{y, m, d}] \:306e\:7de8\:96c6\:53ef\:80fd\:306a\:5165\:529b\:5f0f\:3067\:633f\:5165\:3055\:308c\:308b\:3002\n" <>
+  "Options:\n" <>
+  "  \"TemplatePath\" -> Automatic | path  -- \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8 .nb (\:65e2\:5b9a: \:30d1\:30c3\:30b1\:30fc\:30b8\:5185 Templates)\n" <>
+  "  \"Title\" -> Automatic | _String      -- \:30a6\:30a3\:30f3\:30c9\:30a6\:30bf\:30a4\:30c8\:30eb (\:65e2\:5b9a \"\:65b0\:898f\:30ce\:30fc\:30c8\")\n" <>
+  "  \"Date\" -> Automatic | _DateObject    -- Deadline/NextReview \:306b\:5165\:308c\:308b\:65e5\:4ed8 (\:65e2\:5b9a: \:4eca\:65e5)\n" <>
+  "\:623b\:308a\:5024: <|\"Status\" -> \"OK\", \"Notebook\" -> _NotebookObject, \"Date\" -> _, \"StatusCellReplaced\" -> _Bool, \"Saved\" -> False, ...|>\:3002\n" <>
+  "\:526f\:4f5c\:7528: \:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30a6\:30a3\:30f3\:30c9\:30a6\:3092\:958b\:304f (\:672a\:4fdd\:5b58)\:3002\:30e6\:30fc\:30b6\:304c\:660e\:793a\:7684\:306b\:4fdd\:5b58\:3059\:308b\:307e\:3067\:30c7\:30a3\:30b9\:30af\:306b\:306f\:66f8\:304b\:306a\:3044\:3002";
 
 SourceVaultRefreshAllSummaries::usage =
   "SourceVaultRefreshAllSummaries[opts:OptionsPattern[]] \:306f Scope \:914d\:4e0b\:5168 notebook \:306e\:6982\:8981\:3092\:4e00\:62ec\:518d\:751f\:6210\:3059\:308b\:3002\n" <>
@@ -1067,7 +1102,9 @@ ClearAll[
   iNotebookRefFromPath, iReadNotebookExpr, iCellTextExtract,
   iFlattenCells, iFlattenCellRec, iCellIsInitializationInputQ,
   iNotebookHeaderParse, iNotebookHeaderParseFromInitialization,
-  iNotebookHeaderParseFromBoxes, iAllowedHeaderValueQ,
+  iNotebookHeaderParseFromBoxes, iNotebookHeaderParseFromStatusCell,
+  iSVResolveRelativeDate, iAllowedHeaderValueQ,
+  iSVDateInputString, iSVStringToBoxes,
   iExtractTodoCells, iExtractTodoCellsFromPath, iCellOptionsAssociation, iStrikeThroughQ,
   iColorIsGrayQ, iColorIsGreenQ, iCellFontColor,
   iTodoStatusFromOptions, iComputeReviewState, iComputeDeadlineState,
@@ -1179,7 +1216,11 @@ iIsoNow[] := DateString[Now, {"ISODateTime", "Z"}];
    \:3053\:306e helper \:306f Names[] \:7d4c\:7531\:3067\:6587\:5b57\:5217\:540d\:3092\:691c\:7d22\:3057\:3001
    \:65e2\:5b58\:30b7\:30f3\:30dc\:30eb\:306e\:307f\:3092\:6271\:3046\:3002\:65b0\:898f\:30b7\:30f3\:30dc\:30eb\:3092\:4f5c\:3089\:306a\:3044\:3002 *)
 iReadStringSymbol[name_String] :=
-  Module[{candidates, sorted, val, ranked},
+  Module[{candidates, sorted, val, ranked, direct},
+    (* \:307e\:305a Global\` \:3092\:76f4\:63a5\:53c2\:7167 ($ \:4ed8\:304d\:30b7\:30f3\:30dc\:30eb\:3067 Names \:30d1\:30bf\:30fc\:30f3\:304c
+       \:53d6\:308a\:3053\:307c\:3059\:30b1\:30fc\:30b9\:3078\:306e\:5bfe\:7b56\:3002\:6210\:529f\:3057\:305f\:3089\:5373\:8fd4\:3059) *)
+    direct = Quiet @ Symbol["Global`" <> name];
+    If[StringQ[direct] && direct =!= "", Return[direct]];
     candidates = Quiet[Names["*`" <> name]];
     If[!ListQ[candidates] || Length[candidates] === 0, Return[Null]];
     (* \:30b3\:30f3\:30c6\:30ad\:30b9\:30c8\:512a\:5148\:5ea6: ClaudeCode\` > Global\` > \:305d\:306e\:4ed6 *)
@@ -1194,7 +1235,17 @@ iReadStringSymbol[name_String] :=
   ];
 
 iCwd[] := iReadStringSymbol["$ClaudeWorkingDirectory"];
-iPackageDir[] := iReadStringSymbol["$packageDirectory"];
+(* iPackageDir: $packageDirectory \:306f\:901a\:5e38 Global\` \:6587\:8108\:306b\:3042\:308b\:3002
+   iReadStringSymbol \:306e Names["*`$packageDirectory"] \:30d1\:30bf\:30fc\:30f3\:306f\:30b7\:30f3\:30dc\:30eb\:540d\:306b
+   "$" \:3092\:542b\:3080\:5834\:5408\:306b\:30de\:30c3\:30c1\:3057\:306a\:3044\:3053\:3068\:304c\:3042\:308a (TemplateNotFound \:306e\:539f\:56e0)\:3001
+   Symbol["Global`$packageDirectory"] \:306e\:76f4\:63a5\:53c2\:7167\:3092\:7b2c\:4e00\:9078\:629e\:3068\:3059\:308b\:3002
+   \:898b\:3064\:304b\:3089\:306a\:3051\:308c\:3070\:5f93\:6765\:306e iReadStringSymbol \:306b fallback\:3002 *)
+iPackageDir[] :=
+  Module[{direct},
+    direct = Quiet @ Symbol["Global`$packageDirectory"];
+    If[StringQ[direct] && direct =!= "", Return[direct]];
+    iReadStringSymbol["$packageDirectory"]
+  ];
 
 (* Dropbox root \:3092\:53d6\:5f97\:3002Imai \:74b0\:5883: F:\Dropbox \:307e\:305f\:306f $HomeDirectory\Dropbox *)
 iResolveDropboxRoot[] :=
@@ -6459,6 +6510,10 @@ iAllowedHeaderValueQ[expr_] :=
     MatchQ[expr, Missing[___]],
     MatchQ[expr, DateObject[{_Integer, _Integer, _Integer}, ___]],
     MatchQ[expr, DateObject[{_Integer, _Integer, _Integer, _Integer, _Integer, _?NumericQ}, ___]],
+    (* NotebookStatus \:65b0\:65b9\:5f0f: NextReview/Deadline \:306b\:76f8\:5bfe\:6307\:5b9a Quantity[n,"Weeks"|"Days"|...] \:3092\:8a31\:53ef\:3002
+       \:5024\:81ea\:4f53\:306f\:526f\:4f5c\:7528\:7121\:3057\:306e inert \:5358\:4f4d\:4ed8\:304d\:6570\:5024\:3002 *)
+    MatchQ[expr, Quantity[_?NumericQ, _String]],
+    MatchQ[expr, Quantity[_?NumericQ, _]],
     ListQ[expr] && AllTrue[expr, StringQ[#] || IntegerQ[#] &],
     AssociationQ[expr] && AllTrue[Values[expr], iAllowedHeaderValueQ]
   ];
@@ -6521,23 +6576,80 @@ iNotebookHeaderParseFromBoxes[nbExpr_HoldComplete] :=
       "Source" -> "MakeExpression"|>
   ];
 
-(* \:30e1\:30a4\:30f3\:30a8\:30f3\:30c8\:30ea\:30fc (path \:7248): 2 \:6bb5\:968e\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af
-   Stage 9 P1 Step 8: MakeExpression \:7b2c\:4e00\:9078\:629e\:5316
-   \:65e7\:9806: (A) Import[\"Initialization\"] \[RightArrow] (B) Import[\"Notebook\"] + MakeExpression
-   \:65b0\:9806: (B) MakeExpression \:3092\:5148 \[RightArrow] \:5931\:6557\:6642\:306e\:307f (A) Import[\"Initialization\"] \:306b fallback
-   \:7406\:7531: Initialization Cell \:306e\:8a55\:4fa1\:526f\:4f5c\:7528\:3092\:907f\:3051\:308b (notebook \:30ed\:30fc\:30c9\:6642\:306e\:8a55\:4fa1\:534a\:5b9a\:30b3\:30fc\:30c9\:304c\:8d70\:308b\:30ea\:30b9\:30af) *)
+(* === NotebookStatus \:30b9\:30bf\:30a4\:30eb\:30bb\:30eb\:304b\:3089\:306e Header \:62bd\:51fa (\:65b0\:65b9\:5f0f\:3001\:7b2c\:4e00\:9078\:629e) ===
+   \:4eca\:5f8c\:306f\:521d\:671f\:5316\:30bb\:30eb\:3067\:306f\:306a\:304f "NotebookStatus" \:30b9\:30bf\:30a4\:30eb\:306e\:30bb\:30eb\:306b
+   <|"Keywords"->..., "NextReview"->..., "Status"->...|> \:3092\:683c\:7d0d\:3059\:308b\:3002
+   NotebookImport[path, "NotebookStatus"] \:306f {BoxData[...]} \:3092\:8fd4\:3059\:306e\:3067\:3001
+   \:305d\:306e BoxData \:3092 MakeExpression \:3067\:5b89\:5168\:306b\:5f0f\:5316\:3059\:308b (\:7f60 #22 \:7d4c\:8def\:3001\:526f\:4f5c\:7528\:7121\:3057)\:3002
+   \:898b\:3064\:304b\:3089\:306a\:3051\:308c\:3070 Missing["NoStatusCell"] \:3092\:8fd4\:3057\:3001\:547c\:3073\:51fa\:3057\:5074\:304c
+   \:5f93\:6765\:65b9\:5f0f (MakeExpression \:521d\:671f\:5316\:30bb\:30eb / Initialization) \:306b fallback \:3059\:308b\:3002 *)
+iNotebookHeaderParseFromStatusCell[path_String] :=
+  Module[{imported, boxData, held, assoc, parseStatus = "OK"},
+    If[!FileExistsQ[path], Return[Missing["FileNotFound"]]];
+    (* NotebookStatus \:30b9\:30bf\:30a4\:30eb\:306e\:30bb\:30eb\:5185\:5bb9\:3092 BoxData \:3068\:3057\:3066\:53d6\:5f97 *)
+    imported = Quiet @ Check[
+      NotebookImport[path, "NotebookStatus" -> "BoxData"], $Failed];
+    (* "NotebookStatus" -> "BoxData" \:304c\:7121\:52b9\:306a\:74b0\:5883\:5411\:3051\:306b\:7d20\:306e\:30b9\:30bf\:30a4\:30eb\:6307\:5b9a\:3082\:8a66\:3059 *)
+    If[!ListQ[imported] || imported === {},
+      imported = Quiet @ Check[
+        NotebookImport[path, "NotebookStatus"], $Failed]];
+    If[!ListQ[imported] || imported === {},
+      Return[Missing["NoStatusCell"]]];
+    (* \:6700\:521d\:306e BoxData (\:8907\:6570\:3042\:308c\:3070\:5148\:982d) \:3092\:4f7f\:3046 *)
+    boxData = SelectFirst[imported,
+      SymbolName[Head[#]] === "BoxData" &, First[imported]];
+    held = Quiet[MakeExpression[boxData, StandardForm]];
+    If[!MatchQ[held, HoldComplete[_Association]],
+      Return[Missing["StatusCellNotAssociation"]]];
+    assoc = ReleaseHold[held];
+    If[!AllTrue[Values[assoc], iAllowedHeaderValueQ],
+      parseStatus = "UnsafeExpression"];
+    <|"ParseStatus" -> parseStatus,
+      "Keywords" -> Lookup[assoc, "Keywords", Missing["NotSpecified"]],
+      "Deadline" -> iSVResolveRelativeDate[
+        Lookup[assoc, "Deadline", Missing["NotSpecified"]]],
+      "NextReview" -> iSVResolveRelativeDate[
+        Lookup[assoc, "NextReview", Missing["NotSpecified"]]],
+      "Status" -> Lookup[assoc, "Status", Missing["NotSpecified"]],
+      "RawHeader" -> assoc,
+      "Source" -> "NotebookStatus"|>
+  ];
+
+(* \:76f8\:5bfe\:65e5\:4ed8\:6307\:5b9a (Quantity[n,"Weeks"] \:7b49) \:3092\:7d76\:5bfe\:65e5\:4ed8 DateObject \:306b\:89e3\:6c7a\:3002
+   \:57fa\:6e96\:306f\:4eca\:65e5 (DateObject[Today])\:3002\:65e2\:306b DateObject / \:6587\:5b57\:5217 / Missing \:306f\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002
+   NextReview->Quantity[2,"Weeks"] \:306a\:3089 2 \:9031\:9593\:5f8c\:306e\:65e5\:4ed8\:3068\:306a\:308b\:3002 *)
+iSVResolveRelativeDate[v_] :=
+  Which[
+    MatchQ[v, Quantity[_?NumericQ, _]],
+      Quiet @ Check[
+        DateObject[DatePlus[Today, v], "Day"],
+        v],
+    True, v];
+
+
+(* \:30e1\:30a4\:30f3\:30a8\:30f3\:30c8\:30ea\:30fc (path \:7248): 3 \:6bb5\:968e\:30cf\:30a4\:30d6\:30ea\:30c3\:30c9\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af
+   2026-06: NotebookStatus \:30b9\:30bf\:30a4\:30eb\:30bb\:30eb\:65b9\:5f0f\:3078\:306e\:6bb5\:968e\:79fb\:884c\:3002
+     (0) NotebookStatus \:30b9\:30bf\:30a4\:30eb\:30bb\:30eb (\:65b0\:65b9\:5f0f\:3001\:7b2c\:4e00\:9078\:629e)
+     (B) Import["Notebook"] + MakeExpression (\:5f93\:6765\:306e\:521d\:671f\:5316\:30bb\:30eb box)
+     (A) Import["Initialization"] (\:8a55\:4fa1\:526f\:4f5c\:7528\:6709\:308a\:3001\:6700\:7d42 fallback)
+   \:79fb\:884c\:5b8c\:4e86\:307e\:3067\:306f\:30cf\:30a4\:30d6\:30ea\:30c3\:30c9\:904b\:7528\:3002NotebookStatus \:30bb\:30eb\:7121\:3057\:306f\:5f93\:6765\:65b9\:5f0f\:3067\:8aad\:3080\:3002 *)
 iNotebookHeaderParse[path_String] :=
-  Module[{readResult, boxResult, initResult},
-    (* \:7b2c\:4e00\:9078\:629e: Import[\"Notebook\"] + MakeExpression (\:526f\:4f5c\:7528\:306a\:3057) *)
+  Module[{statusResult, readResult, boxResult, initResult},
+    (* (0) \:7b2c\:4e00\:9078\:629e: NotebookStatus \:30b9\:30bf\:30a4\:30eb\:30bb\:30eb (\:65b0\:65b9\:5f0f) *)
+    statusResult = iNotebookHeaderParseFromStatusCell[path];
+    If[AssociationQ[statusResult] &&
+        MemberQ[{"OK", "UnsafeExpression"},
+          Lookup[statusResult, "ParseStatus", ""]],
+      Return[statusResult]];
+    (* (B) fallback: Import["Notebook"] + MakeExpression (\:526f\:4f5c\:7528\:306a\:3057) *)
     readResult = iReadNotebookExpr[path];
     If[Lookup[readResult, "Status", ""] === "OK",
       boxResult = iNotebookHeaderParseFromBoxes[Lookup[readResult, "Expr"]];
-      (* ParseStatus = \"OK\" \:307e\:305f\:306f \"UnsafeExpression\" (Header \:81ea\:4f53\:306f\:898b\:3064\:304b\:3063\:305f\:5834\:5408) \:306f\:6210\:529f\:3068\:3057\:3066\:8fd4\:3059 *)
       If[AssociationQ[boxResult] &&
           MemberQ[{"OK", "UnsafeExpression"},
             Lookup[boxResult, "ParseStatus", ""]],
         Return[boxResult]]];
-    (* fallback: Import[\"Initialization\"] (\:8a55\:4fa1\:526f\:4f5c\:7528\:6709\:308a) *)
+    (* (A) fallback: Import["Initialization"] (\:8a55\:4fa1\:526f\:4f5c\:7528\:6709\:308a) *)
     initResult = iNotebookHeaderParseFromInitialization[path];
     If[AssociationQ[initResult] && KeyExistsQ[initResult, "ParseStatus"],
       Return[initResult]];
@@ -6761,9 +6873,16 @@ iComputeReviewState[nextReview_, today_] :=
       Module[{diff},
         diff = Quiet[QuantityMagnitude[
           DateDifference[nextReview, today, "Day"]]];
+        (* diff > 0  : nextReview \:304c\:904e\:53bb (today \:304c\:5f8c) = \:671f\:9650\:5207\:308c
+           diff == 0 : \:4eca\:65e5
+           diff < 0  : nextReview \:304c\:672a\:6765
+           \:7f60: \:5f93\:6765 diff>0 \:3092\:4e00\:5f8b "Overdue" \:306b\:3057\:3066\:3044\:305f\:305f\:3081\:3001"ThisWeek"
+           \:30d5\:30a3\:30eb\:30bf\:304c\:6628\:5e74\:306e\:671f\:9650\:5207\:308c\:307e\:3067\:62fe\:3063\:3066\:3044\:305f\:3002\:4eca\:9031\:5185 (7\:65e5\:4ee5\:5185) \:306b
+           \:904e\:304e\:305f\:3082\:306e\:3092 "OverdueThisWeek" \:3068\:3057\:3066\:5206\:96e2\:3059\:308b\:3002 *)
         Which[
           !NumericQ[diff], "NoReviewDate",
-          diff > 0, "Overdue",
+          diff > 7, "Overdue",
+          diff > 0, "OverdueThisWeek",
           diff == 0, "DueToday",
           diff >= -7, "DueThisWeek",
           True, "Current"]],
@@ -6777,9 +6896,12 @@ iComputeDeadlineState[deadline_, today_] :=
       Module[{diff},
         diff = Quiet[QuantityMagnitude[
           DateDifference[deadline, today, "Day"]]];
+        (* \:7f60\:540c\:69d8: \:4eca\:9031\:5185 (7\:65e5\:4ee5\:5185) \:306b\:904e\:304e\:305f\:671f\:9650\:5207\:308c\:3092
+           "OverdueThisWeek" \:3068\:3057\:3066\:9060\:3044\:904e\:53bb "Overdue" \:3068\:533a\:5225\:3059\:308b\:3002 *)
         Which[
           !NumericQ[diff], "NoDeadline",
-          diff > 0, "Overdue",
+          diff > 7, "Overdue",
+          diff > 0, "OverdueThisWeek",
           diff == 0, "DueToday",
           diff >= -7, "DueSoon",
           True, "Future"]],
@@ -6876,9 +6998,12 @@ iNotebookRecordMatchesQuery[record_Association, query_Association,
         StringQ[nextReviewQ],
           Switch[nextReviewQ,
             "Today", If[reviewState =!= "DueToday", ok = False],
-            "Overdue", If[reviewState =!= "Overdue", ok = False],
-            "ThisWeek", If[!MemberQ[{"DueToday", "DueThisWeek", "Overdue"}, reviewState], ok = False],
-            "DueSoon", If[!MemberQ[{"DueToday", "DueThisWeek", "Overdue"}, reviewState], ok = False],
+            (* "Overdue" \:5358\:72ec\:30af\:30a8\:30ea\:306f\:5f93\:6765\:901a\:308a\:300c\:671f\:9650\:5207\:308c\:5168\:90e8\:300d:
+               \:9060\:3044\:904e\:53bb (Overdue) + \:4eca\:9031\:5185\:306b\:904e\:304e\:305f (OverdueThisWeek) \:4e21\:65b9 *)
+            "Overdue", If[!MemberQ[{"Overdue", "OverdueThisWeek"}, reviewState], ok = False],
+            (* "ThisWeek": \:4eca\:65e5 + \:4eca\:9031\:5185 (\:524d\:5f8c7\:65e5) \:306e\:307f\:3002\:9060\:3044\:904e\:53bb Overdue \:306f\:9664\:5916\:3002 *)
+            "ThisWeek", If[!MemberQ[{"DueToday", "DueThisWeek", "OverdueThisWeek"}, reviewState], ok = False],
+            "DueSoon", If[!MemberQ[{"DueToday", "DueThisWeek", "OverdueThisWeek"}, reviewState], ok = False],
             _, Null],
         AssociationQ[nextReviewQ],
           (* Header.NextReview \:307e\:305f\:306f\:30d5\:30a1\:30a4\:30eb\:540d\:65e5\:4ed8 (yyyymmdd-title.nb) \:306e
@@ -6898,9 +7023,11 @@ iNotebookRecordMatchesQuery[record_Association, query_Association,
         StringQ[deadlineQ],
           Switch[deadlineQ,
             "Today", If[deadlineState =!= "DueToday", ok = False],
-            "Overdue", If[deadlineState =!= "Overdue", ok = False],
-            "ThisWeek", If[!MemberQ[{"DueToday", "DueSoon", "Overdue"}, deadlineState], ok = False],
-            "DueSoon", If[!MemberQ[{"DueToday", "DueSoon", "Overdue"}, deadlineState], ok = False],
+            (* "Overdue" \:5358\:72ec\:30af\:30a8\:30ea\:306f\:671f\:9650\:5207\:308c\:5168\:90e8 (\:9060\:3044\:904e\:53bb + \:4eca\:9031\:5185) *)
+            "Overdue", If[!MemberQ[{"Overdue", "OverdueThisWeek"}, deadlineState], ok = False],
+            (* "ThisWeek": \:4eca\:65e5 + \:4eca\:9031\:5185 (\:524d\:5f8c7\:65e5) \:306e\:307f\:3002\:9060\:3044\:904e\:53bb Overdue \:306f\:9664\:5916\:3002 *)
+            "ThisWeek", If[!MemberQ[{"DueToday", "DueSoon", "OverdueThisWeek"}, deadlineState], ok = False],
+            "DueSoon", If[!MemberQ[{"DueToday", "DueSoon", "OverdueThisWeek"}, deadlineState], ok = False],
             _, Null],
         AssociationQ[deadlineQ],
           (* Header.Deadline \:307e\:305f\:306f\:30d5\:30a1\:30a4\:30eb\:540d\:65e5\:4ed8 (yyyymmdd-title.nb) \:306e
@@ -6976,7 +7103,138 @@ iNotebookRecordMatchesQuery[record_Association, query_Association,
     ok
   ];
 
+(* {y, m, d} \:3092\:7de8\:96c6\:53ef\:80fd\:306a DateObject \:5165\:529b\:5f0f\:6587\:5b57\:5217\:306b\:3059\:308b\:3002
+   \:4f8b: {2026, 6, 1} -> "DateObject[{2026, 6, 1}]"
+   InputForm \:81ea\:52d5\:5c55\:958b ("Gregorian" \:7b49\:306e\:4ed8\:4e0e) \:3092\:907f\:3051\:3001\:30e6\:30fc\:30b6\:304c\:305d\:306e\:307e\:307e
+   \:66f8\:304d\:76f4\:305b\:308b\:7c21\:6f54\:306a\:5f62\:3068\:3059\:308b\:3002 *)
+iSVDateInputString[dateList_List] :=
+  "DateObject[{" <>
+  StringRiffle[Map[ToString, dateList], ", "] <>
+  "}]";
+
+(* \:5165\:529b\:5f0f\:6587\:5b57\:5217\:3092 NotebookStatus \:30bb\:30eb\:7528\:306e box \:306b\:3059\:308b\:3002
+   BoxData \:306b\:6587\:5b57\:5217\:3092\:5165\:308c\:308b\:3068\:30d5\:30ed\:30f3\:30c8\:30a8\:30f3\:30c9\:306f\:305d\:308c\:3092\:5165\:529b\:30c6\:30ad\:30b9\:30c8\:3068\:3057\:3066
+   \:30d1\:30fc\:30b9\:30fb\:8868\:793a\:3057\:3001DateObject[{2026, 6, 1}] \:3082\:7de8\:96c6\:53ef\:80fd\:306a\:5165\:529b\:5f0f\:3068\:306a\:308b\:3002
+   (FrontEnd \:30d1\:30fc\:30b5\:306e\:975e\:516c\:958b API \:306f\:74b0\:5883\:306b\:3088\:308a\:5931\:6557\:3057\:5f97\:308b\:305f\:3081\:4f7f\:308f\:305a\:3001
+    \:6700\:3082\:5b89\:5b9a\:306a\:751f\:6587\:5b57\:5217\:3092 BoxData \:306b\:5165\:308c\:308b\:65b9\:5f0f\:3068\:3059\:308b) \:3002 *)
+iSVStringToBoxes[inputStr_String] := inputStr;
+
 (* === Public API === *)
+
+(* ============================================================
+   SourceVaultNewNotebook: \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:304b\:3089\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:751f\:6210
+   - \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8: $packageDirectory/Templates/SourceVault notebook template.nb
+   - NotebookStatus \:30bb\:30eb\:306e Deadline / NextReview \:3092\:751f\:6210\:65e5 (\:4eca\:65e5) \:306b\:7f6e\:63db\:3057\:3066\:51fa\:529b
+   - "\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092" / "\:65b0\:3057\:3044\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092" \:7b49\:306e\:30d7\:30ed\:30f3\:30d7\:30c8\:304b\:3089\:8d77\:52d5
+   \:526f\:4f5c\:7528: \:30d5\:30a1\:30a4\:30eb\:751f\:6210 (SideEffect)\:3002\:65e2\:5b58\:30d5\:30a1\:30a4\:30eb\:306f\:4e0a\:66f8\:304d\:3057\:306a\:3044\:3002
+   ============================================================ *)
+Options[SourceVaultNewNotebook] = {
+  "TemplatePath" -> Automatic,
+  "Title" -> Automatic,
+  "Date" -> Automatic
+};
+
+SourceVaultNewNotebook[opts:OptionsPattern[]] :=
+  Module[{tmplPath, title, theDate, dateList,
+          nbExpr, replaced, found = False, newNb, nbObj},
+    iEnsureRoots[];
+    (* \:751f\:6210\:65e5 (\:65e2\:5b9a: \:4eca\:65e5) *)
+    theDate = OptionValue["Date"];
+    If[theDate === Automatic, theDate = DateObject[Today, "Day"]];
+    dateList = Quiet @ Check[
+      DateValue[theDate, {"Year", "Month", "Day"}], $Failed];
+    If[!MatchQ[dateList, {_Integer, _Integer, _Integer}],
+      dateList = DateValue[DateObject[Today, "Day"],
+        {"Year", "Month", "Day"}]];
+
+    (* \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:30d1\:30b9 *)
+    tmplPath = OptionValue["TemplatePath"];
+    If[tmplPath === Automatic,
+      Module[{pkgDir = iPackageDir[]},
+        If[!StringQ[pkgDir] || pkgDir === "",
+          Return[<|"Status" -> "Failed",
+            "Reason" -> "PackageDirectoryNotSet",
+            "Hint" -> "$packageDirectory \:304c\:672a\:8a2d\:5b9a\:3067\:3059\:3002Global`$packageDirectory \:3092\:8a2d\:5b9a\:3059\:308b\:304b\:3001\"TemplatePath\" \:30aa\:30d7\:30b7\:30e7\:30f3\:3067\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:3092\:660e\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002"|>]];
+        tmplPath = FileNameJoin[{pkgDir, "Templates",
+          "SourceVault notebook template.nb"}]]];
+    If[!StringQ[tmplPath] || !FileExistsQ[tmplPath],
+      Return[<|"Status" -> "Failed", "Reason" -> "TemplateNotFound",
+        "TemplatePath" -> tmplPath|>]];
+
+    (* \:30bf\:30a4\:30c8\:30eb (WindowTitle \:7528\:3002\:65e2\:5b9a \"\:65b0\:898f\:30ce\:30fc\:30c8\")\:3002
+       CreateNotebook \:3067\:672a\:4fdd\:5b58\:30a6\:30a3\:30f3\:30c9\:30a6\:3068\:3057\:3066\:958b\:304f\:305f\:3081\:3001\:30d5\:30a1\:30a4\:30eb\:540d\:30fb\:51fa\:529b\:5148\:306f\:4e0d\:8981\:3002 *)
+    title = OptionValue["Title"];
+    If[title === Automatic || !StringQ[title], title = "\:65b0\:898f\:30ce\:30fc\:30c8"];
+
+    (* \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:3092\:5f0f\:3068\:3057\:3066\:8aad\:307f\:8fbc\:3080 (\:526f\:4f5c\:7528\:306a\:3057) *)
+    nbExpr = Quiet[Import[tmplPath, "Notebook"]];
+    If[!MatchQ[nbExpr, Notebook[_List, ___]],
+      Return[<|"Status" -> "Failed", "Reason" -> "TemplateNotANotebook",
+        "TemplatePath" -> tmplPath|>]];
+
+    (* NotebookStatus \:30b9\:30bf\:30a4\:30eb\:306e\:30bb\:30eb\:3092\:898b\:3064\:3051\:3001Deadline/NextReview \:3092\:4eca\:65e5\:306b\:7f6e\:63db\:3002
+       \:30bb\:30eb\:306e BoxData \:3092 MakeExpression \:3067 Association \:5316\:3057\:3001\:5024\:3092\:5dee\:3057\:66ff\:3048\:308b\:3002
+       \:91cd\:8981: ToBoxes[DateObject[...]] \:306f\:7de8\:96c6\:4e0d\:53ef\:306a TemplateBox (\"Mon 1 Jun 2026\" \:30a6\:30a3\:30b8\:30a7\:30c3\:30c8) \:306b
+       \:306a\:308b\:305f\:3081\:4f7f\:308f\:306a\:3044\:3002\:4ee3\:308f\:308a\:306b Association \:5168\:4f53\:3092 InputForm \:6587\:5b57\:5217\:5316\:3057 box \:5316\:3059\:308b\:3053\:3068\:3067\:3001
+       DateObject[{2026, 6, 1}] \:306e\:3088\:3046\:306a\:7de8\:96c6\:53ef\:80fd\:306a\:5165\:529b\:5f0f\:30c6\:30ad\:30b9\:30c8\:3068\:3057\:3066\:633f\:5165\:3059\:308b\:3002 *)
+    replaced = Replace[nbExpr,
+      Cell[content_, "NotebookStatus", cellOpts___] :> (
+        Module[{held, assoc, newAssoc, newBoxes, inputStr},
+          held = Quiet[MakeExpression[content, StandardForm]];
+          If[MatchQ[held, HoldComplete[_Association]],
+            assoc = ReleaseHold[held];
+            newAssoc = assoc;
+            (* DateObject \:3092\:7de8\:96c6\:53ef\:80fd\:306a\:5165\:529b\:5f0f\:3067\:51fa\:3059\:305f\:3081\:3001\:4e00\:65e6\:30e6\:30cb\:30fc\:30af\:306a
+               \:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0\:6587\:5b57\:5217\:3092\:5165\:308c\:3066 InputForm \:5316\:5f8c\:306b\:5b9f\:30c7\:30fc\:30bf\:5165\:529b\:5f0f\:306b\:7f6e\:63db\:3059\:308b\:3002
+               \:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0\:306f\:885d\:7a81\:3057\:306a\:3044 ASCII \:30c8\:30fc\:30af\:30f3\:3002 *)
+            newAssoc["Deadline"]   = "@@SV_DEADLINE_DATE@@";
+            newAssoc["NextReview"] = "@@SV_NEXTREVIEW_DATE@@";
+            inputStr = ToString[newAssoc, InputForm];
+            (* \:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0 (\:30af\:30a9\:30fc\:30c8\:4ed8\:304d\:6587\:5b57\:5217\:3068\:3057\:3066\:51fa\:529b\:3055\:308c\:308b) \:3092\:5b9f DateObject \:5165\:529b\:5f0f\:306b *)
+            inputStr = StringReplace[inputStr, {
+              "\"@@SV_DEADLINE_DATE@@\""   -> iSVDateInputString[dateList],
+              "\"@@SV_NEXTREVIEW_DATE@@\"" -> iSVDateInputString[dateList]}];
+            found = True;
+            (* \:5165\:529b\:5f0f\:6587\:5b57\:5217\:3092 box \:5316 (\:8a55\:4fa1\:305b\:305a)\:3002\:5931\:6557\:6642\:306f\:5143\:306e content \:3092\:6b8b\:3059 *)
+            newBoxes = Quiet @ Check[
+              iSVStringToBoxes[inputStr], $Failed];
+            If[newBoxes === $Failed,
+              Cell[content, "NotebookStatus", cellOpts],
+              Cell[BoxData[newBoxes], "NotebookStatus", cellOpts]],
+            (* MakeExpression \:5931\:6557\:6642\:306f\:30bb\:30eb\:3092\:305d\:306e\:307e\:307e\:6b8b\:3059 *)
+            Cell[content, "NotebookStatus", cellOpts]]]),
+      Infinity];
+
+    newNb = replaced;
+
+    (* \:672a\:4fdd\:5b58\:306e\:65b0\:898f\:30a6\:30a3\:30f3\:30c9\:30a6\:3068\:3057\:3066\:958b\:304f (\:30d5\:30a1\:30a4\:30eb\:4fdd\:5b58\:3057\:306a\:3044)\:3002
+       newNb \:306f Notebook[{Cell[...], ...}, opts...] \:5f0f\:3002NotebookPut \:306f\:5b8c\:5168\:306a
+       Notebook \:5f0f (\:30bb\:30eb\:30ea\:30b9\:30c8 + \:30aa\:30d7\:30b7\:30e7\:30f3) \:3092\:305d\:306e\:307e\:307e\:53d7\:3051\:53d6\:308a\:3001
+       \:65b0\:898f\:30a6\:30a3\:30f3\:30c9\:30a6\:3068\:3057\:3066\:8868\:793a\:3057\:3066 NotebookObject \:3092\:8fd4\:3059\:3002
+       CreateNotebook[cellList, ...] \:306f\:30bb\:30eb\:30ea\:30b9\:30c8\:3092\:53ef\:5909\:9577\:5f15\:6570\:3068\:3057\:3066\:8981\:6c42\:3057\:30fb
+       Notebook \:30aa\:30d7\:30b7\:30e7\:30f3\:3068\:5e72\:6e09\:3059\:308b\:305f\:3081\:4f7f\:308f\:306a\:3044\:3002 *)
+    nbObj = Quiet @ Check[NotebookPut[newNb], $Failed];
+    If[Head[nbObj] =!= NotebookObject,
+      Return[<|"Status" -> "Failed", "Reason" -> "CreateNotebookFailed",
+        "TemplatePath" -> tmplPath,
+        "NewNotebookHead" -> ToString[Head[newNb]]|>]];
+    (* \:30a6\:30a3\:30f3\:30c9\:30a6\:30bf\:30a4\:30c8\:30eb\:3092\:8a2d\:5b9a (\:5931\:6557\:3057\:3066\:3082\:7121\:8996) *)
+    Quiet @ Check[SetOptions[nbObj, WindowTitle -> title], Null];
+
+    <|"Status" -> "OK",
+      "Notebook" -> nbObj,
+      "Title" -> title,
+      "Date" -> DateObject[dateList, "Day"],
+      "Deadline" -> DateObject[dateList, "Day"],
+      "NextReview" -> DateObject[dateList, "Day"],
+      "StatusCellReplaced" -> found,
+      "Saved" -> False,
+      "TemplatePath" -> tmplPath|>
+  ];
+
+SourceVaultNewNotebook[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "Expected SourceVaultNewNotebook[opts]."|>;
 
 SourceVaultRegisterNotebook[path_String] :=
   Module[{abs, nbRef, fileMTime, ts, record, sourcePath, saveResult},
@@ -7042,7 +7300,7 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
           sourceImportTry, snapshotId, snapshotPath, snapshotRec,
           cachedMTime, header, todos, openCount, doneCount, passCount,
           today, deadlineVal, nextReviewVal, reviewState, deadlineState,
-          lint, ts,
+          lint, ts, cachedHash, curHash,
           hdrC, todoC, hdrRestored, todoRestored, reindexed},
     sourcePath = iNotebookSourcePath[nbRef];
     If[!FileExistsQ[sourcePath],
@@ -7105,6 +7363,22 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
         "CachedMTime" -> cachedMTime,
         "CurrentMTime" -> currentMTime|>]];
 
+    (* mtime \:304c\:5076\:7136\:4e00\:81f4\:3057\:3066\:3082\:5185\:5bb9\:304c\:5909\:308f\:3063\:3066\:3044\:308c\:3070 cache miss \:3068\:3059\:308b\:3002
+       \:7de8\:96c6\:5f8c\:3082 mtime \:304c\:79d2\:7c92\:5ea6\:3067\:540c\:3058\:307e\:307e\:30fb\:30af\:30e9\:30a6\:30c9\:540c\:671f\:3067 mtime \:304c\:5fa9\:5143\:3055\:308c\:308b\:7b49\:306e
+       \:30b1\:30fc\:30b9\:3067\:65e7\:30ad\:30e3\:30c3\:30b7\:30e5\:304c\:8fd4\:308a\:7d9a\:3051\:308b\:554f\:984c (NextReview \:7de8\:96c6\:304c\:53cd\:6620\:3055\:308c\:306a\:3044) \:3092\:9632\:3050\:3002
+       snapshot \:306e RawContentHash ("sha256-<hex>") \:3068\:73fe\:5728\:30d5\:30a1\:30a4\:30eb\:306e\:30cf\:30c3\:30b7\:30e5\:3092\:6bd4\:8f03\:3002
+       \:30cf\:30c3\:30b7\:30e5\:304c snapshot \:306b\:7121\:3044\:65e7\:7248\:306f\:30b9\:30ad\:30c3\:30d7 (mtime \:5224\:5b9a\:306e\:307f) \:3057\:5f8c\:65b9\:4e92\:63db\:3092\:4fdd\:3064\:3002 *)
+    cachedHash = Lookup[snapshotRec, "RawContentHash", Missing["NotPresent"]];
+    If[StringQ[cachedHash],
+      curHash = Quiet @ Check[
+        "sha256-" <> Hash[Import[abs, "Text"], "SHA256", "HexString"],
+        Missing["HashFailed"]];
+      If[StringQ[curHash] && curHash =!= cachedHash,
+        Return[<|"Cached" -> False,
+          "CacheMissReason" -> "ContentHashMismatch",
+          "CachedHash" -> cachedHash,
+          "CurrentHash" -> curHash|>]]];
+
     (* \:4e00\:81f4: \:5b8c\:5168\:306a Index \:7d50\:679c\:3092\:518d\:69cb\:7bc9\:3002
        Stage 9 P1 Step 8: snapshot \:306b HeaderCompressed/TodosCompressed \:304c\:3042\:308c\:3070
        \:305d\:308c\:3092 Uncompress \:3057\:3066\:4f7f\:3046 (.nb \:3092 Import \:3057\:306a\:3044 \[Rule] \:518d\:8d77\:52d5\:5f8c\:3082\:9ad8\:901f)\:3002
@@ -7164,6 +7438,13 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
       "NotebookRef" -> nbRef,
       "SnapshotId" -> snapshotId,
       "Path" -> abs,
+      (* \:5f8c\:65b9\:4e92\:63db: usage \:8a18\:8f09\:30fb\:65e7\:5229\:7528\:30b3\:30fc\:30c9\:304c\:671f\:5f85\:3059\:308b\:30ad\:30fc\:3002
+         OriginalPath \:306f Path \:306e\:30a8\:30a4\:30ea\:30a2\:30b9\:3001Title \:306f Header.Title \:307e\:305f\:306f
+         \:30d5\:30a1\:30a4\:30eb\:540d\:3002Todos \:306f\:62bd\:51fa\:6e08\:307f todo \:672c\:4f53 (\:5b9f\:5728\:3057\:306a\:3044 OriginalPath \:3078\:306e
+         \:518d\:62bd\:51fa\:3092\:4e0d\:8981\:306b\:3059\:308b)\:3002 *)
+      "OriginalPath" -> abs,
+      "Title" -> Lookup[header, "Title", FileBaseName[abs]],
+      "Todos" -> todos,
       "Header" -> header,
       "TodoCount" -> Length[todos],
       "OpenTodoCount" -> openCount,
@@ -7435,8 +7716,9 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
         BinaryWrite[strm, StringToByteArray[lintJson <> "\n", "ISO8859-1"]];
         Close[strm]]];
     
-    (* Overdue Review record append *)
-    If[reviewState === "Overdue" || deadlineState === "Overdue",
+    (* Overdue Review record append (\:4eca\:9031\:5185\:306b\:904e\:304e\:305f OverdueThisWeek \:3082\:671f\:9650\:5207\:308c\:306e\:4e00\:7a2e\:306a\:306e\:3067\:542b\:3081\:308b) *)
+    If[MemberQ[{"Overdue", "OverdueThisWeek"}, reviewState] ||
+       MemberQ[{"Overdue", "OverdueThisWeek"}, deadlineState],
       Module[{revRec, revJson, strm},
         revRec = <|
           "Type" -> "NotebookReview",
@@ -7466,6 +7748,10 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
       "NotebookRef" -> nbRef,
       "SnapshotId" -> snapshotId,
       "Path" -> abs,
+      (* \:5f8c\:65b9\:4e92\:63db: usage \:8a18\:8f09\:30fb\:65e7\:5229\:7528\:30b3\:30fc\:30c9\:304c\:671f\:5f85\:3059\:308b\:30ad\:30fc *)
+      "OriginalPath" -> abs,
+      "Title" -> Lookup[header, "Title", FileBaseName[abs]],
+      "Todos" -> todos,
       "Header" -> header,
       "TodoCount" -> todoCount,
       "OpenTodoCount" -> openCount,
@@ -7528,11 +7814,12 @@ Options[SourceVaultFindNotebooks] = {
   "Title" -> Missing[],
   "Status" -> Missing[],
   "Scope" -> Missing[],
+  "ForceReindex" -> False,
   "Format" -> False
 };
 
 SourceVaultFindNotebooks[opts:OptionsPattern[]] :=
-  Module[{sourcesDir, files, today, query, allRecords = {}, matched},
+  Module[{sourcesDir, files, today, query, allRecords = {}, matched, forceReindex},
     iEnsureRoots[];
     query = <|
       "OpenTodos" -> OptionValue["OpenTodos"],
@@ -7542,6 +7829,7 @@ SourceVaultFindNotebooks[opts:OptionsPattern[]] :=
       "Title" -> OptionValue["Title"],
       "Status" -> OptionValue["Status"],
       "Scope" -> OptionValue["Scope"]|>;
+    forceReindex = TrueQ[OptionValue["ForceReindex"]];
     today = DateObject[Now, "Day"];
     sourcesDir = FileNameJoin[{iNotebooksDir[], "sources"}];
     If[!DirectoryQ[sourcesDir], Return[{}]];
@@ -7575,7 +7863,8 @@ SourceVaultFindNotebooks[opts:OptionsPattern[]] :=
               True, Missing[]]];
           If[StringQ[path],
             (* notebook \:3054\:3068\:306b in-memory \:3067 index \:3092\:4f5c\:308b (mtime cache \:3067\:9ad8\:901f) *)
-            indexed = Quiet[SourceVaultIndexNotebook[path]];
+            indexed = Quiet[SourceVaultIndexNotebook[path,
+              "ForceReindex" -> forceReindex]];
             If[AssociationQ[indexed] && Lookup[indexed, "Status", ""] === "OK",
               AppendTo[allRecords, indexed]]]]]], files];
     matched = Select[allRecords,
@@ -7588,6 +7877,113 @@ SourceVaultFindNotebooks[opts:OptionsPattern[]] :=
       SourceVaultFormatNotebookList[matched],
       matched]
   ];
+
+(* ============================================================
+   SourceVaultFindTodos: todo \:9805\:76ee\:5358\:4f4d\:306e\:30d5\:30e9\:30c3\:30c8\:691c\:7d22
+   SourceVaultFindNotebooks \:3067 notebook \:3092\:7d5e\:308a\:8fbc\:307f\:3001\:5404 record \:306e
+   "Todos" \:3092 1 \:884c 1 \:9805\:76ee\:306b\:5c55\:958b\:3059\:308b\:3002\:300c\:4eca\:9031\:671f\:9650\:306e todo \:3092
+   \:30ea\:30b9\:30c8\:300d\:306e\:3088\:3046\:306a todo \:5358\:4f4d\:306e\:8981\:6c42\:7528\:3002
+   ============================================================ *)
+Options[SourceVaultFindTodos] = {
+  "OpenTodos" -> True,
+  "NextReview" -> Missing[],
+  "Deadline" -> Missing[],
+  "Keywords" -> Missing[],
+  "Title" -> Missing[],
+  "Status" -> Missing[],
+  "Scope" -> Missing[],
+  "TodoStatus" -> "Open",
+  "ForceReindex" -> False,
+  "Format" -> False
+};
+
+SourceVaultFindTodos[opts:OptionsPattern[]] :=
+  Module[{records, todoStatus, rows},
+    (* notebook \:691c\:7d22\:306f FindNotebooks \:306b\:59d4\:8b72 (Format \:306f\:5fc5\:305a False \:3067 raw record \:3092\:5f97\:308b) *)
+    records = SourceVaultFindNotebooks[
+      "OpenTodos" -> OptionValue["OpenTodos"],
+      "NextReview" -> OptionValue["NextReview"],
+      "Deadline" -> OptionValue["Deadline"],
+      "Keywords" -> OptionValue["Keywords"],
+      "Title" -> OptionValue["Title"],
+      "Status" -> OptionValue["Status"],
+      "Scope" -> OptionValue["Scope"],
+      "ForceReindex" -> OptionValue["ForceReindex"],
+      "Format" -> False];
+    If[!ListQ[records], records = {}];
+    todoStatus = OptionValue["TodoStatus"];
+    rows = Flatten[
+      Map[
+        Function[rec,
+          Module[{header, title, path, nbRef, deadline, nextReview,
+                  reviewState, deadlineState, todos, sel},
+            header        = Lookup[rec, "Header", <||>];
+            title         = Lookup[rec, "Title",
+              FileBaseName[Lookup[rec, "Path", Lookup[rec, "OriginalPath", ""]]]];
+            path          = Lookup[rec, "Path", Lookup[rec, "OriginalPath", ""]];
+            nbRef         = Lookup[rec, "NotebookRef", ""];
+            deadline      = Lookup[header, "Deadline", Missing[]];
+            nextReview    = Lookup[header, "NextReview", Missing[]];
+            reviewState   = Lookup[rec, "ReviewState", "NoReviewDate"];
+            deadlineState = Lookup[rec, "DeadlineState", "NoDeadline"];
+            (* record["Todos"] \:512a\:5148\:3002\:7121\:3051\:308c\:3070 path \:304b\:3089\:518d\:62bd\:51fa (\:5f8c\:65b9\:4e92\:63db) *)
+            todos = Lookup[rec, "Todos", Missing[]];
+            If[!ListQ[todos],
+              todos = If[StringQ[path] && FileExistsQ[path],
+                Quiet @ Check[SourceVaultExtractNotebookTodos[path], {}], {}]];
+            (* TodoStatus \:3067\:7d5e\:308b (All \:306a\:3089\:5168\:90e8) *)
+            sel = If[todoStatus === All || MissingQ[todoStatus],
+              todos,
+              Select[todos, Lookup[#, "Status", ""] === todoStatus &]];
+            Map[
+              Function[td,
+                <|"Title" -> title,
+                  "Path" -> path,
+                  "NotebookRef" -> nbRef,
+                  "Deadline" -> deadline,
+                  "NextReview" -> nextReview,
+                  "ReviewState" -> reviewState,
+                  "DeadlineState" -> deadlineState,
+                  "TodoText" -> Lookup[td, "Text", ""],
+                  "TodoStatus" -> Lookup[td, "Status", ""],
+                  "TodoStrikeThrough" -> Lookup[td, "StrikeThrough", False]|>],
+              sel]
+          ]],
+        records],
+      1];
+    If[TrueQ[OptionValue["Format"]],
+      iSVFormatTodoList[rows],
+      rows]
+  ];
+
+(* todo \:30d5\:30e9\:30c3\:30c8 List \:3092 Grid \:8868\:793a (Format -> True \:7528) *)
+iSVFormatTodoList[rows_List] :=
+  If[rows === {},
+    Style["\:6761\:4ef6\:306b\:5408\:3046 todo \:306f\:3042\:308a\:307e\:305b\:3093\:3002", 14],
+    Grid[
+      Prepend[
+        Map[
+          Function[r,
+            {Lookup[r, "Title", ""],
+             iSVTodoDateString[Lookup[r, "Deadline", Missing[]]],
+             iSVTodoDateString[Lookup[r, "NextReview", Missing[]]],
+             Lookup[r, "TodoStatus", ""],
+             Lookup[r, "TodoText", ""]}],
+          rows],
+        {Style["Notebook", Bold], Style["Deadline", Bold],
+         Style["NextReview", Bold], Style["Status", Bold],
+         Style["Todo", Bold]}],
+      Frame -> All,
+      Alignment -> {Left, Center},
+      Background -> {None, {{GrayLevel[0.95], White}}}]
+  ];
+
+(* DateObject \:3092 yyyy/mm/dd \:6587\:5b57\:5217\:306b\:3002Missing / \:7a7a\:306f\:7a7a\:6587\:5b57\:5217 *)
+iSVTodoDateString[d_] :=
+  Which[
+    MatchQ[d, _DateObject], Quiet @ Check[DateString[d, {"Year", "/", "Month", "/", "Day"}], ""],
+    StringQ[d], d,
+    True, ""];
 
 SourceVaultNotebookLint[record_Association] :=
   iComputeNotebookLint[record];
@@ -12970,6 +13366,8 @@ If[AssociationQ[ClaudeCode`$ClaudePackageKeywordMap],
      "\:30ad\:30fc\:30ef\:30fc\:30c9", "keyword", "\:4e00\:89a7", "\:30ea\:30b9\:30c8", "list",
      "\:30d7\:30ed\:30f3\:30d7\:30c8", "prompt",
      "SourceVaultFindNotebooks", "SourceVaultFormatNotebookList",
+     "SourceVaultFindTodos", "Todo", "todo", "\:30bf\:30b9\:30af", "\:9805\:76ee",
+     "SourceVaultNewNotebook", "\:65b0\:898f", "\:65b0\:3057\:3044", "\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8", "template",
      "SourceVaultUpcomingSchedule", "SourceVaultIndexNotebook",
      "SourceVaultExtractNotebookHeader", "SourceVaultNotebookSummary",
      "SaveLastPrompt", "SourceVaultSearchPromptRoutes",
