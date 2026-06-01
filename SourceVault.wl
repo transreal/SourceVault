@@ -451,6 +451,15 @@ SourceVaultModelContextLength::usage =
   "SourceVaultSetModel[..., \"ContextLength\" -> n] \:3067\:6c38\:7d9a\:5316\:3055\:308c\:305f\:5024\:3002\n" <>
   "LM Studio \:7b49\:30ed\:30fc\:30ab\:30eb LLM \:306e context_length \:306b\:4f7f\:3046\:3002\:672a\:8a2d\:5b9a\:306a\:3089 None\:3002";
 
+SourceVaultModelIntegrations::usage =
+  "SourceVaultModelIntegrations[provider, modelId] \:306f\:30e2\:30c7\:30eb\:306b\:7d10\:3065\:304f LM Studio MCP \:306e\n" <>
+  "integrations \:30ea\:30b9\:30c8\:3092\:8fd4\:3059\:3002SourceVaultSetModel[..., \"Integrations\" -> {...}] \:3067\n" <>
+  "\:6c38\:7d9a\:5316\:3055\:308c\:305f\:5024\:3002LM Studio /api/v1/chat \:306e integrations \:30d1\:30e9\:30e1\:30fc\:30bf\:306b\:4f7f\:3046\:3002\n" <>
+  "\:4f8b: SourceVaultSetModel[\"lmstudio\", \"local-heavy\", \"qwen/qwen3-coder-30b\",\n" <>
+  "        \"Integrations\" -> {\"mcp/exa\"}, \"ContextLength\" -> 32000]\n" <>
+  "\:672a\:8a2d\:5b9a\:306a\:3089 None\:3002\:3053\:308c\:306f MCP ID (\"mcp/exa\" \:7b49) \:3092\:30b3\:30fc\:30c9\:306b\:30cf\:30fc\:30c9\:30b3\:30fc\:30c9\:305b\:305a\n" <>
+  "SourceVault \:30b9\:30c8\:30a2\:306b\:6c38\:7d9a\:5316\:3059\:308b\:305f\:3081\:306e\:6a5f\:69cb\:3002";
+
 SourceVaultListRegistries::usage =
   "SourceVaultListRegistries[opts] \:306f\:767b\:9332\:6e08\:307f registry topic \:3068 channel \:3092\:8fd4\:3059\:3002\n" <>
   "Options: \"Channel\" -> \"public\" | \"private\" | All (\:30c7\:30d5\:30a9\:30eb\:30c8 All)";
@@ -5574,6 +5583,33 @@ SourceVaultModelContextLength[provider_String, modelId_String,
 SourceVaultModelContextLength[___] := None;
 
 (* ============================================================
+   SourceVaultModelIntegrations[provider, modelId]:
+   \:30e2\:30c7\:30eb\:306b\:7d10\:3065\:304f LM Studio MCP integrations \:30ea\:30b9\:30c8\:3092 model-registry \:304b\:3089\:8fd4\:3059\:3002
+   ContextLength \:3068\:5b8c\:5168\:306b\:5bfe\:79f0\:306a\:8a2d\:8a08\:3002modelId \:5b8c\:5168\:4e00\:81f4\:306e\:307f\:3092\:8fd4\:3057\:3001
+   \:5b8c\:5168\:4e00\:81f4\:304c\:7121\:3051\:308c\:3070 None (\:30b0\:30ed\:30fc\:30d0\:30eb $ClaudeLMStudioIntegrations / \:65e2\:5b9a\:306b\:59d4\:306d\:308b)\:3002
+   \:623b\:308a\:5024\:306f integrations \:30ea\:30b9\:30c8 (\:6587\:5b57\:5217 ID \:307e\:305f\:306f Association \:306e\:6df7\:5728\:53ef) \:307e\:305f\:306f None\:3002
+   ============================================================ *)
+Options[SourceVaultModelIntegrations] = {"Channel" -> "public"};
+SourceVaultModelIntegrations[provider_String, modelId_String,
+    opts:OptionsPattern[]] :=
+  Module[{channel, path, entries, exact, integ},
+    channel = OptionValue["Channel"];
+    path = iCompiledPath["model-registry", channel];
+    entries = iLoadRegistryEntries[path];
+    If[!ListQ[entries], Return[None]];
+    (* modelId \:5b8c\:5168\:4e00\:81f4\:30a8\:30f3\:30c8\:30ea\:306e\:307f (\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:306a\:3057) *)
+    exact = Select[entries,
+      Lookup[#, "Provider", ""] === provider &&
+        Lookup[#, "ModelId", ""] === modelId &];
+    integ = FirstCase[exact,
+      e_ /; ListQ[Lookup[e, "Integrations", None]] &&
+            Length[Lookup[e, "Integrations"]] > 0 :>
+        Lookup[e, "Integrations"], None];
+    If[ListQ[integ] && Length[integ] > 0, integ, None]
+  ];
+SourceVaultModelIntegrations[___] := None;
+
+(* ============================================================
    Stage 9 P1.5: \:30e2\:30c7\:30eb\:30ec\:30b8\:30b9\:30c8\:30ea\:306e\:624b\:52d5\:4e0a\:66f8\:304d / \:30af\:30ea\:30a2\:3002
 
    API \:30ad\:30fc\:304c\:7121\:3044\:74b0\:5883\:3084\:3001compiled registry \:306b\:53e4\:3044 seed \:30b3\:30d4\:30fc\:304c
@@ -5590,12 +5626,13 @@ Options[SourceVaultSetModel] = {
   "Channel" -> "public",
   "Class" -> Automatic,
   "Capabilities" -> Automatic,
-  "ContextLength" -> Automatic
+  "ContextLength" -> Automatic,
+  "Integrations" -> Automatic
 };
 
 SourceVaultSetModel[provider_String, intent_String, modelId_String,
   opts:OptionsPattern[]] :=
-  Module[{channel, class, caps, ctxLen, infer, topic, path, existing,
+  Module[{channel, class, caps, ctxLen, integ, infer, topic, path, existing,
           newEntry, merged, saveResult},
     iEnsureRoots[];
     iBootstrapDefaultSeeds[];
@@ -5603,6 +5640,7 @@ SourceVaultSetModel[provider_String, intent_String, modelId_String,
     class = OptionValue["Class"];
     caps = OptionValue["Capabilities"];
     ctxLen = OptionValue["ContextLength"];
+    integ = OptionValue["Integrations"];
     infer = iSVInferModelIntentClass[provider, modelId];
     If[class === Automatic,
       class = Lookup[infer, "Class", "Unknown"]];
@@ -5632,11 +5670,17 @@ SourceVaultSetModel[provider_String, intent_String, modelId_String,
        context_length \:306b\:4f7f\:308f\:308c\:308b\:3002Automatic \:306a\:3089\:8a18\:9332\:3057\:306a\:3044) *)
     If[IntegerQ[ctxLen] && ctxLen > 0,
       newEntry = Append[newEntry, "ContextLength" -> ctxLen]];
+    (* LM Studio MCP integrations \:5c5e\:6027\:3092\:6c38\:7d9a\:5316\:3002\:30ea\:30b9\:30c8\:304c\:6307\:5b9a\:3055\:308c\:305f\:3068\:304d\:306e\:307f\:8a18\:9332\:3002
+       MCP ID (\"mcp/exa\" \:7b49) \:3092\:30b3\:30fc\:30c9\:306b\:30cf\:30fc\:30c9\:30b3\:30fc\:30c9\:305b\:305a SourceVault \:30b9\:30c8\:30a2\:306b
+       \:6301\:305f\:305b\:308b\:305f\:3081\:306e\:30d5\:30a3\:30fc\:30eb\:30c9\:3002Automatic / \:7a7a\:30ea\:30b9\:30c8 \:306a\:3089\:8a18\:9332\:3057\:306a\:3044\:3002 *)
+    If[ListQ[integ] && Length[integ] > 0,
+      newEntry = Append[newEntry, "Integrations" -> integ]];
     merged = Append[existing, newEntry];
     saveResult = iSaveRegistryEntries[path, merged];
     <|"Status" -> "OK", "Provider" -> provider, "Intent" -> intent,
       "ModelId" -> modelId, "Class" -> class,
       "ContextLength" -> If[IntegerQ[ctxLen] && ctxLen > 0, ctxLen, None],
+      "Integrations" -> If[ListQ[integ] && Length[integ] > 0, integ, None],
       "RegistryPath" -> Lookup[saveResult, "Path", path],
       "RegistryTotal" -> Length[merged]|>
   ];
