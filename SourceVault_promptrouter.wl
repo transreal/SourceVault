@@ -1149,6 +1149,29 @@ iSVPRExtractParameters[_] := <||>;
 (* ----- built-in seed PromptRoutes (spec 7.1 schema, abridged) -----
    Only routes whose Target resolves to a real callable or to a
    well-defined IntentId are seeded. *)
+(* JSON \:30e9\:30a6\:30f3\:30c9\:30c8\:30ea\:30c3\:30d7\:5f8c\:306e PromptRoute \:3092\:6b63\:898f\:5316\:3059\:308b\:3002
+   \:7a7a Association <||> \:306f JSON \:3067 {} (\:7a7a\:30ea\:30b9\:30c8) \:306b\:306a\:308a\:3001\:8aad\:307f\:8fbc\:307f\:5f8c\:3082 {} \:306e\:307e\:307e\:3002
+   Matcher / Target / Privacy \:306f Association \:3067\:3042\:308b\:3079\:304d\:306a\:306e\:3067\:3001{} \:306a\:3089 <||> \:306b\:623b\:3059\:3002
+   \:3053\:308c\:3092\:6020\:308b\:3068 Lookup[target, \"Kind\"] \:7b49\:304c Lookup::invrl \:3092\:8d77\:3053\:3057\:3001
+   route \:304c\:8868\:793a\:51e6\:7406\:304b\:3089\:843d\:3061\:308b (SaveLastPrompt \:3057\:305f\:30eb\:30fc\:30c8\:304c\:4e00\:89a7\:306b\:51fa\:306a\:3044)\:3002
+   Matcher.KeywordsAny / Examples \:306f\:30ea\:30b9\:30c8\:306e\:307e\:307e\:3067\:826f\:3044 (Association \:5316\:3057\:306a\:3044)\:3002 *)
+iSVPRNormalizeRoute[route_] :=
+  Module[{r},
+    If[!AssociationQ[route], Return[route]];
+    r = route;
+    (* Association \:3092\:671f\:5f85\:3059\:308b\:30c8\:30c3\:30d7\:30ec\:30d9\:30eb\:30ad\:30fc: {} \:2192 <||> *)
+    Scan[
+      Function[k,
+        If[KeyExistsQ[r, k] && r[k] === {}, r[k] = <||>]],
+      {"Matcher", "Target", "Privacy"}];
+    (* Matcher \:304c Association \:306a\:3089\:3001\:305d\:306e\:4e2d\:306e Association \:671f\:5f85\:30ad\:30fc\:3082\:5fdc\:6025\:6b63\:898f\:5316 *)
+    If[AssociationQ[Lookup[r, "Matcher", Null]],
+      Module[{m = r["Matcher"]},
+        (* KeywordsAny / Examples / PromptFingerprints \:306f\:30ea\:30b9\:30c8\:306e\:307e\:307e\:3067\:826f\:3044\:306e\:3067\:89e6\:3089\:306a\:3044 *)
+        r["Matcher"] = m]];
+    r];
+iSVPRNormalizeRoute[x_] := x;
+
 iSVPRSeedPromptRoutes[] :=
   {
     <|
@@ -1607,6 +1630,7 @@ SourceVaultRegisterPromptRoute[route_Association,
     existing = If[FileExistsQ[path],
       Quiet @ Check[iLoadRegistryEntries[path], {}], {}];
     If[!ListQ[existing], existing = {}];
+    existing = Map[iSVPRNormalizeRoute, existing];
     existing = Select[existing, AssociationQ];
 
     (* added vs replaced *)
@@ -1676,6 +1700,7 @@ SourceVaultListPromptRoutes[opts:OptionsPattern[]] :=
     registryRoutes = If[FileExistsQ[path],
       Quiet @ Check[iLoadRegistryEntries[path], {}], {}];
     If[!ListQ[registryRoutes], registryRoutes = {}];
+    registryRoutes = Map[iSVPRNormalizeRoute, registryRoutes];
     registryRoutes = Select[registryRoutes, AssociationQ];
 
     If[includeSeed,
@@ -3034,24 +3059,83 @@ SourceVaultSearchPromptRoutes[___] :=
 
 (* one example prompt string for display (first example or memo) *)
 iSVPRRouteDisplayPrompt[route_Association] :=
-  Module[{matcher, examples},
+  Module[{matcher, examples, kws},
     matcher  = Lookup[route, "Matcher", <||>];
     examples = If[AssociationQ[matcher],
       Lookup[matcher, "Examples", {}], {}];
+    (* 1. \:4fdd\:5b58\:6e08\:307f\:30d7\:30ed\:30f3\:30d7\:30c8\:4f8b (SaveLastPrompt \:7531\:6765) \:304c\:3042\:308c\:3070\:305d\:308c\:3092\:8868\:793a *)
     If[ListQ[examples] && Length[examples] > 0 && StringQ[First[examples]],
-      First[examples],
-      Lookup[route, "RouteId", ""]]];
+      Return[First[examples]]];
+    (* 2. seed route \:7b49\:3067\:4f8b\:304c\:7121\:3044\:5834\:5408\:306f Matcher.KeywordsAny \:306e\:5148\:982d\:3092\:4ee3\:8868\:8868\:793a
+       (RouteId \:3088\:308a\:30e6\:30fc\:30b6\:306b\:5206\:304b\:308a\:3084\:3059\:3044\:30ad\:30fc\:30ef\:30fc\:30c9) *)
+    kws = If[AssociationQ[matcher],
+      Lookup[matcher, "KeywordsAny", {}], {}];
+    If[ListQ[kws] && Length[kws] > 0 && StringQ[First[kws]],
+      Return[First[kws]]];
+    (* 3. \:6700\:7d42 fallback: RouteId *)
+    Lookup[route, "RouteId", ""]];
 iSVPRRouteDisplayPrompt[_] := "";
 
+(* route \:306e Target \:304b\:3089\:5b9f\:884c\:5bfe\:8c61\:306e\:95a2\:6570 ID \:3092\:89e3\:6c7a\:3059\:308b (\:8868\:793a\:30fb\:5b9f\:884c\:5f0f\:7528)\:3002
+   Kind \:306b\:5fdc\:3058\:3066 FunctionId / AdapterFunctionId / TabularQuery \:5bfe\:5fdc\:95a2\:6570\:3092\:8fd4\:3059\:3002 *)
+iSVPRRouteTargetFunctionId[route_Association] :=
+  Module[{target, kind},
+    target = Lookup[route, "Target", <||>];
+    If[!AssociationQ[target], Return[Missing["NoTarget"]]];
+    kind = Lookup[target, "Kind", "Function"];
+    Which[
+      kind === "Function",
+        Lookup[target, "FunctionId",
+          Lookup[target, "FunctionSymbol", Missing["NoFunctionId"]]],
+      kind === "Intent",
+        Lookup[target, "AdapterFunctionId", Missing["NoAdapter"]],
+      kind === "TabularQuery",
+        (* schedule \:306a\:3069\:306e\:8868\:5f62\:30af\:30a8\:30ea\:306f SourceVaultUpcomingSchedule \:3092\:4ee3\:8868\:3068\:3059\:308b *)
+        "SourceVaultUpcomingSchedule",
+      True, Missing["UnknownKind"]]];
+iSVPRRouteTargetFunctionId[_] := Missing["BadRoute"];
+
 (* the function-call expression string for the ToInput button *)
-iSVPRRouteInputExpr[route_Association] :=
-  Module[{te, target, sym},
+iSVPRRouteInputExpr[route_Association, displayPrompt_String] :=
+  Module[{te, target, sym, fid, matcher, examples, promptText, rid},
+    rid = Lookup[route, "RouteId", ""];
+    (* 1. \:4fdd\:5b58\:6e08\:307f\:306e\:5b8c\:5168\:5f0f\:6587\:5b57\:5217\:304c\:3042\:308c\:3070\:305d\:308c\:3092\:512a\:5148 *)
     te = Lookup[route, "TargetExprString", Missing[]];
     If[StringQ[te], Return[te]];
     target = Lookup[route, "Target", <||>];
+    (* 2. \:65e7\:5f62\:5f0f: Target.FunctionSymbol \:304c\:3042\:308c\:3070 sym[] *)
     sym = If[AssociationQ[target],
       Lookup[target, "FunctionSymbol", Missing[]], Missing[]];
-    If[StringQ[sym], sym <> "[]", "(* no target expression *)"]];
+    If[StringQ[sym], Return[sym <> "[]"]];
+    (* 3. Function route: Target.Kind / FunctionId \:304b\:3089\:5b9f\:884c\:5f0f\:3092\:7d44\:307f\:7acb\:3066\:308b *)
+    fid = iSVPRRouteTargetFunctionId[route];
+    If[StringQ[fid] && AssociationQ[target] &&
+        Lookup[target, "Kind", "Function"] === "Function",
+      Return[fid <> "[]"]];
+    (* 4. \:4fdd\:5b58\:30d7\:30ed\:30f3\:30d7\:30c8\:30fbIntent\:30fbTabularQuery: \:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:3092 ClaudeEval \:3067\:5b9f\:884c\:3002
+       \:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:306e\:51b3\:5b9a\:9806: (a) \:6e21\:3055\:308c\:305f displayPrompt (RouteId \:3068\:7570\:306a\:308b\:5834\:5408)
+       (b) Matcher.Examples \:306e\:5148\:982d (c) Matcher.KeywordsAny \:306e\:5148\:982d\:3002
+       \:3044\:305a\:308c\:3082 RouteId \:306b\:843d\:3061\:306a\:3044\:3088\:3046\:751f\:53d6\:5f97\:3059\:308b\:3002 *)
+    matcher = Lookup[route, "Matcher", <||>];
+    examples = If[AssociationQ[matcher],
+      Lookup[matcher, "Examples", {}], {}];
+    promptText = Which[
+      StringQ[displayPrompt] && displayPrompt =!= "" && displayPrompt =!= rid,
+        displayPrompt,
+      ListQ[examples] && Length[examples] > 0 && StringQ[First[examples]],
+        First[examples],
+      AssociationQ[matcher] &&
+        MatchQ[Lookup[matcher, "KeywordsAny", {}], {_String, ___}],
+        First[Lookup[matcher, "KeywordsAny"]],
+      True, Missing["NoPrompt"]];
+    If[StringQ[promptText] && promptText =!= "",
+      Return["ClaudeEval[\"" <>
+        StringReplace[promptText, "\"" -> "\\\""] <> "\"]"]];
+    "(* no target expression *)"];
+
+(* \:5f15\:6570 1 \:7248: \:5f8c\:65b9\:4e92\:63db\:3002\:8868\:793a\:30d7\:30ed\:30f3\:30d7\:30c8\:3092\:5185\:90e8\:3067\:89e3\:6c7a\:3057\:3066\:79fb\:8b72 *)
+iSVPRRouteInputExpr[route_Association] :=
+  iSVPRRouteInputExpr[route, iSVPRRouteDisplayPrompt[route]];
 iSVPRRouteInputExpr[_] := "(* no target expression *)";
 
 (* privacy label, env-independent English word *)
@@ -3070,7 +3154,7 @@ Options[SourceVaultFormatPromptRouteList] = {};
 
 SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
   Module[{filtered, cols, header, body},
-    filtered = Select[routes, AssociationQ];
+    filtered = Select[Map[iSVPRNormalizeRoute, routes], AssociationQ];
     If[filtered === {},
       Return[Style[
         "\:8a72\:5f53\:3059\:308b\:4fdd\:5b58\:6e08\:307f\:30d7\:30ed\:30f3\:30d7\:30c8\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
@@ -3085,14 +3169,19 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                 routeId, channel, inputExpr},
           prompt   = iSVPRRouteDisplayPrompt[rt];
           memo     = Lookup[rt, "Memo", ""];
-          targetSym = Lookup[Lookup[rt, "Target", <||>],
-            "FunctionSymbol", ""];
+          (* Target \:8868\:793a: FunctionSymbol \:304c\:7121\:3044 seed route \:3067\:3082
+             Kind/FunctionId \:304b\:3089\:5b9f\:884c\:5bfe\:8c61\:95a2\:6570\:3092\:8868\:793a\:3059\:308b *)
+          targetSym = Module[{fs, fid},
+            fs = Lookup[Lookup[rt, "Target", <||>], "FunctionSymbol", Missing[]];
+            If[StringQ[fs], fs,
+              fid = iSVPRRouteTargetFunctionId[rt];
+              If[StringQ[fid], fid, ""]]];
           created  = Lookup[rt, "CreatedAt", ""];
           updated  = Lookup[rt, "UpdatedAt", ""];
           privLabel = iSVPRPrivacyLabel[rt];
           routeId  = Lookup[rt, "RouteId", ""];
           channel  = Lookup[rt, "_Channel", "public"];
-          inputExpr = iSVPRRouteInputExpr[rt];
+          inputExpr = iSVPRRouteInputExpr[rt, prompt];
           {
             Style[prompt, FontFamily -> "Yu Gothic UI"],
             Style[If[StringQ[memo], memo, ""],
@@ -3123,12 +3212,23 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                 BaseStyle -> {"Hyperlink"},
                 Method -> "Queued"],
               "  ",
-              (* Run: execute now *)
+              (* Run: execute now \:3002\:5b9f\:884c\:7d50\:679c\:3092\:30c0\:30a4\:30a2\:30ed\:30b0\:3067\:8868\:793a\:3057\:30fb
+                 \:5b9f\:884c\:4e2d\:304b\:5b8c\:4e86\:304b\:304c\:30e6\:30fc\:30b6\:306b\:5206\:304b\:308b\:3088\:3046\:306b\:3059\:308b *)
               Button[
                 Style["Run", FontFamily -> "Yu Gothic UI", FontSize -> 10,
                   RGBColor[0.15, 0.45, 0.30]],
-                With[{p = iSVPRRouteDisplayPrompt[rt]},
-                  SourceVaultExecutePromptRoute[p]],
+                With[{p = iSVPRRouteDisplayPrompt[rt], rid = routeId},
+                  Module[{res},
+                    res = Quiet @ Check[
+                      SourceVaultExecutePromptRoute[p], $Failed];
+                    MessageDialog[
+                      Column[{
+                        Style["Run: " <> rid, Bold],
+                        Style["Prompt: " <> ToString[p], FontSize -> 10],
+                        If[res === $Failed,
+                          Style["(\:5b9f\:884c\:306b\:5931\:6557\:3057\:307e\:3057\:305f)",
+                            RGBColor[0.7, 0.15, 0.15]],
+                          res]}]]]],
                 Appearance -> "Frameless",
                 BaseStyle -> {"Hyperlink"},
                 Method -> "Queued"],

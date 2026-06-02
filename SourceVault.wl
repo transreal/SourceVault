@@ -530,7 +530,7 @@ SourceVaultFindNotebooks::usage =
   "Options:\n" <>
   "  \"OpenTodos\" -> True | False (\:672a\:5b8c\:4e86 Todo \:3092\:542b\:3080 / \:542b\:307e\:306a\:3044 notebook)\n" <>
   "  \"NextReview\" -> \"Today\" | \"Overdue\" | \"ThisWeek\" | \"DueSoon\" | <|\"From\" -> _, \"To\" -> _|>\n" <>
-  "    \:203b \"Today\" \:306f\:53b3\:5bc6\:306b\:4eca\:65e5\:306e\:307f\:3001\"ThisWeek\"/\"DueSoon\" \:306f\:4eca\:65e5\:00b17\:65e5\:4ee5\:5185 (\:4eca\:9031\:5185\:306b\:904e\:304e\:305f\:671f\:9650\:5207\:308c\:3082\:542b\:3080\:304c\:9060\:3044\:904e\:53bb\:306f\:9664\:5916)\:3001\"Overdue\" \:306f\:671f\:9650\:5207\:308c\:5168\:90e8\n" <>
+  "    \:203b \"Today\" \:306f\:53b3\:5bc6\:306b\:4eca\:65e5\:306e\:307f\:3001\"ThisWeek\"/\"DueSoon\" \:306f\:4eca\:65e5\[PlusMinus]7\:65e5\:4ee5\:5185 (\:4eca\:9031\:5185\:306b\:904e\:304e\:305f\:671f\:9650\:5207\:308c\:3082\:542b\:3080\:304c\:9060\:3044\:904e\:53bb\:306f\:9664\:5916)\:3001\"Overdue\" \:306f\:671f\:9650\:5207\:308c\:5168\:90e8\n" <>
   "  \"Deadline\" -> \"Today\" | \"Overdue\" | \"ThisWeek\" | \"DueSoon\" | <|\"From\" -> _, \"To\" -> _|>\n" <>
   "  \"Keywords\" -> {_String, ...} | _String -- \:90e8\:5206\:4e00\:81f4\:691c\:7d22\n" <>
   "    \:691c\:7d22\:5bfe\:8c61: Header.Keywords + Header.Title + FileBaseName[Path] + \:89aa\:30d5\:30a9\:30eb\:30c0\:540d\n" <>
@@ -995,7 +995,6 @@ SourceVaultEnsureNotebookUUIDFolder::usage =
 (* Private implementation *)
 
 
-
 (* ===================================================================
    Phase 2a: DirectiveRepository source kind
    (Codex integration spec 5th review, sections 11.1 / 11.2)
@@ -1087,7 +1086,7 @@ ClearAll[
   iSourceEventsPath, iAppendSourceEvent, iLoadSourceEvents,
   iComputePageHashDiff, iUpdateSnapshotLifecycle, iMakeEventId,
   iSeedsDir, iCompiledDir, iSeedPath, iCompiledPath,
-  iLoadRegistryEntries, iSaveRegistryEntries,
+  iLoadRegistryEntries, iSaveRegistryEntries, iRecAssoc, RuleQ,
   iRegistryEntryMatchesQuery, iRegistryResolveOrder,
   iBootstrapDefaultSeeds, iModelSeedEntries,
   iNotebooksDir, iNotebookSourcePath, iNotebookSnapshotPath,
@@ -5318,13 +5317,45 @@ iLoadRegistryEntries[path_String] :=
     If[!ByteArrayQ[rawBytes], Return[{}]];
     content = Quiet[ByteArrayToString[rawBytes, "UTF-8"]];
     If[!StringQ[content], Return[{}]];
-    parsed = Quiet[ImportString[content, "RawJSON"]];
+    (* JSON \:30d1\:30fc\:30b9: \:7f60 #28 (ImportString[..., \"RawJSON\"] \:304c\:74b0\:5883\:30fb\:5185\:5bb9\:306b\:3088\:308a\:5931\:6557\:3057
+       $Failed \:3092\:8fd4\:3059) \:5bfe\:7b56\:3002Developer`ReadRawJSONString \:3092\:512a\:5148\:3057\:30013\:6bb5\:968e\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3002 *)
+    parsed = Quiet @ Check[
+      Developer`ReadRawJSONString[content], $Failed];
+    If[parsed === $Failed || Head[parsed] === Developer`ReadRawJSONString,
+      parsed = Quiet @ Check[ImportString[content, "RawJSON"], $Failed]];
+    If[parsed === $Failed,
+      parsed = Quiet @ Check[
+        ImportString[content, "JSON"] /. r:{__Rule} :> Association[r],
+        $Failed]];
+    If[parsed === $Failed, Return[{}]];
+    (* JSON \:30e9\:30a6\:30f3\:30c9\:30c8\:30ea\:30c3\:30d7\:3067 Association \:304c\:300c\:898f\:5247\:306e\:30ea\:30b9\:30c8\:300d\:306b\:306a\:308b\:3053\:3068\:304c\:3042\:308b\:3002
+       \:30c8\:30c3\:30d7\:30ec\:30d9\:30eb\:3060\:3051\:3067\:306a\:304f Matcher / Target \:7b49\:306e\:30cd\:30b9\:30c8\:3057\:305f Association \:3082
+       \:30ea\:30b9\:30c8\:306e\:307e\:307e\:3060\:3068\:3001\:5f8c\:6bb5\:306e Lookup[matcher, ...] \:304c Lookup::invrl \:3092\:8d77\:3053\:3059\:3002
+       iRecAssoc \:3067\:518d\:5e30\:7684\:306b Association \:5316\:3057\:3066\:9632\:3050\:3002 *)
     If[ListQ[parsed],
-      Map[Function[r,
-        If[ListQ[r] && AllTrue[r, RuleQ], Association[r], r]],
-        parsed],
-      If[AssociationQ[parsed], {parsed}, {}]]
+      Map[iRecAssoc, parsed],
+      If[AssociationQ[parsed], {iRecAssoc[parsed]}, {}]]
   ];
+
+(* JSON \:30e9\:30a6\:30f3\:30c9\:30c8\:30ea\:30c3\:30d7\:5f8c\:306e\:5024\:3092\:518d\:5e30\:7684\:306b\:6b63\:898f\:5316\:3059\:308b\:3002
+   - \:898f\:5247\:306e\:30ea\:30b9\:30c8 ({_Rule...}) \[RightArrow] Association \:306b\:5909\:63db\:3057\:5404\:5024\:3082\:518d\:5e30\:51e6\:7406
+   - Association \[RightArrow] \:5404\:5024\:3092\:518d\:5e30\:51e6\:7406
+   - \:305d\:306e\:4ed6\:306e\:30ea\:30b9\:30c8 \[RightArrow] \:5404\:8981\:7d20\:3092\:518d\:5e30\:51e6\:7406 (\:7d20\:306e\:30ea\:30b9\:30c8\:306f\:305d\:306e\:307e\:307e)
+   - \:539f\:5b50\:5024 \[RightArrow] \:305d\:306e\:307e\:307e *)
+(* RuleQ: Wolfram 14.x \:306b\:3088\:3063\:3066\:306f\:30b7\:30b9\:30c6\:30e0\:95a2\:6570\:3068\:3057\:3066\:5b58\:5728\:3057\:306a\:3044\:305f\:3081\:81ea\:524d\:5b9a\:7fa9\:3002
+   \:672a\:5b9a\:7fa9\:306e\:307e\:307e\:3060\:3068 AllTrue[x, RuleQ] \:304c\:8a55\:4fa1\:3055\:308c\:305a\:3001JSON \:30d1\:30fc\:30b9\:5f8c\:306e
+   Association \:5224\:5b9a\:304c\:5168\:90e8\:6a5f\:80fd\:4e0d\:5168\:306b\:9665\:308b (Matcher.Examples \:306b\:5b9a\:7fa9\:5f0f\:304c\:6df7\:5165\:3059\:308b\:7b49)\:3002 *)
+RuleQ[r_] := MatchQ[r, _Rule | _RuleDelayed];
+
+iRecAssoc[x_] :=
+  Which[
+    AssociationQ[x],
+      Association[KeyValueMap[#1 -> iRecAssoc[#2] &, x]],
+    ListQ[x] && x =!= {} && AllTrue[x, MatchQ[#, _Rule | _RuleDelayed] &],
+      Association[Map[(First[#] -> iRecAssoc[Last[#]]) &, x]],
+    ListQ[x],
+      Map[iRecAssoc, x],
+    True, x];
 
 (* Registry entries save: List of Association \:3092 JSON \:306b *)
 iSaveRegistryEntries[path_String, entries_List] :=
@@ -7041,7 +7072,7 @@ iNotebookRecordMatchesQuery[record_Association, query_Association,
     (* Keywords (\:3044\:305a\:308c\:304b\:306b match) *)
     (* Stage 9 P1.5: Keywords / Title \:90e8\:5206\:4e00\:81f4\:691c\:7d22\:3002
        - "Keywords" \:3068 "Title" \:306f\:540c\:7b49\:6271\:3044 (\:3069\:3061\:3089\:3092\:6307\:5b9a\:3057\:3066\:3082\:540c\:3058\:691c\:7d22\:30d7\:30fc\:30eb\:3092\:898b\:308b)\:3002
-       - \:5404\:30af\:30a8\:30ea\:6587\:5b57\:5217\:306f StringContainsQ \:3067\:90e8\:5206\:4e00\:81f4 (\:300c\:4f1a\:8b70\:300d\:2192\:300c\:5b66\:79d1\:4f1a\:8b70\:300d\:3082\:62fe\:3046)\:3002
+       - \:5404\:30af\:30a8\:30ea\:6587\:5b57\:5217\:306f StringContainsQ \:3067\:90e8\:5206\:4e00\:81f4 (\:300c\:4f1a\:8b70\:300d\[RightArrow]\:300c\:5b66\:79d1\:4f1a\:8b70\:300d\:3082\:62fe\:3046)\:3002
        - \:691c\:7d22\:30d7\:30fc\:30eb: Header.Keywords \:306e\:5404\:6587\:5b57\:5217 + Header.Title + FileBaseName[Path]
          + \:89aa\:30d5\:30a9\:30eb\:30c0\:540d (FileNameTake[DirectoryName[path], -1])\:3002
          Path \:5168\:4f53\:306f\:4f7f\:308f\:306a\:3044 (\:5171\:901a\:30d5\:30a9\:30eb\:30c0 "On Work" \:7b49\:3067\:8aa4\:30de\:30c3\:30c1\:3092\:9632\:3050)\:3002
@@ -7207,19 +7238,39 @@ SourceVaultNewNotebook[opts:OptionsPattern[]] :=
 
     newNb = replaced;
 
+    (* WindowTitle \:30aa\:30d7\:30b7\:30e7\:30f3\:3092\:9664\:53bb\:3059\:308b\:3002
+       WindowTitle \:3092\:660e\:793a\:8a2d\:5b9a\:3059\:308b\:3068\:30bf\:30a4\:30c8\:30eb\:30d0\:30fc\:304c\:305d\:308c\:306b\:56fa\:5b9a\:3055\:308c\:3001
+       \:30d5\:30a1\:30a4\:30eb\:4fdd\:5b58\:3057\:3066\:3082\:30d5\:30a1\:30a4\:30eb\:540d\:304c\:30bf\:30a4\:30c8\:30eb\:306b\:53cd\:6620\:3055\:308c\:306a\:3044\:3002
+       \:672a\:8a2d\:5b9a\:306b\:3057\:3066\:304a\:3051\:3070\:3001\:30d5\:30ed\:30f3\:30c8\:30a8\:30f3\:30c9\:304c\:4fdd\:5b58\:6642\:306b\:81ea\:52d5\:3067\:30d5\:30a1\:30a4\:30eb\:540d\:3092\:8868\:793a\:3059\:308b\:3002
+       \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:7531\:6765\:306e WindowTitle \:3082\:9664\:53bb\:3057\:3066\:304a\:304f\:3002 *)
+    newNb = Replace[newNb,
+      Notebook[cells_, before___, (Rule | RuleDelayed)[WindowTitle, _], after___] :>
+        Notebook[cells, before, after],
+      {0}];
+    (* \:8907\:6570\:6b8b\:308b\:53ef\:80fd\:6027\:306b\:5099\:3048 FixedPoint \:3067\:7e70\:308a\:8fd4\:3057\:9664\:53bb *)
+    newNb = FixedPoint[
+      Replace[#,
+        Notebook[cells_, before___, (Rule | RuleDelayed)[WindowTitle, _], after___] :>
+          Notebook[cells, before, after],
+        {0}] &,
+      newNb];
+
     (* \:672a\:4fdd\:5b58\:306e\:65b0\:898f\:30a6\:30a3\:30f3\:30c9\:30a6\:3068\:3057\:3066\:958b\:304f (\:30d5\:30a1\:30a4\:30eb\:4fdd\:5b58\:3057\:306a\:3044)\:3002
        newNb \:306f Notebook[{Cell[...], ...}, opts...] \:5f0f\:3002NotebookPut \:306f\:5b8c\:5168\:306a
        Notebook \:5f0f (\:30bb\:30eb\:30ea\:30b9\:30c8 + \:30aa\:30d7\:30b7\:30e7\:30f3) \:3092\:305d\:306e\:307e\:307e\:53d7\:3051\:53d6\:308a\:3001
        \:65b0\:898f\:30a6\:30a3\:30f3\:30c9\:30a6\:3068\:3057\:3066\:8868\:793a\:3057\:3066 NotebookObject \:3092\:8fd4\:3059\:3002
-       CreateNotebook[cellList, ...] \:306f\:30bb\:30eb\:30ea\:30b9\:30c8\:3092\:53ef\:5909\:9577\:5f15\:6570\:3068\:3057\:3066\:8981\:6c42\:3057\:30fb
-       Notebook \:30aa\:30d7\:30b7\:30e7\:30f3\:3068\:5e72\:6e09\:3059\:308b\:305f\:3081\:4f7f\:308f\:306a\:3044\:3002 *)
+       WindowTitle \:3092\:8a2d\:5b9a\:3057\:306a\:3044\:306e\:3067\:3001\:4fdd\:5b58\:6642\:306b\:30d5\:30a1\:30a4\:30eb\:540d\:304c\:30bf\:30a4\:30c8\:30eb\:306b\:8868\:793a\:3055\:308c\:308b\:3002 *)
     nbObj = Quiet @ Check[NotebookPut[newNb], $Failed];
     If[Head[nbObj] =!= NotebookObject,
       Return[<|"Status" -> "Failed", "Reason" -> "CreateNotebookFailed",
         "TemplatePath" -> tmplPath,
         "NewNotebookHead" -> ToString[Head[newNb]]|>]];
-    (* \:30a6\:30a3\:30f3\:30c9\:30a6\:30bf\:30a4\:30c8\:30eb\:3092\:8a2d\:5b9a (\:5931\:6557\:3057\:3066\:3082\:7121\:8996) *)
-    Quiet @ Check[SetOptions[nbObj, WindowTitle -> title], Null];
+    (* WindowTitle \:3092\:30d5\:30ed\:30f3\:30c8\:30a8\:30f3\:30c9\:65e2\:5b9a\:306b\:623b\:3059\:3002
+       \:30b9\:30bf\:30a4\:30eb\:30b7\:30fc\:30c8 (SourceVault default.nb) \:5074\:306b WindowTitle \:304c\:5b9a\:7fa9\:3055\:308c\:3066\:3044\:308b\:3068\:3001
+       Notebook \:5f0f\:304b\:3089 WindowTitle \:3092\:9664\:53bb\:3057\:3066\:3082\:30b9\:30bf\:30a4\:30eb\:7531\:6765\:306e\:30bf\:30a4\:30c8\:30eb\:304c\:6b8b\:308b\:3002
+       Inherited / Automatic \:3092\:9806\:306b\:8a66\:3057\:3001\:30d5\:30a1\:30a4\:30eb\:540d\:30d9\:30fc\:30b9\:306e\:81ea\:52d5\:30bf\:30a4\:30c8\:30eb\:306b\:623b\:3059\:3002 *)
+    Quiet @ Check[SetOptions[nbObj, WindowTitle -> Inherited], Null];
+    Quiet @ Check[CurrentValue[nbObj, WindowTitle] = Inherited, Null];
 
     <|"Status" -> "OK",
       "Notebook" -> nbObj,
@@ -7300,7 +7351,7 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
           sourceImportTry, snapshotId, snapshotPath, snapshotRec,
           cachedMTime, header, todos, openCount, doneCount, passCount,
           today, deadlineVal, nextReviewVal, reviewState, deadlineState,
-          lint, ts, cachedHash, curHash,
+          lint, ts, cachedHash, curHash, cachedSize, curSize,
           hdrC, todoC, hdrRestored, todoRestored, reindexed},
     sourcePath = iNotebookSourcePath[nbRef];
     If[!FileExistsQ[sourcePath],
@@ -7366,18 +7417,34 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
     (* mtime \:304c\:5076\:7136\:4e00\:81f4\:3057\:3066\:3082\:5185\:5bb9\:304c\:5909\:308f\:3063\:3066\:3044\:308c\:3070 cache miss \:3068\:3059\:308b\:3002
        \:7de8\:96c6\:5f8c\:3082 mtime \:304c\:79d2\:7c92\:5ea6\:3067\:540c\:3058\:307e\:307e\:30fb\:30af\:30e9\:30a6\:30c9\:540c\:671f\:3067 mtime \:304c\:5fa9\:5143\:3055\:308c\:308b\:7b49\:306e
        \:30b1\:30fc\:30b9\:3067\:65e7\:30ad\:30e3\:30c3\:30b7\:30e5\:304c\:8fd4\:308a\:7d9a\:3051\:308b\:554f\:984c (NextReview \:7de8\:96c6\:304c\:53cd\:6620\:3055\:308c\:306a\:3044) \:3092\:9632\:3050\:3002
-       snapshot \:306e RawContentHash ("sha256-<hex>") \:3068\:73fe\:5728\:30d5\:30a1\:30a4\:30eb\:306e\:30cf\:30c3\:30b7\:30e5\:3092\:6bd4\:8f03\:3002
-       \:30cf\:30c3\:30b7\:30e5\:304c snapshot \:306b\:7121\:3044\:65e7\:7248\:306f\:30b9\:30ad\:30c3\:30d7 (mtime \:5224\:5b9a\:306e\:307f) \:3057\:5f8c\:65b9\:4e92\:63db\:3092\:4fdd\:3064\:3002 *)
+
+       \:9ad8\:901f\:5316: \:6b63\:5e38\:6642 (mtime \:4e00\:81f4) \:306b\:6bce\:56de Hash[Import[abs,"Text"]] \:3092\:8a08\:7b97\:3059\:308b\:3068
+       \:30d5\:30a1\:30a4\:30eb\:5168\:8aad\:307f\:8fbc\:307f\:306e\:30b3\:30b9\:30c8\:304c\:304b\:304b\:308b\:3002\:305d\:3053\:3067 mtime \:306b\:52a0\:3048\:3066
+       \:8efd\:91cf\:306a FileByteCount (\:5168\:8aad\:307f\:8fbc\:307f\:4e0d\:8981) \:3092\:4f75\:7528\:3057\:3001
+       mtime + \:30b5\:30a4\:30ba\:304c\:5171\:306b\:4e00\:81f4\:3059\:308c\:3070\:30cf\:30c3\:30b7\:30e5\:8a08\:7b97\:3092\:30b9\:30ad\:30c3\:30d7\:3057\:3066 cache hit \:3068\:3059\:308b\:3002
+       mtime \:3082\:30b5\:30a4\:30ba\:3082\:5909\:308f\:3089\:305a\:5185\:5bb9\:3060\:3051\:5909\:308f\:308b\:30b1\:30fc\:30b9 (\:540c\:30d0\:30a4\:30c8\:6570\:306e\:7de8\:96c6) \:306f
+       \:4e8b\:5b9f\:4e0a\:3042\:308a\:5f97\:306a\:3044\:305f\:3081\:5b89\:5168\:3002\:30b5\:30a4\:30ba\:304c snapshot \:306b\:7121\:3044\:65e7\:7248 / \:53d6\:5f97\:4e0d\:53ef\:306e\:5834\:5408\:306e\:307f
+       \:5f93\:6765\:306e\:30cf\:30c3\:30b7\:30e5\:5224\:5b9a\:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3059\:308b (\:5f8c\:65b9\:4e92\:63db)\:3002 *)
+    cachedSize = Lookup[snapshotRec, "SourceSize", Missing["NotPresent"]];
     cachedHash = Lookup[snapshotRec, "RawContentHash", Missing["NotPresent"]];
-    If[StringQ[cachedHash],
-      curHash = Quiet @ Check[
-        "sha256-" <> Hash[Import[abs, "Text"], "SHA256", "HexString"],
-        Missing["HashFailed"]];
-      If[StringQ[curHash] && curHash =!= cachedHash,
+    If[IntegerQ[cachedSize],
+      (* \:30b5\:30a4\:30ba\:5224\:5b9a\:7d4c\:8def (\:9ad8\:901f): FileByteCount \:306e\:307f\:3067\:5224\:5b9a\:3057\:30cf\:30c3\:30b7\:30e5\:306f\:8a08\:7b97\:3057\:306a\:3044 *)
+      curSize = Quiet @ Check[FileByteCount[abs], Missing["SizeFailed"]];
+      If[IntegerQ[curSize] && curSize =!= cachedSize,
         Return[<|"Cached" -> False,
-          "CacheMissReason" -> "ContentHashMismatch",
-          "CachedHash" -> cachedHash,
-          "CurrentHash" -> curHash|>]]];
+          "CacheMissReason" -> "ContentSizeMismatch",
+          "CachedSize" -> cachedSize,
+          "CurrentSize" -> curSize|>]],
+      (* \:30b5\:30a4\:30ba\:672a\:4fdd\:5b58\:306e\:65e7 snapshot: \:5f93\:6765\:306e\:30cf\:30c3\:30b7\:30e5\:5224\:5b9a\:3067\:5f8c\:65b9\:4e92\:63db *)
+      If[StringQ[cachedHash],
+        curHash = Quiet @ Check[
+          "sha256-" <> Hash[Import[abs, "Text"], "SHA256", "HexString"],
+          Missing["HashFailed"]];
+        If[StringQ[curHash] && curHash =!= cachedHash,
+          Return[<|"Cached" -> False,
+            "CacheMissReason" -> "ContentHashMismatch",
+            "CachedHash" -> cachedHash,
+            "CurrentHash" -> curHash|>]]]];
 
     (* \:4e00\:81f4: \:5b8c\:5168\:306a Index \:7d50\:679c\:3092\:518d\:69cb\:7bc9\:3002
        Stage 9 P1 Step 8: snapshot \:306b HeaderCompressed/TodosCompressed \:304c\:3042\:308c\:3070
@@ -7541,6 +7608,8 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
             "LifecycleStatus" -> "Current",
             "SourceMTime" -> If[IntegerQ[currentMTime], currentMTime,
               Missing["NotPresent"]],
+            "SourceSize" -> Quiet @ Check[FileByteCount[abs],
+              Missing["NotPresent"]],
             "Skipped" -> True,
             "SkipReason" -> "FileTooLarge",
             "FileSizeMB" -> sizeMB,
@@ -7647,6 +7716,10 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
       "LifecycleStatus" -> "Current",
       "SourceMTime" -> If[IntegerQ[currentMTime], currentMTime,
         Missing["NotPresent"]],
+      (* mtime \:3068\:4f75\:7528\:3059\:308b\:8efd\:91cf\:306a cache \:5224\:5b9a\:7528\:30b5\:30a4\:30ba (\:30d0\:30a4\:30c8\:6570)\:3002
+         FileByteCount \:306f\:5168\:8aad\:307f\:8fbc\:307f\:4e0d\:8981\:3067\:53d6\:5f97\:3067\:304d\:308b\:305f\:3081\:3001
+         cache hit \:5224\:5b9a\:3092 Hash[Import[...]] \:306a\:3057\:3067\:9ad8\:901f\:5316\:3059\:308b\:306e\:306b\:4f7f\:3046\:3002 *)
+      "SourceSize" -> Quiet @ Check[FileByteCount[abs], Missing["NotPresent"]],
       (* Stage 9 P1 Step 6: snapshot \:5358\:4f4d\:306e PrivacyLevel\:3002
          \:30ed\:30fc\:30ab\:30eb .nb \:306f NBAccess \:306e\:5224\:5b9a\:3092\:7d99\:627f (\:30bb\:30eb\:6df7\:5728\:306f\:6700\:3082\:53b3\:3057\:3044\:5024)\:3002
          \:6982\:8981 (Summary) \:306f\:30b9\:30ad\:30fc\:30de\:5316\:5236\:7d04\:306b\:3088\:308a\:5e38\:306b 0.0 \:6271\:3044\:3002 *)
@@ -7839,7 +7912,7 @@ SourceVaultFindNotebooks[opts:OptionsPattern[]] :=
         (* Trap #28 \:5bfe\:5fdc: source JSON \:306e OriginalPath \:306f Windows \:30d1\:30b9
            (\:30d0\:30c3\:30af\:30b9\:30e9\:30c3\:30b7\:30e5) \:3092\:542b\:307f\:3001ImportString["RawJSON"] \:5358\:72ec\:3067\:306f
            parse \:306b\:5931\:6557\:3059\:308b\:3053\:3068\:304c\:3042\:308b (\:7f60 #28)\:3002iLoadJSONFromFile \:306f
-           ImportString["RawJSON"] \:2192 Developer`ReadRawJSONString \:2192 ImportString["JSON"]
+           ImportString["RawJSON"] \[RightArrow] Developer`ReadRawJSONString \[RightArrow] ImportString["JSON"]
            \:306e 3 \:6bb5\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3092\:6301\:3064\:305f\:3081\:3001\:5fc5\:305a\:3053\:308c\:3092\:7d4c\:7531\:3059\:308b\:3002
            \:65e7\:5b9f\:88c5\:306f ImportString["RawJSON"] \:5358\:72ec\:3067\:3001\:5931\:6557\:6642\:306b notebook \:3092
            \:7121\:8a00\:3067 skip \:3057 SourceVaultFindNotebooks \:304c {} \:3092\:8fd4\:3059\:30d0\:30b0\:304c\:3042\:3063\:305f\:3002 *)
@@ -10717,7 +10790,7 @@ iSVCompareVersions[a_List, b_List] :=
       0]];
 iSVCompareVersions[_, _] := 0;
 
-(* fetched \:30a8\:30f3\:30c8\:30ea\:7fa4\:306b intent/class \:3092\:4ed8\:4e0e\:3057\:3001\:540c provider\:00d7family\:00d7intent \:3067
+(* fetched \:30a8\:30f3\:30c8\:30ea\:7fa4\:306b intent/class \:3092\:4ed8\:4e0e\:3057\:3001\:540c provider\[Times]family\[Times]intent \:3067
    \:6700\:5927\:30d0\:30fc\:30b8\:30e7\:30f3\:306e\:3082\:306e\:3060\:3051\:3092\:300c\:6b63\:898f intent \:30a8\:30f3\:30c8\:30ea\:300d\:306b\:6607\:683c\:3059\:308b\:3002
    - \:5168 fetched \:30a8\:30f3\:30c8\:30ea\:306f "Availability"->"Available" \:306e\:5019\:88dc\:3068\:3057\:3066\:6b8b\:3059
      (Intent=Null \:306e\:307e\:307e\:3002SourceVaultListModels \:3067\:4e00\:89a7\:306b\:51fa\:308b)
