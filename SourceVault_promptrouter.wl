@@ -66,8 +66,10 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultProposePromptRoute",
   "SourceVault`SourceVaultClassifyProviderTrustDomain",
   "SourceVault`SaveLastPrompt",
+  "SourceVault`SourceVaultDecryptPromptRoute",
   "SourceVault`SourceVaultSearchPromptRoutes",
-  "SourceVault`SourceVaultFormatPromptRouteList"
+  "SourceVault`SourceVaultFormatPromptRouteList",
+  "SourceVault`SourceVaultReplayRoute"
 ]];
 
 (* ------------------------------------------------------------
@@ -198,13 +200,19 @@ SourceVaultClassifyProviderTrustDomain::usage =
   "SourceVaultClassifyProviderTrustDomain[label] maps a provider or route label to a TrustDomain (spec 12.2). \"chatgptcodex\" / \"ChatGPTCodexCLI\" / \"ClaudeCodeCLI\" / \"CloudLLM\" classify as \"Cloud\"; \"LocalOnly\" as \"Local\"; \"PrivateLLM\" as \"Private\". Ambiguous or unknown labels (e.g. LocalOpenAICompatible, ExternalAPI) return Missing[\"UnclassifiedTrustDomain\"] so the host resolver must declare TrustDomain explicitly. ChatGPT Codex is a cloud-backed CLI: its filesystem sandbox is local but its LLM inference is in the cloud.";
 
 SaveLastPrompt::usage =
-  "SaveLastPrompt[memo_String] saves the most recent successful ClaudeEval / ContinueEval prompt run as a named PromptRoute so it can be searched and re-run later. memo is a free-text note (e.g. \"this function only works where an LLM is available\") stored in the route's Memo field and shown in the prompt table. Options: \"Channel\" -> \"public\"|\"private\"|\"local\" (default Automatic, resolved from privacy), \"Encrypt\" -> False (encryption of prompt/memo/target at rest is NOT YET IMPLEMENTED; passing True returns Status NotImplemented), \"DryRun\" -> False, \"RouteId\" -> Automatic. Privacy is tracked via SourceVaultResolvePromptPrivacy; raw prompt/function are stored in plaintext by default since they rarely need secrecy, but PrivacyLevel and CloudFallback are recorded on the route.";
+  "SaveLastPrompt[memo_String] saves the most recent successful ClaudeEval / ContinueEval prompt run as a named PromptRoute so it can be searched and re-run later. memo is a free-text note (e.g. \"this function only works where an LLM is available\") stored in the route's Memo field and shown in the prompt table. Options: \"Channel\" -> \"public\"|\"private\"|\"local\" (default Automatic, resolved from privacy), \"Encrypt\" -> False; when True the raw prompt and TargetExprString are encrypted at rest via SourceVaultEncryptedPut (encrypt-then-MAC, keys via NBAccess) and embedded as an EncryptedPayload in the route, with Examples emptied and PromptStorageClass set to \"Encrypted\" (Memo is kept in plaintext as the display label). Requires the SourceVault encryption modules to be loaded and SourceVaultInitializeEncryption[] to have run. \"DryRun\" -> False, \"RouteId\" -> Automatic. Privacy is tracked via SourceVaultResolvePromptPrivacy; with Encrypt -> False the raw prompt/function are stored in plaintext, but PrivacyLevel and CloudFallback are recorded on the route. Use SourceVaultDecryptPromptRoute[route] to recover the plaintext from an encrypted route.";
+
+SourceVaultDecryptPromptRoute::usage =
+  "SourceVaultDecryptPromptRoute[route_Association] decrypts the EncryptedPayload of an encrypted PromptRoute (created via SaveLastPrompt with Encrypt -> True), returning <|\"Status\"->\"Ok\",\"Plaintext\"->...|> or an error association. MAC is verified before decryption; on failure no plaintext is returned.";
 
 SourceVaultSearchPromptRoutes::usage =
   "SourceVaultSearchPromptRoutes[query_String, opts] returns saved PromptRoutes whose prompt examples or memo contain query as a substring (partial match, like SourceVaultFindNotebooks Keywords). query \"\" matches all. Options: \"CreatedAt\" -> <|\"From\"->_,\"To\"->_|> and \"UpdatedAt\" -> <|\"From\"->_,\"To\"->_|> filter by definition / last-updated date (same date-range form as the notebook query API); \"Channel\" -> All|\"public\"|\"private\"|\"local\"; \"IncludeSeed\" -> True. Returns a List of route Associations (does not execute anything).";
 
 SourceVaultFormatPromptRouteList::usage =
   "SourceVaultFormatPromptRouteList[routes_List, opts] renders saved PromptRoutes as a Grid (columns: Prompt, Memo, Target, CreatedAt, UpdatedAt, Privacy) with three action buttons per row: Preview (dry-run, shows what would execute without running it), Run (executes the route now), and ToInput (writes the saved function-call expression into a new Input cell). Mirrors SourceVaultFormatNotebookList. The default display format for prompt-route lists requested in a prompt.";
+
+SourceVaultReplayRoute::usage =
+  "SourceVaultReplayRoute[route_Association, opts] \:306f\:4fdd\:5b58\:6e08\:307f PromptRoute \:3092\:518d\:5b9f\:884c\:30af\:30e9\:30b9\:306b\:5fdc\:3058\:3066\:518d\:69cb\:6210\:3057\:3001\:8a55\:4fa1\:7528\:306e\:5f0f\:6587\:5b57\:5217\:3092\:8fd4\:3059\:3002Replayable \:306f TargetExprString \:3092\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002LightLLM \:306f "NewPrompt" \:7121\:3057\:306a\:3089\:5143\:306e TargetExprString \:3092\:5fa9\:5143\:3057\:3001\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:3092\:4e0e\:3048\:308b\:3068\:8efd\:91cf LLM ("ExtractModel" -> Automatic \:306f SourceVault \:65e2\:5b9a\:30e2\:30c7\:30eb) \:3067\:5404\:30d1\:30e9\:30e1\:30fc\:30bf\:30b9\:30ed\:30c3\:30c8\:306e\:65b0 InputForm \:5024\:3092\:62bd\:51fa\:3057\:3001ParameterTemplate \:3092\:57cb\:3081\:305f\:5f0f\:6587\:5b57\:5217\:3092\:8fd4\:3059\:3002HeavyLLM \:307e\:305f\:306f\:5f0f\:304c\:8a18\:9332\:3055\:308c\:3066\:3044\:306a\:3044\:30eb\:30fc\:30c8\:306f ClaudeEval[...] \:5f62\:5f0f\:306e\:5f0f\:3092\:8fd4\:3059\:3002\:623b\:308a\:5024: <|"Status", "ReplayClass", "ExprString", "SlotValues"|>\:3002\:30aa\:30d7\:30b7\:30e7\:30f3: "NewPrompt" -> Automatic, "ExtractModel" -> Automatic\:3002";
 
 Begin["`Private`"];
 
@@ -1149,6 +1157,365 @@ iSVPRExtractParameters[_] := <||>;
 (* ----- built-in seed PromptRoutes (spec 7.1 schema, abridged) -----
    Only routes whose Target resolves to a real callable or to a
    well-defined IntentId are seeded. *)
+(* \:518d\:5b9f\:884c\:30af\:30e9\:30b9\:5224\:5b9a (\:30d5\:30a7\:30fc\:30ba2): \:63d0\:6848\:5f0f\:6587\:5b57\:5217\:304b\:3089 ReplayClass \:3092\:81ea\:52d5\:5224\:5b9a\:3059\:308b\:3002
+   - \"Replayable\": LLM \:4e0d\:8981\:3067\:305d\:306e\:307e\:307e\:8a55\:4fa1\:3067\:304d\:308b\:3002\:5f0f\:306b ClaudeEval/ContinueEval \:3092\:542b\:307e\:305a\:3001
+     \:5168\:30b7\:30f3\:30dc\:30eb head \:304c\:8a31\:53ef (SourceVault \:7cfb + \:5b89\:5168\:306a\:30b7\:30b9\:30c6\:30e0\:95a2\:6570) \:306b\:53ce\:307e\:308b\:3002
+   - \"HeavyLLM\": \:30d1\:30fc\:30b9\:4e0d\:80fd / ClaudeEval \:3092\:542b\:3080 / \:8a31\:53ef\:5916 head \:3092\:542b\:3080 (\:6bce\:56de LLM \:518d\:751f\:6210\:304c\:5fc5\:8981)\:3002
+   \:30d5\:30a7\:30fc\:30ba3 \:3067 LightLLM (\:30d1\:30e9\:30e1\:30fc\:30bf\:62bd\:51fa) \:3092\:8ffd\:52a0\:4e88\:5b9a\:3002 *)
+iSVPRClassifyReplay[exprStr_String] :=
+  Module[{held, heads, allow, llmHeads, badHeads, trimmed},
+    trimmed = StringTrim[exprStr];
+    If[trimmed === "" ||
+       StringStartsQ[trimmed, "(" <> "*"],
+      Return["HeavyLLM"]];
+    held = Quiet @ Check[
+      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    If[held === $Failed || !MatchQ[held, _HoldComplete],
+      Return["HeavyLLM"]];
+    (* \:5f0f\:4e2d\:306e\:5168\:30b7\:30f3\:30dc\:30eb head \:3092\:62bd\:51fa (\:672a\:8a55\:4fa1)\:3002
+       held = HoldComplete[expr] \:306e\:30e9\:30c3\:30d1\:30fc\:81ea\:4f53\:306f\:9664\:304d\:3001\:4e2d\:8eab expr \:306e head \:3092\:898b\:308b\:3002 *)
+    heads = Quiet @ Check[
+      Extract[held, {1},
+        Function[Null,
+          DeleteDuplicates @ Cases[Unevaluated[#],
+            s_Symbol[___] :> SymbolName[Unevaluated[s]],
+            {0, Infinity}, Heads -> True],
+          HoldAllComplete]], {}];
+    If[!ListQ[heads], heads = {}];
+    (* LLM \:518d\:751f\:6210\:304c\:5fc5\:8981\:306a head: ClaudeEval / ContinueEval *)
+    llmHeads = Select[heads,
+      StringMatchQ[#, "ClaudeEval" | "ContinueEval"] &];
+    If[Length[llmHeads] > 0, Return["HeavyLLM"]];
+    (* \:8a31\:53ef head: SourceVault \:7cfb (Symbol \:540d\:304c SourceVault \:3067\:59cb\:307e\:308b\:304b
+       \:8a31\:53ef\:30ea\:30b9\:30c8\:767b\:9332\:6e08\:307f) + \:5b89\:5168\:306a\:30b7\:30b9\:30c6\:30e0\:95a2\:6570 (\:6700\:5c0f\:9650) *)
+    allow = Quiet @ Check[
+      Keys[SourceVaultCallableAllowlistRegistry[]], {}];
+    If[!ListQ[allow], allow = {}];
+    badHeads = Select[heads,
+      !(StringStartsQ[#, "SourceVault"] ||
+        StringStartsQ[#, "NB"] ||
+        MemberQ[allow, #] ||
+        MemberQ[$iSVPRReplaySafeSystemHeads, #]) &];
+    If[Length[badHeads] > 0, Return["HeavyLLM"]];
+    "Replayable"];
+iSVPRClassifyReplay[_] := "HeavyLLM";
+
+(* \:30d5\:30a7\:30fc\:30ba3a: \:63d0\:6848\:5f0f\:6587\:5b57\:5217\:3092\:69cb\:6587\:7684\:306b\:30d1\:30e9\:30e1\:30fc\:30bf\:5316\:3059\:308b\:3002
+   \:5f0f\:4e2d\:306e DateObject[{y, m, d}] \:30ea\:30c6\:30e9\:30eb\:3092\:691c\:51fa\:3057\:3001\:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0 @@SLOT_n@@ \:306b\:7f6e\:63db\:3057\:305f
+   ParameterTemplate \:6587\:5b57\:5217\:3068\:3001\:5404\:30b9\:30ed\:30c3\:30c8\:306e\:5143\:5024\:30fb\:578b\:3092\:8a18\:9332\:3057\:305f ParameterSlots \:3092\:8fd4\:3059\:3002
+   \:8fd4\:308a\:5024: <|\"Template\" -> _String, \"Slots\" -> {<|\"Name\",\"Type\",\"OriginalString\"|>...}|>\:3002
+   \:30b9\:30ed\:30c3\:30c8\:304c 0 \:500b\:306a\:3089 Template \:306f\:5143\:5f0f\:307e\:307e\:30fbSlots \:7a7a (LightLLM \:306b\:306f\:306a\:3089\:306a\:3044)\:3002
+   LLM \:4e0d\:8981\:306e\:7d14\:69cb\:6587\:51e6\:7406\:3002 *)
+iSVPRParameterize[exprStr_String] :=
+  Module[{held, dateNodes, slots, template, idx},
+    held = Quiet @ Check[
+      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    If[held === $Failed || !MatchQ[held, _HoldComplete],
+      Return[<|"Template" -> exprStr, "Slots" -> {}|>]];
+    (* \:5f0f\:4e2d\:306e DateObject[...] \:30ce\:30fc\:30c9\:3092 InputForm \:6587\:5b57\:5217\:3068\:3057\:3066\:5217\:6319 (\:672a\:8a55\:4fa1) *)
+    dateNodes = Quiet @ Check[
+      Extract[held, {1},
+        Function[Null,
+          Cases[Unevaluated[#],
+            d : (_DateObject) :> ToString[Unevaluated[d], InputForm],
+            {0, Infinity}],
+          HoldAllComplete]], {}];
+    If[!ListQ[dateNodes], dateNodes = {}];
+    dateNodes = DeleteDuplicates[Select[dateNodes, StringQ]];
+    (* \:5404 DateObject \:6587\:5b57\:5217\:3092\:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0\:306b\:7f6e\:63db\:3057\:3066\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:5316 *)
+    template = exprStr;
+    slots = {};
+    idx = 0;
+    Scan[
+      Function[ds,
+        idx = idx + 1;
+        With[{slotName = "@@SLOT_" <> ToString[idx] <> "@@"},
+          template = StringReplace[template, ds -> slotName];
+          AppendTo[slots, <|
+            "Name" -> slotName,
+            "Type" -> "Date",
+            "Source" -> "Syntactic",
+            "OriginalString" -> ds,
+            "Hint" -> "\:65e5\:4ed8"|>]]],
+      dateNodes];
+    <|"Template" -> template, "Slots" -> slots|>];
+iSVPRParameterize[_] := <|"Template" -> "", "Slots" -> {}|>;
+
+(* ============================================================
+   \:30d5\:30a7\:30fc\:30ba3b: LightLLM \:518d\:5b9f\:884c\:ff08\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:5145\:586b\:30fb\:30b9\:30ed\:30c3\:30c8\:62bd\:51fa\:30fb\:516c\:958b\:518d\:5b9f\:884c API\:ff09\:3002
+      3a \:306e iSVPRParameterize \:304c\:4f5c\:308b ParameterTemplate / ParameterSlots \:3092
+      \:4f7f\:3044\:3001\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:304b\:3089\:65b0\:30d1\:30e9\:30e1\:30fc\:30bf\:5024\:3092\:8efd\:91cf LLM \:3067\:62bd\:51fa\:3057\:3066\:5f0f\:3092\:518d\:69cb\:6210\:3059\:308b\:3002
+   ============================================================ *)
+
+(* (1) iSVPRFillTemplate: \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:306e\:30b9\:30ed\:30c3\:30c8\:3092\:65b0\:5024\:3067\:57cb\:3081\:3066\:5f0f\:6587\:5b57\:5217\:3092\:8fd4\:3059\:3002
+   LLM \:4e0d\:8981\:30fb\:7d14\:7c8b\:95a2\:6570\:3002slotValues \:306f <|"@@SLOT_n@@" -> "<\:65b0 InputForm \:6587\:5b57\:5217>"|>\:3002 *)
+iSVPRFillTemplate[template_String, slotValues_Association] :=
+  Module[{result},
+    result = template;
+    KeyValueMap[
+      Function[{slot, val},
+        If[StringQ[slot] && StringQ[val],
+          result = StringReplace[result, slot -> val]]],
+      slotValues];
+    result];
+iSVPRFillTemplate[template_String, _] := template;
+iSVPRFillTemplate[_, _] := Missing["BadTemplate"];
+
+(* LLM \:5fdc\:7b54\:304b\:3089 ```json \:30d5\:30a7\:30f3\:30b9\:3092\:9664\:53bb\:3057\:30013 \:6bb5\:968e\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3067 Association \:5316\:3059\:308b\:3002
+   \:7f60 #28: ImportString["RawJSON"] \:306f\:74b0\:5883\:306b\:3088\:308a\:5931\:6557\:3059\:308b\:305f\:3081
+   Developer`ReadRawJSONString \:3092\:512a\:5148\:3002\:5931\:6557\:6642\:306f <||>\:3002
+   \:5024\:304c\:6587\:5b57\:5217\:306e\:30b9\:30ed\:30c3\:30c8\:3060\:3051\:3092\:6b8b\:3059\:3002 *)
+iSVPRParseSlotJSON[raw_String] :=
+  Module[{txt, parsed, assoc},
+    txt = raw;
+    (* \:30b3\:30fc\:30c9\:30d5\:30a7\:30f3\:30b9\:9664\:53bb: ```json ... ``` \:307e\:305f\:306f ``` ... ``` *)
+    txt = StringReplace[txt,
+      {StartOfString ~~ Whitespace... ~~ "```" ~~ ("json" | "JSON" | "") ~~ "\n" -> "",
+       "```" ~~ Whitespace... ~~ EndOfString -> ""}];
+    txt = StringReplace[txt, "```" -> ""];
+    txt = StringTrim[txt];
+    (* \:5148\:982d\:306e { \:304b\:3089\:672b\:5c3e\:306e } \:307e\:3067\:3092\:629c\:304d\:51fa\:3059\:ff08\:524d\:5f8c\:306e\:5730\:306e\:6587\:3092\:9664\:53bb\:ff09 *)
+    Module[{p1, p2},
+      p1 = StringPosition[txt, "{", 1];
+      p2 = Last /@ StringPosition[txt, "}"];
+      If[p1 =!= {} && p2 =!= {},
+        txt = StringTake[txt, {p1[[1, 1]], Last[p2]}]]];
+    (* 3 \:6bb5\:968e JSON \:30d1\:30fc\:30b9 *)
+    parsed = Quiet @ Check[Developer`ReadRawJSONString[txt], $Failed];
+    If[parsed === $Failed || Head[parsed] === Developer`ReadRawJSONString,
+      parsed = Quiet @ Check[ImportString[txt, "RawJSON"], $Failed]];
+    If[parsed === $Failed,
+      parsed = Quiet @ Check[
+        ImportString[txt, "JSON"] /. r : {__Rule} :> Association[r], $Failed]];
+    If[parsed === $Failed, Return[<||>]];
+    assoc = If[AssociationQ[parsed], parsed,
+      If[ListQ[parsed] && parsed =!= {} && AllTrue[parsed, MatchQ[#, _Rule | _RuleDelayed] &],
+        Association[parsed], <||>]];
+    If[!AssociationQ[assoc], Return[<||>]];
+    (* \:5024\:304c\:6587\:5b57\:5217\:306e\:30ad\:30fc\:3060\:3051\:6b8b\:3059 *)
+    Select[assoc, StringQ]];
+iSVPRParseSlotJSON[_] := <||>;
+
+(* (2) iSVPRExtractSlotValues: \:8efd\:91cf LLM \:306b ParameterTemplate \:3068\:5404\:30b9\:30ed\:30c3\:30c8\:306e
+   Type/Hint/OriginalString\:3001\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:3092\:6e21\:3057\:3001\:5404\:30b9\:30ed\:30c3\:30c8\:306e\:65b0 InputForm \:5024\:3092
+   JSON \:3067\:5f97\:308b\:3002"ExtractModel" -> Automatic \:306a\:3089\:65e2\:5b9a\:30e2\:30c7\:30eb\:3002
+   ClaudeQueryBg[userPrompt, "System" \:306f\:7121\:3044\:306e\:3067 system \:306f\:30d7\:30ed\:30f3\:30d7\:30c8\:5148\:982d\:306b\:9023\:7d50\:3002
+   \:5931\:6557\:6642\:306f <||>\:3002 *)
+Options[iSVPRExtractSlotValues] = {"ExtractModel" -> Automatic};
+iSVPRExtractSlotValues[route_Association, newPrompt_String, opts : OptionsPattern[]] :=
+  Lookup[iSVPRExtractSlotValuesDiag[route, newPrompt, opts], "Values", <||>];
+
+(* \:8a3a\:65ad\:7248: \:5931\:6557\:6bb5\:968e\:3092 "Reason" \:306b\:8fd4\:3059\:3002
+   \:623b\:308a\:5024 <|"Values" -> _Association, "Reason" -> _String,
+   "RawResponse" -> _String (\:53d6\:5f97\:3067\:304d\:305f\:5834\:5408)|>\:3002 *)
+Options[iSVPRExtractSlotValuesDiag] = {"ExtractModel" -> Automatic};
+iSVPRExtractSlotValuesDiag[route_Association, newPrompt_String, opts : OptionsPattern[]] :=
+  Module[{template, slots, model, queryBg, sysPrompt, slotLines, userPrompt,
+          fullPrompt, resp, parsed, slotNames, kept},
+    template = Lookup[route, "ParameterTemplate", Missing[]];
+    slots    = Lookup[route, "ParameterSlots", {}];
+    If[!StringQ[template] || !ListQ[slots] || slots === {},
+      Return[<|"Values" -> <||>, "Reason" -> "NoTemplateOrSlots"|>]];
+    slotNames = Lookup[#, "Name", Missing[]] & /@ slots;
+    slotNames = Select[slotNames, StringQ];
+    If[slotNames === {},
+      Return[<|"Values" -> <||>, "Reason" -> "NoSlotNames"|>]];
+    model = OptionValue["ExtractModel"];
+    (* ClaudeQueryBg \:3092\:5f31\:547c\:3073\:51fa\:3057\:3067\:89e3\:6c7a\:ff08claudecode` \:304c\:30ed\:30fc\:30c9\:6e08\:307f\:524d\:63d0\:3060\:304c\:5b89\:5168\:306b\:ff09\:3002
+       \:5224\:5b9a\:306f 2 \:6bb5\:69cb\:3048: (a) ClaudeQueryBg \:540d\:304c\:898b\:3048\:308b\:304b\:3001\:307e\:305f\:306f
+       (b) \:540c\:30d1\:30c3\:30b1\:30fc\:30b8\:306e ClaudeEval \:304c\:898b\:3048\:308c\:3070 ClaudeCode` \:306f\:30ed\:30fc\:30c9\:6e08\:307f\:3068\:307f\:306a\:3059\:3002
+       Names \:304c $ContextPath \:4f9d\:5b58\:3067\:62fe\:3048\:306a\:3044\:30b1\:30fc\:30b9\:3092\:9632\:3050\:3002 *)
+    If[!(iSVPRSymbolPresentQ["ClaudeCode`ClaudeQueryBg"] ||
+         iSVPRSymbolPresentQ["ClaudeCode`ClaudeEval"]),
+      Return[<|"Values" -> <||>, "Reason" -> "NoClaudeQueryBg"|>]];
+    (* ClaudeCode` \:306f\:30ed\:30fc\:30c9\:6e08\:307f\:3002\:30d5\:30eb\:30cd\:30fc\:30e0\:3067\:65e2\:5b58\:30b7\:30f3\:30dc\:30eb\:3092\:53d6\:5f97\:3002 *)
+    queryBg = Symbol["ClaudeCode`ClaudeQueryBg"];
+    (* system \:76f8\:5f53\:306e\:6307\:793a\:6587\:ff08\:65e5\:672c\:8a9e\:ff09 *)
+    sysPrompt = StringJoin[
+      "\:3042\:306a\:305f\:306f\:4fdd\:5b58\:6e08\:307f\:306e Wolfram \:5f0f\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:306e\:30d1\:30e9\:30e1\:30fc\:30bf\:30b9\:30ed\:30c3\:30c8\:3092\:3001",
+      "\:65b0\:3057\:3044\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:306b\:5408\:308f\:305b\:3066\:518d\:8a08\:7b97\:3059\:308b\:30a2\:30b7\:30b9\:30bf\:30f3\:30c8\:3067\:3059\:3002\n",
+      "\:5404\:30b9\:30ed\:30c3\:30c8\:306e\:65b0\:3057\:3044\:5024\:3092 Wolfram InputForm \:6587\:5b57\:5217\:3068\:3057\:3066\:6c42\:3081\:3066\:304f\:3060\:3055\:3044\:3002\n",
+      "\:65e5\:4ed8\:30b9\:30ed\:30c3\:30c8\:306f DateObject[{y,m,d}] \:5f62\:5f0f\:306e\:6587\:5b57\:5217\:3067\:8fd4\:3057\:307e\:3059\:3002\n",
+      "\:5909\:66f4\:304c\:4e0d\:8981\:306a\:30b9\:30ed\:30c3\:30c8\:306f\:5143\:306e\:5024\:3092\:305d\:306e\:307e\:307e\:8fd4\:3057\:307e\:3059\:3002\n",
+      "\:5fdc\:7b54\:306f JSON \:30aa\:30d6\:30b8\:30a7\:30af\:30c8\:306e\:307f\:3092\:8fd4\:3057\:3001\:524d\:5f8c\:306b\:5730\:306e\:6587\:3084 Markdown \:30b3\:30fc\:30c9\:30d5\:30a7\:30f3\:30b9\:3092\:4ed8\:3051\:306a\:3044\:3067\:304f\:3060\:3055\:3044\:3002\n",
+      "JSON \:306e\:30ad\:30fc\:306f\:30b9\:30ed\:30c3\:30c8\:540d (@@SLOT_n@@)\:3001\:5024\:306f InputForm \:6587\:5b57\:5217\:3067\:3059\:3002"];
+    (* \:5404\:30b9\:30ed\:30c3\:30c8\:306e\:8aac\:660e\:884c *)
+    slotLines = StringRiffle[
+      Function[s,
+        StringJoin[
+          Lookup[s, "Name", "?"], ": Type=", ToString[Lookup[s, "Type", "Unknown"]],
+          ", Hint=", ToString[Lookup[s, "Hint", ""]],
+          ", \:5143\:5024=", ToString[Lookup[s, "OriginalString", ""]]]] /@ slots,
+      "\n"];
+    userPrompt = StringJoin[
+      "\:5f0f\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8:\n", template, "\n\n",
+      "\:30b9\:30ed\:30c3\:30c8\:4e00\:89a7:\n", slotLines, "\n\n",
+      "\:65b0\:3057\:3044\:30d7\:30ed\:30f3\:30d7\:30c8\:6587:\n", newPrompt, "\n\n",
+      "\:4e0a\:8a18\:306e\:5404\:30b9\:30ed\:30c3\:30c8\:540d\:3092\:30ad\:30fc\:3001\:65b0\:3057\:3044 InputForm \:6587\:5b57\:5217\:3092\:5024\:3068\:3059\:308b JSON \:3092\:8fd4\:3057\:3066\:304f\:3060\:3055\:3044\:3002"];
+    fullPrompt = sysPrompt <> "\n\n" <> userPrompt;
+    (* LLM \:547c\:3073\:51fa\:3057\:3002Model \:6307\:5b9a\:304c Automatic \:4ee5\:5916\:306a\:3089\:6e21\:3059\:3002
+       Model \:306f System` \:30b7\:30f3\:30dc\:30eb\:3067 ClaudeQueryBg \:306e\:30aa\:30d7\:30b7\:30e7\:30f3\:540d\:3002 *)
+    resp = Quiet @ Check[
+      If[model === Automatic,
+        queryBg[fullPrompt],
+        queryBg[fullPrompt, Model -> model]],
+      $Failed];
+    If[!StringQ[resp],
+      Return[<|"Values" -> <||>, "Reason" -> "LLMCallFailed",
+        "RawResponse" -> If[StringQ[resp], resp, ToString[resp]]|>]];
+    parsed = iSVPRParseSlotJSON[resp];
+    If[!AssociationQ[parsed] || parsed === <||>,
+      Return[<|"Values" -> <||>, "Reason" -> "JSONParseFailed",
+        "RawResponse" -> resp|>]];
+    (* \:65e2\:77e5\:30b9\:30ed\:30c3\:30c8\:540d\:306b\:9650\:5b9a\:3057\:3066\:63a1\:7528 *)
+    kept = KeySelect[parsed, MemberQ[slotNames, #] &];
+    If[kept === <||>,
+      Return[<|"Values" -> <||>, "Reason" -> "NoMatchingSlots",
+        "RawResponse" -> resp|>]];
+    <|"Values" -> kept, "Reason" -> "OK", "RawResponse" -> resp|>];
+iSVPRExtractSlotValuesDiag[_, _, OptionsPattern[]] :=
+  <|"Values" -> <||>, "Reason" -> "BadArguments"|>;
+
+(* (3) SourceVaultReplayRoute (\:516c\:958b API): \:518d\:5b9f\:884c\:30af\:30e9\:30b9\:306b\:5fdc\:3058\:3066\:5f0f\:6587\:5b57\:5217\:3092\:8fd4\:3059\:3002
+   Replayable: TargetExprString \:3092\:305d\:306e\:307e\:307e\:3002
+   LightLLM: NewPrompt \:7121\:2192\:5143\:5024\:5fa9\:5143 / \:6709\:2192 iSVPRExtractSlotValues + iSVPRFillTemplate\:3002
+   HeavyLLM / \:5f0f\:7121: iSVPRRouteInputExpr (ClaudeEval[...] \:5f62\:5f0f)\:3002
+   \:623b\:308a\:5024: <|"Status","ReplayClass","ExprString","SlotValues"|>\:3002 *)
+Options[SourceVaultReplayRoute] = {"NewPrompt" -> Automatic, "ExtractModel" -> Automatic};
+SourceVaultReplayRoute[route_Association, opts : OptionsPattern[]] :=
+  Module[{cls, targetExpr, template, slots, newPrompt, model},
+    cls        = Lookup[route, "ReplayClass", "HeavyLLM"];
+    targetExpr = Lookup[route, "TargetExprString", Missing[]];
+    template   = Lookup[route, "ParameterTemplate", Missing[]];
+    slots      = Lookup[route, "ParameterSlots", {}];
+    newPrompt  = OptionValue["NewPrompt"];
+    model      = OptionValue["ExtractModel"];
+    Which[
+      (* === Replayable: \:305d\:306e\:307e\:307e === *)
+      cls === "Replayable" && StringQ[targetExpr],
+        <|"Status" -> "OK", "ReplayClass" -> "Replayable",
+          "ExprString" -> targetExpr, "SlotValues" -> <||>|>,
+      (* === LightLLM === *)
+      cls === "LightLLM" && StringQ[template] && ListQ[slots] && slots =!= {},
+        If[!StringQ[newPrompt] || newPrompt === "",
+          (* NewPrompt \:7121\:3057: \:5143\:5024 (TargetExprString) \:3092\:5fa9\:5143 *)
+          <|"Status" -> "OK", "ReplayClass" -> "LightLLM",
+            "ExprString" -> If[StringQ[targetExpr], targetExpr, template],
+            "SlotValues" -> <||>|>,
+          (* NewPrompt \:6709\:308a: \:65b0\:5024\:62bd\:51fa \:2192 \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:5145\:586b *)
+          Module[{diag, sv, ex},
+            diag = iSVPRExtractSlotValuesDiag[route, newPrompt,
+              "ExtractModel" -> model];
+            sv = Lookup[diag, "Values", <||>];
+            If[!AssociationQ[sv] || sv === <||>,
+              Return[<|"Status" -> "ExtractFailed", "ReplayClass" -> "LightLLM",
+                "ExprString" -> If[StringQ[targetExpr], targetExpr, template],
+                "SlotValues" -> <||>,
+                "Reason" -> Lookup[diag, "Reason", "Unknown"],
+                "RawResponse" -> Lookup[diag, "RawResponse", Missing[]]|>]];
+            ex = iSVPRFillTemplate[template, sv];
+            If[!StringQ[ex],
+              Return[<|"Status" -> "FillFailed", "ReplayClass" -> "LightLLM",
+                "ExprString" -> If[StringQ[targetExpr], targetExpr, template],
+                "SlotValues" -> sv|>]];
+            <|"Status" -> "OK", "ReplayClass" -> "LightLLM",
+              "ExprString" -> ex, "SlotValues" -> sv|>]],
+      (* === HeavyLLM \:307e\:305f\:306f\:5f0f\:7121\:3057: ClaudeEval[...] \:5f62\:5f0f === *)
+      True,
+        <|"Status" -> "OK", "ReplayClass" -> "HeavyLLM",
+          "ExprString" -> iSVPRRouteInputExpr[route, iSVPRRouteDisplayPrompt[route]],
+          "SlotValues" -> <||>|>]];
+SourceVaultReplayRoute[___] :=
+  <|"Status" -> "Failed", "Reason" -> "BadArguments",
+    "Hint" -> "Expected SourceVaultReplayRoute[route_Association, opts]."|>;
+(* LightLLM \:518d\:5b9f\:884c\:30c0\:30a4\:30a2\:30ed\:30b0\:3002\:5143\:30d7\:30ed\:30f3\:30d7\:30c8\:30fb\:4fdd\:5b58\:5f0f\:30fb\:5dee\:3057\:66ff\:308f\:308b\:30d1\:30e9\:30e1\:30fc\:30bf\:4e00\:89a7\:3092
+   \:898b\:305b\:305f\:4e0a\:3067\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:3092\:5165\:529b\:3055\:305b\:3001SourceVaultReplayRoute \:3092\:547c\:3076\:3002
+   \:623b\:308a\:5024: \:6210\:529f\:6642\:306f SourceVaultReplayRoute \:306e\:7d50\:679c Association\:3001
+   \:30ad\:30e3\:30f3\:30bb\:30eb\:6642\:306f $Canceled\:3002Run/ToInput \:30dc\:30bf\:30f3\:304b\:3089\:5171\:7528\:3059\:308b\:3002 *)
+iSVPRLightLLMReplayDialog[route_Association] :=
+  Module[{origPrompt, origExpr, slots, slotRows, np},
+    origPrompt = iSVPRRouteDisplayPrompt[route];
+    (* RouteId \:3078\:306e\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:306f\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:5165\:529b\:306e\:521d\:671f\:5024\:3068\:3057\:3066\:7121\:610f\:5473\:306a\:306e\:3067\:3001
+       Matcher.Examples \:7531\:6765\:3067\:306a\:3051\:308c\:3070\:7a7a\:6587\:5b57\:306b\:3059\:308b\:3002 *)
+    If[!StringQ[origPrompt] ||
+        origPrompt === Lookup[route, "RouteId", ""],
+      origPrompt = ""];
+    origExpr = Lookup[route, "TargetExprString",
+      Lookup[route, "ParameterTemplate", ""]];
+    If[!StringQ[origExpr], origExpr = ""];
+    slots = Lookup[route, "ParameterSlots", {}];
+    If[!ListQ[slots], slots = {}];
+    (* \:30b9\:30ed\:30c3\:30c8\:4e00\:89a7\:3092\:300c\:5143\:5024 (\:578b)\:300d\:306e\:884c\:3067\:898b\:305b\:308b *)
+    slotRows = Map[
+      Function[s,
+        {Style[Lookup[s, "Name", "?"], "Courier", FontSize -> 11,
+           RGBColor[0.2, 0.38, 0.65]],
+         Style[ToString[Lookup[s, "OriginalString", ""]], "Courier",
+           FontSize -> 11],
+         Style["(" <> ToString[Lookup[s, "Type", "?"]] <> ")",
+           FontSize -> 10, GrayLevel[0.5]]}],
+      slots];
+    np = DialogInput[
+      DynamicModule[{val = origPrompt},
+        Column[{
+          Style["LightLLM \:518d\:5b9f\:884c: \:30d1\:30e9\:30e1\:30fc\:30bf\:306e\:5dee\:3057\:66ff\:3048",
+            Bold, FontSize -> 13, FontFamily -> "Yu Gothic UI"],
+          Spacer[{0, 6}],
+          (* \:4fdd\:5b58\:3055\:308c\:305f\:5f0f *)
+          Style["\:4fdd\:5b58\:3055\:308c\:305f\:5f0f:", FontFamily -> "Yu Gothic UI",
+            FontSize -> 11, GrayLevel[0.4]],
+          Framed[
+            Style[origExpr, "Courier", FontSize -> 11],
+            Background -> GrayLevel[0.97],
+            FrameStyle -> GrayLevel[0.85],
+            RoundingRadius -> 4, ImageSize -> {520, Automatic}],
+          Spacer[{0, 6}],
+          (* \:5dee\:3057\:66ff\:308f\:308b\:30d1\:30e9\:30e1\:30fc\:30bf *)
+          Style["\:5dee\:3057\:66ff\:308f\:308b\:30d1\:30e9\:30e1\:30fc\:30bf:",
+            FontFamily -> "Yu Gothic UI", FontSize -> 11, GrayLevel[0.4]],
+          If[slotRows === {},
+            Style["(\:30d1\:30e9\:30e1\:30fc\:30bf\:306a\:3057)", FontFamily -> "Yu Gothic UI",
+              FontSize -> 10, GrayLevel[0.5]],
+            Grid[slotRows, Alignment -> Left, Spacings -> {1.5, 0.4},
+              ItemSize -> {Automatic, Automatic}]],
+          Style[
+            "\:4e0a\:306e\:5f0f\:306e\:4e2d\:3067\:3001\:3053\:308c\:3089\:306e\:30d1\:30e9\:30e1\:30fc\:30bf\:304c\:65b0\:3057\:3044\:30d7\:30ed\:30f3\:30d7\:30c8\:306b\:5408\:308f\:305b\:3066\:81ea\:52d5\:3067\:5dee\:3057\:66ff\:308f\:308a\:307e\:3059\:3002",
+            FontFamily -> "Yu Gothic UI", FontSize -> 10, GrayLevel[0.5]],
+          Spacer[{0, 8}],
+          (* \:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:5165\:529b *)
+          Style["\:65b0\:3057\:3044\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:3092\:5165\:529b\:3057\:3066\:304f\:3060\:3055\:3044:",
+            FontFamily -> "Yu Gothic UI", FontSize -> 11, Bold],
+          InputField[Dynamic[val], String,
+            ImageSize -> {520, 60},
+            FieldHint -> origPrompt,
+            BaseStyle -> {FontFamily -> "Yu Gothic UI", FontSize -> 12}],
+          Spacer[{0, 8}],
+          Row[{
+            DefaultButton["OK (\:518d\:5b9f\:884c)", DialogReturn[val],
+              ImageSize -> Automatic,
+              BaseStyle -> {FontFamily -> "Yu Gothic UI"}],
+            Spacer[{8, 0}],
+            CancelButton["\:30ad\:30e3\:30f3\:30bb\:30eb", DialogReturn[$Canceled],
+              BaseStyle -> {FontFamily -> "Yu Gothic UI"}]
+          }]
+        }, Spacings -> 0.3]],
+      WindowTitle -> "LightLLM Replay"];
+    If[np === $Canceled || !StringQ[np] || np === "",
+      Return[$Canceled]];
+    SourceVaultReplayRoute[route, "NewPrompt" -> np]];
+iSVPRLightLLMReplayDialog[_] := $Canceled;
+
+
+
+
+(* \:518d\:5b9f\:884c\:3067\:8a31\:53ef\:3059\:308b\:5b89\:5168\:306a\:30b7\:30b9\:30c6\:30e0 head (\:6700\:5c0f\:9650\:30fb\:526f\:4f5c\:7528\:306a\:3057)\:3002
+   \:5f0f\:306e\:69cb\:9020\:30fb\:30ea\:30b9\:30c8\:30fb\:30aa\:30d7\:30b7\:30e7\:30f3\:30fb\:65e5\:4ed8\:7b49\:3002\:30d5\:30a1\:30a4\:30eb\:524a\:9664\:30fb\:66f8\:304d\:8fbc\:307f\:7cfb\:306f\:542b\:3081\:306a\:3044\:3002 *)
+$iSVPRReplaySafeSystemHeads = {
+  "List", "Association", "Rule", "RuleDelayed", "All", "None",
+  "True", "False", "String", "Integer", "Real",
+  "DateObject", "Quantity", "CompoundExpression",
+  "Hold", "HoldForm", "HoldComplete", "HoldPattern"};
+
 (* JSON \:30e9\:30a6\:30f3\:30c9\:30c8\:30ea\:30c3\:30d7\:5f8c\:306e PromptRoute \:3092\:6b63\:898f\:5316\:3059\:308b\:3002
    \:7a7a Association <||> \:306f JSON \:3067 {} (\:7a7a\:30ea\:30b9\:30c8) \:306b\:306a\:308a\:3001\:8aad\:307f\:8fbc\:307f\:5f8c\:3082 {} \:306e\:307e\:307e\:3002
    Matcher / Target / Privacy \:306f Association \:3067\:3042\:308b\:3079\:304d\:306a\:306e\:3067\:3001{} \:306a\:3089 <||> \:306b\:623b\:3059\:3002
@@ -1633,9 +2000,14 @@ SourceVaultRegisterPromptRoute[route_Association,
     existing = Map[iSVPRNormalizeRoute, existing];
     existing = Select[existing, AssociationQ];
 
-    (* added vs replaced *)
+    (* added vs replaced\:3002
+       FirstPosition \:306f\:30c7\:30d5\:30a9\:30eb\:30c8\:3067\:5168\:30ec\:30d9\:30eb\:3092\:63a2\:7d22\:3059\:308b\:305f\:3081\:3001
+       \:30c6\:30b9\:30c8\:95a2\:6570 Lookup[#, \"RouteId\"] \:304c route \:5185\:90e8\:306e\:30cd\:30b9\:30c8\:5024
+       (\"PromptRoute\" \:6587\:5b57\:5217\:3084 ParameterSlots \:5185\:306e Association \:7b49) \:306b\:3082
+       \:9069\:7528\:3055\:308c Lookup::invrl \:3092\:8d77\:3053\:3059\:3002\:30c8\:30c3\:30d7\:30ec\:30d9\:30eb {1} \:306b\:9650\:5b9a\:3059\:308b\:3002 *)
     pos = FirstPosition[existing,
-      _?(Lookup[#, "RouteId", Null] === rid &), Missing[]];
+      _?(AssociationQ[#] && Lookup[#, "RouteId", Null] === rid &),
+      Missing[], {1}];
     action = If[MissingQ[pos], "Added", "Replaced"];
     newEntries = If[action === "Replaced",
       ReplacePart[existing, First[pos] -> routeWithPrivacy],
@@ -2830,11 +3202,65 @@ iSVPRRunTargetExpr[run_Association] :=
     expr];
 iSVPRRunTargetExpr[_] := Missing["NoTargetExpr"];
 
+(* ------------------------------------------------------------
+   encryption-at-rest helpers (Phase SV-E3 / spec v18 §9)
+   ------------------------------------------------------------ *)
+
+(* 暗号モジュールがロード済みかつ at-rest 鍵が初期化済みか *)
+iSVPREncryptionAvailableQ[] :=
+  TrueQ@Quiet@Check[
+    Length[DownValues[SourceVault`SourceVaultEncryptedPut]] > 0 &&
+     ValueQ[SourceVault`$SourceVaultDefaultAtRestKeyRef] &&
+     AssociationQ[NBAccess`NBKeyStatus[SourceVault`$SourceVaultDefaultAtRestKeyRef]],
+    False];
+
+(* route の機密 (raw prompt / TargetExprString / Target) を暗号化し inline payload に置換。
+   平文 fallback は行わず、失敗時は Ok->False を返す。Memo は表示ラベルとして平文維持。 *)
+iSVPRApplyEncryption[route_Association, rawPrompt_, targetExpr_, privLevel_] :=
+  Module[{payload, put, rec, newRoute, leak},
+    payload = <|
+      "Prompt"           -> If[StringQ[rawPrompt], rawPrompt, Missing["NotStored"]],
+      "TargetExprString" -> If[StringQ[targetExpr], targetExpr, Missing["NoTargetExpr"]],
+      "Target"           -> Lookup[route, "Target", <||>]|>;
+    put = SourceVault`SourceVaultEncryptedPut[payload,
+       "PrivacyLevel" -> privLevel, "ContentType" -> "PromptRoute",
+       "Persist" -> False, "SensitiveFields" -> {"Prompt", "TargetExprString"}];
+    If[! AssociationQ[put] || Lookup[put, "Status", ""] =!= "Stored",
+      Return[<|"Ok" -> False, "Reason" -> Lookup[put, "Reason", "EncryptedPutFailed"]|>]];
+    rec = put["Record"];
+    newRoute = route;
+    newRoute["Matcher", "Examples"]      = {};
+    newRoute["TargetExprString"]         = Missing["Encrypted"];
+    newRoute["Target"]                   = <||>;
+    newRoute["ParameterTemplate"]        = Missing["Encrypted"];
+    newRoute["ParameterSlots"]           = {};
+    newRoute["EncryptedPayload"]         = rec;
+    newRoute["Privacy", "PromptStorageClass"] = "Encrypted";
+    newRoute["Privacy", "RawPromptStored"]    = False;
+    leak = SourceVault`SourceVaultAssertNoPlaintextLeak[
+       newRoute, payload, {"Prompt", "TargetExprString"}];
+    If[! TrueQ[Lookup[leak, "NoLeak", False]],
+      Return[<|"Ok" -> False, "Reason" -> "PlaintextLeakInRoute",
+        "Leaked" -> Lookup[leak, "Leaked", {}]|>]];
+    <|"Ok" -> True, "Route" -> newRoute|>];
+
+(* 暗号 route の inline EncryptedPayload を復号する。MAC 検証を経て plaintext を返す。 *)
+SourceVaultDecryptPromptRoute[route_Association] :=
+  Module[{rec},
+    rec = Lookup[route, "EncryptedPayload", Missing["NotEncrypted"]];
+    If[! AssociationQ[rec],
+      Return[<|"Status" -> "Error", "Reason" -> "NotEncryptedRoute",
+        "PlaintextReturned" -> False|>]];
+    SourceVault`SourceVaultDecryptRecord[rec]];
+SourceVaultDecryptPromptRoute[___] :=
+  <|"Status" -> "Error", "Reason" -> "InvalidArguments", "PlaintextReturned" -> False|>;
+
 Options[SaveLastPrompt] = {
   "Channel" -> Automatic,
   "Encrypt" -> False,
   "DryRun"  -> False,
-  "RouteId" -> Automatic
+  "RouteId" -> Automatic,
+  "ReplayClass" -> Automatic
 };
 
 SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
@@ -2843,15 +3269,15 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
           ts, targetExpr, route, regResult},
 
     encrypt = TrueQ[OptionValue[SaveLastPrompt, {opts}, "Encrypt"]];
-    (* handoff: encryption-at-rest is not implemented yet *)
-    If[encrypt,
-      Return[<|"Status" -> "NotImplemented",
-        "Reason" -> "EncryptionAtRestNotImplemented",
+    (* encryption-at-rest: 機密 (raw prompt / TargetExprString) を SourceVaultEncryptedPut で
+       encrypt-then-MAC し、route に inline EncryptedPayload として埋める (後段で適用)。
+       モジュール未ロード時は平文 fallback せず明示エラー。 *)
+    If[encrypt && ! iSVPREncryptionAvailableQ[],
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "EncryptionModuleNotAvailable",
         "Hint" ->
-          "Saving prompt/memo/target encrypted at rest is a future " <>
-          "feature (KeyRef SourceVault:master:v1, AES256). No master-key " <>
-          "infrastructure exists yet. Save in plaintext or wait for the " <>
-          "encryption phase."|>]];
+          "SourceVault encryption modules (SourceVault_encryptedstore.wl) が未ロード、" <>
+          "または SourceVaultInitializeEncryption[] が未実行です。"|>]];
 
     dryRun  = TrueQ[OptionValue[SaveLastPrompt, {opts}, "DryRun"]];
     routeId = OptionValue[SaveLastPrompt, {opts}, "RouteId"];
@@ -2896,6 +3322,15 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
         If[StringQ[rawPrompt], rawPrompt, memo]]];
 
     targetExpr = iSVPRRunTargetExpr[run];
+    (* run \:306b\:63d0\:6848\:5f0f\:304c\:8a18\:9332\:3055\:308c\:3066\:3044\:306a\:3044\:5834\:5408\:3001ClaudeEval \:304c\:76f4\:8fd1\:306e PromptRouter
+       \:7d4c\:8def\:3067\:5b9f\:884c\:3057\:305f\:63d0\:6848\:5f0f (InputForm \:6587\:5b57\:5217) \:3092\:5171\:6709\:5909\:6570\:304b\:3089\:62fe\:3046\:3002
+       \:3053\:308c\:304c Replayable (LLM \:4e0d\:8981\:518d\:5b9f\:884c) \:306e\:6839\:5e79\:3002 *)
+    If[!StringQ[targetExpr],
+      Module[{shared},
+        shared = Quiet @ Check[
+          Symbol["ClaudeCode`$ClaudeEvalLastProposedExprString"],
+          Missing["NotCaptured"]];
+        If[StringQ[shared] && shared =!= "", targetExpr = shared]]];
 
     (* build the PromptRoute. We store the raw prompt as an Example
        and the memo as a first-class field for searching/display.
@@ -2927,6 +3362,28 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
             True, <||>]],
       "TargetExprString" ->
         If[StringQ[targetExpr], targetExpr, Missing["NoTargetExpr"]],
+      "ReplayClass" ->
+        Module[{userClass, autoClass, paramInfo},
+          userClass = OptionValue[SaveLastPrompt, {opts}, "ReplayClass"];
+          autoClass = If[StringQ[targetExpr],
+            iSVPRClassifyReplay[targetExpr], "HeavyLLM"];
+          (* Replayable \:3068\:5224\:5b9a\:3055\:308c\:305f\:5f0f\:306b\:65e5\:4ed8\:30b9\:30ed\:30c3\:30c8\:304c\:3042\:308c\:3070 LightLLM \:306b\:683c\:4e0a\:3052\:3002
+             (\:9aa8\:683c\:306f\:56fa\:5b9a\:3060\:304c\:65e5\:4ed8\:30d1\:30e9\:30e1\:30fc\:30bf\:3092\:5dee\:3057\:66ff\:3048\:3066\:518d\:5b9f\:884c\:3067\:304d\:308b) *)
+          If[autoClass === "Replayable" && StringQ[targetExpr],
+            paramInfo = iSVPRParameterize[targetExpr];
+            If[Length[Lookup[paramInfo, "Slots", {}]] > 0,
+              autoClass = "LightLLM"]];
+          (* \:81ea\:52d5\:5224\:5b9a\:3092\:512a\:5148\:3001\:30e6\:30fc\:30b6\:30fc\:6307\:5b9a (Automatic \:4ee5\:5916) \:304c\:3042\:308c\:3070\:4e0a\:66f8\:304d *)
+          If[MemberQ[{"Replayable", "LightLLM", "HeavyLLM"}, userClass],
+            userClass, autoClass]],
+      "ParameterTemplate" ->
+        If[StringQ[targetExpr],
+          Lookup[iSVPRParameterize[targetExpr], "Template", targetExpr],
+          Missing["NoTemplate"]],
+      "ParameterSlots" ->
+        If[StringQ[targetExpr],
+          Lookup[iSVPRParameterize[targetExpr], "Slots", {}],
+          {}],
       "Privacy" -> <|
         "PrivacyLevel"        -> privLevel,
         "PrivacyOrigin"       -> Lookup[privRes, "PrivacyOrigin", {}],
@@ -2937,10 +3394,22 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
       |>
     |>;
 
+    (* encryption-at-rest: route の機密 field を暗号化し inline EncryptedPayload に置換 *)
+    If[encrypt,
+      Module[{encRes},
+        encRes = iSVPRApplyEncryption[route, rawPrompt, targetExpr, privLevel];
+        If[!TrueQ[Lookup[encRes, "Ok", False]],
+          Return[<|"Status" -> "Failed",
+            "Reason" -> Lookup[encRes, "Reason", "EncryptionFailed"],
+            "RouteId" -> routeId|>]];
+        route = encRes["Route"]]];
+
     If[dryRun,
       Return[<|"Status" -> "DryRun", "RouteId" -> routeId,
         "Channel" -> channel, "Memo" -> memo,
-        "PrivacyLevel" -> privLevel, "Route" -> route|>]];
+        "PrivacyLevel" -> privLevel,
+        "PromptStorageClass" -> Lookup[route["Privacy"], "PromptStorageClass", "Plaintext"],
+        "Route" -> route|>]];
 
     regResult = SourceVaultRegisterPromptRoute[
       route, "DryRun" -> False, "Channel" -> channel];
@@ -2951,6 +3420,11 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
 
     <|"Status" -> "OK", "RouteId" -> routeId, "Channel" -> channel,
       "Memo" -> memo, "PrivacyLevel" -> privLevel,
+      "ReplayClass" -> Lookup[route, "ReplayClass", "HeavyLLM"],
+      "ParameterSlots" -> Lookup[route, "ParameterSlots", {}],
+      "TargetExprString" -> Lookup[route, "TargetExprString", Missing["NoTargetExpr"]],
+      "PromptStorageClass" -> Lookup[route["Privacy"], "PromptStorageClass", "Plaintext"],
+      "PlaintextPersisted" -> (Lookup[route["Privacy"], "PromptStorageClass", "Plaintext"] =!= "Encrypted"),
       "Action" -> Lookup[regResult, "Action", "Added"]|>
   ];
 
@@ -3138,6 +3612,26 @@ iSVPRRouteInputExpr[route_Association] :=
   iSVPRRouteInputExpr[route, iSVPRRouteDisplayPrompt[route]];
 iSVPRRouteInputExpr[_] := "(* no target expression *)";
 
+(* ToInput \:30dc\:30bf\:30f3\:7528: \:4fdd\:5b58\:6642\:306b\:5b9f\:969b\:306b\:5b9f\:884c\:3055\:308c\:305f\:63d0\:6848\:5f0f\:3092\:8fd4\:3059\:3002
+   \:512a\:5148\:9806: route.TargetExprString (\:4fdd\:5b58\:3055\:308c\:305f\:63d0\:6848\:5f0f) > Target.FunctionSymbol[]
+   > Function route \:306e FunctionId[] \:3002\:3044\:305a\:308c\:3082\:7121\:3051\:308c\:3070\:3001\:63d0\:6848\:5f0f\:304c\:8a18\:9332\:3055\:308c\:3066\:3044\:306a\:3044
+   \:65e7\:30eb\:30fc\:30c8\:306a\:306e\:3067\:30d7\:30ed\:30f3\:30d7\:30c8\:5b9f\:884c\:5f0f (ClaudeEval[...]) \:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3059\:308b\:3002 *)
+iSVPRRouteProposedExpr[route_Association] :=
+  Module[{te, target, sym, fid},
+    te = Lookup[route, "TargetExprString", Missing[]];
+    If[StringQ[te] && te =!= "", Return[te]];
+    target = Lookup[route, "Target", <||>];
+    sym = If[AssociationQ[target],
+      Lookup[target, "FunctionSymbol", Missing[]], Missing[]];
+    If[StringQ[sym], Return[sym <> "[]"]];
+    fid = iSVPRRouteTargetFunctionId[route];
+    If[StringQ[fid] && AssociationQ[target] &&
+        Lookup[target, "Kind", "Function"] === "Function",
+      Return[fid <> "[]"]];
+    (* \:63d0\:6848\:5f0f\:672a\:8a18\:9332: \:30d7\:30ed\:30f3\:30d7\:30c8\:5b9f\:884c\:5f0f\:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af *)
+    iSVPRRouteInputExpr[route, iSVPRRouteDisplayPrompt[route]]];
+iSVPRRouteProposedExpr[_] := "(* no proposed expression *)";
+
 (* privacy label, env-independent English word *)
 iSVPRPrivacyLabel[route_Association] :=
   Module[{lv},
@@ -3166,7 +3660,8 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
     body = Map[
       Function[rt,
         Module[{prompt, memo, targetSym, created, updated, privLabel,
-                routeId, channel, inputExpr},
+                routeId, channel, inputExpr, promptEval, proposedExpr,
+                replayClass},
           prompt   = iSVPRRouteDisplayPrompt[rt];
           memo     = Lookup[rt, "Memo", ""];
           (* Target \:8868\:793a: FunctionSymbol \:304c\:7121\:3044 seed route \:3067\:3082
@@ -3182,11 +3677,38 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
           routeId  = Lookup[rt, "RouteId", ""];
           channel  = Lookup[rt, "_Channel", "public"];
           inputExpr = iSVPRRouteInputExpr[rt, prompt];
+          (* Prompt \:30af\:30ea\:30c3\:30af\:7528: \:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:3092 ClaudeEval \:3067\:5b9f\:884c\:3059\:308b\:5f0f *)
+          promptEval = If[StringQ[prompt] && prompt =!= "",
+            "ClaudeEval[\"" <> StringReplace[prompt, "\"" -> "\\\""] <> "\"]",
+            Missing["NoPrompt"]];
+          (* ToInput \:7528: \:4fdd\:5b58\:6642\:306b\:5b9f\:884c\:3055\:308c\:305f\:63d0\:6848\:5f0f (ProposedExpressionString /
+             TargetExprString)\:3002\:7121\:3051\:308c\:3070 iSVPRRouteInputExpr \:306e\:7d50\:679c\:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af *)
+          proposedExpr = iSVPRRouteProposedExpr[rt];
+          replayClass = Lookup[rt, "ReplayClass", "HeavyLLM"];
           {
-            Style[prompt, FontFamily -> "Yu Gothic UI"],
+            (* Prompt \:5217: \:30af\:30ea\:30c3\:30af\:3067 ClaudeEval[\"<\:30d7\:30ed\:30f3\:30d7\:30c8>\"] \:3092\:5165\:529b\:30bb\:30eb\:306b\:66f8\:304f *)
+            If[StringQ[promptEval],
+              Button[
+                Style[prompt, FontFamily -> "Yu Gothic UI"],
+                With[{pe = promptEval},
+                  Module[{target = InputNotebook[]},
+                    If[Head[target] === NotebookObject,
+                      NBAccess`NBWriteInputCellAndMaybeEvaluate[
+                        target, pe, False]]]],
+                Appearance -> "Frameless",
+                BaseStyle -> {},
+                Method -> "Queued"],
+              Style[prompt, FontFamily -> "Yu Gothic UI"]],
             Style[If[StringQ[memo], memo, ""],
               FontFamily -> "Yu Gothic UI", GrayLevel[0.35]],
-            Style[targetSym, FontFamily -> "Courier"],
+            Column[{
+              Style[targetSym, FontFamily -> "Courier"],
+              Style[replayClass, FontFamily -> "Yu Gothic UI", FontSize -> 9,
+                Which[
+                  replayClass === "Replayable", RGBColor[0.15, 0.45, 0.30],
+                  replayClass === "LightLLM", RGBColor[0.6, 0.5, 0.2],
+                  True, GrayLevel[0.5]]]
+            }, Spacings -> 0.2],
             Style[ToString[created], FontFamily -> "Yu Gothic UI",
               FontSize -> 10],
             Style[ToString[updated], FontFamily -> "Yu Gothic UI",
@@ -3217,32 +3739,65 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
               Button[
                 Style["Run", FontFamily -> "Yu Gothic UI", FontSize -> 10,
                   RGBColor[0.15, 0.45, 0.30]],
-                With[{p = iSVPRRouteDisplayPrompt[rt], rid = routeId},
-                  Module[{res},
-                    res = Quiet @ Check[
-                      SourceVaultExecutePromptRoute[p], $Failed];
-                    MessageDialog[
-                      Column[{
-                        Style["Run: " <> rid, Bold],
-                        Style["Prompt: " <> ToString[p], FontSize -> 10],
-                        If[res === $Failed,
-                          Style["(\:5b9f\:884c\:306b\:5931\:6557\:3057\:307e\:3057\:305f)",
-                            RGBColor[0.7, 0.15, 0.15]],
-                          res]}]]]],
+                With[{p = iSVPRRouteDisplayPrompt[rt], rid = routeId,
+                      rc = replayClass, theRoute = rt},
+                  Module[{res, replay, exprStr, target},
+                    If[rc === "LightLLM",
+                      (* LightLLM: \:69cb\:9020\:5316\:30c0\:30a4\:30a2\:30ed\:30b0\:3067\:5f0f\:30fb\:30b9\:30ed\:30c3\:30c8\:3092\:898b\:305b\:3066\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:3092\:5165\:529b\:2192\:518d\:5b9f\:884c *)
+                      replay = Quiet @ Check[
+                        iSVPRLightLLMReplayDialog[theRoute], $Failed];
+                      If[replay === $Canceled,
+                        Return[Null, Module]];
+                      exprStr = If[AssociationQ[replay],
+                        Lookup[replay, "ExprString", Missing[]], Missing[]];
+                      If[!StringQ[exprStr],
+                        MessageDialog[Style[
+                          "\:ff08\:518d\:5b9f\:884c\:5f0f\:306e\:751f\:6210\:306b\:5931\:6557\:3057\:307e\:3057\:305f\:ff09",
+                          RGBColor[0.7, 0.15, 0.15]]];
+                        Return[Null, Module]];
+                      target = InputNotebook[];
+                      If[Head[target] === NotebookObject,
+                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
+                          target, exprStr, True]],
+                      (* Replayable / HeavyLLM: \:5f93\:6765\:901a\:308a SourceVaultExecutePromptRoute *)
+                      res = Quiet @ Check[
+                        SourceVaultExecutePromptRoute[p], $Failed];
+                      MessageDialog[
+                        Column[{
+                          Style["Run: " <> rid, Bold],
+                          Style["Prompt: " <> ToString[p], FontSize -> 10],
+                          If[res === $Failed,
+                            Style["(\:5b9f\:884c\:306b\:5931\:6557\:3057\:307e\:3057\:305f)",
+                              RGBColor[0.7, 0.15, 0.15]],
+                            res]}]]]]],
                 Appearance -> "Frameless",
                 BaseStyle -> {"Hyperlink"},
                 Method -> "Queued"],
               "  ",
-              (* ToInput: write the saved function-call into a new
-                 Input cell (does not evaluate it) *)
+              (* ToInput: \:4fdd\:5b58\:6642\:306b\:5b9f\:884c\:3055\:308c\:305f\:63d0\:6848\:5f0f\:3092\:65b0\:898f\:5165\:529b\:30bb\:30eb\:306b\:66f8\:304f
+                 (\:8a55\:4fa1\:306f\:3057\:306a\:3044)\:3002\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:306e ClaudeEval \:3067\:306f\:306a\:304f\:63d0\:6848\:5f0f\:81ea\:4f53\:3002 *)
               Button[
                 Style["ToInput", FontFamily -> "Yu Gothic UI", FontSize -> 10,
                   RGBColor[0.2, 0.38, 0.65]],
-                With[{ie = inputExpr},
-                  Module[{target = InputNotebook[]},
-                    If[Head[target] === NotebookObject,
-                      NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                        target, ie, False]]]],
+                With[{ie = proposedExpr, p = iSVPRRouteDisplayPrompt[rt],
+                      rc = replayClass, theRoute = rt},
+                  Module[{target = InputNotebook[], replay, exprStr},
+                    If[rc === "LightLLM",
+                      (* LightLLM: \:69cb\:9020\:5316\:30c0\:30a4\:30a2\:30ed\:30b0\:3067\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:2192\:518d\:69cb\:6210\:5f0f\:3092\:66f8\:304f (\:8a55\:4fa1\:306a\:3057) *)
+                      replay = Quiet @ Check[
+                        iSVPRLightLLMReplayDialog[theRoute], $Failed];
+                      If[replay === $Canceled,
+                        Return[Null, Module]];
+                      exprStr = If[AssociationQ[replay],
+                        Lookup[replay, "ExprString", Missing[]], Missing[]];
+                      If[!StringQ[exprStr], exprStr = ie];
+                      If[Head[target] === NotebookObject && StringQ[exprStr],
+                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
+                          target, exprStr, False]],
+                      (* Replayable / HeavyLLM: \:5f93\:6765\:901a\:308a\:63d0\:6848\:5f0f\:3092\:305d\:306e\:307e\:307e\:66f8\:304f *)
+                      If[Head[target] === NotebookObject,
+                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
+                          target, ie, False]]]]],
                 Appearance -> "Frameless",
                 BaseStyle -> {"Hyperlink"},
                 Method -> "Queued"]

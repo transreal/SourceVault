@@ -141,6 +141,65 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 
 ---
 
+## 暗号化・identity・メール管理
+
+SourceVault には、source 管理に加えて、**at-rest 暗号化基盤・可搬鍵バンドル・2層アドレス帳 (identity)・メール (MailDB/IMAP/Mail UI)** が統合されています。これらの機能は、本体 `SourceVault.wl` のローダが依存順に Get する **4 つのサブファイル**に集約されています: `NBAccess_crypto.wl` (鍵隔離層、`NBAccess\`` 文脈) → `SourceVault_crypto.wl` (crypto + keys + keybundle + encryptedstore + release) → `SourceVault_identity.wl` (addressbook + senderauth + identity + messagerelease) → `SourceVault_maildb.wl` (maildb + imap + mailui)。
+
+### 初回セットアップ（オーナー登録・メールアカウント・鍵バックアップ）
+
+暗号化・メール・アドレス帳を使う前に、個人ごとの初期設定を**一度だけ**行います（鍵 backend を `SystemCredential` に → 暗号化初期化 → **オーナー（自分）をアドレス帳に登録**して identity 層を初期化 → オーナーの LLMProfile/プライマリメール設定 → IMAP アカウント登録 → 鍵バンドルのバックアップ → グループ重み設定）。これらは私的設定（ログイン名・氏名・所属など）を含むため**ソースや公開リポジトリには置かず**、各自のローカル起動ファイル（`init.m` 等、GitHub に上げない）にまとめます。手順とコード例（すべてプレースホルダ）は **[setup.md の「初回セットアップ（暗号化・メール・アドレス帳）」](setup.md)** を参照してください。
+
+```mathematica
+NBAccess`$NBCredentialBackend = "SystemCredential";   (* 永続鍵。Memory だと復号不可=データ消失 *)
+(* SourceVault.wl をロード後 *)
+SourceVault`SourceVaultInitializeEncryption[];
+SourceVault`SourceVaultAddressBookRegisterSelf["you@example.org",
+   "DisplayName" -> "山田 太郎", "Romaji" -> "Taro Yamada", "Kana" -> "やまだ たろう"];
+SourceVault`SourceVaultIdentityInitialize[];          (* オーナー = ユーザDB #1 *)
+SourceVault`SourceVaultSetOwnerLLMProfile["○○大学 ○○学科 ○○。専門: ..."];
+SourceVault`SourceVaultSetOwnerPrimaryEmail["you@example.org"];
+```
+
+### 暗号化基盤 (encrypt-then-MAC)
+
+機密の本文・プロンプト・メール本文は **encrypt-then-MAC** で at-rest 暗号化されます。WL 14.3 に GCM/AEAD・組み込み HMAC が無いため HMAC-SHA256 を手組みし、record の判定駆動フィールド (Policy / PrivacyLevel / AccessTags) も **AAD として MAC で認証**します (改ざんは復号拒否)。鍵は NBAccess 層 (KeyRef 間接参照) の中に閉じ込められ、**戻り値・ログ・record のいずれにも鍵材料は現れません**。
+
+鍵ストアの実体は NBAccess の `$NBCredentialBackend` で切り替えます。`"Memory"` は揮発 (開発用)、`"SystemCredential"` は Windows DPAPI で永続 (本番用)。**`SystemCredential` で暗号化したデータは `Memory` セッションでは本文を復号できない**ため、実データを扱うセッションでは**ロード前に** `SystemCredential` を設定します。
+
+```wolfram
+NBAccess`$NBCredentialBackend = "SystemCredential";   (* ロード前に設定 *)
+Block[{$CharacterEncoding = "UTF-8"},
+  Needs["NBAccess`",    "NBAccess.wl"];
+  Needs["SourceVault`", "SourceVault.wl"]];
+SourceVaultInitializeEncryption[]   (* 冪等な鍵 bootstrap (鍵材料は返さない) *)
+```
+
+### 可搬鍵バンドル (マルチ環境・災害復旧)
+
+鍵はマシンローカル (DPAPI) なので、別マシン利用や Windows 再インストール後の復旧には、標準マスター鍵をパスフレーズで包んだ可搬バンドル (`.svkeys`) を使います。KDF は scrypt、各鍵は AES256 ラップ + encrypt-then-MAC で包まれ、誤パスフレーズ/改ざんは fail-closed。**バンドルは既定で Dropbox の外 (ホーム直下) に書かれ、同期フォルダには置かないでください**。
+
+```wolfram
+SourceVaultExportKeyBundle["correct horse battery staple xyz"]   (* 旧マシン *)
+SourceVaultImportKeyBundle["correct horse battery staple xyz"]   (* 新マシン (Initialize より前) *)
+```
+
+### 2層アドレス帳 (identity resolution)
+
+「Uid = 人」の破綻を避けるため、**識別子 (Identifier: 1つの raw email/SNS/URI、メール取込で自動作成)** と **実体 (Entity: 人/組織/Bot/ML、後からマージ)** を分離します。オーナー (自分) は EntityUid=1 / OwnerKind=Self の特別な実体で、氏名・メール・所属は**ソースにハードコードせず** Self 実体に保持します。`SourceVaultIdentityInitialize[]` で初期化し、`SourceVaultEntityEditUI[1]` やセッターで編集します。
+
+### メール管理 (MailDB / IMAP / Mail UI)
+
+旧 maildb レコードや IMAP 新着を `SourceVaultMailSnapshot` に正規化します。**本文は暗号化** (PL fail-safe 既定 0.85)、**ヘッダ (件名等) は既定で平文 + token** (Dropbox 前提の設計)。snapshot は mbox × 月のシャードに分割保存され、`SourceVaultMailEnsureLoaded` で必要分だけ遅延ロードします。**取り込み (IMAP) と派生 (ローカル LLM による PL/優先度/概要) は分離**され、`SourceVaultMailFetchNew` で高速取り込み → `SourceVaultInferMailDerivedBatch` で増分派生 (中断耐性あり)。重要度は LLM 任せにせず `SourceVaultMailComputePriority` がグループ重み + To/Cc 位置 + bulk 判定 + 依頼度から決定的に計算します。IMAP アカウントは `SourceVaultRegisterMailAccount` で vault config に登録し (パスワードは保存せず CredKey のみ)、対話表示は `SourceVaultMailView` で行います。
+
+```wolfram
+SourceVaultMailEnsureLoaded["work", 3];                 (* 直近3ヶ月だけロード *)
+SourceVaultMailView["会議", "MinPriority" -> 0.5, "Limit" -> 20]
+```
+
+> **安全ポリシー:** 返信は**ドラフト生成のみ** (DraftOnly) で、SourceVault は**メールを自動送信しません**。鍵は NBAccess の外に出ず、本文は暗号化・ヘッダは平文 + token (件名は設計上暗号化しない)。永続データには `SystemCredential` backend が必須で、鍵バンドルは Dropbox の外で管理します。
+
+---
+
 ## 詳細説明
 
 ### 動作環境
@@ -337,14 +396,33 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultClaimStoreCompact[]` | claim JSONL を dedup + 圧縮。 |
 | `$SourceVaultVersion` | パッケージバージョン文字列。 |
 | `$SourceVaultRoots` | PrivateVault のルートパス（Association）。 |
+| `SourceVaultInitializeEncryption[]` | 冪等な鍵 bootstrap。欠落した標準鍵だけ生成。鍵材料は返さない。 |
+| `SourceVaultEncryptionKeyStatus[]` | 標準 KeyRef ごとの存在・種別・指紋（鍵材料なし）。 |
+| `SourceVaultEncryptedPut/Get[...]` | encrypt-then-MAC で機密 record を保存/取得（plaintext は返さない）。 |
+| `SourceVaultDecryptRecord[record]` | MAC 検証後に復号。改ざんは `AuthenticationFailed` で拒否。 |
+| `SourceVaultExportKeyBundle[passphrase]` | 標準鍵を scrypt + AES256 でパスフレーズ保護した可搬バンドルを書き出す（Dropbox 外）。 |
+| `SourceVaultImportKeyBundle[passphrase]` | 鍵バンドルを別マシンの credential store に取り込む。 |
+| `SourceVaultIdentityInitialize[]` | identity の load + self(EntityUid=1) bootstrap（冪等）。 |
+| `SourceVaultPutEntity / LinkIdentifierToEntity[...]` | 2層アドレス帳の実体登録・識別子マージ。 |
+| `SourceVaultEntityEditUI[idOrUid]` | 実体1件の編集フォーム（種別/Group/Weight/プライマリメール/LLMプロフィール等）。 |
+| `SourceVaultRegisterMailAccount[<\|...\|>]` | IMAP アカウントを vault config に登録（パスワードは保存せず CredKey のみ）。 |
+| `SourceVaultMailFetchNew[mbox, opts]` | IMAP 新着のみ取得（既定 LLM なし、RecordId で重複排除）。 |
+| `SourceVaultInferMailDerivedBatch[opts]` | PL/優先度/概要をローカル LLM で増分派生（中断耐性）。 |
+| `SourceVaultMailComputePriority[snap, wr]` | 重要度を決定的に計算（グループ重み + To/Cc 位置 + bulk + 依頼度）。 |
+| `SourceVaultSearchMailSnapshots[query, opts]` | 件名/概要 + Priority/Privacy/From/添付フィルタで検索。 |
+| `SourceVaultMailView[query, opts]` | 本文✉/添付📎/返信↩ を備えた対話的メール一覧。 |
+| `SourceVaultMailComposeReply[rid, opts]` | 返信ドラフトを生成（DraftOnly、自動送信しない）。 |
 
 ### ドキュメント一覧
 
 | ファイル | 内容 |
 |---------|------|
 | `setup.md` | インストール手順・トラブルシューティング |
-| `user_manual.md` | カテゴリ別ユーザーマニュアル（Notebook Management・PromptRouter・Evidence Bundle・Compiled Registry を含む） |
-| `example.md` | 代表的な使用パターン集 |
+| `user_manual.md` | カテゴリ別ユーザーマニュアル（Notebook Management・PromptRouter・暗号化基盤・鍵バンドル・identity・メール管理を含む） |
+| `example.md` | 代表的な使用パターン集（暗号化・identity・メールの例を含む） |
+| `api_crypto.md` | 暗号基盤 API（鍵 bootstrap・encrypt-then-MAC record・鍵バンドル・cloud materialization ゲート） |
+| `api_identity.md` | identity API（2層アドレス帳・送信者認証・release planning） |
+| `api_maildb.md` | メール API（snapshot 変換・検索・IMAP 取得・派生・FE 操作） |
 | `design/` | SourceVault 仕様書・PromptRouter 統合仕様書・物理ストレージレイアウト |
 
 ---

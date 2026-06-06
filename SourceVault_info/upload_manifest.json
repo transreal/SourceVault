@@ -2,7 +2,10 @@
 	"packageName":"SourceVault",
 	"files":[
 		"SourceVault.wl",
-		"SourceVault_promptrouter.wl"
+		"SourceVault_promptrouter.wl",
+		"SourceVault_crypto.wl",
+		"SourceVault_identity.wl",
+		"SourceVault_maildb.wl"
 	],
 	"directories":[
 		"SourceVault_info"

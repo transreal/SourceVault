@@ -490,6 +490,416 @@ SourceVaultIntegrationStatus[]
 
 ---
 
+## 初回セットアップ（暗号化・メール・アドレス帳）
+
+暗号化・メール・2層アドレス帳サブシステムは、使う前に個人ごとの初期設定を**一度だけ**行う必要があります。設定の流れは次の通りです（詳細な手順とコード例はすべてプレースホルダ付きで [`setup.md` の「初回セットアップ（暗号化・メール・アドレス帳）」](setup.md) にまとめてあります）。
+
+1. **鍵 backend を `SystemCredential` に設定**してから `SourceVault.wl` をロードする。`"Memory"`（既定）で暗号化すると鍵が揮発し、次回セッションで本文を復号できません（データ消失・不可逆）。
+2. **暗号化を初期化**（`SourceVaultInitializeEncryption[]`）し、**鍵バンドルを Dropbox の外にバックアップ**（`SourceVaultExportKeyBundle[passphrase]`）。鍵はマシンローカル（SystemCredential/DPAPI）なので、別マシン移行・OS 再インストール復旧にはこのバンドルが要ります。
+3. **オーナー（自分）をアドレス帳に登録**する。日本人名は漢字（正式）・ローマ字・かな（検索用）の3表記で登録し、`SourceVaultIdentityInitialize[]` で**オーナー実体 = ユーザデータベース #1** として確定します。
+
+   ```mathematica
+   SourceVault`SourceVaultAddressBookRegisterSelf["you@example.org",
+      "DisplayName" -> "山田 太郎", "Kanji" -> "山田 太郎",
+      "Romaji" -> "Taro Yamada", "Kana" -> "やまだ たろう"];
+   SourceVault`SourceVaultIdentityInitialize[];
+   SourceVault`SourceVaultSetOwnerLLMProfile["○○大学 ○○学科 ○○。専門: ..."];
+   SourceVault`SourceVaultSetOwnerPrimaryEmail["you@example.org"];
+   (* GUI で編集: SourceVault`SourceVaultEntityEditUI[1] *)
+   ```
+
+   オーナーの `LLMProfile` は派生処理（メールの優先度・概要推定）の受信者説明に、オーナーのメールは ReplyAll の自分除外に使われます。これらはソースにハードコードせず、すべて #1 に保持します。
+4. **ローカル LLM（LM Studio）を登録**（`NBAccess`NBRegisterTrustedLocalServer[...]` + `$ClaudePrivateModel`）。機密メール（PrivacyLevel > 0.5）はここで処理します。
+5. **IMAP アカウントを登録**する。パスワードは `SystemCredential["...KEY..."] = "..."` で手動設定し、`SourceVaultRegisterMailAccount[<|"MBox",...,"CredKey","Server","Port"|>]` で登録（`config/mailaccounts.jsonl` に永続化、パスワードは保存せず CredKey 名のみ）。
+6. **重要度のグループ重みを設定**（任意、`SourceVaultSetPriorityGroupWeight["グループ名", 重み]`）。
+7. **スタイルシート `SourceVault default.nb` を配置**（メール本文・返信ノートブックの見た目。「インストール手順」のスタイルシート節を参照）。
+
+> **公開しない**: 上記のうち私的設定（メールアカウント・パスワード・氏名・所属・ローカルサーバ）を含む部分は、各自のローカル起動ファイル（`init.m` 等）にまとめ、GitHub などに公開しないでください。`RegisterMailAccount` / グループ重み / オーナープロフィールは vault config に永続化されるため、2 回目以降は backend 設定・パッケージロード・`IdentityInitialize`・パスワードの `SystemCredential` 設定だけで動きます。
+
+---
+
+## 暗号化基盤 (at-rest 暗号化)
+
+SourceVault は、機密の本文・プロンプト・メール本文を **encrypt-then-MAC** で at-rest 暗号化して保存します。鍵は NBAccess 層 (KeyRef 間接参照) の中に閉じ込められ、**戻り値・ログ・record のいずれにも鍵材料は現れません**。プロンプト保存 (`SaveLastPrompt[..., "Encrypt" -> True]`) やメール本文の暗号化保存は、すべてこの基盤の上に乗っています。
+
+> **設計メモ:** WL 14.3 には GCM/AEAD・組み込み HMAC・RSA-PSS が無いため、SourceVault は HMAC-SHA256 を手組みした encrypt-then-MAC を採用しています。record の判定駆動フィールド (Policy / Derived = PrivacyLevel / AccessTags など) も **AAD として MAC で認証**され、改ざんすると復号が `AuthenticationFailed` で拒否されます (静かに平文を返しません)。
+
+### バックエンドの選択 (Memory / SystemCredential)
+
+鍵ストアの実体は NBAccess の `$NBCredentialBackend` で切り替えます。**パッケージのロード前に**設定してください (鍵は復号のたびに backend から解決されます)。
+
+| backend | 用途 | 永続性 |
+|---|---|---|
+| `"Memory"` | 開発・テスト | カーネル終了で鍵が消える (揮発) |
+| `"SystemCredential"` | 本番・実データ | Windows DPAPI で永続化 (マシンローカル) |
+
+```wolfram
+(* 本番: 永続鍵で暗号化・復号する。必ずロード前に設定 *)
+NBAccess`$NBCredentialBackend = "SystemCredential";
+Block[{$CharacterEncoding = "UTF-8"},
+  Needs["NBAccess`",    "NBAccess.wl"];
+  Needs["SourceVault`", "SourceVault.wl"]
+]
+```
+
+> **重要 (データ損失に直結):** `"SystemCredential"` backend で暗号化したデータは、`"Memory"` backend のセッションでは **本文だけ復号できません** (ヘッダは平文なので表示されます)。実データを扱うセッションでは常に `SystemCredential` を、ロード前に設定してください。`Memory` のまま実 vault に書き込むと、揮発鍵で暗号化された本文がカーネル終了とともに永久に復号不能になります。
+
+### 鍵の初期化と状態確認
+
+`SourceVaultInitializeEncryption[]` は**冪等**な鍵 bootstrap です。欠落している標準鍵だけを生成し、既存鍵は破壊しません。
+
+```wolfram
+(* 不足している標準鍵だけを生成 (冪等)。鍵材料は返さない *)
+SourceVaultInitializeEncryption[]
+(* → <|"Status" -> "AlreadyInitialized" | "Initialized" | "Partial",
+       "CreatedKeyRefs" -> {...}, "ExistingKeyRefs" -> {...},
+       "KeyMaterialReturned" -> False, ...|> *)
+
+(* 計画だけ確認 (生成しない) *)
+SourceVaultInitializeEncryption["DryRun" -> True]
+
+(* 標準 KeyRef ごとの存在・種別・指紋 (鍵材料なし) *)
+SourceVaultEncryptionKeyStatus[]
+```
+
+> **新マシンでの注意:** `SourceVaultInitializeEncryption[]` は鍵が無いと**新しい乱数鍵を生成**します。後述の鍵バンドルで別マシンの鍵を持ち込む場合は、**先に `SourceVaultImportKeyBundle` を実行してから** Initialize してください。逆順だと別々の鍵が生まれ split-brain になります。
+
+### 暗号 record の put / get / decrypt
+
+```wolfram
+(* 機密オブジェクトを暗号化して保存 (平文は保存しない) *)
+r = SourceVaultEncryptedPut[<|"Prompt" -> "secret text"|>,
+  "PrivacyLevel" -> 0.9, "ContentType" -> "MailBody"];
+rid = r["RecordId"]
+
+(* 暗号 record を取り出す (plaintext は返らない) *)
+rec = SourceVaultEncryptedGet[rid];
+SourceVaultEncryptedRecordQ[rec]   (* True *)
+
+(* MAC 検証して復号 *)
+d = SourceVaultDecryptRecord[rec];
+{d["Status"], d["Plaintext"]}
+(* → {"Ok", <|"Prompt" -> "secret text"|>} *)
+```
+
+主なオプション (`SourceVaultEncryptedPut`):
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"PrivacyLevel"` | `0.75` (`$SourceVaultPrivateThreshold`) | これ以上で平文 digest/index を抑制 |
+| `"ContentType"` | `"Generic"` | record 種別ラベル |
+| `"AccessTags"` | `{}` | アクセス制御タグ (AAD として認証) |
+| `"CloudSendAllowed"` | `False` | cloud materialization の前提条件 |
+| `"Persist"` | `True` | `False` で in-kernel store に保存せず record のみ返す |
+| `"SensitiveFields"` | `{"Prompt","Memo","TargetExprString","ResolvedMaterial"}` | 漏洩検査の対象フィールド |
+
+### 自己診断
+
+```wolfram
+(* この WL 環境の暗号能力 (GCM/RSA-PSS/HMAC) を実測 *)
+SourceVaultCryptoCapabilityReport[]
+
+(* canonical 決定性・EtM roundtrip・改ざん検出をまとめて検査 *)
+SourceVaultCryptoSelfTest[]
+```
+
+---
+
+## 可搬鍵バンドル (マルチ環境・災害復旧)
+
+鍵は **マシンローカル** (SystemCredential / DPAPI) なので、Windows を再インストールすると暗号化本文を全損し、別マシンでは復号できません。これを避けるために、標準マスター鍵をパスフレーズで包んだ**可搬鍵バンドル** (`.svkeys`) をエクスポートし、別マシンや復旧時にインポートします。
+
+KDF は scrypt (メモリ困難・PBKDF2 より強い)。各鍵は AES256 ラップ + encrypt-then-MAC で包まれ、**平文の鍵材料はバンドルにも戻り値にも現れません**。誤ったパスフレーズや改ざんは MAC 検証で fail-closed に拒否されます。
+
+> **セーフティ:** バンドルは既定でホーム直下 (`$HomeDirectory\SourceVault_keybundle.svkeys`、**Dropbox の外**) に書かれます。バンドルは USB やパスワードマネージャで管理し、**同期フォルダ (Dropbox) には絶対に置かないでください**。Dropbox に置くと、機密性はパスフレーズ強度だけに縮退します。
+
+### エクスポート / インポート
+
+```wolfram
+(* 鍵バンドルをエクスポート (パスフレーズは本人だけが知る秘密) *)
+SourceVaultExportKeyBundle["correct horse battery staple xyz"]
+(* → <|"Status" -> "Exported", "Path" -> "...\\SourceVault_keybundle.svkeys",
+       "KeyCount" -> 10, "Fingerprints" -> {...}, "KDF" -> <|...scrypt...|>,
+       "OnSyncFolderWarning" -> False, "KeyMaterialReturned" -> False|> *)
+
+(* 別マシン: 先にインポートしてから InitializeEncryption *)
+SourceVaultImportKeyBundle["correct horse battery staple xyz"]
+(* → <|"Status" -> "Imported", "RestoredCount" -> 10, "Backend" -> "SystemCredential", ...|> *)
+
+(* パスフレーズ不要の非秘密メタだけ確認 *)
+SourceVaultKeyBundleInfo[]
+(* → <|"Status" -> "Ok", "Version" -> ..., "KeyCount" -> 10, "KDF" -> <|...|>|> *)
+```
+
+主なオプション (`SourceVaultExportKeyBundle`):
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"Path"` | `Automatic` | 既定 `$HomeDirectory\SourceVault_keybundle.svkeys` (非 Dropbox) |
+| `"ScryptN"` | `Automatic` | scrypt の N。既定 131072 (=2^17) |
+| `"KeyRefs"` | `Automatic` | 既定で標準鍵すべて |
+| `"Force"` | `False` | `True` で 12 文字未満の弱パスフレーズを許可 |
+
+> **運用フロー:** 旧マシンで `SourceVaultExportKeyBundle[秘密]` → バンドルを安全な経路で新マシンへ → 新マシンで `SourceVaultImportKeyBundle[秘密]` → `SourceVaultInitializeEncryption[]` は `AlreadyInitialized` になり、同じ鍵で既存の暗号データを復号できます。
+
+---
+
+## メール管理 (MailDB / IMAP / Mail UI)
+
+SourceVault は、旧 maildb の月次レコードや IMAP 新着を `SourceVaultMailSnapshot` に正規化し、**本文を暗号化**して保存・検索・派生・閲覧できます。
+
+設計の要点:
+
+- **本文は暗号化** (`SourceVaultEncryptedPut`、PL fail-safe 既定 0.85)。**ヘッダ (件名/差出人/宛先) は既定で平文 + token** です (Dropbox 同期を前提とした設計で、件名は意図的に暗号化しません)。`EncryptHeaders -> True` でヘッダも暗号化できます。
+- snapshot は **mbox × 月のシャード**に分割保存され、1 通の追加で全体が再同期されないようになっています。
+- RecordId / MessageIDToken は鍵に依存しない決定的な値で、再取得しても冪等です。
+- **取り込み (IMAP) と派生処理 (ローカル LLM) は完全分離**。まず高速に取り込み、PL/優先度/概要は後から増分バッチで付けます。
+
+### 既存スナップショットの読み込みと検索
+
+```wolfram
+(* 全シャードを読み込む (重い)。通常は EnsureLoaded で必要分だけ *)
+SourceVaultMailStoreLoad[]
+
+(* 必要な mbox・期間のシャードだけ遅延ロード *)
+SourceVaultMailEnsureLoaded["work", 3]          (* 直近3ヶ月 *)
+SourceVaultMailEnsureLoaded["work", "202601"]   (* 特定の年月 *)
+
+(* キーワード + フィルタで検索 *)
+SourceVaultSearchMailSnapshots["会議",
+  "MinPriority" -> 0.5, "From" -> "@example.org",
+  "HasAttachment" -> True, "SortBy" -> "Priority", "Limit" -> 20]
+```
+
+`SourceVaultSearchMailSnapshots` の主なオプション:
+
+| オプション | 説明 |
+|---|---|
+| `From` | 差出人ヘッダの部分一致 |
+| `MBox` / `DateFrom` / `DateTo` | mbox・日付範囲 |
+| `MinPriority` / `MaxPriority` | 重要度の範囲 |
+| `MinPrivacy` / `MaxPrivacy` | PrivacyLevel の範囲 |
+| `HasAttachment` | 添付ありに限定 |
+| `SortBy` | `"Date"` / `"Priority"` / `"PrivacyLevel"` |
+| `SortOrder` | `"Desc"` (既定) / `"Asc"` |
+| `Newest` | `True` (既定) で日付降順 |
+| `Limit` | 件数制限 |
+
+### 対話的なメール一覧 (Mail UI)
+
+`SourceVaultMailView` は、各行に **✉本文表示 / 📎添付ポップアップ / ↩返信** のクリック操作を備えた表 (Dataset) を返します。件名はクリック可能で、ラベルは `$Language` に応じて日本語/英語に切り替わります。
+
+```wolfram
+(* 対話表示 (FrontEnd 必須)。列: 本文/添付/返信/日付/重要度/秘匿度/件名/差出人/概要 *)
+SourceVaultMailView["会議", "Limit" -> 20]
+
+(* ボタン無しの素の Dataset (列ソート用) *)
+SourceVaultMailDataset["会議", "Limit" -> 20]
+```
+
+個別の FE 操作は次の関数で行えます。
+
+```wolfram
+SourceVaultMailGetBody[rid]            (* 本文を復号して取得 (Status/Body) *)
+SourceVaultMailShowBody[rid]           (* 本文を新規ノートブックで表示 *)
+SourceVaultMailAttachments[rid]        (* 添付 {Name, Path, Exists} のリスト *)
+SourceVaultMailOpenAttachment[rid, "report.pdf"]  (* 添付を開く *)
+SourceVaultMailComposeReply[rid, "ReplyAll" -> True]  (* 返信ドラフト生成 *)
+SourceVaultMailOpenReplyNotebook[rid]  (* 返信ドラフトのノートブックを開く *)
+```
+
+> **安全ポリシー:** 返信は**ドラフト生成のみ** (DraftOnly) です。SourceVault は**メールを自動送信しません**。`SourceVaultMailComposeReply` は To / Cc / `Re:` 件名 / 引用本文 / `InReplyToToken` を組み立てるだけで、送信はユーザーが行います。`"ReplyAll" -> True` のときはオーナー (自分) のアドレスを Cc から自動除外します。
+
+> 本文表示・返信ノートブックのスタイルは `$SourceVaultMailNotebookStyle` (既定 `"SourceVault default.nb"`) で指定します。表のフォントは `ClaudeCode\`$ClaudeStandardFont` を使います。
+
+---
+
+## IMAP 新着取得と派生処理 (取り込みと LLM の分離)
+
+### IMAP アカウントの登録 (設定の外部化)
+
+IMAP の接続情報は**ソースにハードコードせず**、`SourceVaultRegisterMailAccount` で vault config (`PrivateVault/config/mailaccounts.jsonl`) に登録します。**パスワードは保存されず**、SystemCredential 名 (`CredKey`) だけが永続化されます。これは NBAccess の `NBRegisterTrustedLocalServer` と同じ思想です。
+
+```wolfram
+(* IMAP アカウントを登録 (パスワードは SystemCredential に別途投入、ここには CredKey 名のみ) *)
+SourceVaultRegisterMailAccount[<|
+  "MBox" -> "work", "User" -> "you@example.org", "Email" -> "you@example.org",
+  "CredKey" -> "WORK_IMAP_PASSWORD", "Server" -> "imap.example.org", "Port" -> 993|>]
+
+SourceVaultMailAccounts[]                 (* 登録済み一覧 (パスワードは含まない) *)
+SourceVaultGetMailAccount["work"]         (* 1件取得 *)
+SourceVaultRemoveMailAccount["work"]      (* 削除 *)
+```
+
+### 新着の取得 (まず取り込み、LLM は後回し)
+
+`SourceVaultMailFetchNew` は IMAP から新着のみ取得し、snapshot 化して store に保存します。既定は `"Process" -> False` で **LLM を回さず高速**に取り込みます。RecordId で既存と重複排除されるため、再取得しても二重登録されません。
+
+```wolfram
+(* 直近14日を取得 (LLM なし)。事前に RegisterMailAccount が必要 *)
+SourceVaultMailFetchNew["work", "Period" -> "Latest"]
+```
+
+`"Period"` は次の形式を受け付けます: `"Latest"` (14日) / `n` (直近 n 日) / `{year, month}` / `{year, month, day}` / `"YYYYMM"` / `"YYYY"` / `{fromISO, toISO}`。
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"Period"` | `"Latest"` | 取得期間 (上記の各形式) |
+| `"Process"` | `False` | `True` でインライン派生も実行 |
+| `"Overwrite"` | `False` | `True` で同一 RecordId も再保存 (修復・更新用) |
+| `"Persist"` | `True` | ディスク保存 |
+| `"MaxEmails"` | `Automatic` | 取得上限 |
+| `"MessageSource"` | `Automatic` | 既定は実 IMAP (Python imaplib)。テストで注入可 |
+
+### 派生 (PL / 優先度 / 概要) の増分バッチ
+
+取り込んだ snapshot は最初 `DerivedStatus = "Pending"` です。`SourceVaultInferMailDerivedBatch` が本文を復号し、ローカル LLM (LM Studio, OpenAI 互換) で `<|WorkRequest, PrivacyLevel, Summary|>` を生成して in-place 更新します。**中断耐性**があり、`CheckpointEvery` 件ごとに保存し、処理済みは再処理しません。
+
+```wolfram
+(* 派生未処理の snapshot を確認 *)
+SourceVaultMailDerivedPending[]
+
+(* 50件ずつ派生を増分生成 (中断しても再開可) *)
+SourceVaultInferMailDerivedBatch["Limit" -> 50, "CheckpointEvery" -> 20]
+(* → <|"Status" -> ..., "PendingBefore" -> ..., "Processed" -> ...,
+       "Failed" -> ..., "RemainingPending" -> ...|> *)
+```
+
+> ローカル LLM は `ClaudeCode\`$ClaudePrivateModel` のモデル/URL を使います (未設定なら `/v1/models` から取得、既定 `127.0.0.1:1234`)。本文の復号が必要なので、実データでは `SystemCredential` backend のセッションで実行してください。
+
+### 重要度の構造的計算 (ハイブリッド)
+
+優先度は LLM 任せにせず、**コードが決定的に計算**します。LLM が返すのは依頼度 (`WorkRequest`)・概要・PrivacyLevel だけで、優先度は `SourceVaultMailComputePriority` が次式で算出します。
+
+```
+Priority = Clip[senderWeight + 0.30*WorkRequest + posAdj + bulkAdj, {0, 1}]
+  posAdj :  To → +0.15 / Cc → 0.0 / Bulk → -0.25
+  bulkAdj:  bulk なら -0.15
+```
+
+`senderWeight` は、差出人の実体の `PriorityWeight` (数値) → 実体の `Group` に対するグループ重み → 既定 0.4 の順に解決されます。
+
+```wolfram
+(* 重要度の内訳 (Components) を確認 *)
+SourceVaultMailExplainPriority[snap]
+
+(* グループ重みを登録 (vault config に永続化) *)
+SourceVaultSetPriorityGroupWeight["Colleagues", 0.8]
+SourceVaultPriorityGroupWeights[]          (* group -> weight *)
+SourceVaultGroupWeightFor["Colleagues"]    (* 0.8 *)
+```
+
+個別の差出人の `PriorityWeight` や `Group` は、後述の実体編集 UI (`SourceVaultEntityEditUI`) で設定します。
+
+---
+
+## 2層アドレス帳 (identity resolution)
+
+「Uid = 人」という設計は破綻しやすい (同一人物が複数アドレスを持ち、アドレスは後から人に紐付く) ため、SourceVault は **識別子層 (Identifier)** と **実体層 (Entity)** を分離しています。
+
+| 層 | 何を表すか | 作成タイミング |
+|---|---|---|
+| **第1層 Identifier** | 1つの raw email/SNS/URI | メール取込時に**自動作成** |
+| **第2層 Entity** | 人/組織/Bot/ML/サービス | 後から作成・マージ |
+
+オーナー (自分) は **EntityUid=1 / OwnerKind=Self** の特別な実体です。
+
+### 初期化と所有者プロフィール
+
+```wolfram
+(* load + self(EntityUid=1) bootstrap (冪等)。初回アクセス時に自動ロードもされる *)
+SourceVaultIdentityInitialize[]
+
+(* 所有者プロフィール (派生プロンプトの受信者プロフィールに使われる) *)
+SourceVaultSetOwnerLLMProfile["Affiliation, Title, research interests..."]
+SourceVaultSetOwnerPrimaryEmail["you@example.org"]
+
+SourceVaultOwnerEntity[]        (* オーナー実体 *)
+SourceVaultOwnerEmails[]        (* リンク済み全アドレス *)
+SourceVaultOwnerPrimaryEmail[]  (* プライマリメール *)
+```
+
+> オーナーの氏名・メール・所属は**ソースにハードコードされていません**。すべてユーザDB #1 (Self 実体) の `Names` / `PrimaryEmail` / `LLMProfile` に保持され、上記のセッターまたは `SourceVaultEntityEditUI[1]` で編集します。
+
+### 識別子と実体の操作
+
+```wolfram
+(* 識別子を観測/登録 (メール取込で自動。手動 upsert も可) *)
+SourceVaultObserveIdentifier["Email", "alice@example.org",
+  "ObservedName" -> "Alice", "Persist" -> True]
+
+(* ヘッダ文字列から全アドレスを識別子化 *)
+SourceVaultIngestAddressHeader["Alice <alice@example.org>, bob@example.org"]
+
+SourceVaultGetIdentifier[id]
+SourceVaultListIdentifiers[]
+SourceVaultFindIdentifier["Email", "alice@example.org"]
+SourceVaultResolveIdentifierDisplay[id]   (* 実体名→観測名→raw の順 *)
+
+(* 識別子から新規実体を作成 (観測名を DisplayName に継承) *)
+SourceVaultIdentifierCreateEntity[id, "Kind" -> "Person"]
+
+(* 既存実体にアドレスを追加 (マージ/付け替え) *)
+SourceVaultLinkIdentifierToEntity[id, "ent-5"]
+SourceVaultUnlinkIdentifier[id]
+
+(* 実体の登録・取得・更新 *)
+SourceVaultPutEntity[<|"Kind" -> "Organization", "DisplayName" -> "Example Lab"|>]
+SourceVaultGetEntity[5]                              (* uid または EntityId *)
+SourceVaultListEntities[]
+SourceVaultUpdateEntity[5, <|"Group" -> "Colleagues", "PriorityWeight" -> 0.8|>]
+```
+
+### 既存メールからの識別子バックフィル
+
+identity 導入前に取り込んだ大量のメールには識別子がありません。`SourceVaultMailStoreLoad[]` で全件ロードしてから次を実行すると、平文ヘッダ (From/To/Cc) を走査して識別子を一括生成します (再取込不要)。
+
+```wolfram
+SourceVaultMailStoreLoad[];
+SourceVaultIdentityBackfillFromMail[]
+```
+
+### identity 関連の UI
+
+```wolfram
+SourceVaultAddressBookView[]      (* 連絡先の整形表 *)
+SourceVaultIdentityLinkUI[]       (* 未リンク識別子→実体 (新規作成/既存マージ) *)
+SourceVaultEntityView[]           (* 実体一覧 + 各行に編集ボタン *)
+SourceVaultEntityEditUI[1]        (* 実体1件の編集フォーム (オーナーは uid=1) *)
+```
+
+`SourceVaultEntityEditUI` では、表示名 / 種別 (Person/Organization/Bot/MailingList/Service) / 漢字・ローマ字・かな / 分類 / Group / Weight / 所属 (MemberOf) / 信頼状態 / プライマリメール / LLMプロフィール を編集できます。
+
+> **i18n:** UI のラベルは `$Language` で日本語/英語に切り替わります (日本語環境なら日本語、それ以外は英語)。一方、スキーマ・コードのキーは英語固定です。
+
+---
+
+## ファイル構成 (暗号/メール機能)
+
+SourceVault の暗号・メール機能は、本体 `SourceVault.wl` のローダが依存順に Get する **4 つのサブファイル**に集約されています。
+
+| ファイル | 文脈 | 内容 |
+|---|---|---|
+| `NBAccess_crypto.wl` | `NBAccess\`` | 鍵隔離層 (KeyRef・credential backend)。別文脈なので分離維持 |
+| `SourceVault_crypto.wl` | `SourceVault\`` | crypto + keys + keybundle + encryptedstore + release |
+| `SourceVault_identity.wl` | `SourceVault\`` | addressbook + senderauth + identity + messagerelease |
+| `SourceVault_maildb.wl` | `SourceVault\`` | maildb + imap + mailui |
+
+```
+$packageDirectory\
+  SourceVault.wl                 ← 本体 (ローダがサブファイルを Get)
+  SourceVault_promptrouter.wl    ← PromptRouter 拡張
+  NBAccess_crypto.wl             ← 鍵隔離 (NBAccess` 文脈)
+  SourceVault_crypto.wl          ← 暗号 + 鍵 + 鍵バンドル + 暗号 record + release
+  SourceVault_identity.wl        ← アドレス帳 + 送信者認証 + identity + release plan
+  SourceVault_maildb.wl          ← maildb adapter + IMAP + mail UI
+  NBAccess.wl / claudecode.wl / ...
+```
+
+> 旧来の細分化ファイル (`SourceVault_keys.wl` / `_encryptedstore.wl` / `_addressbook.wl` / `_imap.wl` / `_mailui.wl` など) は上記 4 ファイルに統合済みです。詳細な関数シグネチャは API リファレンス (`api_crypto.md` / `api_identity.md` / `api_maildb.md`) を参照してください。
+
+---
+
 ## カテゴリ別リファレンス
 
 ### 1. Vault 管理
@@ -970,7 +1380,6 @@ SourceVaultNotebookLint["C:\\path\\to\\research.nb"]
 
 ---
 
-
 ---
 
 ## 機能マトリックス
@@ -998,6 +1407,7 @@ SourceVaultMarkTodo         Todo 状態の atomic write
 mtime cache                 SourceVaultIndexNotebook の透過的キャッシュ
 PromptRouter                ClaudeEval の式提案契約 (未評価式を提案)
 TabularQuery / FilterSpec   スケジュールの閉じた DSL による絞り込み
+mail subsystem              IMAP 取り込み・暗号化保存・検索・派生・Mail UI
 ```
 
 `ClaudeEval` から PromptRoute / WorkflowRoute への自動 dispatch は、ClaudeOrchestrator がロード済みのときに有効になります。

@@ -1154,7 +1154,7 @@ ClearAll[
    \:91cd\:8981: \:3053\:306e\:5b9a\:7fa9\:306f\:5fc5\:305a\:4e0a\:306e ClearAll[...] \:30d6\:30ed\:30c3\:30af\:306e\:5f8c\:308d\:306b\:7f6e\:304f\:3053\:3068\:3002
    ClearAll \:30ea\:30b9\:30c8\:306b iSVStandardFont \:304c\:542b\:307e\:308c\:308b\:305f\:3081\:3001\:5b9a\:7fa9\:3092 ClearAll \:3088\:308a
    \:524d\:306b\:7f6e\:304f\:3068 ClearAll \:304c\:5b9a\:7fa9\:3092\:6d88\:53bb\:3057\:3001iSVStandardFont[] \:304c\:672a\:5b9a\:7fa9\:306b\:306a\:308b\:3002
-   (\:305d\:308c\:304c\u300c\:95a2\:6570\:304c\:8a55\:4fa1\:3055\:308c\:305a\:5165\:529b\:304c\:305d\:306e\:307e\:307e\:8fd4\:308b\u300d\:539f\:56e0\:3060\:3063\:305f\u3002)
+   (\:305d\:308c\:304c\:300c\:95a2\:6570\:304c\:8a55\:4fa1\:3055\:308c\:305a\:5165\:529b\:304c\:305d\:306e\:307e\:307e\:8fd4\:308b\:300d\:539f\:56e0\:3060\:3063\:305f\:3002)
    ClaudeCode`$ClaudeStandardFont \:304c\:5b9a\:7fa9\:6e08\:306a\:3089\:305d\:306e\:5024\:3092\:3001\:672a\:30ed\:30fc\:30c9\:30fb
    \:672a\:5b9a\:7fa9\:30fb\:975e\:6587\:5b57\:5217\:306a\:3089 "Yu Gothic UI" \:3092\:8fd4\:3059\:3002 *)
 iSVStandardFont[] :=
@@ -13449,7 +13449,13 @@ If[AssociationQ[ClaudeCode`$ClaudePackageKeywordMap],
      "SourceVaultRefreshModelRegistry", "SourceVaultListModels",
      "SourceVaultSetModel", "SourceVaultClearModelRegistry",
      "SourceVaultSetModelIntent", "SourceVaultAssignClaudeModels",
-     "SourceVaultModelIntentMap"}];
+     "SourceVaultModelIntentMap",
+     (* \:30e1\:30fc\:30eb (\:6b63\:5b9a\:306f SourceVault mail \:30b5\:30d6\:30b7\:30b9\:30c6\:30e0\:3002\:65e7 maildb \:30ad\:30fc\:30ef\:30fc\:30c9\:306e\:5f8c\:7d99) *)
+     "\:30e1\:30fc\:30eb", "mail", "Mail", "univ", "\:53d7\:4fe1", "inbox", "IMAP",
+     "\:8fd4\:4fe1", "reply",
+     "SourceVaultMailEnsureLoaded", "SourceVaultMailView", "SourceVaultMailDataset",
+     "SourceVaultSearchMailSnapshots", "SourceVaultInferMailDerivedBatch",
+     "SourceVaultMailFetchNew", "SourceVaultMailComposeReply"}];
 
 
 (* ============================================================
@@ -13502,6 +13508,19 @@ SourceVault`Private`iSVLoadPromptRouterExtension[] :=
         <|"Status" -> "Failed",
           "Reason" -> "CannotResolveSourceVaultDirectory"|>;
       Return[SourceVault`Private`$iSVPromptRouterLoadResult]];
+
+    (* SourceVault 暗号モジュール (Phase SV-E3) を promptrouter より先にロードする。
+       存在する場合のみ。鍵隔離 (NBAccess_crypto) -> crypto primitive -> bootstrap
+       -> encrypted store の依存順。SaveLastPrompt の Encrypt -> True がこれらに依存する。 *)
+    Scan[
+      Function[fn,
+        With[{p = FileNameJoin[{base, fn}]},
+          If[FileExistsQ[p], Quiet @ Check[Get[p], $Failed]]]],
+      (* 集約済み: crypto=crypto+keys+keybundle+encryptedstore+release /
+         identity=addressbook+senderauth+identity+messagerelease /
+         maildb=maildb+imap+mailui。NBAccess_crypto は別文脈で分離。 *)
+      {"NBAccess_crypto.wl", "SourceVault_crypto.wl",
+       "SourceVault_identity.wl", "SourceVault_maildb.wl"}];
 
     path = FileNameJoin[{base, "SourceVault_promptrouter.wl"}];
     If[!FileExistsQ[path],

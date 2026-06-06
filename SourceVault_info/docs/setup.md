@@ -218,6 +218,148 @@ CopyFile[
 
 ---
 
+## 初回セットアップ（暗号化・メール・アドレス帳）
+
+SourceVault の暗号化・メール・2層アドレス帳サブシステムを使う前に、以下の初期設定を**一度だけ**行います。これらは個人ごとに異なる私的設定（メールログイン名・所属・氏名など）を含むため、**ソースコードや公開リポジトリには置かず**、各自のローカル起動ファイル（`init.m` や個人用の起動ノートブック。GitHub に上げない）にまとめて記述してください。
+
+> **重要（安全）**
+> - `NBAccess`$NBCredentialBackend = "SystemCredential"` を**必ず**設定する。`"Memory"`（既定）で暗号化すると鍵が揮発し、次回セッションで本文を復号できなくなります（データ消失・不可逆）。
+> - `SystemCredential[...]` への代入（パスワード設定）と `SystemCredential` の使用は **手動実行のみ**（`AutoEvaluate -> True` で自動実行されるコードに含めない。`rules/00`）。
+> - パスワードや API キー、私的な氏名・メールは公開しない。`RegisterMailAccount` に保存されるのは **CredKey（SystemCredential のキー名）だけ**で、パスワード本体は保存されません。
+
+### 1. 鍵 backend を SystemCredential にしてパッケージをロード
+
+```mathematica
+NBAccess`$NBCredentialBackend = "SystemCredential";   (* 永続鍵ストア。最初に設定 *)
+Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault.wl"]];
+```
+
+### 2. 暗号化の初期化と鍵バンドルのバックアップ
+
+```mathematica
+SourceVault`SourceVaultInitializeEncryption[];        (* 標準鍵を冪等に生成（既存は破壊しない） *)
+SourceVault`SourceVaultEncryptionKeyStatus[]          (* 鍵の存在確認 *)
+```
+
+鍵はマシンローカル（SystemCredential / DPAPI）に保存され、**Dropbox には載りません**。別マシンへの移行・OS 再インストールからの復旧に備え、強いパスフレーズで鍵バンドルを **Dropbox の外**（USB・パスワードマネージャ等）に退避しておきます。
+
+```mathematica
+(* 出力先は既定で $HomeDirectory（非 Dropbox）。USB 等へコピーして保管 *)
+SourceVault`SourceVaultExportKeyBundle["○○ 強いパスフレーズ ○○"]
+(* 別マシンでの復元: SourceVault`SourceVaultImportKeyBundle["同じパスフレーズ", "Path" -> "<退避先>"] *)
+```
+
+### 3. オーナー（自分）をアドレス帳に登録
+
+ユーザデータベースの **#1 がオーナー（自分）** です。氏名（日本人名は漢字＝正式・ローマ字・かな＝検索用の3表記）とメールをアドレス帳に登録し、`IdentityInitialize` でオーナー実体 #1 として確定します。
+
+```mathematica
+(* 自分をアドレス帳に登録（プレースホルダを自分の値に） *)
+SourceVault`SourceVaultAddressBookRegisterSelf["you@example.org",
+   "DisplayName" -> "山田 太郎",
+   "Kanji"  -> "山田 太郎",
+   "Romaji" -> "Taro Yamada",
+   "Kana"   -> "やまだ たろう",
+   "Persist" -> True];
+
+(* identity 層を初期化 → アドレス帳 self を継承して オーナー実体 #1 を確保 *)
+SourceVault`SourceVaultIdentityInitialize[];
+```
+
+オーナーの **LLMProfile**（メールの優先度/概要を推定する LLM プロンプトに渡す受信者説明）と**プライマリメール**を設定します。これらは派生処理や ReplyAll の自分除外に使われ、ソースにハードコードしません。
+
+```mathematica
+SourceVault`SourceVaultSetOwnerLLMProfile[
+  "○○大学 ○○学科 ○○。専門: ○○, ○○"];          (* 所属・役職・専門分野 *)
+SourceVault`SourceVaultSetOwnerPrimaryEmail["you@example.org"];
+
+(* GUI で編集する場合（#1 を開いて 表示名/種別/グループ/重み/主メール/LLMProfile を編集） *)
+SourceVault`SourceVaultEntityEditUI[1]
+```
+
+複数の自分アドレス（職場・個人など）がある場合は、`SourceVaultIdentityLinkUI[]` で各識別子をオーナー #1 にマージしておくと、ReplyAll の自分除外がすべてのアドレスに効きます。
+
+### 4. ローカル LLM（LM Studio）の登録
+
+機密メール（PrivacyLevel > 0.5）はローカル LLM で処理します。LM Studio のサーバを登録し、`$ClaudePrivateModel` を設定します。
+
+```mathematica
+NBAccess`NBRegisterTrustedLocalServer[<|
+   "MachineName" -> "my-pc", "Subnet" -> "192.168.x",
+   "Provider" -> "lmstudio", "URL" -> "http://192.168.x.x:1234"|>];
+
+ClaudeCode`$ClaudePrivateModel = {"lmstudio", "your-local-model", "http://127.0.0.1:1234"};
+```
+
+### 5. IMAP アカウントの登録
+
+まず IMAP パスワードを **SystemCredential に手動で**設定し（`CredKey` がその名前）、次にアカウント設定を登録します。登録は `PrivateVault/config/mailaccounts.jsonl` に永続化され、パスワード本体は保存されません。
+
+```mathematica
+(* パスワードを SystemCredential に設定（手動実行。値は公開しない） *)
+SystemCredential["WORK_IMAP_PASSWORD"] = "○○○○";
+
+(* アカウント設定を登録（mbox ごとに。CredKey は上の名前） *)
+SourceVault`SourceVaultRegisterMailAccount[<|
+   "MBox" -> "work", "User" -> "you@example.org", "Email" -> "you@example.org",
+   "CredKey" -> "WORK_IMAP_PASSWORD", "Server" -> "imap.example.org", "Port" -> 993|>];
+
+SourceVault`SourceVaultMailAccounts[]                 (* 登録確認（パスワードは含まれない） *)
+```
+
+### 6. メールサブシステムの読み込みと受信
+
+メールサブシステム（旧 maildb キーワードの後継）の各操作関数は、必要時に遅延ロードされます。アカウント登録後、以下の関数で受信・閲覧・検索・返信を行います。
+
+```mathematica
+(* メールサブシステムを明示的にロード（初回のみ。各 Mail 関数も内部で自動ロード） *)
+SourceVault`SourceVaultMailEnsureLoaded[];
+
+(* IMAP から新着メールを取得して PrivateVault に snapshot 保存 *)
+SourceVault`SourceVaultMailFetchNew["work"];
+
+(* 受信メールを一覧表示（GUI ビュー） *)
+SourceVault`SourceVaultMailView[];
+
+(* メールを Dataset として取得（プログラム処理用） *)
+SourceVault`SourceVaultMailDataset[];
+
+(* 保存済みメール snapshot を検索 *)
+SourceVault`SourceVaultSearchMailSnapshots["検索語"];
+
+(* メールの派生情報（優先度・概要など）を一括推定 *)
+SourceVault`SourceVaultInferMailDerivedBatch[];
+
+(* 指定メールへの返信ドラフトを作成（自分除外の ReplyAll に対応） *)
+SourceVault`SourceVaultMailComposeReply[mailRef];
+```
+
+> `SourceVaultMailComposeReply` は、オーナー #1 のプライマリメール・LLMProfile（手順 3）と派生情報（`SourceVaultInferMailDerivedBatch`）を利用します。返信ノートブックは `$SourceVaultMailNotebookStyle` のスタイルで開きます。
+
+### 7. 重要度のグループ重みの設定（任意）
+
+メールの重要度は「送信者のグループ重み ＋ To/Cc 位置 ＋ ML 判定 ＋ LLM 依頼度」で計算されます。自分の分類に合わせてグループ重みを定義します（実体の `Group` がこれに解決されます）。
+
+```mathematica
+SourceVault`SourceVaultSetPriorityGroupWeight["共同研究者", 0.85];
+SourceVault`SourceVaultSetPriorityGroupWeight["学生", 0.6];
+SourceVault`SourceVaultSetPriorityGroupWeight["事務", 0.5];
+SourceVault`SourceVaultSetPriorityGroupWeight["業者", 0.2];
+SourceVault`SourceVaultPriorityGroupWeights[]
+```
+
+各送信者の実体に `Group`（上記名）や個別 `PriorityWeight` を設定するには `SourceVaultEntityView[]` の各行の編集ボタン、または送信者を実体にまとめる `SourceVaultIdentityLinkUI[]` を使います。
+
+### 8. スタイルシートの配置
+
+上記「ノートブック用スタイルシートとテンプレートの配置」に従い、`SourceVault default.nb` をスタイルシートディレクトリに配置しておくと、メール本文表示・返信ノートブックがこのスタイルで開きます（`$SourceVaultMailNotebookStyle` で変更可）。
+
+### 起動ファイルへのまとめ方
+
+上記 1〜8 のうち、私的設定（メールアカウント・パスワード・氏名・所属・ローカルサーバ）を含む部分は、**各自のローカル起動ファイル**（例: `$UserBaseDirectory/Kernel/init.m`、または個人用の起動ノートブック）にまとめておくと、起動のたびに自動で設定されます。**このファイルは GitHub などに公開しないでください。** `RegisterMailAccount` / グループ重み / オーナープロフィールは一度実行すれば vault config に永続化されるため、2 回目以降は backend 設定とパッケージロード、`IdentityInitialize`、パスワードの `SystemCredential` 設定だけで動きます。
+
+---
+
 ## 動作確認
 
 ### バージョン確認
@@ -263,6 +405,22 @@ NBReadHeader[nbPath]
 NBReadTodos[nbPath]
 ```
 
+### メールサブシステムの動作確認（IMAP アカウント登録済みが前提）
+
+「初回セットアップ」の手順 1〜5 を済ませてある場合、メールの取得・閲覧を確認できます。
+
+```mathematica
+(* 1. メールサブシステムをロード *)
+SourceVault`SourceVaultMailEnsureLoaded[]
+(* → <|"Status" -> "OK", ...|> *)
+
+(* 2. 新着メールを取得 *)
+SourceVault`SourceVaultMailFetchNew["work"]
+
+(* 3. 受信メールを一覧表示 *)
+SourceVault`SourceVaultMailView[]
+```
+
 ### LLM 要約の動作確認（ClaudeRuntime 必須）
 
 ```mathematica
@@ -283,6 +441,7 @@ SourceVaultNotebookSummary[nbPath]
 | `NBReadHeader` の `Source` が `"None"` になる | TodoItem cell の TaggingRules を Header と誤認していないか。`step8-nbreadheader-boxdata-filter` 以降では `iNBIsHeaderLikeAssoc` フィルタで解決済み |
 | `iLoadJSONFromFile` が `Null` を返す | 罠 #28 (`ImportString[..., "RawJSON"]` が Windows path のバックスラッシュで失敗)。3 段階 fallback を使う実装か確認 |
 | `SourceVaultNotebookSummary` が失敗する | ClaudeRuntime がロードされているか、API キーまたはローカル LLM が利用可能か確認 |
+| `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |
 | ReadList が空配列を返す | 罠 #20 (Windows JSONL/UTF-8)。`ReadByteArray` + `ByteArrayToString` + `StringSplit` 経路を使うこと |
 | パッケージロード時に `Syntax::stresc` が大量に出る | 罠 #11 (`\uXXXX` エスケープ混入)。`\:XXXX` に書き直す必要あり |
 
