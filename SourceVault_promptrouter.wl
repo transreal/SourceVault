@@ -69,8 +69,55 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultDecryptPromptRoute",
   "SourceVault`SourceVaultSearchPromptRoutes",
   "SourceVault`SourceVaultFormatPromptRouteList",
-  "SourceVault`SourceVaultReplayRoute"
+  "SourceVault`SourceVaultReplayRoute",
+  "SourceVault`SourceVaultAutoSaveLastPrompt",
+  "SourceVault`SourceVaultMatchSavedPromptVersions",
+  "SourceVault`SourceVaultPrimaryPromptRoute",
+  "SourceVault`SourceVaultSetPrimaryPromptRoute",
+  "SourceVault`SourceVaultDeletePromptRoute",
+  "SourceVault`SourceVaultRunPrimaryRoute",
+  "SourceVault`SourceVaultPromptVersionsUI",
+  "SourceVault`SourceVaultProposeSavedPromptRoute",
+  "SourceVault`SourceVaultClassifyPromptReplaySafety",
+  "SourceVault`SourceVaultClassifyPromptContextDependency",
+  "SourceVault`SourceVaultUpdatePromptRouteMemo"
 ]];
+
+(* ------------------------------------------------------------
+   Saved-prompt feature flags (Order 9: prompt capture / versioning
+   / primary auto-execute). These are NOT cleared on reload so a
+   user's setting survives a repeated Get[]; they default once.
+     $SourceVaultPromptAutoSave            -- auto-save every
+       notebook ClaudeEval prompt as a new version (default True).
+     $SourceVaultPromptSavedProposalActive -- let ClaudeEval consult
+       saved prompts before the LLM call (default True).
+     $SourceVaultPromptBypassOnce          -- one-shot normalized key
+       that the saved-prompt proposer consumes and then ignores, so
+       the "ask the LLM again" button can force the legacy path.
+   ------------------------------------------------------------ *)
+
+If[!ValueQ[SourceVault`$SourceVaultPromptAutoSave],
+  SourceVault`$SourceVaultPromptAutoSave = True];
+If[!ValueQ[SourceVault`$SourceVaultPromptSavedProposalActive],
+  SourceVault`$SourceVaultPromptSavedProposalActive = True];
+If[!ValueQ[SourceVault`$SourceVaultPromptBypassOnce],
+  SourceVault`$SourceVaultPromptBypassOnce = Missing["None"]];
+
+(* X1: when True (default), SourceVault registers a context planner into
+   ClaudeCode`$ClaudeEvalContextPlanner that uses
+   SourceVaultClassifyPromptContextDependency to refine the ClaudeEval
+   ContextPlan per prompt. Set False to make the planner a no-op (the base
+   package then falls back to its default plan) without reloading. *)
+If[!ValueQ[SourceVault`$SourceVaultContextPlannerEnabled],
+  SourceVault`$SourceVaultContextPlannerEnabled = True];
+
+(* X0b-2 opt-in. When True the planner trims SELF-CONTAINED (no-marker) prompts
+   to NO notebook context (Notebook "None"), not just the default bounded Tail.
+   Helps light models stop imitating prior cells on trivial prompts, at the cost
+   of possibly starving an unmarked notebook-dependent prompt. Default False
+   (conservative). History is never trimmed by this flag. *)
+If[!ValueQ[SourceVault`$SourceVaultContextPlannerTrimSelfContained],
+  SourceVault`$SourceVaultContextPlannerTrimSelfContained = False];
 
 (* ------------------------------------------------------------
    Public usage messages (Phase A scope).
@@ -212,7 +259,129 @@ SourceVaultFormatPromptRouteList::usage =
   "SourceVaultFormatPromptRouteList[routes_List, opts] renders saved PromptRoutes as a Grid (columns: Prompt, Memo, Target, CreatedAt, UpdatedAt, Privacy) with three action buttons per row: Preview (dry-run, shows what would execute without running it), Run (executes the route now), and ToInput (writes the saved function-call expression into a new Input cell). Mirrors SourceVaultFormatNotebookList. The default display format for prompt-route lists requested in a prompt.";
 
 SourceVaultReplayRoute::usage =
-  "SourceVaultReplayRoute[route_Association, opts] \:306f\:4fdd\:5b58\:6e08\:307f PromptRoute \:3092\:518d\:5b9f\:884c\:30af\:30e9\:30b9\:306b\:5fdc\:3058\:3066\:518d\:69cb\:6210\:3057\:3001\:8a55\:4fa1\:7528\:306e\:5f0f\:6587\:5b57\:5217\:3092\:8fd4\:3059\:3002Replayable \:306f TargetExprString \:3092\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002LightLLM \:306f "NewPrompt" \:7121\:3057\:306a\:3089\:5143\:306e TargetExprString \:3092\:5fa9\:5143\:3057\:3001\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:3092\:4e0e\:3048\:308b\:3068\:8efd\:91cf LLM ("ExtractModel" -> Automatic \:306f SourceVault \:65e2\:5b9a\:30e2\:30c7\:30eb) \:3067\:5404\:30d1\:30e9\:30e1\:30fc\:30bf\:30b9\:30ed\:30c3\:30c8\:306e\:65b0 InputForm \:5024\:3092\:62bd\:51fa\:3057\:3001ParameterTemplate \:3092\:57cb\:3081\:305f\:5f0f\:6587\:5b57\:5217\:3092\:8fd4\:3059\:3002HeavyLLM \:307e\:305f\:306f\:5f0f\:304c\:8a18\:9332\:3055\:308c\:3066\:3044\:306a\:3044\:30eb\:30fc\:30c8\:306f ClaudeEval[...] \:5f62\:5f0f\:306e\:5f0f\:3092\:8fd4\:3059\:3002\:623b\:308a\:5024: <|"Status", "ReplayClass", "ExprString", "SlotValues"|>\:3002\:30aa\:30d7\:30b7\:30e7\:30f3: "NewPrompt" -> Automatic, "ExtractModel" -> Automatic\:3002";
+  "SourceVaultReplayRoute[route_Association, opts] \:306f\:4fdd\:5b58\:6e08\:307f PromptRoute \:3092\:518d\:5b9f\:884c\:30af\:30e9\:30b9\:306b\:5fdc\:3058\:3066\:518d\:69cb\:6210\:3057\:3001\:8a55\:4fa1\:7528\:306e\:5f0f\:6587\:5b57\:5217\:3092\:8fd4\:3059\:3002Replayable \:306f TargetExprString \:3092\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002LightLLM \:306f \\\"NewPrompt\\\" \:7121\:3057\:306a\:3089\:5143\:306e TargetExprString \:3092\:5fa9\:5143\:3057\:3001\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:3092\:4e0e\:3048\:308b\:3068\:8efd\:91cf LLM (\\\"ExtractModel\\\" -> Automatic \:306f SourceVault \:65e2\:5b9a\:30e2\:30c7\:30eb) \:3067\:5404\:30d1\:30e9\:30e1\:30fc\:30bf\:30b9\:30ed\:30c3\:30c8\:306e\:65b0 InputForm \:5024\:3092\:62bd\:51fa\:3057\:3001ParameterTemplate \:3092\:57cb\:3081\:305f\:5f0f\:6587\:5b57\:5217\:3092\:8fd4\:3059\:3002HeavyLLM \:307e\:305f\:306f\:5f0f\:304c\:8a18\:9332\:3055\:308c\:3066\:3044\:306a\:3044\:30eb\:30fc\:30c8\:306f ClaudeEval[...] \:5f62\:5f0f\:306e\:5f0f\:3092\:8fd4\:3059\:3002\:623b\:308a\:5024: <|\\\"Status\\\", \\\"ReplayClass\\\", \\\"ExprString\\\", \\\"SlotValues\\\"|>\:3002\:30aa\:30d7\:30b7\:30e7\:30f3: \\\"NewPrompt\\\" -> Automatic, \\\"ExtractModel\\\" -> Automatic\:3002";
+
+$SourceVaultPromptAutoSave::usage =
+  "$SourceVaultPromptAutoSave (default True) controls whether ClaudeEval " <>
+  "auto-saves every notebook prompt it runs as a new saved PromptRoute " <>
+  "version via SourceVaultAutoSaveLastPrompt. Set to False to disable " <>
+  "automatic capture.";
+
+$SourceVaultPromptSavedProposalActive::usage =
+  "$SourceVaultPromptSavedProposalActive (default True) controls whether " <>
+  "ClaudeEval, before calling the LLM, consults the saved prompts for an " <>
+  "exact (normalized) match and proposes them. Set to False to disable " <>
+  "the saved-prompt proposal at the ClaudeEval entry.";
+
+$SourceVaultPromptBypassOnce::usage =
+  "$SourceVaultPromptBypassOnce is a one-shot normalized-prompt key. When " <>
+  "SourceVaultProposeSavedPromptRoute sees a prompt whose normalized form " <>
+  "matches it, it consumes the key (resets to Missing) and declines, so " <>
+  "ClaudeEval falls through to the legacy LLM path. The \"ask the LLM " <>
+  "again\" button in the saved-prompt list sets this.";
+
+SourceVaultAutoSaveLastPrompt::usage =
+  "SourceVaultAutoSaveLastPrompt[prompt_String, opts] saves the most recent " <>
+  "successful ClaudeEval/ContinueEval run for prompt as a NEW saved " <>
+  "PromptRoute version (it never overwrites an existing version). It is the " <>
+  "default-on capture path called automatically by ClaudeEval; the manual, " <>
+  "memo-bearing counterpart is SaveLastPrompt. Versions for the same " <>
+  "(normalized) prompt share a PromptGroupId. A new version is skipped when " <>
+  "its TargetExprString duplicates the group's newest version. Gated by " <>
+  "$SourceVaultPromptAutoSave. Options: \"Memo\" -> \"\", plus the SaveLastPrompt " <>
+  "options. Returns the SaveLastPrompt result, or <|\"Status\"->\"Skipped\"|>.";
+
+SourceVaultMatchSavedPromptVersions::usage =
+  "SourceVaultMatchSavedPromptVersions[prompt_String, opts] returns the saved " <>
+  "PromptRoutes whose normalized prompt exactly matches prompt (the same " <>
+  "normalization used for PromptHash), across all channels, sorted primary " <>
+  "first then newest. Returns {} when none match. Options: \"Channel\" -> All, " <>
+  "\"IncludeSeed\" -> False.";
+
+SourceVaultPrimaryPromptRoute::usage =
+  "SourceVaultPrimaryPromptRoute[prompt_String] returns the primary saved " <>
+  "PromptRoute for prompt's group, or Missing[\"NoPrimary\"]. A route is " <>
+  "primary when its \"Primary\" field is True (set via " <>
+  "SourceVaultSetPrimaryPromptRoute).";
+
+SourceVaultSetPrimaryPromptRoute::usage =
+  "SourceVaultSetPrimaryPromptRoute[routeId_String, opts] marks the route as " <>
+  "the primary version within its PromptGroupId and clears Primary on its " <>
+  "siblings (across channels). Option \"AutoExecute\" -> True|False sets " <>
+  "whether ClaudeEval may release-and-evaluate the route's frozen expression " <>
+  "without a confirmation dialog; AutoExecute is only honoured for routes " <>
+  "with ReplaySafety \"EnvironmentIndependent\". This is a reversible metadata " <>
+  "toggle so \"DryRun\" defaults to False. Returns Status/RouteId/Channel/" <>
+  "ClearedSiblings.";
+
+SourceVaultDeletePromptRoute::usage =
+  "SourceVaultDeletePromptRoute[routeId_String, opts] removes a saved " <>
+  "PromptRoute from its channel registry (atomic rewrite). Per the datastore " <>
+  "safety rule it is non-destructive by default: \"DryRun\" -> True (the " <>
+  "default) reports the plan, and a real delete requires \"Confirm\" -> True " <>
+  "(and DryRun -> False). Returns Status/RouteId/Channel/Removed/WasPrimary.";
+
+SourceVaultRunPrimaryRoute::usage =
+  "SourceVaultRunPrimaryRoute[groupId_String, opts] is the gated executor for " <>
+  "a primary route's frozen expression. It parses the route's TargetExprString " <>
+  "WITHOUT evaluating it, and evaluates it only when (a) the head is a " <>
+  "ReadOnly/SafeCreate SourceVault callable (it rejects Set/SetDelayed/" <>
+  "AppendTo/ClaudeAttach/SystemCredential and any unclassified head, honouring " <>
+  "the AutoEvaluate-prohibited rule) and (b) the route's ReplaySafety is " <>
+  "\"EnvironmentIndependent\". Otherwise it returns a notice and does not " <>
+  "evaluate. ClaudeEval reaches this only via a HoldComplete[SourceVaultRunPrimaryRoute[..]] " <>
+  "proposal, so ClaudeEval never releases the saved expression directly.";
+
+SourceVaultPromptVersionsUI::usage =
+  "SourceVaultPromptVersionsUI[normKey_String, prompt_String, opts] renders the " <>
+  "saved versions for a prompt group (via SourceVaultFormatPromptRouteList) " <>
+  "with a header and an \"ask the LLM again\" button that bypasses the saved " <>
+  "proposal once and re-runs ClaudeEval through the LLM. ClaudeEval shows this " <>
+  "instead of calling the LLM when saved versions exist but no auto-execute " <>
+  "primary is set.";
+
+SourceVaultProposeSavedPromptRoute::usage =
+  "SourceVaultProposeSavedPromptRoute[prompt_String, opts] is the ClaudeEval-entry " <>
+  "saved-prompt proposer (weak-called from claudecode before the LLM call). It " <>
+  "returns a PromptRouteProposal whose \"ProposedExpression\" is either " <>
+  "HoldComplete[SourceVaultRunPrimaryRoute[groupId]] (when an EnvironmentIndependent " <>
+  "primary with AutoExecute exists) or HoldComplete[SourceVaultPromptVersionsUI[..]] " <>
+  "(when saved versions exist). It returns Status NotDispatched when the feature " <>
+  "is off, the one-shot bypass key matches, or no saved version matches.";
+
+SourceVaultUpdatePromptRouteMemo::usage =
+  "SourceVaultUpdatePromptRouteMemo[routeId_String, memo_String] sets the " <>
+  "Memo field of a saved PromptRoute (atomic channel rewrite) and bumps " <>
+  "UpdatedAt. Used by the editable Memo cell in SourceVaultFormatPromptRouteList " <>
+  "so a memo can be added or revised after a prompt was auto-saved. Memo is " <>
+  "stored in plaintext even for encrypted routes (it is the display label). " <>
+  "Returns Status/RouteId/Channel/Memo.";
+
+SourceVaultClassifyPromptReplaySafety::usage =
+  "SourceVaultClassifyPromptReplaySafety[prompt_String, exprString_, contextBinding_] " <>
+  "classifies whether a generated expression is safe to replay as a frozen " <>
+  "constant. Returns <|\"ReplaySafety\" -> \"EnvironmentIndependent\" | " <>
+  "\"ContextBound\" | \"Unknown\", \"ContextBinding\" -> <|...|>|>. A prompt is " <>
+  "ContextBound when its expression literally embeds captured notebook context, " <>
+  "references session-transient symbols (%/Out/In/SelectedCells/NotebookRead/...), " <>
+  "or the prompt uses deictic words (\"the cell above\", etc.). Only " <>
+  "EnvironmentIndependent routes may be auto-executed; ContextBound routes are " <>
+  "forced to ReplayClass HeavyLLM (re-resolved by the LLM with fresh context).";
+
+SourceVaultClassifyPromptContextDependency::usage =
+  "SourceVaultClassifyPromptContextDependency[prompt_String] is an LLM-free, " <>
+  "prompt-only prefilter that infers what context a NEW prompt requires, BEFORE " <>
+  "any expression is generated (unlike SourceVaultClassifyPromptReplaySafety, " <>
+  "which classifies an already-generated expression). It shares the deictic " <>
+  "pattern table with iSVPRDeicticQ and never conflates notebook references with " <>
+  "conversation-history references. Returns <|\"DependencyKinds\" -> {...}, " <>
+  "\"RequiredContext\" -> <|\"Notebook\" -> <|\"Mode\" -> \"None\" | " <>
+  "\"PreviousCellGroup\" | \"Tail\" | \"Full\"|>, \"SelectedCells\" -> True|False, " <>
+  "\"History\" -> <|\"Mode\" -> \"None\" | \"Recent\"|>|>, \"Confidence\" -> " <>
+  "\"High\"|\"Low\", \"Reasons\" -> {...}|>. RequiredContext is the required " <>
+  "MINIMUM (a floor); a context planner combines it with the requested/default " <>
+  "plan. When nothing is detected the floor is empty (DependencyKinds " <>
+  "{\"SelfContained\"}, Confidence \"Low\") so trivial prompts get minimal context.";
 
 Begin["`Private`"];
 
@@ -220,9 +389,9 @@ Begin["`Private`"];
    Version / phase constants.
    ------------------------------------------------------------ *)
 
-$SourceVaultPromptRouterVersion = "2.0.0-proposeContract (2026-05-25)";
+$SourceVaultPromptRouterVersion = "2.1.0-savedPromptVersions (2026-06-09)";
 
-iSVPRImplementationPhase[] := "ProposeContract-spec-v11";
+iSVPRImplementationPhase[] := "SavedPromptVersions-spec-v11";
 
 (* ------------------------------------------------------------
    Availability detection.
@@ -1354,11 +1523,14 @@ iSVPRExtractSlotValuesDiag[route_Association, newPrompt_String, opts : OptionsPa
       "\:4e0a\:8a18\:306e\:5404\:30b9\:30ed\:30c3\:30c8\:540d\:3092\:30ad\:30fc\:3001\:65b0\:3057\:3044 InputForm \:6587\:5b57\:5217\:3092\:5024\:3068\:3059\:308b JSON \:3092\:8fd4\:3057\:3066\:304f\:3060\:3055\:3044\:3002"];
     fullPrompt = sysPrompt <> "\n\n" <> userPrompt;
     (* LLM \:547c\:3073\:51fa\:3057\:3002Model \:6307\:5b9a\:304c Automatic \:4ee5\:5916\:306a\:3089\:6e21\:3059\:3002
-       Model \:306f System` \:30b7\:30f3\:30dc\:30eb\:3067 ClaudeQueryBg \:306e\:30aa\:30d7\:30b7\:30e7\:30f3\:540d\:3002 *)
+       NOTE: the Model option symbol lives in ClaudeCode`Private`, so a bare
+       Model symbol parsed here becomes SourceVault`Private`Model and is
+       silently ignored by ClaudeQueryBg. Pass the option by its string
+       name instead (OptionValue resolves string names by symbol name). *)
     resp = Quiet @ Check[
       If[model === Automatic,
         queryBg[fullPrompt],
-        queryBg[fullPrompt, Model -> model]],
+        queryBg[fullPrompt, "Model" -> model]],
       $Failed];
     If[!StringQ[resp],
       Return[<|"Values" -> <||>, "Reason" -> "LLMCallFailed",
@@ -2439,7 +2611,7 @@ Options[SourceVaultResolveModelForPromptRouter] = {};
 SourceVaultResolveModelForPromptRouter[query_Association,
                                        opts:OptionsPattern[]] :=
   Module[{nq, privLevel, resolverAvailable, raw,
-          resolvedDomain, cloudUsed},
+          resolvedDomain, cloudUsed, routingClass, registryClass = None},
     (* spec 12.1: a String ModelIntent is required *)
     If[!StringQ[Lookup[query, "ModelIntent", Null]],
       Return[<|"Status" -> "Failed",
@@ -2449,6 +2621,28 @@ SourceVaultResolveModelForPromptRouter[query_Association,
 
     nq        = iSVPRNormalizeModelQuery[query];
     privLevel = nq["PrivacyLevel"];
+
+    (* Routing power policy (X0b/B-side: power-aware light-model routing).
+       claudecode owns $ClaudeRoutingModelPolicy + ClaudeRoutingModelClass[];
+       SourceVault weak-calls it (dependency direction SourceVault -> claudecode,
+       rule 11) and only for LIGHT routing. "Off" stops light-tier dispatch (the
+       caller falls back to $ClaudeModel); "Cloud" forces a cloud light model
+       (rule 02: resolved by trust domain, never a hardcoded name); "Local"/None
+       leave the query unchanged (backward compatible). The PrivacyLevel >= 0.5
+       floor below still wins over a "Cloud" policy. *)
+    routingClass = Which[
+      Lookup[nq, "WeightClass", Automatic] =!= "Light", None,
+      Names["ClaudeCode`ClaudeRoutingModelClass"] === {}, None,
+      True, Quiet @ Check[Symbol["ClaudeCode`ClaudeRoutingModelClass"][], None]];
+    If[routingClass === "Off",
+      Return[<|
+        "Status"        -> "RoutingDisabled",
+        "Reason"        -> "RoutingPolicyOff",
+        "RoutingClass"  -> "Off",
+        "Requested"     -> nq,
+        "RouterVersion" -> $SourceVaultPromptRouterVersion|>]];
+    If[routingClass === "Cloud",
+      nq = Append[nq, "AllowedTrustDomains" -> {"Cloud"}]];
 
     (* weak resolver availability check *)
     resolverAvailable =
@@ -2460,9 +2654,31 @@ SourceVaultResolveModelForPromptRouter[query_Association,
         "Requested" -> nq,
         "RouterVersion" -> $SourceVaultPromptRouterVersion|>]];
 
+    (* X2/X3 (model classification): the host resolver matches registry entries
+       by Class ("Light-Local" / "Light-Cloud" / "Heavy-Cloud" / "Heavy-Local"),
+       not by the spec-12.1 contract keys. Translate WeightClass + trust
+       preference into a Class query so an explicit Light/Heavy intent resolves a
+       concrete model. Automatic weight keeps the old NeedsModelClassification
+       behaviour (we do not guess a tier). *)
+    With[{wc = Lookup[nq, "WeightClass", Automatic],
+          atd = Lookup[nq, "AllowedTrustDomains", Automatic]},
+      Module[{trustKind},
+        trustKind = Which[
+          privLevel >= 0.5, "Local",                       (* privacy floor wins *)
+          ListQ[atd] && MemberQ[atd, "Cloud"] &&
+            FreeQ[atd, "Local"] && FreeQ[atd, "Private"], "Cloud",
+          ListQ[atd] && (MemberQ[atd, "Local"] || MemberQ[atd, "Private"]), "Local",
+          wc === "Heavy", "Cloud",                         (* heavy default -> cloud *)
+          True, "Local"];                                  (* light default -> local *)
+        registryClass = Which[
+          wc === "Light", "Light-" <> trustKind,
+          wc === "Heavy", "Heavy-" <> trustKind,
+          True, None]]];
+
     (* delegate the actual model choice to the host resolver *)
     raw = Quiet @ Check[
-      Symbol["SourceVault`SourceVaultResolve"]["Model", nq],
+      Symbol["SourceVault`SourceVaultResolve"]["Model",
+        If[StringQ[registryClass], <|"Class" -> registryClass|>, nq]],
       $Failed];
 
     If[raw === $Failed || raw === Null || MissingQ[raw],
@@ -2493,6 +2709,8 @@ SourceVaultResolveModelForPromptRouter[query_Association,
       "Status"            -> "Resolved",
       "Requested"         -> nq,
       "Resolved"          -> raw,
+      "RoutingClass"      -> routingClass,
+      "ResolvedClass"     -> registryClass,
       "FallbackKind"      -> If[AssociationQ[raw],
         Lookup[raw, "FallbackKind", Missing["DelegatedToResolver"]],
         Missing["DelegatedToResolver"]],
@@ -3127,9 +3345,19 @@ iClassifyProviderTrustDomain[_] :=
 (* resolve a TrustDomain from a host-resolver result: an explicit
    TrustDomain wins; otherwise fall back to label classification *)
 iResolveRawTrustDomain[raw_Association] :=
-  Module[{td, label},
+  Module[{td, cls, label},
     td = Lookup[raw, "TrustDomain", Missing["NotProvided"]];
     If[StringQ[td], Return[td]];
+    (* the registry Class encodes the trust domain asserted at registration
+       time: a "*-Local" entry is a confirmed-local model even when the provider
+       label (e.g. lmstudio, which can also point at a remote endpoint) is not
+       generically classifiable. Per-model Class is more authoritative than the
+       generic provider classification, so it wins over the label fallback. *)
+    cls = Lookup[raw, "Class", Missing["NoClass"]];
+    If[StringQ[cls],
+      Which[
+        StringContainsQ[cls, "Local"], Return["Local"],
+        StringContainsQ[cls, "Cloud"], Return["Cloud"]]];
     label = SelectFirst[
       {Lookup[raw, "Provider", Null],
        Lookup[raw, "ProviderLabel", Null],
@@ -3260,15 +3488,26 @@ Options[SaveLastPrompt] = {
   "Encrypt" -> False,
   "DryRun"  -> False,
   "RouteId" -> Automatic,
-  "ReplayClass" -> Automatic
+  "ReplayClass" -> Automatic,
+  "PromptText" -> Automatic,
+  "TargetExprString" -> Automatic,
+  "ForceNewVersion" -> False,
+  "Auto" -> False
 };
 
 SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
   Module[{encrypt, channel, dryRun, routeId, capture, run, rawPrompt,
           privComponents, privRes, privLevel, cloudFallback, allowedDomains,
-          ts, targetExpr, route, regResult},
+          ts, targetExpr, route, regResult, promptFingerprint,
+          promptTextOpt, targetExprOpt, forceNew, autoMode,
+          gid, versionNum, deterministicId, existingGroup,
+          ctxBinding, safetyRes, replaySafety, contextBinding},
 
     encrypt = TrueQ[OptionValue[SaveLastPrompt, {opts}, "Encrypt"]];
+    promptTextOpt = OptionValue[SaveLastPrompt, {opts}, "PromptText"];
+    targetExprOpt = OptionValue[SaveLastPrompt, {opts}, "TargetExprString"];
+    forceNew = TrueQ[OptionValue[SaveLastPrompt, {opts}, "ForceNewVersion"]];
+    autoMode = TrueQ[OptionValue[SaveLastPrompt, {opts}, "Auto"]];
     (* encryption-at-rest: 機密 (raw prompt / TargetExprString) を SourceVaultEncryptedPut で
        encrypt-then-MAC し、route に inline EncryptedPayload として埋める (後段で適用)。
        モジュール未ロード時は平文 fallback せず明示エラー。 *)
@@ -3282,22 +3521,45 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
     dryRun  = TrueQ[OptionValue[SaveLastPrompt, {opts}, "DryRun"]];
     routeId = OptionValue[SaveLastPrompt, {opts}, "RouteId"];
 
-    (* fetch the last successful prompt run *)
+    (* fetch the last successful prompt run. The auto-save path supplies
+       an explicit "PromptText"; if no PromptRun has been recorded yet
+       (the plain LLM ClaudeEval path does not record one) we tolerate
+       an empty run and rely on the override + shared expr string. *)
     capture = SourceVaultCaptureLastPromptRun[];
     If[!AssociationQ[capture] ||
        Lookup[capture, "Status", ""] =!= "OK",
-      Return[<|"Status" -> "Failed",
-        "Reason" -> "NoLastPromptRun",
-        "Hint" ->
-          "No recent successful ClaudeEval / ContinueEval run found to save."|>]];
-    run = Lookup[capture, "PromptRun", <||>];
-    If[!AssociationQ[run],
-      Return[<|"Status" -> "Failed", "Reason" -> "BadPromptRun"|>]];
+      If[StringQ[promptTextOpt],
+        run = <||>,
+        Return[<|"Status" -> "Failed",
+          "Reason" -> "NoLastPromptRun",
+          "Hint" ->
+            "No recent successful ClaudeEval / ContinueEval run found to save."|>]],
+      run = Lookup[capture, "PromptRun", <||>]];
+    If[!AssociationQ[run], run = <||>];
 
-    (* raw prompt: prefer stored raw, else fall back to hash note *)
-    rawPrompt = Lookup[run, "RawPrompt", Missing["NotStored"]];
-    If[!StringQ[rawPrompt],
-      rawPrompt = Lookup[run, "PromptText", Missing["NotStored"]]];
+    (* raw prompt: explicit override wins, else stored raw, else note *)
+    rawPrompt = Which[
+      StringQ[promptTextOpt],                          promptTextOpt,
+      StringQ[Lookup[run, "RawPrompt", Missing[]]],    run["RawPrompt"],
+      StringQ[Lookup[run, "PromptText", Missing[]]],   run["PromptText"],
+      True,                                            Missing["NotStored"]];
+
+    (* fingerprint of the prompt actually being saved. The captured
+       run can be unrelated to an explicit "PromptText": the plain
+       LLM ClaudeEval path records no PromptRun, so the capture may
+       return a run that is days old. Reusing that run's PromptHash
+       (or its Privacy / Target) would bind this route to a prompt
+       it never saw. Recompute from the raw prompt with the same
+       normalization + hash as SourceVaultPromptRunRecord, and drop
+       the run entirely when its hash does not match. *)
+    promptFingerprint = If[StringQ[rawPrompt],
+      "sha256:" <> Hash[iSVPRNormalizePrompt[rawPrompt],
+        "SHA256", "HexString"],
+      Lookup[run, "PromptHash", Missing["NoHash"]]];
+    If[StringQ[promptTextOpt] &&
+       StringQ[Lookup[run, "PromptHash", Missing[]]] &&
+       run["PromptHash"] =!= promptFingerprint,
+      run = <||>];
 
     (* privacy tracking (spec 11): resolve from whatever the run
        recorded; default components are empty -> level 0.0 *)
@@ -3317,20 +3579,56 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
         "private", "public"]];
 
     ts = iSVPRTimestamp[];
-    If[!StringQ[routeId] || routeId === "",
-      routeId = iSVPRMakeSavedRouteId[
-        If[StringQ[rawPrompt], rawPrompt, memo]]];
 
-    targetExpr = iSVPRRunTargetExpr[run];
-    (* run \:306b\:63d0\:6848\:5f0f\:304c\:8a18\:9332\:3055\:308c\:3066\:3044\:306a\:3044\:5834\:5408\:3001ClaudeEval \:304c\:76f4\:8fd1\:306e PromptRouter
-       \:7d4c\:8def\:3067\:5b9f\:884c\:3057\:305f\:63d0\:6848\:5f0f (InputForm \:6587\:5b57\:5217) \:3092\:5171\:6709\:5909\:6570\:304b\:3089\:62fe\:3046\:3002
-       \:3053\:308c\:304c Replayable (LLM \:4e0d\:8981\:518d\:5b9f\:884c) \:306e\:6839\:5e79\:3002 *)
+    (* target expression: explicit override wins; else the run's
+       proposed/target string; else the shared expr ClaudeEval recorded
+       for the most recent PromptRouter / runtime release. This is the
+       root of Replayable (no-LLM replay). *)
+    targetExpr = Which[
+      StringQ[targetExprOpt], targetExprOpt,
+      True,                   iSVPRRunTargetExpr[run]];
     If[!StringQ[targetExpr],
       Module[{shared},
         shared = Quiet @ Check[
           Symbol["ClaudeCode`$ClaudeEvalLastProposedExprString"],
           Missing["NotCaptured"]];
         If[StringQ[shared] && shared =!= "", targetExpr = shared]]];
+
+    (* ReplaySafety: is the expression a pure function of the live world,
+       or did it bake a transient notebook input as a literal? The context
+       binding ClaudeEval recorded for this run is the authoritative cue. *)
+    (* ClaudeEval records the surrounding notebook context it captured
+       for this run in ClaudeCode`$ClaudeEvalNotebookContext. We read it
+       directly (weak, no dependency) as the authoritative cue for
+       whether the generated expression baked a transient cell as a
+       literal. No new claudecode global is required. *)
+    ctxBinding = Module[{ctx},
+      ctx = Quiet @ Check[
+        Symbol["ClaudeCode`$ClaudeEvalNotebookContext"], ""];
+      If[!StringQ[ctx], ctx = ""];
+      <|"ContextText" -> ctx, "UsedNotebookContext" -> (ctx =!= "")|>];
+    safetyRes = SourceVaultClassifyPromptReplaySafety[
+      If[StringQ[rawPrompt], rawPrompt, ""],
+      If[StringQ[targetExpr], targetExpr, ""], ctxBinding];
+    replaySafety  = Lookup[safetyRes, "ReplaySafety", "Unknown"];
+    contextBinding = Lookup[safetyRes, "ContextBinding", <||>];
+
+    (* version grouping: every save is a new version sharing a
+       PromptGroupId, never overwriting. The first save of a never-seen
+       prompt keeps the deterministic id (back-compat / tests); later
+       saves and all auto-saves create a versioned sibling. *)
+    gid = iSVPRPromptGroupId[If[StringQ[rawPrompt], rawPrompt, memo]];
+    existingGroup = If[StringQ[gid], iSVPRGroupRoutes[gid], {}];
+    deterministicId = iSVPRMakeSavedRouteId[
+      If[StringQ[rawPrompt], rawPrompt, memo]];
+    versionNum = If[StringQ[gid], iSVPRNextVersion[gid], 1];
+    If[!StringQ[routeId] || routeId === "",
+      routeId = Which[
+        forceNew,             iSVPRMakeVersionedRouteId[
+                                If[StringQ[rawPrompt], rawPrompt, memo]],
+        existingGroup === {}, deterministicId,
+        True,                 iSVPRMakeVersionedRouteId[
+                                If[StringQ[rawPrompt], rawPrompt, memo]]]];
 
     (* build the PromptRoute. We store the raw prompt as an Example
        and the memo as a first-class field for searching/display.
@@ -3345,10 +3643,16 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
       "Memo"         -> memo,
       "CreatedAt"    -> ts,
       "UpdatedAt"    -> ts,
+      "PromptGroupId"-> gid,
+      "Version"      -> versionNum,
+      "Primary"      -> False,
+      "AutoExecute"  -> False,
+      "ReplaySafety" -> replaySafety,
+      "ContextBinding"-> contextBinding,
+      "Source"       -> If[autoMode, "AutoCapture", "ManualSaveLastPrompt"],
       "Matcher" -> <|
         "Kind" -> "SavedPrompt",
-        "PromptFingerprints" ->
-          {Lookup[run, "PromptHash", Missing["NoHash"]]},
+        "PromptFingerprints" -> {promptFingerprint},
         "Examples" ->
           If[StringQ[rawPrompt], {rawPrompt}, {}]
       |>,
@@ -3373,6 +3677,9 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
             paramInfo = iSVPRParameterize[targetExpr];
             If[Length[Lookup[paramInfo, "Slots", {}]] > 0,
               autoClass = "LightLLM"]];
+          (* ContextBound: \:51cd\:7d50\:5f0f\:306f\:53e4\:3044\:30b3\:30f3\:30c6\:30ad\:30b9\:30c8\:3092\:518d\:751f\:3057\:3066\:3057\:307e\:3046\:306e\:3067
+             \:5fc5\:305a HeavyLLM (\:6bce\:56de\:73fe\:5728\:30b3\:30f3\:30c6\:30ad\:30b9\:30c8\:3067 LLM \:518d\:89e3\:6c7a) \:306b\:843d\:3068\:3059 *)
+          If[replaySafety === "ContextBound", autoClass = "HeavyLLM"];
           (* \:81ea\:52d5\:5224\:5b9a\:3092\:512a\:5148\:3001\:30e6\:30fc\:30b6\:30fc\:6307\:5b9a (Automatic \:4ee5\:5916) \:304c\:3042\:308c\:3070\:4e0a\:66f8\:304d *)
           If[MemberQ[{"Replayable", "LightLLM", "HeavyLLM"}, userClass],
             userClass, autoClass]],
@@ -3408,6 +3715,8 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
       Return[<|"Status" -> "DryRun", "RouteId" -> routeId,
         "Channel" -> channel, "Memo" -> memo,
         "PrivacyLevel" -> privLevel,
+        "PromptGroupId" -> gid, "Version" -> versionNum,
+        "ReplaySafety" -> replaySafety,
         "PromptStorageClass" -> Lookup[route["Privacy"], "PromptStorageClass", "Plaintext"],
         "Route" -> route|>]];
 
@@ -3420,6 +3729,8 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
 
     <|"Status" -> "OK", "RouteId" -> routeId, "Channel" -> channel,
       "Memo" -> memo, "PrivacyLevel" -> privLevel,
+      "PromptGroupId" -> gid, "Version" -> versionNum,
+      "ReplaySafety" -> replaySafety,
       "ReplayClass" -> Lookup[route, "ReplayClass", "HeavyLLM"],
       "ParameterSlots" -> Lookup[route, "ParameterSlots", {}],
       "TargetExprString" -> Lookup[route, "TargetExprString", Missing["NoTargetExpr"]],
@@ -3654,7 +3965,7 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
         "\:8a72\:5f53\:3059\:308b\:4fdd\:5b58\:6e08\:307f\:30d7\:30ed\:30f3\:30d7\:30c8\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
         FontFamily -> "Yu Gothic UI"]]];
     cols = {"Prompt", "Memo", "Target", "CreatedAt", "UpdatedAt",
-            "Privacy", "Actions"};
+            "Privacy", "State", "Actions"};
     header = Map[
       Style[#, Bold, FontFamily -> "Yu Gothic UI"] &, cols];
     body = Map[
@@ -3688,19 +3999,42 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
           {
             (* Prompt \:5217: \:30af\:30ea\:30c3\:30af\:3067 ClaudeEval[\"<\:30d7\:30ed\:30f3\:30d7\:30c8>\"] \:3092\:5165\:529b\:30bb\:30eb\:306b\:66f8\:304f *)
             If[StringQ[promptEval],
-              Button[
-                Style[prompt, FontFamily -> "Yu Gothic UI"],
-                With[{pe = promptEval},
-                  Module[{target = InputNotebook[]},
-                    If[Head[target] === NotebookObject,
-                      NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                        target, pe, False]]]],
-                Appearance -> "Frameless",
-                BaseStyle -> {},
-                Method -> "Queued"],
-              Style[prompt, FontFamily -> "Yu Gothic UI"]],
-            Style[If[StringQ[memo], memo, ""],
-              FontFamily -> "Yu Gothic UI", GrayLevel[0.35]],
+              Tooltip[
+                Button[
+                  Style[iSVPRTruncateDisplay[prompt],
+                    FontFamily -> "Yu Gothic UI"],
+                  With[{pe = promptEval},
+                    Module[{target = InputNotebook[]},
+                      If[Head[target] === NotebookObject,
+                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
+                          target, pe, False]]]],
+                  Appearance -> "Frameless",
+                  BaseStyle -> {},
+                  Method -> "Queued"],
+                prompt],
+              Tooltip[
+                Style[iSVPRTruncateDisplay[prompt], FontFamily -> "Yu Gothic UI"],
+                prompt]],
+            (* Memo: editable in place (auto-saved prompts have no memo;
+               add/revise here and 保存 writes it back to the registry) *)
+            With[{rid = routeId, m0 = If[StringQ[memo], memo, ""]},
+              DynamicModule[{m = m0, saved = False},
+                Column[{
+                  InputField[Dynamic[m], String,
+                    FieldSize -> {14, {1, 5}},
+                    BaseStyle -> {FontFamily -> "Yu Gothic UI", FontSize -> 10}],
+                  Row[{
+                    Button[
+                      Style["\:4fdd\:5b58", FontFamily -> "Yu Gothic UI",
+                        FontSize -> 9, RGBColor[0.2, 0.38, 0.65]],
+                      (SourceVaultUpdatePromptRouteMemo[rid,
+                         If[StringQ[m], m, ""]]; saved = True),
+                      Appearance -> "Frameless", BaseStyle -> {"Hyperlink"},
+                      Method -> "Queued"],
+                    Dynamic[If[TrueQ[saved],
+                      Style[" \:2713", RGBColor[0.15, 0.45, 0.30], FontSize -> 9],
+                      ""]]}]
+                }, Spacings -> 0.1]]],
             Column[{
               Style[targetSym, FontFamily -> "Courier"],
               Style[replayClass, FontFamily -> "Yu Gothic UI", FontSize -> 9,
@@ -3718,6 +4052,23 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                 privLabel === "Public", GrayLevel[0.5],
                 privLabel === "Restricted", RGBColor[0.6, 0.5, 0.2],
                 True, RGBColor[0.7, 0.15, 0.15]]],
+            (* State: PRIMARY / AUTO flags + ReplaySafety (Nothing
+               collapses out of the Column when a flag is unset) *)
+            Column[{
+              If[TrueQ[Lookup[rt, "Primary", False]],
+                Style["PRIMARY", Bold, FontSize -> 9, RGBColor[0.5, 0.3, 0.55]],
+                Nothing],
+              If[TrueQ[Lookup[rt, "AutoExecute", False]],
+                Style["AUTO", Bold, FontSize -> 9, RGBColor[0.15, 0.45, 0.30]],
+                Nothing],
+              Style[Lookup[rt, "ReplaySafety", "?"], FontSize -> 8,
+                Which[
+                  Lookup[rt, "ReplaySafety", ""] === "EnvironmentIndependent",
+                    RGBColor[0.15, 0.45, 0.30],
+                  Lookup[rt, "ReplaySafety", ""] === "ContextBound",
+                    RGBColor[0.6, 0.5, 0.2],
+                  True, GrayLevel[0.5]]]
+            }, Spacings -> 0.15],
             Row[{
               (* Preview: dry-run, shows what would execute *)
               Button[
@@ -3734,42 +4085,34 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                 BaseStyle -> {"Hyperlink"},
                 Method -> "Queued"],
               "  ",
-              (* Run: execute now \:3002\:5b9f\:884c\:7d50\:679c\:3092\:30c0\:30a4\:30a2\:30ed\:30b0\:3067\:8868\:793a\:3057\:30fb
-                 \:5b9f\:884c\:4e2d\:304b\:5b8c\:4e86\:304b\:304c\:30e6\:30fc\:30b6\:306b\:5206\:304b\:308b\:3088\:3046\:306b\:3059\:308b *)
+              (* Run: ToInput + \:81ea\:52d5\:8a55\:4fa1\:3002\:4fdd\:5b58\:5f0f\:3092\:65b0\:898f\:5165\:529b\:30bb\:30eb\:306b
+                 \:66f8\:304d\:8fbc\:307f\:3001\:305d\:306e\:307e\:307e\:8a55\:4fa1\:3059\:308b (ToInput \:3068\:540c\:30ed\:30b8\:30c3\:30af\:3067
+                 \:6700\:7d42\:5f15\:6570\:306e\:8a55\:4fa1\:30d5\:30e9\:30b0\:3060\:3051 True)\:3002 *)
               Button[
                 Style["Run", FontFamily -> "Yu Gothic UI", FontSize -> 10,
                   RGBColor[0.15, 0.45, 0.30]],
-                With[{p = iSVPRRouteDisplayPrompt[rt], rid = routeId,
+                With[{ie = proposedExpr, pe = promptEval,
                       rc = replayClass, theRoute = rt},
-                  Module[{res, replay, exprStr, target},
+                  Module[{target = InputNotebook[], replay, exprStr},
                     If[rc === "LightLLM",
-                      (* LightLLM: \:69cb\:9020\:5316\:30c0\:30a4\:30a2\:30ed\:30b0\:3067\:5f0f\:30fb\:30b9\:30ed\:30c3\:30c8\:3092\:898b\:305b\:3066\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:3092\:5165\:529b\:2192\:518d\:5b9f\:884c *)
+                      (* LightLLM: \:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:2192\:518d\:69cb\:6210\:5f0f\:3092\:66f8\:3044\:3066\:8a55\:4fa1 *)
                       replay = Quiet @ Check[
                         iSVPRLightLLMReplayDialog[theRoute], $Failed];
                       If[replay === $Canceled,
                         Return[Null, Module]];
                       exprStr = If[AssociationQ[replay],
                         Lookup[replay, "ExprString", Missing[]], Missing[]];
-                      If[!StringQ[exprStr],
-                        MessageDialog[Style[
-                          "\:ff08\:518d\:5b9f\:884c\:5f0f\:306e\:751f\:6210\:306b\:5931\:6557\:3057\:307e\:3057\:305f\:ff09",
-                          RGBColor[0.7, 0.15, 0.15]]];
-                        Return[Null, Module]];
-                      target = InputNotebook[];
-                      If[Head[target] === NotebookObject,
+                      If[!StringQ[exprStr], exprStr = ie];
+                      If[!StringQ[exprStr], exprStr = pe];
+                      If[Head[target] === NotebookObject && StringQ[exprStr],
                         NBAccess`NBWriteInputCellAndMaybeEvaluate[
                           target, exprStr, True]],
-                      (* Replayable / HeavyLLM: \:5f93\:6765\:901a\:308a SourceVaultExecutePromptRoute *)
-                      res = Quiet @ Check[
-                        SourceVaultExecutePromptRoute[p], $Failed];
-                      MessageDialog[
-                        Column[{
-                          Style["Run: " <> rid, Bold],
-                          Style["Prompt: " <> ToString[p], FontSize -> 10],
-                          If[res === $Failed,
-                            Style["(\:5b9f\:884c\:306b\:5931\:6557\:3057\:307e\:3057\:305f)",
-                              RGBColor[0.7, 0.15, 0.15]],
-                            res]}]]]]],
+                      (* Replayable / HeavyLLM: \:4fdd\:5b58\:5f0f\:3092\:66f8\:3044\:3066\:8a55\:4fa1\:3002
+                         \:5f0f\:304c\:7121\:3051\:308c\:3070\:30d7\:30ed\:30f3\:30d7\:30c8\:306e ClaudeEval \:5f0f\:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af *)
+                      exprStr = If[StringQ[ie], ie, pe];
+                      If[Head[target] === NotebookObject && StringQ[exprStr],
+                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
+                          target, exprStr, True]]]]],
                 Appearance -> "Frameless",
                 BaseStyle -> {"Hyperlink"},
                 Method -> "Queued"],
@@ -3800,6 +4143,59 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                           target, ie, False]]]]],
                 Appearance -> "Frameless",
                 BaseStyle -> {"Hyperlink"},
+                Method -> "Queued"],
+              "  ",
+              (* Primary\:8a2d\:5b9a: \:30b0\:30eb\:30fc\:30d7\:5185\:3067\:3053\:306e\:7248\:3092\:30d7\:30e9\:30a4\:30de\:30ea\:306b\:3002
+                 EnvironmentIndependent \:306e\:5834\:5408\:306e\:307f\:300cPrimary+\:81ea\:52d5\:5b9f\:884c\:300d\:3092\:63d0\:793a\:3002 *)
+              Button[
+                Style["Primary\:8a2d\:5b9a", FontFamily -> "Yu Gothic UI",
+                  FontSize -> 10, RGBColor[0.5, 0.3, 0.55]],
+                With[{rid = routeId,
+                      safe = Lookup[rt, "ReplaySafety", "Unknown"]},
+                  Module[{choice},
+                    choice = ChoiceDialog[
+                      Column[{
+                        Style["\:30d7\:30e9\:30a4\:30de\:30ea\:8a2d\:5b9a: " <> rid, Bold],
+                        If[safe === "EnvironmentIndependent",
+                          Style["\:81ea\:52d5\:5b9f\:884c\:3082\:8a31\:53ef\:3067\:304d\:307e\:3059\:3002",
+                            FontSize -> 10],
+                          Style["\:3053\:306e\:5f0f\:306f\:74b0\:5883\:4f9d\:5b58\:ff08" <> ToString[safe] <>
+                            "\:ff09\:306e\:305f\:3081\:81ea\:52d5\:5b9f\:884c\:306f\:3067\:304d\:307e\:305b\:3093\:3002",
+                            FontSize -> 10, RGBColor[0.6, 0.5, 0.2]]]}],
+                      Flatten[{
+                        "Primary\:306e\:307f" -> "PrimaryOnly",
+                        If[safe === "EnvironmentIndependent",
+                          {"Primary+\:81ea\:52d5\:5b9f\:884c" -> "PrimaryAuto"}, {}],
+                        "\:30ad\:30e3\:30f3\:30bb\:30eb" -> $Canceled}]];
+                    If[choice =!= $Canceled,
+                      MessageDialog[Column[{
+                        Style["Primary\:8a2d\:5b9a\:5b8c\:4e86", Bold],
+                        SourceVaultSetPrimaryPromptRoute[rid,
+                          "AutoExecute" -> (choice === "PrimaryAuto")],
+                        Style["\:6700\:65b0\:72b6\:614b\:306f\:518d\:8868\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
+                          FontSize -> 10, GrayLevel[0.4]]}]]]]],
+                Appearance -> "Frameless",
+                BaseStyle -> {"Hyperlink"},
+                Method -> "Queued"],
+              "  ",
+              (* \:524a\:9664: \:78ba\:8a8d\:30c0\:30a4\:30a2\:30ed\:30b0\:5f8c\:306b DryRun->False, Confirm->True \:3067\:5b9f\:524a\:9664 *)
+              Button[
+                Style["\:524a\:9664", FontFamily -> "Yu Gothic UI",
+                  FontSize -> 10, RGBColor[0.7, 0.15, 0.15]],
+                With[{rid = routeId},
+                  Module[{ok},
+                    ok = ChoiceDialog[
+                      Style["\:524a\:9664\:3057\:307e\:3059\:304b: " <> rid,
+                        RGBColor[0.7, 0.15, 0.15]]];
+                    If[TrueQ[ok],
+                      MessageDialog[Column[{
+                        Style["\:524a\:9664\:5b8c\:4e86", Bold],
+                        SourceVaultDeletePromptRoute[rid,
+                          "DryRun" -> False, "Confirm" -> True],
+                        Style["\:6700\:65b0\:72b6\:614b\:306f\:518d\:8868\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
+                          FontSize -> 10, GrayLevel[0.4]]}]]]]],
+                Appearance -> "Frameless",
+                BaseStyle -> {"Hyperlink"},
                 Method -> "Queued"]
             }]
           }]],
@@ -3819,6 +4215,933 @@ SourceVaultFormatPromptRouteList[___] :=
   <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
     "Hint" ->
       "Expected SourceVaultFormatPromptRouteList[routes_List, opts]."|>;
+
+
+(* ============================================================
+   Order 9: prompt capture (default-on) / version grouping /
+   primary auto-execute / ReplaySafety.
+
+   A "saved prompt" is now versioned: every save of the same
+   (normalized) prompt becomes a new PromptRoute that shares a
+   PromptGroupId. One version per group may be Primary; a Primary
+   version may additionally be AutoExecute, in which case ClaudeEval
+   releases-and-evaluates its frozen expression -- but only when the
+   expression is ReadOnly/SafeCreate AND environment-independent.
+
+   ReplaySafety distinguishes an expression that is a pure function
+   of the live world (EnvironmentIndependent, e.g. uses Today /
+   DatePlus / a named file) from one that baked a transient
+   environment input -- a captured notebook cell, % / Out, a
+   selection -- as a literal (ContextBound). Only the former may be
+   auto-executed; the latter is forced to ReplayClass HeavyLLM and is
+   re-resolved by the LLM with fresh context.
+
+   All-ASCII source; Japanese UI text uses \:XXXX (rule 30).
+   ============================================================ *)
+
+(* ---------- prompt group + version identity ---------- *)
+
+iSVPRPromptGroupId[prompt_String] :=
+  "promptgroup-" <> StringTake[
+    Hash[iSVPRNormalizePrompt[prompt], "SHA256", "HexString"], 16];
+iSVPRPromptGroupId[_] := Missing["BadPrompt"];
+
+(* a fresh, unique versioned route id for a prompt's group *)
+iSVPRMakeVersionedRouteId[prompt_String] :=
+  iSVPRPromptGroupId[prompt] <> "-v" <> StringTake[CreateUUID[], 8];
+iSVPRMakeVersionedRouteId[_] :=
+  "promptgroup-x-v" <> StringTake[CreateUUID[], 8];
+
+(* group id of an existing route: explicit field, else derived from
+   the first stored example (back-compat for pre-versioning routes) *)
+iSVPRRouteGroupId[route_Association] :=
+  Module[{gid, ex},
+    gid = Lookup[route, "PromptGroupId", Missing[]];
+    If[StringQ[gid] && gid =!= "", Return[gid]];
+    ex = iSVPRRouteDisplayPrompt[route];
+    If[StringQ[ex] && ex =!= "",
+      iSVPRPromptGroupId[ex], Missing["NoGroup"]]];
+iSVPRRouteGroupId[_] := Missing["NoGroup"];
+
+iSVPRSavedChannels[] := {"public", "private", "local"};
+
+(* every saved route across channels (no seed), each tagged _Channel *)
+iSVPRAllSavedRoutes[] :=
+  Join @@ Map[
+    Function[ch,
+      With[{r = Quiet @ Check[
+          SourceVaultListPromptRoutes[
+            "Channel" -> ch, "IncludeSeed" -> False], {}]},
+        If[ListQ[r],
+          Map[Function[rt,
+              If[AssociationQ[rt], Append[rt, "_Channel" -> ch], rt]],
+            Select[r, AssociationQ]],
+          {}]]],
+    iSVPRSavedChannels[]];
+
+(* routes in a group, newest first (Version, then UpdatedAt) *)
+iSVPRGroupRoutes[groupId_String] :=
+  Module[{all},
+    all = Select[iSVPRAllSavedRoutes[],
+      iSVPRRouteGroupId[#] === groupId &];
+    ReverseSortBy[all,
+      Function[rt, {
+        If[IntegerQ[Lookup[rt, "Version", 0]], Lookup[rt, "Version", 0], 0],
+        ToString[Lookup[rt, "UpdatedAt", ""]]}]]];
+iSVPRGroupRoutes[_] := {};
+
+iSVPRNextVersion[groupId_String] :=
+  Module[{vs},
+    vs = Cases[Map[Lookup[#, "Version", 0] &, iSVPRGroupRoutes[groupId]],
+      _Integer];
+    If[vs === {}, 1, Max[vs] + 1]];
+iSVPRNextVersion[_] := 1;
+
+(* the channel a route lives in, or Missing["NotFound"] *)
+iSVPRFindRouteChannel[routeId_String] :=
+  SelectFirst[iSVPRSavedChannels[],
+    Function[ch,
+      With[{r = Quiet @ Check[
+          SourceVaultListPromptRoutes[
+            "Channel" -> ch, "IncludeSeed" -> False], {}]},
+        ListQ[r] && AnyTrue[r,
+          AssociationQ[#] && Lookup[#, "RouteId", Null] === routeId &]]],
+    Missing["NotFound"]];
+iSVPRFindRouteChannel[_] := Missing["NotFound"];
+
+(* rewrite one channel registry by mapping fn over its entry list.
+   Writes only when the list actually changed (no empty-file churn). *)
+iSVPRRewriteChannel[channel_String, fn_] :=
+  Module[{path, existing, updated},
+    path = iSVPRPromptRouteRegistryPath[channel];
+    existing = If[FileExistsQ[path],
+      Quiet @ Check[iLoadRegistryEntries[path], {}], {}];
+    If[!ListQ[existing], existing = {}];
+    existing = Select[Map[iSVPRNormalizeRoute, existing], AssociationQ];
+    updated = fn[existing];
+    If[!ListQ[updated],
+      Return[<|"Status" -> "Failed", "Reason" -> "BadRewrite",
+        "Channel" -> channel|>]];
+    If[updated === existing,
+      Return[<|"Status" -> "OKNoChange", "Channel" -> channel|>]];
+    iSVPRAtomicWriteRegistry[path, updated]];
+iSVPRRewriteChannel[_, _] :=
+  <|"Status" -> "Failed", "Reason" -> "BadArguments"|>;
+
+(* ---------- ReplaySafety classification ---------- *)
+
+(* session-transient symbols: their presence in an expression means the
+   result depends on the live notebook / session state at call time *)
+$iSVPRTransientHeads = {
+  "Out", "In", "$Line", "MessageList",
+  "SelectedCells", "SelectionMove", "NotebookRead", "NotebookGet",
+  "EvaluationNotebook", "InputNotebook", "SelectedNotebook",
+  "ClipboardData", "PreviousCell", "NextCell"};
+
+(* deictic phrases that point at the live notebook context *)
+$iSVPRDeicticPatterns = {
+  "\:4e0a\:306e\:30bb\:30eb", "\:524d\:306e\:30bb\:30eb", "\:76f4\:524d\:306e\:30bb\:30eb",
+  "\:3055\:3063\:304d", "\:76f4\:524d", "\:9078\:629e", "\:524d\:306e\:7d50\:679c",
+  "the cell above", "previous cell", "above cell", "selected text",
+  "last result", "the result above"};
+
+(* head names applied somewhere in a held expression (un-evaluated) *)
+iSVPRHeldHeadNames[held_] :=
+  Module[{heads},
+    If[!MatchQ[held, _HoldComplete], Return[{}]];
+    (* Cases traverses the held structure without evaluating it
+       (HoldComplete keeps the contents inert); works for any arity. *)
+    heads = Quiet @ Check[
+      DeleteDuplicates @ Cases[held,
+        s_Symbol[___] :> SymbolName[Unevaluated[s]],
+        {0, Infinity}, Heads -> True], {}];
+    If[!ListQ[heads], heads = {}];
+    DeleteCases[heads, "HoldComplete"]];
+iSVPRHeldHeadNames[___] := {};
+
+iSVPRExprHeadNamesFromString[exprStr_String] :=
+  Module[{held},
+    held = Quiet @ Check[
+      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    If[MatchQ[held, _HoldComplete], iSVPRHeldHeadNames[held], {}]];
+iSVPRExprHeadNamesFromString[_] := {};
+
+(* a non-trivial line of captured context appears verbatim in the expr *)
+iSVPRContextOverlapQ[exprStr_String, ctxText_String] :=
+  Module[{lines},
+    If[StringTrim[ctxText] === "" || StringTrim[exprStr] === "",
+      Return[False]];
+    lines = StringSplit[ctxText, RegularExpression["\\r?\\n"]];
+    lines = Select[Map[StringTrim, lines], StringLength[#] >= 12 &];
+    AnyTrue[lines, StringContainsQ[exprStr, #] &]];
+iSVPRContextOverlapQ[_, _] := False;
+
+iSVPRDeicticQ[prompt_String] :=
+  Module[{p = ToLowerCase[prompt]},
+    AnyTrue[$iSVPRDeicticPatterns,
+      StringContainsQ[prompt, #] || StringContainsQ[p, ToLowerCase[#]] &]];
+iSVPRDeicticQ[_] := False;
+
+SourceVaultClassifyPromptReplaySafety[prompt_String, exprString_,
+                                      contextBinding_] :=
+  Module[{exprStr, binding, ctxText, usedCtx, overlap, heads,
+          transient, deictic, safety},
+    exprStr = If[StringQ[exprString], exprString, ""];
+    binding = If[AssociationQ[contextBinding], contextBinding, <||>];
+    ctxText = Lookup[binding, "ContextText", ""];
+    If[!StringQ[ctxText], ctxText = ""];
+    usedCtx = TrueQ[Lookup[binding, "UsedNotebookContext", False]];
+    (* 1. literal context overlap (authoritative) *)
+    overlap  = iSVPRContextOverlapQ[exprStr, ctxText];
+    (* 2. transient session symbols in the expr *)
+    heads     = iSVPRExprHeadNamesFromString[exprStr];
+    transient = Intersection[heads, $iSVPRTransientHeads];
+    (* 3. deictic words in the prompt (weak backup) *)
+    deictic = iSVPRDeicticQ[prompt];
+    safety = Which[
+      overlap || Length[transient] > 0, "ContextBound",
+      TrueQ[deictic],                    "ContextBound",
+      exprStr === "",                    "Unknown",
+      True,                              "EnvironmentIndependent"];
+    <|"ReplaySafety" -> safety,
+      "ContextBinding" -> <|
+        "UsedNotebookContext" -> usedCtx,
+        "ContextOverlap"      -> TrueQ[overlap],
+        "TransientSymbols"    -> transient,
+        "Deictic"             -> TrueQ[deictic]|>|>];
+SourceVaultClassifyPromptReplaySafety[___] :=
+  <|"ReplaySafety" -> "Unknown", "ContextBinding" -> <||>|>;
+
+(* ---------- prompt-only context-dependency classification (X1) ---------- *)
+
+(* conversation-history references. Kept separate from the notebook deictic
+   table on purpose: "the conversation above" is NOT a notebook reference.
+   These phrases are stripped before the deictic check so a pure-history
+   prompt never lights up a notebook scope (spec 7.1: do not conflate). *)
+$iSVPRHistoryPatterns = {
+  "\:3055\:3063\:304d\:306e\:4f1a\:8a71", "\:5148\:307b\:3069\:306e\:4f1a\:8a71",
+  "\:76f4\:524d\:306e\:4f1a\:8a71", "\:524d\:56de\:306e\:4f1a\:8a71",
+  "\:3053\:306e\:4f1a\:8a71", "\:3053\:308c\:307e\:3067\:306e\:4f1a\:8a71",
+  "\:524d\:306e\:8cea\:554f", "\:3055\:3063\:304d\:8a00\:3063\:305f",
+  "\:524d\:306e\:3084\:308a\:53d6\:308a",
+  "earlier you said", "you said earlier", "you mentioned", "as you said",
+  "as mentioned earlier", "previous conversation",
+  "earlier in this conversation", "in our conversation", "you told me"};
+
+(* explicit whole-notebook requests *)
+$iSVPRWholeNotebookPatterns = {
+  "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:5168\:4f53", "\:30ce\:30fc\:30c8\:5168\:4f53",
+  "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:5168\:90e8", "\:5168\:30bb\:30eb",
+  "\:3059\:3079\:3066\:306e\:30bb\:30eb", "\:5168\:3066\:306e\:30bb\:30eb",
+  "whole notebook", "entire notebook", "this notebook",
+  "the whole notebook", "all cells", "all the cells", "across the notebook"};
+
+(* explicit cell/text-selection references. More specific than the bare
+   "\:9078\:629e" deictic token, which also matches "\:9078\:629e\:80a2" (= options). *)
+$iSVPRSelectionPatterns = {
+  "\:9078\:629e\:3057\:305f\:30bb\:30eb", "\:9078\:629e\:30bb\:30eb",
+  "\:9078\:629e\:4e2d", "\:9078\:629e\:7bc4\:56f2",
+  "\:9078\:629e\:3057\:305f\:30c6\:30ad\:30b9\:30c8", "\:9078\:629e\:90e8\:5206",
+  "selected cell", "selected cells", "selected text", "selected region",
+  "the selection", "highlighted cell"};
+
+(* case-insensitive substring hit against a phrase table *)
+iSVPRAnyPhraseQ[prompt_String, phrases_List] :=
+  Module[{p = ToLowerCase[prompt]},
+    AnyTrue[phrases,
+      StringContainsQ[prompt, #] || StringContainsQ[p, ToLowerCase[#]] &]];
+iSVPRAnyPhraseQ[_, _] := False;
+
+(* %, Out, In and other session-transient references in the prompt itself.
+   Two paths: (a) if the prompt parses as code, look for transient heads;
+   (b) textual backup for natural-language prompts embedding Out[/In[/%. *)
+iSVPRPromptTransientQ[prompt_String] :=
+  Module[{heads, hit},
+    heads = iSVPRExprHeadNamesFromString[prompt];
+    hit = Length[Intersection[heads, $iSVPRTransientHeads]] > 0;
+    hit = hit || StringContainsQ[prompt, "Out[" | "In["];
+    hit = hit || StringContainsQ[prompt,
+      RegularExpression["(?<![0-9A-Za-z])%(?![0-9A-Za-z])"]];
+    TrueQ[hit]];
+iSVPRPromptTransientQ[_] := False;
+
+(* demonstrative + notebook-artifact noun (e.g. "\:3053\:306e\:30b0\:30e9\:30d5" = this graph). These
+   read as notebook-recent references even though the bare demonstrative is not
+   in the shared deictic table. Used only by the dependency classifier, so the
+   replay-safety classifier's table is untouched. Strengthens detection so the
+   opt-in self-contained trim does not starve "\:3053\:306e\:30b0\:30e9\:30d5\:3092\:6539\:5584\:3057\:3066"-style prompts. *)
+$iSVPRNotebookNounRegex = RegularExpression[
+  "(\:3053\:306e|\:305d\:306e|\:3042\:306e|\:4e0a\:306e|\:5148\:307b\:3069\:306e)" <>
+  "(\:7d50\:679c|\:30b0\:30e9\:30d5|\:30c7\:30fc\:30bf|\:51fa\:529b|\:30b3\:30fc\:30c9|\:95a2\:6570|" <>
+  "\:30d7\:30ed\:30c3\:30c8|\:5024|\:8a08\:7b97|\:5f0f|\:30a8\:30e9\:30fc|\:56f3|" <>
+  "\:30d7\:30ed\:30b0\:30e9\:30e0|\:8868|\:30ea\:30b9\:30c8|\:30bb\:30eb)"];
+
+iSVPRNotebookNounQ[s_String] :=
+  StringContainsQ[s, $iSVPRNotebookNounRegex] ||
+  StringContainsQ[s, "\:4e0a\:8a18"] ||                       (* \:4e0a\:8a18 = the above *)
+  StringContainsQ[ToLowerCase[s], "the above"] ||
+  StringContainsQ[ToLowerCase[s], "above output"] ||
+  StringContainsQ[ToLowerCase[s], "above result"];
+iSVPRNotebookNounQ[_] := False;
+
+(* notebook scope rank: None 0 < PreviousCellGroup 1 < Tail 2 < Full 3 *)
+$iSVPRNotebookModeByRank = {"None", "PreviousCellGroup", "Tail", "Full"};
+
+SourceVaultClassifyPromptContextDependency[prompt_String] :=
+  Module[{historyHit, stripped, deictic, transient, wholeNB, selection,
+          rank, nbMode, histMode, kinds, reasons, confidence},
+    historyHit = iSVPRAnyPhraseQ[prompt, $iSVPRHistoryPatterns];
+    (* strip matched history phrases before the deictic check so a pure-
+       history prompt does not trigger a notebook scope via the shared
+       "\:3055\:3063\:304d" / "\:76f4\:524d" tokens (spec 7.1: do not conflate) *)
+    stripped = If[historyHit,
+      StringReplace[prompt, (# -> " " &) /@ $iSVPRHistoryPatterns], prompt];
+    deictic   = iSVPRDeicticQ[stripped] || iSVPRNotebookNounQ[stripped];
+    transient = iSVPRPromptTransientQ[prompt];
+    wholeNB   = iSVPRAnyPhraseQ[prompt, $iSVPRWholeNotebookPatterns];
+    selection = iSVPRAnyPhraseQ[prompt, $iSVPRSelectionPatterns];
+    (* notebook scope = max of the contributing signals *)
+    rank = 0;
+    If[transient, rank = Max[rank, 1]];   (* %/Out/In -> PreviousCellGroup+ *)
+    If[deictic,   rank = Max[rank, 2]];   (* "the cell above" -> Tail+ *)
+    If[wholeNB,   rank = 3];              (* explicit whole notebook -> Full *)
+    nbMode   = $iSVPRNotebookModeByRank[[rank + 1]];
+    histMode = If[historyHit, "Recent", "None"];
+    (* dependency kinds + human-readable reasons *)
+    kinds = {}; reasons = {};
+    If[rank == 3,
+      AppendTo[kinds, "NotebookFull"];
+      AppendTo[reasons, "explicit whole-notebook request"]];
+    If[1 <= rank <= 2,
+      AppendTo[kinds, "NotebookRecent"];
+      AppendTo[reasons,
+        If[deictic, "deictic notebook reference",
+                    "transient-symbol notebook reference"]]];
+    If[transient,
+      AppendTo[kinds, "TransientSymbols"];
+      AppendTo[reasons, "prompt references %/Out/In"]];
+    If[selection,
+      AppendTo[kinds, "SelectedCells"];
+      AppendTo[reasons, "explicit cell/text selection"]];
+    If[historyHit,
+      AppendTo[kinds, "ConversationHistory"];
+      AppendTo[reasons, "explicit conversation-history reference"]];
+    If[kinds === {},
+      kinds = {"SelfContained"};
+      AppendTo[reasons, "no notebook/history/selection markers detected"]];
+    confidence = If[rank > 0 || selection || historyHit, "High", "Low"];
+    <|"DependencyKinds" -> DeleteDuplicates[kinds],
+      "RequiredContext" -> <|
+        "Notebook"      -> <|"Mode" -> nbMode|>,
+        "SelectedCells" -> TrueQ[selection],
+        "History"       -> <|"Mode" -> histMode|>|>,
+      "Confidence" -> confidence,
+      "Reasons"    -> reasons|>];
+(* non-string / unclassifiable: choose broader REQUESTED context, but still
+   never conflate notebook with history (spec 7.1) *)
+SourceVaultClassifyPromptContextDependency[___] :=
+  <|"DependencyKinds" -> {"Unknown"},
+    "RequiredContext" -> <|
+      "Notebook"      -> <|"Mode" -> "Tail"|>,
+      "SelectedCells" -> False,
+      "History"       -> <|"Mode" -> "Recent"|>|>,
+    "Confidence" -> "Low",
+    "Reasons"    -> {"non-string prompt; defaulting to broad requested context"}|>;
+
+(* ---------- context planner (X1): register into the base-package hook ----------
+   ClaudeCode`$ClaudeEvalContextPlanner is a package-neutral hook owned by
+   claudecode (default None). SourceVault sets it to this planner so the
+   ClaudeEval send path can refine its ContextPlan per prompt. claudecode never
+   references SourceVault (rule 11): the dependency direction stays
+   SourceVault -> claudecode, and claudecode only calls the function value held
+   in its own hook variable. The base hook already wraps this call in
+   Quiet/Check/Catch and fail-safes to the default plan, so any error here is
+   non-fatal. *)
+iSVPRContextPlanner[payload_Association] :=
+  Module[{enabled, defaultPlan, prompt, cls, conf, clsNbMode, nbMode, nbBudget},
+    defaultPlan = Lookup[payload, "DefaultPlan", <||>];
+    If[!AssociationQ[defaultPlan], defaultPlan = <||>];
+    enabled = TrueQ[SourceVault`$SourceVaultContextPlannerEnabled];
+    prompt  = Lookup[payload, "Prompt", ""];
+    If[!enabled || !StringQ[prompt] || StringTrim[prompt] === "",
+      Return[defaultPlan, Module]];
+    cls = Quiet @ Check[
+      SourceVaultClassifyPromptContextDependency[prompt], $Failed];
+    If[!AssociationQ[cls], Return[defaultPlan, Module]];
+    conf      = Lookup[cls, "Confidence", "Low"];
+    clsNbMode = Lookup[Lookup[Lookup[cls, "RequiredContext", <||>],
+                  "Notebook", <||>], "Mode", "Tail"];
+    nbBudget  = Lookup[Lookup[defaultPlan, "Notebook", <||>], "CharBudget",
+                  ClaudeCode`$ClaudeEvalContextNotebookCharBudget];
+    (* Conservative policy (X1-2): only act on HIGH-confidence classifications.
+       - High + Notebook "None" (a pure conversation-history question) -> drop
+         notebook context; there is a positive reason it is irrelevant.
+       - High + any notebook need -> bounded "Tail" (the X0a-safe mode; the
+         assembler does not yet bound "Full"/"PreviousCellGroup" -- that is X0b).
+       - Low / SelfContained -> keep the DEFAULT notebook scope. With no positive
+         evidence the notebook is irrelevant we never starve an unmarked prompt.
+       History and ToolDefinitions are left at the default plan (history is never
+       trimmed here, so unmarked multi-turn follow-ups keep their context).
+       The $SourceVaultContextPlannerTrimSelfContained opt-in (default False)
+       additionally drops notebook context for Low/SelfContained prompts. *)
+    nbMode = Which[
+      conf === "High",
+        If[clsNbMode === "None", "None", "Tail"],
+      TrueQ[SourceVault`$SourceVaultContextPlannerTrimSelfContained],
+        "None",
+      True,
+        Lookup[Lookup[defaultPlan, "Notebook", <||>], "Mode", "Tail"]];
+    Append[defaultPlan,
+      "Notebook" -> <|"Mode" -> nbMode, "CharBudget" -> nbBudget|>]
+  ];
+iSVPRContextPlanner[_] := <||>;
+
+(* register the planner into the claudecode hook (load-order independent:
+   claudecode initialises the variable with If[!ValueQ[...], ...=None], so this
+   assignment survives whether SourceVault loads before or after claudecode) *)
+ClaudeCode`$ClaudeEvalContextPlanner = iSVPRContextPlanner;
+
+(* ---------- auto-execute gate (rule 00 + ReadOnly/SafeCreate) ---------- *)
+
+(* heads that are safe to release-and-evaluate without confirmation.
+   Pure / structural / scoping / list / math / string / date heads.
+   Mutating, file, process, network heads are intentionally absent. *)
+$iSVPRAutoExecSafeHeads = {
+  "Module", "Block", "With", "Function", "Slot", "SlotSequence",
+  "CompoundExpression", "Set", "SetDelayed",
+  "If", "Which", "Switch", "Do", "Table", "Map", "MapThread", "Apply",
+  "Scan", "Fold", "FoldList", "Nest", "NestList", "Through", "MapIndexed",
+  "List", "Association", "Rule", "RuleDelayed", "Part", "Span",
+  "First", "Last", "Most", "Rest", "Take", "Drop", "Length", "Range",
+  "Join", "Flatten", "Partition", "Append", "Prepend", "Insert", "Delete",
+  "ReplacePart", "Reverse", "Sort", "SortBy", "ReverseSort", "ReverseSortBy",
+  "Select", "Cases", "DeleteCases", "Pick", "DeleteDuplicates",
+  "DeleteDuplicatesBy", "Count", "Total", "Union", "Intersection",
+  "Complement", "Lookup", "Keys", "Values", "KeyTake", "KeyDrop",
+  "KeySelect", "KeyValueMap", "Normal", "Merge", "GroupBy",
+  "AssociationThread", "Thread", "Replace", "ReplaceAll", "ReplaceRepeated",
+  "Position", "FirstCase", "SelectFirst", "MemberQ", "FreeQ", "AllTrue",
+  "AnyTrue", "NoneTrue", "KeyExistsQ",
+  "Plus", "Times", "Subtract", "Divide", "Power", "Minus", "Mod",
+  "Quotient", "Floor", "Ceiling", "Round", "Max", "Min", "Abs",
+  "And", "Or", "Not", "Xor", "Equal", "Unequal", "Greater", "Less",
+  "GreaterEqual", "LessEqual", "SameQ", "UnsameQ", "Boole", "TrueQ",
+  "StringJoin", "StringRiffle", "StringSplit", "StringTrim", "StringTake",
+  "StringDrop", "StringLength", "StringContainsQ", "StringStartsQ",
+  "StringEndsQ", "StringReplace", "StringCases", "ToString",
+  "ToUpperCase", "ToLowerCase", "StringForm", "StringTemplate",
+  "Characters", "StringQ", "IntegerQ", "NumericQ", "AssociationQ", "ListQ",
+  "Today", "Now", "DateObject", "DateList", "DatePlus", "DateDifference",
+  "DateString", "DateValue", "AbsoluteTime", "FromDateString", "DateRange",
+  "DayName", "DayRange", "Quantity", "UnitConvert",
+  "N", "Identity", "Echo", "Print", "Style", "Column", "Row", "Grid",
+  "Item", "Missing", "Nothing"};
+
+(* heads that must never be auto-executed (rule 00 + side effects) *)
+$iSVPRAutoExecForbiddenHeads = {
+  "ClaudeAttach", "SystemCredential",
+  "Set", "SetDelayed",  (* only forbidden as protected-target; see guard *)
+  "Put", "PutAppend", "Save", "DumpSave", "Export",
+  "DeleteFile", "RenameFile", "CopyFile", "CreateFile", "CreateDirectory",
+  "DeleteDirectory", "WriteString", "Write", "BinaryWrite", "OpenWrite",
+  "OpenAppend", "Run", "RunProcess", "StartProcess", "ExternalEvaluate",
+  "CreateScheduledTask", "RemoveScheduledTask", "URLSubmit", "URLExecute",
+  "SendMail", "DeleteObject", "SetEnvironment", "Install",
+  "AppendTo", "PrependTo", "AssociateTo", "AddTo", "SubtractFrom",
+  "TimesBy", "DivideBy", "Increment", "Decrement", "PreIncrement",
+  "PreDecrement", "ClearAll", "Clear", "Remove", "Unset"};
+
+(* the genuinely-forbidden heads (Set/SetDelayed are handled by the
+   protected-target guard, not a blanket ban, so locals stay legal) *)
+$iSVPRAutoExecHardForbidden = Complement[
+  $iSVPRAutoExecForbiddenHeads, {"Set", "SetDelayed"}];
+
+(* True when a held expr assigns (Set/AddTo/...) to a $-prefixed global
+   symbol -- the rule 00 protected-constant family ($Claude*, $NB*,
+   $SourceVault*, etc.). Module-local vars are not $-prefixed. *)
+iSVPRHasGlobalAssignment[held_] :=
+  Module[{targets},
+    If[!MatchQ[held, _HoldComplete], Return[False]];
+    targets = Quiet @ Check[
+      Cases[held,
+        (Set | SetDelayed | AddTo | SubtractFrom | TimesBy | DivideBy |
+         AppendTo | PrependTo | AssociateTo | Increment | Decrement |
+         PreIncrement | PreDecrement | Unset)[lhs_, ___] :>
+          Cases[Unevaluated[lhs],
+            s_Symbol :> SymbolName[Unevaluated[s]],
+            {0, Infinity}, Heads -> True],
+        {0, Infinity}, Heads -> True], {}];
+    targets = Flatten[If[ListQ[targets], targets, {}]];
+    AnyTrue[targets, StringQ[#] && StringStartsQ[#, "$"] &]];
+iSVPRHasGlobalAssignment[___] := False;
+
+(* a held expr is auto-executable iff: it is not an LLM call, has no
+   hard-forbidden head, assigns no protected global, and every applied
+   head is a SourceVault*/NB*/allowlisted/safe-system head. *)
+iSVPRAutoExecutableQ[held_] :=
+  Module[{heads, allow, bad},
+    If[!MatchQ[held, _HoldComplete], Return[False]];
+    heads = iSVPRHeldHeadNames[held];
+    If[!ListQ[heads] || heads === {}, Return[False]];
+    If[Length[Intersection[heads, {"ClaudeEval", "ContinueEval"}]] > 0,
+      Return[False]];
+    If[Length[Intersection[heads, $iSVPRAutoExecHardForbidden]] > 0,
+      Return[False]];
+    If[iSVPRHasGlobalAssignment[held], Return[False]];
+    allow = Quiet @ Check[Keys[SourceVaultCallableAllowlistView[]], {}];
+    If[!ListQ[allow], allow = {}];
+    bad = Select[heads,
+      !(StringStartsQ[#, "SourceVault"] || StringStartsQ[#, "NB"] ||
+        MemberQ[allow, #] || MemberQ[$iSVPRAutoExecSafeHeads, #]) &];
+    Length[bad] === 0];
+iSVPRAutoExecutableQ[___] := False;
+
+(* True when a saved route's stored expression may be auto-executed:
+   parseable, auto-executable head set, and EnvironmentIndependent. *)
+iSVPRRouteAutoExecutableQ[route_Association] :=
+  Module[{exprStr, held, safety},
+    exprStr = Lookup[route, "TargetExprString", Missing[]];
+    If[!StringQ[exprStr] || StringTrim[exprStr] === "", Return[False]];
+    safety = Lookup[route, "ReplaySafety", "Unknown"];
+    If[safety =!= "EnvironmentIndependent", Return[False]];
+    held = Quiet @ Check[
+      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    iSVPRAutoExecutableQ[held]];
+iSVPRRouteAutoExecutableQ[_] := False;
+
+(* ---------- exact-match lookup / primary resolution ---------- *)
+
+Options[SourceVaultMatchSavedPromptVersions] = {
+  "Channel" -> All, "IncludeSeed" -> False};
+
+SourceVaultMatchSavedPromptVersions[prompt_String,
+                                    opts:OptionsPattern[]] :=
+  Module[{gid, all, hits},
+    gid = iSVPRPromptGroupId[prompt];
+    If[!StringQ[gid], Return[{}]];
+    all = iSVPRAllSavedRoutes[];
+    hits = Select[all, iSVPRRouteGroupId[#] === gid &];
+    ReverseSortBy[hits,
+      Function[rt, {
+        If[TrueQ[Lookup[rt, "Primary", False]], 1, 0],
+        If[IntegerQ[Lookup[rt, "Version", 0]], Lookup[rt, "Version", 0], 0],
+        ToString[Lookup[rt, "UpdatedAt", ""]]}]]];
+SourceVaultMatchSavedPromptVersions[___] := {};
+
+SourceVaultPrimaryPromptRoute[prompt_String] :=
+  Module[{vs},
+    vs = SourceVaultMatchSavedPromptVersions[prompt];
+    If[!ListQ[vs], vs = {}];
+    SelectFirst[vs, TrueQ[Lookup[#, "Primary", False]] &,
+      Missing["NoPrimary"]]];
+SourceVaultPrimaryPromptRoute[_] := Missing["BadPrompt"];
+
+(* ---------- set primary / delete ---------- *)
+
+Options[SourceVaultSetPrimaryPromptRoute] = {
+  "AutoExecute" -> Automatic, "DryRun" -> False};
+
+SourceVaultSetPrimaryPromptRoute[routeId_String,
+                                 opts:OptionsPattern[]] :=
+  Module[{dryRun, autoOpt, ch, route, gid, safety, autoExec, cleared},
+    dryRun  = TrueQ[OptionValue[
+      SourceVaultSetPrimaryPromptRoute, {opts}, "DryRun"]];
+    autoOpt = OptionValue[
+      SourceVaultSetPrimaryPromptRoute, {opts}, "AutoExecute"];
+    ch = iSVPRFindRouteChannel[routeId];
+    If[!StringQ[ch],
+      Return[<|"Status" -> "NotFound", "RouteId" -> routeId|>]];
+    route = SourceVaultGetPromptRoute[routeId,
+      "Channel" -> ch, "IncludeSeed" -> False];
+    If[!AssociationQ[route] ||
+       Lookup[route, "Status", ""] === "NotFound",
+      Return[<|"Status" -> "NotFound", "RouteId" -> routeId|>]];
+    gid    = iSVPRRouteGroupId[route];
+    safety = Lookup[route, "ReplaySafety", "Unknown"];
+    autoExec = Which[
+      autoOpt === Automatic, TrueQ[Lookup[route, "AutoExecute", False]],
+      TrueQ[autoOpt],        safety === "EnvironmentIndependent",
+      True,                  False];
+    If[dryRun,
+      Return[<|"Status" -> "DryRun", "RouteId" -> routeId, "Channel" -> ch,
+        "PromptGroupId" -> gid, "AutoExecute" -> autoExec,
+        "AutoExecuteRequested" -> autoOpt, "ReplaySafety" -> safety|>]];
+    cleared = {};
+    Scan[
+      Function[c,
+        iSVPRRewriteChannel[c,
+          Function[entries,
+            Map[
+              Function[e,
+                Which[
+                  Lookup[e, "RouteId", Null] === routeId,
+                    Join[e, <|"Primary" -> True, "AutoExecute" -> autoExec,
+                      "UpdatedAt" -> iSVPRTimestamp[]|>],
+                  iSVPRRouteGroupId[e] === gid &&
+                    TrueQ[Lookup[e, "Primary", False]],
+                    (AppendTo[cleared, Lookup[e, "RouteId", "?"]];
+                     Join[e, <|"Primary" -> False, "AutoExecute" -> False|>]),
+                  True, e]],
+              entries]]]],
+      iSVPRSavedChannels[]];
+    <|"Status" -> "OK", "RouteId" -> routeId, "Channel" -> ch,
+      "PromptGroupId" -> gid, "Primary" -> True, "AutoExecute" -> autoExec,
+      "ReplaySafety" -> safety,
+      "ClearedSiblings" -> DeleteCases[cleared, routeId]|>];
+SourceVaultSetPrimaryPromptRoute[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "Expected SourceVaultSetPrimaryPromptRoute[routeId_String, opts]."|>;
+
+Options[SourceVaultDeletePromptRoute] = {
+  "DryRun" -> True, "Confirm" -> False};
+
+SourceVaultDeletePromptRoute[routeId_String, opts:OptionsPattern[]] :=
+  Module[{dryRun, confirm, ch, route, wasPrimary, writeRes},
+    dryRun  = TrueQ[OptionValue[
+      SourceVaultDeletePromptRoute, {opts}, "DryRun"]];
+    confirm = TrueQ[OptionValue[
+      SourceVaultDeletePromptRoute, {opts}, "Confirm"]];
+    ch = iSVPRFindRouteChannel[routeId];
+    If[!StringQ[ch],
+      Return[<|"Status" -> "NotFound", "RouteId" -> routeId|>]];
+    route = SourceVaultGetPromptRoute[routeId,
+      "Channel" -> ch, "IncludeSeed" -> False];
+    wasPrimary = AssociationQ[route] &&
+      TrueQ[Lookup[route, "Primary", False]];
+    (* rule 103: non-destructive by default; real delete needs both *)
+    If[dryRun || !confirm,
+      Return[<|"Status" -> "DryRun", "RouteId" -> routeId, "Channel" -> ch,
+        "WasPrimary" -> wasPrimary,
+        "Hint" ->
+          "Pass DryRun -> False and Confirm -> True to delete."|>]];
+    writeRes = iSVPRRewriteChannel[ch,
+      Function[entries,
+        Select[entries, Lookup[#, "RouteId", Null] =!= routeId &]]];
+    If[Lookup[writeRes, "Status", ""] === "Failed",
+      Return[<|"Status" -> "Failed",
+        "Reason" -> Lookup[writeRes, "Reason", "WriteFailed"],
+        "RouteId" -> routeId, "Channel" -> ch|>]];
+    <|"Status" -> "OK", "RouteId" -> routeId, "Channel" -> ch,
+      "Removed" -> 1, "WasPrimary" -> wasPrimary|>];
+SourceVaultDeletePromptRoute[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "Expected SourceVaultDeletePromptRoute[routeId_String, opts]."|>;
+
+(* ---------- editable memo ---------- *)
+
+SourceVaultUpdatePromptRouteMemo[routeId_String, memo_String] :=
+  Module[{ch, found = False, writeRes},
+    ch = iSVPRFindRouteChannel[routeId];
+    If[!StringQ[ch],
+      Return[<|"Status" -> "NotFound", "RouteId" -> routeId|>]];
+    writeRes = iSVPRRewriteChannel[ch,
+      Function[entries,
+        Map[Function[e,
+          If[Lookup[e, "RouteId", Null] === routeId,
+            (found = True;
+             Join[e, <|"Memo" -> memo, "UpdatedAt" -> iSVPRTimestamp[]|>]),
+            e]], entries]]];
+    If[Lookup[writeRes, "Status", ""] === "Failed",
+      Return[<|"Status" -> "Failed",
+        "Reason" -> Lookup[writeRes, "Reason", "WriteFailed"],
+        "RouteId" -> routeId, "Channel" -> ch|>]];
+    If[TrueQ[found],
+      <|"Status" -> "OK", "RouteId" -> routeId,
+        "Channel" -> ch, "Memo" -> memo|>,
+      <|"Status" -> "NotFound", "RouteId" -> routeId|>]];
+SourceVaultUpdatePromptRouteMemo[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+(* truncate a display string so a long prompt does not break the Grid
+   layout; the full text is kept for matching and shown via Tooltip. *)
+iSVPRTruncateDisplay[s_String, n_Integer:64] :=
+  Module[{flat},
+    flat = StringReplace[s, RegularExpression["\\s+"] -> " "];
+    flat = StringTrim[flat];
+    If[StringLength[flat] > n,
+      StringTake[flat, n] <> "\:2026", flat]];
+iSVPRTruncateDisplay[s_, n_:64] := iSVPRTruncateDisplay[ToString[s], n];
+
+(* ---------- primary auto-execute executor (gated) ---------- *)
+
+(* styled notice returned when an auto-execute cannot proceed *)
+iSVPRAutoExecNotice[reason_String, groupId_, route_] :=
+  Column[{
+    Style["\:81ea\:52d5\:5b9f\:884c\:3067\:304d\:307e\:305b\:3093: " <> reason,
+      Bold, RGBColor[0.6, 0.5, 0.2], FontFamily -> "Yu Gothic UI"],
+    Style["groupId: " <> ToString[groupId],
+      FontSize -> 9, GrayLevel[0.5]]},
+    Spacings -> 0.3];
+
+(* notice + manual-run button for a blocked expression *)
+iSVPRAutoExecBlocked[exprStr_String, safety_, groupId_, route_] :=
+  Column[{
+    Style[
+      "\:81ea\:52d5\:5b9f\:884c\:3067\:304d\:307e\:305b\:3093\:ff08\:526f\:4f5c\:7528\:307e\:305f\:306f\:74b0\:5883\:4f9d\:5b58\:304c\:672a\:78ba\:8a8d\:3067\:3059\:ff09\:3002" <>
+      "\:624b\:52d5\:3067\:5b9f\:884c\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
+      Bold, RGBColor[0.6, 0.5, 0.2], FontFamily -> "Yu Gothic UI"],
+    Style["ReplaySafety: " <> ToString[safety],
+      FontSize -> 9, GrayLevel[0.5]],
+    With[{e = exprStr},
+      Button[
+        Style["\:624b\:52d5\:3067\:5b9f\:884c", FontFamily -> "Yu Gothic UI",
+          FontSize -> 10, RGBColor[0.2, 0.38, 0.65]],
+        Module[{target = InputNotebook[]},
+          If[Head[target] === NotebookObject,
+            NBAccess`NBWriteInputCellAndMaybeEvaluate[target, e, False]]],
+        Appearance -> "Frameless", BaseStyle -> {"Hyperlink"},
+        Method -> "Queued"]]},
+    Spacings -> 0.3];
+
+Options[SourceVaultRunPrimaryRoute] = {};
+
+SourceVaultRunPrimaryRoute[groupId_String, opts:OptionsPattern[]] :=
+  Module[{routes, primary, exprStr, held, safety, dispPrompt},
+    routes = iSVPRGroupRoutes[groupId];
+    primary = SelectFirst[routes,
+      TrueQ[Lookup[#, "Primary", False]] &, Missing[]];
+    If[!AssociationQ[primary],
+      Return[iSVPRAutoExecNotice[
+        "\:30d7\:30e9\:30a4\:30de\:30ea\:672a\:8a2d\:5b9a", groupId, Missing[]]]];
+    dispPrompt = iSVPRRouteDisplayPrompt[primary];
+    exprStr = Lookup[primary, "TargetExprString", Missing[]];
+    (* encrypted primary: decrypt to recover the expression *)
+    If[!StringQ[exprStr] &&
+       AssociationQ[Lookup[primary, "EncryptedPayload", Null]],
+      Module[{dec},
+        dec = SourceVaultDecryptPromptRoute[primary];
+        If[AssociationQ[dec] && Lookup[dec, "Status", ""] === "Ok",
+          exprStr = Lookup[Lookup[dec, "Plaintext", <||>],
+            "TargetExprString", Missing[]]]]];
+    If[!StringQ[exprStr] || StringTrim[exprStr] === "",
+      Return[iSVPRAutoExecNotice["\:5f0f\:306a\:3057", groupId, primary]]];
+    safety = Lookup[primary, "ReplaySafety", "Unknown"];
+    held = Quiet @ Check[
+      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    If[!MatchQ[held, _HoldComplete],
+      Return[iSVPRAutoExecNotice["\:30d1\:30fc\:30b9\:4e0d\:80fd", groupId, primary]]];
+    If[!(iSVPRAutoExecutableQ[held] && safety === "EnvironmentIndependent"),
+      Return[iSVPRAutoExecBlocked[exprStr, safety, groupId, primary]]];
+    (* record the run, then release-and-evaluate the frozen expression *)
+    Quiet @ Check[
+      SourceVaultPromptRunRecord[
+        If[StringQ[dispPrompt], dispPrompt, ""],
+        <|"RouteId" -> Lookup[primary, "RouteId", Missing[]],
+          "RouteVersion" -> Lookup[primary, "Version", Missing[]],
+          "Decision" -> "PrimaryAutoExecute"|>,
+        <|"Kind" -> "FunctionResult"|>],
+      Null];
+    Quiet @ Check[ReleaseHold[held], $Failed]];
+SourceVaultRunPrimaryRoute[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
+
+(* ---------- saved-versions UI (no LLM) ---------- *)
+
+Options[SourceVaultPromptVersionsUI] = {};
+
+SourceVaultPromptVersionsUI[normKey_String, prompt_String,
+                            opts:OptionsPattern[]] :=
+  Module[{versions, grid, askBtn},
+    versions = SourceVaultMatchSavedPromptVersions[prompt];
+    If[!ListQ[versions], versions = {}];
+    grid = SourceVaultFormatPromptRouteList[versions];
+    askBtn = With[{k = normKey, p = prompt},
+      Button[
+        Style["LLM\:306b\:65b0\:898f\:554f\:3044\:5408\:308f\:305b",
+          FontFamily -> "Yu Gothic UI", FontSize -> 11,
+          RGBColor[0.2, 0.38, 0.65]],
+        Module[{target = InputNotebook[]},
+          SourceVault`$SourceVaultPromptBypassOnce = k;
+          If[Head[target] === NotebookObject,
+            NBAccess`NBWriteInputCellAndMaybeEvaluate[target,
+              "ClaudeEval[\"" <>
+                StringReplace[p, "\"" -> "\\\""] <> "\"]", True]]],
+        Appearance -> "Frameless", BaseStyle -> {"Hyperlink"},
+        Method -> "Queued"]];
+    Column[{
+      Style["\:300c" <> prompt <> "\:300d\:306e\:4fdd\:5b58\:6e08\:307f\:5019\:88dc " <>
+        ToString[Length[versions]] <> " \:4ef6",
+        Bold, FontFamily -> "Yu Gothic UI"],
+      grid,
+      Row[{
+        Style["\:9069\:5408\:3059\:308b\:5019\:88dc\:304c\:7121\:3051\:308c\:3070: ",
+          FontFamily -> "Yu Gothic UI", FontSize -> 10, GrayLevel[0.4]],
+        askBtn}]},
+      Spacings -> 0.6]];
+SourceVaultPromptVersionsUI[___] :=
+  Style["(invalid SourceVaultPromptVersionsUI call)",
+    RGBColor[0.7, 0.15, 0.15]];
+
+(* ---------- ClaudeEval-entry saved-prompt proposer ---------- *)
+
+(* --- (i)(ii) saved-prompt loop fix helpers ---
+   Meta/display expressions (the promptrouter's own proposal UI) must never be
+   captured as a route's TargetExprString, and bare auto-captured HeavyLLM
+   one-shots must not be re-proposed (spec section 10.3). *)
+iSVPRMetaDisplayHeads = {
+  "SourceVaultPromptVersionsUI", "SourceVaultRunPrimaryRoute",
+  "SourceVaultProposeSavedPromptRoute", "SourceVaultProposePromptRoute"};
+iSVPRIsMetaDisplayExpr[s_String] :=
+  Module[{t = StringTrim[s, RegularExpression["[\\s();]+"]]},
+    AnyTrue[iSVPRMetaDisplayHeads, StringStartsQ[t, # <> "["] &]];
+iSVPRIsMetaDisplayExpr[_] := False;
+
+(* spec 10.3: a saved version is worth offering via the versions UI only if it
+   is a user-set primary, or a reusable route (deterministic / light), NOT a
+   bare auto-captured HeavyLLM one-shot. *)
+iSVPRVersionProposableQ[v_Association] :=
+  TrueQ[Lookup[v, "Primary", False]] ||
+  Lookup[v, "ReplayClass", "HeavyLLM"] =!= "HeavyLLM" ||
+  Lookup[v, "Source", ""] =!= "AutoCapture";
+iSVPRVersionProposableQ[_] := False;
+
+Options[SourceVaultProposeSavedPromptRoute] = {"Caller" -> Automatic};
+
+SourceVaultProposeSavedPromptRoute[prompt_String,
+                                   opts:OptionsPattern[]] :=
+  Module[{normKey, gid, bypass, versions, primary, autoPrimary},
+    If[!TrueQ[SourceVault`$SourceVaultPromptSavedProposalActive],
+      Return[<|"Status" -> "NotDispatched",
+        "Reason" -> "SavedProposalInactive"|>]];
+    normKey = iSVPRNormalizePrompt[prompt];
+    If[normKey === "",
+      Return[<|"Status" -> "NotDispatched", "Reason" -> "EmptyPrompt"|>]];
+    (* one-shot bypass set by the "ask the LLM again" button *)
+    bypass = SourceVault`$SourceVaultPromptBypassOnce;
+    If[StringQ[bypass] && bypass === normKey,
+      SourceVault`$SourceVaultPromptBypassOnce = Missing["None"];
+      Return[<|"Status" -> "NotDispatched", "Reason" -> "BypassedOnce"|>]];
+    gid = iSVPRPromptGroupId[prompt];
+    versions = SourceVaultMatchSavedPromptVersions[prompt];
+    If[!ListQ[versions] || versions === {},
+      Return[<|"Status" -> "NotDispatched", "Reason" -> "NoSavedVersion"|>]];
+    primary = SelectFirst[versions,
+      TrueQ[Lookup[#, "Primary", False]] &, Missing[]];
+    autoPrimary = AssociationQ[primary] &&
+      TrueQ[Lookup[primary, "AutoExecute", False]] &&
+      Lookup[primary, "ReplaySafety", "Unknown"] === "EnvironmentIndependent" &&
+      iSVPRRouteAutoExecutableQ[primary];
+    If[autoPrimary,
+      Return[With[{g = gid},
+        <|"Status" -> "Proposed",
+          "ProposedExpression" -> HoldComplete[SourceVaultRunPrimaryRoute[g]],
+          "Dispatch" -> "PrimaryAutoExecute", "PromptGroupId" -> gid|>]]];
+    (* (ii) spec 10.3 + loop fix: do NOT propose the versions UI when every
+       saved version is a bare auto-captured HeavyLLM one-shot (not a reusable
+       route). Proposing those caused a re-proposal loop; fall through so the
+       normal LLM path answers the prompt. *)
+    If[!AnyTrue[versions, iSVPRVersionProposableQ],
+      Return[<|"Status" -> "NotDispatched",
+        "Reason" -> "OnlyAutoCaptureHeavyLLM", "PromptGroupId" -> gid|>]];
+    With[{k = normKey, p = prompt},
+      <|"Status" -> "Proposed",
+        "ProposedExpression" -> HoldComplete[SourceVaultPromptVersionsUI[k, p]],
+        "Dispatch" -> "VersionsUI", "PromptGroupId" -> gid|>]];
+SourceVaultProposeSavedPromptRoute[___] :=
+  <|"Status" -> "NotDispatched", "Reason" -> "BadArguments"|>;
+
+(* ---------- default-on auto-save ---------- *)
+
+(* A ClaudeEval turn can execute several proposal expressions (e.g.
+   FetchNew, then EnsureLoaded; MailView after approval). To replay the
+   prompt faithfully we save the WHOLE workflow as one route, keyed by a
+   per-turn id, upserted as each expression executes. The async approval
+   case is handled because the post-approval execution simply appends. *)
+If[!ValueQ[$iSVPRTurnAccum], $iSVPRTurnAccum = <||>];
+
+(* combine executed expression strings into one evaluable workflow that
+   returns the last expression's value (the display) *)
+iSVPRCombineWorkflowExprs[exprs_List] :=
+  Module[{cleaned},
+    cleaned = Select[exprs, StringQ[#] && StringTrim[#] =!= "" &];
+    cleaned = Map[StringTrim[#, RegularExpression["[\\s;]+"]] &, cleaned];
+    cleaned = Select[cleaned, # =!= "" &];
+    (* (i) never let the proposal/display UI leak into a saved route *)
+    cleaned = Select[cleaned, ! iSVPRIsMetaDisplayExpr[#] &];
+    Which[
+      cleaned === {},        "",
+      Length[cleaned] === 1, First[cleaned],
+      (* wrap in parens so the whole workflow is ONE CompoundExpression
+         (otherwise ToExpression splits it into a multi-arg HoldComplete
+         which neither parses as a single value nor ReleaseHolds right) *)
+      True,                  "(\n" <> StringRiffle[cleaned, ";\n"] <> "\n)"]];
+iSVPRCombineWorkflowExprs[_] := "";
+
+Options[SourceVaultAutoSaveLastPrompt] = {
+  "Memo" -> "", "TurnId" -> Automatic, "ExprString" -> Automatic};
+
+SourceVaultAutoSaveLastPrompt[prompt_String, opts:OptionsPattern[]] :=
+  Module[{memo, turnId, exprOpt, exprStr, gid, st, combined, latest},
+    If[!TrueQ[SourceVault`$SourceVaultPromptAutoSave],
+      Return[<|"Status" -> "Skipped", "Reason" -> "AutoSaveDisabled"|>]];
+    If[StringTrim[prompt] === "",
+      Return[<|"Status" -> "Skipped", "Reason" -> "EmptyPrompt"|>]];
+    memo = OptionValue[SourceVaultAutoSaveLastPrompt, {opts}, "Memo"];
+    If[!StringQ[memo], memo = ""];
+    turnId  = OptionValue[SourceVaultAutoSaveLastPrompt, {opts}, "TurnId"];
+    exprOpt = OptionValue[SourceVaultAutoSaveLastPrompt, {opts}, "ExprString"];
+    exprStr = Which[
+      StringQ[exprOpt] && StringTrim[exprOpt] =!= "", exprOpt,
+      True, Module[{s = Quiet @ Check[
+          Symbol["ClaudeCode`$ClaudeEvalLastProposedExprString"], Missing[]]},
+        If[StringQ[s] && StringTrim[s] =!= "", s, Missing[]]]];
+    (* nothing executable to capture -> skip (we only save replayable runs) *)
+    If[!StringQ[exprStr],
+      Return[<|"Status" -> "Skipped", "Reason" -> "NoExecutedExpression"|>]];
+    (* (i) never capture the promptrouter's own proposal/display expression as a
+       route (it would re-show the versions UI on replay -> infinite loop) *)
+    If[iSVPRIsMetaDisplayExpr[exprStr],
+      Return[<|"Status" -> "Skipped", "Reason" -> "MetaDisplayExpr"|>]];
+    (* (iii) spec 10.3: do not route-ify a raw HeavyLLM one-shot (an LLM answer
+       with no reusable callable, e.g. ClaudeEval[...] / Print[...]). PromptRun
+       history records the run separately; only Replayable / Light routes are
+       worth saving and replaying. Keeps the registry free of un-replayable,
+       never-proposed HeavyLLM versions. *)
+    If[iSVPRClassifyReplay[exprStr] === "HeavyLLM",
+      Return[<|"Status" -> "Skipped", "Reason" -> "HeavyLLMOneShot"|>]];
+    gid = iSVPRPromptGroupId[prompt];
+
+    (* ---- turn accumulation: one upserted route per turn ---- *)
+    If[StringQ[turnId] && turnId =!= "",
+      st = Lookup[$iSVPRTurnAccum, turnId, Missing[]];
+      If[AssociationQ[st] && st["GroupId"] === gid,
+        (* same turn: append this expression and re-save the SAME route *)
+        Module[{exprs = st["Exprs"]},
+          If[!MemberQ[exprs, exprStr], exprs = Append[exprs, exprStr]];
+          combined = iSVPRCombineWorkflowExprs[exprs];
+          $iSVPRTurnAccum[turnId] = Join[st, <|"Exprs" -> exprs|>];
+          Return[SaveLastPrompt[memo, "PromptText" -> prompt,
+            "TargetExprString" -> combined, "RouteId" -> st["RouteId"],
+            "Channel" -> st["Channel"], "Auto" -> True]]],
+        (* new turn: dedup vs the group's newest version, else new version *)
+        combined = iSVPRCombineWorkflowExprs[{exprStr}];
+        latest = If[StringQ[gid],
+          First[iSVPRGroupRoutes[gid], Missing[]], Missing[]];
+        If[AssociationQ[latest] &&
+           Lookup[latest, "TargetExprString", Missing[]] === combined,
+          Return[<|"Status" -> "Skipped",
+            "Reason" -> "DuplicateOfLatestVersion", "PromptGroupId" -> gid|>]];
+        Module[{res},
+          res = SaveLastPrompt[memo, "PromptText" -> prompt,
+            "TargetExprString" -> combined, "ForceNewVersion" -> True,
+            "Auto" -> True];
+          $iSVPRTurnAccum[turnId] = <|"RouteId" -> Lookup[res, "RouteId", ""],
+            "GroupId" -> gid, "Channel" -> Lookup[res, "Channel", "public"],
+            "Exprs" -> {exprStr}|>;
+          Return[res]]],
+
+      (* ---- no TurnId: single-version save (legacy path) ---- *)
+      latest = If[StringQ[gid],
+        First[iSVPRGroupRoutes[gid], Missing[]], Missing[]];
+      If[AssociationQ[latest] &&
+         Lookup[latest, "TargetExprString", Missing[]] === exprStr,
+        Return[<|"Status" -> "Skipped",
+          "Reason" -> "DuplicateOfLatestVersion", "PromptGroupId" -> gid|>]];
+      SaveLastPrompt[memo, "PromptText" -> prompt,
+        "TargetExprString" -> exprStr, "ForceNewVersion" -> True,
+        "Auto" -> True]]];
+SourceVaultAutoSaveLastPrompt[___] :=
+  <|"Status" -> "Failed", "Reason" -> "BadArguments"|>;
 
 
 End[];

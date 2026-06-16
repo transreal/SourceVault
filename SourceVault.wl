@@ -166,6 +166,37 @@ SourceVaultList::usage =
 SourceVaultSnapshots::usage =
   "SourceVaultSnapshots[sourceRef] \:306f\:6307\:5b9a source \:306b\:9650\:5b9a\:3057\:305f snapshot ID \:30ea\:30b9\:30c8\:3002";
 
+(* ―― ソース一覧 / 横断検索 (表示用) ―― *)
+
+SourceVaultSources::usage =
+  "SourceVaultSources[query] は ingest 済み全ソースをメタデータ付きの表で表示する。\n" <>
+  "arXiv は論文タイトル・著者・出版日 (arXiv API から自動取得し meta にキャッシュ)、\n" <>
+  "Web ページは HTML <title>、ローカルファイルはファイル名を Title に出す。\n" <>
+  "各行に URL リンク (▶ URL) と ingest 済みファイルを開くリンク (▶ 開く) が付く。\n" <>
+  "query は Title/Authors/URL/Id 等の部分一致 (\"\" または省略で全件)。\n" <>
+  "Options: \"Limit\" -> Automatic|n, \"Kind\" -> All|\"arxiv\"|\"web\"|\"local\",\n" <>
+  "  \"FetchMetadata\" -> Automatic (未取得のみ取得)|False (network なし)|True (再取得),\n" <>
+  "  \"Format\" -> \"Grid\" (既定)|\"Dataset\"|\"Rows\"";
+
+SourceVaultSourceRow::usage =
+  "SourceVaultSourceRow[sourceId] は 1 ソースの共通スキーマ行を返す:\n" <>
+  "<|\"Kind\", \"Id\", \"Title\", \"Authors\", \"Published\", \"Summary\", \"URL\", \"File\", \"Date\", \"PrivacyLevel\"|>\n" <>
+  "SourceVaultEagleSummaryRow と同じキーを共有する。";
+
+SourceVaultSummaries::usage =
+  "SourceVaultSummaries[query] は SourceVault が抱えるデータ全体 (ingest 済みソース +\n" <>
+  "Eagle 保存済みサマリー等、登録 provider 横断) を検索し統合表で表示する。\n" <>
+  "例: SourceVaultSummaries[\"可逆計算\"]\n" <>
+  "Options: \"Providers\" -> All|{\"sources\", \"eagle\", ...}, \"Limit\", \"Kind\",\n" <>
+  "  \"FetchMetadata\", \"Format\" -> \"Grid\" (既定)|\"Dataset\"|\"Rows\"";
+
+SourceVaultRegisterSummaryProvider::usage =
+  "SourceVaultRegisterSummaryProvider[name, fn] は SourceVaultSummaries の横断検索 provider を登録する。\n" <>
+  "fn[query_String, opts_Association] は共通スキーマ行 (SourceVaultSourceRow 参照) のリストを返すこと。";
+
+$SourceVaultSummaryProviders::usage =
+  "$SourceVaultSummaryProviders は SourceVaultSummaries が横断する provider の Association (name -> fn)。";
+
 (* \[HorizontalLine]\[HorizontalLine] Stage 1: Lookup / Resolve \[HorizontalLine]\[HorizontalLine] *)
 
 SourceVaultResolve::usage =
@@ -713,6 +744,8 @@ SourceVaultNewNotebook::usage =
   "  \"TemplatePath\" -> Automatic | path  -- \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8 .nb (\:65e2\:5b9a: \:30d1\:30c3\:30b1\:30fc\:30b8\:5185 Templates)\n" <>
   "  \"Title\" -> Automatic | _String      -- \:30a6\:30a3\:30f3\:30c9\:30a6\:30bf\:30a4\:30c8\:30eb (\:65e2\:5b9a \"\:65b0\:898f\:30ce\:30fc\:30c8\")\n" <>
   "  \"Date\" -> Automatic | _DateObject    -- Deadline/NextReview \:306b\:5165\:308c\:308b\:65e5\:4ed8 (\:65e2\:5b9a: \:4eca\:65e5)\n" <>
+  "  \"Keywords\" -> Automatic | {_String..} | _String -- NotebookStatus \:306e Keywords \:3092\:7f6e\:63db (\:65e2\:5b9a Automatic \:306f\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:5024\:3092\:7dad\:6301)\n" <>
+  "  \"SessionID\" -> Automatic | _String -- NotebookStatus \:306b capture session \:3078\:306e\:9006\:30ea\:30f3\:30af (SessionID) \:3092\:57cb\:3081\:8fbc\:3080 (\:65e2\:5b9a Automatic \:306f\:8ffd\:52a0\:3057\:306a\:3044)\n" <>
   "\:623b\:308a\:5024: <|\"Status\" -> \"OK\", \"Notebook\" -> _NotebookObject, \"Date\" -> _, \"StatusCellReplaced\" -> _Bool, \"Saved\" -> False, ...|>\:3002\n" <>
   "\:526f\:4f5c\:7528: \:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30a6\:30a3\:30f3\:30c9\:30a6\:3092\:958b\:304f (\:672a\:4fdd\:5b58)\:3002\:30e6\:30fc\:30b6\:304c\:660e\:793a\:7684\:306b\:4fdd\:5b58\:3059\:308b\:307e\:3067\:30c7\:30a3\:30b9\:30af\:306b\:306f\:66f8\:304b\:306a\:3044\:3002";
 
@@ -745,6 +778,12 @@ $SourceVaultCloudRootAliases::usage =
   "iSVSymbolicPath \:306f\:30eb\:30fc\:30c8\:306e\:73fe PC \:5b9f\:4f53\:306b\:52a0\:3048\:3001\:3053\:3053\:306b\:767b\:9332\:3055\:308c\:305f\:30a8\:30a4\:30ea\:30a2\:30b9\:30d1\:30b9\:306e\:914d\:4e0b\:3082\:540c\:3058\:30b7\:30f3\:30dc\:30eb\:540d\:306b\:30de\:30c3\:30c1\:3055\:305b\:308b\:3002\n" <>
   "\:3053\:308c\:306b\:3088\:308a\:5225 PC \:3067 index \:3055\:308c\:305f\:30ec\:30b3\:30fc\:30c9\:306e\:65e7\:30d1\:30b9\:3092 {\"$onWork\", ...} \:306b\:6b63\:898f\:5316\:3067\:304d\:3001\:8907\:6570 PC \:3092\:307e\:305f\:3044\:3060\:4e8c\:91cd\:767b\:9332\:3092\:672a\:7136\:306b\:9632\:3050\:3002\n" <>
   "\:30a8\:30a4\:30ea\:30a2\:30b9\:30d1\:30b9\:306f\:73fe PC \:306b\:5b9f\:5728\:3057\:306a\:304f\:3066\:3088\:3044 (\:6587\:5b57\:5217\:524d\:65b9\:4e00\:81f4\:3001Windows \:3092\:60f3\:5b9a\:3057\:5927\:6587\:5b57\:5c0f\:6587\:5b57\:306f\:7121\:8996)\:3002\:65e2\:5b9a\:306f <||> (\:30a8\:30a4\:30ea\:30a2\:30b9\:306a\:3057)\:3002";
+
+$SourceVaultDefaultNotebookFolder::usage =
+  "$SourceVaultDefaultNotebookFolder is the default folder for SourceVault notebooks. " <>
+  "When Automatic (the default), it resolves to Global`$onWork, falling back to $packageDirectory. " <>
+  "Set it to an absolute directory path to make that folder the default Scope for SourceVault " <>
+  "and the save target used by PresentationListener.";
 
 
 SourceVaultResetStore::usage =
@@ -1265,7 +1304,7 @@ iResolveDropboxRoot[] :=
 
 iResolveRoots[] :=
   Module[{dropboxRoot, privateRoot, cloudRoot, tmpRoot, attachmentRoot,
-          cwd, pkgDir},
+          localStateRoot, cwd, pkgDir},
     cwd = iCwd[];
     pkgDir = iPackageDir[];
     
@@ -1294,12 +1333,27 @@ iResolveRoots[] :=
         FileNameJoin[{$TemporaryDirectory, "sourcevault"}]
     ];
     
+    (* LocalState: Dropbox 非同期の hot state 用 root (spec v6 §3.6)。
+       %LOCALAPPDATA% (Windows) 等。明示変更は SourceVaultSetRoot が上書きする。 *)
+    localStateRoot = Which[
+      $OperatingSystem === "Windows",
+        With[{la = Environment["LOCALAPPDATA"]},
+          If[StringQ[la] && StringLength[la] > 0,
+            FileNameJoin[{la, "SourceVault"}],
+            FileNameJoin[{$HomeDirectory, "AppData", "Local", "SourceVault"}]]],
+      $OperatingSystem === "MacOSX",
+        FileNameJoin[{$HomeDirectory, "Library", "Application Support", "SourceVault"}],
+      True,
+        FileNameJoin[{$HomeDirectory, ".local", "state", "sourcevault"}]
+    ];
+
     <|
       "PrivateVault"     -> privateRoot,
       "CloudMirror"      -> cloudRoot,
       "Tmp"              -> tmpRoot,
       "AttachmentMirror" -> attachmentRoot,
-      "ExternalOwned"    -> Automatic
+      "ExternalOwned"    -> Automatic,
+      "LocalState"       -> localStateRoot
     |>
   ];
 
@@ -1504,9 +1558,21 @@ iWithLock[lockId_String, body_] :=
    5. JSON load / save (\:30e1\:30bf\:30c7\:30fc\:30bf)
    ============================================================ *)
 
+(* ExportString[..., "RawJSON"] は UTF-8 バイト列の Latin-1 表現を返すため、
+   そのまま UTF-8 指定の iTransactionalWrite に渡すと非 ASCII が二重エンコード
+   になる (rule 30)。ExportByteArray -> ByteArrayToString で本物の文字列に
+   戻してから一度だけ UTF-8 で書く。 *)
 iSaveJSON[file_String, data_] :=
-  iTransactionalWrite[file,
-    ExportString[data, "RawJSON", "Compact" -> False]];
+  Module[{str},
+    str = Quiet @ Check[
+      ByteArrayToString[
+        ExportByteArray[data, "RawJSON", "Compact" -> False], "UTF-8"],
+      $Failed];
+    If[!StringQ[str],
+      str = ExportString[data, "RawJSON", "Compact" -> False]];
+    If[!StringQ[str], Return[$Failed]];
+    iTransactionalWrite[file, str]
+  ];
 
 iLoadJSON[file_String] :=
   If[!FileExistsQ[file], Missing["NoFile"],
@@ -1524,6 +1590,11 @@ iLoadJSONFromFile[path_String] :=
     If[!FileExistsQ[path], Return[Null]];
     rawBytes = Quiet @ ReadByteArray[path];
     If[!ByteArrayQ[rawBytes], Return[Null]];
+    (* 第 0 選択: バイト列を直接 parse。非 ASCII を含む本物の文字列を
+       ImportString["RawJSON"] に渡すと jsonoutofrangeunicode で失敗するため
+       (rule 30)、UTF-8 ファイルはこの経路が最も確実。 *)
+    data = Quiet @ ImportByteArray[rawBytes, "RawJSON"];
+    If[AssociationQ[data] || ListQ[data], Return[data]];
     str = Quiet @ ByteArrayToString[rawBytes, "UTF-8"];
     If[!StringQ[str], Return[Null]];
     (* \:7b2c\:4e00\:9078\:629e: ImportString[..., \"RawJSON\"] *)
@@ -2824,6 +2895,460 @@ SourceVaultResolvePath[ref_, OptionsPattern[]] :=
 
 
 (* ============================================================
+   11.5 ソース一覧 / 横断検索 (SourceVaultSources / SourceVaultSummaries)
+
+   共通行スキーマ (provider 契約):
+     <|"Kind" -> "arxiv"|"web"|"local"|"eagle"|...,
+       "Id" -> _String, "Title" -> _String, "Authors" -> _String,
+       "Published" -> _String (内容の出版日 ISO / ""),
+       "Summary" -> _String, "URL" -> _String, "File" -> _String,
+       "Date" -> _String (登録/生成日時), "PrivacyLevel" -> _Real|>
+   SourceVaultEagleSummaryRow (SourceVault_eagle.wl) と同じキーを共有する。
+   provider は SourceVaultRegisterSummaryProvider[name, fn] で登録し、
+   fn[query_String, opts_Association] が共通行のリストを返す。
+   ============================================================ *)
+
+iSVUIFont[] := If[$Language === "Japanese", "Yu Gothic UI", "Segoe UI"];
+
+iSVTruncStr[s_, n_Integer] :=
+  With[{t = If[StringQ[s], s, ToString[s]]},
+    If[StringLength[t] > n, StringTake[t, n] <> "…", t]];
+
+iSVKindOfSourceType[st_] :=
+  Switch[ToString[st],
+    "ArXiv", "arxiv",
+    "URL", "web",
+    "LocalFile", "local",
+    _, ToLowerCase[ToString[st]]];
+
+(* source meta から arXiv id を引く (CanonicalURI 優先、無ければ latest snapshot) *)
+iSVArXivIdOfMeta[meta_Association] :=
+  Module[{canon = ToString @ Lookup[meta, "CanonicalURI", ""], snaps, snap},
+    If[StringStartsQ[canon, "arXiv:"],
+      StringDrop[canon, 6],
+      snaps = Lookup[meta, "Snapshots", {}];
+      snap = If[ListQ[snaps] && snaps =!= {},
+        iSnapshotMetaLoad[Last[snaps]], Missing[]];
+      If[AssociationQ[snap], Lookup[snap, "ArXivId", Missing[]], Missing[]]
+    ]
+  ];
+iSVArXivIdOfMeta[___] := Missing[];
+
+(* arXiv API (export.arxiv.org) から title/authors/published を一括取得。
+   戻り値: <|id -> <|"Title"->_, "Authors"->{__String}, "Published"->_|>, ...|>
+   失敗 id はセッション内キャッシュ $iSVArXivFetchFailed に記録し再試行しない。 *)
+If[!AssociationQ[$iSVArXivFetchFailed], $iSVArXivFetchFailed = <||>];
+
+iSVArXivMetaFetchBatch[ids : {__String}] :=
+  Module[{url, xml, entries, out = <||>},
+    url = "https://export.arxiv.org/api/query?max_results=" <>
+      ToString[Length[ids]] <> "&id_list=" <> StringRiffle[ids, ","];
+    xml = Quiet @ Check[
+      TimeConstrained[Import[url, "XML"], 30, $Failed], $Failed];
+    entries = If[xml === $Failed, {},
+      Cases[xml, XMLElement["entry", _, _], Infinity]];
+    Scan[
+      Function[entry,
+        Module[{eid, title, authors, published, key},
+          eid = FirstCase[entry,
+            XMLElement["id", _, {s_String}] :> s, "", Infinity];
+          eid = StringReplace[eid,
+            RegularExpression["^https?://arxiv\\.org/abs/"] -> ""];
+          title = FirstCase[entry,
+            XMLElement["title", _, {t_String}] :> t, "", Infinity];
+          title = StringTrim @
+            StringReplace[title, WhitespaceCharacter .. -> " "];
+          authors = Cases[entry,
+            XMLElement["author", _, ac_] :>
+              FirstCase[ac, XMLElement["name", _, {n_String}] :> n,
+                Nothing, Infinity],
+            Infinity];
+          published = FirstCase[entry,
+            XMLElement["published", _, {p_String}] :> p, "", Infinity];
+          (* リクエスト id との対応付け: 完全一致 -> version 抜き一致 *)
+          key = SelectFirst[ids, # === eid &,
+            SelectFirst[ids,
+              StringReplace[eid, RegularExpression["v[0-9]+$"] -> ""] === # &,
+              Missing[]]];
+          If[StringQ[key] && title =!= "",
+            out[key] = <|
+              "Title" -> title,
+              "Authors" -> Select[authors, StringQ],
+              "Published" -> published|>]
+        ]],
+      entries];
+    Scan[If[!KeyExistsQ[out, #], $iSVArXivFetchFailed[#] = True] &, ids];
+    out
+  ];
+iSVArXivMetaFetchBatch[{}] := <||>;
+
+(* 保存済み HTML snapshot から <title> を抽出 (network なし、先頭 256KB のみ)。
+   チャンク末尾で UTF-8 マルチバイト列が切れると decode が失敗するので、
+   末尾 1〜3 byte を削って再試行してから Latin-1 にフォールバックする。 *)
+iSVHtmlTitleOf[path_String] :=
+  Module[{strm, bytes, str, hits, title},
+    If[!FileExistsQ[path], Return[""]];
+    strm = Quiet @ OpenRead[path, BinaryFormat -> True];
+    If[Head[strm] =!= InputStream, Return[""]];
+    bytes = Quiet @ Check[BinaryReadList[strm, "Byte", 262144], {}];
+    Quiet @ Close[strm];
+    If[!ListQ[bytes] || bytes === {}, Return[""]];
+    str = SelectFirst[
+      Map[Function[drop,
+        If[Length[bytes] > drop,
+          Quiet @ Check[
+            ByteArrayToString[ByteArray[Drop[bytes, -drop]], "UTF-8"],
+            $Failed],
+          $Failed]],
+        {0, 1, 2, 3}],
+      StringQ, $Failed];
+    If[!StringQ[str],
+      str = Quiet @ Check[FromCharacterCode[bytes], $Failed]];
+    If[!StringQ[str], Return[""]];
+    hits = StringCases[str,
+      RegularExpression["(?is)<title[^>]*>(.*?)</title>"] -> "$1", 1];
+    If[hits === {}, Return[""]];
+    title = StringTrim @
+      StringReplace[First[hits], WhitespaceCharacter .. -> " "];
+    StringReplace[title, {"&amp;" -> "&", "&lt;" -> "<", "&gt;" -> ">",
+      "&quot;" -> "\"", "&#39;" -> "'", "&nbsp;" -> " "}]
+  ];
+iSVHtmlTitleOf[___] := "";
+
+iSVSourceTitleMissingQ[meta_] :=
+  !StringQ[Lookup[meta, "Title", Missing[]]] ||
+    StringTrim[ToString @ Lookup[meta, "Title", ""]] === "";
+
+(* meta 1 件に表示用 Title/Authors/Published を補完し、変化したら保存する *)
+iSVSourceEnrichOne[meta_Association, fetch_, arxivBatch_Association] :=
+  Module[{m = meta, st, changed = False, aid, hit, snaps, snap, ct, path, t},
+    st = ToString @ Lookup[m, "SourceType", ""];
+    Which[
+      st === "ArXiv" && (TrueQ[fetch] || iSVSourceTitleMissingQ[m]),
+        aid = iSVArXivIdOfMeta[m];
+        hit = If[StringQ[aid], Lookup[arxivBatch, aid, Missing[]], Missing[]];
+        If[AssociationQ[hit],
+          m["Title"] = Lookup[hit, "Title", ""];
+          m["Authors"] = Lookup[hit, "Authors", {}];
+          m["Published"] = Lookup[hit, "Published", ""];
+          m["MetaFetchedAt"] = iIsoNow[];
+          changed = True],
+      st === "URL" && (TrueQ[fetch] || iSVSourceTitleMissingQ[m]),
+        snaps = Lookup[m, "Snapshots", {}];
+        snap = If[ListQ[snaps] && snaps =!= {},
+          iSnapshotMetaLoad[Last[snaps]], Missing[]];
+        If[AssociationQ[snap],
+          ct = ToString @ Lookup[snap, "ContentType", ""];
+          path = ToString @ Lookup[snap, "Path", ""];
+          (* HTML 判定: ContentType / raw 拡張子 / (ContentType 欠落時は
+             PDF 系でない限り試す。<title> が無ければ無害に "" が返る) *)
+          If[StringQ[path] && path =!= "" && FileExistsQ[path] &&
+             (StringContainsQ[ct, "html"] ||
+              MemberQ[{"html", "htm"}, ToLowerCase[FileExtension[path]]] ||
+              (ct === "" && !MemberQ[{"pdf", "bin"},
+                 ToLowerCase[FileExtension[path]]])),
+            t = iSVHtmlTitleOf[path];
+            If[StringQ[t] && t =!= "",
+              m["Title"] = t;
+              m["MetaFetchedAt"] = iIsoNow[];
+              changed = True]]],
+      True, Null];
+    If[changed,
+      Quiet @ Check[iSourceMetaSave[ToString @ Lookup[m, "SourceId", ""], m], Null]];
+    m
+  ];
+iSVSourceEnrichOne[m_, ___] := m;
+
+(* metas リストを一括補完 (arXiv API は 1 リクエストにまとめる) *)
+iSVSourcesEnrich[metas_List, fetch_] :=
+  Module[{needIds, batch},
+    If[fetch === False, Return[metas]];
+    needIds = DeleteDuplicates @ Select[
+      Map[Function[m,
+        If[AssociationQ[m] &&
+            ToString @ Lookup[m, "SourceType", ""] === "ArXiv" &&
+            (TrueQ[fetch] || iSVSourceTitleMissingQ[m]) &&
+            !TrueQ[Lookup[$iSVArXivFetchFailed,
+              iSVArXivIdOfMeta[m] /. Missing[___] -> "", False]],
+          iSVArXivIdOfMeta[m], Missing[]]], metas],
+      StringQ];
+    batch = If[needIds === {}, <||>, iSVArXivMetaFetchBatch[needIds]];
+    Map[iSVSourceEnrichOne[#, fetch, batch] &, metas]
+  ];
+
+(* meta -> 共通スキーマ行 *)
+iSVSourceRowOf[meta_Association] :=
+  Module[{kind, id, title, authors, published, url, file, date, pl,
+          snaps, snap, aid},
+    id = ToString @ Lookup[meta, "SourceId", ""];
+    kind = iSVKindOfSourceType[Lookup[meta, "SourceType", ""]];
+    snaps = Lookup[meta, "Snapshots", {}];
+    snap = If[ListQ[snaps] && snaps =!= {},
+      iSnapshotMetaLoad[Last[snaps]], Missing[]];
+    file = If[AssociationQ[snap], ToString @ Lookup[snap, "Path", ""], ""];
+    If[file =!= "" && !FileExistsQ[file], file = ""];  (* purge 済み raw は空欄 *)
+    aid = iSVArXivIdOfMeta[meta];
+    url = Which[
+      kind === "arxiv" && StringQ[aid], "https://arxiv.org/abs/" <> aid,
+      True, ToString @ Lookup[meta, "OriginalURL", ""]];
+    title = ToString @ Lookup[meta, "Title", ""];
+    If[StringTrim[title] === "",
+      title = ToString @ Lookup[meta, "DisplayName", ""]];
+    If[StringTrim[title] === "",
+      title = Which[
+        kind === "local",
+          FileNameTake[ToString @ Lookup[meta, "OriginalPath", id]],
+        url =!= "", url,
+        True, id]];
+    authors = Lookup[meta, "Authors", {}];
+    authors = Which[
+      ListQ[authors], StringRiffle[ToString /@ authors, ", "],
+      StringQ[authors], authors,
+      True, ""];
+    published = ToString @ Lookup[meta, "Published", ""];
+    date = ToString @ Lookup[meta, "CreatedAt", ""];
+    pl = With[{p = Lookup[meta, "PrivacyLevel", Missing[]]},
+      If[NumericQ[p], N[p], 1.0]];
+    <|"Kind" -> kind, "Id" -> id, "Title" -> title, "Authors" -> authors,
+      "Published" -> published,
+      "Summary" -> ToString @ Lookup[meta, "Summary", ""],
+      "URL" -> url, "File" -> file, "Date" -> date, "PrivacyLevel" -> pl|>
+  ];
+
+(* ingest 済み全ソースの共通行 (query フィルタ付き)。
+   opts キー: "FetchMetadata", "Kind" *)
+iSVSourcesRows[query_String, opts_Association] :=
+  Module[{fetch, kindFilter, ids, metas, rows, q},
+    fetch = Lookup[opts, "FetchMetadata", Automatic];
+    kindFilter = Lookup[opts, "Kind", All];
+    iEnsureRoots[];
+    ids = SourceVaultList[];
+    metas = Select[iSourceMetaLoad /@ ids, AssociationQ];
+    metas = iSVSourcesEnrich[metas, fetch];
+    rows = iSVSourceRowOf /@ metas;
+    If[kindFilter =!= All && kindFilter =!= Automatic,
+      rows = Select[rows,
+        MemberQ[ToLowerCase /@ (ToString /@ Flatten[{kindFilter}]),
+          ToString @ Lookup[#, "Kind", ""]] &]];
+    q = StringTrim[query];
+    If[q =!= "",
+      rows = Select[rows, Function[r, AnyTrue[
+        {Lookup[r, "Title", ""], Lookup[r, "Authors", ""],
+         Lookup[r, "Summary", ""], Lookup[r, "URL", ""],
+         Lookup[r, "File", ""], Lookup[r, "Id", ""], Lookup[r, "Kind", ""]},
+        StringContainsQ[ToString[#], q, IgnoreCase -> True] &]]]];
+    rows
+  ];
+iSVSourcesRows[query_String] := iSVSourcesRows[query, <||>];
+
+(* ソース 1 件の全メタ情報を別ウインドウで表示 (タイトルクリック既定動作) *)
+iSVSourceShowInfo[sourceId_String] :=
+  Module[{meta, title},
+    meta = iSourceMetaLoad[sourceId];
+    If[!AssociationQ[meta],
+      Return[<|"Status" -> "Error", "Reason" -> "NotFound",
+        "SourceId" -> sourceId|>]];
+    title = ToString @ Lookup[meta, "Title",
+      Lookup[meta, "DisplayName", sourceId]];
+    CreateDocument[
+      {Cell[title, "Subsection"],
+       ExpressionCell[Dataset[meta], "Output"]},
+      WindowTitle -> sourceId, WindowSize -> {760, 520}];
+    <|"Status" -> "Opened", "SourceId" -> sourceId|>
+  ];
+
+(* Kind ごとの行アクション (adapter が上書き登録できる):
+   $iSVRowTitleActions[kind] = fn[id]  (タイトルクリック。既定: メタ情報ウインドウ)
+   $iSVRowOpenActions[kind]  = fn[id]  (ファイルを開く。既定: row の File を SystemOpen) *)
+If[!AssociationQ[$iSVRowTitleActions], $iSVRowTitleActions = <||>];
+If[!AssociationQ[$iSVRowOpenActions], $iSVRowOpenActions = <||>];
+
+(* 共通行リスト -> notebook list 風 Grid (SourceVaultEagleSummaries と同系の見た目) *)
+iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
+  Module[{ff = iSVUIFont[], header, body, grid, capLine},
+    If[rows === {},
+      Return[Style["該当するデータはありません。", "Text", FontFamily -> ff]]];
+    header = (Style[#, Bold, FontFamily -> ff] &) /@
+      {"種別", "タイトル", "著者", "出版", "サマリー", "PL", "URL", "ファイル", "登録"};
+    body = Function[row,
+      Module[{kind, id, title, authors, published, summary, pl, url, file,
+              date, titleAct, openAct},
+        kind = ToString @ Lookup[row, "Kind", ""];
+        id = ToString @ Lookup[row, "Id", ""];
+        title = ToString @ Lookup[row, "Title", ""];
+        authors = ToString @ Lookup[row, "Authors", ""];
+        published = ToString @ Lookup[row, "Published", ""];
+        summary = ToString @ Lookup[row, "Summary", ""];
+        pl = Lookup[row, "PrivacyLevel", Missing[]];
+        url = ToString @ Lookup[row, "URL", ""];
+        file = ToString @ Lookup[row, "File", ""];
+        date = ToString @ Lookup[row, "Date", ""];
+        titleAct = Lookup[$iSVRowTitleActions, kind, Automatic];
+        openAct = Lookup[$iSVRowOpenActions, kind, Automatic];
+        {kind,
+         With[{act = If[titleAct === Automatic, iSVSourceShowInfo, titleAct],
+               theId = id},
+           Tooltip[
+             Button[Style[iSVTruncStr[title, 60], "Hyperlink", FontFamily -> ff],
+               act[theId], Appearance -> "Frameless", Method -> "Queued",
+               BaseStyle -> "Hyperlink"],
+             title <> "\nId: " <> theId]],
+         If[authors === "", "",
+           Tooltip[Style[iSVTruncStr[authors, 40], FontFamily -> ff], authors]],
+         StringTake[published, UpTo[7]],
+         If[summary === "", "",
+           Tooltip[Style[iSVTruncStr[summary, 60], FontFamily -> ff], summary]],
+         If[NumericQ[pl], ToString[N[pl]], ""],
+         If[StringStartsQ[url, "http"],
+           Tooltip[Hyperlink[Style["▶ URL", FontFamily -> ff], url], url], ""],
+         Which[
+           openAct =!= Automatic,
+             With[{act = openAct, theId = id},
+               Button[Style["▶ 開く", "Hyperlink", FontFamily -> ff],
+                 act[theId], Appearance -> "Frameless", Method -> "Queued",
+                 BaseStyle -> "Hyperlink"]],
+           file =!= "",
+             With[{f = file},
+               Tooltip[
+                 Button[Style["▶ 開く", "Hyperlink", FontFamily -> ff],
+                   SystemOpen[f], Appearance -> "Frameless", Method -> "Queued",
+                   BaseStyle -> "Hyperlink"], f]],
+           True, ""],
+         If[date === "", "",
+           Tooltip[Style[StringTake[date, UpTo[10]], FontFamily -> ff], date]]}
+      ]] /@ rows;
+    grid = Grid[Prepend[body, header],
+      Frame -> All, FrameStyle -> Directive[GrayLevel[0.85]],
+      Background -> {None, {GrayLevel[0.92], {White}}},
+      Alignment -> {Left, Center}, Spacings -> {1.2, 0.7},
+      BaseStyle -> {FontFamily -> ff}];
+    capLine = Style[caption <> " (" <> ToString[total] <> " 件)",
+      Bold, 14, FontFamily -> ff];
+    If[Length[rows] < total,
+      Column[{capLine,
+        Style["全 " <> ToString[total] <> " 件中 " <> ToString[Length[rows]] <>
+          " 件を表示。全件は \"Limit\" -> Automatic。",
+          FontFamily -> ff, GrayLevel[0.45]],
+        grid}],
+      Column[{capLine, grid}]]
+  ];
+
+(* ---- 公開: ingest 済みソース一覧 ---- *)
+
+Options[SourceVaultSourceRow] = {"FetchMetadata" -> Automatic};
+SourceVaultSourceRow[sourceId_String, OptionsPattern[]] :=
+  Module[{meta},
+    meta = iSourceMetaLoad[sourceId];
+    If[!AssociationQ[meta], Return[Missing["NotFound", sourceId]]];
+    meta = First @ iSVSourcesEnrich[{meta}, OptionValue["FetchMetadata"]];
+    iSVSourceRowOf[meta]
+  ];
+
+Options[SourceVaultSources] = {
+  "Limit" -> Automatic, "Kind" -> All,
+  "FetchMetadata" -> Automatic, "Format" -> "Grid"};
+SourceVaultSources[query_String : "", OptionsPattern[]] :=
+  Module[{rows, total, lim},
+    rows = iSVSourcesRows[query, <|
+      "FetchMetadata" -> OptionValue["FetchMetadata"],
+      "Kind" -> OptionValue["Kind"]|>];
+    rows = ReverseSortBy[rows, ToString @ Lookup[#, "Date", ""] &];
+    total = Length[rows];
+    lim = OptionValue["Limit"];
+    If[IntegerQ[lim] && lim >= 0, rows = Take[rows, UpTo[lim]]];
+    Switch[OptionValue["Format"],
+      "Rows", rows,
+      "Dataset", Dataset[rows],
+      _, iSVRenderRowsGrid[rows, total, "Ingest 済みソース一覧"]]
+  ];
+
+(* ---- 公開: 横断検索 (provider 横断) ---- *)
+
+If[!AssociationQ[$SourceVaultSummaryProviders],
+  $SourceVaultSummaryProviders = <||>];
+
+SourceVaultRegisterSummaryProvider[name_String, fn_] :=
+  ($SourceVaultSummaryProviders[name] = fn;
+   <|"Status" -> "Registered", "Provider" -> name|>);
+
+(* ingest 済みソース provider (本体) *)
+SourceVaultRegisterSummaryProvider["sources", iSVSourcesRows];
+
+Options[SourceVaultSummaries] = {
+  "Limit" -> Automatic, "Providers" -> All, "Kind" -> All,
+  "FetchMetadata" -> Automatic, "Format" -> "Grid"};
+SourceVaultSummaries[query_String : "", OptionsPattern[]] :=
+  Module[{provs, sel, o, rows, total, lim},
+    provs = If[AssociationQ[$SourceVaultSummaryProviders],
+      $SourceVaultSummaryProviders, <||>];
+    sel = OptionValue["Providers"];
+    If[sel =!= All && sel =!= Automatic,
+      provs = KeyTake[provs, ToString /@ Flatten[{sel}]]];
+    o = <|"FetchMetadata" -> OptionValue["FetchMetadata"],
+      "Kind" -> OptionValue["Kind"]|>;
+    rows = Join @@ Map[
+      Function[fn, Module[{r = Quiet @ Check[fn[query, o], {}]},
+        If[ListQ[r], Select[r, AssociationQ], {}]]],
+      Values[provs]];
+    rows = ReverseSortBy[rows, ToString @ Lookup[#, "Date", ""] &];
+    total = Length[rows];
+    lim = OptionValue["Limit"];
+    If[IntegerQ[lim] && lim >= 0, rows = Take[rows, UpTo[lim]]];
+    Switch[OptionValue["Format"],
+      "Rows", rows,
+      "Dataset", Dataset[rows],
+      _, iSVRenderRowsGrid[rows, total, "SourceVault 横断検索結果"]]
+  ];
+
+(* ---- View 出力セルの自動機密マーク spec 登録 ----
+   SourceVaultSources / SourceVaultSummaries の出力はソース・item のメタ情報
+   (タイトル/パス/サマリー等) を含むので、表示行の最大 PrivacyLevel をセル PL
+   とする (SourceVault_maildb.wl / SourceVault_eagle.wl と同じ共有レジストリ枠組み。
+   maildb の SourceVaultMarkConfidentialViewCells / 自動フックが spec を走査する)。 *)
+
+iSVCatalogViewInputQ[text_String] :=
+  StringContainsQ[text,
+    RegularExpression["SourceVault(Sources|Summaries)\\s*\\["]];
+iSVCatalogViewInputQ[_] := False;
+
+(* read-only プローブ: Format->"Rows" で再実行し最大 PL を返す。
+   Limit は外して superset を見る (安全側)。network 再取得はしない。 *)
+iSVCatalogPLProbe[query_String : "", opts___] :=
+  Module[{rows},
+    rows = Quiet @ Check[
+      SourceVaultSummaries[query, "Format" -> "Rows",
+        "FetchMetadata" -> False, "Limit" -> Automatic, opts],
+      $Failed];
+    If[!ListQ[rows], Return[1.0]];
+    If[rows === {}, Return[0.0]];
+    Max[Map[
+      Function[r, With[{p = Lookup[r, "PrivacyLevel", Missing[]]},
+        If[NumericQ[p], N[p], 1.0]]],
+      rows]]
+  ];
+iSVCatalogPLProbe[___] := 1.0;
+
+iSVCatalogCellMaxPLFromText[text_String] :=
+  Module[{held, vals},
+    held = Quiet @ Check[ToExpression[text, InputForm, HoldComplete], $Failed];
+    If[held === $Failed, Return[1.0]];
+    vals = Quiet @ Check[
+      Cases[held,
+        HoldPattern[(SourceVaultSources | SourceVaultSummaries)[a___]] :>
+          iSVCatalogPLProbe[a],
+        {0, Infinity}], {}];
+    If[ListQ[vals] && Length[vals] > 0 && AllTrue[vals, NumericQ],
+      Max[vals], 1.0]];
+iSVCatalogCellMaxPLFromText[_] := 1.0;
+
+If[!ListQ[$iSVConfidentialViewSpecRegistry],
+  $iSVConfidentialViewSpecRegistry = {}];
+$iSVConfidentialViewSpecRegistry = Append[
+  DeleteCases[$iSVConfidentialViewSpecRegistry, {iSVCatalogViewInputQ, _}],
+  {iSVCatalogViewInputQ, iSVCatalogCellMaxPLFromText}];
+
+
+(* ============================================================
    12. Stage 3: SourceVaultSpan / Context / ContextAssemble
    ============================================================ *)
 
@@ -3382,7 +3907,7 @@ iOCRViaClaudeVision[req_Association, params_Association] :=
       singleResult = Quiet[
         Block[{ClaudeCode`$iMediaMaxImageSize = 1568},
           ClaudeCode`ClaudeQueryBg[{prompt, img},
-            NonBlocking -> True, Timeout -> timeout]]];
+            "NonBlocking" -> True, "Timeout" -> timeout]]];
       If[verbose,
         Print["[ClaudeVision] API returned: ",
           Which[
@@ -3414,7 +3939,7 @@ iOCRViaClaudeVision[req_Association, params_Association] :=
     topText = Quiet[
       Block[{ClaudeCode`$iMediaMaxImageSize = 1568},
         ClaudeCode`ClaudeQueryBg[{prompt, topImg},
-          NonBlocking -> True, Timeout -> timeout]]];
+          "NonBlocking" -> True, "Timeout" -> timeout]]];
     If[verbose,
       Print["[ClaudeVision] top returned: ",
         Which[
@@ -3438,7 +3963,7 @@ iOCRViaClaudeVision[req_Association, params_Association] :=
     botText = Quiet[
       Block[{ClaudeCode`$iMediaMaxImageSize = 1568},
         ClaudeCode`ClaudeQueryBg[{prompt, botImg},
-          NonBlocking -> True, Timeout -> timeout]]];
+          "NonBlocking" -> True, "Timeout" -> timeout]]];
     If[verbose,
       Print["[ClaudeVision] bottom returned: ",
         Which[
@@ -4025,7 +4550,7 @@ iCallExtractorLLM[prompt_String, timeout_:180] :=
     t0 = AbsoluteTime[];
     resp = Quiet[
       ClaudeCode`ClaudeQueryBg[prompt,
-        NonBlocking -> True, Timeout -> timeout]];
+        "NonBlocking" -> True, "Timeout" -> timeout]];
     elapsed = Round[AbsoluteTime[] - t0, 0.1];
     
     If[verbose,
@@ -5464,6 +5989,13 @@ iModelSeedEntries[] := {
     "ModelId" -> "claude-sonnet-4-6", "Availability" -> "Available",
     "Class" -> "Heavy-Cloud", "Capabilities" -> {"Reasoning", "Code"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
+  (* Light x Cloud: cloud light tier (used by power-aware routing when on
+     battery / no local LLM). Registered as a table entry, not hardcoded in
+     routing logic (rule 02). *)
+  <|"Kind" -> "Model", "Provider" -> "anthropic", "Intent" -> "light",
+    "ModelId" -> "claude-haiku-4-5", "Availability" -> "Available",
+    "Class" -> "Light-Cloud", "Capabilities" -> {"Reasoning"},
+    "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "openai", "Intent" -> "heavy",
     "ModelId" -> "gpt-5", "Availability" -> "Available",
     "Class" -> "Heavy-Cloud", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
@@ -5687,7 +6219,12 @@ SourceVaultModelIntegrations[provider_String, modelId_String,
       e_ /; ListQ[Lookup[e, "Integrations", None]] &&
             Length[Lookup[e, "Integrations"]] > 0 :>
         Lookup[e, "Integrations"], None];
-    If[ListQ[integ] && Length[integ] > 0, integ, None]
+    If[ListQ[integ] && Length[integ] > 0,
+      (* SearXNG が使える環境なら web 検索 backend を exa->SourceVault に切替、
+         使えなければ exa にフォールバックする (SourceVault_webingest.wl 提供; 無ければ素通し)。 *)
+      If[Length[Names["SourceVault`SourceVaultSwapWebSearchBackend"]] > 0,
+        SourceVault`SourceVaultSwapWebSearchBackend[integ], integ],
+      None]
   ];
 SourceVaultModelIntegrations[___] := None;
 
@@ -6287,6 +6824,11 @@ If[!ValueQ[$SourceVaultCloudRoots],
    \:5225 PC \:3067 index \:3055\:308c\:305f\:65e7\:30d1\:30b9\:3092 {"$onWork", ...} \:306b\:6b63\:898f\:5316\:3057\:4e8c\:91cd\:767b\:9332\:3092\:9632\:3050\:3002 *)
 If[!ValueQ[$SourceVaultCloudRootAliases],
   $SourceVaultCloudRootAliases = <||>];
+
+(* Default folder for SourceVault notebooks. Automatic -> Global`$onWork ->
+   $packageDirectory (resolved at use time by iSVDefaultNotebookFolder). *)
+If[!ValueQ[$SourceVaultDefaultNotebookFolder],
+  $SourceVaultDefaultNotebookFolder = Automatic];
 
 (* \:30d1\:30b9\:6587\:5b57\:5217\:3092\:30bb\:30d1\:30ec\:30fc\:30bf\:7d71\:4e00 (/ \:56fa\:5b9a) + \:672b\:5c3e\:30bb\:30d1\:30ec\:30fc\:30bf\:9664\:53bb\:3002\:5927\:6587\:5b57\:5c0f\:6587\:5b57\:306f\:4fdd\:6301\:3002
    \:30b7\:30f3\:30dc\:30ea\:30c3\:30af\:30d1\:30b9\:306e rest \:62bd\:51fa\:306b\:4f7f\:3046 (NotebookRef ID \:5b89\:5b9a\:306e\:305f\:3081\:8868\:8a18\:3092\:5909\:3048\:306a\:3044)\:3002 *)
@@ -7162,11 +7704,13 @@ iSVStringToBoxes[inputStr_String] := inputStr;
 Options[SourceVaultNewNotebook] = {
   "TemplatePath" -> Automatic,
   "Title" -> Automatic,
-  "Date" -> Automatic
+  "Date" -> Automatic,
+  "Keywords" -> Automatic,
+  "SessionID" -> Automatic
 };
 
 SourceVaultNewNotebook[opts:OptionsPattern[]] :=
-  Module[{tmplPath, title, theDate, dateList,
+  Module[{tmplPath, title, theDate, dateList, keywords, sessionId,
           nbExpr, replaced, found = False, newNb, nbObj},
     iEnsureRoots[];
     (* \:751f\:6210\:65e5 (\:65e2\:5b9a: \:4eca\:65e5) *)
@@ -7197,6 +7741,16 @@ SourceVaultNewNotebook[opts:OptionsPattern[]] :=
     title = OptionValue["Title"];
     If[title === Automatic || !StringQ[title], title = "\:65b0\:898f\:30ce\:30fc\:30c8"];
 
+    (* Keywords: a list of strings replaces the template's "Keywords" value.
+       Automatic (default) keeps the template's value (e.g. {"template"}). *)
+    keywords = OptionValue["Keywords"];
+    If[StringQ[keywords], keywords = {keywords}];
+
+    (* SessionID: a string stores a back-link to a capture session into the
+       NotebookStatus association, so a found notebook can recover its session
+       events. Automatic (default) adds nothing. *)
+    sessionId = OptionValue["SessionID"];
+
     (* \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:3092\:5f0f\:3068\:3057\:3066\:8aad\:307f\:8fbc\:3080 (\:526f\:4f5c\:7528\:306a\:3057) *)
     nbExpr = Quiet[Import[tmplPath, "Notebook"]];
     If[!MatchQ[nbExpr, Notebook[_List, ___]],
@@ -7220,6 +7774,8 @@ SourceVaultNewNotebook[opts:OptionsPattern[]] :=
                \:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0\:306f\:885d\:7a81\:3057\:306a\:3044 ASCII \:30c8\:30fc\:30af\:30f3\:3002 *)
             newAssoc["Deadline"]   = "@@SV_DEADLINE_DATE@@";
             newAssoc["NextReview"] = "@@SV_NEXTREVIEW_DATE@@";
+            If[MatchQ[keywords, {___String}], newAssoc["Keywords"] = keywords];
+            If[StringQ[sessionId], newAssoc["SessionID"] = sessionId];
             inputStr = ToString[newAssoc, InputForm];
             (* \:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0 (\:30af\:30a9\:30fc\:30c8\:4ed8\:304d\:6587\:5b57\:5217\:3068\:3057\:3066\:51fa\:529b\:3055\:308c\:308b) \:3092\:5b9f DateObject \:5165\:529b\:5f0f\:306b *)
             inputStr = StringReplace[inputStr, {
@@ -8823,11 +9379,24 @@ SourceVaultNotebookSummary[path_String, opts:OptionsPattern[]] :=
    ============================================================ *)
 
 (* Scope \:6587\:5b57\:5217\:307e\:305f\:306f\:30d1\:30b9\:3092\:5b9f\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:306b\:89e3\:6c7a *)
+(* Resolve $SourceVaultDefaultNotebookFolder to a concrete directory string.
+   Automatic / non-directory -> Global`$onWork -> $packageDirectory. *)
+iSVDefaultNotebookFolder[] :=
+  Module[{f, v},
+    f = $SourceVaultDefaultNotebookFolder;
+    If[StringQ[f] && DirectoryQ[f], Return[f]];
+    v = Quiet @ Symbol["Global`$onWork"];
+    If[StringQ[v] && DirectoryQ[v], Return[v]];
+    v = iPackageDir[];
+    If[StringQ[v] && DirectoryQ[v], Return[v]];
+    $Failed
+  ];
+
 iSVResolveScope[scope_] :=
   Module[{val},
     Which[
       scope === Automatic || scope === None,
-        val = Quiet @ Symbol["Global`$onWork"];
+        val = iSVDefaultNotebookFolder[];
         If[StringQ[val] && DirectoryQ[val], val,
           Quiet @ Symbol["Global`$packageDirectory"]],
       StringQ[scope] && DirectoryQ[scope], scope,
@@ -13433,19 +14002,23 @@ If[!ValueQ[SourceVault`$SourceVaultWorkerPromptAutoDetect],
    ============================================================ *)
 If[AssociationQ[ClaudeCode`$ClaudePackageKeywordMap],
   ClaudeCode`$ClaudePackageKeywordMap["SourceVault"] =
-    {"SourceVault", "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af", "notebook",
+    {"SourceVault",  (* generic "notebook"/JP removed: over-matched *)
      "\:4e88\:5b9a", "\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb", "schedule",
      "\:30ec\:30d3\:30e5\:30fc", "review", "\:7de0\:5207", "\:671f\:9650", "deadline",
-     "\:30ad\:30fc\:30ef\:30fc\:30c9", "keyword", "\:4e00\:89a7", "\:30ea\:30b9\:30c8", "list",
-     "\:30d7\:30ed\:30f3\:30d7\:30c8", "prompt",
+     (* generic removed (over-matched unrelated prompts): keyword / list / prompt *)
+     (* ソース一覧 / 横断検索 (SourceVaultSources / SourceVaultSummaries) *)
+     "ingest", "Ingest", "取り込み",
+     "論文", "arxiv", "arXiv", "横断検索",  (* bare "source"/"検索" removed *)
+     "SourceVaultSources", "SourceVaultSummaries", "SourceVaultSourceRow",
      "SourceVaultFindNotebooks", "SourceVaultFormatNotebookList",
-     "SourceVaultFindTodos", "Todo", "todo", "\:30bf\:30b9\:30af", "\:9805\:76ee",
-     "SourceVaultNewNotebook", "\:65b0\:898f", "\:65b0\:3057\:3044", "\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8", "template",
+     "SourceVaultFindTodos", "Todo",  (* generic "todo"/JP task/item removed *)
+     "SourceVaultNewNotebook",  (* generic new/template removed *)
      "SourceVaultUpcomingSchedule", "SourceVaultIndexNotebook",
      "SourceVaultExtractNotebookHeader", "SourceVaultNotebookSummary",
      "SaveLastPrompt", "SourceVaultSearchPromptRoutes",
      "SourceVaultFormatPromptRouteList",
-     "\:30e2\:30c7\:30eb", "model", "ClaudeResolveModel",
+     (* generic "model"/JP removed: over-matched "which model are you" *)
+     "ClaudeResolveModel",
      "SourceVaultRefreshModelRegistry", "SourceVaultListModels",
      "SourceVaultSetModel", "SourceVaultClearModelRegistry",
      "SourceVaultSetModelIntent", "SourceVaultAssignClaudeModels",
@@ -13456,6 +14029,24 @@ If[AssociationQ[ClaudeCode`$ClaudePackageKeywordMap],
      "SourceVaultMailEnsureLoaded", "SourceVaultMailView", "SourceVaultMailDataset",
      "SourceVaultSearchMailSnapshots", "SourceVaultInferMailDerivedBatch",
      "SourceVaultMailFetchNew", "SourceVaultMailComposeReply"}];
+
+(* \:88dc\:52a9 api_maildb.md \:306e\:6ce8\:5165\:6761\:4ef6 ($ClaudePackageAuxKeywordMap)\:3002
+   \:30e1\:30fc\:30eb\:7cfb\:30ad\:30fc\:30ef\:30fc\:30c9\:304c task \:306b\:542b\:307e\:308c\:308b\:3068\:304d\:306e\:307f api_maildb.md \:3092\:6ce8\:5165\:3057\:3001
+   Eagle \:7b49\:30e1\:30fc\:30eb\:7121\:95a2\:4fc2\:306e\:30bf\:30b9\:30af\:3067 25KB \:7d1a\:306e api_maildb.md \:304c\:7121\:6761\:4ef6\:6ce8\:5165
+   \:3055\:308c\:308b\:306e\:3092\:9632\:3050\:3002\:30c8\:30ea\:30ac\:96c6\:5408\:306f\:4e0a\:306e pkg \:30ec\:30d9\:30eb\:306e\:30e1\:30fc\:30eb\:7cfb\:30ad\:30fc\:30ef\:30fc\:30c9\:3092
+   \:5305\:542b\:3059\:308b\:306e\:3067\:3001\:5f93\:6765\:30e1\:30fc\:30eb\:7d4c\:8def\:3067\:6ce8\:5165\:3055\:308c\:3066\:3044\:305f\:30b1\:30fc\:30b9\:306f\:5168\:3066\:7dad\:6301\:3055\:308c\:308b\:3002
+   \:672a\:767b\:9332\:306e\:88dc\:52a9 api (core/crypto/promptrouter \:7b49) \:306f\:5f93\:6765\:3069\:304a\:308a\:5e38\:6642\:6ce8\:5165\:3002 *)
+If[AssociationQ[ClaudeCode`$ClaudePackageAuxKeywordMap],
+  Module[{auxMap},
+    auxMap = Lookup[ClaudeCode`$ClaudePackageAuxKeywordMap,
+      "SourceVault", <||>];
+    If[!AssociationQ[auxMap], auxMap = <||>];
+    auxMap["maildb"] = {
+      "\:30e1\:30fc\:30eb", "mail", "univ", "\:53d7\:4fe1", "inbox", "IMAP",
+      "\:8fd4\:4fe1", "reply", "\:5dee\:51fa\:4eba", "\:5b9b\:5148", "\:4ef6\:540d",
+      "SourceVaultMail",   (* \:5168 Mail \:95a2\:6570\:540d\:3092\:90e8\:5206\:4e00\:81f4\:3067\:30ab\:30d0\:30fc *)
+      "SourceVaultSearchMailSnapshots", "SourceVaultInferMailDerivedBatch"};
+    ClaudeCode`$ClaudePackageAuxKeywordMap["SourceVault"] = auxMap]];
 
 
 (* ============================================================
@@ -13583,3 +14174,18 @@ Quiet @ Check[
   SourceVault`Private`$iSVSyncResult =
     <|"Status" -> "Failed", "Reason" -> "SyncException"|>
 ];
+
+(* ============================================================
+   Auto-load aux subfiles: Get["SourceVault.wl"] alone also loads
+   SourceVault_core / SourceVault_searchindex / SourceVault_servicemanager.
+   $CharacterEncoding is pinned to UTF-8 so Japanese literals load correctly
+   regardless of the caller's default encoding.
+   ============================================================ *)
+With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
+  Block[{$CharacterEncoding = "UTF-8"},
+    Scan[
+      Function[f, Module[{p = FileNameJoin[{svDir, f}]},
+        Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
+      {"SourceVault_core.wl", "SourceVault_searchindex.wl",
+       "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
+       "SourceVault_mcp.wl"}]]];

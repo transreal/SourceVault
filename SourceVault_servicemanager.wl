@@ -1,0 +1,2646 @@
+(* ::Package:: *)
+
+(* ============================================================
+   SourceVault_servicemanager.wl -- SourceVault 検索拡張 (control / channel plane)
+
+   This file is encoded in UTF-8.
+   Load via: Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault_servicemanager.wl"]]
+
+   仕様書: sourcevault_websearch_extension_spec_v0_10.md
+
+   load order (§2.4): SourceVault.wl -> SourceVault_core.wl
+                      -> SourceVault_searchindex.wl -> SourceVault_servicemanager.wl
+   依存: SourceVault_core.wl, SourceVault_searchindex.wl。
+
+   本ファイルが担当する範囲 (段階実装。今回の増分 = Phase 1 control 側):
+     - private local init 読み込み (§5.2, §5.3)
+     - service / endpoint / credential profile registry (§5.3, §9.x, §16.8)
+     - personal config doctor (§5.5)
+   後続増分 (Phase 2+): detached WolframScript service 起動・停止・監視、
+            manifest、heartbeat、command queue、WebServer route、channel adapter、
+            ActionGate、ServiceVersionSnapshot active pointer、version switch / rollback。
+
+   非衝突方針: private helper は SourceVault`ServiceManagerPrivate` 文脈に置く。
+   ============================================================ *)
+
+BeginPackage["SourceVault`"]
+
+(* ---- local init / config (§5.2, §5.3) ---- *)
+SourceVaultLocalConfigRoot::usage =
+  "SourceVaultLocalConfigRoot[] は private local config directory (<PrivateVault>/config/local) を返す。";
+SourceVaultLoadLocalInit::usage =
+  "SourceVaultLoadLocalInit[opts] は <PrivateVault>/config/local/SourceVaultLocalInit.wl を読み込む。\n" <>
+  "存在しなければ fail-closed せず NotFound を返す (推測 fallback はしない)。\n" <>
+  "オプション: \"Path\" -> 明示パス。";
+SourceVaultLocalConfigStatus::usage =
+  "SourceVaultLocalConfigStatus[] は local init の有無と登録済み profile の summary を返す。";
+SourceVaultLocalConfigDoctor::usage =
+  "SourceVaultLocalConfigDoctor[opts] は必須 registry (release context / backend / endpoint) が\n" <>
+  "登録済みかを点検し、不足を報告する。";
+
+(* ---- service / endpoint / channel registry (§5.3, §9.x, §16.8) ---- *)
+SourceVaultRegisterWebServiceEndpoint::usage =
+  "SourceVaultRegisterWebServiceEndpoint[name, spec] は WebService endpoint を登録する。\n" <>
+  "spec 必須: \"BindAddress\", \"Port\"。";
+SourceVaultResolveWebServiceEndpoint::usage =
+  "SourceVaultResolveWebServiceEndpoint[name] は endpoint を解決する。未登録なら fail-closed。";
+SourceVaultRegisterChannelEndpoint::usage =
+  "SourceVaultRegisterChannelEndpoint[name, spec] は mail/Discord 等の channel endpoint を登録する。";
+SourceVaultRegisterVoiceBackend::usage =
+  "SourceVaultRegisterVoiceBackend[name, spec] は STT/TTS/realtime voice backend を登録する。";
+SourceVaultRegisterVRSNSAdapter::usage =
+  "SourceVaultRegisterVRSNSAdapter[name, spec] は VRSNS adapter を登録する。";
+SourceVaultRegisterCapabilityProfile::usage =
+  "SourceVaultRegisterCapabilityProfile[name, spec] は avatar/world capability profile を登録する。";
+SourceVaultRegisterLLMBackend::usage =
+  "SourceVaultRegisterLLMBackend[name, spec] は headless LLM backend を登録する (§16.9.1)。\n" <>
+  "既定は API 直叩き / trusted local server。CLI は HeadlessSafe test 合格時のみ。";
+SourceVaultRegisterCaptureSource::usage =
+  "SourceVaultRegisterCaptureSource[name, spec] は audio/camera/screen capture source を登録する (§17.3)。\n" <>
+  "DeviceRef / WindowRef は symbolic ref とし、実デバイス名は private local init で解決する。";
+SourceVaultRegisterOutputAdapter::usage =
+  "SourceVaultRegisterOutputAdapter[name, spec] は Discord 等の output adapter を登録する (§17.9)。";
+SourceVaultResolveServiceProfile::usage =
+  "SourceVaultResolveServiceProfile[kind, name] は ServiceManager registry の profile を解決する。\n" <>
+  "kind: \"WebServiceEndpoint\"/\"ChannelEndpoint\"/\"VoiceBackend\"/\"VRSNSAdapter\"/\"CapabilityProfile\"/\"LLMBackend\"/\"CaptureSource\"/\"OutputAdapter\"。";
+SourceVaultListServiceProfiles::usage =
+  "SourceVaultListServiceProfiles[] は ServiceManager registry の summary を返す。kind 指定で名前リスト。";
+SourceVaultClearServiceRegistry::usage =
+  "SourceVaultClearServiceRegistry[] は ServiceManager registry を消去する (test / 再 init 用)。";
+
+(* ---- personal config doctor (§5.5) ---- *)
+SourceVaultNoPersonalConfigDoctor::usage =
+  "SourceVaultNoPersonalConfigDoctor[filesOrDirs, opts] は repository / 配布対象に個人情報・環境依存値が\n" <>
+  "混入していないか検査する。検出: IPv4 literal (octet 検証), localhost:port, Windows/macOS user path,\n" <>
+  "credential らしき token, 実 mail address, private vault root。\n" <>
+  "オプション: \"MailAllowlist\" -> {...}, \"Extensions\" -> {\".wl\",...}, \"Mask\" -> True。\n" <>
+  "ファイル先頭付近に doctor:private-design-doc マーカーがある file は検査対象外。\n" <>
+  "戻り値 <|\"Status\" -> \"OK\"|\"FindingsFound\", \"Findings\" -> {...}, \"FilesScanned\"|>。";
+
+(* ---- detached service lifecycle (§9.3-9.6, §17.8。Phase 2) ---- *)
+SourceVaultStartService::usage =
+  "SourceVaultStartService[serviceId, opts] は detached WolframScript service を起動する。\n" <>
+  "メイン Mathematica を終了しても service process は heartbeat を更新し続ける。\n" <>
+  "オプション: \"Kind\" -> \"heartbeat\" (既定), \"HeartbeatIntervalSeconds\" -> 1, \"PackageRoot\" -> Automatic。\n" <>
+  "戻り値 <|\"Status\", \"ServiceId\", \"PID\", \"RuntimeDir\"|>。";
+SourceVaultStopService::usage =
+  "SourceVaultStopService[serviceId, opts] は Stop command を queue に入れ、必要なら pid 検証後に kill する。";
+SourceVaultRestartService::usage =
+  "SourceVaultRestartService[serviceId, opts] は stop してから同 profile で start する。";
+SourceVaultServiceStatus::usage =
+  "SourceVaultServiceStatus[serviceId] は pid.json / status.json / heartbeat.json から状態 association を返す。";
+SourceVaultServiceHealth::usage =
+  "SourceVaultServiceHealth[serviceId] は heartbeat の鮮度から OK/Degraded/Failing を返す。";
+SourceVaultServiceRootHealth::usage =
+  "SourceVaultServiceRootHealth[serviceId] は service の root/ユーザが main kernel と整合しているかを返す\n" <>
+  "(spec v6 §3.6/§3.10)。<|RootHashMatch, MainRootHash, ServiceRootHash, UserMatch, MainUser,\n" <>
+  "ServiceUser, LocalStatePath, LocalStateWritable, CoreRootPath, Warnings, Healthy|>。\n" <>
+  "RootHashMismatch は root 変更後の未再起動、UserMismatch は %LOCALAPPDATA% 分裂の恐れを示す。";
+SourceVaultServicePing::usage =
+  "SourceVaultServicePing[serviceId, opts] は Ping command を送り、command queue 経由で Pong を待つ。";
+SourceVaultListServices::usage =
+  "SourceVaultListServices[] は runtime/services 配下の service とその状態を返す。";
+SourceVaultServiceLogs::usage =
+  "SourceVaultServiceLogs[serviceId, opts] は service.log.jsonl の event を返す。オプション \"Limit\"。";
+SourceVaultTailServiceLog::usage =
+  "SourceVaultTailServiceLog[serviceId, n:20] は service.log.jsonl の末尾 n 件を返す。";
+SourceVaultSendServiceCommand::usage =
+  "SourceVaultSendServiceCommand[serviceId, command] は command (Association, \"Command\" key 必須) を queue に書く。\n" <>
+  "戻り値 <|\"Status\", \"CommandId\"|>。";
+SourceVaultServiceCommandResult::usage =
+  "SourceVaultServiceCommandResult[serviceId, commandId] は処理済み command の結果を返す (未処理なら Pending)。";
+SourceVaultRecoverServices::usage =
+  "SourceVaultRecoverServices[opts] は status Running だが pid が死んでいる孤児 service を Crashed に更新する。\n" <>
+  "オプション \"Kill\" -> True で pid 同一性確認後に kill。";
+SourceVaultServiceDoctor::usage =
+  "SourceVaultServiceDoctor[serviceId] は runtime dir / pid / heartbeat / status の整合を点検する。";
+SourceVaultServiceMain::usage =
+  "SourceVaultServiceMain[kind, serviceId, opts] は detached service process 側の runner entrypoint。\n" <>
+  "generated run.wls から呼ばれる。pid/status/heartbeat を書き、command queue を処理し、Stop で終了する。\n" <>
+  "メインカーネルからは直接呼ばない (StartService 経由)。";
+SourceVaultServiceRuntimeDir::usage =
+  "SourceVaultServiceRuntimeDir[serviceId] は service の runtime directory を返す。";
+
+(* ---- Python HTTP リバースプロキシ (SocketListen が headless で不可なための edge)。
+   proxy code は SourceVault data として保存し、起動時に working へ materialize + digest 検証して実行する ---- *)
+$SourceVaultPython::usage =
+  "$SourceVaultPython は python 実行ファイルの override。Automatic で PATH 上の python3/python を解決する。";
+SourceVaultPublishProxyCodeSnapshot::usage =
+  "SourceVaultPublishProxyCodeSnapshot[opts] は組込みの proxy Python ソースを immutable snapshot (SourceVaultProxyCode) として vault に保存する。\n" <>
+  "戻り値 <|\"Status\", \"Ref\", \"Digest\", \"CodeSHA256\"|>。alias \"sv-http-proxy\"。";
+SourceVaultMaterializeProxyCode::usage =
+  "SourceVaultMaterializeProxyCode[targetDir, opts] は proxy code を targetDir/proxy.py へ出力する。\n" <>
+  "opts \"CodeRef\" -> snapshot ref | Automatic (組込みソース)。出力後に SHA256 を検証し不一致なら fail-closed。";
+SourceVaultStartHTTPProxy::usage =
+  "SourceVaultStartHTTPProxy[serviceId, opts] は serviceId の WL service を front する Python HTTP proxy を detached 起動する。\n" <>
+  "proxy.py を vault data から materialize+digest検証し、stdlib のみで /sv/health /sv/search /sv/admin/status を提供する。\n" <>
+  "必須 opts \"Port\" (または \"EndpointProfile\")。任意 \"RoutePrefix\"(既定/sv) \"ReleaseContext\" \"PDFIndexProfile\" \"Bind\"(既定127.0.0.1) \"CodeRef\"。\n" <>
+  "gate は WL service 側。proxy は status/heartbeat の直読みと command queue 中継のみで raw vault を公開しない。";
+SourceVaultStopHTTPProxy::usage =
+  "SourceVaultStopHTTPProxy[serviceId] は Python proxy を停止し scheduled task を削除する。";
+SourceVaultHTTPProxyStatus::usage =
+  "SourceVaultHTTPProxyStatus[serviceId] は proxy の pid / 生存 / port を返す。";
+SourceVaultProxyRuntimeDir::usage =
+  "SourceVaultProxyRuntimeDir[serviceId] は proxy の runtime directory を返す。";
+
+(* ---- MCP サーバ起動/停止の便利ラッパー (WL service + HTTP/MCP proxy を一括制御) ---- *)
+SourceVaultStartMCP::usage =
+  "SourceVaultStartMCP[opts] は MCP サーバ (WL service + HTTP/MCP proxy) を一括起動する。\n" <>
+  "WL service を確保し、/sv/mcp を公開する Python proxy を起動する。\n" <>
+  "オプション \"ServiceId\"(既定 $SourceVaultMCPServiceId)/\"Port\"/\"MCPToken\"/\"RestartService\"(既定 False)。\n" <>
+  "Port/MCPToken は Automatic なら既存サービスの proxy.config.json から自動解決 (env 依存値を直書きしない)。\n" <>
+  "戻り値 <|Status, ServiceId, Port, Url, Service, Proxy|>。";
+SourceVaultStopMCP::usage =
+  "SourceVaultStopMCP[opts] は MCP の proxy と WL service を停止する。オプション \"ServiceId\"。";
+SourceVaultMCPRunningQ::usage =
+  "SourceVaultMCPRunningQ[opts] は MCP proxy が稼働中 (到達可能) かを True/False で返す。オプション \"ServiceId\"。";
+SourceVaultMCPStatus::usage =
+  "SourceVaultMCPStatus[opts] は MCP の service/proxy 状態と公開 URL をまとめて返す。オプション \"ServiceId\"。";
+$SourceVaultMCPServiceId::usage =
+  "$SourceVaultMCPServiceId は MCP サーバの既定 serviceId (既定 \"sourcevault\")。";
+$SourceVaultMCPPort::usage =
+  "$SourceVaultMCPPort は MCP proxy の既定ポート (既定 Automatic=既存 proxy.config.json から解決、無ければ 8731)。\n" <>
+  "整数を設定すれば固定。SearXNG(8888)/LM Studio(1234) と衝突しない値にする。";
+$SourceVaultMCPToken::usage =
+  "$SourceVaultMCPToken は /sv/mcp の既定トークン (既定 Automatic=既存設定から解決、無ければ None=localhost 無認証)。\n" <>
+  "文字列なら X-SourceVault-Token で要求する。";
+
+(* ---- channel pipeline / mail / Discord / OutputGate (§9.8, §13 Phase 6, §17.9) ---- *)
+SourceVaultMakeQuestionEnvelope::usage =
+  "SourceVaultMakeQuestionEnvelope[channel, inputText, opts] は統一入力 QuestionEnvelope を作る (§9.8)。\n" <>
+  "channel: \"Web\"|\"Mail\"|\"Discord\"|\"Voice\"|\"VRSNS\"。必須 opts \"ReleaseContext\"。\n" <>
+  "任意 \"Audience\" \"LatencyProfile\" \"AllowedIndexes\"->{...} \"PDFIndexProfile\" \"Requester\"。";
+SourceVaultAnswerChannelQuery::usage =
+  "SourceVaultAnswerChannelQuery[envelope, opts] は envelope を検索→evidence draft 化する。\n" <>
+  "gate 済み SourceVaultSearch を使い、Mail は NeedsHumanReview (draft のみ)、Discord は低 risk のみ Answered。\n" <>
+  "LLM は呼ばない (evidence ベース)。戻り値 <|\"Decision\", \"AnswerDraft\", \"Evidence\", \"Citations\", ...|>。";
+SourceVaultMakeMailReplyDraft::usage =
+  "SourceVaultMakeMailReplyDraft[envelope, opts] は mail 返信 draft を作る。自動送信は一切しない (§13 Phase 6)。";
+SourceVaultEvaluateOutputGate::usage =
+  "SourceVaultEvaluateOutputGate[draft, outputAdapter, opts] は出力可否を判定する (§17.9)。\n" <>
+  "戻り値 Decision: \"Permit\"|\"NeedsApproval\"|\"Deny\"|\"RedactRequired\"。\n" <>
+  "判定: adapter の PrivacyMax / ReleaseContextRequired / AllowedEventKinds / RequireApproval / raw media。";
+SourceVaultDispatchOutput::usage =
+  "SourceVaultDispatchOutput[draft, outputAdapter, opts] は OutputGate を通してから出力する。\n" <>
+  "mail は送信せず draft を返す。Discord は gate Permit かつ opts \"Approved\"->True かつ \"ReallySend\"->True の時のみ webhook 送信。\n" <>
+  "既定は送信せず Prepared / NeedsApproval を返す (fail-safe)。";
+
+(* ---- ActionDraft / ActionGate (VRSNS avatar・world action 安全制御, §9.9, §16.2) ---- *)
+SourceVaultMakeActionDraft::usage =
+  "SourceVaultMakeActionDraft[kind, payload, opts] は ActionDraft を作る (§9.9)。\n" <>
+  "kind: \"Speak\"|\"Gesture\"|\"Expression\"|\"Move\"|\"ShowPanel\"|\"CallTool\"。\n" <>
+  "opts \"CapabilityProfile\", \"Audience\", \"ReleaseContext\", \"Target\", \"EvidenceRefs\"。";
+SourceVaultEvaluateActionGate::usage =
+  "SourceVaultEvaluateActionGate[actionDraft, opts] は capability profile に基づき action 可否を判定する (§9.9)。\n" <>
+  "戻り値 Decision: \"Permit\"|\"RequiresApproval\"|\"Deny\"。world 変更 (Move/CallTool) は AllowWorldControl が無ければ Deny。";
+SourceVaultListCaptureSources::usage = "SourceVaultListCaptureSources[] は登録済み capture source を返す。";
+SourceVaultTestCaptureSource::usage =
+  "SourceVaultTestCaptureSource[name] は capture source profile の解決可否を fail-closed で点検する (実 capture はしない)。";
+
+(* ---- マルチモーダル ingest / live session / multimodal service (§17。Phase 7b) ---- *)
+SourceVaultIngestCapturedMedia::usage =
+  "SourceVaultIngestCapturedMedia[sessionId, kind, data, opts] は capture 由来データを vault に取り込む (§17.4, §17.11)。\n" <>
+  "data が ByteArray なら content-addressed blob に commit (PersistRaw->True 時)、String なら Text として記録。\n" <>
+  "MultimodalEvent を append。実 ffmpeg/ASR driver はこの関数を呼ぶ (device 非依存の取込点)。\n" <>
+  "opts \"PersistRaw\"(既定True), \"SourceRef\", \"Tags\", \"State\", \"PrivacyLevel\"。";
+SourceVaultUpdateLiveSummary::usage =
+  "SourceVaultUpdateLiveSummary[sessionId, summary] は live summary pointer を更新し SystemSummary event を残す (§17.6)。";
+SourceVaultGetLiveSummary::usage = "SourceVaultGetLiveSummary[sessionId] は現在の live summary を返す。";
+SourceVaultGetLiveEvents::usage = "SourceVaultGetLiveEvents[sessionId, opts] は session の MultimodalEvent を返す (§17.7)。";
+SourceVaultGetLiveTranscript::usage = "SourceVaultGetLiveTranscript[sessionId] は session の ASR transcript を連結して返す。";
+SourceVaultAskLiveSession::usage =
+  "SourceVaultAskLiveSession[sessionId, question, opts] は UserQuestion を記録し command を enqueue する (§17.7)。\n" <>
+  "メインカーネルは LLM を直接呼ばず、service 側が処理する。";
+SourceVaultRegisterMultimodalWorkflow::usage =
+  "SourceVaultRegisterMultimodalWorkflow[name, spec] は multimodal workflow (PresentationListenerCompat 等) を登録する (§17.6)。";
+SourceVaultListMultimodalWorkflows::usage = "SourceVaultListMultimodalWorkflows[] は登録済み multimodal workflow を返す。";
+SourceVaultSchedulePostprocess::usage =
+  "SourceVaultSchedulePostprocess[sessionId, spec] は後処理 (ASRImprove/Summary/PurposeIndexBuild 等) を予約 event として記録する (§17.11)。";
+
+(* ---- ServiceVersionSnapshot / version switching (§8.6-8.7, §8.14。Phase 4) ---- *)
+SourceVaultCreateServiceVersionSnapshot::usage =
+  "SourceVaultCreateServiceVersionSnapshot[serviceId, spec] は ServiceVersionSnapshot を immutable 保存する (§8.6)。\n" <>
+  "spec は WorkflowSnapshotRef / CorpusSnapshotRef / IndexSnapshotRefs / ReleaseContextRef 等を持つ。\n" <>
+  "credential / 実 path / IP を含めてはならない (profile ref のみ)。";
+SourceVaultListServiceVersions::usage =
+  "SourceVaultListServiceVersions[serviceId] は作成済み service version の {Version, Ref, CreatedAtUTC} を返す。";
+SourceVaultServiceVersionInfo::usage =
+  "SourceVaultServiceVersionInfo[serviceId, version] は指定 version の snapshot を返す (version 省略で active)。";
+SourceVaultActivateServiceVersion::usage =
+  "SourceVaultActivateServiceVersion[serviceId, versionOrRef, opts] は active service version を切り替える (§8.7)。\n" <>
+  "digest 検証 + IndexSnapshotRefs の解決可能性を確認し、fail-closed。active pointer を pointer event で更新する。";
+SourceVaultActiveServiceVersion::usage =
+  "SourceVaultActiveServiceVersion[serviceId] は現在 active な service version ref を返す (pointer replay)。";
+SourceVaultRollbackServiceVersion::usage =
+  "SourceVaultRollbackServiceVersion[serviceId, opts] は一つ前の active version へ戻し、rollback log を残す。opts \"Reason\"。";
+SourceVaultCompareServiceVersions::usage =
+  "SourceVaultCompareServiceVersions[serviceId, v1, v2] は二つの service version snapshot の主要 ref 差分を返す。";
+
+Begin["`ServiceManagerPrivate`"]
+
+(* ============================================================
+   local config root
+   ============================================================ *)
+
+iPrivateVaultRoot[] := Module[{r},
+  r = SourceVault`$SourceVaultCoreRoot;
+  If[! StringQ[r] || StringLength[r] == 0,
+    r = Quiet @ SourceVault`$SourceVaultRoots["PrivateVault"]];
+  If[StringQ[r] && StringLength[r] > 0, r, $Failed]
+];
+
+SourceVaultLocalConfigRoot[] := Module[{r = iPrivateVaultRoot[]},
+  If[r === $Failed,
+    Failure["PrivateVaultUnresolved", <|
+      "MessageTemplate" -> "PrivateVault root が未解決です。"|>],
+    FileNameJoin[{r, "config", "local"}]]
+];
+
+Options[SourceVaultLoadLocalInit] = {"Path" -> Automatic};
+SourceVaultLoadLocalInit[OptionsPattern[]] := Module[{path, root},
+  path = OptionValue["Path"];
+  If[path === Automatic,
+    root = SourceVaultLocalConfigRoot[];
+    If[FailureQ[root], Return[root]];
+    path = FileNameJoin[{root, "SourceVaultLocalInit.wl"}]];
+  If[! FileExistsQ[path],
+    Return[<|"Status" -> "NotFound", "Path" -> path,
+      "Note" -> "private local init が無いため何も登録しません (fail-closed)。"|>]];
+  Block[{$CharacterEncoding = "UTF-8"},
+    Quiet[Check[Get[path],
+      Return[<|"Status" -> "LoadError", "Path" -> path|>]]]];
+  <|"Status" -> "Loaded", "Path" -> path|>
+];
+
+SourceVaultLocalConfigStatus[] := Module[{root, path, exists},
+  root = SourceVaultLocalConfigRoot[];
+  path = If[FailureQ[root], Missing[], FileNameJoin[{root, "SourceVaultLocalInit.wl"}]];
+  exists = StringQ[path] && FileExistsQ[path];
+  <|"Status" -> "OK", "LocalConfigRoot" -> root, "LocalInitPath" -> path,
+    "LocalInitExists" -> exists,
+    "SearchProfiles" -> Quiet @ SourceVault`SourceVaultListProfiles[],
+    "ServiceProfiles" -> SourceVaultListServiceProfiles[]|>
+];
+
+(* ============================================================
+   ServiceManager registry
+   ============================================================ *)
+
+If[! AssociationQ[$smRegistries], $smRegistries = <||>];
+
+iSMKinds = {"WebServiceEndpoint", "ChannelEndpoint", "VoiceBackend", "VRSNSAdapter",
+   "CapabilityProfile", "LLMBackend", "CaptureSource", "OutputAdapter"};
+
+iSMRegister[kind_String, name_String, spec_Association] := (
+  If[! KeyExistsQ[$smRegistries, kind], $smRegistries[kind] = <||>];
+  $smRegistries[kind] = Append[$smRegistries[kind], name -> spec];
+  <|"Status" -> "OK", "Kind" -> kind, "Name" -> name|>
+);
+
+iSMResolve[kind_String, name_String] := Module[{m = Lookup[$smRegistries, kind, <||>]},
+  If[KeyExistsQ[m, name], m[name],
+    Failure["UnregisteredProfile", <|
+      "MessageTemplate" -> "`1` `2` は未登録です (fail-closed)。private local init で登録してください。",
+      "MessageParameters" -> {kind, name}, "Kind" -> kind, "Name" -> name|>]]
+];
+
+iSMRequire[spec_Association, keys_List, kind_String, name_String] := Module[{missing},
+  missing = Select[keys, ! KeyExistsQ[spec, #] &];
+  If[missing === {}, Null,
+    Failure["InvalidSpec", <|
+      "MessageTemplate" -> "`1` `2`: 必須 field `3` が不足。",
+      "Kind" -> kind, "Name" -> name, "Field" -> missing|>]]
+];
+
+SourceVaultRegisterWebServiceEndpoint[name_String, spec_Association] := Module[{chk},
+  chk = iSMRequire[spec, {"BindAddress", "Port"}, "WebServiceEndpoint", name];
+  If[FailureQ[chk], Return[chk]];
+  iSMRegister["WebServiceEndpoint", name, spec]
+];
+SourceVaultResolveWebServiceEndpoint[name_String, opts___] :=
+  iSMResolve["WebServiceEndpoint", name];
+
+(* === §19: PDFGroupSearchProfile (configuration-as-data) ===
+   ある PDF グループの検索 service 設定を一つの data object に束ねる。コードにドメイン固有を
+   焼かず、profile を差し替えるだけで別 PDF グループの app を立ち上げられる。
+   MVP では sub-profile (QueryScopeResolver/EvidencePolicy/AnswerPolicy 等) を inline field
+   として持つ (§19.5.6 の「ref の束＋差分」。将来は別 object 参照 + version snapshot 化)。 *)
+SourceVault`SourceVaultCreatePDFGroupSearchProfile[groupAlias_String, spec_Association, opts___] :=
+  iSMRegister["PDFGroupSearchProfile", groupAlias,
+    Join[<|"GroupAlias" -> groupAlias|>, spec]];
+SourceVault`SourceVaultResolvePDFGroupSearchProfile[groupAlias_String, opts___] :=
+  iSMResolve["PDFGroupSearchProfile", groupAlias];
+SourceVault`SourceVaultListPDFGroupSearchProfiles[opts___] :=
+  Keys @ Lookup[$smRegistries, "PDFGroupSearchProfile", <||>];
+SourceVault`SourceVaultClonePDFGroupSearchProfile[srcAlias_String, newAlias_String, overrides_Association : <||>, opts___] :=
+  Module[{src = iSMResolve["PDFGroupSearchProfile", srcAlias]},
+    If[FailureQ[src], src,
+      iSMRegister["PDFGroupSearchProfile", newAlias,
+        Join[src, <|"GroupAlias" -> newAlias|>, overrides]]]];
+
+SourceVaultRegisterChannelEndpoint[name_String, spec_Association] :=
+  iSMRegister["ChannelEndpoint", name, spec];
+SourceVaultRegisterVoiceBackend[name_String, spec_Association] :=
+  iSMRegister["VoiceBackend", name, spec];
+SourceVaultRegisterVRSNSAdapter[name_String, spec_Association] :=
+  iSMRegister["VRSNSAdapter", name, spec];
+SourceVaultRegisterCapabilityProfile[name_String, spec_Association] :=
+  iSMRegister["CapabilityProfile", name, spec];
+SourceVaultRegisterLLMBackend[name_String, spec_Association] :=
+  iSMRegister["LLMBackend", name, spec];
+SourceVaultRegisterCaptureSource[name_String, spec_Association] :=
+  iSMRegister["CaptureSource", name, spec];
+SourceVaultRegisterOutputAdapter[name_String, spec_Association] :=
+  iSMRegister["OutputAdapter", name, spec];
+
+SourceVaultResolveServiceProfile[kind_String, name_String, opts___] := iSMResolve[kind, name];
+
+SourceVaultListServiceProfiles[kind_String] := Keys @ Lookup[$smRegistries, kind, <||>];
+SourceVaultListServiceProfiles[] :=
+  Association @ Map[# -> Keys[Lookup[$smRegistries, #, <||>]] &, iSMKinds];
+
+SourceVaultClearServiceRegistry[] := ($smRegistries = <||>; <|"Status" -> "OK"|>);
+
+SourceVaultLocalConfigDoctor[opts___] := Module[{webEps, backends, contexts, missing = {}},
+  contexts = Quiet @ SourceVault`SourceVaultListReleaseContexts[];
+  backends = Quiet @ SourceVault`SourceVaultListProfiles["SearchBackend"];
+  webEps = SourceVaultListServiceProfiles["WebServiceEndpoint"];
+  If[contexts === {} || ! ListQ[contexts], AppendTo[missing, "ReleaseContext"]];
+  If[backends === {} || ! ListQ[backends], AppendTo[missing, "SearchBackend"]];
+  If[webEps === {}, AppendTo[missing, "WebServiceEndpoint"]];
+  <|"Status" -> If[missing === {}, "OK", "Incomplete"], "Missing" -> missing,
+    "ReleaseContexts" -> contexts, "SearchBackends" -> backends,
+    "WebServiceEndpoints" -> webEps|>
+];
+
+(* ============================================================
+   §5.5 personal config doctor
+   ============================================================ *)
+
+$bs = FromCharacterCode[92];  (* バックスラッシュ。regex の 4 重 escape を避ける *)
+
+(* 文字列を mask: 先頭 2 文字 + *** *)
+iMask[s_String] := If[StringLength[s] <= 2, "***",
+  StringTake[s, 2] <> StringRepeat["*", Min[8, StringLength[s] - 2]]];
+
+(* IPv4: 4 octet を抽出し各 octet <= 255 のものだけ採用。
+   0.0.0.0 / 255.255.255.255 は個人・環境情報ではない wildcard / broadcast なので除外。 *)
+$ignoreIPv4 = {"0.0.0.0", "255.255.255.255"};
+iFindIPv4[line_String] := Module[{cands},
+  cands = StringCases[line, RegularExpression["\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"]];
+  Select[cands, Function[c,
+    AllTrue[ToExpression /@ StringSplit[c, "."], # <= 255 &] && ! MemberQ[$ignoreIPv4, c]]]
+];
+
+iFindLocalhostPort[line_String] :=
+  StringCases[line, RegularExpression["(?:localhost|127\\.0\\.0\\.1):\\d+"]];
+
+(* credential らしき: sk-..., Bearer ..., (api key|secret|token|password) = ... *)
+iFindCredential[line_String] := Join[
+  StringCases[line, RegularExpression["sk-[A-Za-z0-9]{12,}"]],
+  StringCases[line, RegularExpression["(?i)bearer\\s+[A-Za-z0-9._-]{12,}"]],
+  StringCases[line, RegularExpression[
+    "(?i)(?:api[_-]?key|secret|token|password|webhook)\\s*[:=]\\s*[\"']?[A-Za-z0-9._/-]{8,}"]]
+];
+
+iFindEmail[line_String, allow_List] := Module[{ems},
+  ems = StringCases[line, RegularExpression["[\\w.+-]+@[\\w-]+\\.[\\w.-]+"]];
+  Select[ems, ! MemberQ[allow, #] &]
+];
+
+(* Windows/macOS user path: 正規表現の literal backslash を避けるため substring 判定 *)
+iFindUserPath[line_String] := Module[{lc = ToLowerCase[line], hits = {}},
+  If[StringContainsQ[lc, "users" <> $bs], AppendTo[hits, "WindowsUserPath"]];
+  (* needle を分割して書き、doctor 自身のソースが self-detect されないようにする *)
+  If[StringContainsQ[lc, "/" <> "users" <> "/"], AppendTo[hits, "macOSUserPath"]];
+  If[StringContainsQ[lc, $bs <> "users" <> $bs], AppendTo[hits, "WindowsUserPath"]];
+  DeleteDuplicates[hits]
+];
+
+$docExtensions = {".wl", ".wls", ".m", ".md", ".json", ".toml", ".yaml", ".yml"};
+
+iExpandFiles[spec_, exts_List] := Module[{items},
+  items = Flatten[{spec}];
+  Flatten[Map[
+    Which[
+      DirectoryQ[#], Select[FileNames["*", #, Infinity],
+        FileExistsQ[#] && MemberQ[exts, "." <> ToLowerCase@FileExtension[#]] &],
+      FileExistsQ[#], {#},
+      True, {}] &, items]]
+];
+
+(* private design doc マーカー (先頭 40 行以内) があれば検査対象外 *)
+iIsPrivateDesignDoc[text_String] :=
+  StringContainsQ[StringTake[text, UpTo[4000]], "doctor:private-design-doc"];
+
+Options[SourceVaultNoPersonalConfigDoctor] = {
+  "MailAllowlist" -> {}, "Extensions" -> Automatic, "Mask" -> True};
+SourceVaultNoPersonalConfigDoctor[filesOrDirs_, OptionsPattern[]] := Module[
+  {exts, files, allow, mask, findings = {}, skipped = {}},
+  exts = OptionValue["Extensions"] /. Automatic -> $docExtensions;
+  allow = OptionValue["MailAllowlist"];
+  mask = TrueQ[OptionValue["Mask"]];
+  files = iExpandFiles[filesOrDirs, exts];
+  Do[
+    Module[{text, lines, lineHits},
+      text = Quiet @ Import[file, "Text"];
+      If[! StringQ[text], Continue[]];
+      If[iIsPrivateDesignDoc[text], AppendTo[skipped, file]; Continue[]];
+      lines = StringSplit[text, {"\r\n", "\n", "\r"}];
+      MapIndexed[
+        Function[{line, idx},
+          lineHits = Join[
+            {"IPv4", #} & /@ iFindIPv4[line],
+            {"LocalhostPort", #} & /@ iFindLocalhostPort[line],
+            {"Credential", #} & /@ iFindCredential[line],
+            {"Email", #} & /@ iFindEmail[line, allow],
+            {#, "(path)"} & /@ iFindUserPath[line]
+          ];
+          Do[
+            AppendTo[findings, <|
+              "File" -> file, "Line" -> idx[[1]], "Kind" -> hit[[1]],
+              "Match" -> If[mask, iMask[ToString[hit[[2]]]], hit[[2]]]|>],
+            {hit, lineHits}]
+        ],
+        lines]
+    ],
+    {file, files}];
+  <|"Status" -> If[findings === {}, "OK", "FindingsFound"],
+    "Findings" -> findings, "FilesScanned" -> Length[files],
+    "Skipped" -> skipped, "FindingCount" -> Length[findings]|>
+];
+
+(* ============================================================
+   §9.3-9.6, §17.8  detached service lifecycle (Phase 2)
+   排他制御 / event log は core (SourceVault_core.wl) に乗る。
+   service runtime dir 配下の status/heartbeat/pid は single-writer の
+   mutable cache なので直接 overwrite で扱う (正本ではない)。
+   ============================================================ *)
+
+(* このファイルのある package root (subkernel から再 Get する) *)
+$smFile = Replace[$InputFileName, Except[_String?(StringLength[#] > 0 &)] :> Missing["Unknown"]];
+iPackageRoot[] := If[StringQ[$smFile], DirectoryName[$smFile], Directory[]];
+
+iSMEnsureDir[d_String] := (If[! DirectoryQ[d], Quiet @ CreateDirectory[d, CreateIntermediateDirectories -> True]]; d);
+
+iSMUTCNow[] := Module[{u = TimeZoneConvert[Now, 0]},
+  DateString[u, {"Year", "-", "Month", "-", "Day", "T", "Hour", ":", "Minute", ":", "Second", "Z"}]];
+
+(* RawJSON が encode できない None/Missing/DateObject を Null/文字列に落とす *)
+iSMJSONSafe[x_] := Which[
+  x === None, Null,
+  Head[x] === Missing, Null,
+  Head[x] === DateObject, iSMUTCNow[],
+  AssociationQ[x], Association @ KeyValueMap[#1 -> iSMJSONSafe[#2] &, x],
+  ListQ[x], iSMJSONSafe /@ x,
+  True, x];
+(* RawJSON はバイト列で書く。ExportString[...,"RawJSON"] は $CharacterEncoding が
+   ShiftJIS 等(日本語 Windows 既定)のとき日本語を「UTF-8 バイト→Latin-1 codepoint」に
+   展開し、後段の StringToByteArray["UTF-8"] が二重 UTF-8 化してしまう。
+   ExportByteArray はエンコーディング非依存で常に正しい UTF-8 を返す。 *)
+iSMWriteJSON[path_String, assoc_] := Module[{strm, ba},
+  ba = Quiet @ ExportByteArray[iSMJSONSafe[assoc], "RawJSON", "Compact" -> True];
+  If[! ByteArrayQ[ba], Return[$Failed]];
+  iSMEnsureDir[DirectoryName[path]];
+  strm = Quiet @ OpenWrite[path, BinaryFormat -> True];
+  If[Head[strm] =!= OutputStream, Return[$Failed]];
+  BinaryWrite[strm, ba]; Close[strm]; path];
+
+(* RawJSON はバイト列から直接解析する。ImportString[ByteArrayToString[...],"RawJSON"]
+   は生 UTF-8 (非 ASCII。例: Python json.dump(ensure_ascii=False) が書く日本語) を
+   再エンコードで壊して "Invalid token" になるため、ImportByteArray を使う。 *)
+iSMParseRawJSON[b_ByteArray] := Module[{r = Quiet @ ImportByteArray[b, "RawJSON"]},
+  If[AssociationQ[r] || ListQ[r], r,
+    Quiet @ ImportString[ByteArrayToString[b, "UTF-8"], "RawJSON"]]];
+iSMReadJSON[path_String] := Module[{b},
+  If[! FileExistsQ[path], Return[Missing["NoFile"]]];
+  b = Quiet @ ReadByteArray[path];
+  If[! ByteArrayQ[b], Return[Missing["Empty"]]];
+  iSMParseRawJSON[b]];
+
+iSMAppendJSONL[path_String, assoc_] := Module[{strm, ba},
+  ba = Quiet @ ExportByteArray[iSMJSONSafe[assoc], "RawJSON", "Compact" -> True];
+  If[! ByteArrayQ[ba], Return[$Failed]];
+  iSMEnsureDir[DirectoryName[path]];
+  strm = Quiet @ OpenAppend[path, BinaryFormat -> True];
+  If[Head[strm] =!= OutputStream, Return[$Failed]];
+  BinaryWrite[strm, ba]; BinaryWrite[strm, StringToByteArray["\n", "UTF-8"]]; Close[strm]; path];
+
+iSMReadJSONL[path_String] := Module[{b, lines},
+  If[! FileExistsQ[path], Return[{}]];
+  b = Quiet @ ReadByteArray[path];
+  If[! ByteArrayQ[b], Return[{}]];
+  lines = Select[StringSplit[ByteArrayToString[b, "UTF-8"], "\n"], StringLength[StringTrim[#]] > 0 &];
+  Select[Quiet[iSMParseRawJSON[StringToByteArray[#, "UTF-8"]]] & /@ lines, AssociationQ]];
+
+(* runtime dir *)
+iServiceRuntimeDir[serviceId_String] := Module[{root = SourceVault`SourceVaultCoreRoot[]},
+  If[FailureQ[root], root, FileNameJoin[{root, "runtime", "services", serviceId}]]];
+SourceVaultServiceRuntimeDir[serviceId_String] := iServiceRuntimeDir[serviceId];
+
+iServiceLog[dir_String, eventClass_String, data_Association: <||>] :=
+  iSMAppendJSONL[FileNameJoin[{dir, "service.log.jsonl"}],
+    Join[<|"EventClass" -> eventClass, "AtUTC" -> iSMUTCNow[]|>, data]];
+
+(* ---- wolframscript 解決 (ClaudeRuntime と同じ優先順を自前実装、依存を持たない) ---- *)
+iResolveWolframScript[] := Module[{cands, exe},
+  cands = {
+    If[StringQ[SourceVault`$SourceVaultWolframScript], SourceVault`$SourceVaultWolframScript, Nothing],
+    Replace[Environment["WOLFRAMSCRIPT"], Except[_String] -> Nothing],
+    FileNameJoin[{$InstallationDirectory, "wolframscript.exe"}],
+    FileNameJoin[{$InstallationDirectory, "wolframscript"}]};
+  exe = SelectFirst[cands, StringQ[#] && FileExistsQ[#] &, Missing[]];
+  If[MissingQ[exe], "wolframscript", exe]];
+
+(* ---- pid 検証 / kill (Windows 中心、PID 再利用での誤 kill 防止) ---- *)
+iPidAlive[pid_Integer] := Module[{out},
+  out = Quiet @ RunProcess[{"tasklist", "/FI", "PID eq " <> ToString[pid], "/NH"}];
+  AssociationQ[out] && StringContainsQ[Lookup[out, "StandardOutput", ""], ToString[pid]]];
+
+(* detached service の image は WolframKernel.exe (wolframscript が起動する kernel)。
+   wolframscript / WolframKernel どちらも Wolfram プロセスとして受理する。 *)
+iPidIsWolframProcess[pid_Integer] := Module[{out},
+  out = Quiet @ RunProcess[{"tasklist", "/FI", "PID eq " <> ToString[pid], "/NH"}];
+  AssociationQ[out] && StringContainsQ[ToLowerCase @ Lookup[out, "StandardOutput", ""], "wolfram"]];
+
+iKillPid[pid_Integer] :=
+  Lookup[Quiet @ RunProcess[{"taskkill", "/PID", ToString[pid], "/F"}], "ExitCode", 1] === 0;
+
+(* ============================================================
+   runner entrypoint (子 process 側)
+   ============================================================ *)
+
+(* ============================================================
+   §Web UI: HTTP リクエストを service 側で処理する。WebServer.wl の
+   見た目(CSS)を再利用しつつ、検索は必ず gate 越し(SourceVaultSearch)。
+   proxy は汎用中継で {StatusCode, ContentType, Body} を受け取り emit する。
+   すべて charset=utf-8。リンク/フォームは RoutePrefix(base) を前置する。
+   ページ画像は Rasterize(FrontEnd 必須) のため headless では生成不可 →
+   gate 済み本文を表示し画像は degrade する。
+   ============================================================ *)
+
+(* esc/parse は自前実装に固定。WebServer`Private` シンボルはコード参照で生成され
+   Names 判定が当てにならないため依存しない。CSS のみ実定義があれば再利用する。 *)
+iWebEsc[s_] := Module[{str = If[StringQ[s], s, ToString[s]]},
+  StringReplace[str, {"&" -> "&amp;", "<" -> "&lt;", ">" -> "&gt;", "\"" -> "&quot;"}]];
+
+iWebCssFallback = "body{font-family:sans-serif;background:#1a1a2e;color:#e0e0e0;max-width:900px;margin:0 auto;padding:24px;line-height:1.6}\n" <>
+  "a{color:#88aaff}\nh1{color:#cfe0ff}\n" <>
+  ".btn,.btn-run{background:#2d4a8a;color:#fff;border:0;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:1em}\n" <>
+  ".query-form{margin:16px 0}\n.form-footer{margin-top:8px}\n" <>
+  ".form-textarea{width:100%;box-sizing:border-box;background:#22223a;color:#e0e0e0;border:1px solid #3a3a5a;border-radius:6px;padding:8px;font-size:1em}";
+iWebCss[] := Module[{c = Quiet @ WebServer`Private`iCSS[]}, If[StringQ[c], c, iWebCssFallback]];
+
+iWebParseQuery[qs_String] := Association @ Cases[StringSplit[qs, "&"],
+  s_String /; StringLength[s] > 0 :> Module[{kv = StringSplit[s, "=", 2]},
+    If[Length[kv] == 2,
+      URLDecode[StringReplace[kv[[1]], "+" -> " "]] -> URLDecode[StringReplace[kv[[2]], "+" -> " "]],
+      URLDecode[StringReplace[First[kv], "+" -> " "]] -> ""]]];
+
+iWebPage[base_String, title_String, bodyHtml_String] := StringJoin[
+  "<!DOCTYPE html>\n<html lang='ja'><head><meta charset='utf-8'>",
+  "<meta name='viewport' content='width=device-width, initial-scale=1'>",
+  "<title>", iWebEsc[title], "</title>",
+  "<link rel='stylesheet' href='", base, "/style.css'></head><body>",
+  bodyHtml,
+  "<hr style='border-color:#3a3a5a;margin-top:32px'>",
+  "<p style='opacity:.5;font-size:.8em'>SourceVault gated web (release-context enforced)</p>",
+  "</body></html>"];
+
+iWebNav[base_String] := StringJoin[
+  "<p style='opacity:.8'>",
+  "<a href='", base, "/pdfsearch' style='color:#88aaff'>検索</a> | ",
+  "<a href='", base, "/pdfask' style='color:#88aaff'>質問応答</a> | ",
+  "<a href='", base, "/pdfpage' style='color:#88aaff'>ページ本文</a></p>"];
+
+iWebSearchForm[base_String, q_String, action_String, label_String] := StringJoin[
+  "<form class='query-form' method='get' action='", base, action, "'>",
+  "<input name='q' class='form-textarea' style='height:42px' placeholder='", label, "' value='",
+  iWebEsc[q], "' autofocus>",
+  "<div class='form-footer' style='margin-top:8px'><button type='submit' class='btn btn-run'>", label, "</button></div>",
+  "</form>"];
+
+(* gated 結果 (SourceVaultSearch の出力 = association のリスト) をカード描画 *)
+iWebRenderResults[base_String, q_String, results_List] := Module[{cards},
+  cards = StringJoin @ MapIndexed[Function[{r, idx},
+    Module[{cit = Lookup[r, "Citation", <||>], title, page, snip, score, chunk, dec},
+      title = iWebEsc @ Lookup[cit, "Title", "(無題)"];
+      page = Lookup[cit, "Page", "?"];
+      snip = iWebEsc @ StringTake[ToString @ Lookup[r, "Snippet", ""], UpTo[320]];
+      score = Lookup[r, "Score", ""];
+      chunk = Lookup[r, "ChunkId", ""];
+      dec = iWebEsc @ ToString @ Lookup[r, "ReleaseDecision", "?"];
+      StringJoin[
+        "<div style='border:1px solid #3a3a5a;border-radius:8px;margin:10px 0;padding:14px;background:#22223a'>",
+        "<h3 style='margin:0 0 6px;color:#cfe0ff'>#", ToString[First[idx]], " ", title,
+        " <span style='opacity:.6;font-weight:normal;font-size:.85em'>(p.", ToString[page],
+        ", score ", ToString[score], ")</span></h3>",
+        "<p style='color:#b8c0e0;font-size:.92em;line-height:1.6;white-space:pre-wrap'>", snip, " …</p>",
+        "<p style='font-size:.8em;opacity:.7'>",
+        "<a href='", base, "/pdfpage?p=", ToString[page],
+          "&doc=", URLEncode[ToString @ Lookup[cit, "DocId", Lookup[cit, "Title", ""]]],
+          "' style='color:#88aaff'>このページを画像表示</a>",
+        " · chunk ", ToString[chunk], " · ", dec, "</p>",
+        "</div>"]]],
+    results];
+  StringJoin[
+    "<h1 style='color:#cfe0ff'>検索結果: ", iWebEsc[q], "</h1>",
+    iWebNav[base],
+    "<p style='opacity:.7'>", ToString[Length[results]], " 件 (release gate 通過)</p>",
+    If[Length[results] === 0,
+      "<p>該当する公開チャンクはありませんでした。</p>", cards]]];
+
+iWebErr[base_String, msg_String] :=
+  <|"StatusCode" -> 200, "ContentType" -> "text/html; charset=utf-8",
+    "Body" -> iWebPage[base, "エラー", "<h2>エラー</h2><p>" <> iWebEsc[msg] <> "</p>" <> iWebNav[base]]|>;
+
+iWebHtml[base_String, title_String, body_String] :=
+  <|"StatusCode" -> 200, "ContentType" -> "text/html; charset=utf-8",
+    "Body" -> iWebPage[base, title, body]|>;
+
+(* gated 検索を1回実行 (HTML/JSON 共用)。{ok, results} or {error, reason} *)
+iWebGatedSearch[q_String, rc_, profile_, limit_ : 20] := Module[{r},
+  If[! StringQ[rc], Return[<|"ok" -> False, "reason" -> "ReleaseContextRequired (fail-closed)"|>]];
+  r = SourceVault`SourceVaultSearch[q, "ReleaseContext" -> rc,
+    "PDFIndexProfile" -> profile, "Limit" -> limit];
+  If[FailureQ[r],
+    <|"ok" -> False, "reason" -> iWebFailureReason[r]|>,
+    <|"ok" -> True, "results" -> r|>]];
+
+(* Failure を画面表示用のクリーンな日本語文に。未登録系は種別/名前を明示。 *)
+iWebFailureReason[r_] := Module[{k = Quiet @ r["Kind"], n = Quiet @ r["Name"]},
+  If[StringQ[k] && StringQ[n],
+    k <> " \"" <> n <> "\" がサービスに未登録です (fail-closed)。" <>
+      "service の prelude / private local init で登録してください。",
+    Module[{msg = Quiet @ Check[r["Message"], ""]},
+      If[StringQ[msg] && StringLength[msg] > 0 && ! StringContainsQ[msg, "TagBox"],
+        msg, "検索に失敗しました (fail-closed)。設定登録を確認してください。"]]]];
+
+(* doc を docId または title で解決 (docId 優先・fail-closed)。複数年度の便覧が混在するため
+   title は URL 往復 (全角空白/エンコード等) に弱く、不一致だと別 PDF の無関係ページを描画してしまう。
+   安定 ID の docId を主キーにし、解決できなければ $Failed を返す (誤った先頭 doc に
+   フォールバックしない=別 PDF を絶対に出さない)。 *)
+iWebResolveDoc[collection_String, ref_String] := Module[{raw, recs, hit, p},
+  (* iLoadCollectionDocs は Association のリストを返す。Normal すると rule-list 化して
+     AssociationQ が False になり誤判定するので Normal しない (これが旧 iWebDocPath の
+     「常に先頭 doc にフォールバック」バグの原因だった)。 *)
+  raw = Quiet @ Check[PDFIndex`Private`iLoadCollectionDocs[collection], $Failed];
+  recs = Which[AssociationQ[raw], Values[raw], ListQ[raw], raw, True, {}];
+  hit = Which[
+    (* doc 未指定 = 素のページ閲覧 → 先頭 doc を既定表示 (title を出すので誤認しない) *)
+    StringTrim[ref] === "", FirstCase[recs, _?AssociationQ, Missing[]],
+    (* 特定文書指定 = docId 優先 → title。見つからなければ fail-closed (別 PDF を出さない) *)
+    True, Module[{h = SelectFirst[recs, AssociationQ[#] && Lookup[#, "docId", ""] === ref &, Missing[]]},
+      If[MissingQ[h], h = SelectFirst[recs, AssociationQ[#] && Lookup[#, "title", ""] === ref &, Missing[]]]; h]];
+  If[! AssociationQ[hit], Return[$Failed]];
+  p = Quiet @ PDFIndex`Private`iResolveSourcePath[Lookup[hit, "sourcePath", ""]];
+  If[StringQ[p] && FileExistsQ[p],
+    <|"path" -> p, "title" -> ToString @ Lookup[hit, "title", ""],
+      "docId" -> ToString @ Lookup[hit, "docId", ""]|>, $Failed]];
+
+(* PDF 1ページを画像化 → base64 JPEG。{"PageImages",n} は headless でも Image を返す
+   (Rasterize/FrontEnd 不要)。ExportByteArray でバイト化。 *)
+iWebPageImgB64[path_String, pageNum_Integer] := Module[{img = $Failed, ba, try},
+  (* PDF importer は初回(コールド)に $Failed を返すことがあるためリトライする。 *)
+  Do[
+    img = Quiet @ Check[Import[path, {"PageImages", pageNum}], $Failed];
+    If[ListQ[img] && Length[img] > 0, img = First[img]];
+    If[Head[img] === Image, Break[]];
+    Pause[0.3],
+    {try, 3}];
+  If[Head[img] =!= Image, Return[None]];
+  ba = Quiet @ Check[ExportByteArray[img, "JPEG"], $Failed];
+  If[ByteArrayQ[ba], BaseEncode[ba], None]];
+
+iWebRenderPageView[base_String, collection_String, pageNum_Integer, docRef_String] :=
+  Module[{resolved, path, title, b64, docParam, nav, imgHtml},
+    resolved = iWebResolveDoc[collection, docRef];
+    (* 文書を特定できないときは別 PDF を出さず明示エラー (誤ページ防止) *)
+    If[! AssociationQ[resolved],
+      Return[iWebHtml[base, "ページ p." <> ToString[pageNum],
+        "<h1 style='color:#cfe0ff'>ページ表示</h1>" <> iWebNav[base] <>
+        "<div style='background:#2a2a1a;border:1px solid #6a5a2a;border-radius:6px;padding:10px'>" <>
+        "指定された文書を特定できませんでした。検索結果の「このページを画像表示」リンクから開いてください。</div>"]]];
+    path = resolved["path"]; title = resolved["title"];
+    b64 = If[StringQ[path] && FileExistsQ[path] && pageNum >= 1,
+      iWebPageImgB64[path, pageNum], None];
+    docParam = "&doc=" <> URLEncode[docRef];   (* docId を保持 (安定) *)
+    nav = StringJoin[
+      "<p style='margin:10px 0'>",
+      If[pageNum > 1,
+        "<a class='btn' href='" <> base <> "/pdfpage?p=" <> ToString[pageNum - 1] <> docParam <> "'>&#8592; 前のページ</a> ", ""],
+      "<span style='opacity:.7;margin:0 8px'>p." <> ToString[pageNum] <> " / " <> iWebEsc[title] <> "</span>",
+      "<a class='btn' href='" <> base <> "/pdfpage?p=" <> ToString[pageNum + 1] <> docParam <> "'>次のページ &#8594;</a>",
+      "</p>"];
+    imgHtml = If[StringQ[b64],
+      "<img src='data:image/jpeg;base64," <> b64 <> "' style='max-width:100%;border:1px solid #3a3a5a;border-radius:6px;display:block'>",
+      "<div style='background:#2a2a1a;border:1px solid #6a5a2a;border-radius:6px;padding:10px'>ページ画像を生成できませんでした (ページ範囲外)。</div>"];
+    iWebHtml[base, "ページ p." <> ToString[pageNum],
+      "<h1 style='color:#cfe0ff'>ページ表示</h1>" <> iWebNav[base] <> nav <> imgHtml <> nav]];
+
+(* ローカル LLM (LM Studio) チャット呼び出し。/pdfask の回答合成に使う。
+   gate 済み evidence のみを prompt に渡し、生 vault は触らせない。endpoint/model/key は
+   ハードコードせず変数・NBAccess・/v1/models 自動検出で解決。 *)
+If[! ValueQ[SourceVault`$SourceVaultWebLLMBase], SourceVault`$SourceVaultWebLLMBase = "http://localhost:1234"];
+If[! ValueQ[SourceVault`$SourceVaultWebChatModel], SourceVault`$SourceVaultWebChatModel = Automatic];
+
+(* === LLM ライセンス/課金ポリシー ===
+   ClaudeCode / Codex (サブスク CLI) は契約者本人のみ利用可。よって他者が使う web サービスで
+   ClaudeCode/Codex を呼んではならない。リクエスト元 IP がオーナー PC のときだけサブスクを許可する。
+     - オーナー PC          → ClaudeCode/Codex ("cloud") 可
+     - 非オーナー + 課金禁止 → LM Studio (ローカル LLM) 一択
+     - 非オーナー + 課金OK   → 課金API ("api") か LM Studio
+   client IP は proxy が実 TCP peer から付与する (X-Forwarded-For は詐称可能なので採用しない)。 *)
+If[! ValueQ[SourceVault`$SourceVaultOwnerIPs], SourceVault`$SourceVaultOwnerIPs = {"127.0.0.1", "::1", "localhost"}];
+If[! ValueQ[SourceVault`$SourceVaultBillingAllowed], SourceVault`$SourceVaultBillingAllowed = False];
+If[! ValueQ[SourceVault`$SourceVaultWebBilledModel], SourceVault`$SourceVaultWebBilledModel = "claude-sonnet-4-6"];
+
+SourceVault`SourceVaultRegisterOwnerIP[ip_String] := (
+  If[! MemberQ[SourceVault`$SourceVaultOwnerIPs, ip],
+    SourceVault`$SourceVaultOwnerIPs = Append[SourceVault`$SourceVaultOwnerIPs, ip]];
+  SourceVault`$SourceVaultOwnerIPs);
+SourceVault`SourceVaultSetBillingAllowed[b : (True | False)] := (SourceVault`$SourceVaultBillingAllowed = b);
+
+(* client IP がオーナー PC か。IP 不明 (proxy を介さない直接 iServiceHttpRender 呼び出し
+   = オーナー自身のカーネル) はオーナー扱い。proxy 経由は必ず IP が載るので他者 IP は非オーナー。 *)
+iWebIsOwnerIP[clientIP_, ownerIPs_List] :=
+  ! StringQ[clientIP] || clientIP === "" || MemberQ[ownerIPs, clientIP];
+
+iWebLLMAPIKey[] := Module[{k},
+  k = Quiet @ Check[NBAccess`NBGetLocalLLMAPIKey["lmstudio", SourceVault`$SourceVaultWebLLMBase,
+    PrivacySpec -> <|"AccessLevel" -> 1.0|>], Null];
+  If[StringQ[k] && k =!= "", k, "lm-studio"]];
+
+iWebChatModel[override_:Automatic] := Module[
+  {m = If[StringQ[override] && override =!= "", override, SourceVault`$SourceVaultWebChatModel],
+   r, j, models, loaded, nonthink, pick, ids},
+  If[StringQ[m], Return[m]];
+  (* LM Studio 拡張 API /api/v0/models は state(loaded) と type を返す。
+     未ロードモデルを選ぶと JIT ロードで数分かかり timeout するため、必ず loaded を選ぶ。
+     type=llm (非 vlm/embeddings) かつ非 thinking を優先 (thinking は遅い)。 *)
+  r = Quiet @ Check[URLRead[HTTPRequest[SourceVault`$SourceVaultWebLLMBase <> "/api/v0/models",
+    <|"Headers" -> {"Authorization" -> "Bearer " <> iWebLLMAPIKey[]}|>], "Body"], $Failed];
+  j = Quiet @ Developer`ReadRawJSONString[r];
+  models = If[AssociationQ[j], Lookup[j, "data", {}], {}];
+  If[ListQ[models] && models =!= {},
+    loaded = Select[models, Lookup[#, "state", ""] === "loaded" &&
+      MemberQ[{"llm", "vlm"}, Lookup[#, "type", ""]] &];
+    nonthink = Select[loaded, ! StringContainsQ[Lookup[#, "id", ""], "think", IgnoreCase -> True] &];
+    pick = SelectFirst[nonthink, Lookup[#, "type", ""] === "llm" &, Missing[]];
+    If[! AssociationQ[pick] && nonthink =!= {}, pick = First[nonthink]];
+    If[! AssociationQ[pick] && loaded =!= {}, pick = First[loaded]];
+    If[AssociationQ[pick], Return[Lookup[pick, "id", "local-model"]]]];
+  (* fallback: /v1/models (state 不明) → 非embed・非thinking の instruct を優先 *)
+  ids = Select[Quiet @ Lookup[
+    Quiet @ Developer`ReadRawJSONString[Quiet @ Check[URLRead[HTTPRequest[
+      SourceVault`$SourceVaultWebLLMBase <> "/v1/models",
+      <|"Headers" -> {"Authorization" -> "Bearer " <> iWebLLMAPIKey[]}|>], "Body"], "{}"]],
+    "data", {}], AssociationQ];
+  ids = Select[Lookup[#, "id", ""] & /@ ids,
+    StringQ[#] && # =!= "" && ! StringContainsQ[#, "embed" | "think", IgnoreCase -> True] &];
+  Module[{instr = Select[ids, StringContainsQ[#, "instruct", IgnoreCase -> True] && ! StringContainsQ[#, "coder", IgnoreCase -> True] &]},
+    Which[instr =!= {}, First[instr], ids =!= {}, First[ids], True, "local-model"]]];
+
+(* クラウド LLM (ClaudeQueryBg, 同期・コンテキスト安全)。公開コンテンツ用に高速。
+   model="" で既定モデル、それ以外は $ClaudeModel を一時切替。 *)
+iWebChatCloud[prompt_String, model_String] := Module[{r},
+  If[Length[Names["ClaudeCode`ClaudeQueryBg"]] === 0, Return[$Failed]];
+  r = Quiet @ Check[
+    If[model === "", ClaudeCode`ClaudeQueryBg[prompt],
+      Block[{ClaudeCode`$ClaudeModel = model}, ClaudeCode`ClaudeQueryBg[prompt]]],
+    $Failed];
+  If[StringQ[r] && StringTrim[r] =!= "" && ! StringStartsQ[r, "Error"], r, $Failed]];
+
+(* 課金API (Anthropic Messages API, 従量課金=サービス提供可)。サブスク CLI とは別ライセンス。
+   鍵は NBAccess`NBGetAPIKey 経由 (直接 SystemCredential は使わない)。 *)
+iWebChatBilledAPI[prompt_String, model_String] := Module[{key, m, body, resp, j, content},
+  key = Quiet @ Check[NBAccess`NBGetAPIKey["anthropic"], $Failed];
+  If[! (StringQ[key] && key =!= ""), Return[$Failed]];
+  m = If[model === "", SourceVault`$SourceVaultWebBilledModel, model];
+  body = ExportByteArray[<|"model" -> m, "max_tokens" -> 1500,
+    "messages" -> {<|"role" -> "user", "content" -> prompt|>}|>, "RawJSON"];
+  resp = Quiet @ Check[URLRead[HTTPRequest["https://api.anthropic.com/v1/messages",
+    <|"Method" -> "POST", "Headers" -> {"x-api-key" -> key,
+       "anthropic-version" -> "2023-06-01", "content-type" -> "application/json"},
+     "Body" -> body|>], TimeConstraint -> 200], $Failed];
+  If[Head[resp] =!= HTTPResponse || resp["StatusCode"] =!= 200, Return[$Failed]];
+  j = Quiet @ Developer`ReadRawJSONString[ByteArrayToString[resp["BodyByteArray"], "UTF-8"]];
+  If[! AssociationQ[j], Return[$Failed]];
+  content = Lookup[j, "content", {}];
+  Module[{t = If[ListQ[content] && content =!= {}, Lookup[First[content], "text", $Failed], $Failed]},
+    If[StringQ[t] && StringTrim[t] =!= "", t, $Failed]]];
+
+(* ローカル LLM (LM Studio, OpenAI 互換)。誰でも利用可 (ローカル処理=課金もライセンスも無関係)。 *)
+iWebChatLocal[prompt_String, modelOverride_] := Module[{key, model, body, resp, j},
+  key = iWebLLMAPIKey[]; model = iWebChatModel[modelOverride];
+  body = ExportByteArray[<|"model" -> model,
+    "messages" -> {<|"role" -> "user", "content" -> prompt|>},
+    "temperature" -> 0.2, "stream" -> False, "max_tokens" -> 1500|>, "RawJSON"];
+  (* chat モデルが未ロードだと JIT で長時間ハングしコマンドループを塞ぐので、短めの
+     TimeConstraint で早期失敗させる (失敗時は /pdfask が evidence のみへ degrade)。 *)
+  resp = Quiet @ Check[URLRead[HTTPRequest[SourceVault`$SourceVaultWebLLMBase <> "/v1/chat/completions",
+    <|"Method" -> "POST", "Headers" -> {"Content-Type" -> "application/json",
+      "Authorization" -> "Bearer " <> key}, "Body" -> body|>], TimeConstraint -> 90], $Failed];
+  If[Head[resp] =!= HTTPResponse || resp["StatusCode"] =!= 200, Return[$Failed]];
+  j = Quiet @ Developer`ReadRawJSONString[ByteArrayToString[resp["BodyByteArray"], "UTF-8"]];
+  If[! AssociationQ[j], Return[$Failed]];
+  Module[{c = Quiet @ Lookup[Lookup[First[Lookup[j, "choices", {<||>}]], "message", <||>], "content", $Failed]},
+    If[StringQ[c] && StringLength[StringTrim[c]] > 0, c, $Failed]]];
+
+(* ライセンス/課金ポリシーに従い、要求された ChatModel spec と policy(IP/owner/billing) から
+   実際に使うバックエンドを決める。これが「ClaudeCode はオーナーのみ」を強制する中核。 *)
+iWebResolveChatPlan[spec_, policy_Association] := Module[{isOwner, billingOK, subOK, s},
+  isOwner = iWebIsOwnerIP[Lookup[policy, "ClientIP", None],
+    Lookup[policy, "OwnerIPs", SourceVault`$SourceVaultOwnerIPs]];
+  billingOK = TrueQ[Lookup[policy, "BillingAllowed", SourceVault`$SourceVaultBillingAllowed]];
+  (* サブスク (ClaudeCode/Codex) を使える条件 = オーナー かつ 明示許可。
+     proxy は「AllowOwnerSubscription かつ ローカルバインド」のときだけ SubscriptionAllowed=True を渡す。
+     既定 (公開バインド・未指定) は False=不使用。policy にキーが無い直接呼び出し
+     (オーナー自身のカーネルで対話的に使う) のみ True 既定で従来どおり。 *)
+  subOK = isOwner && TrueQ[Lookup[policy, "SubscriptionAllowed", True]];
+  s = If[StringQ[spec] && spec =!= "", spec, SourceVault`$SourceVaultWebChatModel];
+  Which[
+    (* ClaudeCode/Codex (サブスク) 要求: subOK のみ。それ以外は課金API/ローカルへ降格。 *)
+    StringQ[s] && (s === "cloud" || StringStartsQ[s, "cloud:"]),
+      Which[
+        subOK, <|"Backend" -> "subscription",
+          "Model" -> If[s === "cloud", "", StringDrop[s, StringLength["cloud:"]]], "Label" -> "ClaudeCode(owner)"|>,
+        billingOK, <|"Backend" -> "api", "Model" -> "", "Label" -> "課金API"|>,
+        True, <|"Backend" -> "local", "Model" -> Automatic, "Label" -> "LM Studio"|>],
+    (* 課金API 要求: 課金OK か オーナーなら使う。課金禁止の非オーナーはローカルへ。 *)
+    StringQ[s] && (s === "api" || StringStartsQ[s, "api:"]),
+      If[billingOK || isOwner,
+        <|"Backend" -> "api", "Model" -> If[s === "api", "", StringDrop[s, StringLength["api:"]]], "Label" -> "課金API"|>,
+        <|"Backend" -> "local", "Model" -> Automatic, "Label" -> "LM Studio"|>],
+    (* それ以外 = ローカルモデル名 / Automatic: 常に LM Studio *)
+    True, <|"Backend" -> "local", "Model" -> s, "Label" -> "LM Studio"|>]];
+
+(* /pdfask の回答合成 LLM。policy(ClientIP/OwnerIPs/BillingAllowed) でバックエンドを gate。
+   policy 省略 (直接呼び出し=オーナー自身) は従来どおりオーナー扱い。 *)
+iWebChat[prompt_String, modelOverride_ : Automatic, policy_ : <||>] := Module[{plan, r},
+  plan = iWebResolveChatPlan[modelOverride, If[AssociationQ[policy], policy, <||>]];
+  r = Switch[Lookup[plan, "Backend"],
+    "subscription", iWebChatCloud[prompt, Lookup[plan, "Model", ""]],
+    "api", iWebChatBilledAPI[prompt, Lookup[plan, "Model", ""]],
+    _, iWebChatLocal[prompt, Lookup[plan, "Model", Automatic]]];
+  (* サブスク/課金API が失敗したら LM Studio へフォールバック (回答を出すため)。
+     フォールバック先は常に local=非オーナーがサブスクに昇格することはない。 *)
+  If[! StringQ[r] && MemberQ[{"subscription", "api"}, Lookup[plan, "Backend"]],
+    r = iWebChatLocal[prompt, Automatic]];
+  r];
+
+(* gate 済み結果から LLM 用の根拠テキストを組む (上位 n 件, raw path 非露出)。
+   pdfSearch の context は短い (~90字, 表ヘッダのみ) ため、gate を通過した ChunkId の
+   フル本文を PDFIndex`pdfGetChunk で取得して渡す (取得不可なら Snippet にフォールバック)。
+   渡すのは Permit 済みチャンクのみ = gate は維持。 *)
+(* 西暦 (タイトル中の 20xx) から「令和N年度版」ラベルを作る。LLM が「R7/令和7」と
+   「学生便覧 2025」を結び付けられるようにするため (年度指定クエリの取りこぼし対策)。 *)
+iWebEraLabel[title_String] := Module[{ys, yr},
+  ys = StringCases[title, RegularExpression["20[0-9][0-9]"]];
+  yr = If[ys =!= {}, Quiet @ Check[ToExpression[First[ys]], 0], 0];
+  If[IntegerQ[yr] && yr >= 2019 && yr <= 2100,
+    " [令和" <> ToString[yr - 2018] <> "年度版]", ""]];
+
+(* クエリから西暦年を抽出 (20xx / 令和N / RN)。年度指定の取りこぼし対策。 *)
+iWebQueryYears[q_String] := DeleteDuplicates @ Select[Flatten @ {
+    Quiet @ Check[ToExpression /@ StringCases[q, RegularExpression["20[0-9][0-9]"]], {}],
+    Quiet @ Check[(2018 + ToExpression[#]) & /@
+      StringCases[q, RegularExpression["令和\\s*([0-9]{1,2})"] -> "$1"], {}],
+    Quiet @ Check[(2018 + ToExpression[#]) & /@
+      StringCases[q, RegularExpression["[RＲ]\\s*([0-9]{1,2})"] -> "$1"], {}]},
+  IntegerQ];
+
+(* 年度がクエリに含まれる場合、該当年度の doc を結果の先頭へ安定再ランク。 *)
+iWebRerankByYear[results_List, years_List] := If[years === {} || results === {}, results,
+  Module[{matchQ},
+    matchQ[res_] := AnyTrue[years, StringContainsQ[
+      ToString @ Lookup[Lookup[res, "Citation", <||>], "Title", ""], ToString[#]] &];
+    Join[Select[results, matchQ], Select[results, ! matchQ[#] &]]]];
+
+(* クエリから固有語 (科目名等) を抽出。漢字2字以上 / カタカナ3字以上 / 英数字コードを拾い、
+   汎用な問い語 (配当年次・一覧 等) を除く。locale 依存語はコードに焼かず設定値。 *)
+If[! ListQ[$svQueryStopwords],
+  $svQueryStopwords = {"配当年次", "配当", "年次", "一覧", "単位", "科目", "年度",
+    "入学", "入学者", "入学生", "授業", "教えて", "について", "場合", "対象", "何年次"}];
+iWebQueryKeywords[q_String] := DeleteDuplicates @ Select[
+  Flatten @ {
+    StringCases[q, RegularExpression["[\\p{Han}]{2,}"]],
+    StringCases[q, RegularExpression["[\\p{Katakana}ー]{3,}"]],
+    StringCases[q, RegularExpression["[A-Za-z][A-Za-z0-9]{2,}"]]},
+  StringLength[#] >= 2 && ! MemberQ[$svQueryStopwords, #] &];
+
+(* 根拠の複合再ランク: クエリ固有語を literal に含むチャンクを最優先、次に年度一致、次に元順。
+   埋め込み類似度だけだと大きな表ダンプ中の特定科目 (例「離散数学」) が薄まり上位に来ないため、
+   キーワード一致を強い信号として加える。各候補のフル本文を取得し FullText に載せて二重取得を防ぐ。 *)
+iWebRerankEvidence[results_List, q_String, collection_String] := Module[{kws, years, scored},
+  kws = iWebQueryKeywords[q]; years = iWebQueryYears[q];
+  If[(kws === {} && years === {}) || results === {}, Return[results]];
+  scored = MapIndexed[Function[{r, i}, Module[{cid, c, full, kc, ym, title},
+    cid = Lookup[r, "ChunkId", ""];
+    c = Quiet @ Check[ToExpression[cid], $Failed];
+    full = If[IntegerQ[c], Quiet @ Check[PDFIndex`pdfGetChunk[c, collection], $Failed], $Failed];
+    If[! (StringQ[full] && StringLength[StringTrim[full]] > 0),
+      full = ToString @ Lookup[r, "Snippet", ""]];
+    kc = If[kws === {}, 0, Count[kws, kw_ /; StringContainsQ[full, kw]]];
+    title = ToString @ Lookup[Lookup[r, "Citation", <||>], "Title", ""];
+    ym = If[years =!= {} && AnyTrue[years, StringContainsQ[title, ToString[#]] &], 1, 0];
+    <|"r" -> Append[r, "FullText" -> full], "kc" -> kc, "ym" -> ym, "i" -> First[i]|>]],
+    results];
+  Lookup[SortBy[scored, {-#["kc"] &, -#["ym"] &, #["i"] &}], "r"]];
+
+iWebEvidenceText[results_List, n_Integer, collection_String : "default"] :=
+  StringJoin @ MapIndexed[Function[{r, i},
+    Module[{cit = Lookup[r, "Citation", <||>], cid = Lookup[r, "ChunkId", ""], full, c, title},
+      title = ToString @ Lookup[cit, "Title", ""];
+      (* 再ランクで取得済みなら FullText を再利用 (二重取得回避)、無ければ取得 *)
+      full = Lookup[r, "FullText", $Failed];
+      If[! (StringQ[full] && StringLength[StringTrim[full]] > 0),
+        c = Quiet @ Check[ToExpression[cid], $Failed];
+        full = If[IntegerQ[c],
+          Quiet @ Check[PDFIndex`pdfGetChunk[c, collection], $Failed], $Failed]];
+      If[! (StringQ[full] && StringLength[StringTrim[full]] > 0),
+        full = ToString @ Lookup[r, "Snippet", ""]];
+      "[" <> ToString[First[i]] <> "] (p." <> ToString[Lookup[cit, "Page", "?"]] <> " " <>
+        title <> iWebEraLabel[title] <> ")\n" <> StringTake[full, UpTo[1500]] <> "\n\n"]],
+    Take[results, UpTo[n]]];
+
+(* PDFIndexProfile から pdfGetChunk 用の collection 名を解決 (既定 default)。
+   legacy search が Collection->CollectionRoot で検索するので chunk 取得も同じ名前に揃える。 *)
+iWebProfileCollection[profile_] := Module[{p, cr},
+  If[! StringQ[profile], Return["default"]];
+  p = Quiet @ Check[SourceVault`SearchIndexPrivate`iResolve["PDFIndexProfile", profile], $Failed];
+  If[! AssociationQ[p], Return["default"]];
+  cr = Lookup[p, "CollectionRoot", Automatic];
+  If[StringQ[cr] && cr =!= "", cr, "default"]];
+
+(* ドメイン中立の既定。アプリ固有 (表題・assistant persona) は endpoint profile /
+   Http command で外部から差し込む。SourceVault のコードには固有名を残さない。 *)
+$svWebAppTitleDefault = "SourceVault \:691c\:7d22";
+$svWebAskPromptDefault = StringJoin[
+  "提供された【根拠】(release gate 通過済みの検索結果)から【質問】に関連する情報を日本語でまとめて答えてください。",
+  "該当する一覧・表があれば項目をできるだけ列挙してください。複数年度・複数版が含まれる場合は",
+  "年度(令和N年度/西暦)を明記し、質問の年度に最も近いものを優先してください。",
+  "表やOCRが読み取りにくい場合も、推測と断定は避けつつ可能な範囲で抽出してください。",
+  "各事実の末尾に (p.ページ番号) を付けてください。根拠に全く該当が無い場合のみ「記載が見つかりません」と述べてください。"];
+
+(* 非同期 /pdfask: 回答はバックグラウンド (SessionSubmit, HoldFirst で一回限り非同期) で
+   生成し、ブラウザは JS ポーリングで差し込む。遅いモデルでも proxy が timeout しない。
+   回答はクエリ単位でキャッシュ ($svAskCache)。 *)
+If[! AssociationQ[$svAskCache], $svAskCache = <||>];
+
+iWebAskKey[q_String, rc_, profile_, model_] :=
+  IntegerString[Hash[{q, ToString[rc], ToString[profile], ToString[model]}, "SHA256"], 16];
+
+(* curated 補足知識を根拠の上に別枠で表示 (HumanReviewed・出典明示) *)
+iWebRenderCurated[curated_List] := If[curated === {}, "",
+  "<h3 style='color:#cfe0ff;margin-top:20px'>補足知識 (人手レビュー済み)</h3>" <>
+  StringJoin @ Map[Function[it,
+    "<div style='background:#1b2330;border:1px solid #3a5a8a;border-radius:6px;padding:10px;margin:8px 0;font-size:.92em'>" <>
+      iWebEsc[ToString @ Lookup[it, "Text", ""]] <>
+      "<div style='opacity:.55;font-size:.8em;margin-top:6px'>HumanReviewed / EvidenceOnly" <>
+      If[Lookup[it, "Years", {}] =!= {}, " / 年度: " <> iWebEsc[ToString @ Lookup[it, "Years", {}]], ""] <>
+      "</div></div>"], curated]];
+
+iWebRenderAskPage[base_String, q_String, results_List, curated_List, state_String, answer_, modelLabel_String] :=
+  Module[{box, poll},
+    box = Switch[state,
+      "ready",
+        "<div style='background:#1c2c1c;border:1px solid #3a6a3a;border-radius:8px;padding:16px;margin:12px 0;white-space:pre-wrap;line-height:1.7'>" <>
+          iWebEsc[ToString[answer]] <> "</div><p style='opacity:.6;font-size:.8em'>LLM 合成回答 (モデル: " <>
+          iWebEsc[modelLabel] <> ")。根拠は下記 gate 済みチャンクのみ。</p>",
+      "generating",
+        "<div style='background:#1c2435;border:1px solid #3a5a8a;border-radius:8px;padding:16px;margin:12px 0'>" <>
+          "&#9203; 回答を生成中… (モデル: " <> iWebEsc[modelLabel] <> ")。このページは自動で更新されます。</div>",
+      _,
+        "<div style='background:#2a2a1a;border:1px solid #6a5a2a;border-radius:6px;padding:10px;margin:12px 0;font-size:.9em'>" <>
+          "LLM 回答を生成できませんでした (該当根拠なし / LLM 利用不可)。gate 済みの根拠のみ表示します。</div>"];
+    poll = If[state === "generating",
+      "<script>setTimeout(function(){location.replace('" <> base <> "/pdfask?a=1&q=" <>
+        URLEncode[q] <> "')},2500);</script>", ""];
+    iWebHtml[base, "質問応答: " <> q,
+      "<h1 style='color:#cfe0ff'>質問応答: " <> iWebEsc[q] <> "</h1>" <> iWebNav[base] <>
+      iWebSearchForm[base, q, "/pdfask", "再質問"] <> box <> poll <>
+      iWebRenderCurated[curated] <>
+      "<h3 style='color:#cfe0ff;margin-top:20px'>根拠 (gate 済み)</h3>" <>
+      iWebRenderResults[base, q, results]]];
+
+(* バックグラウンドで LLM 回答を生成し $svAskCache[key] を ready/error に更新する。
+   pending を即セットしてから SessionSubmit (HoldFirst, 一回限り非同期) で投げる。 *)
+iWebKickAskJob[key_String, results_List, curated_List, prompt_String, model_, policy_ : <||>] := (
+  $svAskCache[key] = <|"Status" -> "pending", "Results" -> results, "Curated" -> curated,
+    "Answer" -> Null, "StartedAt" -> AbsoluteTime[]|>;
+  With[{kk = key, rr = results, cc = curated, pp = prompt, mm = model, pol = policy},
+    SessionSubmit[
+      Module[{a = iWebChat[pp, mm, pol]},
+        $svAskCache[kk] = <|"Status" -> If[StringQ[a], "ready", "error"], "Results" -> rr,
+          "Curated" -> cc, "Answer" -> If[StringQ[a], a, Null], "StartedAt" -> AbsoluteTime[]|>]]];);
+
+(* === MVP-A: curated supplemental knowledge (§18.5/§18.6.1 の最小実装) ===
+   人手レビュー済みの clean text を release context / 年度 scope で限定し、gated 検索結果に
+   後段マージして LLM へ「根拠」として渡す (命令ではない=EvidenceOnly)。崩れた PDF 表や
+   PDF に無い凡例・慣例を補うための層。将来は §18.5 SurveyCorpus subtype + snapshot 化。 *)
+If[! AssociationQ[$svCuratedKnowledge], $svCuratedKnowledge = <||>];
+
+(* 永続化: <CoreRoot>/curated/curated_knowledge.wl。register が書き、resolve/list が最新を読む。
+   これにより別プロセス (detached service) でも登録が反映され、再起動でも消えない。
+   将来は §18.5 SurveyCorpus subtype + immutable snapshot store へ移行。 *)
+iCuratedFile[] := Module[{r = Quiet @ Check[SourceVault`SourceVaultCoreRoot[], $Failed]},
+  If[StringQ[r], FileNameJoin[{r, "curated", "curated_knowledge.wl"}], $Failed]];
+
+iSaveCurated[] := Module[{f = iCuratedFile[]},
+  If[StringQ[f],
+    Quiet @ If[! DirectoryQ[DirectoryName[f]],
+      CreateDirectory[DirectoryName[f], CreateIntermediateDirectories -> True]];
+    Block[{$CharacterEncoding = "UTF-8"}, Quiet @ Put[$svCuratedKnowledge, f]]; True,
+    False]];
+
+iLoadCurated[] := Module[{f = iCuratedFile[], r},
+  If[StringQ[f] && FileExistsQ[f],
+    r = Block[{$CharacterEncoding = "UTF-8"}, Quiet @ Check[Get[f], $Failed]];
+    If[AssociationQ[r], $svCuratedKnowledge = r]];
+  $svCuratedKnowledge];
+
+SourceVault`SourceVaultRegisterCuratedKnowledge[id_String, spec_Association] := (
+  iLoadCurated[];   (* 既存 (他カーネル登録含む) を読んでから追加し、上書き喪失を防ぐ *)
+  $svCuratedKnowledge[id] = Join[<|
+    "Years" -> {}, "Unit" -> All, "QuestionClasses" -> All,
+    "ReleaseContexts" -> {}, "ReviewState" -> "HumanReviewed",
+    "AllowedUse" -> "EvidenceOnly", "SourceRefs" -> {}, "Text" -> ""|>, spec];
+  <|"Status" -> "OK", "Id" -> id, "Persisted" -> iSaveCurated[]|>);
+
+SourceVault`SourceVaultListCuratedKnowledge[opts___] := (iLoadCurated[]; Normal[$svCuratedKnowledge]);
+
+(* #4: 崩れ表 curated 転記支援 (§18.10 ChunkCorrection / §18.6.7 human editing assist)。
+   OCR で構造が崩れた表チャンクを LLM で clean に「転記」し、人手レビュー前提のドラフト
+   curated 項目として返す。自動登録しない (ReviewState=NeedsHumanReview)。
+   人手で内容確認・修正後に SourceVaultRegisterCuratedKnowledge[..., ReviewState->"HumanReviewed"] する。 *)
+Options[SourceVault`SourceVaultDraftCuratedTranscription] = {
+  "Collection" -> "default", "ChunkIds" -> Automatic, "Limit" -> 4,
+  "ChatModel" -> "cloud", "Years" -> {}, "Unit" -> All, "ReleaseContexts" -> {}};
+SourceVault`SourceVaultDraftCuratedTranscription[query_String, OptionsPattern[]] := Module[
+  {coll, chunkIds, rawTexts, prompt, clean},
+  coll = OptionValue["Collection"];
+  chunkIds = OptionValue["ChunkIds"];
+  If[chunkIds === Automatic,
+    Module[{r = Quiet @ Check[PDFIndex`pdfSearch[query, OptionValue["Limit"]], $Failed], rows},
+      rows = Which[Head[r] === Dataset, Normal[r], ListQ[r], r, True, {}];
+      chunkIds = Select[Lookup[#, "chunkIdx", Missing[]] & /@ rows, IntegerQ]]];
+  If[! (ListQ[chunkIds] && chunkIds =!= {}),
+    Return[Failure["NoSourceChunks", <|
+      "MessageTemplate" -> "転記元チャンクが見つかりません (ChunkIds か query を確認)。"|>]]];
+  rawTexts = Table[ToString @ Quiet @ Check[PDFIndex`pdfGetChunk[c, coll], ""], {c, chunkIds}];
+  prompt = StringJoin[
+    "以下は PDF から OCR 抽出された、構造が崩れた表の生テキストです。",
+    "元の表構造(行・列・科目名・科目コード・記号)をできるだけ保ったまま、人が読める clean な箇条書き/表に転記してください。\n",
+    "重要: 原文にない内容を推測で追加しないこと。読み取れない箇所は (判読不可) と記すこと。",
+    "記号(②△●等)はそのまま残すこと。年度・学科などの見出しがあれば明記すること。\n\n",
+    "【生テキスト】\n", StringRiffle[rawTexts, "\n---\n"], "\n\n【clean 転記】"];
+  clean = iWebChat[prompt, OptionValue["ChatModel"]];
+  If[! StringQ[clean],
+    Return[Failure["TranscriptionFailed", <|
+      "MessageTemplate" -> "LLM 転記に失敗しました (ChatModel / LM Studio / cloud 認証を確認)。"|>]]];
+  <|"Status" -> "OK", "CleanText" -> clean, "SourceChunkIds" -> chunkIds,
+    "ReviewState" -> "NeedsHumanReview",
+    "Note" -> "LLM による転記ドラフト。内容を人手で確認・修正してから " <>
+      "SourceVaultRegisterCuratedKnowledge で ReviewState->\"HumanReviewed\" として登録すること。",
+    "ProposedCuratedSpec" -> <|
+      "Text" -> clean, "Years" -> OptionValue["Years"], "Unit" -> OptionValue["Unit"],
+      "ReleaseContexts" -> OptionValue["ReleaseContexts"],
+      "SourceRefs" -> ("chunk:" <> coll <> ":" <> ToString[#] & /@ chunkIds),
+      "SourceRelation" -> "Corrects", "ReviewState" -> "NeedsHumanReview"|>|>];
+
+(* release context が一致 (gate) し、年度 scope が一致する HumanReviewed curated を上位 n 件。
+   score 非依存で常時採用 (§18.6.1 CuratedEvidencePolicyProfile.MergeOrder 相当)。 *)
+iWebResolveCurated[q_String, rc_, n_Integer : 3] := Module[{years, items},
+  iLoadCurated[];   (* 別カーネル/再起動後も最新を反映 *)
+  years = iWebQueryYears[q];
+  items = Select[Values[$svCuratedKnowledge],
+    Lookup[#, "ReviewState", ""] === "HumanReviewed" &&
+    Lookup[#, "AllowedUse", "EvidenceOnly"] =!= "PromptInstructionCandidate" &&
+    StringQ[rc] && MemberQ[Lookup[#, "ReleaseContexts", {}], rc] &&
+    (Lookup[#, "Years", {}] === {} || years === {} ||
+       IntersectingQ[Lookup[#, "Years", {}], years]) &];
+  Take[items, UpTo[n]]];
+
+iWebCuratedText[items_List] := If[items === {}, "",
+  StringJoin @ MapIndexed[Function[{it, i},
+    "[C" <> ToString[First[i]] <> " 人手レビュー済み補足] " <>
+      ToString @ Lookup[it, "Text", ""] <> "\n\n"], items]];
+
+(* === MVP-B: EvidenceGap + AnswerGrounding 「列挙OK・分類断定NG」(§18.2/§18.3/§18.17) ===
+   凡例(LegendMap)が無い分類質問では、候補列挙は許すが必修/選択の断定はさせず、
+   EvidenceGap を記録する。凡例を curated に登録すると分類が解禁される。
+   locale 依存語は設定値 (コードに焼かない)。private profile から上書き可。 *)
+If[! AssociationQ[$svEvidenceGaps], $svEvidenceGaps = <||>];
+If[! ListQ[$svClassificationIntentPhrases],
+  $svClassificationIntentPhrases = {"必修", "選択必修", "選択科目", "分類"}];
+
+(* curated に LegendMap / ProvidesLegend があれば凡例利用可 (= classification 解禁条件) *)
+iWebLegendAvailable[curated_List] := AnyTrue[curated, Function[it,
+  TrueQ[Lookup[it, "ProvidesLegend", False]] ||
+  (AssociationQ[Lookup[it, "LegendMap", None]] && Lookup[it, "LegendMap"] =!= <||>)]];
+
+iWebIsClassificationQuery[q_String] :=
+  AnyTrue[$svClassificationIntentPhrases, StringContainsQ[q, #] &];
+
+iWebGroundingPolicyText[legendAvail_, classQuery_] := Which[
+  ! TrueQ[classQuery], "",
+  TrueQ[legendAvail],
+    "\n\n【判定方針】補足知識に凡例(LegendMap)があるので、必修/選択の分類を凡例に従って示してよい。各分類に凡例の出典を明記すること。",
+  True,
+    "\n\n【判定方針】凡例(必修記号の意味)が未確認なので、該当する候補科目は列挙してよいが、必修/選択の分類は断定しないこと。「凡例未確認のため必修/選択は未確定」と明記し、推測で必修と断定しないこと。"];
+
+(* EvidenceGap 永続化 (<CoreRoot>/curated/evidence_gaps.wl, GapId キー) *)
+iEvidenceGapFile[] := Module[{r = Quiet @ Check[SourceVault`SourceVaultCoreRoot[], $Failed]},
+  If[StringQ[r], FileNameJoin[{r, "curated", "evidence_gaps.wl"}], $Failed]];
+iLoadGaps[] := Module[{f = iEvidenceGapFile[], r},
+  If[StringQ[f] && FileExistsQ[f],
+    r = Block[{$CharacterEncoding = "UTF-8"}, Quiet @ Check[Get[f], $Failed]];
+    If[AssociationQ[r], $svEvidenceGaps = r]]; $svEvidenceGaps];
+iSaveGaps[] := Module[{f = iEvidenceGapFile[]},
+  If[StringQ[f],
+    Quiet @ If[! DirectoryQ[DirectoryName[f]],
+      CreateDirectory[DirectoryName[f], CreateIntermediateDirectories -> True]];
+    Block[{$CharacterEncoding = "UTF-8"}, Quiet @ Put[$svEvidenceGaps, f]]; True, False]];
+iRecordEvidenceGap[gap_Association] := Module[{gid},
+  iLoadGaps[];
+  gid = "gap:" <> IntegerString[Hash[{Lookup[gap, "GapKind", ""], Lookup[gap, "Question", ""],
+    Lookup[gap, "ReleaseContext", ""]}, "SHA256"], 16, 12];
+  If[! KeyExistsQ[$svEvidenceGaps, gid] || Lookup[$svEvidenceGaps[gid], "State", "Open"] === "Closed",
+    $svEvidenceGaps[gid] = Join[<|"GapId" -> gid, "State" -> "Open",
+      "CreatedAtUTC" -> iSMUTCNow[]|>, gap]; iSaveGaps[]];
+  gid];
+(* 公開記録 API (他サブモジュール=webingest の fetch 失敗等から EvidenceGap を記録するため。
+   private iRecordEvidenceGap への薄いラッパー。dedup は {GapKind, Question, ReleaseContext}。 *)
+SourceVault`SourceVaultRecordEvidenceGap::usage =
+  "SourceVaultRecordEvidenceGap[gap] は EvidenceGap を記録し GapId を返す。\n" <>
+  "gap は <|\"GapKind\", \"Question\", ...|>。同一 {GapKind, Question, ReleaseContext} は dedup される。";
+SourceVault`SourceVaultRecordEvidenceGap[gap_Association] := iRecordEvidenceGap[gap];
+
+SourceVault`SourceVaultListEvidenceGaps[opts___] := (iLoadGaps[]; Normal[$svEvidenceGaps]);
+SourceVault`SourceVaultCloseEvidenceGap[gapId_String, opts___] := (iLoadGaps[];
+  If[KeyExistsQ[$svEvidenceGaps, gapId],
+    $svEvidenceGaps[gapId] = Append[$svEvidenceGaps[gapId], "State" -> "Closed"]; iSaveGaps[];
+    <|"Status" -> "OK", "GapId" -> gapId|>, <|"Status" -> "NotFound", "GapId" -> gapId|>]);
+
+iServiceHttpRender[cmd_Association] := Module[
+  {method, path, qs, query, base, rc, profile, body, appTitle, askPrompt, chatModel},
+  method = ToUpperCase @ ToString @ Lookup[cmd, "Method", "GET"];
+  path = ToString @ Lookup[cmd, "Path", "/"];
+  qs = ToString @ Lookup[cmd, "Query", ""];
+  base = ToString @ Lookup[cmd, "RoutePrefix", "/sv"];
+  rc = Lookup[cmd, "ReleaseContext"];
+  profile = Lookup[cmd, "PDFIndexProfile", None];
+  body = ToString @ Lookup[cmd, "Body", ""];
+  query = iWebParseQuery[qs];
+  appTitle = Lookup[cmd, "AppTitle", Null];
+  appTitle = If[StringQ[appTitle] && appTitle =!= "", appTitle, $svWebAppTitleDefault];
+  askPrompt = Lookup[cmd, "AskPrompt", Null];
+  askPrompt = If[StringQ[askPrompt] && askPrompt =!= "", askPrompt, $svWebAskPromptDefault];
+  chatModel = Lookup[cmd, "ChatModel", Null];  (* 文字列でなければ Automatic 扱い *)
+  Which[
+    path === "/style.css",
+      <|"StatusCode" -> 200, "ContentType" -> "text/css; charset=utf-8", "Body" -> iWebCss[]|>,
+
+    path === "/" || path === "",
+      iWebHtml[base, appTitle,
+        "<h1 style='color:#cfe0ff'>" <> iWebEsc[appTitle] <> "</h1>" <> iWebNav[base] <>
+        iWebSearchForm[base, "", "/pdfsearch", "検索"]],
+
+    path === "/pdfsearch" || path === "/search",
+      Module[{q = ToString @ Lookup[query, "q", ""], sr, rr},
+        If[StringTrim[q] === "",
+          iWebHtml[base, appTitle,
+            "<h1 style='color:#cfe0ff'>" <> iWebEsc[appTitle] <> "</h1>" <> iWebNav[base] <>
+            iWebSearchForm[base, "", "/pdfsearch", "検索"]],
+          sr = iWebGatedSearch[q, rc, profile, 40];
+          If[! TrueQ[sr["ok"]], iWebErr[base, sr["reason"]],
+            (* /pdfask と同じくクエリ固有語+年度で再ランクし上位 20 を表示 *)
+            rr = Take[iWebRerankEvidence[sr["results"], q, iWebProfileCollection[profile]], UpTo[20]];
+            iWebHtml[base, "検索結果: " <> q, iWebRenderResults[base, q, rr]]]]],
+
+    path === "/pdfsearch/api" || path === "/search.json",
+      Module[{q, sr, payload},
+        q = If[method === "POST" && StringLength[StringTrim[body]] > 0,
+          ToString @ Lookup[Quiet @ iSMParseRawJSON[StringToByteArray[body, "UTF-8"]], "query",
+            ToString @ Lookup[query, "q", ""]],
+          ToString @ Lookup[query, "q", ""]];
+        sr = iWebGatedSearch[q, rc, profile];
+        payload = If[TrueQ[sr["ok"]],
+          <|"Status" -> "OK", "Query" -> q, "Count" -> Length[sr["results"]], "Results" -> sr["results"]|>,
+          <|"Status" -> "Error", "Reason" -> sr["reason"]|>];
+        <|"StatusCode" -> 200, "ContentType" -> "application/json; charset=utf-8",
+          "Body" -> Quiet @ ExportString[iSMJSONSafe[payload], "RawJSON"]|>],
+
+    (* 質問応答 (非同期): 初回は gated 検索→根拠を即時表示し、回答は SessionSubmit で
+       バックグラウンド生成。ブラウザは ?a=1 へ JS ポーリングして回答を差し込む。
+       LLM が遅くても proxy は待たない (各リクエストは即応)。gate 済み根拠のみ LLM に渡す。 *)
+    path === "/pdfask",
+      Module[{q = ToString @ Lookup[query, "q", ""], key, entry, sr, rr, coll, modelLabel,
+              curated, legendAvail, classQuery, policy},
+        If[method === "POST" && StringLength[StringTrim[body]] > 0,
+          q = ToString @ Lookup[iWebParseQuery[body], "q", q]];
+        (* リクエスト元 IP とライセンス/課金ポリシー: ClaudeCode はオーナーのみ *)
+        policy = <|"ClientIP" -> Lookup[cmd, "ClientIP", None],
+          "OwnerIPs" -> Lookup[cmd, "OwnerIPs", SourceVault`$SourceVaultOwnerIPs],
+          "BillingAllowed" -> Lookup[cmd, "BillingAllowed", SourceVault`$SourceVaultBillingAllowed],
+          (* web 経路はサブスクを既定で不使用 (proxy が許可条件を満たす時のみ True) *)
+          "SubscriptionAllowed" -> Lookup[cmd, "SubscriptionAllowed", False]|>;
+        modelLabel = Lookup[iWebResolveChatPlan[chatModel, policy], "Label", "LM Studio"];
+        If[StringTrim[q] === "",
+          iWebHtml[base, "質問応答",
+            "<h1 style='color:#cfe0ff'>質問応答 <span style='font-size:.5em;opacity:.6'>(LLM 回答合成・非同期)</span></h1>" <>
+            iWebNav[base] <> iWebSearchForm[base, "", "/pdfask", "質問する"]],
+          key = iWebAskKey[q, rc, profile, chatModel];
+          entry = Lookup[$svAskCache, key, None];
+          Which[
+            AssociationQ[entry] && entry["Status"] === "ready",
+              iWebRenderAskPage[base, q, entry["Results"], Lookup[entry, "Curated", {}], "ready", entry["Answer"], modelLabel],
+            AssociationQ[entry] && entry["Status"] === "error",
+              iWebRenderAskPage[base, q, entry["Results"], Lookup[entry, "Curated", {}], "error", Null, modelLabel],
+            AssociationQ[entry] && entry["Status"] === "pending",
+              (* ハング保険: 240 秒超の pending は error 扱い *)
+              If[AbsoluteTime[] - Lookup[entry, "StartedAt", AbsoluteTime[]] > 240,
+                ($svAskCache[key] = Append[entry, "Status" -> "error"];
+                 iWebRenderAskPage[base, q, entry["Results"], Lookup[entry, "Curated", {}], "error", Null, modelLabel]),
+                iWebRenderAskPage[base, q, entry["Results"], Lookup[entry, "Curated", {}], "generating", Null, modelLabel]],
+            True,
+              (* 初回: gated 検索 (候補多め) → クエリ固有語+年度で複合再ランク → 背景生成起動。
+                 固有語 (例「離散数学」) を含むチャンクを根拠上位へ押し上げて取りこぼしを防ぐ。 *)
+              sr = iWebGatedSearch[q, rc, profile, 40];
+              If[! TrueQ[sr["ok"]],
+                iWebErr[base, sr["reason"]],
+                coll = iWebProfileCollection[profile];
+                rr = Take[iWebRerankEvidence[sr["results"], q, coll], UpTo[15]];
+                curated = iWebResolveCurated[q, rc];   (* 人手レビュー済み補足を scope/RC で解決 *)
+                legendAvail = iWebLegendAvailable[curated];
+                classQuery = iWebIsClassificationQuery[q];
+                (* 凡例なしの分類質問は EvidenceGap として記録 (列挙は許可・分類は抑制) *)
+                If[classQuery && ! legendAvail && StringQ[rc],
+                  iRecordEvidenceGap[<|"GapKind" -> "TableLegendMissing", "Question" -> q,
+                    "ReleaseContext" -> rc, "MissingEvidenceKinds" -> {"LegendMap"},
+                    "AllowedAnswerMode" -> "EnumerateWithoutClassification"|>]];
+                If[rr === {} && curated === {},
+                  ($svAskCache[key] = <|"Status" -> "error", "Results" -> {}, "Answer" -> Null,
+                     "StartedAt" -> AbsoluteTime[]|>;
+                   iWebRenderAskPage[base, q, {}, {}, "error", Null, modelLabel]),
+                  (iWebKickAskJob[key, rr, curated,
+                     StringJoin[askPrompt, "\n\n【質問】", q,
+                       If[curated =!= {},
+                         "\n\n【補足知識(人手レビュー済み・最優先で参照)】\n" <> iWebCuratedText[curated], ""],
+                       "\n\n【根拠(PDF)】\n", iWebEvidenceText[rr, 12, coll],
+                       iWebGroundingPolicyText[legendAvail, classQuery], "\n【回答】"], chatModel, policy];
+                   iWebRenderAskPage[base, q, rr, curated, "generating", Null, modelLabel])]]
+          ]]],
+
+    (* ページ画像表示: {"PageImages",n} で headless レンダリング (FrontEnd 不要)。
+       ?p=N で物理ページ直接、?q=... で gated 検索→上位ヒットのページ。?doc= で年度指定。 *)
+    path === "/pdfpage",
+      Module[{collection = "default", p = StringTrim @ ToString @ Lookup[query, "p", ""],
+              q = ToString @ Lookup[query, "q", ""], docTitle = ToString @ Lookup[query, "doc", ""],
+              pageNum, sr, top, cit, pg},
+        Which[
+          p =!= "" && IntegerQ[Quiet @ ToExpression[p]],
+            iWebRenderPageView[base, collection, ToExpression[p], docTitle],
+          StringTrim[q] =!= "",
+            sr = iWebGatedSearch[q, rc, profile];
+            If[! TrueQ[sr["ok"]], iWebErr[base, sr["reason"]],
+              If[sr["results"] === {},
+                iWebHtml[base, "ページ表示",
+                  "<h1 style='color:#cfe0ff'>ページ表示</h1>" <> iWebNav[base] <>
+                  "<p>該当ページが見つかりませんでした。</p>" <> iWebSearchForm[base, q, "/pdfpage", "ページ検索"]],
+                top = First[sr["results"]]; cit = Lookup[top, "Citation", <||>];
+                pg = Lookup[cit, "Page", 1]; If[! IntegerQ[pg], pg = Quiet @ ToExpression @ ToString[pg]];
+                If[! IntegerQ[pg], pg = 1];
+                iWebRenderPageView[base, collection, pg, ToString @ Lookup[cit, "DocId", Lookup[cit, "Title", ""]]]]],
+          True,
+            iWebHtml[base, "ページ表示",
+              "<h1 style='color:#cfe0ff'>ページ表示</h1>" <> iWebNav[base] <>
+              "<p style='opacity:.7'>ページ番号(p=) または 検索語(q=) を指定してください。</p>" <>
+              iWebSearchForm[base, "", "/pdfpage", "ページ検索"]]]],
+
+    path === "/pdfimgdata",
+      <|"StatusCode" -> 200, "ContentType" -> "text/plain; charset=utf-8",
+        "Body" -> ""|>,
+
+    True,
+      <|"StatusCode" -> 404, "ContentType" -> "text/html; charset=utf-8",
+        "Body" -> iWebPage[base, "404", "<h2>404 Not Found</h2><p>" <> iWebEsc[path] <> "</p>" <> iWebNav[base]]|>]];
+
+iDispatchServiceCommand[cmd_Association] := Switch[Lookup[cmd, "Command"],
+  "Ping", <|"Status" -> "OK", "Pong" -> True, "AtUTC" -> iSMUTCNow[]|>,
+  "Http",
+    Module[{r = Quiet @ iServiceHttpRender[cmd]},
+      If[AssociationQ[r] && KeyExistsQ[r, "Body"],
+        Join[<|"Status" -> "OK"|>, r],
+        <|"Status" -> "OK", "StatusCode" -> 500,
+          "ContentType" -> "text/html; charset=utf-8",
+          "Body" -> "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body><h2>500</h2><p>render error</p></body></html>"|>]],
+  "Stop", <|"Status" -> "OK", "Stop" -> True|>,
+  "Echo", <|"Status" -> "OK", "Echo" -> Lookup[cmd, "Payload"]|>,
+  "Search",
+    (* gate は SourceVaultSearch (SearchIndex) が request-time に行う。
+       ReleaseContext / PDFIndexProfile は command に含めて proxy から渡す。 *)
+    Module[{rc = Lookup[cmd, "ReleaseContext"], res},
+      If[! StringQ[rc],
+        <|"Status" -> "Error", "Reason" -> "ReleaseContextRequired"|>,
+        res = SourceVault`SourceVaultSearch[Lookup[cmd, "Query", ""],
+          "ReleaseContext" -> rc,
+          "PDFIndexProfile" -> Lookup[cmd, "PDFIndexProfile", None],
+          "Limit" -> Lookup[cmd, "Limit", 20]];
+        If[FailureQ[res],
+          <|"Status" -> "Error", "Reason" -> ToString[res]|>,
+          <|"Status" -> "OK", "Results" -> res, "Count" -> Length[res]|>]]],
+  (* ---- Web ingest job 二層 (spec v6 §7) ----
+     job 側の "Status" (Succeeded 等) と command envelope の "Status" (OK/Error) が
+     衝突しないよう、handler 結果は "Web" 配下にネストする。 *)
+  "WebSearchSubmit",
+    Module[{r = Quiet @ Check[
+        SourceVault`SourceVaultWebSearchSubmit[
+          KeyDrop[cmd, {"Command", "CommandId", "CreatedAtUTC"}]], $Failed]},
+      If[AssociationQ[r], <|"Status" -> "OK", "Web" -> r|>,
+        <|"Status" -> "Error", "Reason" -> "WebSearchSubmitFailed", "Detail" -> ToString[r]|>]],
+  "WebJobStatus",
+    Module[{jid = Lookup[cmd, "JobId"]},
+      If[! StringQ[jid], <|"Status" -> "Error", "Reason" -> "JobIdRequired"|>,
+        <|"Status" -> "OK", "Web" -> SourceVault`SourceVaultWebJobStatus[jid]|>]],
+  "WebJobResult",
+    Module[{jid = Lookup[cmd, "JobId"]},
+      If[! StringQ[jid], <|"Status" -> "Error", "Reason" -> "JobIdRequired"|>,
+        <|"Status" -> "OK", "Web" -> SourceVault`SourceVaultWebJobResult[jid]|>]],
+  "AddReferenceEvent",
+    Module[{r = Quiet @ Check[
+        SourceVault`SourceVaultAddReferenceEvent[
+          KeyDrop[cmd, {"Command", "CommandId", "CreatedAtUTC"}]], $Failed]},
+      If[AssociationQ[r], <|"Status" -> "OK", "Web" -> r|>,
+        <|"Status" -> "Error", "Reason" -> "AddReferenceEventFailed", "Detail" -> ToString[r]|>]],
+  (* ---- MCP JSON-RPC dispatch (spec v6 §13) ----
+     proxy が HTTP POST /mcp で受けた JSON-RPC {method, params} をこの command で渡す。
+     result は "MCP" 配下 (Failure は "MCPError" 配下、proxy が JSON-RPC error に変換)。 *)
+  "MCP",
+    Module[{method = Lookup[cmd, "Method"], params = Lookup[cmd, "Params", <||>], r},
+      If[! StringQ[method], <|"Status" -> "Error", "Reason" -> "MethodRequired"|>,
+        r = Quiet @ Check[SourceVault`SourceVaultMCPDispatch[method,
+              If[AssociationQ[params], params, <||>]], $Failed];
+        If[FailureQ[r] || r === $Failed,
+          <|"Status" -> "OK", "MCPError" -> <|"code" -> -32601,
+            "message" -> If[FailureQ[r], ToString[r[[1]]], "InternalError"]|>|>,
+          <|"Status" -> "OK", "MCP" -> r|>]]],
+  _, <|"Status" -> "UnknownCommand", "Command" -> Lookup[cmd, "Command", Missing[]]|>];
+
+(* pending command を処理。done/ へ結果付きで移し、Stop 要求の有無を返す *)
+iProcessServiceCommands[dir_String] := Module[{cmdDir, doneDir, files, stop = False},
+  cmdDir = FileNameJoin[{dir, "commands"}];
+  doneDir = FileNameJoin[{dir, "commands", "done"}];
+  iSMEnsureDir[doneDir];
+  files = If[DirectoryQ[cmdDir], FileNames["*.json", cmdDir], {}];  (* done/ は再帰しないので含まない *)
+  Do[Module[{cmd = iSMReadJSON[f], result},
+      If[AssociationQ[cmd],
+        result = iDispatchServiceCommand[cmd];
+        If[TrueQ[Lookup[result, "Stop"]], stop = True];
+        iSMWriteJSON[FileNameJoin[{doneDir, FileNameTake[f]}],
+          Join[cmd, <|"Result" -> result, "ProcessedAtUTC" -> iSMUTCNow[]|>]];
+        iServiceLog[dir, "CommandProcessed", <|"Command" -> Lookup[cmd, "Command"], "CommandId" -> Lookup[cmd, "CommandId"]|>]];
+      Quiet @ DeleteFile[f]],
+    {f, files}];
+  stop];
+
+Options[SourceVaultServiceMain] = {"HeartbeatIntervalSeconds" -> 1, "MaxSeconds" -> Automatic};
+SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Module[
+  {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath, lastRollupAbs},
+  dir = iServiceRuntimeDir[serviceId];
+  If[FailureQ[dir], Return[dir]];
+  iSMEnsureDir[dir];
+  (* spec v6 §7.4: 起動時に stale な Running/Queued job を Failed に掃く (webingest があれば) *)
+  If[Length[DownValues[SourceVault`SourceVaultWebRecoverStaleJobs]] > 0,
+    Quiet @ Check[SourceVault`SourceVaultWebRecoverStaleJobs[], Null]];
+  (* #2: 起動時に参照イベント hot ログを CoreRoot(Dropbox) へ rollup (webingest があれば) *)
+  If[Length[DownValues[SourceVault`SourceVaultRollupReferenceEvents]] > 0,
+    Quiet @ Check[SourceVault`SourceVaultRollupReferenceEvents[], Null]];
+  lastRollupAbs = AbsoluteTime[];
+  interval = OptionValue["HeartbeatIntervalSeconds"];
+  maxSec = OptionValue["MaxSeconds"];  (* 安全弁: Automatic なら無制限 *)
+  statusPath = FileNameJoin[{dir, "status.json"}];
+  hbPath = FileNameJoin[{dir, "heartbeat.json"}];
+  startAbs = AbsoluteTime[];
+  (* runner が自身の PID を pid.json に self-report (detached 起動のため launcher は PID を知らない) *)
+  iSMWriteJSON[FileNameJoin[{dir, "pid.json"}],
+    <|"PID" -> $ProcessID, "Host" -> $MachineName, "Executable" -> "WolframKernel",
+      "User" -> $UserName,
+      "InjectedRootHash" -> With[{h = SourceVault`$SourceVaultInjectedRootHash}, If[StringQ[h], h, Null]],
+      "LaunchedAtUTC" -> iSMUTCNow[]|>];
+  iSMWriteJSON[statusPath, <|"ServiceId" -> serviceId, "Kind" -> kind,
+    "State" -> "Running", "PID" -> $ProcessID, "Host" -> $MachineName,
+    "StartedAtUTC" -> iSMUTCNow[]|>];
+  iServiceLog[dir, "ServiceStarted", <|"Kind" -> kind, "PID" -> $ProcessID|>];
+  CheckAbort[
+    While[! stop,
+      counter++;
+      iSMWriteJSON[hbPath, <|"Counter" -> counter, "UpdatedAtUTC" -> iSMUTCNow[], "PID" -> $ProcessID|>];
+      stop = iProcessServiceCommands[dir];
+      If[stop, Break[]];
+      (* #2: 低頻度で参照イベントを CoreRoot に rollup (per-event 同期を避ける; バッテリーノート配慮)。
+         反映には service 再起動が必要 (rule105 §8)。 *)
+      If[Length[DownValues[SourceVault`SourceVaultRollupReferenceEvents]] > 0 &&
+         NumericQ[SourceVault`$SourceVaultRollupIntervalSeconds] &&
+         (AbsoluteTime[] - lastRollupAbs) > SourceVault`$SourceVaultRollupIntervalSeconds,
+        Quiet @ Check[SourceVault`SourceVaultRollupReferenceEvents[], Null];
+        lastRollupAbs = AbsoluteTime[]];
+      If[NumericQ[maxSec] && (AbsoluteTime[] - startAbs) > maxSec, stop = True; Break[]];
+      Pause[interval]],
+    stop = True];
+  iSMWriteJSON[statusPath, <|"ServiceId" -> serviceId, "Kind" -> kind,
+    "State" -> "Stopped", "PID" -> $ProcessID, "StoppedAtUTC" -> iSMUTCNow[],
+    "HeartbeatCounter" -> counter|>];
+  iServiceLog[dir, "ServiceStopped", <|"HeartbeatCounter" -> counter|>];
+  <|"Status" -> "Stopped", "ServiceId" -> serviceId, "HeartbeatCounter" -> counter|>];
+
+(* ============================================================
+   管理 API (親 = メインカーネル側)
+   ============================================================ *)
+
+iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_String,
+   interval_, prelude_String] :=
+  Module[{q, path, rootsAssoc, rootHash},
+    q[s_] := ToString[s, InputForm];  (* Windows path も含め正しく escape *)
+    path = FileNameJoin[{dir, "run.wls"}];
+    (* spec v6 §3.7: main kernel の current roots を service kernel へ注入する snapshot。
+       core 側の薄いアクセサ (SourceVaultRootAssociation) が注入値を最優先する。 *)
+    rootsAssoc = SourceVault`$SourceVaultRoots;
+    If[! AssociationQ[rootsAssoc], rootsAssoc = <||>];
+    rootHash = Quiet @ Check[SourceVault`SourceVaultRootConfigHash[], ""];
+    iSMWriteJSON[FileNameJoin[{dir, "manifest.resolved.wl"}],
+      <|"ServiceId" -> serviceId, "Kind" -> kind, "PackageRoot" -> pkgRoot,
+        "CoreRoot" -> root, "HeartbeatIntervalSeconds" -> interval,
+        "Packages" -> {"SourceVault_core.wl", "SourceVault_searchindex.wl",
+          "SourceVault_servicemanager.wl", "SourceVault_webingest.wl", "SourceVault_mcp.wl"},
+        "InjectedRootHash" -> rootHash,
+        "HasPrelude" -> (StringLength[prelude] > 0), "CreatedAtUTC" -> iSMUTCNow[]|>];
+    Module[{strm = OpenWrite[path, BinaryFormat -> True], text},
+      text = StringJoin[
+        "Block[{$CharacterEncoding = \"UTF-8\"},\n",
+        "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_core.wl\"}]];\n",
+        "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_searchindex.wl\"}]];\n",
+        "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_servicemanager.wl\"}]];\n",
+        (* webingest / mcp は存在する場合のみ load (spec v6 §4.6)。未作成段階でも安全。 *)
+        "  With[{wpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_webingest.wl\"}]}, If[FileExistsQ[wpath], Get[wpath]]];\n",
+        "  With[{mpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_mcp.wl\"}]}, If[FileExistsQ[mpath], Get[mpath]]];\n",
+        "];\n",
+        "SourceVault`$SourceVaultCoreRoot = ", q[root], ";\n",
+        (* root snapshot 注入 (spec v6 §3.7): service kernel は注入値を最優先する。
+           main kernel の current roots を start-time snapshot として焼き込む。 *)
+        "SourceVault`$SourceVaultInjectedRoots = ", q[rootsAssoc], ";\n",
+        "SourceVault`$SourceVaultInjectedRootHash = ", q[rootHash], ";\n",
+        (* service kernel 用の任意 prelude (backend / config 設定など) *)
+        If[StringLength[prelude] > 0, prelude <> "\n", ""],
+        "SourceVault`SourceVaultServiceMain[", q[kind], ", ", q[serviceId],
+          ", \"HeartbeatIntervalSeconds\" -> ", ToString[interval], "];\n"];
+      BinaryWrite[strm, StringToByteArray[text, "UTF-8"]]; Close[strm]];
+    path];
+
+(* 起動用 .bat を生成。Task Scheduler が detachment 境界になるので start は不要。
+   stdout/stderr は runtime dir のログへ redirect。path の空白は二重引用符で囲う。 *)
+iGenLaunchBat[dir_String, exe_String, runWls_String] := Module[{path, text, q, strm},
+  q[s_] := "\"" <> s <> "\"";
+  path = FileNameJoin[{dir, "launch.bat"}];
+  text = "@echo off\r\n" <> q[exe] <> " -file " <> q[runWls] <>
+    " > " <> q[FileNameJoin[{dir, "stdout.log"}]] <> " 2>&1\r\n";
+  strm = OpenWrite[path, BinaryFormat -> True];
+  BinaryWrite[strm, StringToByteArray[text, "UTF-8"]]; Close[strm];
+  path];
+
+(* task/file 安全名 (core の iSafeLockName は CorePrivate 文脈なのでローカルに定義)。
+   task 名・ファイル名に使えない : \ / * ? < > | 空白 を _ にする。 *)
+iSafeName[s_String] := StringReplace[s,
+  {":" -> "__", FromCharacterCode[92] -> "_", "/" -> "_", "*" -> "_",
+   "?" -> "_", "<" -> "_", ">" -> "_", "|" -> "_", " " -> "_"}];
+
+(* service 用 scheduled task 名 (serviceId を file/task 安全名に) *)
+iServiceTaskName[serviceId_String] := "SourceVaultSvc_" <> iSafeName[serviceId];
+
+Options[SourceVaultStartService] = {
+  "Kind" -> "heartbeat", "HeartbeatIntervalSeconds" -> 1, "PackageRoot" -> Automatic,
+  "PreludeCode" -> ""};
+SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
+  {dir, root, pkgRoot, kind, interval, runWls, exe, batPath, task, runRes, pid,
+   existing, pidPath, deadline, pidRec, prelude},
+  root = SourceVault`SourceVaultCoreRoot[];
+  If[FailureQ[root], Return[root]];
+  kind = OptionValue["Kind"];
+  interval = OptionValue["HeartbeatIntervalSeconds"];
+  prelude = OptionValue["PreludeCode"];
+  pkgRoot = OptionValue["PackageRoot"] /. Automatic -> iPackageRoot[];
+  dir = iServiceRuntimeDir[serviceId];
+  iSMEnsureDir[dir]; iSMEnsureDir[FileNameJoin[{dir, "commands", "done"}]];
+  (* 既に Running なら二重起動しない *)
+  existing = SourceVaultServiceStatus[serviceId];
+  If[AssociationQ[existing] && Lookup[existing, "State"] === "Running" &&
+      TrueQ[Lookup[existing, "PidAlive"]],
+    Return[<|"Status" -> "AlreadyRunning", "ServiceId" -> serviceId,
+      "PID" -> Lookup[existing, "PID"], "RuntimeDir" -> dir|>]];
+  (* 前インスタンスが残っていれば kill する (orphan service 累積防止)。
+     pid.json を上書きする前に旧 pid を始末しないと、同じ commands/ を読む
+     ゾンビが溜まって競合し、コマンドが done を書かれず Pending 化する。 *)
+  Module[{oldRec = iSMReadJSON[FileNameJoin[{dir, "pid.json"}]], oldPid},
+    oldPid = If[AssociationQ[oldRec], Lookup[oldRec, "PID"], Missing[]];
+    If[IntegerQ[oldPid] && iPidAlive[oldPid] && iPidIsWolframProcess[oldPid],
+      iKillPid[oldPid]]];
+  (* 起動前に未処理コマンドを掃除する。特に前回 StopService が残した stale "Stop" を
+     新 service が起動直後に拾って即停止する事故を防ぐ (heartbeat 1 で Stopped になる)。 *)
+  Quiet[DeleteFile /@ FileNames["*.json", FileNameJoin[{dir, "commands"}]]];
+  runWls = iGenRunWls[dir, kind, serviceId, root, pkgRoot, interval, prelude];
+  exe = iResolveWolframScript[];
+  batPath = iGenLaunchBat[dir, exe, runWls];
+  task = iServiceTaskName[serviceId];
+  iSMWriteJSON[FileNameJoin[{dir, "status.json"}],
+    <|"ServiceId" -> serviceId, "Kind" -> kind, "State" -> "Starting",
+      "StartedAtUTC" -> iSMUTCNow[]|>];
+  (* detached 起動 (§14.3: メイン kernel 終了後も生存)。
+     WL の StartProcess 子は kernel の job object (kill-on-close) で道連れに kill
+     されるため、Windows Task Scheduler を detachment 境界として使う。
+     PID は runner が自身の $ProcessID を pid.json に self-report する。 *)
+  Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", batPath,
+    "/SC", "ONCE", "/ST", "23:59", "/F"}];
+  runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", task}];
+  If[! (AssociationQ[runRes] && Lookup[runRes, "ExitCode"] === 0),
+    iSMWriteJSON[FileNameJoin[{dir, "status.json"}],
+      <|"State" -> "Crashed", "Reason" -> "ScheduledTaskRunFailed"|>];
+    Return[Failure["ScheduledTaskRunFailed", <|"ServiceId" -> serviceId, "Task" -> task,
+      "Detail" -> If[AssociationQ[runRes], Lookup[runRes, "StandardError"], runRes]|>]]];
+  (* runner が pid.json を書くのを待つ。scheduler 下の kernel boot は遅い (~10-20s)。 *)
+  pidPath = FileNameJoin[{dir, "pid.json"}];
+  deadline = AbsoluteTime[] + 60;
+  While[AbsoluteTime[] < deadline && ! FileExistsQ[pidPath], Pause[0.5]];
+  pidRec = iSMReadJSON[pidPath];
+  pid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing["Pending"]];
+  iServiceLog[dir, "ServiceLaunched", <|"PID" -> pid, "Kind" -> kind, "Task" -> task|>];
+  <|"Status" -> "Started", "ServiceId" -> serviceId, "PID" -> pid,
+    "RuntimeDir" -> dir, "Task" -> task|>];
+
+iHeartbeatAgeSeconds[dir_String] := Module[{hb = iSMReadJSON[FileNameJoin[{dir, "heartbeat.json"}]], t},
+  If[! AssociationQ[hb], Return[Missing["NoHeartbeat"]]];
+  t = Quiet @ DateObject[Lookup[hb, "UpdatedAtUTC", ""], TimeZone -> 0];
+  If[Head[t] =!= DateObject, Return[Missing["BadTimestamp"]]];
+  QuantityMagnitude[DateDifference[t, Now, "Second"]]];
+
+SourceVaultServiceStatus[serviceId_String, opts___] := Module[
+  {dir, status, hb, pidRec, pid, alive, age, health},
+  dir = iServiceRuntimeDir[serviceId];
+  If[FailureQ[dir], Return[dir]];
+  If[! DirectoryQ[dir], Return[<|"ServiceId" -> serviceId, "State" -> "Unknown", "Exists" -> False|>]];
+  status = iSMReadJSON[FileNameJoin[{dir, "status.json"}]];
+  hb = iSMReadJSON[FileNameJoin[{dir, "heartbeat.json"}]];
+  pidRec = iSMReadJSON[FileNameJoin[{dir, "pid.json"}]];
+  pid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing[]];
+  alive = If[IntegerQ[pid], iPidAlive[pid], False];
+  age = iHeartbeatAgeSeconds[dir];
+  health = Which[
+    ! TrueQ[alive], "Failing",
+    NumericQ[age] && age <= 5, "OK",
+    NumericQ[age] && age <= 15, "Degraded",
+    True, "Failing"];
+  <|"ServiceId" -> serviceId,
+    "State" -> If[AssociationQ[status], Lookup[status, "State", "Unknown"], "Unknown"],
+    "PID" -> pid, "PidAlive" -> alive,
+    "HeartbeatCounter" -> If[AssociationQ[hb], Lookup[hb, "Counter"], Missing[]],
+    "HeartbeatAgeSeconds" -> age, "Health" -> health,
+    "RuntimeDir" -> dir, "Exists" -> True|>];
+
+SourceVaultServiceHealth[serviceId_String, opts___] :=
+  Lookup[SourceVaultServiceStatus[serviceId], "Health", "Unknown"];
+
+(* spec v6 §3.6/§3.10: service kernel の root/ユーザが main kernel と整合しているか検証する。
+   - RootHashMismatch: service の injected root hash ≠ main の現在 hash → root 変更後に未再起動。
+   - UserMismatch: service 実行ユーザ ≠ main → %LOCALAPPDATA%/書込み権限が分裂する恐れ。 *)
+iLocalStateWritableQ[ls_] := If[! StringQ[ls], False,
+  Module[{t, s},
+    Quiet[iSMEnsureDir[ls]];
+    t = FileNameJoin[{ls, ".sv-health-probe-" <> ToString[$ProcessID]}];
+    TrueQ @ Quiet @ Check[
+      s = OpenWrite[t, BinaryFormat -> True]; BinaryWrite[s, StringToByteArray["x", "UTF-8"]];
+      Close[s]; DeleteFile[t]; True, $Failed]]];
+
+SourceVaultServiceRootHealth[serviceId_String, opts___] := Module[
+  {dir, pid, manifest, svcHash, svcUser, mainHash, mainUser, mainLS, coreRoot, lsWritable, warnings = {}, hashMatch, userMatch},
+  dir = iServiceRuntimeDir[serviceId];
+  If[FailureQ[dir] || ! DirectoryQ[dir],
+    Return[<|"ServiceId" -> serviceId, "Exists" -> False|>]];
+  pid = iSMReadJSON[FileNameJoin[{dir, "pid.json"}]];
+  manifest = iSMReadJSON[FileNameJoin[{dir, "manifest.resolved.wl"}]];
+  svcUser = If[AssociationQ[pid], Lookup[pid, "User", Missing[]], Missing[]];
+  svcHash = Which[
+    AssociationQ[pid] && StringQ[Lookup[pid, "InjectedRootHash", Null]], pid["InjectedRootHash"],
+    AssociationQ[manifest] && StringQ[Lookup[manifest, "InjectedRootHash", Null]], manifest["InjectedRootHash"],
+    True, Missing[]];
+  mainHash = Quiet @ Check[SourceVault`SourceVaultRootConfigHash[], Missing[]];
+  mainUser = $UserName;
+  mainLS = Quiet @ Check[SourceVault`SourceVaultRoot["LocalState"], Missing[]];
+  coreRoot = Quiet @ Check[SourceVault`SourceVaultCoreRoot[], Missing[]];
+  lsWritable = iLocalStateWritableQ[mainLS];
+  hashMatch = StringQ[svcHash] && StringQ[mainHash] && svcHash === mainHash;
+  userMatch = ! StringQ[svcUser] || svcUser === mainUser;
+  If[StringQ[svcHash] && StringQ[mainHash] && ! hashMatch,
+    AppendTo[warnings,
+      "RootHashMismatch: service の root が main の現在値と異なる。SourceVaultRestartService で再注入してください。"]];
+  If[StringQ[svcUser] && svcUser =!= mainUser,
+    AppendTo[warnings,
+      "UserMismatch: service 実行ユーザ (" <> svcUser <> ") が main (" <> mainUser <>
+      ") と異なる。%LOCALAPPDATA% / 書込み権限が分裂する恐れ。"]];
+  If[StringQ[mainLS] && ! lsWritable,
+    AppendTo[warnings, "LocalStateNotWritable: " <> mainLS]];
+  <|"ServiceId" -> serviceId, "Exists" -> True,
+    "MainUser" -> mainUser, "ServiceUser" -> svcUser, "UserMatch" -> userMatch,
+    "MainRootHash" -> mainHash, "ServiceRootHash" -> svcHash, "RootHashMatch" -> hashMatch,
+    "LocalStatePath" -> mainLS, "LocalStateWritable" -> lsWritable,
+    "CoreRootPath" -> coreRoot,
+    "Warnings" -> warnings, "Healthy" -> (warnings === {})|>];
+
+SourceVaultSendServiceCommand[serviceId_String, command_Association, opts___] := Module[
+  {dir, cmdId, cmd, path},
+  dir = iServiceRuntimeDir[serviceId];
+  If[FailureQ[dir], Return[dir]];
+  cmdId = "cmd:" <> CreateUUID[];
+  cmd = Join[<|"CommandId" -> cmdId, "CreatedAtUTC" -> iSMUTCNow[]|>, command];
+  path = FileNameJoin[{dir, "commands", StringReplace[cmdId, ":" -> "_"] <> ".json"}];
+  If[iSMWriteJSON[path, cmd] === $Failed, Return[Failure["CommandWriteFailed", <|"ServiceId" -> serviceId|>]]];
+  <|"Status" -> "Queued", "CommandId" -> cmdId, "ServiceId" -> serviceId|>];
+
+SourceVaultServiceCommandResult[serviceId_String, commandId_String, opts___] := Module[{dir, donePath, rec},
+  dir = iServiceRuntimeDir[serviceId];
+  donePath = FileNameJoin[{dir, "commands", "done", StringReplace[commandId, ":" -> "_"] <> ".json"}];
+  rec = iSMReadJSON[donePath];
+  If[AssociationQ[rec], <|"Status" -> "Done", "Result" -> Lookup[rec, "Result"]|>,
+    <|"Status" -> "Pending"|>]];
+
+Options[SourceVaultServicePing] = {"TimeoutSeconds" -> 10};
+SourceVaultServicePing[serviceId_String, OptionsPattern[]] := Module[
+  {sent, cmdId, deadline, res},
+  sent = SourceVaultSendServiceCommand[serviceId, <|"Command" -> "Ping"|>];
+  If[FailureQ[sent], Return[sent]];
+  cmdId = Lookup[sent, "CommandId"];
+  deadline = AbsoluteTime[] + OptionValue["TimeoutSeconds"];
+  While[AbsoluteTime[] < deadline,
+    res = SourceVaultServiceCommandResult[serviceId, cmdId];
+    If[Lookup[res, "Status"] === "Done",
+      Return[<|"Status" -> "OK", "Pong" -> True, "Result" -> Lookup[res, "Result"]|>]];
+    Pause[0.2]];
+  Failure["PingTimeout", <|"ServiceId" -> serviceId|>]];
+
+Options[SourceVaultStopService] = {"TimeoutSeconds" -> 10, "Force" -> True};
+SourceVaultStopService[serviceId_String, OptionsPattern[]] := Module[
+  {dir, sent, deadline, st, pidRec, pid, killed = False},
+  dir = iServiceRuntimeDir[serviceId];
+  If[FailureQ[dir], Return[dir]];
+  sent = SourceVaultSendServiceCommand[serviceId, <|"Command" -> "Stop"|>];
+  deadline = AbsoluteTime[] + OptionValue["TimeoutSeconds"];
+  While[AbsoluteTime[] < deadline,
+    st = SourceVaultServiceStatus[serviceId];
+    If[Lookup[st, "State"] === "Stopped" || ! TrueQ[Lookup[st, "PidAlive"]], Break[]];
+    Pause[0.3]];
+  st = SourceVaultServiceStatus[serviceId];
+  (* graceful 失敗時は pid 同一性確認のうえ kill *)
+  If[TrueQ[OptionValue["Force"]] && TrueQ[Lookup[st, "PidAlive"]],
+    pidRec = iSMReadJSON[FileNameJoin[{dir, "pid.json"}]];
+    pid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing[]];
+    If[IntegerQ[pid] && iPidIsWolframProcess[pid], killed = iKillPid[pid];
+      iSMWriteJSON[FileNameJoin[{dir, "status.json"}],
+        <|"ServiceId" -> serviceId, "State" -> "Stopped", "StoppedAtUTC" -> iSMUTCNow[], "Killed" -> True|>]]];
+  (* detachment 用の scheduled task を削除 (残しても 23:59 に再実行されるため) *)
+  Quiet @ RunProcess[{"schtasks", "/Delete", "/TN", iServiceTaskName[serviceId], "/F"}];
+  iServiceLog[dir, "ServiceStopRequested", <|"Killed" -> killed|>];
+  <|"Status" -> "Stopped", "ServiceId" -> serviceId, "Killed" -> killed,
+    "FinalState" -> Lookup[SourceVaultServiceStatus[serviceId], "State"]|>];
+
+SourceVaultRestartService[serviceId_String, opts___] := Module[{stopRes, manifest, dir, kind, interval},
+  dir = iServiceRuntimeDir[serviceId];
+  manifest = iSMReadJSON[FileNameJoin[{dir, "manifest.resolved.wl"}]];
+  kind = If[AssociationQ[manifest], Lookup[manifest, "Kind", "heartbeat"], "heartbeat"];
+  interval = If[AssociationQ[manifest], Lookup[manifest, "HeartbeatIntervalSeconds", 1], 1];
+  stopRes = SourceVaultStopService[serviceId];
+  Pause[0.5];
+  SourceVaultStartService[serviceId, "Kind" -> kind, "HeartbeatIntervalSeconds" -> interval]];
+
+SourceVaultListServices[opts___] := Module[{base, dirs},
+  base = Module[{r = SourceVault`SourceVaultCoreRoot[]},
+    If[FailureQ[r], Return[{}], FileNameJoin[{r, "runtime", "services"}]]];
+  If[! DirectoryQ[base], Return[{}]];
+  dirs = Select[FileNames["*", base], DirectoryQ];
+  SourceVaultServiceStatus[FileNameTake[#]] & /@ dirs];
+
+Options[SourceVaultServiceLogs] = {"Limit" -> 100};
+SourceVaultServiceLogs[serviceId_String, OptionsPattern[]] := Module[{dir, evs, lim},
+  dir = iServiceRuntimeDir[serviceId]; lim = OptionValue["Limit"];
+  evs = iSMReadJSONL[FileNameJoin[{dir, "service.log.jsonl"}]];
+  If[IntegerQ[lim], Take[evs, UpTo[lim]], evs]];
+
+SourceVaultTailServiceLog[serviceId_String, n_Integer: 20, opts___] := Module[{dir, evs},
+  dir = iServiceRuntimeDir[serviceId];
+  evs = iSMReadJSONL[FileNameJoin[{dir, "service.log.jsonl"}]];
+  Take[evs, -Min[n, Length[evs]]]];
+
+Options[SourceVaultRecoverServices] = {"Kill" -> False};
+SourceVaultRecoverServices[OptionsPattern[]] := Module[{services, recovered = {}},
+  services = SourceVaultListServices[];
+  Do[
+    If[Lookup[s, "State"] === "Running" && ! TrueQ[Lookup[s, "PidAlive"]],
+      Module[{dir = Lookup[s, "RuntimeDir"]},
+        iSMWriteJSON[FileNameJoin[{dir, "status.json"}],
+          <|"ServiceId" -> Lookup[s, "ServiceId"], "State" -> "Crashed",
+            "RecoveredAtUTC" -> iSMUTCNow[]|>];
+        iServiceLog[dir, "ServiceRecovered", <|"Reason" -> "RunningButPidDead"|>];
+        AppendTo[recovered, Lookup[s, "ServiceId"]]]],
+    {s, services}];
+  <|"Status" -> "OK", "Recovered" -> recovered|>];
+
+SourceVaultServiceDoctor[serviceId_String, opts___] := Module[{dir, issues = {}, exists},
+  dir = iServiceRuntimeDir[serviceId];
+  exists = StringQ[dir] && DirectoryQ[dir];
+  If[! exists, AppendTo[issues, "RuntimeDirMissing"]];
+  If[exists,
+    If[! FileExistsQ[FileNameJoin[{dir, "manifest.resolved.wl"}]], AppendTo[issues, "ManifestMissing"]];
+    If[! FileExistsQ[FileNameJoin[{dir, "run.wls"}]], AppendTo[issues, "RunWlsMissing"]]];
+  <|"Status" -> If[issues === {}, "OK", "Issues"], "ServiceId" -> serviceId,
+    "Issues" -> issues, "Detail" -> If[exists, SourceVaultServiceStatus[serviceId], Missing[]]|>];
+
+(* ============================================================
+   §8.6-8.7  ServiceVersionSnapshot / version switching (Phase 4)
+   active pointer は core の pointer event (AtomicUpdatePointer/PointerReplay) を使う。
+   pointer 名は dir 名になるためコロン不可 -> iSafeName で安全化。
+   ============================================================ *)
+
+iActiveVersionPointer[serviceId_String] := "active-service-version-" <> iSafeName[serviceId];
+
+SourceVaultCreateServiceVersionSnapshot[serviceId_String, spec_Association, opts___] := Module[{rec, saved},
+  rec = Join[<|"ObjectClass" -> "SourceVaultServiceVersionSnapshot",
+    "ServiceId" -> serviceId|>, spec];
+  saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultServiceVersionSnapshot", rec];
+  If[FailureQ[saved], Return[saved]];
+  (* 一覧用に作成 event を記録 *)
+  SourceVault`SourceVaultAppendEvent[<|"EventClass" -> "ServiceVersionCreated",
+    "ServiceId" -> serviceId, "Ref" -> Lookup[saved, "Ref"],
+    "Version" -> Lookup[spec, "ServiceVersion", Lookup[saved, "Digest"]]|>];
+  saved];
+
+SourceVaultListServiceVersions[serviceId_String, opts___] := Module[{evs},
+  evs = Select[SourceVault`SourceVaultTransactionLog["Limit" -> All],
+    Lookup[#, "EventClass"] === "ServiceVersionCreated" && Lookup[#, "ServiceId"] === serviceId &];
+  SortBy[<|"Version" -> Lookup[#, "Version"], "Ref" -> Lookup[#, "Ref"],
+    "CreatedAtUTC" -> Lookup[#, "CreatedAtUTC"]|> & /@ evs, Lookup[#, "CreatedAtUTC"] &]];
+
+iResolveVersionRef[serviceId_String, versionOrRef_String] :=
+  If[StringMatchQ[versionOrRef, "snapshot:" ~~ __],
+    versionOrRef,
+    Module[{match = SelectFirst[SourceVaultListServiceVersions[serviceId],
+        Lookup[#, "Version"] === versionOrRef &, Missing[]]},
+      If[AssociationQ[match], Lookup[match, "Ref"], $Failed]]];
+
+SourceVaultServiceVersionInfo[serviceId_String, version_: Automatic, opts___] := Module[{ref},
+  ref = If[version === Automatic,
+    Lookup[SourceVaultActiveServiceVersion[serviceId], "Value", $Failed],
+    iResolveVersionRef[serviceId, version]];
+  If[ref === $Failed || ! StringQ[ref], Return[Failure["VersionNotFound", <|"ServiceId" -> serviceId, "Version" -> version|>]]];
+  SourceVault`SourceVaultLoadImmutableSnapshot[ref]];
+
+SourceVaultActiveServiceVersion[serviceId_String, opts___] :=
+  SourceVault`SourceVaultPointerReplay[iActiveVersionPointer[serviceId]];
+
+Options[SourceVaultActivateServiceVersion] = {"VerifyArtifacts" -> True};
+SourceVaultActivateServiceVersion[serviceId_String, versionOrRef_String, OptionsPattern[]] := Module[
+  {ref, snap, ver, idxRefs, unresolved, ptrRes},
+  ref = iResolveVersionRef[serviceId, versionOrRef];
+  If[ref === $Failed || ! StringQ[ref],
+    Return[Failure["VersionNotFound", <|"ServiceId" -> serviceId, "Version" -> versionOrRef|>]]];
+  (* 1. digest 検証 *)
+  ver = SourceVault`SourceVaultVerifyImmutableSnapshot[ref];
+  If[! TrueQ[Lookup[ver, "Valid"]],
+    Return[Failure["ServiceVersionDigestMismatch", <|"Ref" -> ref, "Verify" -> ver|>]]];
+  snap = SourceVault`SourceVaultLoadImmutableSnapshot[ref];
+  (* 2. IndexSnapshotRefs が解決できなければ fail-closed (§8.7-4) *)
+  If[TrueQ[OptionValue["VerifyArtifacts"]],
+    idxRefs = Lookup[snap, "IndexSnapshotRefs", {}];
+    unresolved = Select[idxRefs, FailureQ[SourceVault`SourceVaultLoadImmutableSnapshot[#]] &];
+    If[unresolved =!= {},
+      Return[Failure["IndexArtifactsUnresolved", <|"ServiceId" -> serviceId,
+        "Unresolved" -> unresolved|>]]]];
+  (* 3. active pointer を pointer event で更新 *)
+  ptrRes = SourceVault`SourceVaultAtomicUpdatePointer[iActiveVersionPointer[serviceId], ref];
+  If[FailureQ[ptrRes], Return[ptrRes]];
+  SourceVault`SourceVaultAppendEvent[<|"EventClass" -> "ServiceVersionActivated",
+    "ServiceId" -> serviceId, "Ref" -> ref, "Sequence" -> Lookup[ptrRes, "Sequence"]|>];
+  <|"Status" -> "Activated", "ServiceId" -> serviceId, "Ref" -> ref,
+    "Sequence" -> Lookup[ptrRes, "Sequence"]|>];
+
+Options[SourceVaultRollbackServiceVersion] = {"Reason" -> ""};
+SourceVaultRollbackServiceVersion[serviceId_String, OptionsPattern[]] := Module[
+  {hist, prev, ptrRes},
+  hist = SourceVault`SourceVaultPointerHistory[iActiveVersionPointer[serviceId]];
+  If[Length[hist] < 2,
+    Return[Failure["NoPreviousVersion", <|"ServiceId" -> serviceId,
+      "MessageTemplate" -> "戻せる前版がありません。"|>]]];
+  prev = Lookup[hist[[-2]], "Value"];
+  ptrRes = SourceVault`SourceVaultAtomicUpdatePointer[iActiveVersionPointer[serviceId], prev];
+  If[FailureQ[ptrRes], Return[ptrRes]];
+  SourceVault`SourceVaultAppendEvent[<|"EventClass" -> "ServiceVersionRolledBack",
+    "ServiceId" -> serviceId, "Ref" -> prev, "Reason" -> OptionValue["Reason"],
+    "Sequence" -> Lookup[ptrRes, "Sequence"]|>];
+  <|"Status" -> "RolledBack", "ServiceId" -> serviceId, "Ref" -> prev,
+    "Reason" -> OptionValue["Reason"]|>];
+
+SourceVaultCompareServiceVersions[serviceId_String, v1_String, v2_String, opts___] := Module[
+  {s1, s2, keys},
+  s1 = SourceVaultServiceVersionInfo[serviceId, v1];
+  s2 = SourceVaultServiceVersionInfo[serviceId, v2];
+  If[FailureQ[s1], Return[s1]]; If[FailureQ[s2], Return[s2]];
+  keys = {"WorkflowSnapshotRef", "CorpusSnapshotRef", "IndexSnapshotRefs",
+    "ReleaseContextRef", "LatencyProfile"};
+  <|"ServiceId" -> serviceId,
+    "Diff" -> Association @ Map[
+      # -> <|"V1" -> Lookup[s1, #, Missing[]], "V2" -> Lookup[s2, #, Missing[]],
+        "Changed" -> (Lookup[s1, #, Null] =!= Lookup[s2, #, Null])|> &, keys]|>];
+
+(* ============================================================
+   Python HTTP リバースプロキシ (SocketListen が headless wolframscript で
+   機能しないため、HTTP edge は stdlib Python に委ねる)。
+   proxy code は vault data (immutable snapshot) として保存し、起動時に
+   working へ materialize + SHA256 検証して実行する (ポータブル化)。
+   gate は WL service 側。proxy は status/heartbeat 直読みと command queue
+   中継のみで raw vault を公開しない。
+   ============================================================ *)
+
+If[! ValueQ[SourceVault`$SourceVaultPython], SourceVault`$SourceVaultPython = Automatic];
+
+(* python 実行ファイル解決。WindowsApps の stub は避け実体を優先。 *)
+iResolvePython[] := Module[{o, lines = {}, real},
+  o = SourceVault`$SourceVaultPython;
+  If[StringQ[o] && FileExistsQ[o], Return[o]];
+  Do[Module[{r = Quiet @ RunProcess[{"where", c}]},
+      If[AssociationQ[r] && Lookup[r, "ExitCode"] === 0,
+        lines = Join[lines, Select[StringTrim /@ StringSplit[Lookup[r, "StandardOutput", ""], "\n"],
+          StringLength[#] > 0 &]]]],
+    {c, {"python3", "python"}}];
+  lines = DeleteDuplicates[lines];
+  real = SelectFirst[lines, ! StringContainsQ[#, "WindowsApps"] &, Missing[]];
+  Which[StringQ[real], real, lines =!= {}, First[lines], True, "python"]];
+
+iSHA256Str[s_String] := ToLowerCase @ Hash[StringToByteArray[s, "UTF-8"], "SHA256", "HexString"];
+
+(* proxy Python ソース。シングルクォートのみ・バックスラッシュ無し
+   (WL 文字列へのエスケープを避けるため)。stdlib のみ。 *)
+$proxyPySource = "import sys, os, json, time, uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+CFG = json.load(open(sys.argv[1], encoding='utf-8'))
+SVC = CFG['svcDir']
+PREFIX = CFG.get('routePrefix', '/sv')
+RC = CFG.get('releaseContext')
+PROFILE = CFG.get('pdfIndexProfile')
+APPTITLE = CFG.get('appTitle')
+ASKPROMPT = CFG.get('askPrompt')
+CHATMODEL = CFG.get('chatModel')
+OWNERIPS = CFG.get('ownerIPs', ['127.0.0.1'])
+BILLING = CFG.get('billingAllowed', False)
+SUBALLOW = CFG.get('subscriptionAllowed', False)
+TIMEOUT = CFG.get('searchTimeoutMs', 8000) / 1000.0
+MCPTOKEN = CFG.get('mcpToken')
+MCPTIMEOUT = CFG.get('mcpTimeoutMs', 60000) / 1000.0
+RUNTIME = os.path.dirname(os.path.abspath(sys.argv[1]))
+
+def rj(path):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def health():
+    st = rj(os.path.join(SVC, 'status.json'))
+    hb = rj(os.path.join(SVC, 'heartbeat.json'))
+    return {'ok': True, 'service': st.get('ServiceId'), 'state': st.get('State'),
+            'pid': st.get('PID'), 'heartbeatCounter': hb.get('Counter'),
+            'atUTC': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+
+def run_cmd(cmd, timeout=None):
+    to = TIMEOUT if timeout is None else timeout
+    cid = cmd['CommandId']
+    fn = cid.replace(':', '_') + '.json'
+    cdir = os.path.join(SVC, 'commands')
+    os.makedirs(os.path.join(cdir, 'done'), exist_ok=True)
+    tmp = os.path.join(cdir, fn + '.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(cmd, f, ensure_ascii=False)
+    os.replace(tmp, os.path.join(cdir, fn))
+    done = os.path.join(cdir, 'done', fn)
+    end = time.time() + to
+    while time.time() < end:
+        if os.path.exists(done):
+            return rj(done).get('Result', {})
+        time.sleep(0.15)
+    return None
+
+def http_cmd(method, path, query, body, client_ip):
+    cid = 'cmd:' + str(uuid.uuid4())
+    cmd = {'CommandId': cid, 'Command': 'Http', 'Method': method,
+           'Path': path, 'Query': query, 'Body': body,
+           'ReleaseContext': RC, 'PDFIndexProfile': PROFILE, 'RoutePrefix': PREFIX,
+           'AppTitle': APPTITLE, 'AskPrompt': ASKPROMPT, 'ChatModel': CHATMODEL,
+           'ClientIP': client_ip, 'OwnerIPs': OWNERIPS, 'BillingAllowed': BILLING,
+           'SubscriptionAllowed': SUBALLOW}
+    return run_cmd(cmd)
+
+class H(BaseHTTPRequestHandler):
+    def emit(self, code, ctype, body_str):
+        body = body_str.encode('utf-8')
+        self.send_response(code)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+        self.wfile.write(body)
+    def app_path(self, p):
+        if p == PREFIX or p == PREFIX + '/':
+            return '/'
+        if p.startswith(PREFIX):
+            return p[len(PREFIX):] or '/'
+        return p
+    def handle_req(self, method):
+        u = urlparse(self.path)
+        if u.path == PREFIX + '/health':
+            self.emit(200, 'application/json; charset=utf-8',
+                      json.dumps(health(), ensure_ascii=False))
+            return
+        if u.path == PREFIX + '/mcp':
+            self.handle_mcp(method)
+            return
+        body = ''
+        if method == 'POST':
+            ln = int(self.headers.get('Content-Length', 0) or 0)
+            if ln > 0:
+                body = self.rfile.read(ln).decode('utf-8', 'replace')
+        res = http_cmd(method, self.app_path(u.path), u.query, body, self.client_address[0])
+        if not isinstance(res, dict) or 'Body' not in res:
+            self.emit(504, 'text/plain; charset=utf-8', 'service timeout')
+            return
+        self.emit(int(res.get('StatusCode', 200)),
+                  res.get('ContentType', 'text/html; charset=utf-8'),
+                  res.get('Body', ''))
+    def handle_mcp(self, method):
+        if MCPTOKEN:
+            if self.headers.get('X-SourceVault-Token', '') != MCPTOKEN:
+                self.emit(401, 'application/json; charset=utf-8',
+                          json.dumps({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32001, 'message': 'Unauthorized'}}))
+                return
+        if method != 'POST':
+            self.emit(405, 'application/json; charset=utf-8',
+                      json.dumps({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Use POST'}}))
+            return
+        ln = int(self.headers.get('Content-Length', 0) or 0)
+        raw = self.rfile.read(ln).decode('utf-8', 'replace') if ln > 0 else ''
+        try:
+            req = json.loads(raw)
+        except Exception:
+            self.emit(400, 'application/json; charset=utf-8',
+                      json.dumps({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'Parse error'}}))
+            return
+        rid = req.get('id')
+        rmethod = req.get('method', '')
+        params = req.get('params', {})
+        if not isinstance(params, dict):
+            params = {}
+        if rid is None and isinstance(rmethod, str) and rmethod.startswith('notifications/'):
+            self.emit(202, 'application/json; charset=utf-8', '')
+            return
+        cid = 'cmd:' + str(uuid.uuid4())
+        cmd = {'CommandId': cid, 'Command': 'MCP', 'Method': rmethod, 'Params': params, 'ClientIP': self.client_address[0]}
+        res = run_cmd(cmd, MCPTIMEOUT)
+        if not isinstance(res, dict):
+            self.emit(504, 'application/json; charset=utf-8',
+                      json.dumps({'jsonrpc': '2.0', 'id': rid, 'error': {'code': -32000, 'message': 'service timeout'}}))
+            return
+        if 'MCP' in res:
+            out = {'jsonrpc': '2.0', 'id': rid, 'result': res['MCP']}
+        elif 'MCPError' in res:
+            out = {'jsonrpc': '2.0', 'id': rid, 'error': res['MCPError']}
+        else:
+            out = {'jsonrpc': '2.0', 'id': rid, 'error': {'code': -32603, 'message': 'Internal error'}}
+        self.emit(200, 'application/json; charset=utf-8', json.dumps(out, ensure_ascii=False))
+    def do_GET(self):
+        self.handle_req('GET')
+    def do_POST(self):
+        self.handle_req('POST')
+    def log_message(self, *a):
+        return
+
+class SVServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+    daemon_threads = True
+
+srv = SVServer((CFG.get('bind', '127.0.0.1'), int(CFG['port'])), H)
+with open(os.path.join(RUNTIME, 'proxy.pid'), 'w') as f:
+    f.write(str(os.getpid()))
+srv.serve_forever()
+";
+
+iProxyRuntimeDir[serviceId_String] := Module[{root = SourceVault`SourceVaultCoreRoot[]},
+  If[FailureQ[root], root, FileNameJoin[{root, "runtime", "proxies", serviceId}]]];
+SourceVaultProxyRuntimeDir[serviceId_String] := iProxyRuntimeDir[serviceId];
+iProxyTaskName[serviceId_String] := "SourceVaultProxy_" <> iSafeName[serviceId];
+
+SourceVaultPublishProxyCodeSnapshot[opts___] := Module[{rec, saved},
+  rec = <|"ObjectClass" -> "SourceVaultProxyCode", "Language" -> "Python",
+    "Name" -> "sv-http-proxy", "Code" -> $proxyPySource,
+    "CodeSHA256" -> iSHA256Str[$proxyPySource]|>;
+  saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultProxyCode", rec,
+    "Alias" -> "sv-http-proxy"];
+  If[FailureQ[saved], saved, Append[saved, "CodeSHA256" -> rec["CodeSHA256"]]]];
+
+Options[SourceVaultMaterializeProxyCode] = {"CodeRef" -> Automatic};
+SourceVaultMaterializeProxyCode[targetDir_String, OptionsPattern[]] := Module[
+  {ref, code, sha, path, strm, actual},
+  ref = OptionValue["CodeRef"];
+  If[ref === Automatic,
+    code = $proxyPySource; sha = iSHA256Str[$proxyPySource],
+    Module[{r = SourceVault`SourceVaultLoadImmutableSnapshot[ref]},
+      If[FailureQ[r], Return[r]];
+      code = Lookup[r, "Code"]; sha = Lookup[r, "CodeSHA256"]]];
+  If[! StringQ[code], Return[Failure["ProxyCodeMissing", <|"Ref" -> ref|>]]];
+  iSMEnsureDir[targetDir];
+  path = FileNameJoin[{targetDir, "proxy.py"}];
+  strm = OpenWrite[path, BinaryFormat -> True];
+  BinaryWrite[strm, StringToByteArray[code, "UTF-8"]]; Close[strm];
+  (* 出力後に SHA256 を検証 (改竄/破損検知, fail-closed) *)
+  actual = ToLowerCase @ Hash[ReadByteArray[path], "SHA256", "HexString"];
+  If[actual =!= sha,
+    Return[Failure["ProxyCodeDigestMismatch", <|"Path" -> path, "Expected" -> sha, "Actual" -> actual|>]]];
+  <|"Status" -> "OK", "Path" -> path, "CodeSHA256" -> sha|>];
+
+Options[SourceVaultStartHTTPProxy] = {
+  "Port" -> None, "EndpointProfile" -> None, "RoutePrefix" -> "/sv",
+  "ReleaseContext" -> None, "PDFIndexProfile" -> None, "Bind" -> "127.0.0.1",
+  "CodeRef" -> Automatic, "SearchTimeoutMs" -> 8000,
+  "AppTitle" -> Automatic, "AskPrompt" -> Automatic, "ChatModel" -> Automatic,
+  "PDFGroupProfile" -> None, "OwnerIPs" -> Automatic, "BillingAllowed" -> Automatic,
+  "AllowOwnerSubscription" -> False, "MCPToken" -> None, "MCPTimeoutMs" -> 60000};
+SourceVaultStartHTTPProxy[serviceId_String, OptionsPattern[]] := Module[
+  {proxyDir, svcDir, port, prefix, mat, cfgPath, py, batPath, task, runRes,
+   pidPath, deadline, pid, ep, epName, bind, releaseCtx, pdfProfile, appTitle, askPrompt, chatModel,
+   fromEP, grpName, grp, fromG, ownerIPs, billingAllowed, subscriptionAllowed},
+  proxyDir = iProxyRuntimeDir[serviceId];
+  If[FailureQ[proxyDir], Return[proxyDir]];
+  svcDir = iServiceRuntimeDir[serviceId];
+  port = OptionValue["Port"]; prefix = OptionValue["RoutePrefix"]; bind = OptionValue["Bind"];
+  releaseCtx = OptionValue["ReleaseContext"]; pdfProfile = OptionValue["PDFIndexProfile"];
+  appTitle = OptionValue["AppTitle"]; askPrompt = OptionValue["AskPrompt"]; chatModel = OptionValue["ChatModel"];
+  epName = OptionValue["EndpointProfile"];
+  (* endpoint profile が Web アプリ設定 (AppTitle/AskPrompt/ChatModel 等) の本体。
+     アプリ固有値は profile (private local init) に置く。直接オプションが優先、無ければ profile から。 *)
+  If[StringQ[epName],
+    ep = SourceVaultResolveWebServiceEndpoint[epName];
+    If[FailureQ[ep], Return[ep]];
+    port = Lookup[ep, "Port", port]; prefix = Lookup[ep, "RoutePrefix", prefix];
+    bind = Lookup[ep, "BindAddress", bind];
+    fromEP[opt_, key_, none_] := If[opt === none, Lookup[ep, key, none], opt];
+    releaseCtx = fromEP[releaseCtx, "ReleaseContext", None];
+    pdfProfile = fromEP[pdfProfile, "PDFIndexProfile", None];
+    appTitle = fromEP[appTitle, "AppTitle", Automatic];
+    askPrompt = fromEP[askPrompt, "AskPrompt", Automatic];
+    chatModel = fromEP[chatModel, "ChatModel", Automatic]];
+  (* §19: PDFGroupSearchProfile が未設定の項目を埋める (直接 > endpoint > group > 既定)。
+     これ一つで PDF グループ app の設定を供給でき、横展開は profile 追加だけで済む。 *)
+  grpName = OptionValue["PDFGroupProfile"];
+  If[StringQ[grpName],
+    grp = SourceVault`SourceVaultResolvePDFGroupSearchProfile[grpName];
+    If[FailureQ[grp], Return[grp]];
+    fromG[opt_, key_, none_] := If[opt === none, Lookup[grp, key, none], opt];
+    port = If[IntegerQ[port], port, Lookup[grp, "Port", port]];
+    releaseCtx = fromG[releaseCtx, "ReleaseContext", None];
+    pdfProfile = fromG[pdfProfile, "PDFIndexProfile", None];
+    appTitle = fromG[appTitle, "AppTitle", Automatic];
+    askPrompt = fromG[askPrompt, "AskPrompt", Automatic];
+    chatModel = fromG[chatModel, "ChatModel", Automatic]];
+  If[! IntegerQ[port],
+    Return[Failure["ProxyPortRequired", <|
+      "MessageTemplate" -> "Port または EndpointProfile が必要です。"|>]]];
+  iSMEnsureDir[proxyDir];
+  (* 旧 proxy が残っていれば kill してから起動 (Windows の多重バインド/ゾンビ累積防止)。
+     proxy.pid は起動成功時のみ書かれるので、生きていれば前インスタンス。 *)
+  Module[{oldPidPath = FileNameJoin[{proxyDir, "proxy.pid"}], oldPid},
+    oldPid = If[FileExistsQ[oldPidPath],
+      Quiet @ ToExpression @ StringTrim @ ByteArrayToString[ReadByteArray[oldPidPath], "UTF-8"],
+      Missing[]];
+    If[IntegerQ[oldPid] && iPidAlive[oldPid], iKillPid[oldPid]; Pause[0.5]];
+    Quiet @ If[FileExistsQ[oldPidPath], DeleteFile[oldPidPath]]];
+  mat = SourceVaultMaterializeProxyCode[proxyDir, "CodeRef" -> OptionValue["CodeRef"]];
+  If[FailureQ[mat], Return[mat]];
+  cfgPath = FileNameJoin[{proxyDir, "proxy.config.json"}];
+  (* ライセンス/課金ポリシー: Automatic はカーネル既定 (オーナーIP={127.0.0.1...}, 課金禁止) を採用 *)
+  ownerIPs = OptionValue["OwnerIPs"] /. Automatic -> SourceVault`$SourceVaultOwnerIPs;
+  billingAllowed = TrueQ[OptionValue["BillingAllowed"] /. Automatic -> SourceVault`$SourceVaultBillingAllowed];
+  (* サブスク (ClaudeCode/Codex) は保守的に既定で不使用。明示許可 かつ ローカルバインド時のみ可。
+     公開バインド (127.0.0.1/::1/localhost 以外) ではオーナー宛でもサブスクを使わない。 *)
+  subscriptionAllowed = TrueQ[OptionValue["AllowOwnerSubscription"]] &&
+    MemberQ[{"127.0.0.1", "::1", "localhost"}, bind];
+  iSMWriteJSON[cfgPath, <|"svcDir" -> svcDir, "port" -> port, "routePrefix" -> prefix,
+    "ownerIPs" -> ownerIPs, "billingAllowed" -> billingAllowed,
+    "subscriptionAllowed" -> subscriptionAllowed,
+    "bind" -> bind, "releaseContext" -> releaseCtx, "pdfIndexProfile" -> pdfProfile,
+    "appTitle" -> (appTitle /. Automatic -> Null),
+    "askPrompt" -> (askPrompt /. Automatic -> Null),
+    "chatModel" -> (chatModel /. Automatic -> Null),
+    "searchTimeoutMs" -> OptionValue["SearchTimeoutMs"],
+    "mcpToken" -> (OptionValue["MCPToken"] /. (None | Automatic) -> Null),
+    "mcpTimeoutMs" -> OptionValue["MCPTimeoutMs"]|>];
+  py = iResolvePython[];
+  batPath = FileNameJoin[{proxyDir, "launch.bat"}];
+  Module[{strm = OpenWrite[batPath, BinaryFormat -> True], q},
+    q[s_] := "\"" <> s <> "\"";
+    BinaryWrite[strm, StringToByteArray[
+      "@echo off\r\n" <> q[py] <> " " <> q[FileNameJoin[{proxyDir, "proxy.py"}]] <>
+        " " <> q[cfgPath] <> " > " <> q[FileNameJoin[{proxyDir, "stdout.log"}]] <> " 2>&1\r\n",
+      "UTF-8"]]; Close[strm]];
+  task = iProxyTaskName[serviceId];
+  Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", batPath,
+    "/SC", "ONCE", "/ST", "23:59", "/F"}];
+  runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", task}];
+  If[! (AssociationQ[runRes] && Lookup[runRes, "ExitCode"] === 0),
+    Return[Failure["ProxyTaskRunFailed", <|"ServiceId" -> serviceId, "Task" -> task|>]]];
+  pidPath = FileNameJoin[{proxyDir, "proxy.pid"}];
+  deadline = AbsoluteTime[] + 30;
+  While[AbsoluteTime[] < deadline && ! FileExistsQ[pidPath], Pause[0.4]];
+  pid = If[FileExistsQ[pidPath],
+    Quiet @ ToExpression @ StringTrim @ ByteArrayToString[ReadByteArray[pidPath], "UTF-8"],
+    Missing["Pending"]];
+  <|"Status" -> "Started", "ServiceId" -> serviceId, "PID" -> pid, "Port" -> port,
+    "ProxyDir" -> proxyDir, "Python" -> py, "CodeSHA256" -> Lookup[mat, "CodeSHA256"],
+    "HealthURL" -> "http://" <> bind <> ":" <> ToString[port] <> prefix <> "/health"|>];
+
+SourceVaultHTTPProxyStatus[serviceId_String, opts___] := Module[{proxyDir, pidPath, pid, alive, cfg},
+  proxyDir = iProxyRuntimeDir[serviceId];
+  If[FailureQ[proxyDir] || ! DirectoryQ[proxyDir],
+    Return[<|"ServiceId" -> serviceId, "State" -> "Unknown", "Exists" -> False|>]];
+  pidPath = FileNameJoin[{proxyDir, "proxy.pid"}];
+  pid = If[FileExistsQ[pidPath],
+    Quiet @ ToExpression @ StringTrim @ ByteArrayToString[ReadByteArray[pidPath], "UTF-8"], Missing[]];
+  alive = If[IntegerQ[pid], iPidAlive[pid], False];
+  cfg = iSMReadJSON[FileNameJoin[{proxyDir, "proxy.config.json"}]];
+  <|"ServiceId" -> serviceId, "PID" -> pid, "PidAlive" -> alive,
+    "State" -> If[TrueQ[alive], "Running", "Stopped"],
+    "Port" -> If[AssociationQ[cfg], Lookup[cfg, "port"], Missing[]],
+    "ProxyDir" -> proxyDir, "Exists" -> True|>];
+
+SourceVaultStopHTTPProxy[serviceId_String, opts___] := Module[{proxyDir, pidPath, pid, killed = False},
+  proxyDir = iProxyRuntimeDir[serviceId];
+  If[FailureQ[proxyDir], Return[proxyDir]];
+  pidPath = FileNameJoin[{proxyDir, "proxy.pid"}];
+  pid = If[FileExistsQ[pidPath],
+    Quiet @ ToExpression @ StringTrim @ ByteArrayToString[ReadByteArray[pidPath], "UTF-8"], Missing[]];
+  If[IntegerQ[pid] && iPidAlive[pid], killed = iKillPid[pid]];
+  (* config の port を握る残党 (proxy.pid 上書きで取り逃した zombie) もポート基準で kill。 *)
+  Module[{cfg = iSMReadJSON[FileNameJoin[{proxyDir, "proxy.config.json"}]], port, lines},
+    port = If[AssociationQ[cfg], Lookup[cfg, "port"], Missing[]];
+    If[IntegerQ[port],
+      lines = Select[
+        StringSplit[Quiet @ RunProcess[{"netstat", "-ano"}]["StandardOutput"], "\n"],
+        StringContainsQ[#, ":" <> ToString[port] <> " "] && StringContainsQ[#, "LISTENING"] &];
+      Do[Module[{p = Last[StringSplit[ln]]},
+          If[StringMatchQ[p, NumberString] && p =!= "0",
+            Quiet @ RunProcess[{"taskkill", "/PID", p, "/F"}]; killed = True]],
+        {ln, lines}]]];
+  Quiet @ RunProcess[{"schtasks", "/Delete", "/TN", iProxyTaskName[serviceId], "/F"}];
+  Quiet @ If[FileExistsQ[pidPath], DeleteFile[pidPath]];
+  <|"Status" -> "Stopped", "ServiceId" -> serviceId, "Killed" -> killed|>];
+
+(* ============================================================
+   MCP サーバ起動/停止の便利ラッパー + claudecode パレットへの登録
+   ------------------------------------------------------------
+   WL service (カーネル) + HTTP/MCP proxy (Python) の二段を一括制御する。
+   パレットへは claudecode の package-neutral レジストリ経由で登録する
+   (rule 11: claudecode は SourceVault に依存しない; 弱参照のみ)。
+   ============================================================ *)
+(* serviceId はパッケージ名由来の汎用既定。port/token は環境依存値なのでソースに直書きせず
+   (rule03)、既存サービスの proxy.config.json から自動解決する (Automatic)。 *)
+If[! StringQ[SourceVault`$SourceVaultMCPServiceId], SourceVault`$SourceVaultMCPServiceId = "sourcevault"];
+If[! ValueQ[SourceVault`$SourceVaultMCPPort], SourceVault`$SourceVaultMCPPort = Automatic];
+If[! ValueQ[SourceVault`$SourceVaultMCPToken], SourceVault`$SourceVaultMCPToken = Automatic];
+
+iMCPServiceId[Automatic] := SourceVault`$SourceVaultMCPServiceId;
+iMCPServiceId[s_String] := s;
+iMCPServiceId[_] := SourceVault`$SourceVaultMCPServiceId;
+
+(* 既存 proxy.config.json から port/token を読む (env 依存値をソースに置かない)。
+   既存サービスがあればその port を引き継ぎ、無ければ汎用 fallback (8731)。 *)
+iMCPProxyConfig[sid_String] := Module[{pd = Quiet @ Check[iProxyRuntimeDir[sid], $Failed]},
+  If[StringQ[pd], iSMReadJSON[FileNameJoin[{pd, "proxy.config.json"}]], $Failed]];
+iMCPResolvePort[Automatic, sid_String] := Module[{cfg = iMCPProxyConfig[sid], p},
+  p = If[AssociationQ[cfg], Lookup[cfg, "port", Missing[]], Missing[]];
+  If[IntegerQ[p], p, 8731]];
+iMCPResolvePort[n_Integer, _] := n;
+iMCPResolvePort[_, sid_String] := iMCPResolvePort[Automatic, sid];
+iMCPResolveToken[Automatic, sid_String] := Module[{cfg = iMCPProxyConfig[sid], t},
+  t = If[AssociationQ[cfg], Lookup[cfg, "mcpToken", Null], Null];
+  If[StringQ[t] && t =!= "", t, None]];
+iMCPResolveToken[t_, _] := t;
+
+SourceVaultMCPRunningQ[OptionsPattern[]] := Module[{sid, st},
+  sid = iMCPServiceId[OptionValue["ServiceId"]];
+  st = Quiet @ Check[SourceVaultHTTPProxyStatus[sid], $Failed];
+  AssociationQ[st] && (Lookup[st, "State", ""] === "Running" || TrueQ[Lookup[st, "PidAlive", False]])];
+Options[SourceVaultMCPRunningQ] = {"ServiceId" -> Automatic};
+
+Options[SourceVaultStartMCP] = {
+  "ServiceId" -> Automatic, "Port" -> Automatic, "MCPToken" -> Automatic, "RestartService" -> False};
+SourceVaultStartMCP[OptionsPattern[]] := Module[{sid, port, tok, svcRunning, svc, prox},
+  sid  = iMCPServiceId[OptionValue["ServiceId"]];
+  port = iMCPResolvePort[Replace[OptionValue["Port"], Automatic -> SourceVault`$SourceVaultMCPPort], sid];
+  tok  = iMCPResolveToken[Replace[OptionValue["MCPToken"], Automatic -> SourceVault`$SourceVaultMCPToken], sid];
+  (* WL service を確保。RestartService 指定時は再注入のため restart。 *)
+  svcRunning = With[{s = Quiet @ Check[SourceVaultServiceStatus[sid], $Failed]},
+    AssociationQ[s] && Lookup[s, "State", ""] === "Running"];
+  svc = Which[
+    TrueQ[OptionValue["RestartService"]] && svcRunning, SourceVaultRestartService[sid],
+    svcRunning, <|"Status" -> "AlreadyRunning", "ServiceId" -> sid|>,
+    True, SourceVaultStartService[sid]];
+  (* /sv/mcp を公開する proxy を起動。token があれば認証付き。 *)
+  prox = SourceVaultStartHTTPProxy[sid, "Port" -> port,
+    Sequence @@ If[StringQ[tok] && tok =!= "", {"MCPToken" -> tok}, {}]];
+  <|"Status" -> "Started", "ServiceId" -> sid, "Port" -> port,
+    "Url" -> "http://127.0.0.1:" <> ToString[port] <> "/sv/mcp",
+    "TokenRequired" -> (StringQ[tok] && tok =!= ""),
+    "Service" -> svc, "Proxy" -> prox|>];
+
+Options[SourceVaultStopMCP] = {"ServiceId" -> Automatic};
+SourceVaultStopMCP[OptionsPattern[]] := Module[{sid, p, s},
+  sid = iMCPServiceId[OptionValue["ServiceId"]];
+  p = Quiet @ Check[SourceVaultStopHTTPProxy[sid], $Failed];
+  s = Quiet @ Check[SourceVaultStopService[sid], $Failed];
+  <|"Status" -> "Stopped", "ServiceId" -> sid, "Proxy" -> p, "Service" -> s|>];
+
+Options[SourceVaultMCPStatus] = {"ServiceId" -> Automatic};
+SourceVaultMCPStatus[OptionsPattern[]] := Module[{sid, svc, prox, port},
+  sid = iMCPServiceId[OptionValue["ServiceId"]];
+  svc  = Quiet @ Check[SourceVaultServiceStatus[sid], $Failed];
+  prox = Quiet @ Check[SourceVaultHTTPProxyStatus[sid], $Failed];
+  port = If[AssociationQ[prox], Lookup[prox, "Port", Missing[]], Missing[]];
+  <|"ServiceId" -> sid,
+    "Running" -> SourceVaultMCPRunningQ["ServiceId" -> sid],
+    "ServiceState" -> If[AssociationQ[svc], Lookup[svc, "State", Missing[]], Missing[]],
+    "ProxyState" -> If[AssociationQ[prox], Lookup[prox, "State", Missing[]], Missing[]],
+    "Port" -> port,
+    "Url" -> If[IntegerQ[port], "http://127.0.0.1:" <> ToString[port] <> "/sv/mcp", Missing[]]|>];
+
+(* claudecode パレットへ package-neutral に登録 (claudecode が無くても安全; soft-probe)。
+   ラベル文字列・コールバックは SourceVault 側が供給し、claudecode は SourceVault を一切参照しない。 *)
+iRegisterMCPPaletteControl[] := If[
+  Length[Names["ClaudeCode`ClaudeRegisterPaletteServiceControl"]] > 0,
+  Quiet @ Check[
+    ClaudeCode`ClaudeRegisterPaletteServiceControl[<|
+      "Id" -> "sourcevault-mcp",
+      "RunningQ" -> Function[SourceVault`SourceVaultMCPRunningQ[]],
+      "Start"    -> Function[SourceVault`SourceVaultStartMCP[]],
+      "Stop"     -> Function[SourceVault`SourceVaultStopMCP[]],
+      "RunningLabel" -> "\[FilledSquare] MCP 停止",
+      "StoppedLabel" -> "\[RightTriangle] MCP 起動",
+      "UnknownLabel" -> "\[RightTriangle] MCP",
+      "RunningColor" -> RGBColor[0.2, 0.55, 0.35],
+      "StoppedColor" -> RGBColor[0.55, 0.35, 0.3]|>],
+    $Failed],
+  Missing["NoClaudeCode"]];
+iRegisterMCPPaletteControl[];
+
+(* ============================================================
+   §9.8 channel pipeline / §13 Phase 6 mail・Discord / §17.9 OutputGate
+   mail は draft のみ (自動送信しない)、Discord は承認必須。
+   gate 済み SourceVaultSearch を使い、LLM は呼ばない (evidence ベース)。
+   ============================================================ *)
+
+SourceVault`ServiceManagerPrivate`iChannels = {"Web", "Mail", "Discord", "Voice", "VRSNS"};
+
+Options[SourceVaultMakeQuestionEnvelope] = {
+  "ReleaseContext" -> None, "Audience" -> Missing["Anonymous"], "LatencyProfile" -> Automatic,
+  "AllowedIndexes" -> {}, "PDFIndexProfile" -> None, "Requester" -> Missing["Anonymous"]};
+SourceVaultMakeQuestionEnvelope[channel_String, inputText_String, OptionsPattern[]] := Module[{rc, lat},
+  rc = OptionValue["ReleaseContext"];
+  If[! StringQ[rc],
+    Return[Failure["ReleaseContextRequired", <|
+      "MessageTemplate" -> "QuestionEnvelope には \"ReleaseContext\" が必須です。"|>]]];
+  lat = OptionValue["LatencyProfile"] /. Automatic -> Switch[channel,
+    "Web", "RealtimeWeb", "Mail", "MailReplyDraft", "Discord", "ChatReply",
+    "Voice", "VoiceUltraLowLatency", "VRSNS", "VRSNSRealtime", _, "RealtimeWeb"];
+  <|"EnvelopeId" -> "env:" <> CreateUUID[], "InterfaceVersion" -> "QuestionEnvelope/1",
+    "Channel" -> channel, "InputText" -> inputText,
+    "Requester" -> OptionValue["Requester"], "Audience" -> OptionValue["Audience"],
+    "ReleaseContextRef" -> rc, "LatencyProfile" -> lat,
+    "AllowedIndexes" -> OptionValue["AllowedIndexes"],
+    "PDFIndexProfile" -> OptionValue["PDFIndexProfile"],
+    "CreatedAtUTC" -> iSMUTCNow[]|>];
+
+(* evidence draft 化。Mail は draft のみ。 *)
+Options[SourceVaultAnswerChannelQuery] = {"Limit" -> 10};
+SourceVaultAnswerChannelQuery[envelope_Association, OptionsPattern[]] := Module[
+  {rc, channel, query, idx, profile, results, citations, decision, draftText, n},
+  rc = Lookup[envelope, "ReleaseContextRef"];
+  channel = Lookup[envelope, "Channel", "Web"];
+  query = Lookup[envelope, "InputText", ""];
+  If[! StringQ[rc], Return[Failure["BadEnvelope", <|"Reason" -> "NoReleaseContext"|>]]];
+  idx = FirstCase[Lookup[envelope, "AllowedIndexes", {}], _String, None];
+  profile = Lookup[envelope, "PDFIndexProfile", None];
+  results = Which[
+    StringQ[idx], SourceVault`SourceVaultSearch[query, "ReleaseContext" -> rc, "Index" -> idx, "Limit" -> OptionValue["Limit"]],
+    StringQ[profile], SourceVault`SourceVaultSearch[query, "ReleaseContext" -> rc, "PDFIndexProfile" -> profile, "Limit" -> OptionValue["Limit"]],
+    True, Failure["NoSearchTarget", <|"MessageTemplate" -> "AllowedIndexes か PDFIndexProfile が必要です。"|>]];
+  If[FailureQ[results], Return[results]];
+  n = Length[results];
+  citations = Lookup[#, "Citation", <||>] & /@ results;
+  (* evidence ベースの draft (LLM 無し)。本文生成は latency profile に応じ後続で LLM 化可能。 *)
+  draftText = If[n === 0,
+    "該当する情報が見つかりませんでした。",
+    "関連する情報が " <> ToString[n] <> " 件見つかりました。根拠: " <>
+      StringRiffle[Lookup[#, "Title", "?"] & /@ citations, ", "]];
+  decision = Switch[channel,
+    "Mail", "NeedsHumanReview",            (* mail は必ず draft *)
+    "Discord", If[n > 0, "Answered", "NoAnswer"],
+    _, If[n > 0, "Answered", "NoAnswer"]];
+  <|"Decision" -> decision, "Channel" -> channel, "ReleaseContextRef" -> rc,
+    "AnswerDraft" -> <|"Text" -> draftText, "RequiresHumanReview" -> (channel === "Mail"),
+      "Generator" -> "EvidenceTemplate", "LLMUsed" -> False|>,
+    "Evidence" -> results, "Citations" -> citations, "ResultCount" -> n,
+    "EnvelopeId" -> Lookup[envelope, "EnvelopeId"]|>];
+
+SourceVaultMakeMailReplyDraft[envelope_Association, opts___] := Module[{env, res},
+  env = Append[envelope, "Channel" -> "Mail"];
+  res = SourceVaultAnswerChannelQuery[env, opts];
+  If[FailureQ[res], Return[res]];
+  Append[res, "AutoSend" -> False]];
+
+(* §17.9 OutputGate *)
+Options[SourceVaultEvaluateOutputGate] = {"EventKind" -> "ResponseDraft", "HasRawMedia" -> False};
+SourceVaultEvaluateOutputGate[draft_Association, adapterName_String, OptionsPattern[]] := Module[
+  {adapter, why = {}, decision, pl, rcs, reqRC, privMax, allowedKinds, eventKind, rawMedia},
+  adapter = iSMResolve["OutputAdapter", adapterName];
+  If[FailureQ[adapter], Return[adapter]];
+  eventKind = OptionValue["EventKind"];
+  rawMedia = TrueQ[OptionValue["HasRawMedia"]];
+  pl = Lookup[draft, "PrivacyLevel", 0.];
+  rcs = Lookup[draft, "ReleaseContexts", {Lookup[draft, "ReleaseContextRef", Nothing]}];
+  reqRC = Lookup[adapter, "ReleaseContextRequired", {}];
+  privMax = Lookup[adapter, "PrivacyMax", 0.5];
+  allowedKinds = Lookup[adapter, "AllowedEventKinds", All];
+  (* event kind allowlist *)
+  If[allowedKinds =!= All && ! MemberQ[allowedKinds, eventKind],
+    AppendTo[why, "EventKindNotAllowed(" <> eventKind <> ")"]];
+  (* privacy *)
+  If[! (NumericQ[pl] && pl <= privMax), AppendTo[why, "PrivacyExceedsMax"]];
+  (* release context required ⊆ draft contexts *)
+  If[! SubsetQ[rcs, reqRC], AppendTo[why, "MissingRequiredReleaseContext"]];
+  (* raw media: 既定で外部送信禁止 (§17.9)。AllowRawVisualExport が無い限り redact *)
+  decision = Which[
+    why =!= {}, "Deny",
+    rawMedia && ! TrueQ[Lookup[adapter, "AllowRawVisualExport", False]], "RedactRequired",
+    TrueQ[Lookup[adapter, "RequireApproval", False]], "NeedsApproval",
+    True, "Permit"];
+  <|"Decision" -> decision, "Why" -> why, "Adapter" -> adapterName, "EventKind" -> eventKind|>];
+
+Options[SourceVaultDispatchOutput] = {"Approved" -> False, "ReallySend" -> False,
+  "EventKind" -> "ResponseDraft", "HasRawMedia" -> False};
+SourceVaultDispatchOutput[draft_Association, adapterName_String, OptionsPattern[]] := Module[
+  {adapter, gate, kind, approved, reallySend, webhookRef, sendRes},
+  adapter = iSMResolve["OutputAdapter", adapterName];
+  If[FailureQ[adapter], Return[adapter]];
+  gate = SourceVaultEvaluateOutputGate[draft, adapterName,
+    "EventKind" -> OptionValue["EventKind"], "HasRawMedia" -> OptionValue["HasRawMedia"]];
+  kind = Lookup[adapter, "Kind", ""];
+  approved = TrueQ[OptionValue["Approved"]];
+  reallySend = TrueQ[OptionValue["ReallySend"]];
+  Which[
+    Lookup[gate, "Decision"] === "Deny",
+      <|"Status" -> "Denied", "Sent" -> False, "Gate" -> gate|>,
+    Lookup[gate, "Decision"] === "RedactRequired",
+      <|"Status" -> "RedactRequired", "Sent" -> False, "Gate" -> gate|>,
+    (* mail は OutputAdapter であっても自動送信しない (§13 Phase 6) *)
+    kind === "Mail" || kind === "MailDraft",
+      <|"Status" -> "DraftOnly", "Sent" -> False, "Draft" -> draft, "Gate" -> gate|>,
+    Lookup[gate, "Decision"] === "NeedsApproval" && ! approved,
+      <|"Status" -> "NeedsApproval", "Sent" -> False, "Gate" -> gate|>,
+    (* Permit (または承認済み) かつ明示 ReallySend のときだけ実送信 *)
+    (Lookup[gate, "Decision"] === "Permit" || approved) && reallySend &&
+        kind === "DiscordWebhook",
+      webhookRef = Lookup[adapter, "WebhookURL", Lookup[adapter, "WebhookRef", None]];
+      If[! (StringQ[webhookRef] && StringStartsQ[webhookRef, "http"]),
+        <|"Status" -> "NoWebhookURL", "Sent" -> False, "Gate" -> gate|>,
+        sendRes = Quiet @ URLRead[HTTPRequest[webhookRef, <|"Method" -> "POST",
+          "Body" -> ExportString[<|"content" -> Lookup[draft, "Text",
+            Lookup[Lookup[draft, "AnswerDraft", <||>], "Text", ""]]|>, "RawJSON"],
+          "ContentType" -> "application/json"|>], TimeoutConstraint -> 8];
+        <|"Status" -> If[Head[sendRes] === HTTPResponse && sendRes["StatusCode"] < 300, "Sent", "SendFailed"],
+          "Sent" -> (Head[sendRes] === HTTPResponse && sendRes["StatusCode"] < 300), "Gate" -> gate|>],
+    True,
+      <|"Status" -> "Prepared", "Sent" -> False, "Gate" -> gate|>]];
+
+(* ============================================================
+   §9.9 ActionDraft / ActionGate (VRSNS avatar・world action 安全制御)
+   §17.3 CaptureSource 補助 (device 非依存。実体解決は private local init)
+   ============================================================ *)
+
+$worldMutatingActions = {"Move", "CallTool", "WorldControl"};
+
+Options[SourceVaultMakeActionDraft] = {
+  "CapabilityProfile" -> None, "Audience" -> Missing["Anonymous"], "ReleaseContext" -> None,
+  "Target" -> <||>, "EvidenceRefs" -> {}};
+SourceVaultMakeActionDraft[kind_String, payload_, OptionsPattern[]] :=
+  <|"ActionId" -> "act:" <> CreateUUID[], "Kind" -> kind, "Payload" -> payload,
+    "Target" -> OptionValue["Target"], "Audience" -> OptionValue["Audience"],
+    "ReleaseContextRef" -> OptionValue["ReleaseContext"],
+    "CapabilityProfileRef" -> OptionValue["CapabilityProfile"],
+    "EvidenceRefs" -> OptionValue["EvidenceRefs"],
+    "RequiresApproval" -> MemberQ[$worldMutatingActions, kind],
+    "CreatedAtUTC" -> iSMUTCNow[]|>;
+
+SourceVaultEvaluateActionGate[actionDraft_Association, opts___] := Module[
+  {kind, capName, cap, allowed, why = {}, decision, worldMut, requireGate},
+  kind = Lookup[actionDraft, "Kind", ""];
+  capName = Lookup[actionDraft, "CapabilityProfileRef", None];
+  If[! StringQ[capName],
+    Return[<|"Decision" -> "Deny", "Why" -> {"NoCapabilityProfile"}, "ActionId" -> Lookup[actionDraft, "ActionId"]|>]];
+  cap = iSMResolve["CapabilityProfile", capName];
+  If[FailureQ[cap], Return[cap]];
+  allowed = Lookup[cap, "AllowedActions", {}];
+  worldMut = MemberQ[$worldMutatingActions, kind];
+  requireGate = TrueQ[Lookup[cap, "RequireActionGate", True]];
+  If[! MemberQ[allowed, kind], AppendTo[why, "ActionNotAllowed(" <> kind <> ")"]];
+  If[worldMut && ! TrueQ[Lookup[cap, "AllowWorldControl", False]],
+    AppendTo[why, "WorldControlNotAllowed"]];
+  decision = Which[
+    why =!= {}, "Deny",
+    (* Speak は他者に聞こえるが capability 上許可なら Permit。world 変更や ShowPanel/CallTool は承認 *)
+    worldMut || (requireGate && kind =!= "Speak"), "RequiresApproval",
+    True, "Permit"];
+  <|"Decision" -> decision, "Why" -> why, "Kind" -> kind,
+    "ActionId" -> Lookup[actionDraft, "ActionId"], "CapabilityProfileRef" -> capName|>];
+
+SourceVaultListCaptureSources[opts___] := SourceVaultListServiceProfiles["CaptureSource"];
+SourceVaultTestCaptureSource[name_String, opts___] := Module[{spec},
+  spec = iSMResolve["CaptureSource", name];
+  If[FailureQ[spec], Return[spec]];
+  (* 実 capture はせず、profile の必須項目と device ref が symbolic か (実 device 名を直書きしていないか) を点検 *)
+  <|"Status" -> "OK", "Name" -> name, "Kind" -> Lookup[spec, "Kind", Missing[]],
+    "HasSymbolicDeviceRef" -> (StringQ[Lookup[spec, "DeviceRef", Lookup[spec, "WindowRef", ""]]]),
+    "Note" -> "実 capture はしない。device 実体は private local init で解決。"|>];
+
+(* ============================================================
+   §17 マルチモーダル ingest / live session / workflow / postprocess
+   capture driver (ffmpeg/ASR/realtime) はこれらを呼ぶ薄い層。device 非依存。
+   ============================================================ *)
+
+If[! AssociationQ[$multimodalWorkflows], $multimodalWorkflows = <||>];
+(* PresentationListenerCompat を既定登録 (§17.6) *)
+$multimodalWorkflows["PresentationListenerCompat-v1"] = <|
+  "Input" -> <|"Audio" -> "SegmentedWhisper", "Visual" -> "PeriodicFrameWithChangeDetection"|>,
+  "TranscriptPostprocess" -> "ASRCorrection",
+  "Output" -> {"SourceVaultEvent", "NotebookSummary"}, "LatencyProfile" -> "PresentationSummary"|>;
+
+Options[SourceVaultIngestCapturedMedia] = {
+  "PersistRaw" -> True, "SourceRef" -> None, "Tags" -> {}, "State" -> "Captured",
+  "PrivacyLevel" -> Automatic};
+SourceVaultIngestCapturedMedia[sessionId_String, kind_String, data_, OptionsPattern[]] := Module[
+  {ev, blobRes, pl},
+  pl = OptionValue["PrivacyLevel"] /. Automatic -> SourceVault`SourceVaultMediaPrivacyDefault[kind];
+  ev = <|"SessionID" -> sessionId, "Kind" -> kind, "PrivacyLevel" -> pl,
+    "Tags" -> OptionValue["Tags"], "State" -> OptionValue["State"],
+    "SourceRef" -> OptionValue["SourceRef"]|>;
+  Which[
+    ByteArrayQ[data],
+      If[TrueQ[OptionValue["PersistRaw"]],
+        blobRes = SourceVault`SourceVaultCommitBlob[data,
+          "Meta" -> <|"SessionID" -> sessionId, "Kind" -> kind|>];
+        If[FailureQ[blobRes], Return[blobRes]];
+        ev = Join[ev, <|"BlobRef" -> Lookup[blobRes, "BlobRef"], "MediaHash" -> Lookup[blobRes, "Hash"]|>],
+        ev = Join[ev, <|"BlobRef" -> Missing["NotPersisted"]|>]],
+    StringQ[data], ev = Join[ev, <|"Text" -> data|>],
+    True, Return[Failure["UnsupportedMediaData", <|"Kind" -> kind|>]]];
+  SourceVault`SourceVaultAppendMultimodalEvent[ev]];
+
+iLiveSummaryPointer[sessionId_String] := "live-summary-" <> iSafeName[sessionId];
+
+SourceVaultUpdateLiveSummary[sessionId_String, summary_String, opts___] := Module[{p},
+  p = SourceVault`SourceVaultAtomicUpdatePointer[iLiveSummaryPointer[sessionId],
+    <|"Summary" -> summary, "UpdatedAtUTC" -> iSMUTCNow[]|>];
+  If[FailureQ[p], Return[p]];
+  SourceVault`SourceVaultAppendMultimodalEvent[<|"SessionID" -> sessionId,
+    "Kind" -> "SystemSummary", "Text" -> summary|>];
+  <|"Status" -> "OK", "SessionID" -> sessionId, "Sequence" -> Lookup[p, "Sequence"]|>];
+
+SourceVaultGetLiveSummary[sessionId_String, opts___] := Module[{r},
+  r = SourceVault`SourceVaultPointerReplay[iLiveSummaryPointer[sessionId]];
+  If[Lookup[r, "Status"] === "Empty", <|"SessionID" -> sessionId, "Summary" -> Missing["NoSummary"]|>,
+    <|"SessionID" -> sessionId, "Summary" -> Lookup[Lookup[r, "Value", <||>], "Summary"],
+      "Sequence" -> Lookup[r, "Sequence"]|>]];
+
+SourceVaultGetLiveEvents[sessionId_String, opts___] := SourceVault`SourceVaultSessionEvents[sessionId, opts];
+SourceVaultGetLiveTranscript[sessionId_String, opts___] := Module[{evs},
+  evs = SourceVault`SourceVaultSessionEvents[sessionId, "Kind" -> "ASRTranscript"];
+  StringRiffle[Lookup[#, "Text", ""] & /@ evs, " "]];
+
+Options[SourceVaultAskLiveSession] = {"ReplyTarget" -> "MainKernelQueue", "UseRecentSeconds" -> 600};
+SourceVaultAskLiveSession[sessionId_String, question_String, OptionsPattern[]] := Module[{q, cmd},
+  (* メインカーネルは LLM を呼ばない。UserQuestion を記録し command を enqueue する。 *)
+  SourceVault`SourceVaultAppendMultimodalEvent[<|"SessionID" -> sessionId,
+    "Kind" -> "UserQuestion", "Text" -> question|>];
+  cmd = SourceVault`SourceVaultAppendEvent[<|"EventClass" -> "SessionCommand",
+    "Type" -> "AskSessionQuestion", "SessionID" -> sessionId, "Question" -> question,
+    "ReplyTarget" -> OptionValue["ReplyTarget"], "UseRecentSeconds" -> OptionValue["UseRecentSeconds"]|>];
+  <|"Status" -> "Queued", "SessionID" -> sessionId, "CommandRef" -> Lookup[cmd, "Ref"]|>];
+
+SourceVaultRegisterMultimodalWorkflow[name_String, spec_Association, opts___] :=
+  ($multimodalWorkflows[name] = spec; <|"Status" -> "OK", "Name" -> name|>);
+SourceVaultListMultimodalWorkflows[opts___] := Keys[$multimodalWorkflows];
+
+SourceVaultSchedulePostprocess[sessionId_String, spec_Association, opts___] :=
+  SourceVault`SourceVaultAppendEvent[Join[<|"EventClass" -> "PostprocessScheduled",
+    "SessionID" -> sessionId, "Priority" -> "Batch"|>, spec]];
+
+(* ============================================================
+   §10.1 Latency baseline snapshot / §10.2 deadline-driven cascade
+   deadlineMs は固定断定値でなく実測 baseline から導く budget hint。
+   ============================================================ *)
+
+iLatUTCNow[] := DateString[
+  {"Year", "-", "Month", "-", "Day", "T", "Hour", ":", "Minute", ":", "Second", "Z"}, TimeZone -> 0];
+(* 個人情報を含めない host fingerprint (非識別の system 値を hash) *)
+iHostFingerprint[] := "hostfp:" <> StringTake[
+  ToLowerCase @ Hash[{$SystemID, $ProcessorCount, $OperatingSystem}, "SHA256", "HexString"], 16];
+
+(* probe 値は (a) 事前計測 ms のリスト or (b) 0引数関数。後者は Repeats 回 time する。 *)
+iLatSamples[probe_, reps_Integer] := Which[
+  ListQ[probe] && AllTrue[probe, NumericQ], N[probe],
+  True, Table[Module[{t0 = AbsoluteTime[]}, probe[]; (AbsoluteTime[] - t0)*1000.], reps]];
+iLatP[samples_, q_] := If[samples === {} || ! ListQ[samples], Missing["NotMeasured"],
+  Round[Quantile[N[samples], q]]];
+
+Options[SourceVault`SourceVaultMeasureServiceLatency] = {"Probes" -> <||>, "Repeats" -> 7};
+SourceVault`SourceVaultMeasureServiceLatency[serviceId_String, OptionsPattern[]] := Module[
+  {probes, reps, status, meas = <||>, raw = <||>},
+  probes = OptionValue["Probes"]; reps = OptionValue["Repeats"];
+  If[! AssociationQ[probes], probes = <||>];
+  (* 既定 IPC probe: service 稼働時のみ実 Ping 往復を計測 *)
+  If[! KeyExistsQ[probes, "IPC"],
+    status = SourceVaultServiceStatus[serviceId];
+    If[AssociationQ[status] && Lookup[status, "State"] === "Running" && TrueQ[Lookup[status, "PidAlive"]],
+      probes = Append[probes, "IPC" -> Function[Module[{c = SourceVaultSendServiceCommand[serviceId, <|"Command" -> "Ping"|>], dl},
+        dl = AbsoluteTime[] + 5;
+        While[Lookup[SourceVaultServiceCommandResult[serviceId, Lookup[c, "CommandId"]], "Status"] =!= "Done" && AbsoluteTime[] < dl, Pause[0.02]]]]]]];
+  KeyValueMap[Function[{name, probe}, Module[{s = iLatSamples[probe, reps]},
+    raw[name] = s;
+    meas[name <> ".P50Ms"] = iLatP[s, 0.5];
+    meas[name <> ".P95Ms"] = iLatP[s, 0.95]]], probes];
+  <|"Status" -> "OK", "ServiceId" -> serviceId, "Measurements" -> meas, "RawSamples" -> raw,
+    "HostFingerprint" -> iHostFingerprint[]|>];
+
+(* 実測 P95 から budget hint を導く。fast path = IPC+TPOGate+HotFAQ。 *)
+SourceVault`SourceVaultLatencyBaselineReport[serviceId_String, measurements_Association, opts___] := Module[
+  {g, num, ipc, tpo, faq, vec, llm, fast, vecB, llmB},
+  g[k_] := Lookup[measurements, k <> ".P95Ms", Missing["NotMeasured"]];
+  num[x_, d_] := If[NumericQ[x], x, d];
+  ipc = g["IPC"]; tpo = g["TPOGate"]; faq = g["HotFAQ"]; vec = g["Vector"]; llm = g["LLM"];
+  fast = num[ipc, 0] + num[tpo, 0] + num[faq, 0];
+  vecB = fast + num[vec, 0];
+  llmB = vecB + num[llm, 0];
+  <|"SnapshotKind" -> "LatencyBaselineSnapshot", "ServiceId" -> serviceId,
+    "HostFingerprint" -> iHostFingerprint[],
+    "Measurements" -> measurements,
+    "RecommendedBudgets" -> <|
+      "FastPathDeadlineMs" -> Ceiling[fast],
+      "AllowVectorBeforeMs" -> Ceiling[vecB],
+      "AllowLLMBeforeMs" -> Ceiling[llmB]|>,
+    "VectorMeasured" -> NumericQ[vec], "LLMMeasured" -> NumericQ[llm],
+    "CreatedAtUTC" -> iLatUTCNow[]|>];
+
+iLatBaselinePointer[serviceId_] := "latency-baseline-" <> iSafeName[serviceId];
+SourceVault`SourceVaultSaveLatencyBaselineSnapshot[serviceId_String, report_Association, opts___] := Module[{rec, saved},
+  rec = Join[<|"ObjectClass" -> "SourceVaultLatencyBaselineSnapshot"|>, report];
+  saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultLatencyBaselineSnapshot", rec,
+    "Alias" -> "svlatency:" <> serviceId];
+  If[FailureQ[saved], Return[saved]];
+  SourceVault`SourceVaultAtomicUpdatePointer[iLatBaselinePointer[serviceId], Lookup[saved, "Ref"]];
+  <|"Status" -> "OK", "ObjectRef" -> Lookup[saved, "Ref"], "Digest" -> Lookup[saved, "Digest"],
+    "RecommendedBudgets" -> Lookup[report, "RecommendedBudgets"]|>];
+SourceVault`SourceVaultLatencyBaseline[serviceId_String, opts___] := Module[{ptr},
+  ptr = SourceVault`SourceVaultPointerReplay[iLatBaselinePointer[serviceId]];
+  If[AssociationQ[ptr] && StringQ[Lookup[ptr, "Value"]],
+    SourceVault`SourceVaultLoadImmutableSnapshot[Lookup[ptr, "Value"]],
+    Failure["NoLatencyBaseline", <|"ServiceId" -> serviceId|>]]];
+
+(* §10.2: 残り budget からどの段階まで許可するか。baseline 無しは HotFAQ/fallback に制限。 *)
+SourceVault`SourceVaultDeadlineDecision[remainingMs_?NumericQ, budgets_Association, opts___] := Module[{fp, av, al},
+  fp = Lookup[budgets, "FastPathDeadlineMs", 0];
+  av = Lookup[budgets, "AllowVectorBeforeMs", Infinity];
+  al = Lookup[budgets, "AllowLLMBeforeMs", Infinity];
+  Which[
+    remainingMs < fp, <|"Allowed" -> "SafeFallback", "SkippedByDeadline" -> {"HotFAQ", "Vector", "LLM"}|>,
+    remainingMs < av, <|"Allowed" -> "HotFAQ", "SkippedByDeadline" -> {"Vector", "LLM"}|>,
+    remainingMs < al, <|"Allowed" -> "Vector", "SkippedByDeadline" -> {"LLM"}|>,
+    True, <|"Allowed" -> "LLM", "SkippedByDeadline" -> {}|>]];
+
+End[]  (* `ServiceManagerPrivate` *)
+
+EndPackage[]  (* SourceVault` *)
+(* ロード時ヘルプは削除。API 一覧は SourceVault_info/docs を参照。 *)

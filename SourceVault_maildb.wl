@@ -25,8 +25,9 @@ SourceVaultMailSnapshotPut::usage = "SourceVaultMailSnapshotPut[snapshot, opts] 
 SourceVaultMailSnapshotGet::usage = "SourceVaultMailSnapshotGet[recordId] は保存済み snapshot を返す。";
 SourceVaultMailSnapshotList::usage = "SourceVaultMailSnapshotList[] は保存済み snapshot を返す。";
 SourceVaultIdentityBackfillFromMail::usage = "SourceVaultIdentityBackfillFromMail[] は現在ロード済みの snapshot の平文 From/To/Cc を走査して識別子(2層アドレス帳)を一括生成する。再取込不要。スコープは先に SourceVaultMailEnsureLoaded で決める。";
-SourceVaultSearchMailSnapshots::usage = "SourceVaultSearchMailSnapshots[query_String:\"\", opts] は subject/summary 部分一致 + From / FromContact / MBox / DateFrom / DateTo / HasAttachment で検索し、Newest(既定 True)で日付降順、Limit で件数制限する。";
-SourceVaultMailSummaryRow::usage = "SourceVaultMailSummaryRow[snapshot] は一覧表示用の低漏洩行 <|Date, From, Subject, Attach, MBox, RecordId, BodyEncrypted|> を返す。From は AddressBook 解決時は表示名。";
+SourceVaultSearchMailSnapshots::usage = "SourceVaultSearchMailSnapshots[query_String:\"\", opts] は subject/summary 部分一致 + From / To / FromContact / MBox / DateFrom / DateTo / HasAttachment / Category / HasDeadline / DeadlineFrom / DeadlineTo で検索し、Newest(既定 True)で日付降順、Limit で件数制限する。Category は $SourceVaultMailCategories のトークン(日本語名 \"作業依頼\" 等でも可)。DeadlineFrom/DeadlineTo は〆切日を日単位包含で範囲指定(例: 今週〆切の作業依頼 = \"Category\"->\"TaskRequest\", \"DeadlineFrom\"->今日, \"DeadlineTo\"->週末)。SortBy は \"Date\"|\"Priority\"|\"PrivacyLevel\"|\"Deadline\"。";
+SourceVaultMailSummaryRow::usage = "SourceVaultMailSummaryRow[snapshot] は一覧表示用の低漏洩行 <|Date, From, Subject, Category, Deadline, Attach, MBox, RecordId, BodyEncrypted|> を返す。From は AddressBook 解決時は表示名。Category は依頼カテゴリトークン、Deadline は〆切の ISO 文字列 (無ければ Missing)。";
+$SourceVaultMailCategories::usage = "メール派生カテゴリの語彙: InfoProvision=情報提供, AttendanceRequest=(会議等への)出席依頼, TaskRequest=作業・仕事の依頼, Confirmation=確認・承認依頼, Report=報告, Notice=通知・一斉配信, Other=その他。Derived.Category と検索オプション \"Category\" で使う。";
 SourceVaultMailSearchSummary::usage = "SourceVaultMailSearchSummary[query_String:\"\", opts] は検索結果を SummaryRow のリスト(新着順・Limit 適用)で返す。";
 SourceVaultMailDataset::usage = "SourceVaultMailDataset[query_String:\"\", opts] は検索結果を素の Dataset で返す(列ソート用、ボタン無し)。";
 SourceVaultMailStoreSave::usage = "SourceVaultMailStoreSave[\"All\"->False] は変更のあった月次シャードのみ (All->True で全シャード) を byte-exact 保存する。";
@@ -186,6 +187,10 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
          "PrivacyLevel" -> pl,
          "AccessTags" -> {}, "DenyTags" -> {},
          "Summary" -> Lookup[record, "summary", Missing["NotGenerated"]],
+         (* カテゴリ ($SourceVaultMailCategories トークン) と 〆切 (ISO 文字列、ローカル時刻意図)。
+            旧 maildb record には無いので LLM 派生 (iSVApplyDerived) で埋まる。 *)
+         "Category" -> Missing["NotGenerated"],
+         "Deadline" -> Missing["NotGenerated"],
          "Priority" -> Lookup[record, "priority", Missing["NotGenerated"]],
          (* 派生フィールド (PL/Priority/Summary) が LLM 等で確定済みか。
             未確定 (新規 IMAP 取込で未処理) は "Pending" -> 後から増分バッチで処理。 *)
@@ -287,9 +292,67 @@ iSVMDDateInRange[snap_, fromDay_, toDay_] :=
       toDay === Automatic || ! MatchQ[toDay, {_Integer, _Integer, _Integer}] ||
         OrderedQ[{dDay, toDay}]]];
 
+(* ---- 派生カテゴリ語彙 (schema キーは英語固定、日本語は表示・入力同義語) ---- *)
+$SourceVaultMailCategories = {"InfoProvision", "AttendanceRequest", "TaskRequest",
+   "Confirmation", "Report", "Notice", "Other"};
+
+(* 入力 (LLM 出力や検索オプション) をトークンへ正規化する。日本語同義語も受ける。
+   未知の値は Missing["UnknownCategory"]。 *)
+$iSVMDCategorySynonyms = <|
+   "情報提供" -> "InfoProvision", "情報" -> "InfoProvision", "案内" -> "InfoProvision",
+   "出席依頼" -> "AttendanceRequest", "会議出席依頼" -> "AttendanceRequest",
+   "出席" -> "AttendanceRequest", "日程調整" -> "AttendanceRequest",
+   "作業依頼" -> "TaskRequest", "仕事依頼" -> "TaskRequest", "仕事の依頼" -> "TaskRequest",
+   "作業の依頼" -> "TaskRequest", "依頼" -> "TaskRequest", "作業" -> "TaskRequest",
+   "確認" -> "Confirmation", "承認" -> "Confirmation", "確認依頼" -> "Confirmation",
+   "報告" -> "Report", "通知" -> "Notice", "一斉配信" -> "Notice", "広告" -> "Notice",
+   "その他" -> "Other"|>;
+
+iSVMDNormalizeCategory[s_String] :=
+  Module[{t = StringTrim[s], hit},
+    If[t === "", Return[Missing["UnknownCategory"]]];
+    hit = SelectFirst[$SourceVaultMailCategories,
+       StringMatchQ[t, #, IgnoreCase -> True] &, Missing[]];
+    If[StringQ[hit], Return[hit]];
+    Lookup[$iSVMDCategorySynonyms, t, Missing["UnknownCategory"]]];
+iSVMDNormalizeCategory[_] := Missing["UnknownCategory"];
+
+(* 〆切文字列の正規化: "2026-06-19" / "2026-06-19 17:00" / "2026年6月19日 17時" 等を
+   ISO 風 "YYYY-MM-DD" または "YYYY-MM-DDTHH:MM:00" (ローカル時刻意図, TZ なし) に。
+   なし/解釈不能は Missing。 *)
+iSVMDNormalizeDeadline[s_String] :=
+  Module[{t = StringTrim[s], m, y, mo, d, h, mi, pad},
+    If[t === "" || StringMatchQ[t, "none" | "null" | "n/a" | "-", IgnoreCase -> True] ||
+       StringContainsQ[t, "なし"] || StringContainsQ[t, "無し"],
+      Return[Missing["None"]]];
+    m = StringCases[t,
+       RegularExpression["(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})(?:[T\\s]+(\\d{1,2}):(\\d{2}))?"] :>
+         {"$1", "$2", "$3", "$4", "$5"}];
+    If[m === {},
+      m = StringCases[t,
+         RegularExpression["(\\d{4})年\\s*(\\d{1,2})月\\s*(\\d{1,2})日(?:\\s*(\\d{1,2})[:時](\\d{1,2})?分?)?"] :>
+           {"$1", "$2", "$3", "$4", "$5"}]];
+    If[m === {}, Return[Missing["Unparsed"]]];
+    {y, mo, d, h, mi} = First[m];
+    {y, mo, d} = Quiet@Check[ToExpression /@ {y, mo, d}, {0, 0, 0}];
+    If[! (IntegerQ[y] && 2000 <= y <= 2199 && IntegerQ[mo] && 1 <= mo <= 12 &&
+          IntegerQ[d] && 1 <= d <= 31),
+      Return[Missing["Unparsed"]]];
+    pad = StringPadLeft[ToString[#], 2, "0"] &;
+    If[h === "",
+      StringJoin[ToString[y], "-", pad[mo], "-", pad[d]],
+      Module[{hh = Quiet@Check[ToExpression[h], -1],
+          mm = If[mi === "", 0, Quiet@Check[ToExpression[mi], -1]]},
+        If[! (IntegerQ[hh] && 0 <= hh <= 23 && IntegerQ[mm] && 0 <= mm <= 59),
+          StringJoin[ToString[y], "-", pad[mo], "-", pad[d]],
+          StringJoin[ToString[y], "-", pad[mo], "-", pad[d], "T", pad[hh], ":", pad[mm], ":00"]]]]];
+iSVMDNormalizeDeadline[_] := Missing["None"];
+
 Options[SourceVaultSearchMailSnapshots] = {
-  "FromContact" -> Automatic, "From" -> Automatic, "MBox" -> Automatic,
+  "FromContact" -> Automatic, "From" -> Automatic, "To" -> Automatic, "MBox" -> Automatic,
   "DateFrom" -> Automatic, "DateTo" -> Automatic, "HasAttachment" -> Automatic,
+  "Category" -> Automatic, "HasDeadline" -> Automatic,
+  "DeadlineFrom" -> Automatic, "DeadlineTo" -> Automatic,
   "MinPriority" -> Automatic, "MaxPriority" -> Automatic,
   "MinPrivacy" -> Automatic, "MaxPrivacy" -> Automatic,
   "SortBy" -> Automatic, "SortOrder" -> "Desc", "Newest" -> True, "Limit" -> Automatic};
@@ -298,17 +361,45 @@ iSVMDSnapDate[s_] := Lookup[s["MailMetadataPublic"], "Date", ""];
 iSVMDNum[x_, default_] := If[NumericQ[x], x, default];
 iSVMDPriority[s_] := iSVMDNum[Lookup[s["Derived"], "Priority", Missing[]], -Infinity];
 iSVMDPrivacy[s_] := iSVMDNum[Lookup[s["Derived"], "PrivacyLevel", Missing[]], 0];
+iSVMDCategoryOf[s_] := With[{c = Lookup[Lookup[s, "Derived", <||>], "Category", Missing[]]},
+   If[StringQ[c], c, Missing["NoCategory"]]];
+iSVMDDeadlineOf[s_] := With[{dl = Lookup[Lookup[s, "Derived", <||>], "Deadline", Missing[]]},
+   If[StringQ[dl], dl, Missing["NoDeadline"]]];
+
+(* 〆切の日付範囲 (日単位包含)。〆切はローカル時刻意図の素の ISO 文字列なので
+   メール Date と違い TZ 変換しない。〆切なしは範囲指定時に不一致。 *)
+iSVMDDeadlineInRange[s_, Automatic, Automatic] := True;
+iSVMDDeadlineInRange[s_, fromDay_, toDay_] :=
+  Module[{dl = iSVMDDeadlineOf[s], dDay},
+    If[! StringQ[dl], Return[False]];
+    dDay = iSVMDDayListOf[dl];
+    If[! MatchQ[dDay, {_Integer, _Integer, _Integer}], Return[False]];
+    And[
+      fromDay === Automatic || ! MatchQ[fromDay, {_Integer, _Integer, _Integer}] ||
+        OrderedQ[{fromDay, dDay}],
+      toDay === Automatic || ! MatchQ[toDay, {_Integer, _Integer, _Integer}] ||
+        OrderedQ[{dDay, toDay}]]];
 
 iSVMDSortKey[by_][s_] := Switch[by,
   "Priority", iSVMDPriority[s], "PrivacyLevel" | "Privacy", iSVMDPrivacy[s],
+  (* 〆切なしは昇順で末尾に来るよう番兵値 *)
+  "Deadline", With[{dl = iSVMDDeadlineOf[s]}, If[StringQ[dl], dl, "9999-12-31T23:59:59"]],
   _, iSVMDSnapDate[s]];
 
 SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
-  Module[{q, fc, fr, mb, df, dt, ha, hits, lim, minP, maxP, minPr, maxPr, by, ord},
+  Module[{q, fc, fr, toQ, mb, df, dt, ha, cat, hd, ddf, ddt, hits, lim,
+      minP, maxP, minPr, maxPr, by, ord},
     q = StringTrim[query]; fc = OptionValue["FromContact"]; fr = OptionValue["From"];
-    mb = OptionValue["MBox"];
+    toQ = OptionValue["To"]; mb = OptionValue["MBox"];
     df = iSVMDDayListOf[OptionValue["DateFrom"]]; dt = iSVMDDayListOf[OptionValue["DateTo"]];
     ha = OptionValue["HasAttachment"];
+    (* Category は日本語名でも受け、保存トークンへ正規化してから比較 *)
+    cat = With[{c = OptionValue["Category"]},
+       If[c === Automatic || c === All, Automatic,
+         With[{n = iSVMDNormalizeCategory[ToString[c]]}, If[StringQ[n], n, ToString[c]]]]];
+    hd = OptionValue["HasDeadline"];
+    ddf = iSVMDDayListOf[OptionValue["DeadlineFrom"]];
+    ddt = iSVMDDayListOf[OptionValue["DeadlineTo"]];
     minP = OptionValue["MinPriority"]; maxP = OptionValue["MaxPriority"];
     minPr = OptionValue["MinPrivacy"]; maxPr = OptionValue["MaxPrivacy"];
     hits = Select[Values[$iSVMDStore], Function[s,
@@ -319,9 +410,15 @@ SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
              StringQ[#] && StringContainsQ[#, q, IgnoreCase -> True] &],
          fr === Automatic || (StringQ[Lookup[s["MailMetadataPublic"], "From", ""]] &&
             StringContainsQ[s["MailMetadataPublic"]["From"], fr, IgnoreCase -> True]),
+         (* 宛先フィルタ: To ヘッダ部分一致 (オーナー以外の特定個人宛の依頼を選べるように) *)
+         toQ === Automatic || (StringQ[Lookup[s["MailMetadataPublic"], "To", ""]] &&
+            StringContainsQ[s["MailMetadataPublic"]["To"], toQ, IgnoreCase -> True]),
          fc === Automatic || Lookup[s["AddressBookRefs"], "FromContact", Null] === fc,
          mb === Automatic || Lookup[s["MailSource"], "MBox", Null] === mb,
          ha === Automatic || TrueQ[Lookup[s["MailMetadataPublic"], "AttachmentCount", 0] > 0] === TrueQ[ha],
+         cat === Automatic || iSVMDCategoryOf[s] === cat,
+         hd === Automatic || StringQ[iSVMDDeadlineOf[s]] === TrueQ[hd],
+         iSVMDDeadlineInRange[s, ddf, ddt],
          minP === Automatic || iSVMDPriority[s] >= minP, maxP === Automatic || iSVMDPriority[s] <= maxP,
          minPr === Automatic || iSVMDPrivacy[s] >= minPr, maxPr === Automatic || iSVMDPrivacy[s] <= maxPr,
          iSVMDDateInRange[s, df, dt]]]];
@@ -348,6 +445,8 @@ SourceVaultMailSummaryRow[s_Association] :=
   <|"Date" -> Lookup[s["MailMetadataPublic"], "Date", Missing[]],
     "From" -> iSVMDFromDisplay[s],
     "Subject" -> Lookup[s["MailMetadataPublic"], "Subject", Missing["Encrypted"]],
+    "Category" -> iSVMDCategoryOf[s],
+    "Deadline" -> iSVMDDeadlineOf[s],
     "Priority" -> Lookup[s["Derived"], "Priority", Missing["NotGenerated"]],
     "PrivacyLevel" -> Lookup[s["Derived"], "PrivacyLevel", Missing[]],
     "MaildbPrivacy" -> Lookup[s["Provenance"], "OriginalMaildbPrivacy", Missing[]],
@@ -357,9 +456,45 @@ SourceVaultMailSummaryRow[s_Association] :=
     "BodyEncrypted" ->
       SourceVault`SourceVaultEncryptedRecordQ[Lookup[s["PayloadRefs"], "Body", <||>]]|>;
 
+(* View 結果が機密扱いか: PL >= 0.5 のメールを 1 通でも含めば機密
+   (フェイルセーフ: PL 欠落は 1.0 扱い)。全件 PL < 0.5 なら平文扱い。 *)
+iSVMDConfidentialQ[snaps_List] :=
+  snaps =!= {} && TrueQ[Max[iSVMailProbePL /@ snaps] >= 0.5];
+
+(* 表示時の即時機密マーク (ClaudeCode 不在時のフォールバック):
+   View 評価の出力セルは評価中はまだ存在しないため、ワンショットの
+   スケジュールタスク (kernel idle 後に実行) で評価完了直後に
+   SourceVaultMarkConfidentialViewCells を走らせる (FE がある時のみ)。
+   ClaudeEval 直前の NBMakeContextPacket フックは最終防衛線として残る。 *)
+iSVMDScheduleConfidentialMark[snaps_List] :=
+  Quiet@Check[
+    If[TrueQ[$Notebooks] && iSVMDConfidentialQ[snaps],
+      With[{nb = EvaluationNotebook[]},
+        If[Head[nb] === NotebookObject,
+          SessionSubmit[ScheduledTask[
+            Quiet@Check[SourceVault`SourceVaultMarkConfidentialViewCells[nb], Null],
+            {1.0}]]]]];
+    Null,
+    Null];
+
+(* View 値の機密化 (ユーザー方針: View は機密値を返す関数として振る舞う)。
+   PL >= 0.5 のメールを含む結果は ClaudeCode`Confidential を通して返す:
+   入力セルの機密マーク + 出力セルの遅延マーク + 代入先変数 (mails 等) の
+   秘密変数登録 + CellEpilog 装着までやってくれるので、mails[[1]][[1]] の
+   ような派生値のセルも評価時に依存秘密として自動マークされる。
+   ClaudeCode 未ロード時はセルマークのみのフォールバック。
+   (将来的には値自体が Confidential プロパティを運ぶ多値化が筋だが当座はこれ) *)
+iSVMDWrapConfidential[result_, snaps_List] :=
+  Which[
+    ! iSVMDConfidentialQ[snaps], result,
+    Length[DownValues[ClaudeCode`Confidential]] > 0,
+      ClaudeCode`Confidential[result],
+    True, (iSVMDScheduleConfidentialMark[snaps]; result)];
+
 Options[SourceVaultMailSearchSummary] = Options[SourceVaultSearchMailSnapshots];
 SourceVaultMailSearchSummary[query_String : "", opts : OptionsPattern[]] :=
-  SourceVaultMailSummaryRow /@ SourceVaultSearchMailSnapshots[query, opts];
+  With[{snaps = SourceVaultSearchMailSnapshots[query, opts]},
+    iSVMDWrapConfidential[SourceVaultMailSummaryRow /@ snaps, snaps]];
 
 Options[SourceVaultMailDataset] = Options[SourceVaultSearchMailSnapshots];
 SourceVaultMailDataset[query_String : "", opts : OptionsPattern[]] :=
@@ -564,13 +699,21 @@ SourceVaultMailDerivedPending::usage =
 SourceVaultMailDerivedPendingQ::usage =
   "SourceVaultMailDerivedPendingQ[snapshot] は派生が未処理 (\"Pending\") なら True。";
 SourceVaultInferMailDerivedBatch::usage =
-  "SourceVaultInferMailDerivedBatch[opts] は未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。中断耐性 (CheckpointEvery 件ごとに保存)。opts: \"Limit\"(既定50、フィルタ後の件数上限。範囲内すべてなら Infinity), \"DateFrom\"/\"DateTo\"(既定 Automatic。DateObject/文字列/{y,m,d} で対象メールを日付範囲に限定、日単位包含), \"Inferencer\"(既定=実LLM, 注入可), \"CheckpointEvery\"(既定20), \"Persist\"(既定True)。";
+  "SourceVaultInferMailDerivedBatch[opts] は未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。中断耐性 (CheckpointEvery 件ごとに保存)。opts: \"Limit\"(既定50、フィルタ後の件数上限。範囲内すべてなら Infinity), \"DateFrom\"/\"DateTo\"(既定 Automatic。DateObject/文字列/{y,m,d} で対象メールを日付範囲に限定、日単位包含), \"Refresh\"(既定 None=Pending のみ。\"MissingCategory\"=Category 未生成の処理済み旧 snapshot も再処理, All=全件再処理, Function=述語に一致する snapshot を再処理。例: \"Refresh\"->Function[s, StringContainsQ[ToString@s[\"MailMetadataPublic\"][\"Subject\"], \"Cerezo\"]]), \"Inferencer\"(既定=実LLM, 注入可), \"CheckpointEvery\"(既定20), \"Persist\"(既定True)。";
 SourceVaultMailInferDerived::usage =
-  "SourceVaultMailInferDerived[mailspec] は mailspec(date/subject/from/to/cc/body)からローカル LLM で <|WorkRequest, PrivacyLevel, Summary, Status|> を返す(優先度は構造的に別計算)。";
+  "SourceVaultMailInferDerived[mailspec] は mailspec(date/subject/from/to/cc/body)からローカル LLM で <|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|> を返す(優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン、Deadline は ISO 文字列または Missing[\"None\"]。";
+SourceVaultRegisterMailspecEnricher::usage =
+  "SourceVaultRegisterMailspecEnricher[name, f] は派生(サマリー作成)時に LLM へ渡す mailspec を拡張する enricher を登録する(Cerezo.wl 等の拡張用)。f[mailspec, snapshot] が変更後の mailspec(Association)を返すとそれが LLM 入力に使われ、Derived.DerivedEnrichment に名前が記録される。非該当/失敗時は mailspec をそのまま返す。取り込み・保存レコード形式には影響せず、未登録なら完全素通し。";
+SourceVaultUnregisterMailspecEnricher::usage =
+  "SourceVaultUnregisterMailspecEnricher[name] は mailspec enricher の登録を解除する。";
+SourceVaultMailspecEnrichers::usage =
+  "SourceVaultMailspecEnrichers[] は登録済み mailspec enricher 名のリストを返す。";
 SourceVaultMailComputePriority::usage =
-  "SourceVaultMailComputePriority[snapshot, workRequest] は構造シグナル(送信者グループ重み + To/Cc 位置 + ML判定 + LLM 依頼度)から重要度 0.0-1.0 を決定的に計算する。<|Priority, Components|> を返す。";
+  "SourceVaultMailComputePriority[snapshot, workRequest, category] は構造シグナル(送信者グループ重み + To/Cc 位置 + ML判定 + LLM 依頼度 + LLM カテゴリ)から重要度 0.0-1.0 を決定的に計算する。category が \"Notice\"(通知・一斉配信・広告)なら -0.30 減点。<|Priority, Components|> を返す。";
 SourceVaultMailExplainPriority::usage =
-  "SourceVaultMailExplainPriority[snapshot] は snapshot の保存済み WorkRequest を使って重要度の内訳(Components)を返す。";
+  "SourceVaultMailExplainPriority[snapshot] は snapshot の保存済み WorkRequest/Category を使って重要度の内訳(Components)を返す。";
+SourceVaultMailRecomputePriorities::usage =
+  "SourceVaultMailRecomputePriorities[opts] はロード済み snapshot のうち構造計算済み (PriorityComponents あり) のものについて、保存済み WorkRequest/Category から Priority を LLM なしで再計算し in-place 更新する。優先度式の変更を既処理メールへ反映するために使う (legacy maildb 由来の Priority は触らない)。opts: \"Persist\"(既定True)。";
 SourceVaultSetPriorityGroupWeight::usage =
   "SourceVaultSetPriorityGroupWeight[group, weight] はグループの重み(0.0-1.0)を登録し vault config に保存する。実体の Group がこれに解決される。";
 SourceVaultPriorityGroupWeights::usage = "SourceVaultPriorityGroupWeights[] は登録済みグループ重みを返す。";
@@ -755,17 +898,21 @@ iSVMDOwnerLLMProfile[] := Quiet@Check[
      SourceVault`SourceVaultOwnerLLMProfile[], ""], ""];
 
 iSVDerivePrompt[mailspec_Association] :=
-  Module[{fld, pmail, prof, ownerRef, recvLine},
+  Module[{fld, pmail, prof, owners, ownerRef, recvLine},
     fld = StringJoin[KeyValueMap[
        #1 <> ": " <> Which[StringQ[#2], #2, ListQ[#2], StringRiffle[Select[#2, StringQ], ", "],
           True, ToString[#2]] <> "\n" &,
        KeyTake[mailspec, {"date", "subject", "from", "to", "cc", "body"}]]];
     pmail = iSVMDOwnerPrimaryEmail[];
     prof = iSVMDOwnerLLMProfile[];
+    owners = iSVMDOwnerEmails[];
     ownerRef = If[StringQ[pmail] && pmail =!= "", pmail, "オーナー"];
     recvLine = "受信者(オーナー)は " <> ownerRef <>
-       If[StringQ[prof] && prof =!= "", "。プロフィール: " <> prof, ""] <> "。\n\n";
-    "以下の[メール]について、WORKREQUEST、PRIVACY、SUMMARY の3つを推定せよ。\n" <>
+       If[ListQ[owners] && owners =!= {},
+         "(オーナーのアドレス: " <> StringRiffle[owners, ", "] <> ")", ""] <>
+       If[StringQ[prof] && prof =!= "", "。プロフィール: " <> prof, ""] <> "。\n" <>
+       "to/cc がオーナー個人のアドレスでなくても、オーナーの所属するグループ・部署・メーリングリスト宛であれば、その依頼はオーナーへの依頼として扱う。\n\n";
+    "以下の[メール]について、WORKREQUEST、PRIVACY、CATEGORY、DEADLINE、SUMMARY の5つを推定せよ。\n" <>
     "各行のフォーマットに従い、余計な説明は一切不要。\n\n" <>
     recvLine <>
     "== WORKREQUEST ==\n依頼度を 0.0〜1.0 の数値で1つ出力。これは「このメールがオーナー個人への直接の依頼・要請・タスク(返信や対応が必要)である度合い」(優先度はシステムが別途計算するので、内容としての依頼度のみを評価せよ)。\n" <>
@@ -773,20 +920,36 @@ iSVDerivePrompt[mailspec_Association] :=
     "== PRIVACY ==\n秘匿度を 0.0〜1.0 の数値で1つ出力。これはクラウドLLMで処理してよいかの指標。" <>
     "0.5以下ならクラウド可。1.0=人事/成績/個人情報、0.8=組織内部の内部連絡、0.5=組織内可視で問題なし、" <>
     "0.4=外部の知人が見ても問題ない、0.0=どこに開示しても問題ない既知の内容。\n\n" <>
+    "== CATEGORY ==\nfrom から to への伝達の種類を、次のトークンから1つだけ出力。\n" <>
+    "TaskRequest=作業・仕事の依頼(査読、原稿・書類の提出、調査・対応の依頼など)、" <>
+    "AttendanceRequest=会議・行事等への出席依頼/日程調整、" <>
+    "Confirmation=確認・承認を求める連絡、" <>
+    "InfoProvision=情報提供・案内、Report=結果・状況の報告、" <>
+    "Notice=機械的な通知・一斉配信・広告、Other=その他。\n" <>
+    "宛先がオーナーの所属グループ(部署ML等)であっても、内容が依頼なら TaskRequest または AttendanceRequest と判定する。\n\n" <>
+    "== DEADLINE ==\n〆切・期限(提出期限、回答期限、申込期限、出欠回答期限など)が本文にあれば、" <>
+    "メールの date を基準に「来週月曜」等の相対表現も絶対日時へ変換して、YYYY-MM-DD または YYYY-MM-DD HH:MM の形式で出力。" <>
+    "〆切が無ければ NONE とだけ出力。会議開催日時そのものは〆切ではないが、出欠回答期限は〆切である。\n\n" <>
     "== SUMMARY ==\n要約を1行で出力。形式「〔カテゴリ〕内容の要約〔関係者〕」。" <>
     "カテゴリは 依頼/確認/報告/情報/雑務/〆切 から最適なものを選ぶ。\n\n" <>
-    "== 出力形式 ==\n以下の3行のみを出力。他のテキストは一切不要。\n" <>
-    "WORKREQUEST: <数値>\nPRIVACY: <数値>\nSUMMARY: <要約文>\n\n[メール]\n" <> fld];
+    "== 出力形式 ==\n以下の5行のみを出力。他のテキストは一切不要。\n" <>
+    "WORKREQUEST: <数値>\nPRIVACY: <数値>\nCATEGORY: <トークン>\nDEADLINE: <YYYY-MM-DD[ HH:MM] または NONE>\nSUMMARY: <要約文>\n\n[メール]\n" <> fld];
 
 iSVParseDerived[raw_String] :=
-  Module[{wr = Missing["NotParsed"], pv = Missing["NotParsed"], sm = "", m},
+  Module[{wr = Missing["NotParsed"], pv = Missing["NotParsed"],
+      ct = Missing["NotParsed"], dl = Missing["NotParsed"], sm = "", m},
     m = StringCases[raw, ("WORKREQUEST:" | "PRIORITY:") ~~ Whitespace ~~ v : NumberString :> v];
     If[m =!= {} && StringLength[First[m]] <= 4, wr = Clip[ToExpression[First[m]], {0.0, 1.0}]];
     m = StringCases[raw, "PRIVACY:" ~~ Whitespace ~~ v : NumberString :> v];
     If[m =!= {} && StringLength[First[m]] <= 4, pv = Clip[ToExpression[First[m]], {0.0, 1.0}]];
+    m = StringCases[raw, "CATEGORY:" ~~ Whitespace ~~ s__ /; ! StringContainsQ[s, "\n"] :> StringTrim[s]];
+    If[m =!= {}, ct = iSVMDNormalizeCategory[First[m]]];
+    m = StringCases[raw, "DEADLINE:" ~~ Whitespace ~~ s__ /; ! StringContainsQ[s, "\n"] :> StringTrim[s]];
+    If[m =!= {}, dl = iSVMDNormalizeDeadline[First[m]]];
     m = StringCases[raw, "SUMMARY:" ~~ Whitespace ~~ s__ /; ! StringContainsQ[s, "\n"] :> StringTrim[s]];
     If[m =!= {}, sm = First[m]];
-    <|"WorkRequest" -> wr, "PrivacyLevel" -> pv, "Summary" -> sm|>];
+    <|"WorkRequest" -> wr, "PrivacyLevel" -> pv, "Category" -> ct, "Deadline" -> dl,
+      "Summary" -> sm|>];
 
 SourceVaultMailInferDerived[mailspec_Association] :=
   Module[{llm, raw, parsed},
@@ -795,6 +958,7 @@ SourceVaultMailInferDerived[mailspec_Association] :=
     If[! StringQ[raw] || raw === "",
       Return[<|"Status" -> "Error", "Reason" -> "LLMUnavailable",
         "WorkRequest" -> Missing["NotGenerated"], "PrivacyLevel" -> Missing["NotGenerated"],
+        "Category" -> Missing["NotGenerated"], "Deadline" -> Missing["NotGenerated"],
         "Summary" -> Missing["NotGenerated"]|>]];
     parsed = iSVParseDerived[raw];
     Append[parsed, "Status" -> "Ok"]];
@@ -884,55 +1048,132 @@ iSVMDSenderWeight[snap_Association] :=
       If[NumericQ[gw], Return[N@Clip[gw, {0., 1.}]]]];
     $iSVMDDefaultSenderWeight];
 
-SourceVaultMailComputePriority[snap_Association, workRequest_: Missing[]] :=
-  Module[{sw, pos, bulk, wr, posAdj, bulkAdj, pri},
+SourceVaultMailComputePriority[snap_Association, workRequest_: Missing[], category_: Missing[]] :=
+  Module[{sw, pos, bulk, wr, posAdj, bulkAdj, catAdj, pri},
     sw = iSVMDSenderWeight[snap];
     pos = iSVMDOwnerPosition[snap];
     bulk = iSVMDBulkQ[snap];
     wr = If[NumericQ[workRequest], Clip[N[workRequest], {0., 1.}], 0.0];
     posAdj = Which[pos === "To", 0.15, pos === "Cc", 0.0, pos === "Bulk", -0.25, True, 0.0];
     bulkAdj = If[bulk, -0.15, 0.0];
-    pri = Clip[sw + 0.30 wr + posAdj + bulkAdj, {0.0, 1.0}];
+    (* LLM カテゴリ Notice (機械的通知・一斉配信・広告) は強い減点。
+       DM はオーナー個人が To に入るため posAdj +0.15 が広告を持ち上げてしまう
+       (未知送信者 0.4 + To 0.15 = 0.55)。Notice -0.30 で 0.25 に落とす。
+       他カテゴリは WorkRequest が既に反映するので加減点しない。 *)
+    catAdj = If[category === "Notice", -0.30, 0.0];
+    pri = Clip[sw + 0.30 wr + posAdj + bulkAdj + catAdj, {0.0, 1.0}];
     <|"Priority" -> Round[pri, 0.01],
       "Components" -> <|"SenderWeight" -> sw, "OwnerPosition" -> pos, "Bulk" -> bulk,
-         "WorkRequest" -> wr, "PositionAdj" -> posAdj, "BulkAdj" -> bulkAdj|>|>];
+         "WorkRequest" -> wr, "Category" -> category,
+         "PositionAdj" -> posAdj, "BulkAdj" -> bulkAdj, "CategoryAdj" -> catAdj|>|>];
 
 SourceVaultMailExplainPriority[snap_Association] :=
   SourceVaultMailComputePriority[snap,
-    Quiet@Check[snap["Derived"]["WorkRequest"], Missing[]]];
+    Quiet@Check[snap["Derived"]["WorkRequest"], Missing[]],
+    Quiet@Check[With[{c = snap["Derived"]["Category"]}, If[StringQ[c], c, Missing[]]], Missing[]]];
+
+(* 優先度式の変更を既処理 snapshot に反映する (LLM 不要・高速)。
+   対象は PriorityComponents を持つもの = 過去に構造計算で Priority を出したもの。
+   legacy maildb 由来の Priority (PriorityComponents 無し) は有意な別ソースなので触らない。 *)
+Options[SourceVaultMailRecomputePriorities] = {"Persist" -> True};
+SourceVaultMailRecomputePriorities[OptionsPattern[]] :=
+  Module[{snaps = SourceVaultMailSnapshotList[], n = 0, changed = 0},
+    Do[
+      Module[{d = Lookup[snap, "Derived", <||>], wr, ct, cp, s2},
+        If[! KeyExistsQ[d, "PriorityComponents"], Continue[]];
+        n++;
+        wr = Lookup[d, "WorkRequest", Missing[]];
+        ct = With[{c = Lookup[d, "Category", Missing[]]}, If[StringQ[c], c, Missing[]]];
+        cp = SourceVaultMailComputePriority[snap, wr, ct];
+        If[d["Priority"] =!= cp["Priority"] || d["PriorityComponents"] =!= cp["Components"],
+          d["Priority"] = cp["Priority"];
+          d["PriorityComponents"] = cp["Components"];
+          s2 = snap; s2["Derived"] = d;
+          SourceVaultMailSnapshotPut[s2, "Persist" -> False];
+          changed++]],
+      {snap, snaps}];
+    If[TrueQ[OptionValue["Persist"]] && changed > 0, SourceVaultMailStoreSave["All" -> False]];
+    <|"Status" -> "Ok", "Eligible" -> n, "Recomputed" -> changed,
+      "Total" -> Length[snaps]|>];
 
 (* snapshot に派生結果を適用。優先度は構造的に計算(LLM は WorkRequest のみ)。 *)
 iSVApplyDerived[snap_Association, res_Association] :=
-  Module[{d = Lookup[snap, "Derived", <||>], s2 = snap, wr, cp},
+  Module[{d = Lookup[snap, "Derived", <||>], s2 = snap, wr, cp, ct},
     (* 旧 LLM の Priority は WorkRequest の代理として扱う(後方互換) *)
     wr = Lookup[res, "WorkRequest", Lookup[res, "Priority", Missing[]]];
-    cp = SourceVaultMailComputePriority[snap, wr];
+    (* カテゴリは語彙へ正規化して保存 (注入 Inferencer の日本語値も受ける)。
+       優先度計算にも渡す (Notice = DM/一斉配信 は減点)。 *)
+    ct = iSVMDNormalizeCategory[Lookup[res, "Category", Missing[]]];
+    cp = SourceVaultMailComputePriority[snap, wr, If[StringQ[ct], ct, Missing[]]];
     d["Priority"] = cp["Priority"];
     d["PriorityComponents"] = cp["Components"];
     If[NumericQ[wr], d["WorkRequest"] = N@Clip[wr, {0., 1.}]];
     If[NumericQ[res["PrivacyLevel"]], d["PrivacyLevel"] = res["PrivacyLevel"]];
+    If[StringQ[ct], d["Category"] = ct];
+    (* 〆切はキーが在るときだけ更新: 再処理で「〆切なし」になれば Missing で上書き、
+       Deadline 非対応の旧 Inferencer では既存値を保持。 *)
+    If[KeyExistsQ[res, "Deadline"],
+      d["Deadline"] = With[{dl = res["Deadline"]},
+         Which[
+           StringQ[dl], With[{n = iSVMDNormalizeDeadline[dl]}, If[StringQ[n], n, dl]],
+           MatchQ[dl, Missing["None"]], Missing["None"],
+           True, Lookup[d, "Deadline", Missing["NotGenerated"]]]]];
     If[StringQ[res["Summary"]], d["Summary"] = res["Summary"]];
     d["DerivedStatus"] = "Processed";
     d["DerivedSource"] = "LocalLLM+Structured";
     s2["Derived"] = d; s2];
 
+(* ---- mailspec enricher 登録 (拡張ポイント) ----
+   サマリー作成 (派生) のときだけ呼ばれる。登録が無ければ完全素通しで
+   SourceVault 単体の動作は変わらない。enricher が本文を拡張しても保存
+   レコードは標準形式のまま (Derived.DerivedEnrichment に名前が付くのみ。
+   暗号化済み body は変更しない)。 *)
+If[! AssociationQ[$iSVMDMailspecEnrichers], $iSVMDMailspecEnrichers = <||>];
+
+SourceVaultRegisterMailspecEnricher[name_String, f_] :=
+  (AssociateTo[$iSVMDMailspecEnrichers, name -> f];
+   <|"Status" -> "Registered", "Name" -> name|>);
+SourceVaultUnregisterMailspecEnricher[name_String] :=
+  ($iSVMDMailspecEnrichers = KeyDrop[$iSVMDMailspecEnrichers, name];
+   <|"Status" -> "Unregistered", "Name" -> name|>);
+SourceVaultMailspecEnrichers[] := Keys[$iSVMDMailspecEnrichers];
+
+iSVMDEnrichMailspec[spec_Association, snap_Association] :=
+  Module[{s = spec, applied = {}},
+    KeyValueMap[
+      Function[{name, f},
+        Module[{r = Quiet@Check[f[s, snap], $Failed]},
+          If[AssociationQ[r] && r =!= s, applied = Append[applied, name]; s = r]]],
+      $iSVMDMailspecEnrichers];
+    If[applied =!= {}, s["_enrichedBy"] = applied];
+    s];
+
+(* 派生レコードに enrichment 名を記録 (透明性のための追加キーのみ) *)
+iSVMDStampEnrichment[snap_Association, spec_Association] :=
+  With[{names = Lookup[spec, "_enrichedBy", Missing[]]},
+    If[! ListQ[names] || names === {}, snap,
+      Module[{s2 = snap, d = Lookup[snap, "Derived", <||>]},
+        d["DerivedEnrichment"] = names; s2["Derived"] = d; s2]]];
+
 iSVSnapMailspec[snap_Association] :=
-  Module[{md = Lookup[snap, "MailMetadataPublic", <||>], bodyR},
+  Module[{md = Lookup[snap, "MailMetadataPublic", <||>], bodyR, spec},
     bodyR = SourceVaultMailSnapshotDecryptBody[snap];
-    <|"date" -> ToString@Lookup[md, "Date", ""],
+    spec = <|"date" -> ToString@Lookup[md, "Date", ""],
       "subject" -> ToString@Lookup[md, "Subject", ""],
       "from" -> ToString@Lookup[md, "From", ""],
       "to" -> ToString@Lookup[md, "To", ""],
       "cc" -> ToString@Lookup[md, "Cc", ""],
       "body" -> If[Lookup[bodyR, "Status", ""] === "Ok", bodyR["Body"], ""],
-      "_bodyStatus" -> Lookup[bodyR, "Status", "Error"]|>];
+      "_bodyStatus" -> Lookup[bodyR, "Status", "Error"]|>;
+    iSVMDEnrichMailspec[spec, snap]];
 
 Options[SourceVaultInferMailDerivedBatch] = {
    "Limit" -> 50, "DateFrom" -> Automatic, "DateTo" -> Automatic,
+   "Refresh" -> None,
    "Inferencer" -> Automatic, "CheckpointEvery" -> 20, "Persist" -> True};
 
 SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
-  Module[{infer, lim, ck, persist, pendBefore, batch, pend, df, dt,
+  Module[{infer, lim, ck, persist, pendBefore, batch, pend, df, dt, ref,
       done = 0, failBody = 0, failLLM = 0, sinceCk = 0},
     infer = OptionValue["Inferencer"] /. Automatic -> SourceVaultMailInferDerived;
     lim = OptionValue["Limit"]; ck = OptionValue["CheckpointEvery"];
@@ -943,7 +1184,21 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
        範囲内すべてを処理するには "Limit" -> Infinity を指定する。 *)
     df = iSVMDDayListOf[OptionValue["DateFrom"]];
     dt = iSVMDDayListOf[OptionValue["DateTo"]];
-    pend = SourceVaultMailDerivedPending[];
+    (* "Refresh": None=Pending のみ (既定)。"MissingCategory"=Category 未生成の
+       Processed も対象 (Category/Deadline 導入前に処理済みの旧 snapshot の後埋め用)。
+       All=ロード済み全件を再処理。Function=述語に一致する snapshot を再処理
+       (例: Cerezo 通知だけリンク先込みで再派生)。 *)
+    ref = OptionValue["Refresh"];
+    pend = Which[
+      ref === All || ref === "All", SourceVaultMailSnapshotList[],
+      ref === "MissingCategory",
+        Select[SourceVaultMailSnapshotList[],
+          Function[s, SourceVaultMailDerivedPendingQ[s] ||
+            ! StringQ[Lookup[Lookup[s, "Derived", <||>], "Category", Missing[]]]]],
+      Head[ref] === Function,
+        Select[SourceVaultMailSnapshotList[],
+          TrueQ[Quiet@Check[ref[#], False]] &],
+      True, SourceVaultMailDerivedPending[]];
     pendBefore = Length[pend];
     If[df =!= Automatic || dt =!= Automatic,
       pend = Select[pend, iSVMDDateInRange[#, df, dt] &]];
@@ -952,9 +1207,9 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
       Module[{spec, res, s2},
         spec = iSVSnapMailspec[snap];
         If[spec["_bodyStatus"] =!= "Ok", failBody++; Continue[]];
-        res = infer[KeyDrop[spec, "_bodyStatus"]];
+        res = infer[KeyDrop[spec, {"_bodyStatus", "_enrichedBy"}]];
         If[! AssociationQ[res] || Lookup[res, "Status", "Ok"] === "Error", failLLM++; Continue[]];
-        s2 = iSVApplyDerived[snap, res];
+        s2 = iSVMDStampEnrichment[iSVApplyDerived[snap, res], spec];
         SourceVaultMailSnapshotPut[s2, "Persist" -> False];
         done++; sinceCk++;
         If[persist && sinceCk >= ck, SourceVaultMailStoreSave["All" -> False]; sinceCk = 0]],
@@ -1125,9 +1380,10 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
         If[TrueQ[OptionValue["Process"]],
           spec = iSVSnapMailspec[snap];
           If[spec["_bodyStatus"] === "Ok",
-            res = infer[KeyDrop[spec, "_bodyStatus"]];
+            res = infer[KeyDrop[spec, {"_bodyStatus", "_enrichedBy"}]];
             If[AssociationQ[res] && Lookup[res, "Status", "Ok"] =!= "Error",
-              snap = iSVApplyDerived[snap, res]; processed++]]];
+              snap = iSVMDStampEnrichment[iSVApplyDerived[snap, res], spec];
+              processed++]]];
         SourceVaultMailSnapshotPut[snap, "Persist" -> False]; stored++],
       {m, toStore}];
     If[TrueQ[OptionValue["Persist"]], SourceVaultMailStoreSave["All" -> False]; iSVMDIdentitySaveSafe[]];
@@ -1173,14 +1429,22 @@ SourceVaultEntityView::usage = "SourceVaultEntityView[] は実体(人/組織/Bot
 SourceVaultEntityEditUI::usage = "SourceVaultEntityEditUI[entityIdOrUid] は実体1件の編集フォーム(front end)。表示名/種別/漢字/ローマ字/かな/分類/グループ/重み/所属/信頼 を編集し保存。";
 $SourceVaultLegacyMailRoot::usage = "旧 maildb のメールルート (添付ディレクトリの親)。既定は PrivateVault と同階層の udb/mails。";
 $SourceVaultMailNotebookStyle::usage = "本文表示・返信ノートブックの StyleDefinitions。既定 \"SourceVault default.nb\"。";
-SourceVaultMailMarkViewCells::usage = "SourceVaultMailMarkViewCells[nb] は notebook 内の SourceVaultMailView/MailDataset/MailSearchSummary 出力セルを、表示メールの最大 Derived.PrivacyLevel で機密マークする。クラウド LLM (閾値0.5) へはスキーマのみ、ローカル LLM (閾値1.0) へは全文が送られるようになる。最大PL<=0.5 の公開メールのみの表はマークしない。nb 省略時は EvaluationNotebook[]。返り値: {<|\"Cell\"->idx,\"PrivacyLevel\"->pl|>...}。";
-SourceVaultMailEnableAutoConfidential::usage = "SourceVaultMailEnableAutoConfidential[] は NBAccess`NBMakeContextPacket にフックを装着し、ClaudeEval/ClaudeQuery の文脈構築直前にメール View 出力セルを自動で SourceVaultMailMarkViewCells で機密マークする。冪等。SourceVaultMailDisableAutoConfidential[] で解除。";
+$SourceVaultMailViewMaxRows::usage = "$SourceVaultMailViewMaxRows はメール一覧 Dataset (SourceVaultMailView 等) が一度に描画する最大行数。Windows 版 FrontEnd は項目数の多い Dataset の描画が重いため既定 25 (Pane スクロール + Dataset ページング前提)。All で無制限。整数を設定すると即反映。";
+SourceVaultMarkConfidentialViewCells::usage = "SourceVaultMarkConfidentialViewCells[nb] は notebook 内の「ノートブック生データを表示する出力セル」(メール View=SourceVaultMailView/MailDataset/MailSearchSummary、Todo 生テキスト=SourceVaultFindTodos) を、含まれる項目の最大プライバシーで機密マークする。メールは Derived.PrivacyLevel、Todo はソースノートブックの Publishable (全 Public なら 0.0=マークせず、1 つでも非 Public なら 1.0)。クラウド LLM (閾値0.5) へはスキーマのみ、ローカル LLM (閾値1.0) へは全文。サマリー/予定表 (SourceVaultUpcomingSchedule 等) はクラウド安全なので対象外。検出対象は共有レジストリで拡張される (SourceVault_eagle.wl ロード時は Eagle View/Dataset/Search/GeoView も対象)。nb 省略時は EvaluationNotebook[]。返り値: {<|\"Cell\"->idx,\"PrivacyLevel\"->pl|>...}。";
+SourceVaultMailMarkViewCells::usage = "SourceVaultMailMarkViewCells[nb] は SourceVaultMarkConfidentialViewCells の別名 (後方互換)。メール・Todo など生データ出力セルを機密マークする。";
+SourceVaultMailEnableAutoConfidential::usage = "SourceVaultMailEnableAutoConfidential[] は NBAccess`NBMakeContextPacket にフックを装着し、ClaudeEval/ClaudeQuery の文脈構築直前に SourceVaultMarkConfidentialViewCells で生データ出力セル (メール View / Todo 生テキスト) を自動機密マークする。冪等。SourceVaultMailDisableAutoConfidential[] で解除。";
 SourceVaultMailDisableAutoConfidential::usage = "SourceVaultMailDisableAutoConfidential[] は SourceVaultMailEnableAutoConfidential[] で装着したフックを解除し、NBMakeContextPacket を元に戻す。";
 
 Begin["`Private`"];
 
 If[! ValueQ[$SourceVaultMailNotebookStyle],
   $SourceVaultMailNotebookStyle = "SourceVault default.nb"];
+
+(* Windows 版 FrontEnd は項目数の多い Dataset の描画が重い。メール一覧の
+   一度に描画する行数を既定 25 に抑え、Pane スクロール + Dataset ページング
+   前提にする。All で無制限。 *)
+If[! ValueQ[$SourceVaultMailViewMaxRows],
+  $SourceVaultMailViewMaxRows = 25];
 
 iSVUILegacyRoot[] :=
   If[StringQ[$SourceVaultLegacyMailRoot], $SourceVaultLegacyMailRoot,
@@ -1371,6 +1635,8 @@ $iSVUILabels = <|
   "Subject" -> <|"Japanese" -> "\:4ef6\:540d", "English" -> "Subject"|>,
   "From" -> <|"Japanese" -> "\:5dee\:51fa\:4eba", "English" -> "From"|>,
   "Summary" -> <|"Japanese" -> "\:6982\:8981", "English" -> "Summary"|>,
+  "Cat" -> <|"Japanese" -> "分類", "English" -> "Cat"|>,
+  "Deadline" -> <|"Japanese" -> "〆切", "English" -> "Due"|>,
   "NoMail" -> <|"Japanese" -> "\:8a72\:5f53\:3059\:308b\:30e1\:30fc\:30eb\:304c\:3042\:308a\:307e\:305b\:3093\:3002",
      "English" -> "No matching mail."|>,
   "Name" -> <|"Japanese" -> "\:8868\:793a\:540d", "English" -> "Name"|>,
@@ -1431,6 +1697,34 @@ iSVUITextCell[s_] :=
 (* Missing/Null は空文字に *)
 iSVUIShow[x_] := Which[MissingQ[x] || x === Null, "", StringQ[x], x, True, ToString[x]];
 
+(* カテゴリトークン -> 短い表示ラベル (列幅節約)。Tooltip にトークン名 *)
+$iSVUICategoryShort = <|
+  "InfoProvision" -> <|"Japanese" -> "情報", "English" -> "Info"|>,
+  "AttendanceRequest" -> <|"Japanese" -> "出席", "English" -> "Attend"|>,
+  "TaskRequest" -> <|"Japanese" -> "作業", "English" -> "Task"|>,
+  "Confirmation" -> <|"Japanese" -> "確認", "English" -> "Confirm"|>,
+  "Report" -> <|"Japanese" -> "報告", "English" -> "Report"|>,
+  "Notice" -> <|"Japanese" -> "通知", "English" -> "Notice"|>,
+  "Other" -> <|"Japanese" -> "他", "English" -> "Other"|>|>;
+
+iSVUICategoryCell[c_, ff_] :=
+  Module[{e, lang, lbl},
+    If[! StringQ[c], Return[""]];
+    e = Lookup[$iSVUICategoryShort, c, <||>];
+    lang = If[$Language === "Japanese", "Japanese", "English"];
+    lbl = Lookup[e, lang, Lookup[e, "English", c]];
+    (* 件名セル (iSVUITextCell) と同一構造にする。Tooltip 内の素の Style[文字列] は
+       Dataset セルで ShowStringCharacters が効き "通知" と引用符付きで表示される
+       (ユーザー報告)。"Text" スタイル (ShowStringCharacters->False) + Item で抑止。
+       Tooltip にはカテゴリトークン名を出す。 *)
+    Item[Tooltip[Style[lbl, "Text", FontFamily -> ff], c], Alignment -> Left]];
+
+(* 〆切 ISO 文字列 -> "2026/06/19 17:00" / "2026/06/19" のコンパクト表示 *)
+iSVUIFormatDeadline[dl_] :=
+  If[! StringQ[dl], "",
+    StringReplace[If[StringLength[dl] >= 16, StringTake[dl, 16], dl],
+      {"-" -> "/", "T" -> " "}]];
+
 Options[SourceVaultMailView] = Options[SourceVault`SourceVaultSearchMailSnapshots];
 SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
   Module[{snaps, rows, ff = iSVUIFont[]},
@@ -1447,19 +1741,26 @@ SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
            iSVL["Date"] -> Style[iSVUIFormatDateJST[Lookup[md, "Date", Missing[]]], FontFamily -> ff],
            iSVL["Pri"] -> Style[iSVUINumCell[Lookup[dv, "Priority", Missing[]]], FontFamily -> ff],
            iSVL["Sec"] -> Style[iSVUINumCell[Lookup[dv, "PrivacyLevel", Missing[]]], FontFamily -> ff],
+           iSVL["Cat"] -> iSVUICategoryCell[Lookup[dv, "Category", Missing[]], ff],
+           iSVL["Deadline"] -> Style[iSVUIFormatDeadline[Lookup[dv, "Deadline", Missing[]]],
+              FontFamily -> ff],
            iSVL["Subject"] -> iSVUITextCell[ToString@Lookup[md, "Subject", ""]],
            iSVL["From"] -> iSVUITextCell[iSVUIFromDisplayUI[s]],
            iSVL["Summary"] -> iSVUITextCell[With[{sm = Lookup[dv, "Summary", ""]},
               If[StringQ[sm], sm, ""]]]|>]] /@ snaps;
     If[rows === {}, Return[Style[iSVL["NoMail"], "Text"]]];
-    Pane[
-      Dataset[rows,
-        ItemSize -> {2, {3, 4, 3, 15, 3, 3, 28, 14, 40}},
-        Alignment -> {Left, Center},
-        (* MaxItems -> {最大行数, 最大列数}。第2要素を行数に縛ると
-           少件数時に列が隠れるので All (全列・全行) にする。 *)
-        MaxItems -> {All, All}],
-      ImageSize -> Full]];
+    (* PL >= 0.5 のメールを含む場合は Confidential 値として返す
+       (代入先変数も秘密登録され、派生値のセルにも伝播する) *)
+    iSVMDWrapConfidential[
+      Pane[
+        Dataset[rows,
+          ItemSize -> {2, {3, 4, 3, 15, 3, 3, 5, 12, 28, 14, 40}},
+          Alignment -> {Left, Center},
+          (* MaxItems -> {最大行数, 最大列数}。第2要素を行数に縛ると
+             少件数時に列が隠れるので All (全列・全行) にする。 *)
+          MaxItems -> {$SourceVaultMailViewMaxRows, All}],
+        ImageSize -> Full],
+      snaps]];
 
 (* From 表示 (AddressBook 解決) -- maildb の SummaryRow と同じ規則 *)
 iSVUIFromDisplayUI[s_] :=
@@ -1498,7 +1799,7 @@ SourceVaultAddressBookView[] :=
       Dataset[rows,
         ItemSize -> {2, {4, 16, 14, 28, 14, 10, 5, 22}},
         Alignment -> {Left, Center},
-        MaxItems -> {All, All}],
+        MaxItems -> {$SourceVaultMailViewMaxRows, All}],
       ImageSize -> Full]];
 
 (* ---- 識別子 -> 実体 リンク編集 UI (新規作成 / 既存マージ) ---- *)
@@ -1542,7 +1843,7 @@ SourceVaultIdentityLinkUI[OptionsPattern[]] :=
                       iSVL["Unlinked"]]]]|>]] /@ idfs;
          Pane[
            Dataset[rows, ItemSize -> {2, {5, 7, 26, 24, 4, 20}},
-             Alignment -> {Left, Center}, MaxItems -> {All, All}],
+             Alignment -> {Left, Center}, MaxItems -> {$SourceVaultMailViewMaxRows, All}],
            ImageSize -> Full]]]]]];
 
 (* ---- 実体 一覧 + 編集 ---- *)
@@ -1568,7 +1869,7 @@ SourceVaultEntityView[] :=
           iSVL["TrustStatus"] -> Style[iSVUIShow[Lookup[e, "TrustStatus", ""]], FontFamily -> ff]|>]] /@ ents;
     Pane[
       Dataset[rows, ItemSize -> {2, {5, 4, 8, 20, 14, 5, 12, 6, 9}},
-        Alignment -> {Left, Center}, MaxItems -> {All, All}],
+        Alignment -> {Left, Center}, MaxItems -> {$SourceVaultMailViewMaxRows, All}],
       ImageSize -> Full]]);
 
 iSVUIFormRow[lab_, ctrl_] := {Style[lab, Bold], ctrl};
@@ -1655,12 +1956,18 @@ iSVMailViewInputQ[text_String] :=
     RegularExpression["SourceVaultMail(View|Dataset|SearchSummary)\\s*\\["]];
 iSVMailViewInputQ[_] := False;
 
+(* 機密判定用 PL アクセサ: フェイルセーフで PrivacyLevel 欠落は 1.0 (秘匿) 扱い。
+   (検索フィルタ用 iSVMDPrivacy は欠落を 0 にするので機密判定には使わない) *)
+iSVMailProbePL[s_] :=
+  With[{p = Quiet@Check[Lookup[Lookup[s, "Derived", <||>], "PrivacyLevel", Missing[]], Missing[]]},
+    If[NumericQ[p], N[p], 1.0]];
+
 (* View/Dataset/SearchSummary を read-only に差し替えるプローブ: 同じクエリで
    メモリ内 snapshot を検索し、表示メールの最大 PrivacyLevel を返す。 *)
 iSVMailPLProbe[query_String : "", opts : OptionsPattern[SourceVaultSearchMailSnapshots]] :=
   Module[{snaps},
     snaps = Quiet@Check[SourceVaultSearchMailSnapshots[query, opts], {}];
-    If[ListQ[snaps] && Length[snaps] > 0, Max[iSVMDPrivacy /@ snaps], 0.0]];
+    If[ListQ[snaps] && Length[snaps] > 0, Max[iSVMailProbePL /@ snaps], 0.0]];
 iSVMailPLProbe[___] := 1.0;
 
 (* 入力テキストから View 呼び出しだけを抜き出してプローブ評価し、最大 PL を得る。
@@ -1677,12 +1984,62 @@ iSVMailCellMaxPLFromText[text_String] :=
     If[ListQ[vals] && Length[vals] > 0 && AllTrue[vals, NumericQ], Max[vals], 1.0]];
 iSVMailCellMaxPLFromText[_] := 1.0;
 
+(* ── Todo (ノートブック本体セルの生テキスト) 用 ──
+   SourceVaultUpcomingSchedule / FormatNotebookList の表 (Summary 列) は
+   クラウド安全に生成されるので対象外。SourceVaultFindTodos は TodoText に
+   ノートブック本体の生セルを含むため、ソース NB が Public でない限り秘匿する。 *)
+iSVTodoViewInputQ[text_String] :=
+  StringContainsQ[text, RegularExpression["SourceVaultFindTodos\\s*\\["]];
+iSVTodoViewInputQ[_] := False;
+
+(* FindTodos を read-only 再実行し、ソース NB の Publishable を見る。
+   全ソース NB が CloudPublishable===True (Public) なら 0.0 (クラウド可)、
+   1 つでも非 Public (Unspecified/False) があれば 1.0 (秘匿)。 *)
+iSVTodoPLProbe[opts___] :=
+  Module[{cleanOpts, rows, paths},
+    cleanOpts = DeleteCases[Flatten[{opts}], (("Format" | Format) -> _)];
+    rows = Quiet@Check[
+      SourceVaultFindTodos[Sequence @@ cleanOpts, "Format" -> False], $Failed];
+    If[! ListQ[rows], Return[1.0]];
+    If[rows === {}, Return[0.0]];
+    paths = Select[
+      DeleteDuplicates@Cases[rows,
+        a_Association :> Lookup[a, "Path", Lookup[a, "OriginalPath", Missing[]]]],
+      StringQ];
+    If[paths =!= {} &&
+       AllTrue[paths,
+         (Quiet@Check[NBAccess`NBGetCloudPublishable[#], Missing[]] === True) &],
+      0.0, 1.0]];
+iSVTodoPLProbe[___] := 1.0;
+
+iSVTodoCellMaxPLFromText[text_String] :=
+  Module[{held, vals},
+    held = Quiet@Check[ToExpression[text, InputForm, HoldComplete], $Failed];
+    If[held === $Failed, Return[1.0]];
+    vals = Quiet@Check[
+      Cases[held, HoldPattern[SourceVaultFindTodos[a___]] :> iSVTodoPLProbe[a],
+        {0, Infinity}], {}];
+    If[ListQ[vals] && Length[vals] > 0 && AllTrue[vals, NumericQ], Max[vals], 1.0]];
+iSVTodoCellMaxPLFromText[_] := 1.0;
+
+(* 機密対象 View の仕様: {入力判定(text->bool), 最大PL算出(text->pl)} のリスト。
+   メール (Derived.PrivacyLevel) と Todo 生テキスト (ソース NB の Publishable) を登録。
+   サマリー/予定表 (SourceVaultUpcomingSchedule/FormatNotebookList) は
+   クラウド安全に生成されるので登録しない。新たな「生セル内容を出す View」は
+   ここに spec を追加するか、他アダプタのロード時に共有レジストリ
+   $iSVConfidentialViewSpecRegistry (SourceVault`Private`、ロード順不問) へ
+   {判定, PL算出} を登録する (SourceVault_eagle.wl が Eagle View 用 spec を登録)。 *)
+iSVConfidentialViewSpecs[] := Join[
+  {{iSVMailViewInputQ, iSVMailCellMaxPLFromText},
+   {iSVTodoViewInputQ, iSVTodoCellMaxPLFromText}},
+  If[ListQ[$iSVConfidentialViewSpecRegistry], $iSVConfidentialViewSpecRegistry, {}]];
+
 (* 既存の機密/非機密タグ (True/False) があれば尊重し再マークしない。未判定のみ対象。 *)
 iSVMailCellTaggedQ[nb_, i_] :=
   With[{t = Quiet@Check[NBAccess`NBGetConfidentialTag[nb, i], Missing[]]},
     t === True || t === False];
 
-SourceVaultMailMarkViewCells[nb_NotebookObject] :=
+SourceVaultMarkConfidentialViewCells[nb_NotebookObject] :=
   Module[{n, lastIn = 0, lastInText = "", marked = {}},
     (* $iCellsCache は sticky (NBInvalidateCellsCache まで更新されない)。
        セッション中に古い件数でキャッシュされていると新規セルを見落とすため、
@@ -1697,42 +2054,87 @@ SourceVaultMailMarkViewCells[nb_NotebookObject] :=
             lastIn = i;
             lastInText = Quiet@Check[NBAccess`NBCellReadInputText[nb, i], ""],
           style === "Output" && lastIn > 0 && StringQ[lastInText] &&
-            iSVMailViewInputQ[lastInText] && ! iSVMailCellTaggedQ[nb, i],
-            Module[{pl = iSVMailCellMaxPLFromText[lastInText]},
-              If[! NumericQ[pl], pl = 1.0];
-              (* 公開メールのみ (<=0.5) はマークしない: クラウドでも全文可 *)
-              If[pl > 0.5,
+            ! iSVMailCellTaggedQ[nb, i] &&
+            AnyTrue[iSVConfidentialViewSpecs[], First[#][lastInText] &],
+            Module[{pls, pl},
+              (* 複数 spec が同一セルに合致する場合 (メール+Eagle 混在等) は最大を採る *)
+              pls = (Quiet@Check[Last[#][lastInText], 1.0] &) /@
+                Select[iSVConfidentialViewSpecs[], First[#][lastInText] &];
+              pl = If[pls =!= {} && AllTrue[pls, NumericQ], Max[pls], 1.0];
+              (* 最大PL < 0.5 (公開メール / 全ソースNBが Public な Todo) はマークしない。
+                 0.5 ちょうどは安全側でマークする (ユーザー指定: 0.5 以上=機密。
+                 cloud gate の許可境界 PL<=0.5 より保守的) *)
+              If[pl >= 0.5,
                 Quiet@Check[NBAccess`NBMarkCellConfidential[nb, i, pl], Null];
                 AppendTo[marked, <|"Cell" -> i, "PrivacyLevel" -> pl|>]]],
           True, Null]],
       {i, n}];
     marked];
-SourceVaultMailMarkViewCells[] :=
+SourceVaultMarkConfidentialViewCells[] :=
   With[{nb = Quiet@Check[EvaluationNotebook[], $Failed]},
-    If[Head[nb] === NotebookObject, SourceVaultMailMarkViewCells[nb], {}]];
+    If[Head[nb] === NotebookObject, SourceVaultMarkConfidentialViewCells[nb], {}]];
 
-(* ── NBMakeContextPacket フック (opt-in、再入ガード付き高優先 DownValue) ── *)
+(* 後方互換の別名 (Enable フックが呼ぶ名前も含む) *)
+SourceVaultMailMarkViewCells[args___] := SourceVaultMarkConfidentialViewCells[args];
+
+(* ── NBMakeContextPacket フック (既定で有効、再入ガード付き高優先 DownValue) ──
+   装着判定はフラグでなく DownValues の構造検査で行う: NBAccess を再ロードすると
+   NBMakeContextPacket の定義ごとフックが消えるため、フラグ頼みだと「装着済みの
+   つもりで実は無防備」になる。Enable は不在なら常に再装着する (冪等)。 *)
 If[! ValueQ[$iSVMailCtxHookInstalled], $iSVMailCtxHookInstalled = False];
 
+iSVMailCtxHookPresentQ[] :=
+  AnyTrue[DownValues[NBAccess`NBMakeContextPacket],
+    ! FreeQ[#, $iSVMailCtxReentry] &];
+
 SourceVaultMailEnableAutoConfidential[] :=
-  (If[! TrueQ[$iSVMailCtxHookInstalled],
+  (If[! iSVMailCtxHookPresentQ[],
      (* nb_NotebookObject は本体の nb_ より特化なので先に試される。
         $iSVMailCtxReentry で本体呼び出し時はこの規則を素通りさせる。 *)
      NBAccess`NBMakeContextPacket[nb_NotebookObject, spec_Association,
          o : OptionsPattern[]] /; ! TrueQ[$iSVMailCtxReentry] :=
        Block[{$iSVMailCtxReentry = True},
-         Quiet@Check[SourceVaultMailMarkViewCells[nb], Null];
-         NBAccess`NBMakeContextPacket[nb, spec, o]];
-     $iSVMailCtxHookInstalled = True];
+         Quiet@Check[SourceVaultMarkConfidentialViewCells[nb], Null];
+         NBAccess`NBMakeContextPacket[nb, spec, o]]];
+   $iSVMailCtxHookInstalled = True;
    <|"Status" -> "Enabled", "Hook" -> "NBMakeContextPacket"|>);
 
 SourceVaultMailDisableAutoConfidential[] :=
-  (If[TrueQ[$iSVMailCtxHookInstalled],
-     DownValues[NBAccess`NBMakeContextPacket] =
-       DeleteCases[DownValues[NBAccess`NBMakeContextPacket],
-         _?(! FreeQ[#, $iSVMailCtxReentry] &)];
-     $iSVMailCtxHookInstalled = False];
+  (DownValues[NBAccess`NBMakeContextPacket] =
+     DeleteCases[DownValues[NBAccess`NBMakeContextPacket],
+       _?(! FreeQ[#, $iSVMailCtxReentry] &)];
+   $iSVMailCtxHookInstalled = False;
    <|"Status" -> "Disabled"|>);
+
+(* ロード時に自動有効化 (ユーザー指摘: PL>0.5 のメールを含む View 出力は
+   ClaudeEval の文脈構築前に必ず機密マークされていなければならない)。
+   解除したい場合は SourceVaultMailDisableAutoConfidential[]。
+   ヘッドレス/部分ロード環境では NBMakeContextPacket が呼ばれないだけで無害。 *)
+SourceVaultMailEnableAutoConfidential[];
+
+(* 機密生成ヘッド登録: 「返り値が機密たり得る」関数を NBAccess レジストリへ宣言。
+   claudecode が (a) LLM 生成コード/応答を書き込んだセルの自動機密マーク、
+   (b) CellEpilog の依存秘密判定 (snaps = SourceVaultSearch...[..] 等) に使う。
+   関数本体の変更は不要 (View 3 関数の実 PL 判定 self-wrap は精密層として併存)。
+   NBAccess full (NBAccess.wl) 未ロードの部分環境では skip。 *)
+iSVMDRegisterConfidentialHeads[] :=
+  Quiet@Check[
+    If[Length[DownValues[NBAccess`NBRegisterConfidentialHead]] > 0,
+      Scan[NBAccess`NBRegisterConfidentialHead[First[#], Last[#]] &,
+        {{"SourceVaultMailGetBody", 1.0},
+         {"SourceVaultMailSnapshotDecryptBody", 1.0},
+         {"SourceVaultMailComposeReply", 1.0},
+         {"SourceVaultSearchMailSnapshots", 0.85},
+         {"SourceVaultMailSnapshotGet", 0.85},
+         {"SourceVaultMailSnapshotList", 0.85},
+         {"SourceVaultMailDerivedPending", 0.85},
+         {"SourceVaultMailSummaryRow", 0.85},
+         {"SourceVaultMailSearchSummary", 0.85},
+         {"SourceVaultMailDataset", 0.85},
+         {"SourceVaultMailView", 0.85},
+         {"SourceVaultMailAttachments", 0.85}}]];
+    Null, Null];
+iSVMDRegisterConfidentialHeads[];
 
 End[];
 EndPackage[];

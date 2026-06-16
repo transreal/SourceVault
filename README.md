@@ -2,7 +2,7 @@
 
 # SourceVault
 
-Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter** を備えます。
+Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter**、release context に基づく公開ポリシー基盤と Web 検索サービス管理 (**SourceVault_searchindex** / **SourceVault_servicemanager**)、[Eagle](https://eagle.cool) デジタルアセットライブラリ統合 (**SourceVault_eagle**)、排他制御・immutable snapshot・append-only event log を提供するコア基盤 (**SourceVault_core**) を備えます。
 
 ## 設計思想と実装の概要
 
@@ -60,6 +60,8 @@ SourceVaultUpcomingSchedule 本来の装飾付き Grid
 
 これにより `ClaudeEval` の出力は、内部診断 `Association` でも PromptRouter 独自の簡易表でもなく、**allowlist 済み callable を評価した結果**(`SourceVaultUpcomingSchedule` 本来の Title link・tooltip・date styling 付きの表)になります。
 
+`SaveLastPrompt[memo]` で ClaudeEval の実行結果を名前付き PromptRoute として保存でき、`SourceVaultSearchPromptRoutes[query]` で過去に保存したルートをプロンプト例・Memo の部分一致で検索できます。`$SourceVaultPromptBypassOnce` は「LLM に再度聞く」ボタン用のワンショットバイパスです。`$SourceVaultContextPlannerEnabled` が True のとき、ClaudeEval はコンテキスト依存度に応じたコンテキストプランを自動適用します。
+
 ### TabularQuery — スケジュールの絞り込み
 
 「Todo が残っているもの」「Deadline が今週」のような **表に対する絞り込み**も、PromptRouter は評価済みの表を作らず、allowlist 済み callable の式として表現します。`SourceVaultUpcomingSchedule` には `"FilterSpec"` オプションがあり、構造化述語を literal Association として受け取ります。
@@ -75,25 +77,97 @@ HoldComplete[
       "Field" -> "OpenTodoCount", "Op" -> "Greater", "Value" -> 0|>]]
 ```
 
-`FilterSpec` の述語は **閉じた DSL** に限定されます。`Kind` は `And` / `Or` / `Not` / `Field`、`Op` は `Equal` / `NotEqual` / `Greater` / `GreaterEqual` / `Less` / `LessEqual` / `Contains` / `DateWithin` / `NonEmpty`、フィールド名はスキーマ allowlist にあるものだけです。`Function` / `Slot` / `ToExpression` / `RunProcess` などは一切受け付けません。`SourceVaultUpcomingSchedule` 内部でこの閉じた述語を record list に適用し、既存の Grid 整形経路に戻します。`Select` や `Function` が式表面に出ないため、Runtime の検証は `SourceVaultUpcomingSchedule` の head と literal option value を見るだけで済みます。
+`FilterSpec` の述語は **閉じた DSL** に限定されます。`Kind` は `And` / `Or` / `Not` / `Field`、`Op` は `Equal` / `NotEqual` / `Greater` / `GreaterEqual` / `Less` / `LessEqual` / `Contains` / `DateWithin` / `NonEmpty`、フィールド名はスキーマ allowlist にあるものだけです。`Function` / `Slot` / `ToExpression` / `RunProcess` などは一切受け付けません。
 
 ### snapshot lifecycle
 
 snapshot には **LifecycleStatus** (Current / Stale / Frozen / Invalidated) が付与されます。`SourceVaultMarkSnapshotStale` / `Invalidated` / `RefreshSnapshot` は `events/source-events.jsonl` に lifecycle event を append-only で記録し、依存している Bundle 側は lazy に再評価します。これにより「上流の文書が更新されても、下流の引用が古いままになる」という事故を防ぎます。
+
+### コア基盤 (SourceVault_core)
+
+`SourceVault_core.wl` はデータ整合性の基礎を提供する必須サブファイルです。設計原則として「LLM/ASR/TTS/OCR/HTTP 実行中はデータ lock を保持しない。書き込みは append-only / create-only。既存 object の破壊的更新禁止」を守ります。
+
+- **排他制御** — `SourceVaultWithLock[name, body]` でアトミックな書き込みを保護します。lock は atomic directory creation で実現され、同一ホストの期限切れ lock は自動回収されます。
+- **Immutable Snapshot Store** — `SourceVaultSaveImmutableSnapshot[class, assoc]` で class 別に不変 snapshot を保存します。同一内容の再保存は idempotent です。
+- **Append-only Event Log** — `SourceVaultAppendEvent[event]` で 1 event / 1 file として commit し、EventID 重複は digest 照合で検出します。
+- **Content-addressed Blob Store** — `SourceVaultCommitBlob[data]` で ByteArray / String を hash 単位で create-only 保存します。
+- **Pointer** — `SourceVaultAtomicUpdatePointer[name, value]` で名前付き pointer を単調増加 Sequence で管理します。
+
+### 検索基盤と公開ポリシー (SourceVault_searchindex)
+
+`SourceVault_searchindex.wl` は **release context** による公開ポリシー評価と、検索プロファイル registry を提供します。
+
+**Release Context** は「このコンテンツをどこまで公開してよいか」を定義するポリシーオブジェクトです。`SourceVaultRegisterReleaseContext[name, spec]` で登録し、`SourceVaultEvaluateReleasePolicy[source, context]` が Permit / Deny / NeedsReview を返します。`SourceVaultSearch` はこの gate を通過したチャンクのみを返します。
+
+```mathematica
+(* release context を登録 *)
+SourceVaultRegisterReleaseContext["campus-handbook-web", <|
+  "MaxPrivacyLevel" -> 0.5,
+  "RequiredTags" -> {"ReleaseContext:Campus:Handbook:Web"},
+  "DenyTags" -> {"NoWeb", "Draft"}|>];
+
+(* gate 付き検索 *)
+SourceVaultSearch["履修登録の手順",
+  "ReleaseContext" -> "campus-handbook-web",
+  "PDFIndexProfile" -> "student-handbook",
+  "Limit" -> 8]
+```
+
+**Profile Registry** には検索インデックス・PDFIndex・検索バックエンド・OCR バックエンドを登録できます。**Object Revocation** では `SourceVaultRevokeObject[objectId]` で個別 object を tombstone 化し、`SourceVaultBuildRevocationSet[]` で HotRevocationSet を replay 構築します。**Versioned Snapshot** (`SourceVaultSaveRetrievalWorkflowSnapshot` / `SourceVaultFreezeCorpusSnapshot`) で検索ワークフローの設定と検索対象集合を immutable に固定できます。
+
+### Web サービス管理 (SourceVault_servicemanager)
+
+`SourceVault_servicemanager.wl` は release gate 付き Web 検索・質問応答サービスを headless で公開する機能を提供します。
+
+**PDFGroupSearchProfile** に表題・assistant prompt・対象 index・gate 設定・LLM モデルをまとめ、コードに焼かずに profile 差し替えでアプリを切り替えられます。**detached service** は `SourceVaultStartService[serviceId]` で WolframScript プロセスとして起動し、メインカーネルを終了しても heartbeat を更新し続けます。`SourceVaultStartHTTPProxy` が Python reverse proxy をエッジに立て、WL サービスへ file ベースの command/response queue で中継します。生ファイルパスは外に出ず、**gate は必ず WL 側**で保持されます。
+
+```
+PDF / Web ページ → ingest → コレクション
+   + ReleaseContext + PDFIndexProfile + MigrationRule
+   ↓
+SourceVaultSearch (gate 付き検索)
+   ↓
+Python HTTP proxy → ブラウザ
+```
+
+ローカル設定は `<PrivateVault>/config/local/SourceVaultLocalInit.wl` に記述し、`SourceVaultLoadLocalInit[]` で読み込みます（サービスカーネルと main カーネルの両方で呼ぶことが重要です）。`SourceVaultNoPersonalConfigDoctor[filesOrDirs]` で配布ファイルへの個人情報・環境依存値の混入を検査できます。
+
+### SearXNG / MCP Web 検索ゲートウェイ (SourceVault_webingest / SourceVault_mcp)
+
+LM Studio などローカル LLM の Web 検索を、外部 API (Exa 等) ではなく **ローカル SearXNG → SourceVault → MCP** ゲートウェイ経由にする構成です。検索・本文取得が SourceVault に監査記録され、外部に検索内容を出さずにローカル完結します。
+
+```
+LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ WL service
+   SourceVaultWebSearch ──▶ SearXNG (127.0.0.1:8888) ──▶ 結果正規化 / 本文取得
+   監査: WebSearchRun snapshot + 参照イベント + WebDocument snapshot
+```
+
+- `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得・clean-text・job 二層・参照イベント・**importance / 構造 Priority**（mail の `Derived.Priority` に対応）・参照イベントの**クロスマシン rollup**・LLM 要約と **DerivedArtifact** 保存。
+- `SourceVault_mcp.wl` — MCP tool schema・dispatch（`sourcevault_web_search` ほか 5 ツール。protocol endpoint は Python proxy 側）。
+- `SourceVaultStartMCP[]` で WL service + `/sv/mcp` proxy を一括起動。`ShowClaudePalette[]` のプライバシー直下に起動/停止トグルが出ます（claudecode は package-neutral レジストリ経由で SourceVault に非依存）。
+- SearXNG が無い環境では `SourceVaultWebSearchIntegration[]` で **exa に後方互換フォールバック**（claudecode 無変更）。
+
+セットアップ（SearXNG インストール・MCP 起動・LM Studio `mcp.json`）は setup.md、使い方は user_manual.md の「Web 検索 / SearXNG / MCP ゲートウェイ」を参照してください。
 
 ### 経路統一
 
 SourceVault をロードすると、以下が自動的に設定されます。
 
 ```
-$SourceVaultRoots["PrivateVault"]    自動初期化 (PrivateVault ディレクトリの作成)
-SourceVault_promptrouter.wl          同ディレクトリにあれば自動ロード
-NBAccess semantic API                7 API が利用可能
-SourceVaultIndexNotebook mtime cache 透過的 cache (ForceReindex -> True で無効化)
-iNotebookHeaderParse の Source       MakeExpression 第一選択 (副作用回避)
+$SourceVaultRoots["PrivateVault"]       自動初期化 (PrivateVault ディレクトリの作成)
+SourceVault_core.wl                     コア基盤 (排他制御・event log・blob・pointer)
+SourceVault_searchindex.wl              検索基盤 (release context・profiles・revocation)
+SourceVault_servicemanager.wl           サービス管理 (Web サービス・detached service・MCP proxy)
+SourceVault_webingest.wl                Web 検索 (SearXNG・本文取得・importance・rollup・要約)
+SourceVault_mcp.wl                      MCP tool schema / dispatch
+SourceVault_promptrouter.wl             同ディレクトリにあれば自動ロード
+NBAccess semantic API                   7 API が利用可能
+SourceVaultIndexNotebook mtime cache    透過的 cache (ForceReindex -> True で無効化)
+iNotebookHeaderParse の Source          MakeExpression 第一選択 (副作用回避)
+$SourceVaultDefaultNotebookFolder       Automatic で $onWork → $packageDirectory に解決
 ```
 
-`SourceVault.wl` をロードすると、同じディレクトリにある `SourceVault_promptrouter.wl` (PromptRouter 拡張) も自動的に読み込まれます。同様に `ClaudeOrchestrator.wl` をロードすると `ClaudeOrchestrator_promptworkflow.wl` (PromptWorkflow 拡張) が自動ロードされます。いずれも本体のロードを壊さないよう `Quiet @ Check` で保護されています。
+`SourceVault.wl` をロードすると、同じディレクトリにある `SourceVault_core.wl`・`SourceVault_searchindex.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl` (SearXNG/Web 検索)・`SourceVault_mcp.wl` (MCP)・`SourceVault_promptrouter.wl` (PromptRouter 拡張) が順に自動的に読み込まれます。同様に `ClaudeOrchestrator.wl` をロードすると `ClaudeOrchestrator_promptworkflow.wl` (PromptWorkflow 拡張) が自動ロードされます。いずれも本体のロードを壊さないよう `Quiet @ Check` で保護されています。
 
 加えてロード時に、依存関係のあるパッケージ (NBAccess / claudecode / ClaudeRuntime) が読み込まれているかを `Quiet @ Needs[]` + `Names[]` チェックで確認し、不足機能はグレースフルに `Missing["PackageNotAvailable"]` を返します。
 
@@ -109,7 +183,9 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 - Notebook の Header 取り出しは **whitelist** (String / Integer / Bool / Missing / DateObject / List of String / Association) を通過したものだけが採用され、`RunProcess` / `Get` / `Import` / `URLRead` を含む式は `UnsafeExpression` で拒否されます。
 - Notebook ファイルへの書き込みは NBAccess の AccessLevel >= 0.7 が必須で、デフォルトは DryRun = True です。
 - claim 抽出は NBAccess の 2 段階 authorization を経由し、`Permit` / `Screen` でのみ続行します。
-- PromptRouter が `ClaudeEval` に返す提案式は、head が ReadOnly callable allowlist にあるものだけが `ReleaseHold` され評価されます。allowlist 外の head を持つ式は評価されません。`FilterSpec` の述語は閉じた DSL に限定され、任意コードを含み得ません。
+- PromptRouter が `ClaudeEval` に返す提案式は、head が ReadOnly callable allowlist にあるものだけが `ReleaseHold` され評価されます。`FilterSpec` の述語は閉じた DSL に限定され、任意コードを含み得ません。
+- `SourceVaultSearch` が返す検索結果は release context gate を通過した chunk のみで、生ファイルパスは外部 HTTP proxy に出ません。
+- メール本文の PrivacyLevel は fail-safe 既定 0.85 で暗号化され、送信者由来の feature loosening は認証済み (DMARC/DKIM Pass) 送信者にのみ適用されます。
 
 ### 永続化レイアウト
 
@@ -127,6 +203,11 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
   claims/by-source/<sourceId>.jsonl
   bundles/bundle-<safeName>-<ts>-<rnd>.json
   events/source-events.jsonl           (lifecycle events)
+  core/events/                         (core append-only event directory)
+  core/snapshots/<class>/              (immutable snapshot store)
+  core/blobs/                          (content-addressed blob store)
+  core/pointers/                       (atomic pointer store)
+  core/locks/                          (lock directory)
   seeds/<topic>-seed.json              (registry bootstrap)
   compiled/public/<topic>.json         (registry production)
   compiled/private/<topic>.json        (registry user override)
@@ -137,24 +218,33 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
   notebooks/lint/notebook-lint.jsonl
   promptrouter/runs/prompt-runs.jsonl  (PromptRun ストア、append-only)
   promptrouter/artifacts/wf-code/      (WorkflowRoute コード artifact)
+  promptrouter/routes/                 (コンパイル済み PromptRoute レジストリ)
+  eagle/itemcache/                     (Eagle item キャッシュ)
+  eagle/summaries/                     (Eagle item LLM サマリー)
+  eagle/ingest/                        (Eagle → SourceVault ingest 対応表)
+  eagle/libraries.json                 (登録済み Eagle ライブラリ一覧)
+  config/local/SourceVaultLocalInit.wl (ローカル初期設定)
+  identity/identifiers.jsonl           (識別子 JSONL)
+  identity/entities.jsonl              (実体 JSONL)
+  mail/snapshots/<mbox>/<yyyymm>.svmail  (月次メールシャード)
+  curated/                             (CuratedKnowledge 補足知識)
+  runtime/services/<serviceId>/        (detached service runtime)
 ```
 
 ---
 
 ## 暗号化・identity・メール管理
 
-SourceVault には、source 管理に加えて、**at-rest 暗号化基盤・可搬鍵バンドル・2層アドレス帳 (identity)・メール (MailDB/IMAP/Mail UI)** が統合されています。これらの機能は、本体 `SourceVault.wl` のローダが依存順に Get する **4 つのサブファイル**に集約されています: `NBAccess_crypto.wl` (鍵隔離層、`NBAccess\`` 文脈) → `SourceVault_crypto.wl` (crypto + keys + keybundle + encryptedstore + release) → `SourceVault_identity.wl` (addressbook + senderauth + identity + messagerelease) → `SourceVault_maildb.wl` (maildb + imap + mailui)。
+SourceVault には、source 管理に加えて、**at-rest 暗号化基盤・可搬鍵バンドル・2層アドレス帳 (identity)・送信者認証・メール (MailDB/IMAP/Mail UI)** が統合されています。これらの機能は、本体 `SourceVault.wl` のローダが依存順に Get する **4 つのサブファイル**に集約されています: `NBAccess_crypto.wl` (鍵隔離層、`NBAccess\`` 文脈) → `SourceVault_crypto.wl` (crypto + keys + keybundle + encryptedstore + release) → `SourceVault_identity.wl` (addressbook + senderauth + identity + messagerelease) → `SourceVault_maildb.wl` (maildb + imap + mailui)。
 
 ### 初回セットアップ（オーナー登録・メールアカウント・鍵バックアップ）
 
-暗号化・メール・アドレス帳を使う前に、個人ごとの初期設定を**一度だけ**行います（鍵 backend を `SystemCredential` に → 暗号化初期化 → **オーナー（自分）をアドレス帳に登録**して identity 層を初期化 → オーナーの LLMProfile/プライマリメール設定 → IMAP アカウント登録 → 鍵バンドルのバックアップ → グループ重み設定）。これらは私的設定（ログイン名・氏名・所属など）を含むため**ソースや公開リポジトリには置かず**、各自のローカル起動ファイル（`init.m` 等、GitHub に上げない）にまとめます。手順とコード例（すべてプレースホルダ）は **[setup.md の「初回セットアップ（暗号化・メール・アドレス帳）」](setup.md)** を参照してください。
+暗号化・メール・アドレス帳を使う前に、個人ごとの初期設定を**一度だけ**行います（鍵 backend を `SystemCredential` に → 暗号化初期化 → **オーナー（自分）を identity 層に登録** → オーナーの LLMProfile/プライマリメール設定 → IMAP アカウント登録 → 鍵バンドルのバックアップ → グループ重み設定）。これらは私的設定（ログイン名・氏名・所属など）を含むため**ソースや公開リポジトリには置かず**、各自のローカル起動ファイル（`init.m` 等、GitHub に上げない）にまとめます。手順とコード例（すべてプレースホルダ）は **[setup.md の「初回セットアップ（暗号化・メール・アドレス帳）」](setup.md)** を参照してください。
 
 ```mathematica
 NBAccess`$NBCredentialBackend = "SystemCredential";   (* 永続鍵。Memory だと復号不可=データ消失 *)
 (* SourceVault.wl をロード後 *)
 SourceVault`SourceVaultInitializeEncryption[];
-SourceVault`SourceVaultAddressBookRegisterSelf["you@example.org",
-   "DisplayName" -> "山田 太郎", "Romaji" -> "Taro Yamada", "Kana" -> "やまだ たろう"];
 SourceVault`SourceVaultIdentityInitialize[];          (* オーナー = ユーザDB #1 *)
 SourceVault`SourceVaultSetOwnerLLMProfile["○○大学 ○○学科 ○○。専門: ..."];
 SourceVault`SourceVaultSetOwnerPrimaryEmail["you@example.org"];
@@ -185,11 +275,13 @@ SourceVaultImportKeyBundle["correct horse battery staple xyz"]   (* 新マシン
 
 ### 2層アドレス帳 (identity resolution)
 
-「Uid = 人」の破綻を避けるため、**識別子 (Identifier: 1つの raw email/SNS/URI、メール取込で自動作成)** と **実体 (Entity: 人/組織/Bot/ML、後からマージ)** を分離します。オーナー (自分) は EntityUid=1 / OwnerKind=Self の特別な実体で、氏名・メール・所属は**ソースにハードコードせず** Self 実体に保持します。`SourceVaultIdentityInitialize[]` で初期化し、`SourceVaultEntityEditUI[1]` やセッターで編集します。
+「Uid = 人」の破綻を避けるため、**識別子 (Identifier: 1つの raw email/SNS/URI、メール取込で自動作成)** と **実体 (Entity: 人/組織/Bot/ML、後からマージ)** を分離します。オーナー (自分) は EntityUid=1 / OwnerKind=Self の特別な実体で、氏名・メール・所属は**ソースにハードコードせず** Self 実体に保持します。`SourceVaultIdentityInitialize[]` で初期化し、`SourceVaultEntityEditUI[1]` やセッターで編集します。`SourceVaultIdentityBackfillFromMail[]` でロード済みメール snapshot の From/To/Cc から識別子を一括生成できます（再取込不要）。
+
+**送信者認証** (`$SourceVaultTrustedAuthservIds` に pinning した authserv-id が付けた Authentication-Results のみ採用) により、偽装 inline A-R を無視した DMARC/DKIM/SPF 検証が行えます。`SourceVaultSenderAuthentication[record]` が判定 metadata を返し、`SourceVaultSenderAuthenticatedQ[auth]` が loosening 可否を返します。
 
 ### メール管理 (MailDB / IMAP / Mail UI)
 
-旧 maildb レコードや IMAP 新着を `SourceVaultMailSnapshot` に正規化します。**本文は暗号化** (PL fail-safe 既定 0.85)、**ヘッダ (件名等) は既定で平文 + token** (Dropbox 前提の設計)。snapshot は mbox × 月のシャードに分割保存され、`SourceVaultMailEnsureLoaded` で必要分だけ遅延ロードします。**取り込み (IMAP) と派生 (ローカル LLM による PL/優先度/概要) は分離**され、`SourceVaultMailFetchNew` で高速取り込み → `SourceVaultInferMailDerivedBatch` で増分派生 (中断耐性あり)。重要度は LLM 任せにせず `SourceVaultMailComputePriority` がグループ重み + To/Cc 位置 + bulk 判定 + 依頼度から決定的に計算します。IMAP アカウントは `SourceVaultRegisterMailAccount` で vault config に登録し (パスワードは保存せず CredKey のみ)、対話表示は `SourceVaultMailView` で行います。
+旧 maildb レコードや IMAP 新着を `SourceVaultMailSnapshot` に正規化します。**本文は暗号化** (PL fail-safe 既定 0.85)、**ヘッダ (件名等) は既定で平文 + token** (Dropbox 前提の設計)。snapshot は mbox × 月のシャードに分割保存され、`SourceVaultMailEnsureLoaded` で必要分だけ遅延ロードします。**取り込み (IMAP) と派生 (ローカル LLM による PL/優先度/概要/カテゴリ/締切) は分離**され、`SourceVaultMailFetchNew` で高速取り込み → `SourceVaultInferMailDerivedBatch` で増分派生 (中断耐性あり)。派生カテゴリ (`$SourceVaultMailCategories`) は InfoProvision / AttendanceRequest / TaskRequest / Confirmation / Report / Notice / Other の 7 種です。`SourceVaultInferMailDerivedBatch["Refresh" -> "MissingCategory"]` でカテゴリ・締切未生成の処理済みメールだけを後埋めできます。`SourceVaultMailSnapshotDecryptBody[snapshot]` で MAC 検証後に本文を復号できます。重要度は `SourceVaultMailComputePriority` がグループ重み + To/Cc 位置 + bulk 判定 + 依頼度から決定的に計算します。IMAP アカウントは `SourceVaultRegisterMailAccount` で vault config に登録し (パスワードは保存せず CredKey のみ)、対話表示は `SourceVaultMailView` で行います。
 
 ```wolfram
 SourceVaultMailEnsureLoaded["work", 3];                 (* 直近3ヶ月だけロード *)
@@ -197,6 +289,44 @@ SourceVaultMailView["会議", "MinPriority" -> 0.5, "Limit" -> 20]
 ```
 
 > **安全ポリシー:** 返信は**ドラフト生成のみ** (DraftOnly) で、SourceVault は**メールを自動送信しません**。鍵は NBAccess の外に出ず、本文は暗号化・ヘッダは平文 + token (件名は設計上暗号化しない)。永続データには `SystemCredential` backend が必須で、鍵バンドルは Dropbox の外で管理します。
+
+---
+
+## Eagle ライブラリ統合
+
+`SourceVault_eagle.wl` は [Eagle](https://eagle.cool) デジタルアセット管理ライブラリを SourceVault のソースとして読み書き・検索・要約する機能を提供します。`Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault_eagle.wl"]]` で追加ロードします（依存: `SourceVault.wl`）。
+
+### ライブラリ登録と管理
+
+```mathematica
+(* ライブラリを登録 (シンボリックパスで永続化 → 別 PC でも同じ設定が使える) *)
+SourceVaultEagleRegisterLibrary["main",
+  {"$dropbox", "Eagle", "My Library.library"}]
+
+(* 現在ライブラリを切り替える *)
+SourceVaultEagleSetLibrary["main"]
+
+(* ステータス確認 *)
+SourceVaultEagleStatus[]
+```
+
+### 検索と表示
+
+```mathematica
+(* name / annotation / tags / url + 保存済みサマリー本文で検索 *)
+SourceVaultEagleSearch["自然計算",
+  "Folder" -> "論文", "Ext" -> "pdf", "Limit" -> 20]
+
+(* フォルダ一覧 *)
+SourceVaultEagleFolderList[]
+
+(* フォルダビューをノートブックで開く *)
+SourceVaultEagleShowFolder["論文"]
+```
+
+### プライバシーとクラウド LLM
+
+`$SourceVaultEaglePrivacyLevel` で出力セルの PrivacyLevel を設定します（数値で全ライブラリ共通、または `<|ライブラリ名 -> PL, "Default" -> PL|>` でライブラリ別設定）。`$SourceVaultEagleCloudPublishableTag`（既定 `"Cloud-Publishable"`）タグが付いた item は `"Method" -> Automatic` の要約でクラウド LLM 経路を使い、summary record に PrivacyLevel 0.0 が記録されます。
 
 ---
 
@@ -219,6 +349,7 @@ SourceVaultMailView["会議", "MinPriority" -> 0.5, "Limit" -> 20]
 
 - [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime) — LLM 要約・claim 抽出機能を `ClaudeEval` 経由で実行する場合に必要。SourceVault 単体では index・extract（deterministic 経路）・lint・FindNotebooks クエリなど LLM を使わない機能のみ動作します。
 - [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) — 複数 notebook の一括処理を agentic に並列実行する場合に追加でロード。SourceVault の NBAccess hook (P1〜P4) で ClaudeAttach / Attachments / WorkerPrompt / ParseProposal にフックできます。また `ClaudeEval` から PromptRoute / WorkflowRoute へ自動 dispatch する機能は、原則として ClaudeOrchestrator がロード済みのときに有効になります。
+- [PDFIndex](https://github.com/transreal/PDFIndex) — PDF コレクションの embedding + keyword ハイブリッド検索バックエンド。`SourceVaultSearch` / `SourceVaultStartHTTPProxy` と組み合わせて gate 付き Web 検索サービスを構築できます。
 - [github](https://github.com/transreal/github) — パッケージのインストール・更新を簡略化します（`setup.md` 参照）。
 
 ### インストール
@@ -227,12 +358,16 @@ SourceVaultMailView["会議", "MinPriority" -> 0.5, "Limit" -> 20]
 
 #### 1. パッケージファイルの配置
 
-`SourceVault.wl` を `$packageDirectory` 直下に配置します。PromptRouter 拡張 `SourceVault_promptrouter.wl` も同じディレクトリに置きます。
+`SourceVault.wl` と関連サブファイルを `$packageDirectory` 直下に配置します。
 
 ```
 $packageDirectory\
   SourceVault.wl                 ← 本体
+  SourceVault_core.wl            ← コア基盤 (本体ロード時に自動ロード)
+  SourceVault_searchindex.wl     ← 検索基盤 (本体ロード時に自動ロード)
+  SourceVault_servicemanager.wl  ← サービス管理 (本体ロード時に自動ロード)
   SourceVault_promptrouter.wl    ← PromptRouter 拡張 (本体ロード時に自動ロード)
+  SourceVault_eagle.wl           ← Eagle 統合 (任意、手動ロード)
   NBAccess.wl
   claudecode.wl
   ...
@@ -265,7 +400,7 @@ Block[{$CharacterEncoding = "UTF-8"},
 ]
 ```
 
-`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_promptrouter.wl` (PromptRouter 拡張) が自動的にロードされます。
+`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_searchindex.wl`・`SourceVault_servicemanager.wl`・`SourceVault_promptrouter.wl` が順に自動的にロードされます。
 
 LLM 要約・claim 抽出機能を使用する場合は、ClaudeRuntime もロードします。
 
@@ -285,6 +420,14 @@ Block[{$CharacterEncoding = "UTF-8"},
   Needs["ClaudeRuntime`",       "ClaudeRuntime.wl"];
   Needs["ClaudeOrchestrator`",  "ClaudeOrchestrator.wl"];
   Needs["SourceVault`",         "SourceVault.wl"]
+]
+```
+
+Eagle 統合を使う場合はさらに追加ロードします。
+
+```mathematica
+Block[{$CharacterEncoding = "UTF-8"},
+  Get[FileNameJoin[{$packageDirectory, "SourceVault_eagle.wl"}]]
 ]
 ```
 
@@ -358,6 +501,21 @@ ClaudeEval["今日から3日間のスケジュールを"]
 
 (* 絞り込み付き: FilterSpec で OpenTodoCount > 0 のものだけ *)
 ClaudeEval["7日間のスケジュールのうちTodoが残っているものを"]
+
+(* 実行履歴を名前付き PromptRoute として保存 *)
+SaveLastPrompt["3日スケジュール表示"]
+```
+
+**Gate 付き PDF 検索（SearchIndex + ServiceManager）:**
+
+```mathematica
+(* release context を登録してコレクションを公開 *)
+SourceVaultRegisterReleaseContext["handbook-web", <|
+  "MaxPrivacyLevel" -> 0.5, "RequiredTags" -> {"released"}|>]
+
+(* gate を通過した chunk のみ返す検索 *)
+SourceVaultSearch["履修登録の手順",
+  "ReleaseContext" -> "handbook-web", "Limit" -> 5]
 ```
 
 **LLM 要約（ClaudeRuntime 必須）:**
@@ -388,41 +546,124 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultNotebookLint[record \| path]` | 7 種 lint (HeaderStatusTodoButNoOpenTodos / DeadlinePast / NextReviewPast / TodoCellStatusHeuristicOnly 等) を検出。 |
 | `SourceVaultProposePromptRoute[prompt, opts]` | `ClaudeEval` 接続用。プロンプトを未評価の提案式 `HoldComplete[...]` に解決し、`PromptRouteProposal` 連想で返す。式は評価しない。 |
 | `SourceVaultExecutePromptRoute[prompt, opts]` | PromptRoute の手動 / テスト / 診断用 API。route を解決し、診断 `Association` を返す。 |
+| `SaveLastPrompt[memo, opts]` | 最新の ClaudeEval 実行を名前付き PromptRoute として保存。`"Channel"` / `"DryRun"` オプション対応。 |
+| `SourceVaultSearchPromptRoutes[query, opts]` | 保存済み PromptRoute をプロンプト例・Memo の部分一致で検索。`"Channel"` / 日時範囲フィルタ対応。 |
+| `SourceVaultPromptReprocessPlan[opts]` | 古くなったルート（schema/version 不一致）を検出し再処理プランを返す（読み取り専用）。 |
+| `$SourceVaultContextPlannerEnabled` | ClaudeEval コンテキストプランナーの有効/無効（既定 True）。 |
+| `$SourceVaultPromptBypassOnce` | ワンショット PromptRouter バイパスキー（「LLM に再度聞く」機能用）。 |
 | `SourceVaultLookup[topic, key]` | Compiled Registry から値を取得。 |
 | `SourceVaultResolve[topic, intent]` | Compiled Registry + Seed fallback で最適な値を返す。Availability / Freshness / Class 優先順位。 |
-| `SourceVaultListModels[provider]` | 指定 provider の選択可能な全モデル ID を列挙（Compiled Registry 優先、Seed fallback）。`SourceVaultResolve` が intent 単位で 1 件を返すのに対し、カタログ全体を返す。 |
-| `SourceVaultRefreshModelRegistry[opts]` | クラウド (anthropic/openai)・ローカル (LM Studio)・ChatGPT Codex CLI のエンドポイントからモデル一覧を取得し Compiled Model Registry を更新。`Providers` オプションで対象を限定。 |
+| `SourceVaultListModels[provider]` | 指定 provider の選択可能な全モデル ID を列挙（Compiled Registry 優先、Seed fallback）。 |
+| `SourceVaultRefreshModelRegistry[opts]` | クラウド (anthropic/openai)・ローカル (LM Studio)・ChatGPT Codex CLI のエンドポイントからモデル一覧を取得し Compiled Model Registry を更新。 |
 | `ClaudeResolveModel[provider, intent]` | `SourceVaultResolve["Model", ...]` の互換 wrapper。provider と intent から具体的なモデルを解決。 |
 | `SourceVaultClaimStoreCompact[]` | claim JSONL を dedup + 圧縮。 |
 | `$SourceVaultVersion` | パッケージバージョン文字列。 |
 | `$SourceVaultRoots` | PrivateVault のルートパス（Association）。 |
+| `$SourceVaultDefaultNotebookFolder` | SourceVault が管理する notebook のデフォルト保存フォルダ（`Automatic` で `$onWork` → `$packageDirectory` に解決）。 |
+| **コア基盤 (SourceVault_core)** | |
+| `SourceVaultWithLock[name, body, opts]` | 排他 lock を取得して body を評価し確実に解放（`HoldRest`）。`"TimeoutSeconds"` / `"TTLSeconds"` オプション。 |
+| `SourceVaultAppendEvent[event, opts]` | append-only event log に 1 event / 1 file で commit。同一 EventID の再 commit は digest 照合で冪等処理。 |
+| `SourceVaultTransactionLog[opts]` | event directory の全 event を新しい順で返す。`"Limit"` / `"EventClass"` オプション。 |
+| `SourceVaultCommitBlob[data, opts]` | ByteArray / String をコンテントアドレス blob として create-only 保存。 |
+| `SourceVaultSaveImmutableSnapshot[class, assoc, opts]` | assoc を class 別 immutable snapshot として保存。同一内容の再保存は idempotent。`"Alias"` オプション対応。 |
+| `SourceVaultLoadImmutableSnapshot[ref]` | snapshot ref または `"class/alias"` を読み、検証済み assoc を返す。 |
+| `SourceVaultAtomicUpdatePointer[name, value, opts]` | pointer を排他更新（Sequence 単調増加）。 |
+| `SourceVaultPointerReplay[name, opts]` | pointer event を replay し最大 Sequence の検証済み値を返す。 |
+| **検索基盤 (SourceVault_searchindex)** | |
+| `SourceVaultRegisterReleaseContext[name, spec]` | 公開ポリシー（`MaxPrivacyLevel` / `RequiredTags` / `DenyTags` 等）を登録。 |
+| `SourceVaultEvaluateReleasePolicy[source, context]` | source が release context で公開可能か評価し `Permit` / `Deny` / `NeedsReview` を返す。 |
+| `SourceVaultRegisterPDFIndexProfile[name, spec]` | PDFIndex profile を登録（`CollectionRoot` 等）。 |
+| `SourceVaultRegisterSearchBackend[name, spec]` | embedding / keyword 検索バックエンドを登録。 |
+| `SourceVaultListProfiles[kind]` | 指定 kind（ReleaseContext / SearchIndexProfile / PDFIndexProfile / SearchBackend / OCRBackend）の登録名を返す。 |
+| `SourceVaultRevokeObject[objectId, opts]` | ObjectRevoked event を event log に記録。`"Reason"` / `"State"` オプション対応。 |
+| `SourceVaultBuildRevocationSet[]` | revocation 系 event を replay して HotRevocationSet を構築。 |
+| `SourceVaultSaveRetrievalWorkflowSnapshot[name, spec, opts]` | retrieval ワークフロー設定を immutable 保存（credential / 実パスは含めない）。 |
+| `SourceVaultFreezeCorpusSnapshot[corpusId, opts]` | 検索対象集合を immutable CorpusSnapshot に固定。 |
+| `SourceVaultSearch[query, opts]` | release context gate 付き検索。`"ReleaseContext"` / `"PDFIndexProfile"` / `"Limit"` オプション対応。 |
+| **サービス管理 (SourceVault_servicemanager)** | |
+| `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
+| `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |
+| `SourceVaultRegisterWebServiceEndpoint[name, spec]` | Web サービスエンドポイントを登録（`BindAddress` / `Port` 必須）。 |
+| `SourceVaultCreatePDFGroupSearchProfile[alias, spec]` | PDF グループ検索プロファイルを登録（QueryScopeResolver / ポリシー等をまとめた data object）。 |
+| `SourceVaultClonePDFGroupSearchProfile[src, new, overrides]` | 既存 profile を複製して差分登録。 |
+| `SourceVaultStartService[serviceId, opts]` | detached WolframScript サービスを起動（メインカーネル終了後も継続）。`"PreludeCode"` / `"HeartbeatIntervalSeconds"` オプション。 |
+| `SourceVaultStopService[serviceId, opts]` | サービスを停止する。 |
+| `SourceVaultServiceStatus[serviceId]` | サービスの状態（Running/Stopped 等）を返す。 |
+| `SourceVaultStartHTTPProxy[serviceId, opts]` | Python reverse proxy を起動して Web 検索サービスを公開。`"Port"` / `"ReleaseContext"` / `"PDFIndexProfile"` / `"AppTitle"` / `"AskPrompt"` / `"ChatModel"` / `"MCPToken"` オプション対応。 |
+| `SourceVaultStartMCP[opts]` | MCP サーバ（WL service + `/sv/mcp` proxy）を一括起動。`"ServiceId"` / `"Port"` / `"MCPToken"`（既定 Automatic = `proxy.config.json` から解決）。 |
+| `SourceVaultStopMCP[opts]` / `SourceVaultMCPRunningQ[opts]` / `SourceVaultMCPStatus[opts]` | MCP の停止 / 稼働判定 / 状態と公開 URL。 |
+| `SourceVaultNoPersonalConfigDoctor[filesOrDirs, opts]` | 配布ファイルへの個人情報・環境依存値（IP / パス / credential / メールアドレス）の混入を検査。 |
+| **Web 検索 / MCP ゲートウェイ (SourceVault_webingest / SourceVault_mcp)** | |
+| `SourceVaultSearXNGSearch[query, opts]` | SearXNG JSON API を叩き候補 URL を正規化（記録しない生クライアント）。 |
+| `SourceVaultWebSearch[query, opts]` | provenance + 監査記録つき検索。`"FetchPages"` で本文取得、`"StoreSearchRun"`（既定 True）で WebSearchRun snapshot + Searched イベント。 |
+| `SourceVaultWebSearchSubmit[query, opts]` / `SourceVaultWebJobStatus` / `SourceVaultWebJobResult` | 非同期検索 job（長時間 fetch をブロックしない）。 |
+| `SourceVaultWebFetch[url, opts]` | URL 本文取得 + HTML clean-text → WebDocument 不変 snapshot（非 2xx は FetchFailed）。 |
+| `SourceVaultWebComputePriority` / `SourceVaultWebPriority` / `SourceVaultWebImportance` / `SourceVaultWebRecomputePriorities` | 構造 Priority（mail 整合）と使用 importance の計算・合成・再計算。 |
+| `SourceVaultSetWebDomainWeight[domain, w]` / `SourceVaultWebDomainWeights[]` | ソースドメイン重み（mail のグループ重みに対応。サブドメインは親継承）。 |
+| `SourceVaultRollupReferenceEvents[]` / `SourceVaultReferenceEventStoreStatus[]` / `SourceVaultPruneRolledReferenceEvents[]` | 参照イベントのクロスマシン rollup（Dropbox 集約）・状態・剪定。 |
+| `SourceVaultSummarizeText` / `SourceVaultSummarizeResults` | ローカル LLM 要約。`"Persist" -> True` で DerivedArtifact 保存 + Summarized イベント。 |
+| `SourceVaultSaveDerivedArtifact` / `SourceVaultDerivedArtifactList` / `SourceVaultDerivedArtifactsForSource` | 派生成果物（要約等）の保存・一覧・逆引き。 |
+| `SourceVaultWebSearchIntegration[]` / `SourceVaultSearXNGAvailableQ[]` | SearXNG 可用判定と exa ⇄ SourceVault backend の後方互換切替（claudecode 無変更）。 |
+| **Eagle 統合 (SourceVault_eagle)** | |
+| `SourceVaultEagleRegisterLibrary[name, path]` | Eagle ライブラリを名前付きで登録（シンボリックパスで永続化、別 PC でも使用可）。 |
+| `SourceVaultEagleSetLibrary[nameOrPath]` | 現在の Eagle ライブラリを切り替える。 |
+| `SourceVaultEagleStatus[]` | 現在ライブラリ・item 数・API 状態・サマリー/ingest 件数の概要を返す。 |
+| `SourceVaultEagleSearch[query, opts]` | name / annotation / tags / url + サマリー本文の部分一致で item を検索。`"Folder"` / `"Tags"` / `"Ext"` / `"DateFrom"` 等のフィルタ対応。 |
+| `SourceVaultEagleItems[]` | 全 item の metadata リストを返す（mtime.json による増分キャッシュ）。 |
+| `SourceVaultEagleItemsInFolder[folder, opts]` | フォルダ（通常・スマートフォルダ）内 item を返す。 |
+| `SourceVaultEagleFolderList[]` | フォルダ一覧をノートブックリスト風の表で返す。フォルダ名クリックでビューを開く。 |
+| `SourceVaultEagleShowFolder[folder, opts]` | フォルダビューを新規ノートブックで開く。 |
+| `SourceVaultEagleRefresh[]` | item / メタ / オンライン判定のメモリキャッシュを破棄して再読込させる。 |
+| `SourceVaultEagleLibraryOnlineQ[]` | 現在ライブラリへの到達可否（NAS オフライン検知）。結果はキャッシュされる。 |
+| `$SourceVaultEagleLibrary` | 現在の Eagle ライブラリパス。 |
+| `$SourceVaultEagleCloudPublishableTag` | クラウド LLM サマリーを許可するタグ名（既定 `"Cloud-Publishable"`）。 |
+| `$SourceVaultEaglePrivacyLevel` | Eagle 出力セルの既定 PrivacyLevel（数値またはライブラリ別 Association）。 |
+| **暗号化基盤** | |
 | `SourceVaultInitializeEncryption[]` | 冪等な鍵 bootstrap。欠落した標準鍵だけ生成。鍵材料は返さない。 |
 | `SourceVaultEncryptionKeyStatus[]` | 標準 KeyRef ごとの存在・種別・指紋（鍵材料なし）。 |
 | `SourceVaultEncryptedPut/Get[...]` | encrypt-then-MAC で機密 record を保存/取得（plaintext は返さない）。 |
 | `SourceVaultDecryptRecord[record]` | MAC 検証後に復号。改ざんは `AuthenticationFailed` で拒否。 |
 | `SourceVaultExportKeyBundle[passphrase]` | 標準鍵を scrypt + AES256 でパスフレーズ保護した可搬バンドルを書き出す（Dropbox 外）。 |
 | `SourceVaultImportKeyBundle[passphrase]` | 鍵バンドルを別マシンの credential store に取り込む。 |
+| **identity / 送信者認証** | |
 | `SourceVaultIdentityInitialize[]` | identity の load + self(EntityUid=1) bootstrap（冪等）。 |
 | `SourceVaultPutEntity / LinkIdentifierToEntity[...]` | 2層アドレス帳の実体登録・識別子マージ。 |
 | `SourceVaultEntityEditUI[idOrUid]` | 実体1件の編集フォーム（種別/Group/Weight/プライマリメール/LLMプロフィール等）。 |
+| `SourceVaultIdentityBackfillFromMail[]` | ロード済みメール snapshot の From/To/Cc から識別子を一括生成（再取込不要）。 |
+| `SourceVaultSenderAuthentication[record, opts]` | メール record から SenderAuthentication 判定 metadata を作る（信頼 authserv-id pinning）。 |
+| `SourceVaultSenderAuthenticatedQ[auth]` | DMARC/DKIM 認証が成立しているか（loosening 可否）を返す。 |
+| `$SourceVaultTrustedAuthservIds` | 受信側が信頼する authserv-id のリスト（未登録は fail-closed）。 |
+| **メール管理** | |
 | `SourceVaultRegisterMailAccount[<\|...\|>]` | IMAP アカウントを vault config に登録（パスワードは保存せず CredKey のみ）。 |
+| `SourceVaultGetMailAccount[mbox]` | 登録済み IMAP アカウント設定を返す。 |
+| `SourceVaultMailAccounts[]` | 登録済み IMAP アカウント設定を Dataset で返す（パスワード除外）。 |
+| `SourceVaultRemoveMailAccount[mbox, opts]` | アカウント登録を削除する。 |
 | `SourceVaultMailFetchNew[mbox, opts]` | IMAP 新着のみ取得（既定 LLM なし、RecordId で重複排除）。 |
-| `SourceVaultInferMailDerivedBatch[opts]` | PL/優先度/概要をローカル LLM で増分派生（中断耐性）。 |
+| `SourceVaultInferMailDerivedBatch[opts]` | PL/優先度/概要/カテゴリ/締切をローカル LLM で増分派生（中断耐性）。`"Refresh" -> "MissingCategory"` で後埋め対応。 |
 | `SourceVaultMailComputePriority[snap, wr]` | 重要度を決定的に計算（グループ重み + To/Cc 位置 + bulk + 依頼度）。 |
+| `SourceVaultMailSnapshotDecryptBody[snapshot]` | snapshot の暗号化 body を MAC 検証後に復号。 |
+| `SourceVaultMailParseEmails[headerValue]` | ヘッダ文字列からメールアドレスリストを抽出。 |
 | `SourceVaultSearchMailSnapshots[query, opts]` | 件名/概要 + Priority/Privacy/From/添付フィルタで検索。 |
 | `SourceVaultMailView[query, opts]` | 本文✉/添付📎/返信↩ を備えた対話的メール一覧。 |
 | `SourceVaultMailComposeReply[rid, opts]` | 返信ドラフトを生成（DraftOnly、自動送信しない）。 |
+| `$SourceVaultMailCategories` | メール派生カテゴリトークン一覧（InfoProvision / AttendanceRequest / TaskRequest / Confirmation / Report / Notice / Other）。 |
+| `$SourceVaultDefaultImportedMailPL` | import 時のメール本文 PL 既定（`0.85`、fail-safe）。 |
 
 ### ドキュメント一覧
 
 | ファイル | 内容 |
 |---------|------|
 | `setup.md` | インストール手順・トラブルシューティング |
-| `user_manual.md` | カテゴリ別ユーザーマニュアル（Notebook Management・PromptRouter・暗号化基盤・鍵バンドル・identity・メール管理を含む） |
-| `example.md` | 代表的な使用パターン集（暗号化・identity・メールの例を含む） |
+| `user_manual.md` | カテゴリ別ユーザーマニュアル（Notebook Management・PromptRouter・暗号化基盤・鍵バンドル・identity・メール管理・Eagle 統合を含む） |
+| `example.md` | 代表的な使用パターン集（基本機能・ClaudeOrchestrator 統合・暗号化・identity・メールの例を含む） |
+| `api_core.md` | コア基盤 API（排他制御・immutable snapshot・append-only event log・blob store・pointer） |
 | `api_crypto.md` | 暗号基盤 API（鍵 bootstrap・encrypt-then-MAC record・鍵バンドル・cloud materialization ゲート） |
 | `api_identity.md` | identity API（2層アドレス帳・送信者認証・release planning） |
 | `api_maildb.md` | メール API（snapshot 変換・検索・IMAP 取得・派生・FE 操作） |
+| `api_promptrouter.md` | PromptRouter API（ルート解決・PromptRun 履歴・レジストリ・プロンプトキャプチャ） |
+| `api_searchindex.md` | 検索基盤 API（release context・profiles・revocation・versioned snapshot） |
+| `api_servicemanager.md` | サービス管理 API（Web サービス・HTTP proxy・detached service・PDF グループ検索 profile） |
+| `api_eagle.md` | Eagle 統合 API（ライブラリ管理・読み取り・検索・変更・LLM サマリー） |
 | `design/` | SourceVault 仕様書・PromptRouter 統合仕様書・物理ストレージレイアウト |
 
 ---
@@ -509,17 +750,9 @@ r2["Cached"]
 
 #### 例 5 — Todo の状態を変更（DryRun → 実行）
 
-`SourceVaultMarkTodo` は NBAccess の `NBWriteTodoStatus` への薄いラッパーで、Cell options + TaggingRules を同時に更新します。
-
 ```mathematica
 (* DryRun = True (default) で Before / After をプレビュー *)
 SourceVaultMarkTodo[nbPath, 1, "Done"]
-(* → <|"Status" -> "DryRunOK",
-       "OldStatus" -> "Open", "NewStatus" -> "Done",
-       "Before" -> HoldComplete[Cell[..., 
-                     FontVariations -> {"StrikeThrough" -> False}, ...]],
-       "After"  -> HoldComplete[Cell[..., 
-                     FontVariations -> {"StrikeThrough" -> True}, ...]], ...|> *)
 
 (* 実行 *)
 SourceVaultMarkTodo[nbPath, 1, "Done", "DryRun" -> False]
@@ -551,24 +784,19 @@ h["Source"]
 | `"BoxData"` | Input cell の BoxData を `MakeExpression` で Association 化（whitelist なし） |
 | `"None"` | どれにも該当せず |
 
-Header フィルタ (`iNBIsHeaderLikeAssoc`) は Keywords / Status / Deadline / NextReview / Owner / PathHint / Title のいずれかを含む Association のみ Header と認め、TodoItem cell の `<|"TodoStatus" -> "Done"|>` のような Todo metadata を誤認しません。
-
 ### スケジュールの問い合わせ（PromptRouter / TabularQuery）
 
-`ClaudeEval` のスケジュール系プロンプトは、PromptRouter が `SourceVaultUpcomingSchedule` の呼び出し式に変換します。`ClaudeEval` の出力は内部診断 `Association` ではなく、`SourceVaultUpcomingSchedule` 本来の装飾付き Grid です。
+`ClaudeEval` のスケジュール系プロンプトは、PromptRouter が `SourceVaultUpcomingSchedule` の呼び出し式に変換します。
 
 ```mathematica
-(* 単純な期間指定: Period オプションに変換される *)
+(* 単純な期間指定 *)
 ClaudeEval["今日から3日間のスケジュールを"]
-(* → SourceVaultUpcomingSchedule["Period" -> Quantity[3,"Days"], ...] の評価結果 *)
 
-(* 絞り込み付き: FilterSpec オプションに変換される *)
+(* 絞り込み付き *)
 ClaudeEval["7日間のスケジュールのうちTodoが残っているものを"]
-(* → "FilterSpec" -> <|"Kind" -> "Field",
-       "Field" -> "OpenTodoCount", "Op" -> "Greater", "Value" -> 0|> *)
 ```
 
-`SourceVaultUpcomingSchedule` を直接呼ぶこともできます。`FilterSpec` には閉じた DSL の構造化述語を渡します。
+`SourceVaultUpcomingSchedule` を直接呼ぶこともできます。
 
 ```mathematica
 (* Todo が残っていて、かつ NextReview がある notebook だけ *)
@@ -590,15 +818,58 @@ SourceVaultUpcomingSchedule[
   "OutputFormat" -> "Records"]
 ```
 
-PromptRouter の提案式そのものを確認したい場合は `SourceVaultProposePromptRoute` を使います。
+PromptRoute の保存と検索：
 
 ```mathematica
-p = SourceVaultProposePromptRoute["今日から3日間のスケジュールを"];
-p["Status"]
-(* "Proposed" *)
-p["ProposedExpression"]
-(* HoldComplete[SourceVaultUpcomingSchedule["Scope" -> $onWork,
-     "Period" -> Quantity[3, "Days"], ...]] *)
+(* 最新の ClaudeEval 実行を PromptRoute として保存 *)
+SaveLastPrompt["週次スケジュール確認"]
+
+(* 保存済みルートを検索 *)
+SourceVaultSearchPromptRoutes["スケジュール"]
+```
+
+### Gate 付き PDF 検索と Web サービス公開
+
+PDF コレクションを取り込み、release context で公開範囲を制御し、Web 検索サービスとして公開する流れです。
+
+```mathematica
+(* release context とプロファイルを登録 *)
+SourceVaultRegisterReleaseContext["handbook-web", <|
+  "MaxPrivacyLevel" -> 0.5,
+  "RequiredTags" -> {"ReleaseContext:Campus:Handbook:Web"},
+  "DenyTags" -> {"NoWeb", "Draft"}|>];
+SourceVaultRegisterPDFIndexProfile["student-handbook", <||>];
+
+(* gate 付き検索 *)
+res = SourceVaultSearch["履修登録の手順",
+  "ReleaseContext" -> "handbook-web",
+  "PDFIndexProfile" -> "student-handbook",
+  "Limit" -> 5];
+Dataset[<|"Title" -> Lookup[#Citation, "Title"], "Score" -> #Score|> & /@ res]
+
+(* detached サービスを起動して Web で公開 *)
+SourceVaultStartService["handbook-svc", "Kind" -> "websearch"];
+SourceVaultStartHTTPProxy["handbook-svc",
+  "Port" -> 8080,
+  "ReleaseContext" -> "handbook-web",
+  "PDFIndexProfile" -> "student-handbook",
+  "AppTitle" -> "学生便覧 検索",
+  "ChatModel" -> "cloud"]
+```
+
+### Eagle ライブラリの検索と表示
+
+```mathematica
+(* Eagle ライブラリを登録 *)
+SourceVaultEagleRegisterLibrary["main",
+  {"$dropbox", "Eagle", "My Library.library"}]
+
+(* 全 item 検索 *)
+SourceVaultEagleSearch["自然計算",
+  "Folder" -> "論文", "Ext" -> "pdf", "Limit" -> 20]
+
+(* フォルダビューをノートブックで開く *)
+SourceVaultEagleShowFolder["論文"]
 ```
 
 ### LLM 要約（ClaudeRuntime 経由）
@@ -659,11 +930,20 @@ SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
 ### リポジトリ
 
 - [SourceVault](https://github.com/transreal/SourceVault)
+- [SourceVault_core](https://github.com/transreal/SourceVault_core)
+- [SourceVault_searchindex](https://github.com/transreal/SourceVault_searchindex)
+- [SourceVault_servicemanager](https://github.com/transreal/SourceVault_servicemanager)
+- [SourceVault_promptrouter](https://github.com/transreal/SourceVault_promptrouter)
+- [SourceVault_crypto](https://github.com/transreal/SourceVault_crypto)
+- [SourceVault_identity](https://github.com/transreal/SourceVault_identity)
+- [SourceVault_maildb](https://github.com/transreal/SourceVault_maildb)
+- [SourceVault_eagle](https://github.com/transreal/SourceVault_eagle)
 - [NBAccess](https://github.com/transreal/NBAccess)
 - [claudecode](https://github.com/transreal/claudecode)
 - [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)
 - [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator)
 - [ClaudeTestKit](https://github.com/transreal/ClaudeTestKit)
+- [PDFIndex](https://github.com/transreal/PDFIndex)
 - [github](https://github.com/transreal/github)
 
 ---
@@ -690,4 +970,3 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```

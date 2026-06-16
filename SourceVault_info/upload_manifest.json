@@ -5,13 +5,23 @@
 		"SourceVault_promptrouter.wl",
 		"SourceVault_crypto.wl",
 		"SourceVault_identity.wl",
-		"SourceVault_maildb.wl"
+		"SourceVault_maildb.wl",
+		"SourceVault_core.wl",
+		"SourceVault_searchindex.wl",
+		"SourceVault_servicemanager.wl",
+		"SourceVault_webingest.wl",
+		"SourceVault_mcp.wl",
+		"SourceVault_eagle.wl"
 	],
 	"directories":[
 		"SourceVault_info"
 	],
 	"excludePatterns":[
 		"SourceVault_info\/history\/",
-		"SourceVault_info\/references\/"
+		"SourceVault_info\/references\/",
+		"SourceVault_info\/runtime\/",
+		"SourceVault_info\/cache\/",
+		"SourceVault_info\/local\/",
+		"SourceVault_info\/secrets\/"
 	]
 }
