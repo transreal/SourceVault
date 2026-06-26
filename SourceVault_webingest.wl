@@ -77,6 +77,11 @@ SourceVaultWebFetch::usage =
   "戻り値は WebDocument 概要 (Url/ContentHash/Title/CleanTextRef/ExtractionStatus/SnapshotRef/...)。\n" <>
   "オプション: \"TimeoutSeconds\"/\"StoreEvidence\"/\"Provenance\"。";
 
+SourceVaultRegisterWebIngestHook::usage =
+  "SourceVaultRegisterWebIngestHook[name, f] は SourceVaultWebFetch 完了時に呼ぶフック f[ctx] を登録する (取り込み後の著者/タグ抽出を webingest 非依存で結線する拡張点)。ctx=<|Result, Url|>。失敗しても fetch を壊さない。";
+SourceVaultUnregisterWebIngestHook::usage = "SourceVaultUnregisterWebIngestHook[name] は登録フックを解除する。";
+SourceVaultWebIngestHooks::usage = "SourceVaultWebIngestHooks[] は登録済み web ingest フック名のリストを返す。";
+
 SourceVaultWebSearchRunList::usage =
   "SourceVaultWebSearchRunList[] は保存済み WebSearchRun (検索の監査記録) のリストを返す。\n" <>
   "各 WebSearch は既定で WebSearchRun として core に永続化され、誰がいつ何を検索したか辿れる。";
@@ -558,10 +563,21 @@ iWebRecordFetchGap[url_String, gapKind_String, reason_, status_, prov_] :=
       "IngestProvenanceRef" -> Lookup[If[AssociationQ[prov], prov, <||>], "ProvenanceId", Missing[]],
       "Source" -> "WebFetch"|>], $Failed], Null];
 
+(* --- post-ingest hook: SourceVaultWebFetch 完了時に f[ctx] を呼ぶ。取り込み後の著者/タグ抽出 (mining) を
+   webingest に依存させずに結線する拡張点。hook の失敗は fetch を壊さない (Quiet@Check)。未登録なら素通し。 *)
+If[! AssociationQ[$iWebIngestHooks], $iWebIngestHooks = <||>];
+SourceVaultRegisterWebIngestHook[name_String, f_] :=
+  (AssociateTo[$iWebIngestHooks, name -> f]; <|"Status" -> "Registered", "Name" -> name|>);
+SourceVaultUnregisterWebIngestHook[name_String] :=
+  ($iWebIngestHooks = KeyDrop[$iWebIngestHooks, name]; <|"Status" -> "Unregistered", "Name" -> name|>);
+SourceVaultWebIngestHooks[] := Keys[$iWebIngestHooks];
+iWebRunIngestHooks[ctx_Association] :=
+  Association[KeyValueMap[#1 -> Quiet@Check[#2[ctx], $Failed] &, $iWebIngestHooks]];
+
 Options[SourceVaultWebFetch] = {"TimeoutSeconds" -> 30, "StoreEvidence" -> True,
   "Provenance" -> <||>, "RecordGap" -> True};
 SourceVaultWebFetch[url_String, OptionsPattern[]] := Module[
-  {timeout, store, prov, recGap, fetch, status, ct, bytes, ext, cleanText, bodyBlob, cleanBlob, doc, snap, es, prRec},
+  {timeout, store, prov, recGap, fetch, status, ct, bytes, ext, cleanText, bodyBlob, cleanBlob, doc, snap, es, prRec, result},
   timeout = OptionValue["TimeoutSeconds"];
   store   = TrueQ[OptionValue["StoreEvidence"]];
   prov    = OptionValue["Provenance"];
@@ -624,11 +640,13 @@ SourceVaultWebFetch[url_String, OptionsPattern[]] := Module[
      可変メタなので不変 snapshot には入れない (rule105 §3)。FetchFailed も含め保存済み snapshot に付与。 *)
   prRec = If[store && AssociationQ[snap] && StringQ[Lookup[snap, "Ref", Null]],
     Quiet @ iWebPutPriority[Lookup[snap, "Ref"], If[AssociationQ[prov], prov, <||>], doc], Missing[]];
-  Join[doc, <|
+  result = Join[doc, <|
     "CleanTextPreview" -> If[StringQ[cleanText], StringTake[cleanText, UpTo[300]], ""],
     "SnapshotRef"    -> If[AssociationQ[snap], Lookup[snap, "Ref", Missing[]], Missing[]],
     "SnapshotStatus" -> If[AssociationQ[snap], Lookup[snap, "Status", Missing[]], Missing[]],
-    "Priority"       -> If[AssociationQ[prRec], Lookup[prRec, "Priority", Missing[]], Missing[]]|>]];
+    "Priority"       -> If[AssociationQ[prRec], Lookup[prRec, "Priority", Missing[]], Missing[]]|>];
+  (* 取り込み後フック (mining の著者/タグ抽出など)。失敗しても fetch は成功扱い。観測のため戻り値に載せる。 *)
+  Append[result, "IngestHooks" -> iWebRunIngestHooks[<|"Result" -> result, "Url" -> url|>]]];
 
 (* ---- reference event append-only log (spec v6 §11) ---- *)
 iWebRefEventsDir[] := Module[{ls = iWebLocalStateDir[]},
@@ -825,6 +843,11 @@ If[! AssociationQ[SourceVault`$SourceVaultRefEventWeights],
     "Displayed" -> 0.2, "Retrieved" -> 0.3, "Searched" -> 0.3, "Selected" -> 0.5,
     "Ingested" -> 0.5, "Summarized" -> 0.7, "Exported" -> 0.8, "UsedInAnswer" -> 1.0,
     "Cited" -> 1.5, "UserPinned" -> 2.0|>];
+(* Deposited: MCP deposit 由来の自己申告 SourceRefs は検証済 evidence でないため低 weight
+   (spec §10.7 / §15.3)。既存 table にも後付け保証 (上の guard で再ロード時に更新されないため)。 *)
+If[AssociationQ[SourceVault`$SourceVaultRefEventWeights] &&
+   ! KeyExistsQ[SourceVault`$SourceVaultRefEventWeights, "Deposited"],
+  AssociateTo[SourceVault`$SourceVaultRefEventWeights, "Deposited" -> 0.1]];
 
 iWebParseTime[s_String] := Quiet @ Check[DateObject[StringTrim[s, "Z"], TimeZone -> 0], Missing[]];
 iWebParseTime[_] := Missing[];
@@ -1127,7 +1150,11 @@ iWebLLMBase[endpoint_String] := First[
   StringCases[endpoint, RegularExpression["^https?://[^/]+"]], endpoint];
 
 iWebLLMGetJSON[url_String] := Module[{body},
-  body = Quiet @ Check[URLRead[HTTPRequest[url, <|"Headers" -> iWebLLMHeaders[]|>], "Body"], $Failed];
+  (* #3: モデル一覧取得 (LM Studio /api/v0/models, /v1/models)。LM Studio ロード中の
+     無限待ちを防ぐため TimeConstrained で打ち切る (要約本体 iWebLLMComplete とは別経路)。 *)
+  body = TimeConstrained[
+    Quiet @ Check[URLRead[HTTPRequest[url, <|"Headers" -> iWebLLMHeaders[]|>], "Body"], $Failed],
+    15, $Failed];
   If[StringQ[body] || ByteArrayQ[body],
     Quiet @ Check[ImportByteArray[
       If[ByteArrayQ[body], body, StringToByteArray[body, "UTF-8"]], "RawJSON"], $Failed],
@@ -1266,6 +1293,7 @@ iWebRefClass[ref_String] := Module[{p = StringSplit[ref, ":"]},
 iWebRefClass[_] := "Unknown";
 
 iWebArtifactRefEventType["Summary"] = "Summarized";
+iWebArtifactRefEventType["MCPDeposit"] = "Deposited";  (* MCP deposit: 低 weight Deposited イベント (§10.7) *)
 iWebArtifactRefEventType[_] = "Derived";
 
 SourceVaultSaveDerivedArtifact[artifact_Association] := Module[

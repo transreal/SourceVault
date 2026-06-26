@@ -91,6 +91,19 @@ SourceVaultServiceStatus::usage =
   "SourceVaultServiceStatus[serviceId] は pid.json / status.json / heartbeat.json から状態 association を返す。";
 SourceVaultServiceHealth::usage =
   "SourceVaultServiceHealth[serviceId] は heartbeat の鮮度から OK/Degraded/Failing を返す。";
+SourceVaultInstallWatchdog::usage =
+  "SourceVaultInstallWatchdog[serviceId, opts] は軽量 PowerShell ウォッチドッグを常駐起動する。\n" <>
+  "wscript の hidden launcher 経由で一度だけ起動し、以後は PowerShell 内の while ループで自前 sleep し\n" <>
+  "終了せず常駐する (周期 scheduled task をやめたのでコンソール窓が前面に出るフリッカは発生しない)。\n" <>
+  "WL カーネルを spawn せず (ライセンス/電力配慮)、heartbeat 失効 (既定 90s) or crash を検知すると、wedge ログを\n" <>
+  "stdout.wedge-*.log へ退避し pid を kill して既存サービスタスクを再実行 (run.wls 再利用=root 再注入なし) する。\n" <>
+  "意図停止 (status.State=Stopped) は復活させない。多重常駐は named mutex で 1 本に抑止する。\n" <>
+  "オプション \"StaleSeconds\" -> 90 (失効秒), \"IntervalMinutes\" -> 2 (ループの巡回間隔)。";
+SourceVaultUninstallWatchdog::usage =
+  "SourceVaultUninstallWatchdog[serviceId] は watchdog scheduled task を削除し、常駐 PowerShell プロセスも kill する。";
+SourceVaultWatchdogStatus::usage =
+  "SourceVaultWatchdogStatus[serviceId] は watchdog task 登録の有無・常駐プロセスの生存 (ProcessAlive)・" <>
+  "watchdog.log.jsonl の再起動履歴を返す。";
 SourceVaultServiceRootHealth::usage =
   "SourceVaultServiceRootHealth[serviceId] は service の root/ユーザが main kernel と整合しているかを返す\n" <>
   "(spec v6 §3.6/§3.10)。<|RootHashMatch, MainRootHash, ServiceRootHash, UserMatch, MainUser,\n" <>
@@ -153,9 +166,12 @@ SourceVaultStartMCP::usage =
 SourceVaultStopMCP::usage =
   "SourceVaultStopMCP[opts] は MCP の proxy と WL service を停止する。オプション \"ServiceId\"。";
 SourceVaultMCPRunningQ::usage =
-  "SourceVaultMCPRunningQ[opts] は MCP proxy が稼働中 (到達可能) かを True/False で返す。オプション \"ServiceId\"。";
+  "SourceVaultMCPRunningQ[opts] は MCP proxy が実際に到達可能か (proxy の /health へ HTTP 接続成功) を\n" <>
+  "True/False で返す。pid 生存だけに頼らないので stale/再利用 pid でも誤検知しない。オプション \"ServiceId\"。";
 SourceVaultMCPStatus::usage =
-  "SourceVaultMCPStatus[opts] は MCP の service/proxy 状態と公開 URL をまとめて返す。オプション \"ServiceId\"。";
+  "SourceVaultMCPStatus[opts] は MCP の状態と公開 URL を返す。\"Running\" は実到達性 (/health 接続成功)、\n" <>
+  "\"ProxyState\"/\"ProxyPidAlive\" は pid ベース。両者が食い違う (PidAlive だが Running 偽) なら stale/再利用 pid。\n" <>
+  "オプション \"ServiceId\"。";
 $SourceVaultMCPServiceId::usage =
   "$SourceVaultMCPServiceId は MCP サーバの既定 serviceId (既定 \"sourcevault\")。";
 $SourceVaultMCPPort::usage =
@@ -533,9 +549,15 @@ iSMReadJSONL[path_String] := Module[{b, lines},
   lines = Select[StringSplit[ByteArrayToString[b, "UTF-8"], "\n"], StringLength[StringTrim[#]] > 0 &];
   Select[Quiet[iSMParseRawJSON[StringToByteArray[#, "UTF-8"]]] & /@ lines, AssociationQ]];
 
-(* runtime dir *)
+(* runtime dir。services / proxies は「マシン固有」状態 (その PC で動くカーネル/proxy の
+   pid / heartbeat / log)。Dropbox 共有 vault でも別マシンと衝突 (競合コピー) しないよう、
+   runtime 直下に $MachineName の層を挟んで namespacing する。
+   locks (core の runtime/locks) はクロスマシン排他のため共有のまま (ここでは触らない)。 *)
+iRuntimeMachineTag[] :=
+  StringReplace[ToString[$MachineName], Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"];
+iRuntimeMachineRoot[root_String] := FileNameJoin[{root, "runtime", iRuntimeMachineTag[]}];
 iServiceRuntimeDir[serviceId_String] := Module[{root = SourceVault`SourceVaultCoreRoot[]},
-  If[FailureQ[root], root, FileNameJoin[{root, "runtime", "services", serviceId}]]];
+  If[FailureQ[root], root, FileNameJoin[{iRuntimeMachineRoot[root], "services", serviceId}]]];
 SourceVaultServiceRuntimeDir[serviceId_String] := iServiceRuntimeDir[serviceId];
 
 iServiceLog[dir_String, eventClass_String, data_Association: <||>] :=
@@ -562,6 +584,11 @@ iPidAlive[pid_Integer] := Module[{out},
 iPidIsWolframProcess[pid_Integer] := Module[{out},
   out = Quiet @ RunProcess[{"tasklist", "/FI", "PID eq " <> ToString[pid], "/NH"}];
   AssociationQ[out] && StringContainsQ[ToLowerCase @ Lookup[out, "StandardOutput", ""], "wolfram"]];
+
+(* watchdog の常駐プロセスは powershell。pid 再利用での誤 kill を避けるため image を確認する。 *)
+iPidIsPowerShell[pid_Integer] := Module[{out},
+  out = Quiet @ RunProcess[{"tasklist", "/FI", "PID eq " <> ToString[pid], "/NH"}];
+  AssociationQ[out] && StringContainsQ[ToLowerCase @ Lookup[out, "StandardOutput", ""], "powershell"]];
 
 iKillPid[pid_Integer] :=
   Lookup[Quiet @ RunProcess[{"taskkill", "/PID", ToString[pid], "/F"}], "ExitCode", 1] === 0;
@@ -1338,6 +1365,23 @@ iDispatchServiceCommand[cmd_Association] := Switch[Lookup[cmd, "Command"],
           "Body" -> "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body><h2>500</h2><p>render error</p></body></html>"|>]],
   "Stop", <|"Status" -> "OK", "Stop" -> True|>,
   "Echo", <|"Status" -> "OK", "Echo" -> Lookup[cmd, "Payload"]|>,
+  (* D2 検証: service kernel で grant crypto が使えるか実地に確認する。
+     ensure key -> mint(短命) -> verify を service 側で実行。crypto が service loader に
+     入っていれば CryptoLoaded/MintOK/VerifyValid が True になる。 *)
+  "MCPGrantSelfTest",
+    Module[{cryptoLoaded, grantFn, ek, g, v},
+      cryptoLoaded = Length[DownValues[SourceVault`SourceVaultHMACSHA256Hex]] > 0;
+      grantFn = Length[DownValues[SourceVault`SourceVaultMCPVerifyAccessGrant]] > 0;
+      ek = If[grantFn, Quiet @ SourceVault`SourceVaultMCPEnsureGrantKey[], $Failed];
+      g = If[grantFn,
+        Quiet @ SourceVault`SourceVaultMCPMintAccessGrant[<|"AllowedKinds" -> {"mail"}, "TTLSeconds" -> 60|>],
+        $Failed];
+      v = If[AssociationQ[g],
+        Quiet @ SourceVault`SourceVaultMCPVerifyAccessGrant[g], <|"Valid" -> False|>];
+      <|"Status" -> "OK", "CryptoLoaded" -> cryptoLoaded, "GrantFnLoaded" -> grantFn,
+        "KeyEnsured" -> (AssociationQ[ek] && ! FailureQ[ek]),
+        "MintOK" -> AssociationQ[g],
+        "VerifyValid" -> TrueQ[Lookup[v, "Valid", False]], "AtUTC" -> iSMUTCNow[]|>],
   "Search",
     (* gate は SourceVaultSearch (SearchIndex) が request-time に行う。
        ReleaseContext / PDFIndexProfile は command に含めて proxy から渡す。 *)
@@ -1444,7 +1488,10 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
       If[Length[DownValues[SourceVault`SourceVaultRollupReferenceEvents]] > 0 &&
          NumericQ[SourceVault`$SourceVaultRollupIntervalSeconds] &&
          (AbsoluteTime[] - lastRollupAbs) > SourceVault`$SourceVaultRollupIntervalSeconds,
-        Quiet @ Check[SourceVault`SourceVaultRollupReferenceEvents[], Null];
+        (* #3: rollup をループ内で無制限ブロックさせない。Dropbox I/O ハング等は
+           TimeConstrained で打ち切り (Abort)、サービスループは次反復へ進める。 *)
+        Quiet @ TimeConstrained[
+          Check[SourceVault`SourceVaultRollupReferenceEvents[], Null], 30, Null];
         lastRollupAbs = AbsoluteTime[]];
       If[NumericQ[maxSec] && (AbsoluteTime[] - startAbs) > maxSec, stop = True; Break[]];
       Pause[interval]],
@@ -1472,7 +1519,7 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
     iSMWriteJSON[FileNameJoin[{dir, "manifest.resolved.wl"}],
       <|"ServiceId" -> serviceId, "Kind" -> kind, "PackageRoot" -> pkgRoot,
         "CoreRoot" -> root, "HeartbeatIntervalSeconds" -> interval,
-        "Packages" -> {"SourceVault_core.wl", "SourceVault_searchindex.wl",
+        "Packages" -> {"SourceVault_core.wl", "SourceVault_crypto.wl", "SourceVault_searchindex.wl",
           "SourceVault_servicemanager.wl", "SourceVault_webingest.wl", "SourceVault_mcp.wl"},
         "InjectedRootHash" -> rootHash,
         "HasPrelude" -> (StringLength[prelude] > 0), "CreatedAtUTC" -> iSMUTCNow[]|>];
@@ -1480,6 +1527,9 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
       text = StringJoin[
         "Block[{$CharacterEncoding = \"UTF-8\"},\n",
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_core.wl\"}]];\n",
+        (* crypto は grant 検証 (sourcevault_get / D3 本文解放) に必要。core 後・他より前に
+           load。存在ガードで fail-soft (欠落時 grant 検証は CryptoUnavailable で安全側)。 *)
+        "  With[{cpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_crypto.wl\"}]}, If[FileExistsQ[cpath], Get[cpath]]];\n",
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_searchindex.wl\"}]];\n",
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_servicemanager.wl\"}]];\n",
         (* webingest / mcp は存在する場合のみ load (spec v6 §4.6)。未作成段階でも安全。 *)
@@ -1498,10 +1548,25 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
       BinaryWrite[strm, StringToByteArray[text, "UTF-8"]]; Close[strm]];
     path];
 
+(* #1: stdout.log を再起動で truncate せず世代退避 (.1..keep) する。
+   launch 前に呼ぶことで、前回 (wedge を含む) 実行の stdout を保全し post-mortem を可能にする。 *)
+iRotateLog[logPath_String] := iRotateLog[logPath, 5];
+iRotateLog[logPath_String, keep_Integer] := (
+  If[FileExistsQ[logPath],
+    Do[
+      With[{src = If[i == 0, logPath, logPath <> "." <> ToString[i]],
+            dst = logPath <> "." <> ToString[i + 1]},
+        If[FileExistsQ[src],
+          Quiet @ Check[If[FileExistsQ[dst], DeleteFile[dst]]; RenameFile[src, dst], Null]]],
+      {i, keep - 1, 0, -1}]];
+  Null);
+
 (* 起動用 .bat を生成。Task Scheduler が detachment 境界になるので start は不要。
-   stdout/stderr は runtime dir のログへ redirect。path の空白は二重引用符で囲う。 *)
+   stdout/stderr は runtime dir のログへ redirect。path の空白は二重引用符で囲う。
+   #1: 既存 stdout.log は launch 前に世代退避し、前回実行のログを残す。 *)
 iGenLaunchBat[dir_String, exe_String, runWls_String] := Module[{path, text, q, strm},
   q[s_] := "\"" <> s <> "\"";
+  iRotateLog[FileNameJoin[{dir, "stdout.log"}]];
   path = FileNameJoin[{dir, "launch.bat"}];
   text = "@echo off\r\n" <> q[exe] <> " -file " <> q[runWls] <>
     " > " <> q[FileNameJoin[{dir, "stdout.log"}]] <> " 2>&1\r\n";
@@ -1558,8 +1623,11 @@ SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
   (* detached 起動 (§14.3: メイン kernel 終了後も生存)。
      WL の StartProcess 子は kernel の job object (kill-on-close) で道連れに kill
      されるため、Windows Task Scheduler を detachment 境界として使う。
-     PID は runner が自身の $ProcessID を pid.json に self-report する。 *)
-  Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", batPath,
+     PID は runner が自身の $ProcessID を pid.json に self-report する。
+     【窓非表示】bat を直接 /TR にすると Task Scheduler が対話セッションで
+     wolframscript のコンソール窓を表示し続ける。wscript の hidden launcher
+     (cmd /c bat を vbHide で起動) 経由にして窓を出さない (stdout リダイレクトは bat 側で維持)。 *)
+  Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", iWriteHiddenLauncher[dir, batPath]["TR"],
     "/SC", "ONCE", "/ST", "23:59", "/F"}];
   runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", task}];
   If[! (AssociationQ[runRes] && Lookup[runRes, "ExitCode"] === 0),
@@ -1720,9 +1788,168 @@ SourceVaultRestartService[serviceId_String, opts___] := Module[{stopRes, manifes
   Pause[0.5];
   SourceVaultStartService[serviceId, "Kind" -> kind, "HeartbeatIntervalSeconds" -> interval]];
 
+(* ============================================================
+   ウォッチドッグ (軽量 PowerShell。wedge/crash 検知 → 既存 run.wls 再利用で自動再起動)
+   - WL カーネルを spawn しない (バッテリーノート + Wolfram ライセンス同時起動数への配慮)。
+   - 再起動は kill + stdout 退避 + schtasks /Run で既存サービスタスクを再実行 → root 再注入なし。
+   - 意図停止 (status.State=Stopped) は復活させない。kill は wolfram プロセスのみ (pid 再利用誤爆回避)。
+   - 【常駐化 (window フリッカ対策)】以前は scheduled task を /SC MINUTE で周期実行していたため、
+     数分おきにコンソール窓が前面に出てフォア作業を妨げた。現在は「一度だけ起動 → PowerShell 内の
+     while ループで自前 sleep → 終了させず常駐」に変更。起動は wscript の hidden launcher 経由なので
+     窓は一切出ない。多重起動は named mutex で 1 本に抑止し、停止は pid 記録から kill する。
+   ============================================================ *)
+iWatchdogTaskName[serviceId_String] := "SourceVaultWatchdog_" <> iSafeName[serviceId];
+iWatchdogMutexName[svcTask_String] := "SourceVaultWatchdog_" <> svcTask;
+iWatchdogPidPath[svcDir_String] := FileNameJoin[{svcDir, "watchdog.pid.json"}];
+iWatchdogPidValue[svcDir_String] := Module[{rec = iSMReadJSON[iWatchdogPidPath[svcDir]]},
+  If[AssociationQ[rec], Lookup[rec, "PID", Missing[]], Missing[]]];
+
+iWriteTextFileUTF8[path_String, text_String] := Module[{strm = OpenWrite[path, BinaryFormat -> True]},
+  BinaryWrite[strm, StringToByteArray[text, "UTF-8"]]; Close[strm]; path];
+
+(* PowerShell 監視スクリプト本体。svcDir/svcTask/staleSec/intervalSec を焼き込む。
+   バックスラッシュ・二重引用符を含めない (WL 文字列エスケープ回避; パスは単一引用符で埋め込む)。
+   常駐ループ: 1 回チェック → intervalSec 秒 sleep を繰り返す。終了は外部 kill (uninstall) のみ。 *)
+iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJoin[
+  "$ErrorActionPreference = 'SilentlyContinue'\n",
+  "$svc = '", svcDir, "'\n",
+  "$task = '", svcTask, "'\n",
+  "$staleSec = ", ToString[staleSec], "\n",
+  "$intervalSec = ", ToString[intervalSec], "\n",
+  "$pidFile = Join-Path $svc 'watchdog.pid.json'\n",
+  (* 二重起動防止: 既に常駐 watchdog がいれば mutex を取れず即終了する。 *)
+  "$createdNew = $false\n",
+  "$mtx = New-Object System.Threading.Mutex($true, '", iWatchdogMutexName[svcTask], "', [ref]$createdNew)\n",
+  "if(-not $createdNew){ exit 0 }\n",
+  (* 自 PID を記録 (uninstall が確実に止められるように)。 *)
+  "try{ [IO.File]::WriteAllText($pidFile, ('{\"PID\":' + $PID + ',\"StartedAtUTC\":\"' + ([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) + '\"}')) }catch{}\n",
+  "function RJ($p){ if(Test-Path $p){ try{ Get-Content -Raw -Encoding UTF8 $p | ConvertFrom-Json }catch{ $null } } else { $null } }\n",
+  (* --- 1 周期分の健全性チェック。'ok'/'idle'/'restarted' を返す。 --- *)
+  "function Invoke-WatchdogCheck {\n",
+  "$status = RJ (Join-Path $svc 'status.json')\n",
+  "if($null -eq $status -or $status.State -ne 'Running'){ return 'idle' }\n",
+  "$hb = RJ (Join-Path $svc 'heartbeat.json')\n",
+  "$c1 = if($hb){ $hb.Counter } else { $null }\n",
+  "$age = $null\n",
+  "if($hb -and $hb.UpdatedAtUTC){ try{ $dto=[DateTimeOffset]::Parse([string]$hb.UpdatedAtUTC,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal); $age=([DateTimeOffset]::UtcNow-$dto).TotalSeconds }catch{ $age=$null } }\n",
+  "$pr = RJ (Join-Path $svc 'pid.json')\n",
+  "$svpid = if($pr){ [int]$pr.PID } else { 0 }\n",
+  "$proc = if($svpid -gt 0){ Get-Process -Id $svpid -ErrorAction SilentlyContinue } else { $null }\n",
+  "$alive = ($null -ne $proc) -and ($proc.ProcessName -match 'wolfram')\n",
+  "if($alive -and $null -ne $age -and $age -le $staleSec){ return 'ok' }\n",
+  "if($alive -and $null -eq $age){ return 'ok' }\n",
+  "if($alive){ Start-Sleep -Seconds 5; $hb2 = RJ (Join-Path $svc 'heartbeat.json'); $c2 = if($hb2){ $hb2.Counter } else { $null }; if($null -ne $c1 -and $null -ne $c2 -and $c1 -ne $c2){ return 'ok' } }\n",
+  "$stdout = Join-Path $svc 'stdout.log'\n",
+  "if(Test-Path $stdout){ $st=[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'); Copy-Item $stdout (Join-Path $svc ('stdout.wedge-'+$st+'.log')) -Force }\n",
+  "if($alive){ Stop-Process -Id $svpid -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }\n",
+  "schtasks /Run /TN $task | Out-Null\n",
+  "$rec=[ordered]@{ EventClass='WatchdogRestart'; AtUTC=[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'); HeartbeatAgeSeconds=$age; PidWasAlive=$alive; PID=$svpid }\n",
+  "[IO.File]::AppendAllText((Join-Path $svc 'watchdog.log.jsonl'), ($rec | ConvertTo-Json -Compress)+[Environment]::NewLine)\n",
+  "return 'restarted'\n",
+  "}\n",
+  (* --- 常駐ループ: チェック → sleep を繰り返す。窓を出さず終了もしない。 --- *)
+  "while($true){\n",
+  "  $r = 'ok'\n",
+  "  try{ $r = Invoke-WatchdogCheck }catch{ $r = 'ok' }\n",
+  "  Start-Sleep -Seconds $intervalSec\n",
+  "}\n"];
+
+(* wscript 経由の hidden launcher。wscript は GUI サブシステムなのでコンソール窓を一切持たず、
+   Run の第2引数 0 (vbHide) で起動する powershell も最初から非表示。これで窓フリッカが出ない。 *)
+iWatchdogLauncherVBS[ps1Path_String] := StringJoin[
+  "Set sh = CreateObject(\"WScript.Shell\")\r\n",
+  "sh.Run \"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"\"",
+  ps1Path, "\"\"\", 0, False\r\n"];
+
+iResolveWScriptExe[] := With[{sr = Environment["SystemRoot"]},
+  If[StringQ[sr], FileNameJoin[{sr, "System32", "wscript.exe"}], "wscript.exe"]];
+
+(* 既存の launch.bat を窓を出さずに起動する VBS。cmd /c 経由なので bat 内の stdout リダイレクトは
+   そのまま効く。第2引数 0 (vbHide) でコンソールを最初から非表示にする。 *)
+iHiddenBatLauncherVBS[batPath_String] := StringJoin[
+  "Set sh = CreateObject(\"WScript.Shell\")\r\n",
+  "sh.Run \"cmd /c \"\"", batPath, "\"\"\", 0, False\r\n"];
+
+(* schtasks /TR 用の文字列。program / script path を個別に quote する。schtasks は /TR 値を
+   verbatim 保存し、起動時に CreateProcess が quote 込みで program/args を分解する。 *)
+iWScriptTR[vbsPath_String] := "\"" <> iResolveWScriptExe[] <> "\" //B //Nologo \"" <> vbsPath <> "\"";
+
+(* bat を hidden launcher 化して runtime dir に vbs を書き、/TR 文字列を返す共通処理。 *)
+iWriteHiddenLauncher[dir_String, batPath_String] := Module[{vbsPath = FileNameJoin[{dir, "launch_hidden.vbs"}]},
+  iWriteTextFileUTF8[vbsPath, iHiddenBatLauncherVBS[batPath]];
+  <|"VBS" -> vbsPath, "TR" -> iWScriptTR[vbsPath]|>];
+
+Options[SourceVaultInstallWatchdog] = {"StaleSeconds" -> 90, "IntervalMinutes" -> 2};
+SourceVaultInstallWatchdog[serviceId_String, OptionsPattern[]] := Module[
+  {svcDir, svcTask, wdTask, staleSec, interval, intervalSec, ps1Path, vbsPath,
+   trStr, oldPid, cre, runRes, deadline, wdPid},
+  svcDir = iServiceRuntimeDir[serviceId];
+  If[FailureQ[svcDir], Return[svcDir]];
+  If[! DirectoryQ[svcDir], Return[Failure["ServiceNotInstalled", <|"ServiceId" -> serviceId|>]]];
+  svcTask = iServiceTaskName[serviceId];
+  wdTask = iWatchdogTaskName[serviceId];
+  staleSec = OptionValue["StaleSeconds"];
+  interval = OptionValue["IntervalMinutes"];
+  intervalSec = Max[5, Round[interval*60]];
+  (* 旧 watchdog が常駐していれば先に止める (interval 変更を反映 / 二重常駐回避)。 *)
+  oldPid = iWatchdogPidValue[svcDir];
+  If[IntegerQ[oldPid] && iPidAlive[oldPid] && iPidIsPowerShell[oldPid], iKillPid[oldPid]; Pause[0.3]];
+  Quiet @ If[FileExistsQ[iWatchdogPidPath[svcDir]], DeleteFile[iWatchdogPidPath[svcDir]]];
+  ps1Path = FileNameJoin[{svcDir, "watchdog.ps1"}];
+  vbsPath = FileNameJoin[{svcDir, "watchdog_launch.vbs"}];
+  iWriteTextFileUTF8[ps1Path, iWatchdogPS1[svcDir, svcTask, staleSec, intervalSec]];
+  iWriteTextFileUTF8[vbsPath, iWatchdogLauncherVBS[ps1Path]];
+  (* 旧版が残した watchdog.bat は使わない。混乱回避のため削除する。 *)
+  Quiet @ With[{old = FileNameJoin[{svcDir, "watchdog.bat"}]}, If[FileExistsQ[old], DeleteFile[old]]];
+  trStr = iWScriptTR[vbsPath];
+  (* 周期実行 (/SC MINUTE) はやめ、ONCE で一度だけ起動 → 以後は PS 常駐ループが面倒を見る。
+     scheduled task は detachment 境界 (メインカーネル終了後も生存) として残す。 *)
+  cre = Quiet @ RunProcess[{"schtasks", "/Create", "/TN", wdTask, "/TR", trStr,
+    "/SC", "ONCE", "/ST", "23:59", "/F"}];
+  runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", wdTask}];
+  (* 常駐起動の確認: watchdog.pid.json を最大 ~8s 待つ (best-effort)。 *)
+  deadline = AbsoluteTime[] + 8;
+  While[AbsoluteTime[] < deadline && ! FileExistsQ[iWatchdogPidPath[svcDir]], Pause[0.3]];
+  wdPid = iWatchdogPidValue[svcDir];
+  <|"Status" -> If[AssociationQ[cre] && Lookup[cre, "ExitCode", 1] === 0 &&
+      AssociationQ[runRes] && Lookup[runRes, "ExitCode", 1] === 0, "Installed", "Error"],
+    "ServiceId" -> serviceId, "Task" -> wdTask, "ServiceTask" -> svcTask,
+    "StaleSeconds" -> staleSec, "IntervalMinutes" -> interval, "IntervalSeconds" -> intervalSec,
+    "Resident" -> True, "WatchdogPID" -> wdPid, "PS1" -> ps1Path, "Launcher" -> vbsPath,
+    "ExitCode" -> If[AssociationQ[cre], Lookup[cre, "ExitCode"], Missing[]]|>];
+
+SourceVaultUninstallWatchdog[serviceId_String] := Module[
+  {wdTask = iWatchdogTaskName[serviceId], svcDir, wdPid, killed = False},
+  svcDir = iServiceRuntimeDir[serviceId];
+  (* scheduled task を消すだけでは常駐 PowerShell は止まらない。pid 記録から kill する。 *)
+  If[! FailureQ[svcDir],
+    wdPid = iWatchdogPidValue[svcDir];
+    If[IntegerQ[wdPid] && iPidAlive[wdPid] && iPidIsPowerShell[wdPid], killed = iKillPid[wdPid]];
+    Quiet @ If[FileExistsQ[iWatchdogPidPath[svcDir]], DeleteFile[iWatchdogPidPath[svcDir]]]];
+  Quiet @ RunProcess[{"schtasks", "/Delete", "/TN", wdTask, "/F"}];
+  <|"Status" -> "Uninstalled", "ServiceId" -> serviceId, "Task" -> wdTask, "Killed" -> killed|>];
+
+SourceVaultWatchdogStatus[serviceId_String] := Module[
+  {svcDir, wdTask, q, installed, logPath, evs, wdPid, alive},
+  svcDir = iServiceRuntimeDir[serviceId];
+  If[FailureQ[svcDir], Return[svcDir]];
+  wdTask = iWatchdogTaskName[serviceId];
+  q = Quiet @ RunProcess[{"schtasks", "/Query", "/TN", wdTask}];
+  installed = AssociationQ[q] && Lookup[q, "ExitCode", 1] === 0;
+  (* 常駐プロセスの実生存 (task 登録の有無とは別) *)
+  wdPid = iWatchdogPidValue[svcDir];
+  alive = IntegerQ[wdPid] && iPidAlive[wdPid] && iPidIsPowerShell[wdPid];
+  logPath = FileNameJoin[{svcDir, "watchdog.log.jsonl"}];
+  evs = If[FileExistsQ[logPath], iSMReadJSONL[logPath], {}];
+  <|"ServiceId" -> serviceId, "Task" -> wdTask, "Installed" -> installed,
+    "Resident" -> True, "ProcessAlive" -> alive,
+    "WatchdogPID" -> If[IntegerQ[wdPid], wdPid, Missing[]],
+    "RestartCount" -> Length[evs],
+    "LastRestarts" -> If[evs === {}, {}, Take[evs, -Min[5, Length[evs]]]]|>];
+
 SourceVaultListServices[opts___] := Module[{base, dirs},
   base = Module[{r = SourceVault`SourceVaultCoreRoot[]},
-    If[FailureQ[r], Return[{}], FileNameJoin[{r, "runtime", "services"}]]];
+    If[FailureQ[r], Return[{}], FileNameJoin[{iRuntimeMachineRoot[r], "services"}]]];
   If[! DirectoryQ[base], Return[{}]];
   dirs = Select[FileNames["*", base], DirectoryQ];
   SourceVaultServiceStatus[FileNameTake[#]] & /@ dirs];
@@ -1886,7 +2113,7 @@ iSHA256Str[s_String] := ToLowerCase @ Hash[StringToByteArray[s, "UTF-8"], "SHA25
 
 (* proxy Python ソース。シングルクォートのみ・バックスラッシュ無し
    (WL 文字列へのエスケープを避けるため)。stdlib のみ。 *)
-$proxyPySource = "import sys, os, json, time, uuid
+$proxyPySource = "import sys, os, json, time, uuid, calendar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -1916,8 +2143,25 @@ def rj(path):
 def health():
     st = rj(os.path.join(SVC, 'status.json'))
     hb = rj(os.path.join(SVC, 'heartbeat.json'))
-    return {'ok': True, 'service': st.get('ServiceId'), 'state': st.get('State'),
+    age = None
+    ts = hb.get('UpdatedAtUTC')
+    if ts:
+        try:
+            age = max(0.0, time.time() - calendar.timegm(time.strptime(ts, '%Y-%m-%dT%H:%M:%SZ')))
+        except Exception:
+            age = None
+    if age is None:
+        hstate = 'Unknown'
+    elif age <= 15:
+        hstate = 'OK'
+    elif age <= 60:
+        hstate = 'Degraded'
+    else:
+        hstate = 'Stale'
+    return {'ok': hstate != 'Stale', 'service': st.get('ServiceId'), 'state': st.get('State'),
             'pid': st.get('PID'), 'heartbeatCounter': hb.get('Counter'),
+            'heartbeatAgeSeconds': (round(age, 1) if age is not None else None),
+            'healthState': hstate,
             'atUTC': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
 
 def run_cmd(cmd, timeout=None):
@@ -2042,7 +2286,7 @@ srv.serve_forever()
 ";
 
 iProxyRuntimeDir[serviceId_String] := Module[{root = SourceVault`SourceVaultCoreRoot[]},
-  If[FailureQ[root], root, FileNameJoin[{root, "runtime", "proxies", serviceId}]]];
+  If[FailureQ[root], root, FileNameJoin[{iRuntimeMachineRoot[root], "proxies", serviceId}]]];
 SourceVaultProxyRuntimeDir[serviceId_String] := iProxyRuntimeDir[serviceId];
 iProxyTaskName[serviceId_String] := "SourceVaultProxy_" <> iSafeName[serviceId];
 
@@ -2152,6 +2396,7 @@ SourceVaultStartHTTPProxy[serviceId_String, OptionsPattern[]] := Module[
     "mcpTimeoutMs" -> OptionValue["MCPTimeoutMs"]|>];
   py = iResolvePython[];
   batPath = FileNameJoin[{proxyDir, "launch.bat"}];
+  iRotateLog[FileNameJoin[{proxyDir, "stdout.log"}]];  (* #1: proxy ログも世代退避 *)
   Module[{strm = OpenWrite[batPath, BinaryFormat -> True], q},
     q[s_] := "\"" <> s <> "\"";
     BinaryWrite[strm, StringToByteArray[
@@ -2159,7 +2404,9 @@ SourceVaultStartHTTPProxy[serviceId_String, OptionsPattern[]] := Module[
         " " <> q[cfgPath] <> " > " <> q[FileNameJoin[{proxyDir, "stdout.log"}]] <> " 2>&1\r\n",
       "UTF-8"]]; Close[strm]];
   task = iProxyTaskName[serviceId];
-  Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", batPath,
+  (* 【窓非表示】service と同じく wscript hidden launcher 経由で起動し、python の
+     コンソール窓を出さない (stdout リダイレクトは bat 側で維持)。 *)
+  Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", iWriteHiddenLauncher[proxyDir, batPath]["TR"],
     "/SC", "ONCE", "/ST", "23:59", "/F"}];
   runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", task}];
   If[! (AssociationQ[runRes] && Lookup[runRes, "ExitCode"] === 0),
@@ -2186,6 +2433,7 @@ SourceVaultHTTPProxyStatus[serviceId_String, opts___] := Module[{proxyDir, pidPa
   <|"ServiceId" -> serviceId, "PID" -> pid, "PidAlive" -> alive,
     "State" -> If[TrueQ[alive], "Running", "Stopped"],
     "Port" -> If[AssociationQ[cfg], Lookup[cfg, "port"], Missing[]],
+    "RoutePrefix" -> If[AssociationQ[cfg], Lookup[cfg, "routePrefix", "/sv"], "/sv"],
     "ProxyDir" -> proxyDir, "Exists" -> True|>];
 
 SourceVaultStopHTTPProxy[serviceId_String, opts___] := Module[{proxyDir, pidPath, pid, killed = False},
@@ -2241,11 +2489,52 @@ iMCPResolveToken[Automatic, sid_String] := Module[{cfg = iMCPProxyConfig[sid], t
   If[StringQ[t] && t =!= "", t, None]];
 iMCPResolveToken[t_, _] := t;
 
-SourceVaultMCPRunningQ[OptionsPattern[]] := Module[{sid, st},
-  sid = iMCPServiceId[OptionValue["ServiceId"]];
-  st = Quiet @ Check[SourceVaultHTTPProxyStatus[sid], $Failed];
-  AssociationQ[st] && (Lookup[st, "State", ""] === "Running" || TrueQ[Lookup[st, "PidAlive", False]])];
+(* proxy の /health へ実 HTTP 接続して到達性を確認する。任意の HTTP 応答 (200/401/404 等) が
+   返れば port は listen 中 = 到達可能。接続拒否 (ECONNREFUSED) は $Failed → 到達不可。
+   pid 生存だけでは stale/再利用 pid を「Running」と誤検知するため、実到達性で判定する。 *)
+iMCPHealthUrl[st_] := Module[{port, prefix},
+  If[! AssociationQ[st], Return[Missing[]]];
+  port = Lookup[st, "Port", Missing[]];
+  If[! IntegerQ[port], Return[Missing[]]];
+  prefix = With[{p = Lookup[st, "RoutePrefix", "/sv"]}, If[StringQ[p], p, "/sv"]];
+  "http://127.0.0.1:" <> ToString[port] <> prefix <> "/health"];
+iMCPReachableQ[st_] := Module[{url, r},
+  url = iMCPHealthUrl[st];
+  If[! StringQ[url], Return[False]];
+  r = Quiet @ TimeConstrained[
+    URLRead[HTTPRequest[url, <|"Method" -> "GET"|>], "StatusCode"], 6, $Failed];
+  IntegerQ[r]];
+
+(* /health の本文を読み、WL サービスカーネルが「真に健全」か (healthState=="OK") を判定する。
+   proxy が listen しているだけ (= iMCPReachableQ True) でも背後の service kernel が死んで
+   いれば healthState は "Stale"/"Unknown" になり、本関数は False を返す。
+   これによりパレットのトグルが「proxy 生存 = 実行中」と誤認して逆に Stop する事故を防ぐ。
+   pid 用の RunProcess[tasklist] は使わず HTTP GET + JSON パースのみ (窓フリッカ対策は維持)。 *)
+iMCPHealthyQ[st_] := Module[{url, body, j},
+  url = iMCPHealthUrl[st];
+  If[! StringQ[url], Return[False]];
+  body = Quiet @ TimeConstrained[
+    URLRead[HTTPRequest[url, <|"Method" -> "GET"|>], "Body"], 6, $Failed];
+  If[! StringQ[body], Return[False]];
+  j = Quiet @ Check[ImportString[body, "RawJSON"], $Failed];
+  If[! AssociationQ[j], Return[False]];
+  TrueQ[Lookup[j, "ok", False]] && Lookup[j, "healthState", Missing[]] === "OK"];
+
 Options[SourceVaultMCPRunningQ] = {"ServiceId" -> Automatic};
+SourceVaultMCPRunningQ[OptionsPattern[]] := Module[{sid, cfg, st},
+  sid = iMCPServiceId[OptionValue["ServiceId"]];
+  (* 「Running」= proxy が listen しているだけでなく、背後の WL サービスカーネルが健全
+     (/health の healthState=="OK")。proxy だけ上がって service kernel が死んでいる状態
+     (再起動直後など) を「実行中」と誤判定すると、パレットのトグルが逆に Stop して Svc タスク
+     ごと消す事故になるため、真の health を見る。port/prefix は proxy.config.json から直接読む。
+     【窓フリッカ対策】pid 用 RunProcess[tasklist] は使わず HTTP GET + JSON パースのみ
+     (本関数はパレットが UpdateInterval->15 で定期呼びするため、端末窓を出さないことが重要)。 *)
+  cfg = iMCPProxyConfig[sid];
+  st = If[AssociationQ[cfg],
+    <|"Port" -> Lookup[cfg, "port", Missing[]],
+      "RoutePrefix" -> Lookup[cfg, "routePrefix", "/sv"]|>,
+    Missing[]];
+  iMCPHealthyQ[st]];
 
 Options[SourceVaultStartMCP] = {
   "ServiceId" -> Automatic, "Port" -> Automatic, "MCPToken" -> Automatic, "RestartService" -> False};
@@ -2253,9 +2542,16 @@ SourceVaultStartMCP[OptionsPattern[]] := Module[{sid, port, tok, svcRunning, svc
   sid  = iMCPServiceId[OptionValue["ServiceId"]];
   port = iMCPResolvePort[Replace[OptionValue["Port"], Automatic -> SourceVault`$SourceVaultMCPPort], sid];
   tok  = iMCPResolveToken[Replace[OptionValue["MCPToken"], Automatic -> SourceVault`$SourceVaultMCPToken], sid];
-  (* WL service を確保。RestartService 指定時は再注入のため restart。 *)
+  (* WL service を確保。RestartService 指定時は再注入のため restart。
+     「Running」判定は status.json の State 文字列だけでなく実 pid 生存 (PidAlive) も要求する。
+     カーネルが crash すると自分で status を Crashed に書けず "Running" のまま残るため、
+     State だけ見ると死んだカーネルを AlreadyRunning と誤認して再起動せず、proxy は上がるが
+     /health が Stale のまま (= MCPRunningQ False) になり、パレットが「停止中」のまま
+     クリックしても復帰しない (StartService は PidAlive を見るので、ここで偽 Running を弾けば
+     下の True 分岐で正しく起動し直す)。 *)
   svcRunning = With[{s = Quiet @ Check[SourceVaultServiceStatus[sid], $Failed]},
-    AssociationQ[s] && Lookup[s, "State", ""] === "Running"];
+    AssociationQ[s] && Lookup[s, "State", ""] === "Running" &&
+      TrueQ[Lookup[s, "PidAlive", False]]];
   svc = Which[
     TrueQ[OptionValue["RestartService"]] && svcRunning, SourceVaultRestartService[sid],
     svcRunning, <|"Status" -> "AlreadyRunning", "ServiceId" -> sid|>,
@@ -2282,9 +2578,12 @@ SourceVaultMCPStatus[OptionsPattern[]] := Module[{sid, svc, prox, port},
   prox = Quiet @ Check[SourceVaultHTTPProxyStatus[sid], $Failed];
   port = If[AssociationQ[prox], Lookup[prox, "Port", Missing[]], Missing[]];
   <|"ServiceId" -> sid,
+    (* "Running" は実到達性 (/health への HTTP 接続成功)。pid 生存とは別の真の状態。 *)
     "Running" -> SourceVaultMCPRunningQ["ServiceId" -> sid],
     "ServiceState" -> If[AssociationQ[svc], Lookup[svc, "State", Missing[]], Missing[]],
+    (* ProxyState/ProxyPidAlive は pid ベース (stale/再利用 pid だと Running でも到達不可になり得る) *)
     "ProxyState" -> If[AssociationQ[prox], Lookup[prox, "State", Missing[]], Missing[]],
+    "ProxyPidAlive" -> If[AssociationQ[prox], TrueQ[Lookup[prox, "PidAlive", False]], False],
     "Port" -> port,
     "Url" -> If[IntegerQ[port], "http://127.0.0.1:" <> ToString[port] <> "/sv/mcp", Missing[]]|>];
 
@@ -2298,9 +2597,16 @@ iRegisterMCPPaletteControl[] := If[
       "RunningQ" -> Function[SourceVault`SourceVaultMCPRunningQ[]],
       "Start"    -> Function[SourceVault`SourceVaultStartMCP[]],
       "Stop"     -> Function[SourceVault`SourceVaultStopMCP[]],
-      "RunningLabel" -> "\[FilledSquare] MCP 停止",
-      "StoppedLabel" -> "\[RightTriangle] MCP 起動",
-      "UnknownLabel" -> "\[RightTriangle] MCP",
+      (* labels as 0-arg functions so they re-evaluate at palette render time and
+         follow $Language (a plain iL string would freeze at SourceVault load).
+         状態を明示 (実行中/停止中)。クリックで起動/停止をトグルする (動作は claudecode の
+         サービストグルが RunningQ を見て Start/Stop を切り替える)。 *)
+      "RunningLabel" -> Function[If[$Language === "Japanese",
+        "\[FilledCircle] MCP 実行中", "\[FilledCircle] MCP Running"]],
+      "StoppedLabel" -> Function[If[$Language === "Japanese",
+        "\[EmptyCircle] MCP 停止中", "\[EmptyCircle] MCP Stopped"]],
+      "UnknownLabel" -> Function[If[$Language === "Japanese",
+        "\[EmptyCircle] MCP (\:4e0d\:660e)", "\[EmptyCircle] MCP (unknown)"]],
       "RunningColor" -> RGBColor[0.2, 0.55, 0.35],
       "StoppedColor" -> RGBColor[0.55, 0.35, 0.3]|>],
     $Failed],

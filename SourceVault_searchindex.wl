@@ -46,6 +46,18 @@ SourceVaultRegisterSearchBackend::usage =
 SourceVaultRegisterOCRBackend::usage =
   "SourceVaultRegisterOCRBackend[name, spec] は OCR backend を登録する。";
 
+$SourceVaultPersistSearchProfiles::usage =
+  "$SourceVaultPersistSearchProfiles が True (既定) のとき、DB プロファイル (ReleaseContext / PDFIndexProfile /\n" <>
+  "SearchIndexProfile / PDFIndex migration rule) の登録を PrivateVault/config へ自動永続化し、パッケージ\n" <>
+  "ロード時に復元する。SearchBackend / OCRBackend / web service endpoint (= service endpoint) は永続化\n" <>
+  "せず明示登録のままとする。";
+SourceVaultSaveSearchProfiles::usage =
+  "SourceVaultSaveSearchProfiles[] は DB プロファイル (release context / PDFIndex profile / search index\n" <>
+  "profile / migration rule) を PrivateVault/config/searchindex-profiles.wxf に保存する。";
+SourceVaultLoadSearchProfiles::usage =
+  "SourceVaultLoadSearchProfiles[] は永続化された DB プロファイルを読み込み registry へ復元する\n" <>
+  "(session で登録済みの同名は上書きしない)。戻り値は読み込んだ件数の Association。";
+
 SourceVaultResolveSearchIndexProfile::usage =
   "SourceVaultResolveSearchIndexProfile[name] は search index profile を解決する。未登録なら fail-closed (Failure)。";
 SourceVaultResolvePDFIndexProfile::usage =
@@ -195,6 +207,49 @@ Begin["`SearchIndexPrivate`"]
 
 If[! AssociationQ[$registries], $registries = <||>];
 
+(* ---- DB プロファイル永続化 (PrivateVault/config)。
+   ReleaseContext / PDFIndexProfile / SearchIndexProfile + PDFIndex migration rule のみ対象。
+   SearchBackend / OCRBackend / web service endpoint (= service endpoint 系) は永続化せず明示登録のまま。
+   パッケージロード時に自動復元し、登録時に自動保存する (main / service kernel 双方で共有)。 ---- *)
+If[! BooleanQ[$SourceVaultPersistSearchProfiles], $SourceVaultPersistSearchProfiles = True];
+iPersistedRegKinds = {"ReleaseContext", "PDFIndexProfile", "SearchIndexProfile"};
+
+iRegistryFile[] := Module[{pv = Quiet @ Check[SourceVault`SourceVaultRoot["PrivateVault"], $Failed]},
+  If[StringQ[pv], FileNameJoin[{pv, "config", "searchindex-profiles.wxf"}], $Failed]];
+
+iRegistrySave[] := Module[{path = iRegistryFile[], dir, snap},
+  If[! StringQ[path], Return[$Failed]];
+  dir = DirectoryName[path];
+  If[! DirectoryQ[dir], Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
+  snap = <|"Version" -> 1,
+    "Registries" -> KeyTake[$registries, iPersistedRegKinds],
+    "MigrationRules" -> If[AssociationQ[$pdfMigrationRules], $pdfMigrationRules, <||>],
+    "SavedAtUTC" -> DateString["ISODateTime"]|>;
+  Quiet @ Check[Export[path, snap, "WXF"]; path, $Failed]];
+
+iRegistryLoad[] := Module[{path = iRegistryFile[], data, regs, rules},
+  If[! StringQ[path] || ! FileExistsQ[path], Return[<|"Status" -> "NoFile"|>]];
+  data = Quiet @ Check[Import[path, "WXF"], $Failed];
+  If[! AssociationQ[data], Return[<|"Status" -> "BadFile"|>]];
+  regs = Lookup[data, "Registries", <||>];
+  rules = Lookup[data, "MigrationRules", <||>];
+  (* session 登録を優先: 永続値は未登録 name のみ補完 (Join は後者優先) *)
+  If[AssociationQ[regs],
+    KeyValueMap[Function[{kind, m},
+      If[AssociationQ[m],
+        If[! KeyExistsQ[$registries, kind], $registries[kind] = <||>];
+        $registries[kind] = Join[m, $registries[kind]]]], regs]];
+  If[! AssociationQ[$pdfMigrationRules], $pdfMigrationRules = <||>];
+  If[AssociationQ[rules], $pdfMigrationRules = Join[rules, $pdfMigrationRules]];
+  <|"Status" -> "Loaded", "Path" -> path,
+    "ReleaseContexts" -> Length[Lookup[regs, "ReleaseContext", <||>]],
+    "PDFIndexProfiles" -> Length[Lookup[regs, "PDFIndexProfile", <||>]],
+    "SearchIndexProfiles" -> Length[Lookup[regs, "SearchIndexProfile", <||>]],
+    "MigrationRules" -> Length[rules]|>];
+
+SourceVaultSaveSearchProfiles[] := iRegistrySave[];
+SourceVaultLoadSearchProfiles[] := iRegistryLoad[];
+
 iRevClasses = {"ObjectRevoked", "ObjectStateChanged", "RevocationTombstoneCompacted"};
 
 iRegKinds = {"ReleaseContext", "SearchIndexProfile", "PDFIndexProfile",
@@ -206,6 +261,9 @@ iEnsureKind[kind_String] :=
 iDoRegister[kind_String, name_String, spec_Association] := (
   iEnsureKind[kind];
   $registries[kind] = Append[$registries[kind], name -> spec];
+  (* DB プロファイル種別は自動永続化 (service endpoint 系 SearchBackend/OCRBackend は除く) *)
+  If[TrueQ[$SourceVaultPersistSearchProfiles] && MemberQ[iPersistedRegKinds, kind],
+    iRegistrySave[]];
   <|"Status" -> "OK", "Kind" -> kind, "Name" -> name|>
 );
 
@@ -563,7 +621,9 @@ SourceVaultPDFIndexLegacySearch[query_String, OptionsPattern[]] := Module[
 
 (* migration rule (§7.4.1) *)
 SourceVaultRegisterPDFIndexMigrationRule[profile_String, rule_Association] :=
-  ($pdfMigrationRules[profile] = rule; <|"Status" -> "OK", "Profile" -> profile|>);
+  ($pdfMigrationRules[profile] = rule;
+   If[TrueQ[$SourceVaultPersistSearchProfiles], iRegistrySave[]];
+   <|"Status" -> "OK", "Profile" -> profile|>);
 
 (* rule を 1 行に適用し release 判定用 source 連想を作る。
    rule 未登録なら release context を与えず State も Draft = gate で Deny (fail-closed §7.4.1-4)。 *)
@@ -1456,6 +1516,10 @@ SourceVault`SourceVaultPromoteWorkflowCandidate[serviceId_String, workflowRef_St
 SourceVault`SourceVaultActiveWorkflow[serviceId_String, opts___] := Module[{ptr},
   ptr = SourceVault`SourceVaultPointerReplay[iEvalWFPointer[serviceId]];
   If[AssociationQ[ptr] && StringQ[Lookup[ptr, "Value"]], Lookup[ptr, "Value"], None]];
+
+(* ロード時に永続化された DB プロファイルを自動復元 (main / service kernel 双方)。
+   PrivateVault 未解決や file 不在は no-op (fail-soft)。 *)
+If[TrueQ[$SourceVaultPersistSearchProfiles], Quiet @ Check[iRegistryLoad[], Null]];
 
 End[]  (* `SearchIndexPrivate` *)
 

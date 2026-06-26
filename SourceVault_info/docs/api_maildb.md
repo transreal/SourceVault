@@ -1,248 +1,325 @@
-# SourceVault_maildb API リファレンス
+# SourceVault_maildb API Reference
 
-パッケージ: `SourceVault``
-リポジトリ: https://github.com/transreal/SourceVault_maildb
-ロード順: SourceVault_encryptedstore.wl → SourceVault_keys.wl → SourceVault_addressbook.wl → SourceVault_maildb.wl → SourceVault_imap.wl → SourceVault_mailui.wl
-依存: [NBAccess](https://github.com/transreal/NBAccess), [SourceVault_core](https://github.com/transreal/SourceVault_core), [SourceVault_crypto](https://github.com/transreal/SourceVault_crypto), [SourceVault_identity](https://github.com/transreal/SourceVault_identity)
+パッケージ: `SourceVault`` (BeginPackage["SourceVault`", {"NBAccess`"}])
+ソース: https://github.com/transreal/SourceVault_maildb
+ロード順: SourceVault_encryptedstore.wl → SourceVault_keys.wl → SourceVault_addressbook.wl → SourceVault_maildb.wl → SourceVault_messagerelease.wl → SourceVault_mailui.wl
 
-旧 [maildb_legacy](https://github.com/transreal/maildb_legacy) の月次 .wl record を SourceVaultMailSnapshot に正規化するアダプタ。IMAP 新着取得・ローカル LLM 派生処理・FE UI を含む。
+旧 maildb (https://github.com/transreal/maildb_legacy) 月次 .wl record を SourceVaultMailSnapshot に正規化するアダプタ。RecordId は `sourcevault:mailid:mac:v1` keyed HMAC、body は SourceVaultEncryptedPut で暗号化、From/To/Cc は AddressBook に照合する。
 
-## スナップショット構造
+## スナップショット変換・永続化
 
-snapshot は Association。主要キー:
-- `"RecordId"` — keyed HMAC (SourceVault:mailid:mac:v1)
-- `"MailMetadataPublic"` — `<|"Date", "Subject", "From", "To", "Cc", "AttachmentCount", "Attachments"|>`
-- `"MailSource"` — `<|"MBox", "MessageIDToken"|>`
-- `"Derived"` — `<|"Priority", "PriorityComponents", "WorkRequest", "PrivacyLevel", "Category", "Deadline", "Summary", "DerivedStatus", "DerivedSource", "DerivedEnrichment"|>`
-- `"AddressBookRefs"` — `<|"FromContact", "FromIdentifier"|>`
+### SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, opts]
+旧 maildb record を SourceVaultMailSnapshot に変換する。body を暗号化し PL を fail-safe (既定 0.85) で設定する。
+→ Association (MailSnapshot)
+Options: "EncryptHeaders" -> False (True で subject/from/to も暗号化), "PrivacyLevel" -> $SourceVaultDefaultImportedMailPL (本文 PL)
 
-`Derived.DerivedStatus`: `"Pending"` | `"Processed"`。DerivedStatus なし + Summary 空も Pending 扱い。
+### SourceVaultImportMaildbFile[file_String, mbox_String, opts]
+旧 maildb 月次 .wl を読み込み各 record を MailSnapshot に変換して store に put する (冪等)。
+→ Association `<|Status, MBox, Count, Stored, Persisted, Snapshots|>`
+Options: SourceVaultMailSnapshotFromMaildb のすべてのオプション, "Persist" -> False (True でディスク保存)
+例: `SourceVaultImportMaildbFile["/vault/mail/imai/202505.wl", "imai", "Persist"->True]`
 
-## maildb → スナップショット変換
+### SourceVaultMailSnapshotPut[snapshot, opts]
+snapshot を RecordId をキーに store へ保存する (冪等)。
+→ Association
+Options: "Persist" -> False
 
-### SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, opts] → Association
-旧 maildb record を SourceVaultMailSnapshot に変換する。body は暗号化、PL は fail-safe (既定 0.85)。From/To/Cc を AddressBook に照合。
-Options: "EncryptHeaders" -> False (True でヘッダ subject/from/to も暗号化、Dropbox 非前提時に使う)
+### SourceVaultMailSnapshotGet[recordId_String]
+→ Association | Missing 保存済み snapshot を返す。
 
-### SourceVaultImportMaildbFile[file_String, mbox_String, opts] → Association
-旧 maildb 月次 .wl を読み、各 record を MailSnapshot に変換する。
-→ `<|"Status", "Imported", "Skipped"|>`
-Options: "Persist" -> True
+### SourceVaultMailSnapshotList[]
+→ List[Association] ロード済み snapshot の全リストを返す。
 
-## スナップショット CRUD
-
-### SourceVaultMailSnapshotPut[snapshot, opts] → Association
-snapshot を RecordId をキーに store へ保存 (冪等)。
-Options: "Persist" -> True
-
-### SourceVaultMailSnapshotGet[recordId_String] → Association | Missing
-保存済み snapshot を返す。未登録は Missing。
-
-### SourceVaultMailSnapshotList[] → List
-ロード済み全 snapshot のリストを返す。
-
-### SourceVaultMailSnapshotDecryptBody[snapshot_Association] → Association
+### SourceVaultMailSnapshotDecryptBody[snapshot_Association]
 snapshot の暗号化 body を復号して返す (MAC 検証経由)。
-→ `<|"Status"->"Ok", "Body"->String|>` または `<|"Status"->"Error", "Reason"->...|>`
+→ Association `<|Status, Body|>` または `<|Status, Reason|>`
 
-### SourceVaultMailParseEmails[headerValue_String] → List
+### SourceVaultMailParseEmails[headerValue_String]
 ヘッダ文字列からメールアドレス文字列のリストを抽出する。
+→ List[String]
 
-## ストア・シャード管理
+## ストア操作
 
-### $SourceVaultMailStoreRoot
-型: String, 初期値: PrivateVault/mail/snapshots
-mail snapshot store のルート。テストで上書き可。
+### SourceVaultMailStoreRoot[]
+→ String snapshot store のルートディレクトリパスを返す。
 
-### SourceVaultMailStoreRoot[] → String
-snapshot store のルートパスを返す。
+### SourceVaultMailStorePath[]
+→ String 旧単一ファイル snapshots.svmail のパス (移行用)。
 
-### SourceVaultMailStorePath[] → String
-旧単一ファイル snapshots.svmail のパスを返す (移行用)。
+### SourceVaultMailShardPath["mbox/yyyymm"]
+→ String 月次シャードファイルのパスを返す。
 
-### SourceVaultMailShardPath["mbox/yyyymm"] → String
-月次シャードのパスを返す。
+### SourceVaultMailStoreLoad[]
+全シャードをメモリへ読み込む (重い)。通常は SourceVaultMailEnsureLoaded を使う。
+→ Association `<|Status, Root, Shards, Count|>`
 
-### SourceVaultMailAvailableShards[mbox_:All] → List
+### SourceVaultMailStoreSave["All"->False]
+変更のあった月次シャードのみ (All->True で全シャード) を byte-exact 保存し、索引 sidecar (.svmailidx) を自動更新する。
+→ Association `<|Status, Shards, ...|>`
+
+### SourceVaultMailAvailableShards[mbox_:All]
 ディスク上のシャード `{mbox, yyyymm}` の一覧をロードせずに返す。
+→ List[{String, String}]
 
-### SourceVaultMailLoadShard["mbox/yyyymm"] → Association
+### SourceVaultMailEnsureLoaded[mbox_String, period_:Automatic]
+指定 mbox の必要分シャードのみをメモリへ遅延ロードする。既ロードは再読込しない。
+period: `"YYYYMM"` | `{fromYYYYMM, toYYYYMM}` | `"Latest"` / Automatic | 整数n (直近n月) | All
+→ Association `<|Status, MBox, Period, Shards, NewlyLoaded, InMemory|>`
+例: `SourceVaultMailEnsureLoaded["imai", 3]` (直近3月ロード)
+
+### SourceVaultMailLoadShard["mbox/yyyymm"]
 1シャードをロードする。
+→ Integer (ロードした snapshot 数)
 
-### SourceVaultMailEnsureLoaded[mbox_String, period_:Automatic] → Association
-指定 mbox の期間分シャードだけをメモリへ遅延ロードする。既ロードは再読込しない。
-period: `"YYYYMM"` | `{from, to}` | `"Latest"` / Automatic | n (直近 n 月) | All
+### SourceVaultMailUnloadAll[]
+メモリ上の全 snapshot を解放する。
+→ Association `<|Status -> "Unloaded"|>`
 
-### SourceVaultMailStoreLoad[] → Association
-全シャードを読み込む (重い)。通常は SourceVaultMailEnsureLoaded で必要分だけ遅延ロードする。
+### SourceVaultMailLoadedCount[]
+→ Integer 現在メモリにある snapshot 数。
 
-### SourceVaultMailStoreSave["All"->False] → Association
-変更のあった月次シャードのみ (All->True で全シャード) を byte-exact 保存する。
+### SourceVaultMailMigrateToShards[]
+旧単一ファイル snapshots.svmail を mbox×月のシャードに移行し、旧ファイルを .premigration.bak にリネームする。
+→ Association `<|Status, Snapshots, Shards, OldFile|>`
 
-### SourceVaultMailUnloadAll[] → Association
-メモリ上の snapshot を解放する。
-
-### SourceVaultMailLoadedCount[] → Integer
-現在メモリにある snapshot 数を返す。
-
-### SourceVaultMailMigrateToShards[] → Association
-旧単一ファイル snapshots.svmail を mbox×月のシャードに移行し、旧ファイルを .bak にする。
-
-## カテゴリ語彙・検索
+## 検索・索引
 
 ### $SourceVaultMailCategories
-メール派生カテゴリの語彙 (Association)。
-トークン: `"InfoProvision"` (情報提供), `"AttendanceRequest"` (出席依頼), `"TaskRequest"` (作業依頼), `"Confirmation"` (確認・承認), `"Report"` (報告), `"Notice"` (通知・一斉配信・広告), `"Other"` (その他)。
-`Derived.Category` および検索オプション `"Category"` で使う。日本語名でも指定可。
+型: Association, メールカテゴリ語彙。
+トークン: `"InfoProvision"` (情報提供), `"AttendanceRequest"` (出席依頼), `"TaskRequest"` (作業依頼), `"Confirmation"` (確認・承認依頼), `"Report"` (報告), `"Notice"` (通知・一斉配信), `"Other"` (その他)。
+Derived.Category と検索オプション `"Category"` で使う。日本語名 (`"作業依頼"` 等) でも検索可。
 
-### SourceVaultSearchMailSnapshots[query_String:"", opts] → List
-subject/summary 部分一致 + フィールドフィルタで snapshot を検索し、リストを返す。
-Options:
-- "From" -> All (送信者メールアドレス)
-- "To" -> All
-- "FromContact" -> All (AddressBook の ContactId)
-- "MBox" -> All
-- "DateFrom" -> Automatic (DateObject/文字列/{y,m,d}、日単位包含)
-- "DateTo" -> Automatic
-- "HasAttachment" -> Automatic (True/False)
-- "Category" -> All ($SourceVaultMailCategories トークンまたは日本語名)
-- "HasDeadline" -> Automatic (True/False)
-- "DeadlineFrom" -> Automatic (〆切日範囲、日単位包含)
-- "DeadlineTo" -> Automatic
-- "Newest" -> True (日付降順)
-- "Limit" -> All
-- "SortBy" -> "Date" ("Date"|"Priority"|"PrivacyLevel"|"Deadline")
+### SourceVaultSearchMailSnapshots[query_String:"", opts]
+ロード済みスナップショットを subject/summary 部分一致 + フィルタ条件で検索する。
+→ List[Association]
+Options: "From" -> Automatic, "To" -> Automatic, "FromContact" -> Automatic, "MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic, "HasAttachment" -> Automatic, "Category" -> Automatic, "HasDeadline" -> Automatic, "DeadlineFrom" -> Automatic, "DeadlineTo" -> Automatic, "MinPriority" -> Automatic, "MaxPriority" -> Automatic, "MinPrivacy" -> Automatic, "MaxPrivacy" -> Automatic, "Newest" -> True, "Limit" -> Automatic, "SortBy" -> Automatic ("Date"|"Priority"|"PrivacyLevel"|"Deadline"), "SortOrder" -> Automatic
+例: `SourceVaultSearchMailSnapshots["Cerezo", "Category"->"TaskRequest", "DeadlineFrom"->今日, "DeadlineTo"->週末, "Limit"->20]`
 
-例: `SourceVaultSearchMailSnapshots["", "Category"->"TaskRequest", "DeadlineFrom"->Today, "DeadlineTo"->weekEnd]`
+### SourceVaultMailSummaryRow[snapshot_Association]
+一覧表示用の低漏洩行を返す。From は AddressBook 解決時は表示名。
+→ Association `<|Date, From, Subject, Category, Deadline, Attach, MBox, RecordId, BodyEncrypted|>`
 
-### SourceVaultMailSummaryRow[snapshot_Association] → Association
-一覧表示用の低漏洩行を返す。
-→ `<|"Date", "From", "Subject", "Category", "Deadline", "Attach", "MBox", "RecordId", "BodyEncrypted"|>`
-From は AddressBook 解決時は表示名。Deadline は ISO 文字列または Missing。
-
-### SourceVaultMailSearchSummary[query_String:"", opts] → List
+### SourceVaultMailSearchSummary[query_String:"", opts]
 検索結果を SummaryRow のリスト (新着順・Limit 適用) で返す。opts は SourceVaultSearchMailSnapshots と同じ。
+→ List[Association]
 
-### SourceVaultMailDataset[query_String:"", opts] → Dataset
+### SourceVaultMailDataset[query_String:"", opts]
 検索結果を素の Dataset で返す (列ソート用、ボタン無し)。opts は SourceVaultSearchMailSnapshots と同じ。
+→ Dataset
 
-### SourceVaultIdentityBackfillFromMail[] → Association
+### SourceVaultMailSearchIndex[query_String:"", opts]
+ディスク上の軽量メタデータ索引 (.svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。opts は SourceVaultSearchMailSnapshots と同じ。
+→ List[Association] (SummaryRow 形 + Summary + FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey/AccessTags/IndexSchemaVersion)
+例: `SourceVaultMailSearchIndex["報告", "MBox"->"imai", "Limit"->50]`
+
+### SourceVaultMailIndexGet[recordId_String]
+索引 sidecar から該当 RecordId の低漏洩メタ/サマリー行を1件返す (snapshot 本体はロードしない)。MCP の単一 URI 解決用。
+→ Association | Missing["NotFound"]
+
+### SourceVaultMailIndexedCount[mbox_:All]
+→ Integer ディスク上の索引 sidecar に含まれる行数 (索引済みメール数)。
+
+### SourceVaultMailRebuildMetadataIndex[mbox_:All]
+ディスク上の各 shard を一時的に読み、低漏洩メタデータ索引 sidecar (.svmailidx) を再生成する ($iSVMDStore は変更しない)。既存 .svmail からの初回構築・再構築に使う。
+→ Association `<|Status, Shards, Rows, Root|>`
+
+### SourceVaultIdentityBackfillFromMail[]
 ロード済み snapshot の平文 From/To/Cc を走査して識別子 (2層アドレス帳) を一括生成する。再取込不要。スコープは先に SourceVaultMailEnsureLoaded で決める。
-
-## 変数
-
-### $SourceVaultDefaultImportedMailPL
-型: Real, 初期値: 0.85
-import 時のメール本文 PL 既定 (fail-safe)。maildb privacy フィールドは信用しない。
+→ Association
 
 ## IMAP 取得
 
-### SourceVaultMailFetchNew[mbox_String, opts] → Association
-IMAP から新着のみ取得し snapshot 化して store に保存する。RecordId で重複排除。既定は LLM 処理なし。
-→ `<|"Status", "Fetched", "Skipped", "Errors"|>`
-Options:
-- "Period" -> "Latest" ("Latest" | n日 | {from,to} | "YYYYMM")
-- "Process" -> False (True で取込時に LLM 派生も実行)
-- "MessageSource" -> Automatic (実 IMAP。テスト用 fake 注入可)
-- "Inferencer" -> Automatic (実 LLM。テスト用 fake 注入可)
-- "Persist" -> True
-- "MaxEmails" -> Infinity
+### SourceVaultMailFetchNew[mbox_String, opts]
+IMAP から新着のみ取得し snapshot 化して store に保存する。RecordId で既存と重複排除する。既定は LLM 処理なし。
+→ Association `<|Status, MBox, ...|>`
+Options: "Period" -> Automatic ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> (実IMAP, 注入可), "Inferencer" -> (実LLM, 注入可), "Persist" -> True, "MaxEmails" -> Automatic
 
-## 派生処理 (ローカル LLM)
+### SourceVaultRegisterPostFetchHook[name_String, f]
+SourceVaultMailFetchNew の取り込み完了時に呼ぶフック `f[mbox, fetchResult]` を登録する。フック失敗は fetch を壊さない。
+→ (副作用)
 
-### SourceVaultMailDerivedPendingQ[snapshot_Association] → True | False
-派生が未処理 (DerivedStatus="Pending" または DerivedStatus 無しで Summary 空) なら True。
+### SourceVaultUnregisterPostFetchHook[name_String]
+post-fetch フックの登録を解除する。
+→ (副作用)
 
-### SourceVaultMailDerivedPending[] → List
-ロード済み store の中で派生未処理の snapshot リストを返す。
+### SourceVaultPostFetchHooks[]
+→ List[String] 登録済み post-fetch フック名のリスト。
 
-### SourceVaultMailInferDerived[mailspec_Association] → Association
-mailspec (date/subject/from/to/cc/body) からローカル LLM (LM Studio, OpenAI 互換) で派生を生成する。
-→ `<|"Status"->"Ok"|"Error", "WorkRequest"->0.0~1.0, "PrivacyLevel"->0.0~1.0, "Category"->token, "Deadline"->ISO文字列|Missing["None"], "Summary"->String|>`
+## 派生処理 (LLM)
 
-### SourceVaultInferMailDerivedBatch[opts] → Association
-未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。CheckpointEvery 件ごとに dirty シャードを保存する中断耐性あり。
-→ `<|"Status", "Processed", "Skipped", "Errors"|>`
-Options:
-- "Limit" -> 50 (フィルタ後の件数上限。全件は Infinity)
-- "DateFrom" -> Automatic
-- "DateTo" -> Automatic
-- "Refresh" -> None (None=Pending のみ / "MissingCategory"=Category 未生成の処理済みも再処理 / All=全件再処理 / Function=述語一致を再処理)
-- "Inferencer" -> Automatic (テスト用 fake 注入可)
-- "CheckpointEvery" -> 20
-- "Persist" -> True
+### SourceVaultMailDerivedPendingQ[snapshot_Association]
+→ True | False 派生 (PL/優先度/概要) が未処理 ("Pending") なら True。旧 snapshot は Summary 空で True。
 
-例: `SourceVaultInferMailDerivedBatch["Refresh"->Function[s, StringContainsQ[ToString@s["MailMetadataPublic"]["Subject"], "Cerezo"]], "Limit"->Infinity]`
+### SourceVaultMailDerivedPending[]
+→ List[Association] ロード済み store の中で派生未処理の snapshot リスト。
 
-## mailspec Enricher
+### SourceVaultMailInferDerived[mailspec_Association]
+mailspec (date/subject/from/to/cc/body) からローカル LLM で派生を推論する。Category は $SourceVaultMailCategories のトークン。Deadline は ISO 文字列または Missing["None"]。
+→ Association `<|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|>`
 
-### SourceVaultRegisterMailspecEnricher[name_String, f_] → Association
-派生時に LLM へ渡す mailspec を拡張する enricher を登録する。f[mailspec, snapshot] → Association。非該当/失敗時は mailspec をそのまま返す。保存レコード形式には影響せず、Derived.DerivedEnrichment に名前が記録される。
+### SourceVaultInferMailDerivedBatch[opts]
+未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。CheckpointEvery 件ごとに dirty シャードを保存する (中断耐性)。
+→ Association `<|Status, Processed, Skipped, ...|>`
+Options: "Limit" -> 50 (Infinity で範囲内全件), "DateFrom" -> Automatic, "DateTo" -> Automatic, "Refresh" -> None (None=Pending のみ / "MissingCategory"=Category 未生成の処理済み旧 snapshot も再処理 / All=全件 / Function=述語一致を再処理), "Inferencer" -> (実LLM, 注入可), "CheckpointEvery" -> 20, "Persist" -> True
+例: `SourceVaultInferMailDerivedBatch["Limit"->Infinity, "DateFrom"->{2026,6,1}, "Refresh"->"MissingCategory"]`
+例: `SourceVaultInferMailDerivedBatch["Refresh"->Function[s, StringContainsQ[ToString@s["MailMetadataPublic"]["Subject"], "Cerezo"]]]`
 
-### SourceVaultUnregisterMailspecEnricher[name_String] → Association
+### SourceVaultMailAddSummaries[mbox_String, period_:"Latest", opts]
+mbox の指定期間を SourceVaultMailEnsureLoaded でロードしてから SourceVaultInferMailDerivedBatch で一括生成・保存する。EnsureLoaded とバッチを内包する正準エントリポイント。
+→ Association `<|Status, MBox, Period, Loaded, Batch|>`
+Options: "Limit" -> Infinity, "Persist" -> True
+
+### SourceVaultRegisterMailspecEnricher[name_String, f]
+LLM へ渡す mailspec を拡張する enricher を登録する。`f[mailspec, snapshot]` が変更後の mailspec を返す。非該当/失敗時は mailspec をそのまま返す。Derived.DerivedEnrichment に名前が記録される。
+→ (副作用)
+
+### SourceVaultUnregisterMailspecEnricher[name_String]
 mailspec enricher の登録を解除する。
+→ (副作用)
 
-### SourceVaultMailspecEnrichers[] → List
-登録済み mailspec enricher 名のリストを返す。
+### SourceVaultMailspecEnrichers[]
+→ List[String] 登録済み mailspec enricher 名のリスト。
 
 ## 優先度計算
 
-### SourceVaultMailComputePriority[snap_Association, workRequest_:Missing[], category_:Missing[]] → Association
-構造シグナル (送信者グループ重み + To/Cc 位置 + 一斉配信判定 + LLM 依頼度 + カテゴリ) から重要度を決定的に計算する。category="Notice" なら -0.30 減点。
-→ `<|"Priority"->0.0~1.0, "Components"-><|"SenderWeight","OwnerPosition","Bulk","WorkRequest","Category","PositionAdj","BulkAdj","CategoryAdj"|>|>`
+### SourceVaultMailComputePriority[snapshot_Association, workRequest_, category_String]
+構造シグナル (送信者グループ重み + To/Cc 位置 + ML 判定 + LLM 依頼度 + LLM カテゴリ) から重要度 0.0–1.0 を決定的に計算する。"Notice" カテゴリは -0.30 減点。
+→ Association `<|Priority, Components|>`
 
-### SourceVaultMailExplainPriority[snap_Association] → Association
-snapshot の保存済み WorkRequest/Category を使って重要度の内訳を返す。SourceVaultMailComputePriority と同じ構造。
+### SourceVaultMailExplainPriority[snapshot_Association]
+snapshot の保存済み WorkRequest/Category を使って重要度の内訳 (Components) を返す。
+→ Association `<|Priority, Components|>`
 
-### SourceVaultMailRecomputePriorities[opts] → Association
-ロード済み snapshot のうち PriorityComponents を持つもの (SourceVault 構造計算由来) について、Priority を LLM なしで再計算し in-place 更新する。legacy maildb 由来 (PriorityComponents 無し) は変更しない。
-→ `<|"Status", "Eligible", "Recomputed", "Total"|>`
+### SourceVaultMailRecomputePriorities[opts]
+ロード済み snapshot のうち PriorityComponents ありのものについて、保存済み WorkRequest/Category から Priority を LLM なしで再計算し in-place 更新する。優先度式変更を既処理メールへ反映するために使う。legacy maildb 由来の Priority は触らない。
+→ Association
 Options: "Persist" -> True
 
-## グループ重み
+### SourceVaultSetPriorityGroupWeight[group_String, weight_Real]
+グループの重み (0.0–1.0) を登録し vault config に保存する。
+→ Association
 
-### SourceVaultSetPriorityGroupWeight[group_String, weight_?NumericQ, opts] → Association
-グループの優先度重み (0.0~1.0) を登録し vault config に保存する。送信者実体の Group フィールドで照合される。
+### SourceVaultPriorityGroupWeights[]
+→ Association 登録済みグループ重みの全マップ。
+
+### SourceVaultGroupWeightFor[group_String]
+→ Real | Missing グループの重み。未登録なら Missing。
+
+### SourceVaultPriorityGroupsLoad[]
+グループ重み config をディスクから読み込む。
+→ Association
+
+## アカウント管理
+
+### SourceVaultRegisterMailAccount[assoc_Association, opts]
+IMAP アカウント設定を登録し vault config に保存する。パスワードは保存せず CredKey (SystemCredential 名) のみ記録する。同一 MBox は上書き。
+必須キー: "MBox", "CredKey", "Server"。任意: "User", "Email", "Port" (既定 993)。
+→ Association `<|Status, MBox|>`
+Options: "Persist" -> True
+例: `SourceVaultRegisterMailAccount[<|"MBox"->"imai", "User"->"k.imai@...", "Email"->"k.imai@...", "CredKey"->"sv-imap-imai", "Server"->"imap.example.com"|>]`
+
+### SourceVaultGetMailAccount[mbox_String]
+→ Association | Missing["NotRegistered"] 登録済みアカウント設定 (パスワードは含まない)。
+
+### SourceVaultMailAccounts[]
+→ Dataset 登録済み IMAP アカウント設定の全件 (パスワードは含まない)。
+
+### SourceVaultRemoveMailAccount[mbox_String, opts]
+登録を削除する。
+→ Association `<|Status, MBox|>`
 Options: "Persist" -> True
 
-### SourceVaultPriorityGroupWeights[] → Association
-登録済みグループ重みの Association (group -> weight) を返す。
+### SourceVaultMailAccountsLoad[]
+vault config からアカウント設定を読み込む。
+→ Association `<|Status, Count|>`
 
-### SourceVaultGroupWeightFor[group_] → Real | Missing
-グループの重みを返す。未登録は Missing["NotSet"]。
+## UI 操作 (front end 必須)
 
-### SourceVaultPriorityGroupsLoad[] → Association
-グループ重み config を vault config から読み込む。
+### SourceVaultMailGetBody[recordId_String]
+snapshot の暗号化本文を復号して文字列で返す。
+→ Association `<|Status->"Ok", Body->String|>` または `<|Status->"Error", Reason->String|>`
 
-## IMAP アカウント管理
+### SourceVaultMailShowBody[recordId_String]
+本文を新規ノートブックで表示する (front end 必須)。
+→ Association `<|Status->"Shown"|>`
+
+### SourceVaultMailAttachmentDir[mbox_String, yyyymm_String]
+→ String 旧 maildb 添付ディレクトリのパス (`<legacyRoot>/<mbox>/<yyyymm>_attachment`)。
+
+### SourceVaultMailAttachments[recordId_String]
+添付ファイルの `{Name, Path, Exists}` リストを返す。AttachmentCount > 0 だが名前が snapshot 未記録の旧レコードはヒント付き Association を返す。
+→ List[Association]
+
+### SourceVaultMailOpenAttachment[recordId_String, name_String]
+添付ファイルを SystemOpen で開く (front end 必須)。
+→ Association `<|Status, Path|>` または `<|Status->"Error", Reason, Name|>`
+
+### SourceVaultMailComposeReply[recordId_String, opts]
+返信ドラフトを生成する (ロジックのみ、front end 不要)。
+→ Association `<|Status->"Draft", To, Cc, Subject, InReplyToToken, Quoted, Body, RecordId|>`
+Options: "ReplyAll" -> False (True で Cc 含む), "Body" -> "" (本文初期値)
+
+### SourceVaultMailOpenReplyNotebook[recordId_String, opts]
+返信ドラフトのノートブックを開く (front end 必須)。opts は SourceVaultMailComposeReply と同じ。
+→ Association `<|Status->"ReplyNotebookOpened", Draft|>`
+
+### SourceVaultMailView[query_String:"", opts]
+検索結果を、行ごとに本文表示(✉)/添付ポップアップ(📎)/返信(↩) のクリック操作を備えた Dataset で返す (旧 maildb showMails 踏襲)。opts は SourceVaultSearchMailSnapshots と同じ。
+→ Dataset
+
+### SourceVaultMailRowActions[snapshot_Association]
+1行分のアクション (Body/Attachments/Reply ボタン Row) を返す。SourceVaultMailView の内部行に使われる。
+→ Row
+
+### SourceVaultAddressBookView[]
+連絡先を整形 Dataset で表示する。列: Uid/表示名/かな/メール/分類/信頼/MaxPL/AccessTags。
+→ Dataset
+
+### SourceVaultIdentityLinkUI[opts]
+識別子を実体に紐付ける編集表 (front end)。各行で新規実体作成またはマージ操作。
+→ (front end 表)
+Options: "ShowLinked" -> False (True で既リンクも表示), "Limit" -> 200
+
+### SourceVaultEntityView[]
+実体 (人/組織/Bot/ML) の一覧 Dataset。列: Uid/種別/表示名/かな/識別子数/グループ/重み/信頼。
+→ Dataset
+
+### SourceVaultEntityEditUI[entityIdOrUid]
+実体1件の編集フォーム (front end)。表示名/種別/漢字/ローマ字/かな/分類/グループ/重み/所属/信頼を編集して保存する。
+→ (front end フォーム)
+
+### SourceVaultMarkConfidentialViewCells[nb_:EvaluationNotebook[]]
+notebook 内の生データ出力セル (SourceVaultMailView / MailDataset / MailSearchSummary / SourceVaultFindTodos 等) を含まれる最大 PL で機密マークする。メールは Derived.PrivacyLevel、Todo はソースノートブックの Publishable による。検出対象は共有レジストリで拡張される。
+→ List[Association] `{<|"Cell"->idx, "PrivacyLevel"->pl|>, ...}`
+
+### SourceVaultMailMarkViewCells[nb_:EvaluationNotebook[]]
+SourceVaultMarkConfidentialViewCells の別名 (後方互換)。
+→ List[Association]
+
+### SourceVaultMailEnableAutoConfidential[]
+NBAccess`NBMakeContextPacket にフックを装着し、ClaudeEval/ClaudeQuery の文脈構築直前に SourceVaultMarkConfidentialViewCells で生データ出力セルを自動機密マークする (冪等)。
+→ (副作用)
+
+### SourceVaultMailDisableAutoConfidential[]
+SourceVaultMailEnableAutoConfidential[] で装着したフックを解除し、NBMakeContextPacket を元に戻す。
+→ (副作用)
+
+## 設定変数
+
+### $SourceVaultMailStoreRoot
+型: String, 初期値: PrivateVault/mail/snapshots
+mail snapshot store のルート。テストで上書き可能。
+
+### $SourceVaultDefaultImportedMailPL
+型: Real, 初期値: 0.85
+import 時のメール本文 PL 既定 (fail-safe)。maildb の privacy フィールドは信用しない。
 
 ### $SourceVaultMailConfigRoot
 型: String, 初期値: PrivateVault/config
-IMAP アカウント設定の保存ルート。テストで上書き可。
-
-### SourceVaultRegisterMailAccount[assoc_Association, opts] → Association
-IMAP アカウント設定を登録し vault config に保存する。パスワードは保存せず CredKey (SystemCredential 名) のみ。同一 MBox は上書き。
-assoc 必須キー: `"MBox"`, `"CredKey"`, `"Server"`。省略可: `"User"`, `"Email"`, `"Port"` (既定 993)。
-Options: "Persist" -> True
-→ `<|"Status"->"Registered"|"Error", "MBox"|>`
-
-### SourceVaultMailAccounts[] → Dataset
-登録済み IMAP アカウント設定を Dataset で返す (パスワードは含まない)。
-
-### SourceVaultGetMailAccount[mbox_String] → Association | Missing
-登録済みアカウント設定を返す。未登録は Missing["NotRegistered"]。
-
-### SourceVaultRemoveMailAccount[mbox_String, opts] → Association
-アカウント登録を削除する。
-Options: "Persist" -> True
-
-### SourceVaultMailAccountsLoad[] → Association
-vault config からアカウント設定を読み込む。
-
-## UI (front end 必須の関数)
+IMAP アカウント設定の保存ルート。テストで上書き可能。
 
 ### $SourceVaultLegacyMailRoot
-型: String, 初期値: PrivateVault/../mails
+型: String, 初期値: PrivateVault と同階層の udb/mails
 旧 maildb のメールルート (添付ディレクトリの親)。
 
 ### $SourceVaultMailNotebookStyle
@@ -250,64 +327,5 @@ vault config からアカウント設定を読み込む。
 本文表示・返信ノートブックの StyleDefinitions。
 
 ### $SourceVaultMailViewMaxRows
-型: Integer | Symbol, 初期値: 25
-メール一覧 Dataset が一度に描画する最大行数。All で無制限。Windows FrontEnd の重さ対策。
-
-### SourceVaultMailGetBody[recordId_String | snap_Association] → Association
-snapshot の暗号化本文を復号して文字列で返す (headless 可)。
-→ `<|"Status"->"Ok", "Body"->String|>` または `<|"Status"->"Error", "Reason"->...|>`
-
-### SourceVaultMailShowBody[recordId_String | snap_Association] → Association
-本文を新規ノートブックで表示する (front end)。復号失敗時は理由をノートブックに表示。
-
-### SourceVaultMailAttachmentDir[mbox_String, yyyymm_String] → String
-旧 maildb 添付ディレクトリのパスを返す (パスのみ、存在確認なし)。
-
-### SourceVaultMailAttachments[recordId_String | snap_Association] → List
-添付 `{<|"Name", "Path", "Exists"|>}` のリストを返す。添付名が snapshot にない旧形式は再 import を促す Association を返す。
-
-### SourceVaultMailOpenAttachment[recordId_String | snap_Association, name_String] → Association
-添付ファイルを SystemOpen で開く (front end)。
-→ `<|"Status"->"Opened"|"Error", ...|>`
-
-### SourceVaultMailComposeReply[recordId_String | snap_Association, opts] → Association
-返信ドラフトを生成する (headless テスト可)。オーナー自身は Cc から除外される。
-→ `<|"Status"->"Draft", "To", "Cc", "Subject", "InReplyToToken", "Quoted", "Body", "RecordId"|>`
-Options: "ReplyAll" -> False, "Body" -> ""
-
-### SourceVaultMailOpenReplyNotebook[recordId_String | snap_Association, opts] → Association
-返信ドラフトのノートブックを開く (front end)。opts は SourceVaultMailComposeReply と同じ。
-
-### SourceVaultMailRowActions[snapshot_Association] → Row
-1行分のアクション (本文✉ / 添付 / 返信↩ ボタン) を返す。SourceVaultMailView の各行用。
-
-### SourceVaultMailView[query_String:"", opts] → Dataset | Style
-検索結果を本文表示/添付/返信の操作ボタン付き表 (Dataset) で返す。旧 maildb showMails 踏襲。opts は SourceVaultSearchMailSnapshots と同じ。表示行数は $SourceVaultMailViewMaxRows で制限。PL >= 0.5 のメールを含む場合は Confidential 値として返す。
-
-### SourceVaultAddressBookView[] → Dataset | Style
-連絡先を整形表 (Dataset) で表示する。列: Uid/表示名/かな/メール/分類/信頼/MaxPL/AccessTags。
-
-### SourceVaultIdentityLinkUI[opts] → DynamicModule
-識別子を実体に紐付ける編集表 (front end)。各行で 新規 (ヘッダ継承で実体作成) / マージ (既存実体にアドレス追加) を実行できる。
-Options: "ShowLinked" -> False (True で既リンクも表示), "Limit" -> 200
-
-### SourceVaultEntityView[] → Dataset | Style
-実体 (人/組織/Bot/ML) の一覧表 (Dataset)。各行に編集ボタン。列: Uid/種別/表示名/かな/識別子数/グループ/重み。
-
-### SourceVaultEntityEditUI[entityIdOrUid] → Dynamic
-実体1件の編集フォーム (front end)。表示名/種別/漢字/ローマ字/かな/分類/グループ/重み/所属/信頼を編集し保存。
-
-## 機密マーク
-
-### SourceVaultMarkConfidentialViewCells[nb_:EvaluationNotebook[]] → List
-notebook 内の「生データを表示する出力セル」(SourceVaultMailView / MailDataset / MailSearchSummary、Todo 生テキスト) を最大プライバシーで機密マークする。クラウド LLM (閾値0.5) にはスキーマのみ、ローカル LLM (閾値1.0) には全文。SourceVault_eagle.wl ロード時は Eagle View 等も対象。サマリー/予定表は対象外。
-→ `{<|"Cell"->idx, "PrivacyLevel"->pl|>...}`
-
-### SourceVaultMailMarkViewCells[nb_:EvaluationNotebook[]] → List
-SourceVaultMarkConfidentialViewCells の別名 (後方互換)。
-
-### SourceVaultMailEnableAutoConfidential[] → Null
-NBAccess`NBMakeContextPacket にフックを装着し、ClaudeEval/ClaudeQuery の文脈構築直前に SourceVaultMarkConfidentialViewCells を自動実行する。冪等。
-
-### SourceVaultMailDisableAutoConfidential[] → Null
-SourceVaultMailEnableAutoConfidential[] で装着したフックを解除し、NBMakeContextPacket を元に戻す。
+型: Integer | All, 初期値: 25
+SourceVaultMailView 等が一度に描画する最大行数。Windows 版 FrontEnd の描画負荷対策。All で無制限。

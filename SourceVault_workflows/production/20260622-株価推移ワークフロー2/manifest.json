@@ -1,0 +1,17 @@
+{
+  "Slug": "20260622-株価推移ワークフロー2",
+  "Name": "20260622-株価推移ワークフロー2 株価相対指数ノートブック生成",
+  "Version": "1.0.0",
+  "Context": "SourceVaultWorkflow`W20260622株価推移ワークフロー2`",
+  "Launch": "株価推移ワークフロー2Launch",
+  "Stage": 1,
+  "StageTotal": 1,
+  "Description": "2016年1月1日を100とした主要テック・半導体株・S&P500の相対指数推移ノートブックを生成するワークフロー(完全実装)。context先頭の数字を避けるためWプレフィックス付きcontext。AdjustedClose優先・Close fallback、補間なし。FinancialDataのTimeSeries返却形状をasPairs(DatePath→Path)で吸収し、Quantity値を剥がして{date,value}対へ正規化(パッケージ本体・生成ノートブックの両方で同一の coercion)。generateで6セル(補助表・対数スケール切替含む)を生成。",
+  "MainFile": "SVWorkflow_W20260622株価推移ワークフロー2.wl",
+  "Files": [
+    "SVWorkflow_W20260622株価推移ワークフロー2.wl",
+    "SVWorkflow_W20260622株価推移ワークフロー2_info/docs/examples/example.md",
+    "test_W20260622株価推移ワークフロー2.wls",
+    "manifest.json"
+  ]
+}

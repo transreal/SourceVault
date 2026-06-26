@@ -19,7 +19,7 @@
 | LM Studio | OpenAI 互換サーバが起動し、**埋め込みモデル `text-embedding-baai-bge-m3-568m`**（8192トークン/1024次元・多言語。表末尾の年度ヘッダや長い表も切らず embedding 可）と、**chat モデル**（非 thinking の instruct 推奨）または **クラウド LLM**（`ChatModel->"cloud"`）が利用可能なこと |
 | LLM トークン | LM Studio が Bearer 認証必須の場合、`NBAccess` の local LLM credential に登録（後述） |
 
-> 注: 埋め込み・chat の endpoint/model/token は**ハードコードしません**。token は `NBAccess`NBGetLocalLLMAPIKey` から取得します。
+> 注: 埋め込み・chat の endpoint/model/token は**ハードコードしません**。token は `NBAccess`\`NBGetLocalLLMAPIKey` から取得します。
 >
 > 埋め込みモデルを変更したら（次元/空間が変わるため）`PDFIndex\`pdfReembed["default"]` で全 chunk を再 embedding してください。`PDFIndex\`Private\`$embeddingModel`（既定 `text-embedding-baai-bge-m3-568m`）/ `$embeddingTextWindow`（既定 6000 字）で上書き可。512 トークン上限のモデルに戻す場合は窓も ~400 に下げること。
 
@@ -27,7 +27,7 @@
 
 ## 2. ロード
 
-`SourceVault.wl` を読むだけで補助サブファイル（`SourceVault_core` / `_searchindex` / `_servicemanager`）も自動でロードされます。
+`SourceVault.wl` を読むだけで補助サブファイル（`SourceVault_core` / `_searchindex` / `_servicemanager` / `_mcp` / `_objectview`）も自動でロードされます。
 
 ```mathematica
 Block[{$CharacterEncoding = "UTF-8"},
@@ -290,6 +290,55 @@ SourceVaultStartHTTPProxy["handbook-web-svc",
 
 ---
 
+## 6f. arXiv ソース一覧・サマリー管理
+
+ingest 済みの arXiv ソースは `SourceVaultArXiv` で一覧表示できます。表示中のタイトルまたはサマリーをクリックすると `SourceVaultShowSourceSummary` が呼ばれ、**編集可能なサマリーノートブック**が開きます（保存済みの追記版があればそれを正本として開きます）。
+
+```mathematica
+(* arXiv ソースのみ一覧 (SourceVaultSources["", "Kind"->"arxiv"] の薄ラッパ) *)
+SourceVaultArXiv["可逆計算"]                                   (* クエリ部分一致 *)
+SourceVaultArXiv["", "On" -> Today]                            (* 今日 ingest したもの *)
+SourceVaultArXiv["", "Author" -> "Bennett", "Since" -> "2025-01-01"]  (* 著者・期間絞り込み *)
+```
+
+arXiv ソースは ingest 時にアブストラクトを取得し、`$Language` へ翻訳して Summary に自動格納します。既存ソースで Summary が未設定（または過去の LLM エラー本文）の場合は `SourceVaultBackfillArXivSummaries` で一括補完できます。
+
+```mathematica
+(* 未設定/エラー本文のあるソースに一括バックフィル *)
+SourceVaultBackfillArXivSummaries[]
+(* => <|"Candidates"->N, "Updated"->N, "AlreadyPresent"->N, "NoAbstract"->N, "Failed"->N, "Results"->{...}|> *)
+
+(* Force->True で既存 Summary も再生成、Limit で処理件数を制限 *)
+SourceVaultBackfillArXivSummaries["Force" -> True, "Limit" -> 10]
+```
+
+> **注意**: 翻訳は cloud LLM を使用します（arXiv は公開データなので PrivacyLevel 0.0）。`$Language` が `Japanese` のセッションで実行してください。headless 環境では英語原文のまま格納されます。
+
+### プライバシーレベルの誤設定修正
+
+旧版では arXiv などの `OfficialDocs` が PrivacyLevel 0.6 と誤タグされる不具合がありました（公開 arXiv が機密扱いになり `SourceVaultArXiv` 等に出ない原因でした）。現行版では正しい既定値（`OfficialDocs`/`OfficialAPI` = 0.0、`PublicWeb` = 0.4）が使われますが、旧版で ingest 済みのレコードが残っている場合は `SourceVaultReclassifyPublicPrivacy` で一括修正できます。
+
+```mathematica
+(* 公開ソース (arXiv / 公開 URL) の PrivacyLevel を正値に修正 *)
+SourceVaultReclassifyPublicPrivacy[]
+(* => <|"Status", "Count", "Changed" -> {<|SourceId, From, To|>...}|> *)
+```
+
+また `SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries` の表で**タイトルまたはサマリーをクリック**すると `SourceVaultShowSourceSummary` が開きます。`SourceVaultOpenSourceFile` を使うと raw ファイルを直接開くことができます。
+
+```mathematica
+(* ソースのサマリーノートブックを開く (表のクリックと同じ) *)
+SourceVaultShowSourceSummary["sv-src-XXXXXXXX"]
+
+(* ingest 済みソースの raw ファイルを現 PC で解決して開く *)
+SourceVaultOpenSourceFile["sv-src-XXXXXXXX"]
+
+(* 1 ソースの共通スキーマ行を取得 ("URI" フィールド = sv://snapshot/sha256/<hex> を含む) *)
+SourceVaultSourceRow["sv-src-XXXXXXXX"]
+```
+
+---
+
 ## 7. 停止・再起動
 
 ```mathematica
@@ -313,6 +362,8 @@ SourceVaultStopService["handbook-web-svc"];      (* service 停止 (task 削除 
 | `/pdfask` と `/pdfsearch` が同じ結果 | `ChatModel` 未解決で LLM が呼べず degrade している。loaded な chat モデルを確認。 |
 | 必修/選択が断定されず候補列挙だけになる | 凡例 (LegendMap) が未登録。§6b で `ProvidesLegend->True` の凡例 curated を該当 release context・年度で登録すれば分類が解禁される。`SourceVaultListEvidenceGaps[]` で「凡例が要る質問」を確認できる。 |
 | 崩れた表が検索に出ない / 内容が拾えない | bge-m3＋窓拡大で `PDFIndex\`pdfReembed["default"]`。それでも不足なら §6b の `SourceVaultDraftCuratedTranscription` で転記→確認→ curated 登録（clean text は検索で上位に来る）。 |
+| arXiv ソースが一覧に出ない / 機密扱いになる | 旧版の PrivacyLevel 誤設定バグ（OfficialDocs が 0.6 になっていた）。`SourceVaultReclassifyPublicPrivacy[]` で一括修正し、その後 `SourceVaultArXiv[]` で確認する。 |
+| arXiv サマリーが空または LLM エラー文になっている | ingest 時の自動翻訳が失敗したか旧版で登録された。`SourceVaultBackfillArXivSummaries[]` で再生成（`$Language = "Japanese"` のセッションで実行すること）。 |
 | `path::shdw` 警告 | PDFIndex の `$pdfPythonPath` が原因（修正済み）。最新の PDFIndex.wl を再ロード、またはセッションの `Global\`path` を `Remove`。 |
 | 起動直後に即停止（heartbeat 1） | 古い `Stop` コマンド残留。修正版 `StartService` は起動前に `commands/` を purge する。再起動で解消。 |
 | 文字化け | 旧版の二重エンコードバグ。現行は JSON の書き込み（`iSMWriteJSON`）・読み込み（`iSMParseRawJSON`）ともに `ExportByteArray`/`ImportByteArray` 経路で解消済み（`ExportString` は ShiftJIS 環境で二重 UTF-8 化するため不使用）。サービス再起動で反映。 |
@@ -330,6 +381,7 @@ Import["http://127.0.0.1:1234/api/v0/models", "Text"]   (* state=loaded, type=ll
 - **release gate は必ず WL 側**で評価され、`Permit` のチャンクのみ返る（build 時・request 時の二重評価＋失効照合）。
 - HTTP レスポンスに **raw local path を出さない**（citation は doc タイトル＋ページのみ）。
 - `/pdfask` の LLM には **gate 済み根拠だけ**を渡す（生 vault 非露出）。
+- **content-addressed 不変スナップショット**（ID が `snapshot:class:hex` または `sv://snapshot/...` 形式）は本体ファイルが書き換わらないため、プライバシーレベルの変更はサイドレコードへ委譲されます（§10 参照）。スナップショット ID はコロンを含む形式のため、通常の colon-path ファイルパスより**先に pattern で判定**されます。`SourceVaultSourceRow` が返す `"URI"` フィールド（`sv://snapshot/sha256/<hex>`）はこの正準 URI であり、横断データセットの join/参照キーとして使用できます。
 - **ClaudeCode/Codex（サブスク）はオーナー PC の IP からのリクエストのみ**（§6e）。他者には絶対に使わせない（ライセンス遵守）。クライアント IP は実 TCP 接続元から取得し、`X-Forwarded-For` は信用しない。
 - mail = draft のみ（自動送信しない）、Discord = 承認必須（`DispatchOutput`）。
 - アプリ固有の実 path / endpoint / token は **private local init と NBAccess credential** に置き、リポジトリには残さない。
@@ -343,10 +395,13 @@ Import["http://127.0.0.1:1234/api/v0/models", "Text"]   (* state=loaded, type=ll
 | 設定登録 | `SourceVaultRegisterReleaseContext` / `RegisterPDFIndexProfile` / `RegisterPDFIndexMigrationRule` / `RegisterWebServiceEndpoint` / `RegisterLLMBackend`（`"Class"->"Light-Cloud"` / `"Capabilities"->{"Reasoning"}` 等のフィールドをサポート。バッテリー節約・LM Studio 未起動時の代替 LLM をデータとして登録できる） |
 | サービス | `SourceVaultStartService` / `StopService` / `ServiceStatus` / `SendServiceCommand` |
 | プロキシ | `SourceVaultStartHTTPProxy`（`PDFGroupProfile`/`EndpointProfile`/`AppTitle`/`AskPrompt`/`ChatModel`/`ReleaseContext`/`PDFIndexProfile`/`SearchTimeoutMs`） / `StopHTTPProxy` / `HTTPProxyStatus` |
+| ソース一覧・閲覧 | `SourceVaultSources`（`"Kind"`/`"Author"`/`"Since"`/`"Until"`/`"On"` で絞り込み） / `SourceVaultArXiv`（arXiv 専用ビュー・`SourceVaultSources["", "Kind"->"arxiv", ...]` の薄ラッパ） / `SourceVaultSummaries`（横断検索） / `SourceVaultBackfillArXivSummaries`（既存 arXiv ソースにアブストラクト翻訳を Summary としてバックフィル） / `SourceVaultShowSourceSummary`（タイトル/サマリークリックで編集可能ノートを開く） / `SourceVaultOpenSourceFile`（raw ファイルを現 PC で解決して開く） / `SourceVaultSourceRow`（共通スキーマ行取得・`"URI"` フィールド `sv://snapshot/sha256/<hex>` を含む） |
 | 補足知識 | `SourceVaultRegisterCuratedKnowledge` / `ListCuratedKnowledge` / `DraftCuratedTranscription`（崩れ表の LLM 転記ドラフト） |
 | Evidence Gap | `SourceVaultListEvidenceGaps` / `CloseEvidenceGap` |
 | PDF グループ設定 | `SourceVaultCreatePDFGroupSearchProfile` / `ResolvePDFGroupSearchProfile` / `ListPDFGroupSearchProfiles` / `ClonePDFGroupSearchProfile` |
 | 索引（PDFIndex） | `PDFIndex\`pdfLoadIndex` / `pdfReembed`（モデル変更時の再 embed） / `pdfGetChunk` |
+| 不変スナップショット | `SourceVaultImmutableSnapshotExistsQ[snapshotId]`（存在確認）/ `SourceVaultSetImmutableSnapshotPrivacyLevel[snapshotId, lv]`（プライバシーレベル変更。本体不変・サイドレコードへ委譲） |
+| 修復ユーティリティ | `SourceVaultReclassifyPublicPrivacy`（公開ソースの PrivacyLevel 誤設定を一括修正。`OfficialDocs`/`OfficialAPI` = 0.0、`PublicWeb` = 0.4 に是正） |
 
 ### LLM バックエンド登録例（バッテリー節約・LM Studio 未起動時の代替）
 
@@ -362,14 +417,32 @@ SourceVaultRegisterLLMBackend["light-cloud-fallback", <|
 
 `"Class" -> "Light-Cloud"` は軽量クラウドモデルを示す分類フィールドです。`"Capabilities" -> {"Reasoning"}` を指定すると推論能力が必要なクエリでこのバックエンドが優先的に選択されます。バックエンドはデータとして登録するため、コードを変えずに切り替えが可能です。
 
+### content-addressed 不変スナップショット
+
+SnapshotId が `snapshot:class:hex` または `sv://snapshot/...` 形式のレコードは **content-addressed 不変スナップショット**として扱われます。本体ファイルは書き換えが禁止されているため、プライバシーレベルの変更は専用のサイドレコードへ委譲されます。
+
+```mathematica
+(* スナップショットの存在確認 *)
+SourceVaultImmutableSnapshotExistsQ["snapshot:pdf:a1b2c3..."]
+(* => True / False *)
+
+(* プライバシーレベルをサイドレコードに記録 (本体は変更されない) *)
+SourceVaultSetImmutableSnapshotPrivacyLevel["snapshot:pdf:a1b2c3...", 0.5]
+```
+
+スナップショット ID はコロン（`:`）またはスキーム（`sv://`）を含むため、通常の vault パスの判定（`FileExistsQ` 等）より**先に pattern で照合**されます。通常の vault レコードと同じ gate・プライバシー評価を受けますが、本体の不変性が保証されます。
+
 ---
 
 ## 11. まとめ
 
-- `Get["SourceVault.wl"]` で基盤一式（core/searchindex/servicemanager）がロードされる。
-- アプリ（学生便覧）は **release context / profile / migration rule** をサービス prelude（方式A）または private local init（方式B）で登録するだけ。SourceVault コードはドメイン非依存。
+- `Get["SourceVault.wl"]` で基盤一式（core / searchindex / servicemanager / mcp / objectview）がロードされます。
+- アプリ（学生便覧）は **release context / profile / migration rule** をサービス prelude（方式A）または private local init（方式B）で登録するだけ。SourceVault コードはドメイン非依存です。
 - 起動は **StartService(prelude) → StartHTTPProxy** の 2 ステップ（方式B は前に `LoadLocalInit`）。
+- arXiv ソースは ingest 時にアブストラクトが自動翻訳されて Summary に格納されます。`SourceVaultArXiv` で種別専用一覧表示、`SourceVaultBackfillArXivSummaries` で既存ソースへの一括補完が可能です（§6f）。タイトル/サマリーのクリックは `SourceVaultShowSourceSummary` で編集可能ノートブックを開きます。
+- 旧版で arXiv 等が PrivacyLevel 0.6 と誤タグされた場合は `SourceVaultReclassifyPublicPrivacy[]` で修正できます（§6f）。
 - 崩れた表・凡例は **補足知識 (curated)** で補い（§6b）、凡例があれば必修/選択を**分類**、無ければ**列挙のみ＋Evidence Gap 記録**（§6c）。
-- 別 PDF グループは **`PDFGroupSearchProfile` を clone+override** するだけで横展開できる（§6d）。コード変更は不要。
-- LLM バックエンドは `SourceVaultRegisterLLMBackend` でデータとして登録でき、`"Class"->"Light-Cloud"` / `"Capabilities"->{"Reasoning"}` によりバッテリー節約・LM Studio 未起動時の代替を設定として管理できる（§10）。
-- 埋め込みは **bge-m3（8192）**、回答合成は **ローカル instruct or `ChatModel->"cloud"`**。`/pdfask` は**非同期**で遅いモデルでも timeout しない。JSON の読み書きは `ExportByteArray`/`ImportByteArray` 経路で文字化けを防いでいる。
+- 別 PDF グループは **`PDFGroupSearchProfile` を clone+override** するだけで横展開できます（§6d）。コード変更は不要です。
+- LLM バックエンドは `SourceVaultRegisterLLMBackend` でデータとして登録でき、`"Class"->"Light-Cloud"` / `"Capabilities"->{"Reasoning"}` によりバッテリー節約・LM Studio 未起動時の代替を設定として管理できます（§10）。
+- **content-addressed 不変スナップショット**（`snapshot:class:hex` / `sv://snapshot/...` 形式）は本体不変。存在確認は `SourceVaultImmutableSnapshotExistsQ`、プライバシーレベル変更は `SourceVaultSetImmutableSnapshotPrivacyLevel`（サイドレコードへ委譲）で行います（§9・§10）。`SourceVaultSourceRow` の `"URI"` フィールドがこの正準 URI を提供します。
+- 埋め込みは **bge-m3（8192）**、回答合成は **ローカル instruct or `ChatModel->"cloud"`**。`/pdfask` は**非同期**で遅いモデルでも timeout しません。JSON の読み書きは `ExportByteArray`/`ImportByteArray` 経路で文字化けを防いでいます。

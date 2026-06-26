@@ -99,6 +99,29 @@ SourceVaultSaveImmutableSnapshot::usage =
 SourceVaultLoadImmutableSnapshot::usage =
   "SourceVaultLoadImmutableSnapshot[ref] は snapshot ref または \"class/alias\" を読み、検証済み assoc を返す。";
 
+(* ---- privacy invariant (phase 1): 不変スナップショットの privacy ---- *)
+$SourceVaultDefaultObjectPrivacyLevel::usage =
+  "$SourceVaultDefaultObjectPrivacyLevel は privacy 未指定オブジェクトの既定 privacy level (0.85)。\n" <>
+  "0.5 のクラウド閾値を超えるため、明示ダウングレードしない限りクラウド sink へ出ない (fail-closed)。";
+
+SourceVaultSnapshotPrivacyLevel::usage =
+  "SourceVaultSnapshotPrivacyLevel[ref] は content-addressed 不変スナップショット\n" <>
+  "(snapshot:class:hex / class/alias / sv://snapshot/class/hex) の privacy level を返す。\n" <>
+  "privacy サイドレコードがあればその Level、無ければ $SourceVaultDefaultObjectPrivacyLevel (0.85)。\n" <>
+  "read-only。変更は NBAccess`NBSetSnapshotPrivacyLevel 経由のみ。";
+
+SourceVaultSnapshotPrivacyRecord::usage =
+  "SourceVaultSnapshotPrivacyRecord[ref] は不変スナップショットの privacy サイドレコード Association を返す\n" <>
+  "(キー Level / Source / Present / Class / Hex / Ref / Encrypted)。未設定でも既定値で返す。";
+
+SourceVaultImmutableSnapshotExistsQ::usage =
+  "SourceVaultImmutableSnapshotExistsQ[ref] は不変スナップショット本体がストアに存在するか判定する。";
+
+SourceVaultSetImmutableSnapshotPrivacyLevel::usage =
+  "SourceVaultSetImmutableSnapshotPrivacyLevel[ref, level] は不変スナップショットの privacy サイドレコードを\n" <>
+  "設定する (本体は不変なので別ファイル)。戻り値 <|\"Status\",\"Ref\",\"OldPrivacyLevel\",\"NewPrivacyLevel\",\"Lowered\",...|>。\n" <>
+  "サンクションされた呼び出し経路は NBAccess`NBSetSnapshotPrivacyLevel (承認ゲート付き) のみ。";
+
 SourceVaultReadSnapshot::usage =
   "SourceVaultReadSnapshot[id] は SourceVaultLoadImmutableSnapshot の別名。";
 
@@ -496,6 +519,104 @@ SourceVaultVerifyImmutableSnapshot[ref_String, opts___] := Module[
   <|"Status" -> If[recomputed === storedDigest, "Valid", "Mismatch"],
     "Ref" -> ref, "StoredDigest" -> storedDigest, "Recomputed" -> recomputed,
     "Valid" -> (recomputed === storedDigest)|>
+];
+
+(* ============================================================
+   §8.2a-priv  Immutable snapshot privacy side-record (privacy invariant phase 1)
+
+   不変スナップショットは content-addressed (digest 固定) なので privacy を内容へ
+   焼き込めない (焼き込むと再指定不可)。privacy は ref をキーにした可変サイドレコードで
+   保持する。レコード非存在 = $SourceVaultDefaultObjectPrivacyLevel (0.85)。
+   サイドレコードの書き込みはサンクション経路 (NBAccess`NBSetSnapshotPrivacyLevel ->
+   SourceVault`SourceVaultSetSnapshotPrivacyLevel -> SourceVaultSetImmutableSnapshotPrivacyLevel)
+   からのみ行う。本体ファイルは一切書き換えない。
+   ============================================================ *)
+
+$SourceVaultDefaultObjectPrivacyLevel = 0.85;
+
+iSnapshotPrivacyPath[class_String, digestHex_String] :=
+  iSub["snapshot-privacy", class, StringTake[digestHex, UpTo[2]], digestHex <> ".json"];
+
+(* "snapshot:class:hex" / "class/alias" / "sv://snapshot/class/hex" -> {class, hex} | $Failed *)
+iSVResolveSnapshotClassHex[ref_String] := Module[{r, rest, parts},
+  r = iResolveRef[ref];
+  If[r =!= $Failed, Return[r]];
+  If[StringStartsQ[ref, "sv://snapshot/"],
+    rest = StringDrop[ref, StringLength["sv://snapshot/"]];
+    parts = StringSplit[rest, "/"];
+    If[Length[parts] === 2 && parts[[1]] =!= "" && parts[[2]] =!= "",
+      Return[{parts[[1]], parts[[2]]}]]];
+  $Failed
+];
+
+SourceVaultImmutableSnapshotExistsQ[ref_String] := Module[{ch, class, hex, path},
+  ch = iSVResolveSnapshotClassHex[ref];
+  If[ch === $Failed, Return[False]];
+  {class, hex} = ch;
+  path = iSnapshotPath[class, hex];
+  If[FailureQ[path], Return[False]];
+  TrueQ[FileExistsQ[path]]
+];
+
+SourceVaultSnapshotPrivacyRecord[ref_String] := Module[
+  {ch, class, hex, path, rec, default},
+  default[c_, h_] := <|"Level" -> $SourceVaultDefaultObjectPrivacyLevel,
+    "Source" -> "Default", "Present" -> False, "Encrypted" -> False,
+    "Class" -> c, "Hex" -> h,
+    "Ref" -> If[StringQ[c] && StringQ[h], "snapshot:" <> c <> ":" <> h, ref]|>;
+  ch = iSVResolveSnapshotClassHex[ref];
+  If[ch === $Failed, Return[default[Missing[], Missing[]]]];
+  {class, hex} = ch;
+  path = iSnapshotPrivacyPath[class, hex];
+  If[FailureQ[path] || ! FileExistsQ[path], Return[default[class, hex]]];
+  rec = Quiet @ iFromJSON[iReadStringUTF8[path]];
+  If[! AssociationQ[rec], Return[default[class, hex]]];
+  Join[<|"Present" -> True, "Encrypted" -> False, "Class" -> class, "Hex" -> hex,
+    "Ref" -> "snapshot:" <> class <> ":" <> hex|>, rec]
+];
+
+SourceVaultSnapshotPrivacyLevel[ref_String] := Module[{lv},
+  lv = Lookup[SourceVaultSnapshotPrivacyRecord[ref], "Level",
+    $SourceVaultDefaultObjectPrivacyLevel];
+  If[NumericQ[lv], N[Clip[lv, {0.0, 1.0}]], $SourceVaultDefaultObjectPrivacyLevel]
+];
+
+(* サイドレコード writer (internal)。本体は触らない。create/overwrite。 *)
+iSVWriteSnapshotPrivacy[ref_String, assoc_Association] := Module[
+  {ch, class, hex, path, dir, rec, json},
+  ch = iSVResolveSnapshotClassHex[ref];
+  If[ch === $Failed, Return[Failure["SnapshotRefUnresolved", <|"Ref" -> ref|>]]];
+  {class, hex} = ch;
+  path = iSnapshotPrivacyPath[class, hex];
+  If[FailureQ[path], Return[path]];
+  dir = DirectoryName[path];
+  Quiet @ If[! DirectoryQ[dir], CreateDirectory[dir, CreateIntermediateDirectories -> True]];
+  rec = Join[assoc, <|"Class" -> class, "Hex" -> hex,
+    "Ref" -> "snapshot:" <> class <> ":" <> hex, "UpdatedAtUTC" -> iUTCNow[]|>];
+  json = iToJSON[rec];
+  If[! StringQ[json], Return[Failure["JSONEncodeFailed", <|"Ref" -> ref|>]]];
+  If[FailureQ[iWriteStringUTF8[path, json]],
+    Return[Failure["WriteFailed", <|"Path" -> path|>]]];
+  <|"Status" -> "OK", "Path" -> path, "Ref" -> rec["Ref"]|>
+];
+
+SourceVaultSetImmutableSnapshotPrivacyLevel[ref_String, level_?NumericQ] := Module[
+  {lv, oldLv, lowered, wr, ts},
+  If[! SourceVaultImmutableSnapshotExistsQ[ref],
+    Return[<|"Status" -> "Failed", "Reason" -> "SnapshotNotFound", "Ref" -> ref|>]];
+  lv = N[Clip[level, {0.0, 1.0}]];
+  oldLv = SourceVaultSnapshotPrivacyLevel[ref];
+  lowered = NumericQ[oldLv] && lv < oldLv;
+  ts = iUTCNow[];
+  wr = iSVWriteSnapshotPrivacy[ref, <|"Level" -> lv, "Source" -> "Manual",
+    "PrivacyLevelSetAt" -> ts, "Encrypted" -> False|>];
+  If[FailureQ[wr],
+    Return[<|"Status" -> "Failed", "Reason" -> "PrivacyWriteFailed",
+      "Ref" -> ref, "Detail" -> wr|>]];
+  <|"Status" -> "OK", "Ref" -> Lookup[wr, "Ref", ref],
+    "SnapshotKind" -> "Immutable",
+    "OldPrivacyLevel" -> oldLv, "NewPrivacyLevel" -> lv,
+    "Lowered" -> lowered, "PrivacyLevelSource" -> "Manual", "SetAt" -> ts|>
 ];
 
 (* ============================================================

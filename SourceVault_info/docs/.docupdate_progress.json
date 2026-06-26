@@ -1,0 +1,24 @@
+{
+	"Cycle":"1edgvs1bpsqpl",
+	"Done":[
+		"api.md",
+		"docs\/api_core.md",
+		"setup.md",
+		"docs\/api_crypto.md",
+		"user_manual.md",
+		"docs\/api_maildb.md",
+		"docs\/api_identity.md",
+		"docs\/api_mcp.md",
+		"docs\/api_eagle.md",
+		"docs\/api_mining.md",
+		"docs\/api_servicemanager.md",
+		"docs\/api_webingest.md",
+		"docs\/api_workflowcatalog.md",
+		"docs\/api_workflowregistry.md",
+		"examples\/example.md",
+		"examples\/ingest_group_search_publish_example.md",
+		"examples\/mining_example.md",
+		"examples\/servicemanager_example.md",
+		"examples\/workflow_spec_review_example.md"
+	]
+}

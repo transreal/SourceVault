@@ -42,6 +42,10 @@ SourceVaultMailShardPath::usage = "SourceVaultMailShardPath[\"mbox/yyyymm\"] は
 SourceVaultMailMigrateToShards::usage = "SourceVaultMailMigrateToShards[] は旧単一ファイル snapshots.svmail を mbox×月のシャードに移行し、旧ファイルを .bak にする。";
 SourceVaultMailStorePath::usage = "SourceVaultMailStorePath[] は旧単一ファイル (移行用) のパスを返す。";
 $SourceVaultMailStoreRoot::usage = "mail snapshot store のルート (既定 PrivateVault/mail/snapshots)。テストで上書き可。";
+SourceVaultMailSearchIndex::usage = "SourceVaultMailSearchIndex[query_String:\"\", opts] はディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) だけを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行 (SummaryRow 形 + Summary) を返す。opts は SourceVaultSearchMailSnapshots と同じ (To/Cc/FromContact 等 index 非保持の項目は無視)。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。";
+SourceVaultMailRebuildMetadataIndex::usage = "SourceVaultMailRebuildMetadataIndex[mbox_:All] はディスク上の各 shard を一時的に読み、低漏洩メタデータ索引 sidecar (.svmailidx) を再生成する ($iSVMDStore は変更しない)。既存 .svmail から索引を初回構築/再構築するのに使う。";
+SourceVaultMailIndexedCount::usage = "SourceVaultMailIndexedCount[mbox_:All] はディスク上の索引 sidecar に含まれる行数 (索引済みメール数) を返す。";
+SourceVaultMailIndexGet::usage = "SourceVaultMailIndexGet[recordId_String] は索引 sidecar から該当 RecordId の低漏洩メタ/サマリー行を1件返す (snapshot 本体はロードしない)。無ければ Missing[\"NotFound\"]。MCP の単一 URI 解決 (sourcevault_get) 用。";
 SourceVaultMailSnapshotDecryptBody::usage = "SourceVaultMailSnapshotDecryptBody[snapshot] は snapshot の暗号化 body を復号して返す (MAC 検証経由)。";
 SourceVaultMailParseEmails::usage = "SourceVaultMailParseEmails[headerValue_String] はヘッダ文字列からメールアドレスを抽出する。";
 $SourceVaultDefaultImportedMailPL::usage = "import 時のメール本文 PL 既定 (fail-safe, 既定 0.85)。maildb privacy は信用しない。";
@@ -120,7 +124,7 @@ Options[SourceVaultMailSnapshotFromMaildb] = {
 
 SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPattern[]] :=
   Module[{msgId, recId, pl, subject, from, to, cc, body, encHeaders,
-     bodyRef, headerEnc, mdPrivacy, snapshot},
+     bodyRef, headerEnc, mdPrivacy, mailDelivery, snapshot},
     msgId = ToString[Lookup[record, "id", Lookup[record, "MessageID", "unknown"]]];
     recId = iSVMDRecordId[mbox, msgId];
     pl = OptionValue["PrivacyLevel"] /. Automatic -> $SourceVaultDefaultImportedMailPL;
@@ -131,6 +135,17 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
     cc   = ToString[Lookup[record, "cc", ""]];
     body = Lookup[record, "body", Missing["NoBody"]];
     mdPrivacy = Lookup[record, "privacy", Missing["Unknown"]];
+
+    (* 配送 feature (§8.1.1, 配線(b)): raw header を fetch 時に parse し coarse feature だけ保存。
+       raw header 本体は snapshot に載せない (privacy)。mining 未ロード/raw header 無しは Missing。 *)
+    mailDelivery = With[{rh = Lookup[record, "rawheader", Missing[]]},
+      If[StringQ[rh] && rh =!= "" &&
+         Length[Names["SourceVault`SourceVaultMiningMailHeaderObservation"]] > 0 &&
+         Length[DownValues[SourceVault`SourceVaultMiningMailHeaderObservation]] > 0,
+        Quiet@Check[
+          Lookup[SourceVault`SourceVaultMiningMailHeaderObservation[rh, "SourceID" -> recId],
+            "SnapshotFeatures", Missing["NoFeatures"]], Missing["DeliveryParseFailed"]],
+        Missing["NoRawHeader"]]];
 
     (* body: 既定で暗号化 (PL fail-safe)。inline EncryptedPayload record。 *)
     bodyRef = If[StringQ[body] && OptionValue["StoreBody"] === "Encrypted",
@@ -155,6 +170,8 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
       (* 送信者認証 (信頼 authserv-id の A-R のみ採用)。legacy maildb は A-R 無し
          -> Source "Missing" -> sender-based loosening 不可。 *)
       "SenderAuthentication" -> SourceVault`SourceVaultSenderAuthentication[record],
+      (* 配送 coarse feature (raw header は載せない、§8.1.1)。delivery anomaly→metacog conflict 入力。 *)
+      "MailDelivery" -> mailDelivery,
       "MailSource" -> <|
          "Kind" -> "MaildbMonthlyFile", "MBox" -> mbox,
          "MessageIDToken" -> iSVMDMailToken[msgId],
@@ -516,17 +533,24 @@ SourceVaultMailShardPath[shardKey_String] :=
 SourceVaultMailStorePath[] := FileNameJoin[{SourceVaultMailStoreRoot[], "snapshots.svmail"}];
 
 iSVMDWriteShard[shardKey_String, rids_List] :=
-  Module[{path = SourceVaultMailShardPath[shardKey], dir, lines, keep},
+  Module[{path = SourceVaultMailShardPath[shardKey], ipath = iSVMDIndexPath[shardKey],
+      dir, lines, keep, res},
     dir = DirectoryName[path];
     If[! DirectoryQ[dir], Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
     keep = Select[rids, KeyExistsQ[$iSVMDStore, #] &];
-    If[keep === {}, If[FileExistsQ[path], Quiet@DeleteFile[path]]; Return[0]];
+    If[keep === {},
+      If[FileExistsQ[path], Quiet@DeleteFile[path]];
+      If[FileExistsQ[ipath], Quiet@DeleteFile[ipath]];
+      Return[0]];
     lines = (BaseEncode[BinarySerialize[$iSVMDStore[#]]] &) /@ keep;
-    Quiet@Check[
+    res = Quiet@Check[
       With[{strm = OpenWrite[path, BinaryFormat -> True]},
         Scan[BinaryWrite[strm, StringToByteArray[# <> "\n", "ASCII"]] &, lines];
         Close[strm]; Length[lines]],
-      $Failed]];
+      $Failed];
+    (* 軽量メタデータ索引 sidecar も同時更新 (本文をロードせず検索するため) *)
+    iSVMDWriteIndexFile[ipath, (iSVMDIndexRow[$iSVMDStore[#]] &) /@ keep];
+    res];
 
 Options[SourceVaultMailStoreSave] = {"All" -> False};
 SourceVaultMailStoreSave[OptionsPattern[]] :=
@@ -542,6 +566,163 @@ iSVMDReadShardFile[path_String] :=
     lines = Select[StringSplit[raw, "\n"], StringTrim[#] =!= "" &];
     snaps = Quiet@Check[BinaryDeserialize[BaseDecode[StringTrim[#]]], Nothing] & /@ lines;
     Select[snaps, AssociationQ]];
+
+(* ============================================================
+   軽量メタデータ索引 (sidecar/shard) ── 本文暗号文をロードせず検索する。
+   各 shard <root>/<mbox>/<yyyymm>.svmail と並べて
+   <root>/<mbox>/<yyyymm>.svmailidx を持つ。1 行 = BinarySerialize した索引行
+   (SummaryRow 形 + Summary + FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey)。
+   PayloadRefs (本文・ヘッダ暗号文) は一切含めない ── 索引に入るのは既に shard 内で
+   at-rest 平文のメタ/サマリーのみなので新たな露出区分は増えない。release gate は
+   各行の PrivacyLevel により MCP 層 (B3) が従来どおり cloud 宛を gate する。
+   shard 単位なので Dropbox 同期も新着のあった月の sidecar だけで済む。
+   ============================================================ *)
+
+iSVMDIndexExt = ".svmailidx";
+
+iSVMDIndexPath[shardKey_String] :=
+  FileNameJoin[{SourceVaultMailStoreRoot[],
+     Sequence @@ (StringSplit[shardKey, "/"] /. {m_, y_} :> {m, y <> iSVMDIndexExt})}];
+
+iSVMDIndexFiles[mbox_ : All] :=
+  Module[{root = SourceVaultMailStoreRoot[], files},
+    files = If[DirectoryQ[root], FileNames["*" <> iSVMDIndexExt, root, 2], {}];
+    If[mbox === All, files, Select[files, FileNameTake[DirectoryName[#]] === mbox &]]];
+
+(* 索引行: snapshot から低漏洩投影。本文/暗号文 (PayloadRefs) は含めない。 *)
+iSVMDIndexRow[snap_Association] :=
+  Module[{md = Lookup[snap, "MailMetadataPublic", <||>], dv = Lookup[snap, "Derived", <||>]},
+    Join[SourceVaultMailSummaryRow[snap], <|
+      "Summary" -> Lookup[dv, "Summary", Missing["NotGenerated"]],
+      (* 認証済み (SourceVault 管理 Derived) AccessTags を索引へ surface し MCP scope gate に使う。
+         本文を読まずに索引だけで scope filter できる。既定 {} (= untagged)。 *)
+      "AccessTags" -> With[{at = Lookup[dv, "AccessTags", {}]}, If[ListQ[at], at, {}]],
+      "FromRaw" -> Lookup[md, "From", Missing[]],
+      "ToRaw" -> Lookup[md, "To", Missing[]],
+      "FromContact" -> Lookup[Lookup[snap, "AddressBookRefs", <||>], "FromContact", Missing[]],
+      "AttachmentCount" -> Lookup[md, "AttachmentCount", 0],
+      "ShardKey" -> iSVMDShardKey[snap],
+      "IndexSchemaVersion" -> 2|>]];
+
+iSVMDWriteIndexFile[path_String, rows_List] :=
+  Module[{dir = DirectoryName[path], lines},
+    If[rows === {}, If[FileExistsQ[path], Quiet@DeleteFile[path]]; Return[0]];
+    If[! DirectoryQ[dir], Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
+    lines = (BaseEncode[BinarySerialize[#]] &) /@ rows;
+    Quiet@Check[
+      With[{strm = OpenWrite[path, BinaryFormat -> True]},
+        Scan[BinaryWrite[strm, StringToByteArray[# <> "\n", "ASCII"]] &, lines];
+        Close[strm]; Length[lines]],
+      $Failed]];
+
+iSVMDReadIndexFile[path_String] :=
+  Module[{raw, lines, rows},
+    If[! FileExistsQ[path], Return[{}]];
+    raw = Quiet@Check[ByteArrayToString[ReadByteArray[path], "ASCII"], ""];
+    lines = Select[StringSplit[raw, "\n"], StringTrim[#] =!= "" &];
+    rows = Quiet@Check[BinaryDeserialize[BaseDecode[StringTrim[#]]], Nothing] & /@ lines;
+    Select[rows, AssociationQ]];
+
+SourceVaultMailIndexedCount[mbox_ : All] :=
+  Total[(Length[iSVMDReadIndexFile[#]]) & /@ iSVMDIndexFiles[mbox]];
+
+(* RecordId 1 件を索引から引く (本体ロードなし)。索引ファイルを順次走査。 *)
+SourceVaultMailIndexGet[recordId_String] :=
+  Module[{files = iSVMDIndexFiles[], hit = Missing["NotFound"], i = 1, r},
+    While[i <= Length[files] && MissingQ[hit],
+      r = SelectFirst[iSVMDReadIndexFile[files[[i]]],
+         Lookup[#, "RecordId", ""] === recordId &, Missing[]];
+      If[AssociationQ[r], hit = r];
+      i++];
+    hit];
+
+(* 索引再生成: 各 shard を一時的に読み込んで索引 sidecar を書く ($iSVMDStore は不変)。
+   既存 .svmail からの初回構築・再構築に使う。 *)
+SourceVaultMailRebuildMetadataIndex[mbox_ : All] :=
+  Module[{shards, nShards = 0, total = 0},
+    shards = SourceVaultMailAvailableShards[mbox];
+    Scan[Function[pair,
+      Module[{sk = pair[[1]] <> "/" <> pair[[2]], snaps, irows},
+        snaps = iSVMDReadShardFile[SourceVaultMailShardPath[sk]];
+        irows = iSVMDIndexRow /@ Select[snaps, AssociationQ];
+        iSVMDWriteIndexFile[iSVMDIndexPath[sk], irows];
+        nShards += 1; total += Length[irows]]],
+      shards];
+    <|"Status" -> "Rebuilt", "Shards" -> nShards, "Rows" -> total,
+      "Root" -> SourceVaultMailStoreRoot[]|>];
+
+(* ---- 索引行ベース (flat row) の述語/ソート: snapshot 述語の index 版 ---- *)
+iSVMDIxPriority[row_] := iSVMDNum[Lookup[row, "Priority", Missing[]], -Infinity];
+iSVMDIxPrivacy[row_] := iSVMDNum[Lookup[row, "PrivacyLevel", Missing[]], 0];
+iSVMDIxDeadlineOf[row_] := With[{dl = Lookup[row, "Deadline", Missing[]]},
+   If[StringQ[dl], dl, Missing["NoDeadline"]]];
+iSVMDIxSnapDate[row_] := Lookup[row, "Date", ""];
+iSVMDIxSortKey[by_][row_] := Switch[by,
+  "Priority", iSVMDIxPriority[row], "PrivacyLevel" | "Privacy", iSVMDIxPrivacy[row],
+  "Deadline", With[{dl = iSVMDIxDeadlineOf[row]}, If[StringQ[dl], dl, "9999-12-31T23:59:59"]],
+  _, iSVMDIxSnapDate[row]];
+
+iSVMDIxDateInRange[row_, fromDay_, toDay_] :=
+  Module[{dDay},
+    If[fromDay === Automatic && toDay === Automatic, Return[True]];
+    dDay = iSVMDMailDay[Lookup[row, "Date", Missing[]]];
+    If[! MatchQ[dDay, {_Integer, _Integer, _Integer}], Return[False]];
+    And[
+      fromDay === Automatic || ! MatchQ[fromDay, {_Integer, _Integer, _Integer}] || OrderedQ[{fromDay, dDay}],
+      toDay === Automatic || ! MatchQ[toDay, {_Integer, _Integer, _Integer}] || OrderedQ[{dDay, toDay}]]];
+
+iSVMDIxDeadlineInRange[row_, Automatic, Automatic] := True;
+iSVMDIxDeadlineInRange[row_, fromDay_, toDay_] :=
+  Module[{dl = iSVMDIxDeadlineOf[row], dDay},
+    If[! StringQ[dl], Return[False]];
+    dDay = iSVMDDayListOf[dl];
+    If[! MatchQ[dDay, {_Integer, _Integer, _Integer}], Return[False]];
+    And[
+      fromDay === Automatic || ! MatchQ[fromDay, {_Integer, _Integer, _Integer}] || OrderedQ[{fromDay, dDay}],
+      toDay === Automatic || ! MatchQ[toDay, {_Integer, _Integer, _Integer}] || OrderedQ[{dDay, toDay}]]];
+
+Options[SourceVaultMailSearchIndex] = Options[SourceVaultSearchMailSnapshots];
+SourceVaultMailSearchIndex[query_String : "", OptionsPattern[]] :=
+  Module[{q, fr, toQ, fc, mb, df, dt, ha, cat, hd, ddf, ddt, minP, maxP, minPr, maxPr,
+      by, ord, lim, rows, hits},
+    q = StringTrim[query]; fr = OptionValue["From"]; toQ = OptionValue["To"];
+    fc = OptionValue["FromContact"]; mb = OptionValue["MBox"];
+    df = iSVMDDayListOf[OptionValue["DateFrom"]]; dt = iSVMDDayListOf[OptionValue["DateTo"]];
+    ha = OptionValue["HasAttachment"];
+    cat = With[{c = OptionValue["Category"]},
+       If[c === Automatic || c === All, Automatic,
+         With[{n = iSVMDNormalizeCategory[ToString[c]]}, If[StringQ[n], n, ToString[c]]]]];
+    hd = OptionValue["HasDeadline"];
+    ddf = iSVMDDayListOf[OptionValue["DeadlineFrom"]]; ddt = iSVMDDayListOf[OptionValue["DeadlineTo"]];
+    minP = OptionValue["MinPriority"]; maxP = OptionValue["MaxPriority"];
+    minPr = OptionValue["MinPrivacy"]; maxPr = OptionValue["MaxPrivacy"];
+    rows = Join @@ (iSVMDReadIndexFile /@ iSVMDIndexFiles[If[StringQ[mb], mb, All]]);
+    hits = Select[rows, Function[r,
+       And[
+         q === "" ||
+           AnyTrue[{Lookup[r, "Subject", ""], Lookup[r, "Summary", ""]},
+             StringQ[#] && StringContainsQ[#, q, IgnoreCase -> True] &],
+         fr === Automatic || (StringQ[Lookup[r, "FromRaw", ""]] &&
+            StringContainsQ[r["FromRaw"], fr, IgnoreCase -> True]),
+         toQ === Automatic || (StringQ[Lookup[r, "ToRaw", ""]] &&
+            StringContainsQ[r["ToRaw"], toQ, IgnoreCase -> True]),
+         fc === Automatic || Lookup[r, "FromContact", Null] === fc,
+         mb === Automatic || Lookup[r, "MBox", Null] === mb,
+         ha === Automatic || TrueQ[Lookup[r, "AttachmentCount", 0] > 0] === TrueQ[ha],
+         cat === Automatic || Lookup[r, "Category", Missing["NoCategory"]] === cat,
+         hd === Automatic || StringQ[iSVMDIxDeadlineOf[r]] === TrueQ[hd],
+         iSVMDIxDeadlineInRange[r, ddf, ddt],
+         minP === Automatic || iSVMDIxPriority[r] >= minP, maxP === Automatic || iSVMDIxPriority[r] <= maxP,
+         minPr === Automatic || iSVMDIxPrivacy[r] >= minPr, maxPr === Automatic || iSVMDIxPrivacy[r] <= maxPr,
+         iSVMDIxDateInRange[r, df, dt]]]];
+    by = OptionValue["SortBy"] /. Automatic -> If[TrueQ[OptionValue["Newest"]], "Date", None];
+    If[by =!= None,
+      ord = OptionValue["SortOrder"];
+      hits = SortBy[hits, iSVMDIxSortKey[by]];
+      If[ord === "Desc" || ord === Descending, hits = Reverse[hits]]];
+    lim = OptionValue["Limit"];
+    If[IntegerQ[lim] && lim >= 0, hits = Take[hits, UpTo[lim]]];
+    hits];
 
 iSVMDIndexSnapshot[snap_] :=
   Module[{rid = Lookup[snap, "RecordId", Missing[]], sk},
@@ -671,6 +852,77 @@ SourceVaultIdentityBackfillFromMail[OptionsPattern[]] :=
       "IdentifiersAfter" -> Quiet@Check[Length[SourceVault`SourceVaultListIdentifiers[]], before],
       "Persisted" -> TrueQ[OptionValue["Persist"]]|>];
 
+(* ============================================================
+   SourceVaultSummaries 横断検索 provider (mail)
+   ディスク索引 (.svmailidx) のみを走査し本文暗号文をロードせず共通スキーマ行を返す。
+   eagle/sources と同じ共通スキーマ <|Kind,Id,URI,Title,Authors,Published,Summary,
+   URL,File,Date,PrivacyLevel|> に揃え、JoinAcross / 総検索で混在検索できるようにする。
+   類似項目は同名 (Title=件名, Summary=要約, Date, PrivacyLevel, URI)、メール固有値は
+   別 API に残す。行ごとに PrivacyLevel を出すので SourceVaultSummaries の出力セルは
+   iSVCatalogCellMaxPLFromText により最大 PL でマークされ、高 PL メールを含む結果は
+   cloud へ出ない (fail-safe: PL 欠落 = 1.0)。
+   ============================================================ *)
+
+(* mail の正準 SourceVault URI (sv://record/svmail-<id>。mcp の iSVMailOwnsURIQ /
+   iSVMailAdapterResolve が解決する形)。RecordId は既に "svmail-" 接頭辞付き。 *)
+iSVMDMailURI[recordId_String] := "sv://record/" <> recordId;
+iSVMDMailURI[_] := Missing["NoURI"];
+
+iSVMDCommonRows[query_String, opts_Association] :=
+  Module[{rows},
+    rows = Quiet @ Check[SourceVaultMailSearchIndex[query], {}];
+    If[! ListQ[rows], rows = {}];
+    Map[
+      Function[r,
+        Module[{rid = ToString @ Lookup[r, "RecordId", ""],
+            subj = Lookup[r, "Subject", Missing[]],
+            summ = Lookup[r, "Summary", Missing[]],
+            frm = Lookup[r, "From", Missing[]],
+            date = Lookup[r, "Date", Missing[]],
+            pl = Lookup[r, "PrivacyLevel", Missing[]]},
+          <|"Kind" -> "mail",
+            "Id" -> rid,
+            "URI" -> iSVMDMailURI[rid],
+            "Title" -> Which[
+              StringQ[subj] && StringTrim[subj] =!= "", subj,
+              MatchQ[subj, _Missing], "(\:4ef6\:540d\:7121\:3057\:30fb\:6697\:53f7\:5316)",
+              True, "(\:4ef6\:540d\:7121\:3057)"],
+            "Authors" -> If[StringQ[frm], frm, ""],
+            "Published" -> "",
+            "Summary" -> If[StringQ[summ], summ, ""],
+            "URL" -> "",
+            "File" -> "",
+            "Date" -> If[StringQ[date], date, ToString[date]],
+            (* fail-safe: PL 欠落は 1.0 (cloud 非送信側に倒す) *)
+            "PrivacyLevel" -> If[NumericQ[pl], N[pl], 1.0]|>]],
+      Select[rows, AssociationQ]]];
+iSVMDCommonRows[query_String] := iSVMDCommonRows[query, <||>];
+
+(* 横断検索 Grid の mail 行タイトルクリック: 低漏洩ヘッダ + URI をウインドウ表示
+   (本文・暗号文は読まない)。全文/サマリーは mail 専用 API (機密ラップ付き) を使う。 *)
+iSVMDShowMailInfo[recordId_String] :=
+  Module[{r = SourceVaultMailIndexGet[recordId]},
+    If[! AssociationQ[r],
+      Return[<|"Status" -> "NotFound", "RecordId" -> recordId|>]];
+    Quiet @ Check[
+      CreateDocument[{
+        Cell[ToString @ Lookup[r, "Subject", "(\:4ef6\:540d\:7121\:3057)"], "Subsection"],
+        Cell["From: " <> ToString @ Lookup[r, "From", ""], "Text"],
+        Cell["Date: " <> ToString @ Lookup[r, "Date", ""] <>
+          "    PL: " <> ToString @ Lookup[r, "PrivacyLevel", ""], "Text"],
+        Cell["URI: " <> iSVMDMailURI[recordId], "Text"],
+        Cell["\:5168\:6587\:30fb\:30b5\:30de\:30ea\:30fc\:306f mail \:5c02\:7528 API (SourceVaultMailSearchSummary \:7b49\:3001\:6a5f\:5bc6\:30e9\:30c3\:30d7\:4ed8) \:3092\:4f7f\:3046\:3002", "Text"]},
+        WindowTitle -> "Mail: " <> recordId],
+      Null];
+    <|"Status" -> "Opened", "RecordId" -> recordId|>];
+
+(* provider / 行アクション登録 (eagle と同じ枠組み・Association ガード付き。
+   SourceVault.wl 未ロードの maildb 単体ロードでも落ちない)。 *)
+If[! AssociationQ[$SourceVaultSummaryProviders], $SourceVaultSummaryProviders = <||>];
+$SourceVaultSummaryProviders["mail"] = iSVMDCommonRows;
+If[! AssociationQ[$iSVRowTitleActions], $iSVRowTitleActions = <||>];
+$iSVRowTitleActions["mail"] = iSVMDShowMailInfo;
+
 End[];
 EndPackage[];
 
@@ -702,12 +954,21 @@ SourceVaultInferMailDerivedBatch::usage =
   "SourceVaultInferMailDerivedBatch[opts] は未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。中断耐性 (CheckpointEvery 件ごとに保存)。opts: \"Limit\"(既定50、フィルタ後の件数上限。範囲内すべてなら Infinity), \"DateFrom\"/\"DateTo\"(既定 Automatic。DateObject/文字列/{y,m,d} で対象メールを日付範囲に限定、日単位包含), \"Refresh\"(既定 None=Pending のみ。\"MissingCategory\"=Category 未生成の処理済み旧 snapshot も再処理, All=全件再処理, Function=述語に一致する snapshot を再処理。例: \"Refresh\"->Function[s, StringContainsQ[ToString@s[\"MailMetadataPublic\"][\"Subject\"], \"Cerezo\"]]), \"Inferencer\"(既定=実LLM, 注入可), \"CheckpointEvery\"(既定20), \"Persist\"(既定True)。";
 SourceVaultMailInferDerived::usage =
   "SourceVaultMailInferDerived[mailspec] は mailspec(date/subject/from/to/cc/body)からローカル LLM で <|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|> を返す(優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン、Deadline は ISO 文字列または Missing[\"None\"]。";
+SourceVaultMailAddSummaries::usage =
+  "SourceVaultMailAddSummaries[mbox_String, period_:\"Latest\", opts] は mbox の指定期間のメールを SourceVaultMailEnsureLoaded でロードしてから、その mbox の未処理 snapshot の派生(概要/カテゴリ/優先度/〆切)を SourceVaultInferMailDerivedBatch で一括生成・保存する。「<mbox>の新着メールにサマリーを追加」の正準エントリポイント(EnsureLoaded とバッチを1関数に内包するので、外部 WolframScript ジョブへ退避されてもロードから自己完結し、空ストアで0件処理になる失敗を防ぐ)。opts: \"Limit\"(既定 Infinity=新着全件), \"Persist\"(既定 True)。返り値 <|Status, MBox, Period, Loaded, Batch|>。";
 SourceVaultRegisterMailspecEnricher::usage =
   "SourceVaultRegisterMailspecEnricher[name, f] は派生(サマリー作成)時に LLM へ渡す mailspec を拡張する enricher を登録する(Cerezo.wl 等の拡張用)。f[mailspec, snapshot] が変更後の mailspec(Association)を返すとそれが LLM 入力に使われ、Derived.DerivedEnrichment に名前が記録される。非該当/失敗時は mailspec をそのまま返す。取り込み・保存レコード形式には影響せず、未登録なら完全素通し。";
 SourceVaultUnregisterMailspecEnricher::usage =
   "SourceVaultUnregisterMailspecEnricher[name] は mailspec enricher の登録を解除する。";
 SourceVaultMailspecEnrichers::usage =
   "SourceVaultMailspecEnrichers[] は登録済み mailspec enricher 名のリストを返す。";
+SourceVaultRegisterPostFetchHook::usage =
+  "SourceVaultRegisterPostFetchHook[name, f] は SourceVaultMailFetchNew の取り込み完了時に呼ぶフック f[mbox, fetchResult] を登録する。" <>
+  "取り込み後の派生(mining の著者抽出など)を maildb に依存させずに結線する拡張点。フックの失敗は fetch を壊さない。未登録なら完全素通し。";
+SourceVaultUnregisterPostFetchHook::usage =
+  "SourceVaultUnregisterPostFetchHook[name] は post-fetch フックの登録を解除する。";
+SourceVaultPostFetchHooks::usage =
+  "SourceVaultPostFetchHooks[] は登録済み post-fetch フック名のリストを返す。";
 SourceVaultMailComputePriority::usage =
   "SourceVaultMailComputePriority[snapshot, workRequest, category] は構造シグナル(送信者グループ重み + To/Cc 位置 + ML判定 + LLM 依頼度 + LLM カテゴリ)から重要度 0.0-1.0 を決定的に計算する。category が \"Notice\"(通知・一斉配信・広告)なら -0.30 減点。<|Priority, Components|> を返す。";
 SourceVaultMailExplainPriority::usage =
@@ -1138,6 +1399,20 @@ SourceVaultUnregisterMailspecEnricher[name_String] :=
    <|"Status" -> "Unregistered", "Name" -> name|>);
 SourceVaultMailspecEnrichers[] := Keys[$iSVMDMailspecEnrichers];
 
+(* --- post-fetch hook: SourceVaultMailFetchNew 完了時に f[mbox, fetchResult] を呼ぶ。
+   取り込み後の派生処理 (mining の著者抽出など) を maildb に依存させずに結線するための拡張点。
+   hook の失敗は fetch を壊さない (Quiet@Check)。未登録なら完全素通し。 *)
+If[! AssociationQ[$iSVMDPostFetchHooks], $iSVMDPostFetchHooks = <||>];
+SourceVaultRegisterPostFetchHook[name_String, f_] :=
+  (AssociateTo[$iSVMDPostFetchHooks, name -> f];
+   <|"Status" -> "Registered", "Name" -> name|>);
+SourceVaultUnregisterPostFetchHook[name_String] :=
+  ($iSVMDPostFetchHooks = KeyDrop[$iSVMDPostFetchHooks, name];
+   <|"Status" -> "Unregistered", "Name" -> name|>);
+SourceVaultPostFetchHooks[] := Keys[$iSVMDPostFetchHooks];
+iSVMDRunPostFetchHooks[mbox_String, result_Association] :=
+  KeyValueMap[Function[{nm, f}, Quiet @ Check[f[mbox, result], $Failed]], $iSVMDPostFetchHooks];
+
 iSVMDEnrichMailspec[spec_Association, snap_Association] :=
   Module[{s = spec, applied = {}},
     KeyValueMap[
@@ -1222,6 +1497,30 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
       "FailedBodyDecrypt" -> failBody, "FailedLLM" -> failLLM,
       "RemainingPending" -> Length[SourceVaultMailDerivedPending[]]|>];
 
+(* 「<mbox>の新着メールにサマリーを追加」の正準1関数。EnsureLoaded(スコープ確定)→
+   その mbox の未処理だけをバッチ要約・永続化、を内包する。
+   重要: 外部 WolframScript ジョブへ退避されたとき、子プロセスはメールストアが空
+   から始まる (SourceVaultMailDerivedPending[]=0)。EnsureLoaded を式の外で済ませて
+   バッチだけを外部化すると 0 件処理で終わる。本関数は両者を1式に閉じ込めるので、
+   提案が `SourceVaultMailAddSummaries["univ","Latest"]` 単体でも外部プロセスで
+   自己完結してロード→要約まで走る。mbox 絞りは正しいパス #["MailSource"]["MBox"] を使う。 *)
+Options[SourceVaultMailAddSummaries] =
+  {"Limit" -> Infinity, "Persist" -> True, "CheckpointEvery" -> 3};
+SourceVaultMailAddSummaries[mbox_String, period_ : "Latest",
+    OptionsPattern[]] :=
+  Module[{ensured, result},
+    ensured = SourceVaultMailEnsureLoaded[mbox, period];
+    result = SourceVaultInferMailDerivedBatch[
+      "Refresh" -> Function[s,
+        SourceVaultMailDerivedPendingQ[s] &&
+          Quiet@Check[s["MailSource", "MBox"], Missing[]] === mbox],
+      "Limit"   -> OptionValue["Limit"],
+      "Persist" -> OptionValue["Persist"],
+      (* 同期実行が打ち切られても進捗が残るよう頻繁に保存 (既定 3 件ごと)。 *)
+      "CheckpointEvery" -> OptionValue["CheckpointEvery"]];
+    <|"Status" -> "Ok", "MBox" -> mbox, "Period" -> period,
+      "Loaded" -> ensured, "Batch" -> result|>];
+
 (* ---- 実 IMAP source (Python imaplib 経由) ---- *)
 (* Period 受理形式:
    "Latest"(直近14日) / n(直近n日, 整数) /
@@ -1282,7 +1581,8 @@ iSVIMAPPythonSource[mbox_String, srcOpts_Association] :=
 
 iSVBuildPython[server_, port_, user_, pw_, since_, before_, attBase_, maxN_] :=
   Module[{maxLine},
-    maxLine = If[IntegerQ[maxN], "        email_ids = email_ids[-" <> ToString[maxN] <> ":]\n", ""];
+    (* try ブロック内 (4スペース) に挿入されるので 4スペース字下げ。8スペースだと IndentationError で script 全体が PythonEvalFailed になる *)
+    maxLine = If[IntegerQ[maxN], "    email_ids = email_ids[-" <> ToString[maxN] <> ":]\n", ""];
     StringJoin[{
 "import imaplib, email, os, json, re\n",
 "from email.header import decode_header\n",
@@ -1322,6 +1622,8 @@ maxLine,
 "        typ,md=c.fetch(eid,'(RFC822)')\n",
 "        if not md or not md[0]: continue\n",
 "        m=email.message_from_bytes(md[0][1])\n",
+"        try: _rh='\\n'.join('%s: %s'%(k,v) for k,v in m.items())\n",
+"        except: _rh=''\n",
 "        try: dt=parsedate_to_datetime(m.get('Date'))\n",
 "        except: dt=None\n",
 "        ym=dt.strftime('%Y%m') if dt else '000000'\n",
@@ -1338,7 +1640,7 @@ maxLine,
 "        _out.append({'id':m.get('Message-ID') or _dec(m.get('Subject')),\n",
 "          'date':dt.isoformat() if dt else '','subject':_dec(m.get('Subject')),\n",
 "          'from':_dec(m.get('From')),'to':_dec(m.get('To')),'cc':_dec(m.get('Cc')) or '',\n",
-"          'body':_body(m),'attachment':','.join(names)})\n",
+"          'body':_body(m),'attachment':','.join(names),'rawheader':_rh})\n",
 "    c.logout()\n",
 "except Exception as e:\n",
 "    _out=[{'_error':str(e)}]\n",
@@ -1355,7 +1657,7 @@ Options[SourceVaultMailFetchNew] = {
    "Overwrite" -> False};
 
 SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
-  Module[{src, msgs, errs, existsQ, newMsgs, toStore, infer, overwrite,
+  Module[{src, msgs, errs, existsQ, newMsgs, toStore, infer, overwrite, result,
       processed = 0, stored = 0, overwritten = 0},
     src = OptionValue["MessageSource"] /. Automatic -> Function[so, iSVIMAPPythonSource[mbox, so]];
     msgs = src[<|"Period" -> OptionValue["Period"], "MaxEmails" -> OptionValue["MaxEmails"], "Mbox" -> mbox|>];
@@ -1387,12 +1689,15 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
         SourceVaultMailSnapshotPut[snap, "Persist" -> False]; stored++],
       {m, toStore}];
     If[TrueQ[OptionValue["Persist"]], SourceVaultMailStoreSave["All" -> False]; iSVMDIdentitySaveSafe[]];
-    <|"Status" -> "Ok", "MBox" -> mbox, "Fetched" -> Length[msgs],
+    result = <|"Status" -> "Ok", "MBox" -> mbox, "Fetched" -> Length[msgs],
       "New" -> Length[newMsgs], "Stored" -> stored,
       "Overwritten" -> overwritten,
       "Duplicates" -> If[overwrite, 0, Length[msgs] - Length[newMsgs]],
       "Processed" -> processed,
-      "ProcessMode" -> If[TrueQ[OptionValue["Process"]], "Inline", "Deferred"]|>];
+      "ProcessMode" -> If[TrueQ[OptionValue["Process"]], "Inline", "Deferred"]|>;
+    (* 取り込み完了後フック (mining の著者抽出など)。失敗しても fetch は成功扱い。
+       結果を観測できるよう PostFetchHooks に各フックの戻り値を載せる (フックは基底 result を受け取る)。 *)
+    Append[result, "PostFetchHooks" -> iSVMDRunPostFetchHooks[mbox, result]]];
 
 End[];
 EndPackage[];

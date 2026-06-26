@@ -128,26 +128,26 @@ SourceVaultEagleIngest::usage = "SourceVaultEagleIngest[item, opts] は item を
 SourceVaultEagleIngestInfo::usage = "SourceVaultEagleIngestInfo[item] は ingest 記録 (Mode->\"Reference\"|\"Vault\", ContentHash, SourceId 等) を返す。未 ingest なら Missing。";
 SourceVaultEagleIngestFolder::usage = "SourceVaultEagleIngestFolder[folder, opts] はフォルダ内 item を一括 ingest し統計を返す。既定は参照モード (コピーなし)。";
 SourceVaultEagleExtractText::usage = "SourceVaultEagleExtractText[item, opts] は item 本文テキストを抽出する。PDF は原本から直接ページ抽出 (コピーなし、PrivateVault/eagle/pages にキャッシュ、テキスト層が無いページは $SourceVaultOCRHook 設定時に OCR)。vault 複製済み (\"Copy\"->True で ingest 済み) なら SourceVaultExtractPages 経由。docx/pptx/txt/html/xlsx はローカル抽出。opts: \"MaxPages\", \"MaxChars\"。";
-SourceVaultEagleSummarize::usage = "SourceVaultEagleSummarize[item, opts] は item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約、画像/動画は vision。既定はローカル LLM ($ClaudePrivateModel 経由。\"Method\"->\"Claude\" でクラウド)、原本コピーなし (\"Copy\"->True で vault 複製)。$SourceVaultEagleCloudPublishableTag (既定 \"Cloud-Publishable\") のタグが付いた item は Automatic でもクラウドへ切り替わり、summary record に PrivacyLevel 0.0 を記録する。クラウド経路は $ClaudeModel の provider に従う: claudecode/未設定→Claude Code CLI、chatgptcodex/codex→Codex CLI (テキスト。画像/動画は Codex 未対応のため Claude Code CLI で実行)。課金 API は {\"anthropic\"|\"openai\", ...} 明示時のみ。文書系 (PDF/Word/PowerPoint/テキスト) は同じ LLM 呼び出しで書誌情報 (Title/Authors/Published) も抽出して record に保存する (PDF は埋め込みメタデータをフォールバック。旧 record の backfill は SourceVaultEagleExtractBibMeta)。opts: \"Method\"(Automatic|\"Local\"|\"Claude\"), \"MaxLength\", \"MaxChars\", \"MaxPages\", \"Frames\", \"Language\", \"ForceRefresh\", \"Ingest\", \"Copy\", \"WriteAnnotation\", \"Persist\"。";
-SourceVaultEagleSummary::usage = "SourceVaultEagleSummary[item] は保存済みサマリー record を返す (\"SummaryStatus\"->\"Current\"|\"Stale\" 付き)。無ければ Missing。一覧は SourceVaultEagleSummaries[]、全文表示は SourceVaultEagleShowSummary[item]、表中では View の Memo 列にも出る。";
+SourceVaultEagleSummarize::usage = "SourceVaultEagleSummarize[item, opts] は item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約、画像はサムネイル優先 (原本フォールバック) で vision 要約する。動画は 2 段 pipeline: Stage 1 で n 枚 (既定 5、\"Frames\"->n) のフレームを nested dyadic 位置で抽出し各フレームを個別に vision 記述 (各 \"FrameMaxLength\"->200 文字)、Stage 2 でフレーム説明を時刻順に統合して最終 summary を作る。各フレーム記述は record の \"Frames\"[*].\"Text\" に保存され、シーン遷移として ShowSummary 表示・検索に使われる。後から \"Frames\"->より大きい n を指定すると粒度を上げられ、既存フレーム記述を再利用して不足分だけ追加 vision する (\"ForceRefresh\"->True で全再生成)。PDF・画像・動画が混在するフォルダでも batch / summaries / search が一貫動作する (動画は vision 呼び出しが n 回になるためコスト増)。既定はローカル LLM ($ClaudePrivateModel 経由。\"Method\"->\"Claude\" でクラウド)、原本コピーなし (\"Copy\"->True で vault 複製)。$SourceVaultEagleCloudPublishableTag (既定 \"Cloud-Publishable\") のタグが付いた item は Automatic でもクラウドへ切り替わり、summary record に PrivacyLevel 0.0 を記録する。クラウド経路は $ClaudeModel の provider に従う: claudecode/未設定→Claude Code CLI、chatgptcodex/codex→Codex CLI (テキスト。画像/動画は Codex 未対応のため Claude Code CLI で実行)。課金 API は {\"anthropic\"|\"openai\", ...} 明示時のみ。文書系 (PDF/Word/PowerPoint/テキスト) は同じ LLM 呼び出しで書誌情報 (Title/Authors/Published) も抽出して record に保存する (PDF は埋め込みメタデータをフォールバック。旧 record の backfill は SourceVaultEagleExtractBibMeta)。opts: \"Method\"(Automatic|\"Local\"|\"Claude\"), \"MaxLength\", \"MaxChars\", \"MaxPages\", \"Frames\"(動画フレーム数、既定 5), \"FrameMaxLength\"(各フレーム記述の上限、既定 200), \"Language\", \"ForceRefresh\", \"Ingest\", \"Copy\", \"WriteAnnotation\", \"Persist\"。";
+SourceVaultEagleSummary::usage = "SourceVaultEagleSummary[item] は保存済みサマリー record を返す (\"SummaryStatus\"->\"Current\"|\"Stale\" 付き)。無ければ Missing。一覧は SourceVaultEagleSummaries[]、全文表示は SourceVaultEagleShowSummary[item]、表中では View の Summary 列にも出る。";
 SourceVaultEagleSummaries::usage = "SourceVaultEagleSummaries[query, opts] は保存済みサマリーの一覧をノートブックリスト風の表で返す。「▶ 開く」クリックで原本ファイルを SystemOpen、ファイル名クリックでサマリー全文をウインドウ表示 (Current/Stale 状態付き)。query はサマリー本文/ノート補足/ファイル名の部分一致。opts: \"Limit\"。";
 SourceVaultEagleExtractBibMeta::usage = "SourceVaultEagleExtractBibMeta[item, opts] は要約済み item の書誌情報 (Title/Authors/Published) を本文先頭から LLM で抽出し summary record に追記する (旧 record の backfill 用。新規要約は SourceVaultEagleSummarize が同時抽出)。PDF は埋め込みメタデータをフォールバックに使う。既に Title を持つ record はスキップ (\"ForceRefresh\"->True で再抽出)。Method 解決は Summarize と同じ fail-safe (Cloud-Publishable タグ無しはローカル LLM)。opts: \"Method\", \"MaxChars\"(2500), \"MaxPages\"(2), \"Timeout\", \"ForceRefresh\"。";
 SourceVaultEagleExtractBibMetaBatch::usage = "SourceVaultEagleExtractBibMetaBatch[query, opts] は保存済みサマリー record のうち書誌情報が無いものへ一括で SourceVaultEagleExtractBibMeta を適用し統計を返す。query は SourceVaultEagleSummaries と同じ部分一致 (\"\" で全件)。opts: \"Ext\"->\"pdf\" 等の絞り込み, \"Limit\", ほか SourceVaultEagleExtractBibMeta と同じ。例: SourceVaultEagleExtractBibMetaBatch[\"\", \"Ext\"->\"pdf\", \"Limit\"->20]。";
-SourceVaultEagleSummarizeBatch::usage = "SourceVaultEagleSummarizeBatch[items, opts] は item リスト (または検索 query 文字列) を一括要約し統計を返す。生成済み (Current) はスキップ。検索オプション (\"Folder\", \"Ext\", \"Tags\", \"DateFrom\" 等 SourceVaultEagleSearch と同じ) を併用でき、\"Limit\" は要約件数の上限。例: SourceVaultEagleSummarizeBatch[\"\", \"Folder\"->\"自然計算関連\", \"Ext\"->\"pdf\", \"Limit\"->2]。\"Method\"->Automatic では item ごとに判定: Cloud-Publishable タグ付きはクラウド ($ClaudeModel)、それ以外はローカル ($ClaudePrivateModel)。";
+SourceVaultEagleSummarizeBatch::usage = "SourceVaultEagleSummarizeBatch[items, opts] は item リスト (または検索 query 文字列) を一括要約し統計を返す。生成済み (Current) はスキップ。検索オプション (\"Folder\", \"Ext\", \"Tags\", \"DateFrom\" 等 SourceVaultEagleSearch と同じ) を併用でき、\"Limit\" は要約件数の上限。PDF・画像・動画が混在するフォルダでも Kind ごとに dispatch して全件処理する (1 件の失敗で全体を止めない)。\"Frames\" / \"FrameMaxLength\" など SourceVaultEagleSummarize の option も継承する (動画はフレーム数ぶん vision 呼び出しが増えるためコスト・時間に注意)。例: SourceVaultEagleSummarizeBatch[\"\", \"Folder\"->\"自然計算関連\", \"Ext\"->\"pdf\", \"Limit\"->2]。\"Method\"->Automatic では item ごとに判定: Cloud-Publishable タグ付きはクラウド ($ClaudeModel)、それ以外はローカル ($ClaudePrivateModel)。";
 $SourceVaultEagleCloudPublishableTag::usage = "$SourceVaultEagleCloudPublishableTag はクラウド要約を許可するタグ名 (既定 \"Cloud-Publishable\"、大文字小文字無視)。このタグが付いた item は \"Method\"->Automatic の要約でローカル LLM ではなくクラウド経路を使い、summary record に PrivacyLevel 0.0 が記録される。クラウド経路は $ClaudeModel の provider 準拠 (claudecode→Claude Code CLI、codex→Codex CLI。課金 API は anthropic/openai 明示時のみ)。また、このタグ付き item のサマリーノート (notes/*.nb) では NBMarkCellConfidential で秘匿マークされたセル (confidential=True または privacyLevel>0.5) を検索インデックス/メタ情報 (Note フィールド) から除外する — サマリー等のメタ情報を Cloud-Publishable な PL に保つため。タグ無し item のノートは全文がローカル検索対象 (メタ情報はライブラリ既定 PL の fail-safe マーキングが前提)。";
 
 (* ---- インデックス (Eagle 情報 + Exif) と AND/OR 検索 ---- *)
 SourceVaultEagleExif::usage = "SourceVaultEagleExif[item, opts] は item の Exif record <|HasExif, Exif, BasedOnMTime, ...|> を返す。未抽出なら原本から抽出して PrivateVault/eagle/exifindex に永続化 (Eagle 側は不変)。opts: \"Extract\"->True, \"ForceRefresh\"->False。";
 SourceVaultEagleBuildExifIndex::usage = "SourceVaultEagleBuildExifIndex[query, opts] は検索条件に合う画像 item の Exif を一括抽出して索引化する (冪等、抽出済みはスキップ)。opts は SourceVaultEagleSearch と同じ + \"ForceRefresh\"。NAS 上の大規模ライブラリでは時間がかかるので \"Limit\" で分割推奨。";
-SourceVaultEagleIndexRecord::usage = "SourceVaultEagleIndexRecord[item] は検索用の統合 record を返す: <|Id, Name, Ext, Kind, Star(★数), Width, Height, Megapixels, Size, SizeMB, Added(追加日), Created(作成日), Modified(変更日), Tags, Folders, Annotation, URL, Deleted, Summary(保存済みサマリー本文), HasSummary, SummaryStatus, Note(サマリーノート補足の本文), HasNote, HasExif, CameraModel, TakenAt(撮影日), ISO, FNumber, ExposureTime, FocalLength, GPS, Exif|>。日付は DateObject。Exif は SourceVaultEagleBuildExifIndex 済み分のみ (未索引は Missing)。";
+SourceVaultEagleIndexRecord::usage = "SourceVaultEagleIndexRecord[item] は検索用の統合 record を返す: <|Id, Name, Ext, Kind, Star(★数), Width, Height, Megapixels, Size, SizeMB, Added(追加日), Created(作成日), Modified(変更日), Tags, Folders, Annotation, URL, Deleted, Summary(保存済みサマリー本文), HasSummary, SummaryStatus, FrameCount(動画のフレーム数。動画以外は Missing), Note(サマリーノート補足の本文), HasNote, HasExif, CameraModel, TakenAt(撮影日), ISO, FNumber, ExposureTime, FocalLength, GPS, Exif|>。日付は DateObject。Exif は SourceVaultEagleBuildExifIndex 済み分のみ (未索引は Missing)。";
 SourceVaultEagleIndexSearch::usage = "SourceVaultEagleIndexSearch[pred, opts] は統合 record (SourceVaultEagleIndexRecord) に述語 pred を適用して検索する。pred 内で && / || を使えば AND / OR 検索になる。例: SourceVaultEagleIndexSearch[#Star >= 2 && (#Width >= 3000 || MemberQ[#Tags, \"Lumix\"]) &]、SourceVaultEagleIndexSearch[TrueQ[#HasSummary] && StringContainsQ[#Summary, \"自然計算\"] &]。opts: SourceVaultEagleSearch と同じ + \"Query\" (文字列部分一致)。Limit は pred 適用後に効く。";
 SourceVaultEagleIndexDataset::usage = "SourceVaultEagleIndexDataset[pred, opts] は SourceVaultEagleIndexSearch の結果を Dataset で返す (Exif 生データ列は除く)。";
 SourceVaultEagleFolderView::usage = "SourceVaultEagleFolderView[folder, opts] はフォルダ内のファイル情報一覧 (★/解像度/サイズ/追加・作成・変更日/タグ/サマリー) をノートブックリスト風の表で表示する。ファイル名クリックで原本を SystemOpen、サマリー列 (生成済みの場合) クリックで全文をウインドウ表示。folder はスマートフォルダ名/id も可。既定 \"Limit\"->200 で並び順上位のみ表示し、切り詰め時は「全 N 件中 200 件」の注記を付ける (\"Limit\"->All で全件)。opts: \"Recursive\", \"Where\"->述語 (AND/OR 絞り込み), \"SortBy\"(\"Added\"|\"Created\"|\"Modified\"|\"Name\"|\"Size\"|\"Star\"), \"SortOrder\", \"Limit\", \"IncludeDeleted\", \"ShowExif\"。";
 
 (* ---- 表示 ---- *)
-SourceVaultEagleSummaryRow::usage = "SourceVaultEagleSummaryRow[item] は一覧用の低漏洩行を SourceVault 共通スキーマで返す: <|Kind(\"eagle\"),Id,Title,Authors,Published,Summary,URL,File,Date,PrivacyLevel|> + eagle 固有の <|Ext,Size,Tags,Folders,Annotation|>。SourceVaultSourceRow (SourceVault.wl) と同じ共通キーを共有し、SourceVaultSummaries の横断検索行と互換。(旧キー \"Name\" は \"Title\" に改名)";
+SourceVaultEagleSummaryRow::usage = "SourceVaultEagleSummaryRow[item] は一覧用の低漏洩行を SourceVault 共通スキーマで返す: <|Kind(\"eagle\"),Id,URI(sv://object/eagle-<id>),Title,Authors,Published,Summary,URL,File,Date,PrivacyLevel|> + eagle 固有の <|Ext,Size,Tags,Folders,Annotation|>。SourceVaultSourceRow (SourceVault.wl) と同じ共通キーを共有し、SourceVaultSummaries の横断検索行と互換。混在データセットの汎用 join/参照キーは \"URI\"。(旧キー \"Name\" は \"Title\" に改名)";
 SourceVaultEagleDataset::usage = "SourceVaultEagleDataset[query, opts] は検索結果を素の Dataset で返す (ボタン無し)。";
-SourceVaultEagleView::usage = "SourceVaultEagleView[query, opts] は検索結果を、行ごとに 原本を開く(▶)/Eagleで表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表 (Dataset) で返す。opts は SourceVaultEagleSearch + \"Thumbnails\", \"ThumbnailSize\"。";
+SourceVaultEagleView::usage = "SourceVaultEagleView[query, opts] は検索結果を、行ごとに 原本を開く(▶)/Eagleで表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表 (Dataset) で返す。列は ▶/⌂/☰・(サムネイル)・Date・Name・Ext・Size・Tags・Summary(サマリー先頭150字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel かライブラリ既定)・URI(正準 SourceVault URI sv://object/eagle-<id>、sourcevault_get / SourceVaultMCPGet で解決可)。opts は SourceVaultEagleSearch + \"Thumbnails\", \"ThumbnailSize\"。";
 SourceVaultEagleShowSummary::usage = "SourceVaultEagleShowSummary[item, opts] はサマリーをノートブックで開く (front end)。PrivateVault/eagle/notes/ に保存済みノートがあればそれを開く (補足メモ・図などの追記が残る)。無ければ $SourceVaultEagleNotebookStyle のスタイルで生成し、ノート内の「保存」ボタンで notes/ に保存できる (以後 Ctrl+S で上書き、次回からは保存版が開く)。\"Fresh\"->True で保存版を無視して最新サマリーから作り直す (保存ボタンで上書き)。";
 $SourceVaultEagleNotebookStyle::usage = "$SourceVaultEagleNotebookStyle はサマリー/フォルダ表示ノートブックの StyleDefinitions。既定 \"SourceVault default.nb\"。";
 SourceVaultEagleGeoView::usage = "SourceVaultEagleGeoView[query, opts] は Exif GPS を持つ写真を地図上にサムネイル表示する (クリックで原本を開く)。opts は SourceVaultEagleSearch + \"GeoRange\", \"MarkerScale\", \"ThumbnailSize\"。";
@@ -193,8 +193,18 @@ $iSVEGDefaultRootSymbols = {"$packageDirectory", "$dropbox", "$onWork",
   "$offWork", "$mathematicaWork"};
 
 iSVEGRootValue[symName_String] :=
-  Module[{v = Quiet@ToExpression["Global`" <> symName]},
-    If[StringQ[v], ExpandFileName[v], Missing[]]];
+  Module[{v = Quiet@ToExpression["Global`" <> symName], fb},
+    If[StringQ[v], Return[ExpandFileName[v]]];
+    (* Global シンボル未定義時はコアの解決機構で $dropbox / $packageDirectory を補完
+       (Global`$dropbox が無い PC でも Eagle ライブラリのシンボリックパスを解決する) *)
+    fb = With[{db = Quiet@Check[SourceVault`Private`iResolveDropboxRoot[], Missing[]]},
+      Switch[ToLowerCase[StringTrim[symName, "$"]],
+        "dropbox", db,
+        "packagedirectory", Quiet@Check[SourceVault`Private`iPackageDir[], Missing[]],
+        "onwork", If[StringQ[db], FileNameJoin[{db, "On Work"}], Missing[]],
+        "offwork", If[StringQ[db], FileNameJoin[{db, "Off Work"}], Missing[]],
+        _, Missing[]]];
+    If[StringQ[fb] && DirectoryQ[fb], ExpandFileName[fb], Missing[]]];
 
 (* 絶対パス -> シンボリックパス。どのルートにも一致しなければ {"<ABS>", abs}。 *)
 iSVEGSymbolizePath[abs_String] :=
@@ -346,6 +356,16 @@ iSVEGNameKeyForNorm[norm_String] :=
       iSVEGNormPath[$iSVEGLibraries[#]] === norm &, Missing[]];
     If[StringQ[hit], "name:" <> hit, norm]];
 iSVEGLibStoreKey[lib_String] := iSVEGNameKeyForNorm[iSVEGNormPath[lib]];
+
+(* lib 絶対パス -> PC 間で安定な登録名 (あれば)。FolderView の「開く」ボタンに
+   絶対パスでなくこれを焼くと、別 PC で iSVEGLib[name] が現 PC の live パスへ解決する。
+   登録名が無ければ lib (パス) を返す (現状維持)。 *)
+iSVEGLibPortableSpec[lib_String] :=
+  Module[{nm},
+    iSVEGLibRegistryEnsure[];
+    nm = SelectFirst[Keys[$iSVEGLibraries],
+      iSVEGNormPath[$iSVEGLibraries[#]] === iSVEGNormPath[lib] &, Missing[]];
+    If[StringQ[nm], nm, lib]];
 
 iSVEGNoLib[] := <|"Status" -> "Error", "Reason" -> "NoLibrary",
   "Hint" -> "SourceVaultEagleRegisterLibrary[name, path] でライブラリを登録してください。"|>;
@@ -1042,8 +1062,18 @@ Options[SourceVaultEagleSearch] = {
 iSVEGDateMsOf[item_, by_] :=
   Lookup[item, by, Lookup[item, "btime", Lookup[item, "modificationTime", 0]]];
 
+(* 動画 summary record の Frames[*].Text を連結 (検索対象)。最終 Summary に
+   出ていないフレーム内の語でも検索できるようにする。 *)
+iSVEGFramesSearchText[r_Association] :=
+  With[{fr = Lookup[r, "Frames", {}]},
+    If[ListQ[fr] && fr =!= {},
+      StringRiffle[
+        Select[ToString@Lookup[#, "Text", ""] & /@ fr, # =!= "" &], " "],
+      ""]];
+iSVEGFramesSearchText[_] := "";
+
 (* テキスト一致: name / annotation / url / tags + (既定で) 保存済みサマリー本文
-   + サマリーノート (notes/*.nb の補足追記)。
+   + 動画フレーム説明 (Frames[*].Text) + サマリーノート (notes/*.nb の補足追記)。
    sums は id -> summary record、notes は id -> {stamp, text} のキャッシュ。 *)
 iSVEGMatchQuery[item_, q_String, sums_Association, notes_Association] :=
   q === "" || With[{id = ToString@Lookup[item, "id", ""]},
@@ -1053,7 +1083,8 @@ iSVEGMatchQuery[item_, q_String, sums_Association, notes_Association] :=
         ToString@Lookup[item, "url", ""],
         ToString /@ Lookup[item, "tags", {}],
         With[{r = Lookup[sums, id, Missing[]]},
-          If[AssociationQ[r], ToString@Lookup[r, "Summary", ""], Nothing]],
+          If[AssociationQ[r],
+            {ToString@Lookup[r, "Summary", ""], iSVEGFramesSearchText[r]}, Nothing]],
         With[{n = Lookup[notes, id, Missing[]]},
           If[ListQ[n] && StringQ[n[[2]]], n[[2]], Nothing]]}],
       StringContainsQ[#, q, IgnoreCase -> True] &]];
@@ -1955,6 +1986,30 @@ iSVEGQueryClaude[parts_List, timeout_] :=
           "NonBlocking" -> True, "Timeout" -> timeout]]]];
     If[StringQ[r], StringTrim[r], "Error: API returned non-string"]];
 
+(* LLM が要約本文の代わりに返したエラー/利用制限メッセージを検出する。
+   ClaudeQueryBg / LM Studio は HTTP 500 や利用制限の本文を「正常な文字列応答」
+   として返すことがあり (例: "Error: LM Studio /api/... StatusCode=500 ...",
+   "You've hit your session limit \[CenterDot] resets 8:30pm (Asia/Tokyo)")、
+   "Error:" 前置も StatusCode も無いプレーン文も含まれる。これらをそのまま
+   サマリーとして保存しないよう、応答先頭 200 文字を検査する。
+   要約本文は通常もっと長く、これらの語が冒頭付近に来ることはまずない。 *)
+iSVEGLooksLikeLLMError[s_String] :=
+  Module[{head},
+    head = StringTake[s, UpTo[200]];
+    Or[
+      StringStartsQ[StringTrim[head], "Error:"],
+      StringStartsQ[StringTrim[head], "Error "],
+      StringContainsQ[head, "StatusCode=" ~~ DigitCharacter ..],
+      StringContainsQ[head, RegularExpression["\"error\"\\s*:\\s*\\{"]],
+      StringContainsQ[head, "Model unloaded"],
+      StringContainsQ[head, "internal_error"],
+      (* Claude CLI 利用制限バナー: "...hit your session/usage limit..." *)
+      StringContainsQ[head, "hit your" ~~ Shortest[___] ~~ "limit", IgnoreCase -> True],
+      StringContainsQ[head, "session limit", IgnoreCase -> True],
+      StringContainsQ[head, "usage limit", IgnoreCase -> True]
+    ]];
+iSVEGLooksLikeLLMError[_] := False;
+
 (* ============================================================
    サマリー生成・保存
    ============================================================ *)
@@ -2015,11 +2070,21 @@ SourceVaultEagleSummary[itemSpec_, OptionsPattern[]] :=
       If[AssociationQ[item],
         If[iSVEGSummaryCurrentQ[rec, item], "Current", "Stale"], "Unknown"]]];
 
+(* 要約言語の解決: "Language"->Automatic (既定) は $Language に従う。
+   明示文字列指定 ("Japanese"/"English"/その他) はそれを優先する。 *)
+iSVEGResolveLang[lang_] :=
+  If[StringQ[lang] && lang =!= "Automatic", lang,
+    If[StringQ[$Language] && StringTrim[$Language] =!= "", $Language, "English"]];
+
+(* 要約・フレーム記述の言語指示。解決した言語で「必ず」書かせ、他言語混入を明示禁止する
+   (画像/動画/文書すべての prompt がこの 1 行を末尾に付ける)。 *)
 iSVEGLangInstruction[lang_] :=
-  Switch[lang,
-    "English", "Write the summary in English.",
-    "Japanese", "要約は日本語で書く。",
-    _, If[$Language === "Japanese", "要約は日本語で書く。", "Write the summary in English."]];
+  With[{lg = iSVEGResolveLang[lang]},
+    Switch[lg,
+      "Japanese", "要約は必ず日本語で書くこと。英語など他の言語では書かない。",
+      "English", "Write the summary strictly in English. Do not use any other language.",
+      _, "Write the summary strictly in " <> ToString[lg] <>
+         ". Do not use any other language."]];
 
 iSVEGItemContextLine[item_Association] :=
   "ファイル名: " <> ToString@Lookup[item, "name", ""] <> "." <>
@@ -2111,13 +2176,62 @@ iSVEGImagePrompt[item_, maxLen_, lang_] :=
   "出力は説明本文のみ。" <> ToString[maxLen] <> "文字以内の平文。" <>
   iSVEGLangInstruction[lang];
 
-iSVEGVideoPrompt[item_, nFrames_, duration_, maxLen_, lang_] :=
-  "以下は1本の動画から等間隔に抽出した " <> ToString[nFrames] <> " 枚のフレームである。" <>
-  If[NumericQ[duration], "動画の長さは約 " <> ToString[Round[duration]] <> " 秒。", ""] <>
-  "動画全体の内容を推定して説明せよ。\n" <>
+(* ---- 動画フレームの標本位置 (nested dyadic grid) ----
+   1/2, 1/4,3/4, 1/8,3/8,5/8,7/8, 1/16,... の無限列の先頭 n 個を採る。
+   先頭 n を採るので n を増やすと既存集合を必ず包含する
+   (粒度後増し時に既存フレーム記述を再利用できる)。返り値は生成順
+   (record 保存前に Time 昇順へ並べ替える)。fraction は厳密有理数で保持し、
+   一致照合・保存時に N へ落とす。 *)
+iSVEGVideoFrameFractions[n_Integer?Positive] :=
+  Module[{fr = {}, k = 1},
+    While[Length[fr] < n,
+      fr = Join[fr, Table[(2 j - 1)/2^k, {j, 2^(k - 1)}]];
+      k++];
+    Take[fr, n]];
+
+iSVEGVideoFrameTimes[n_Integer?Positive, duration_?NumericQ] :=
+  duration * iSVEGVideoFrameFractions[n];
+
+(* 秒 -> mm:ss (シーン遷移表示・prompt 用) *)
+iSVEGClock[t_?NumericQ] :=
+  With[{s = Max[0, Round[t]]},
+    StringPadLeft[ToString[Quotient[s, 60]], 2, "0"] <> ":" <>
+    StringPadLeft[ToString[Mod[s, 60]], 2, "0"]];
+iSVEGClock[_] := "--:--";
+
+iSVEGFrameTimeLabel[time_, fraction_] :=
+  Which[
+    NumericQ[time], "動画内の時刻 " <> iSVEGClock[time] <> " 付近。",
+    NumericQ[fraction], "動画の約 " <> ToString[Round[100 fraction]] <> "% の位置。",
+    True, ""];
+
+(* Stage 1: 動画 1 フレームの説明 prompt (シーン遷移として読める単体記述) *)
+iSVEGFramePrompt[item_, time_, fraction_, maxLen_, lang_] :=
+  "これは 1 本の動画から抽出した 1 フレームである。" <>
+  iSVEGFrameTimeLabel[time, fraction] <>
+  "このフレームに写っている対象・行動・場所・画面内の文字 (OCR 可能なら) ・全体の雰囲気を簡潔に説明せよ。" <>
+  "動画全体を断定せず、このフレームから見える内容を中心に書く。" <>
+  "後で時刻順に並べたときシーン遷移として読めるようにする。\n" <>
   iSVEGItemContextLine[item] <> "\n" <>
   "出力は説明本文のみ。" <> ToString[maxLen] <> "文字以内の平文。" <>
   iSVEGLangInstruction[lang];
+
+(* Stage 2: フレーム説明を時刻順に並べて統合する prompt (画像は送らない) *)
+iSVEGFrameSynthesisPrompt[item_, frames_List, maxLen_, lang_] :=
+  "以下は 1 本の動画から時刻順に抽出したフレームの説明である。各行は " <>
+  "[時刻 / 相対位置] とそのフレームの内容を表し、全体として動画のシーン遷移を示す。\n" <>
+  iSVEGItemContextLine[item] <> "\n" <>
+  "これらを踏まえ、動画全体の内容・流れ・主題を要約せよ。" <>
+  "単なるフレームの列挙ではなく、通して見た動画の説明にする。\n" <>
+  "出力は要約本文のみ。" <> ToString[maxLen] <> "文字以内の平文。" <>
+  iSVEGLangInstruction[lang] <> "\n\n[フレーム説明]\n" <>
+  StringRiffle[
+    Function[f,
+      "[" <> iSVEGClock[Lookup[f, "Time", Missing[]]] <> " / " <>
+      With[{fr = Lookup[f, "Fraction", Missing[]]},
+        If[NumericQ[fr], ToString[Round[100. fr, 0.1]] <> "%", "?"]] <> "] " <>
+      ToString@Lookup[f, "Text", ""]] /@ frames,
+    "\n"];
 
 iSVEGVisionImages[lib_, item_, path_String] :=
   Module[{tp, img},
@@ -2127,41 +2241,155 @@ iSVEGVisionImages[lib_, item_, path_String] :=
     If[! ImageQ[img], img = Quiet@Check[Import[path], $Failed]];
     If[ImageQ[img], {img}, {}]];
 
-iSVEGVideoFrames[path_String, n_Integer] :=
+(* 動画の長さ (秒)。取得できなければ Missing。pipeline の seam (テストで差替可)。 *)
+iSVEGVideoDuration[path_String] :=
+  Quiet@Check[QuantityMagnitude[Import[path, "Duration"], "Seconds"],
+    With[{d = Quiet@Check[Import[path, "Duration"], $Failed]},
+      If[NumericQ[d], d, Missing["NoDuration"]]]];
+iSVEGVideoDuration[_] := Missing["NoDuration"];
+
+(* 指定時刻 1 フレームを Image で取り出す。VideoExtractFrames が Video/Image の
+   いずれを返しても Image を取り出せるようにする。 *)
+iSVEGExtractFrameAt[v_, t_?NumericQ] :=
+  Module[{r},
+    r = Quiet@Check[
+      TimeConstrained[VideoExtractFrames[v, Quantity[N[t], "Seconds"]], 60, $Failed],
+      $Failed];
+    Which[
+      ImageQ[r], r,
+      Head[r] === Video,
+        SelectFirst[Flatten[{Quiet@Check[VideoFrameList[r, 1], {}]}], ImageQ, $Failed],
+      True, $Failed]];
+
+(* 与えられた fraction 群のフレーム画像を取り出す。pipeline の seam。
+   返り値: {<|"Fraction"->f, "Time"->t|秒, "Image"->img|>...} (取得成功分のみ)。
+   duration 既知なら fraction*duration の時刻で個別抽出、不明なら backend に
+   個数を渡して等間隔抽出し fraction を近似で対応づける (時刻は Missing)。 *)
+iSVEGVideoFrameImages[path_String, fractions_List, duration_] :=
   Module[{v, frames},
+    If[fractions === {}, Return[{}]];
     v = Quiet@Check[Video[path], $Failed];
     If[Head[v] =!= Video, Return[{}]];
-    frames = Quiet@Check[VideoFrameList[v, n], {}];
-    Select[Flatten[{frames}], ImageQ]];
+    frames = If[NumericQ[duration] && duration > 0,
+      Function[f,
+        With[{t = N[duration f]},
+          <|"Fraction" -> N[f], "Time" -> t, "Image" -> iSVEGExtractFrameAt[v, t]|>]] /@
+        fractions,
+      Module[{imgs = Select[Flatten[{Quiet@Check[
+            VideoFrameList[v, Length[fractions]], {}]}], ImageQ]},
+        MapThread[
+          <|"Fraction" -> N[#1], "Time" -> Missing["NoDuration"], "Image" -> #2|> &,
+          {Take[fractions, Length[imgs]], imgs}]]];
+    Select[frames, ImageQ[Lookup[#, "Image", $Failed]] &]];
+
+(* Stage 1 の 1 フレーム vision 記述 (テストで差替可能な seam)。
+   空/Error は "" に正規化する。 *)
+iSVEGDescribeFrame[item_, method_, timeout_, maxLen_, lang_, frame_Association] :=
+  Module[{img = Lookup[frame, "Image", $Failed], prompt, raw},
+    If[! ImageQ[img], Return[""]];
+    prompt = iSVEGFramePrompt[item, Lookup[frame, "Time", Missing[]],
+      Lookup[frame, "Fraction", Missing[]], maxLen, lang];
+    raw = Switch[method,
+      "Local", iSVEGQueryLocalLLMVision[prompt, {img}, timeout],
+      "Claude", iSVEGQueryClaude[{prompt, img}, timeout],
+      _, ""];
+    If[StringQ[raw] && ! StringStartsQ[StringTrim[raw], "Error:"], StringTrim[raw], ""]];
+
+(* Stage 1: フレーム画像群 -> 説明つき frame record (空記述は捨てる)。 *)
+iSVEGDescribeVideoFrames[item_, method_, timeout_, maxLen_, lang_, frameImgs_List] :=
+  DeleteCases[
+    Function[fr,
+      With[{txt = iSVEGDescribeFrame[item, method, timeout, maxLen, lang, fr]},
+        If[StringQ[txt] && StringTrim[txt] =!= "",
+          <|"Time" -> Lookup[fr, "Time", Missing[]],
+            "Fraction" -> Lookup[fr, "Fraction", Missing[]], "Text" -> txt|>,
+          Null]]] /@ frameImgs,
+    Null];
+
+(* frame record 群を時刻 (無ければ fraction) 昇順に並べ、0 始まり Index を付け、
+   画像列を落とす (永続化はテキストのみ)。 *)
+iSVEGFrameSortKey[f_Association] :=
+  With[{t = Lookup[f, "Time", Missing[]]},
+    If[NumericQ[t], t,
+      With[{fr = Lookup[f, "Fraction", Missing[]]}, If[NumericQ[fr], fr, 0]]]];
+iSVEGFinalizeFrames[frames_List] :=
+  MapIndexed[
+    Append[KeyDrop[#1, "Image"], "Index" -> (First[#2] - 1)] &,
+    SortBy[frames, iSVEGFrameSortKey]];
+
+(* 粒度後増し時の再利用: 既存 frame 記述のうち target fraction に一致するものを
+   再利用し、不足 fraction だけを返す。一致は Fraction を主判定 (許容 10^-6)。
+   返り値 {再利用 frame records, 不足 fraction list}。 *)
+iSVEGReuseFrames[existingFrames_List, targetFracs_List, duration_] :=
+  Module[{reused = {}, missing = {}, tol = 1.*^-6},
+    Function[f,
+      With[{m = SelectFirst[existingFrames,
+          NumericQ[Lookup[#, "Fraction", Missing[]]] &&
+          Abs[Lookup[#, "Fraction"] - f] <= tol &&
+          StringQ[Lookup[#, "Text", Missing[]]] &&
+          StringTrim[Lookup[#, "Text"]] =!= "" &, Missing[]]},
+        If[AssociationQ[m],
+          AppendTo[reused, <|
+            "Time" -> If[NumericQ[duration], N[duration f], Lookup[m, "Time", Missing[]]],
+            "Fraction" -> f, "Text" -> StringTrim[Lookup[m, "Text"]]|>],
+          AppendTo[missing, f]]]] /@ targetFracs;
+    {reused, missing}];
+
+(* 既存 record を early-return できるか。動画は要求 Frames を加味する
+   (schema>=2 かつ FrameCount>=要求 かつ Frames/Summary 非空)。
+   Frames 非明示 (通常 batch) の動画は旧 current record を無駄に再生成しない。 *)
+iSVEGServeCurrentQ[rec_Association, kind_, requested_Integer, framesExplicit_] :=
+  Which[
+    kind =!= "Video", True,
+    ! TrueQ[framesExplicit], True,
+    True,
+      TrueQ[Lookup[rec, "SummarySchema", 1] >= 2] &&
+      IntegerQ[Lookup[rec, "FrameCount", 0]] &&
+      Lookup[rec, "FrameCount", 0] >= requested &&
+      ListQ[Lookup[rec, "Frames", {}]] && Lookup[rec, "Frames", {}] =!= {} &&
+      StringQ[Lookup[rec, "Summary", ""]] &&
+      StringTrim[Lookup[rec, "Summary", ""]] =!= ""];
 
 Options[SourceVaultEagleSummarize] = {
   "Library" -> Automatic, "Method" -> Automatic,
-  "MaxLength" -> 400, "MaxChars" -> 8000, "MaxPages" -> 15, "Frames" -> 3,
+  "MaxLength" -> 400, "MaxChars" -> 8000, "MaxPages" -> 15,
+  "Frames" -> 5, "FrameMaxLength" -> 200,
   "Language" -> Automatic, "Timeout" -> 240,
   "ForceRefresh" -> False, "Ingest" -> True, "Copy" -> False,
   "WriteAnnotation" -> False, "Persist" -> True};
 
-SourceVaultEagleSummarize[itemSpec_, OptionsPattern[]] :=
+SourceVaultEagleSummarize[itemSpec_, opts : OptionsPattern[]] :=
   Module[{lib = iSVEGLib[OptionValue["Library"]], item, id, path, kind, existing,
       method, cloudByTag = False,
       maxLen = OptionValue["MaxLength"], lang = OptionValue["Language"],
       timeout = OptionValue["Timeout"], txtR, prompt, raw = "", usedModel = Missing[],
-      imgs, duration, rec, summaryText, bib = <||>},
+      imgs, duration = Missing["NoDuration"], rec, summaryText, bib = <||>,
+      requestedFrames, frameMaxLen, framesExplicit, finalFrames = {}, reusable = False,
+      fractions, reuseFrames = {}, missingFracs = {}, newImgs = {}, newFrames = {},
+      allFrames = {}},
     If[lib === $Failed, Return[iSVEGNoLib[]]];
     item = iSVEGItemOf[lib, itemSpec];
     If[item === $Failed, Return[<|"Status" -> "Error", "Reason" -> "ItemNotFound"|>]];
     id = iSVEGItemId[item];
+    kind = iSVEGItemKind[ToString@Lookup[item, "ext", ""]];
+    requestedFrames = With[{f = OptionValue["Frames"]}, If[IntegerQ[f] && f >= 1, f, 5]];
+    frameMaxLen = With[{m = OptionValue["FrameMaxLength"]}, If[IntegerQ[m] && m >= 1, m, 200]];
+    framesExplicit = MemberQ[Cases[Flatten[{opts}], (k_ -> _) :> k], "Frames"];
     (* 保存済みサマリーはローカル store にあるので、オフラインでも返せるよう
-       原本アクセスより先に判定する *)
+       原本アクセスより先に判定する。動画は要求 Frames 数も加味し、
+       FrameCount が不足する場合は (early return せず) 増分処理へ進む。 *)
     existing = SourceVaultEagleSummary[item, "Library" -> lib];
+    (* 過去に LLM エラー/利用制限本文がそのまま保存された record は「有効な要約」
+       とみなさず、再生成へ進む (再生成も失敗すれば下流で Error を返す)。 *)
     If[AssociationQ[existing] && ! TrueQ[OptionValue["ForceRefresh"]] &&
-       Lookup[existing, "SummaryStatus", ""] === "Current",
+       Lookup[existing, "SummaryStatus", ""] === "Current" &&
+       ! iSVEGLooksLikeLLMError[ToString@Lookup[existing, "Summary", ""]] &&
+       iSVEGServeCurrentQ[existing, kind, requestedFrames, framesExplicit],
       Return[Append[existing, "Status" -> "Current"]]];
     If[! iSVEGOnlineQ[lib], Return[Append[iSVEGOffline[], "Id" -> id]]];
     path = SourceVaultEagleItemPath[item, "Library" -> lib];
     If[! StringQ[path] || ! FileExistsQ[path],
       Return[<|"Status" -> "Error", "Reason" -> "FileNotFound", "Id" -> id|>]];
-    kind = iSVEGItemKind[ToString@Lookup[item, "ext", ""]];
     If[kind === "Audio",
       Return[<|"Status" -> "Error", "Reason" -> "AudioNotSupported", "Id" -> id|>]];
     If[TrueQ[OptionValue["Ingest"]],
@@ -2170,7 +2398,8 @@ SourceVaultEagleSummarize[itemSpec_, OptionsPattern[]] :=
         "Copy" -> OptionValue["Copy"]], Null]];
     (* Method 解決: Automatic は item ごとに判定 —
        Cloud-Publishable タグ付きはクラウド (ClaudeQueryBg / $ClaudeModel)、
-       それ以外はローカル ($ClaudePrivateModel) の fail-safe。 *)
+       それ以外はローカル ($ClaudePrivateModel) の fail-safe。
+       動画は Stage 1 (フレーム vision) / Stage 2 (統合) とも同じ method を使う。 *)
     method = OptionValue["Method"] /. "LocalLLM" -> "Local";
     cloudByTag = method === Automatic && iSVEGCloudPublishableQ[item];
     method = method /. Automatic -> If[cloudByTag, "Claude", "Local"];
@@ -2198,20 +2427,38 @@ SourceVaultEagleSummarize[itemSpec_, OptionsPattern[]] :=
             iSVEGQueryClaude[Join[{prompt}, imgs], timeout]),
           _, ""],
       kind === "Video",
-        imgs = iSVEGVideoFrames[path, OptionValue["Frames"]];
-        If[imgs === {},
-          Return[<|"Status" -> "Error", "Reason" -> "VideoFramesUnavailable", "Id" -> id|>]];
-        duration = Quiet@Check[QuantityMagnitude[Import[path, "Duration"], "Seconds"],
-          Quiet@Check[Import[path, "Duration"], Missing[]]];
-        prompt = iSVEGVideoPrompt[item, Length[imgs], duration, maxLen, lang];
+        (* 2 段 pipeline: Stage 1 各フレームを個別に vision 記述 (既存記述は
+           再利用し不足分だけ追加)、Stage 2 で時刻順のフレーム説明を統合要約。 *)
+        duration = iSVEGVideoDuration[path];
+        fractions = N /@ iSVEGVideoFrameFractions[requestedFrames];
+        reusable = AssociationQ[existing] && ! TrueQ[OptionValue["ForceRefresh"]] &&
+          Lookup[existing, "SummaryStatus", ""] === "Current" &&
+          TrueQ[Lookup[existing, "SummarySchema", 1] >= 2] &&
+          ListQ[Lookup[existing, "Frames", {}]] && NumericQ[duration];
+        {reuseFrames, missingFracs} = If[reusable,
+          iSVEGReuseFrames[Lookup[existing, "Frames", {}], fractions, duration],
+          {{}, fractions}];
+        newImgs = If[missingFracs === {}, {},
+          iSVEGVideoFrameImages[path, missingFracs, duration]];
+        newFrames = If[newImgs === {}, {},
+          iSVEGDescribeVideoFrames[item, method, timeout, frameMaxLen, lang, newImgs]];
+        usedModel = If[method === "Local",
+          iSVEGResolveLocalLLM[]["Model"], iSVEGClaudeProvider[]];
+        allFrames = Join[reuseFrames, newFrames];
+        If[allFrames === {},
+          Return[Failure["SourceVaultEagleVideoFramesUnavailable", <|
+            "MessageTemplate" ->
+              "動画 (`id`) のフレーム説明を 1 枚も生成できませんでした。",
+            "MessageParameters" -> <|"id" -> id|>,
+            "Id" -> id, "RequestedFrames" -> requestedFrames|>]]];
+        finalFrames = iSVEGFinalizeFrames[allFrames];
+        prompt = iSVEGFrameSynthesisPrompt[item, finalFrames, maxLen, lang];
         raw = Switch[method,
-          "Local", (usedModel = iSVEGResolveLocalLLM[]["Model"];
-            iSVEGQueryLocalLLMVision[prompt, imgs, timeout]),
-          "Claude", (usedModel = iSVEGClaudeProvider[];
-            iSVEGQueryClaude[Join[{prompt}, imgs], timeout]),
+          "Local", iSVEGQueryLocalLLMText[prompt, timeout],
+          "Claude", iSVEGQueryClaude[{prompt}, timeout],
           _, ""]];
     Which[
-      StringQ[raw] && StringStartsQ[raw, "Error:"],
+      StringQ[raw] && iSVEGLooksLikeLLMError[raw],
         Return[<|"Status" -> "Error", "Reason" -> raw, "Id" -> id|>],
       ! StringQ[raw] || StringTrim[raw] === "",
         Return[<|"Status" -> "Error", "Reason" -> "LLMUnavailableOrEmpty", "Id" -> id,
@@ -2235,6 +2482,18 @@ SourceVaultEagleSummarize[itemSpec_, OptionsPattern[]] :=
       "BasedOnSize" -> Lookup[item, "size", Missing[]],
       "CreatedAt" -> DateString[TimeZoneConvert[Now, 0], "ISODateTime"] <> "Z"|>;
     rec = iSVEGBibMergeIntoRec[rec, bib];
+    If[kind === "Video",
+      (* schema 2 の動画フレーム fields。Frames[*].Text はシーン遷移として
+         再利用・検索される。Summary は統合本文 (従来 consumer 互換)。 *)
+      rec = Join[rec, <|
+        "SummarySchema" -> 2,
+        "FrameCount" -> Length[finalFrames],
+        "Duration" -> If[NumericQ[duration], N[duration], Missing["NoDuration"]],
+        "Frames" -> finalFrames,
+        "FrameModel" -> usedModel|>];
+      (* 一部フレームのみ成功した場合は要求数も残す *)
+      If[requestedFrames =!= Length[finalFrames],
+        rec = Append[rec, "RequestedFrameCount" -> requestedFrames]]];
     If[cloudByTag,
       (* タグによる明示宣言なので、summary 自体もクラウド可 (PL 0.0) と記録する *)
       rec = Join[rec, <|"CloudByTag" -> True, "PrivacyLevel" -> 0.0|>]];
@@ -2334,7 +2593,9 @@ SourceVaultEagleExtractBibMeta[itemSpec_, OptionsPattern[]] :=
       "Local", iSVEGQueryLocalLLMText[prompt, timeout],
       "Claude", iSVEGQueryClaude[{prompt}, timeout],
       _, ""];
-    bib = If[StringQ[raw] && ! StringStartsQ[raw, "Error:"],
+    If[StringQ[raw] && iSVEGLooksLikeLLMError[raw],
+      Return[<|"Status" -> "Error", "Reason" -> raw, "Id" -> id|>]];
+    bib = If[StringQ[raw] && StringTrim[raw] =!= "",
       Last[iSVEGParseBibTail[raw]],
       <|"Title" -> "", "Authors" -> "", "Published" -> ""|>];
     If[kind === "PDF" && Lookup[bib, "Title", ""] === "",
@@ -2556,6 +2817,10 @@ iSVEGIndexRecord[lib_, item_Association] :=
         If[AssociationQ[srec],
           If[iSVEGSummaryCurrentQ[srec, item], "Current", "Stale"],
           Missing["NoSummary"]]],
+      (* 動画 summary record のフレーム数 (任意列。既存 key の意味は変えない)。 *)
+      "FrameCount" -> With[{srec = iSVEGSummaryRecord[id]},
+        If[AssociationQ[srec], Lookup[srec, "FrameCount", Missing["NotAvailable"]],
+          Missing["NoSummary"]]],
       "Note" -> iSVEGNoteTextOf[id],
       "HasNote" -> StringQ[iSVEGNoteTextOf[id]],
       "HasExif" -> If[AssociationQ[exrec], TrueQ[exrec["HasExif"]],
@@ -2628,10 +2893,12 @@ Options[SourceVaultEagleFolderView] = {"Library" -> Automatic, "Recursive" -> Fa
   "Where" -> All, "SortBy" -> "Added", "SortOrder" -> "Desc",
   "Limit" -> 200, "IncludeDeleted" -> False, "ShowExif" -> False};
 SourceVaultEagleFolderView[folderSpec_, OptionsPattern[]] :=
-  Module[{lib = iSVEGLib[OptionValue["Library"]], f, items, recs, total,
+  Module[{lib = iSVEGLib[OptionValue["Library"]], libSpec, f, items, recs, total,
       pred = OptionValue["Where"], ff, cols, header, body, showExif, grid},
     If[! StringQ[lib],
       Return[Style["Eagle ライブラリが未登録です。", "Text"]]];
+    (* 開くボタンには絶対パスでなく可搬な登録名を焼く (別 PC でも解決) *)
+    libSpec = iSVEGLibPortableSpec[lib];
     (* 通常フォルダに加えスマートフォルダ名/id も指定できる *)
     f = iSVEGResolveFolderSpec[lib, folderSpec, TrueQ[OptionValue["Recursive"]]];
     If[! AssociationQ[f],
@@ -2658,11 +2925,13 @@ SourceVaultEagleFolderView[folderSpec_, OptionsPattern[]] :=
       If[showExif, {"カメラ", "撮影日"}, {}]];
     body = Function[r,
       Join[
-        {Button[
-           Style[Row[{r["Name"] <> If[r["Ext"] === "", "", "." <> r["Ext"]]}],
-             "Hyperlink", FontFamily -> ff],
-           SourceVaultEagleOpenItem[r["Id"], "Library" -> lib],
-           Appearance -> "Frameless", Method -> "Queued", BaseStyle -> "Hyperlink"],
+        {With[{lsp = libSpec, rid = r["Id"],
+             lbl = r["Name"] <> If[r["Ext"] === "", "", "." <> r["Ext"]]},
+           Button[
+             Style[Row[{lbl}], "Hyperlink", FontFamily -> ff],
+             SourceVaultEagleOpenItem[rid, "Library" -> lsp],
+             Appearance -> "Frameless", Method -> "Queued",
+             BaseStyle -> "Hyperlink"]],
          With[{s = Lookup[r, "Star", 0]},
            If[IntegerQ[s] && s > 0, StringRepeat["★", Min[s, 5]], ""]],
          With[{w = r["Width"], h = r["Height"]},
@@ -2726,6 +2995,26 @@ iSVEGTextCell[s_] :=
   With[{t = If[StringQ[s], s, ToString[s]], ff = iSVEGFont[]},
     Item[Tooltip[Style[t, "Text", FontFamily -> ff], t], Alignment -> Left]];
 
+(* Summary 列セル (旧 Memo): Dataset はセル内容が大きいとセル全体を "…" に折りたたむため
+   (長いサマリーが先頭から "…" になる)、表示は先頭プレビューに切り詰める。
+   全文は行の ☰ (SourceVaultEagleShowSummary) ボタンで開ける。 *)
+iSVEGMemoCell[s_] := iSVEGMemoCell[s, 150];
+iSVEGMemoCell[s_, maxChars_Integer] :=
+  With[{t = If[StringQ[s], s, ToString[s]], ff = iSVEGFont[]},
+    With[{disp = If[StringLength[t] > maxChars,
+        StringTake[t, maxChars] <> "\:2026", t]},
+      Item[Tooltip[Style[disp, "Text", FontFamily -> ff], disp], Alignment -> Left]]];
+
+(* Eagle item の正準 SourceVault URI (SourceVault_mcp.wl の object adapter が解決する形)。
+   id は英数の Eagle id なので percent-encode 不要。 *)
+iSVEGObjectURI[id_String] := "sv://object/eagle-" <> id;
+
+(* item の実効 PrivacyLevel: summary record の "PrivacyLevel" があればそれ、
+   無ければライブラリ既定 (iSVEGLibraryPL)。SourceVaultEagleSummaryRow と同じ規則。 *)
+iSVEGItemPLOf[lib_, sm_] :=
+  With[{p = If[AssociationQ[sm], Lookup[sm, "PrivacyLevel", Missing[]], Missing[]]},
+    If[NumericQ[p], N[p], If[StringQ[lib], iSVEGLibraryPL[lib], 1.0]]];
+
 iSVEGSizeStr[b_?NumericQ] :=
   Which[b >= 1.*^9, ToString[Round[b/1.*^9, 0.1]] <> " GB",
     b >= 1.*^6, ToString[Round[b/1.*^6, 0.1]] <> " MB",
@@ -2764,6 +3053,7 @@ SourceVaultEagleSummaryRow[item_Association, OptionsPattern[]] :=
     bibTitle = If[AssociationQ[sm], ToString@Lookup[sm, "Title", ""], ""];
     <|"Kind" -> "eagle",
       "Id" -> iSVEGItemId[item],
+      "URI" -> iSVEGObjectURI[iSVEGItemId[item]],
       "Title" -> If[StringTrim[bibTitle] =!= "", bibTitle, fname],
       "Authors" -> If[AssociationQ[sm], ToString@Lookup[sm, "Authors", ""], ""],
       "Published" -> If[AssociationQ[sm], ToString@Lookup[sm, "Published", ""], ""],
@@ -2826,8 +3116,10 @@ iSVEGSummaryListRows[query_String, lib_] :=
 
 Options[SourceVaultEagleSummaries] = {"Library" -> Automatic, "Limit" -> Automatic};
 SourceVaultEagleSummaries[query_String : "", OptionsPattern[]] :=
-  Module[{lib = iSVEGLib[OptionValue["Library"]], rows, lim,
+  Module[{lib = iSVEGLib[OptionValue["Library"]], libSpec, rows, lim,
       total, header, body, grid, ff = iSVEGFont[]},
+    (* 原本を開くボタンには絶対パスでなく可搬な登録名を焼く (別 PC でも解決) *)
+    libSpec = If[StringQ[lib], iSVEGLibPortableSpec[lib], Automatic];
     rows = iSVEGSummaryListRows[query, lib];
     total = Length[rows];
     lim = OptionValue["Limit"];
@@ -2837,9 +3129,9 @@ SourceVaultEagleSummaries[query_String : "", OptionsPattern[]] :=
     header = (Style[#, Bold, FontFamily -> ff] &) /@
       {"原本", "ファイル", "サマリー", "Method", "PL", "生成日時", "状態", "ノート"};
     body = Function[row,
-      With[{id = row["Id"], r = row["Rec"]},
+      With[{id = row["Id"], r = row["Rec"], lsp = libSpec},
         {Button[Style[Row[{"▶ 開く"}], "Hyperlink", FontFamily -> ff],
-           SourceVaultEagleOpenItem[id],
+           SourceVaultEagleOpenItem[id, "Library" -> lsp],
            Appearance -> "Frameless", Method -> "Queued",
            BaseStyle -> "Hyperlink"],
          Button[Style[Row[{row["NameDisp"]}], "Hyperlink", FontFamily -> ff],
@@ -2891,6 +3183,9 @@ iSVEGCommonRows[query_String, opts_Association] :=
           If[NumericQ[p], N[p], libPL]];
         <|"Kind" -> "eagle",
           "Id" -> id,
+          (* 正準 SourceVault URI: 混在データセットの汎用 join/参照キー。
+             クロス環境/クロスソース参照は (絶対パスや内部 Id ではなく) これを使う。 *)
+          "URI" -> iSVEGObjectURI[id],
           (* 書誌タイトル (record の "Title") があれば優先、無ければファイル名 *)
           "Title" -> With[{bt = ToString@Lookup[r, "Title", ""]},
             If[StringTrim[bt] =!= "", bt, ToString@Lookup[row, "NameDisp", id]]],
@@ -3036,6 +3331,26 @@ iSVEGNoteTextOf[id_String] :=
     If[ListQ[e] && StringQ[e[[2]]] && StringTrim[e[[2]]] =!= "",
       e[[2]], Missing["NoNote"]]];
 
+(* 動画 record のシーン遷移行: [時刻] テキスト (Time 無しは Fraction%/#Index)。 *)
+iSVEGSceneLine[f_Association] :=
+  "[" <> With[{t = Lookup[f, "Time", Missing[]]},
+     Which[
+       NumericQ[t], iSVEGClock[t],
+       NumericQ[Lookup[f, "Fraction", Missing[]]],
+         ToString[Round[100 Lookup[f, "Fraction"]]] <> "%",
+       True, "#" <> ToString[Lookup[f, "Index", 0]]]] <> "] " <>
+   ToString@Lookup[f, "Text", ""];
+
+(* Summary 表示ノートへ追加する Scenes セル群 (動画かつ Frames 非空のときのみ)。 *)
+iSVEGSceneCells[rec_] :=
+  With[{fr = If[AssociationQ[rec], Lookup[rec, "Frames", {}], {}]},
+    If[ListQ[fr] && fr =!= {},
+      Join[
+        {Cell["Scenes", "Subsection"]},
+        (Cell[iSVEGSceneLine[#], "Text"] &) /@
+          SortBy[Select[fr, AssociationQ], iSVEGFrameSortKey]],
+      {}]];
+
 Options[SourceVaultEagleShowSummary] = {"Fresh" -> False};
 SourceVaultEagleShowSummary[itemSpec_, OptionsPattern[]] :=
   Module[{id, rec, title, noteFile, notesDir, savePath},
@@ -3056,11 +3371,16 @@ SourceVaultEagleShowSummary[itemSpec_, OptionsPattern[]] :=
       CreateDocument[
         Join[
           If[AssociationQ[rec],
-            {Cell[title, "Subtitle"],
-             Cell["生成: " <> ToString@Lookup[rec, "CreatedAt", ""] <>
-               " / Method: " <> ToString@Lookup[rec, "Method", ""] <>
-               " / 状態: " <> ToString@Lookup[rec, "SummaryStatus", ""], "Text"],
-             Cell[ToString@Lookup[rec, "Summary", ""], "Text"]},
+            Join[
+              {Cell[title, "Subtitle"],
+               Cell["生成: " <> ToString@Lookup[rec, "CreatedAt", ""] <>
+                 " / Method: " <> ToString@Lookup[rec, "Method", ""] <>
+                 With[{fc = Lookup[rec, "FrameCount", Missing[]]},
+                   If[IntegerQ[fc], " / フレーム: " <> ToString[fc], ""]] <>
+                 " / 状態: " <> ToString@Lookup[rec, "SummaryStatus", ""], "Text"],
+               Cell[ToString@Lookup[rec, "Summary", ""], "Text"]},
+              (* 動画はシーン遷移セクションを追加 *)
+              iSVEGSceneCells[rec]],
             {Cell["サマリー未生成", "Subtitle"],
              Cell["SourceVaultEagleSummarize[\"" <> id <> "\"] を実行してください。", "Text"]}],
           (* 保存ボタン: notes/ へ即保存し、以後はその保存版が開かれる。
@@ -3084,10 +3404,13 @@ SourceVaultEagleShowSummary[itemSpec_, OptionsPattern[]] :=
 Options[SourceVaultEagleView] = Join[Options[SourceVaultEagleSearch],
   {"Thumbnails" -> True, "ThumbnailSize" -> 48}];
 SourceVaultEagleView[query_String : "", opts : OptionsPattern[]] :=
-  Module[{lib = iSVEGLib[OptionValue["Library"]], items, rows, ff = iSVEGFont[],
+  Module[{lib = iSVEGLib[OptionValue["Library"]], libSpec, items, rows,
+      ff = iSVEGFont[],
       showThumbs = TrueQ[OptionValue["Thumbnails"]], tsz = OptionValue["ThumbnailSize"],
       searchOpts, lim, total, out},
     If[lib === $Failed, Return[Style["Eagle ライブラリが未登録です。", "Text"]]];
+    (* 原本ファイルの開くボタンには絶対パスでなく可搬な登録名を焼く (別 PC でも解決) *)
+    libSpec = iSVEGLibPortableSpec[lib];
     searchOpts = DeleteCases[
       FilterRules[Flatten[{opts}], Options[SourceVaultEagleSearch]],
       HoldPattern["Limit" -> _]];
@@ -3107,9 +3430,11 @@ SourceVaultEagleView[query_String : "", opts : OptionsPattern[]] :=
           "\"] を使ってください。", "Text"],
         Style["該当する item がありません。", "Text"]]]];
     rows = Function[it,
-      With[{id = iSVEGItemId[it]},
+      With[{id = iSVEGItemId[it], sm = SourceVaultEagleSummary[it, "Library" -> lib],
+            lsp = libSpec},
         Join[
-          <|"" -> Tooltip[Button["\:25b6", SourceVaultEagleOpenItem[id],
+          <|"" -> Tooltip[Button["\:25b6",
+               SourceVaultEagleOpenItem[id, "Library" -> lsp],
                Appearance -> "Frameless", Method -> "Queued"], "原本ファイルを開く"],
             "App" -> Tooltip[Button["\:2302", SourceVaultEagleShowInApp[id],
                Appearance -> "Frameless", Method -> "Queued"], "Eagle で表示"],
@@ -3124,17 +3449,21 @@ SourceVaultEagleView[query_String : "", opts : OptionsPattern[]] :=
             "Ext" -> Style[ToString@Lookup[it, "ext", ""], FontFamily -> ff],
             "Size" -> Style[iSVEGSizeStr[Lookup[it, "size", Missing[]]], FontFamily -> ff],
             "Tags" -> iSVEGTextCell[StringRiffle[ToString /@ Lookup[it, "tags", {}], ", "]],
-            "Memo" -> iSVEGTextCell[
-              With[{sm = SourceVaultEagleSummary[it, "Library" -> lib]},
-                Which[
-                  AssociationQ[sm], ToString@Lookup[sm, "Summary", ""],
-                  StringTrim[ToString@Lookup[it, "annotation", ""]] =!= "",
-                    ToString@Lookup[it, "annotation", ""],
-                  True, ""]]]|>]]] /@ items;
+            "Summary" -> iSVEGMemoCell[
+              Which[
+                AssociationQ[sm], ToString@Lookup[sm, "Summary", ""],
+                StringTrim[ToString@Lookup[it, "annotation", ""]] =!= "",
+                  ToString@Lookup[it, "annotation", ""],
+                True, ""]],
+            (* 実効 PrivacyLevel (summary record の PL or ライブラリ既定) *)
+            "PL" -> Style[NumberForm[iSVEGItemPLOf[lib, sm], {4, 2}], FontFamily -> ff],
+            (* 正準 SourceVault URI (sourcevault_get / SourceVaultMCPGet で解決可) *)
+            "URI" -> iSVEGTextCell[iSVEGObjectURI[id]]|>]]] /@ items;
     out = Pane[
       Dataset[rows,
         ItemSize -> {2, If[showThumbs,
-          {2, 2, 2, 6, 12, 22, 4, 6, 18, 36}, {2, 2, 2, 12, 22, 4, 6, 18, 36}]},
+          {2, 2, 2, 6, 12, 22, 4, 6, 18, 36, 5, 26},
+          {2, 2, 2, 12, 22, 4, 6, 18, 36, 5, 26}]},
         Alignment -> {Left, Center},
         MaxItems -> {All, All}],
       ImageSize -> Full];
@@ -3164,8 +3493,10 @@ iSVEGExifPosition[_] := Missing["NoGPS"];
 Options[SourceVaultEagleGeoView] = Join[Options[SourceVaultEagleSearch],
   {"GeoRange" -> Automatic, "MarkerScale" -> 0.003, "ThumbnailSize" -> 64}];
 SourceVaultEagleGeoView[query_String : "", opts : OptionsPattern[]] :=
-  Module[{lib = iSVEGLib[OptionValue["Library"]], items, searchOpts, markers},
+  Module[{lib = iSVEGLib[OptionValue["Library"]], libSpec, items, searchOpts, markers},
     If[lib === $Failed, Return[Style["Eagle ライブラリが未登録です。", "Text"]]];
+    (* マーカークリックは絶対パスでなく可搬な登録名でクリック時解決する *)
+    libSpec = iSVEGLibPortableSpec[lib];
     searchOpts = FilterRules[Flatten[{opts}], Options[SourceVaultEagleSearch]];
     items = SourceVaultEagleSearch[query, Sequence @@ searchOpts, "Library" -> lib];
     items = Select[items, iSVEGItemKind[ToString@Lookup[#, "ext", ""]] === "Image" &];
@@ -3179,10 +3510,12 @@ SourceVaultEagleGeoView[query_String : "", opts : OptionsPattern[]] :=
             If[! ListQ[pos], Nothing,
               th = SourceVaultEagleThumbnail[it, "Library" -> lib,
                 "Size" -> OptionValue["ThumbnailSize"]];
-              GeoMarker[GeoPosition[pos],
-                EventHandler[If[ImageQ[th], th, ToString@Lookup[it, "name", ""]],
-                  {"MouseClicked" :> SystemOpen[path]}],
-                "Scale" -> OptionValue["MarkerScale"]]]]]],
+              With[{eid = iSVEGItemId[it], lsp = libSpec},
+                GeoMarker[GeoPosition[pos],
+                  EventHandler[If[ImageQ[th], th, ToString@Lookup[it, "name", ""]],
+                    {"MouseClicked" :>
+                       SourceVaultEagleOpenItem[eid, "Library" -> lsp]}],
+                  "Scale" -> OptionValue["MarkerScale"]]]]]]],
       items];
     markers = DeleteCases[markers, Nothing];
     If[markers === {},
@@ -3392,6 +3725,60 @@ SourceVaultEagleDisableAutoConfidential[] :=
    <|"Status" -> "Disabled"|>);
 
 End[];
+
+(* ============================================================
+   sv:// object -> notebook cell -- merged from SourceVault_objectview.wl (2026-06-21).
+   FE-dependent (NBAccess cell API). Resolution helpers live in SourceVault_mcp.wl.
+   ============================================================ *)
+
+SourceVaultObjectToCell::usage =
+  "SourceVaultObjectToCell[uri, opts] はオブジェクトの内容/プロパティをノートブックの\n" <>
+  "セルに出力し、そのセルの PrivacyLevel をオブジェクトの privacy level に継承する\n" <>
+  "(level > 0.5 なら confidential マーク)。オプション: \"Notebook\" -> Automatic(InputNotebook),\n" <>
+  "\"Show\" -> \"Both\"(既定) | \"Data\" | \"Properties\"。戻り値 <|Status, URI, PrivacyLevel,\n" <>
+  "Confidential, Cells|>。ノートブックが無い (headless) 場合は Status->NoNotebook で値だけ返す。";
+
+Begin["`ObjectViewPrivate`"]
+
+iSVOVCellExpr[expr_, tag_String] := Which[
+  ImageQ[expr], Cell[BoxData[ToBoxes[expr]], "Output", CellTags -> {tag}],
+  StringQ[expr], Cell[expr, "Text", CellTags -> {tag}],
+  AssociationQ[expr], Cell[BoxData[ToBoxes[Dataset[expr]]], "Output", CellTags -> {tag}],
+  True, Cell[BoxData[ToBoxes[expr]], "Output", CellTags -> {tag}]];
+
+Options[SourceVaultObjectToCell] = {"Notebook" -> Automatic, "Show" -> "Both"};
+SourceVaultObjectToCell[uri_String, OptionsPattern[]] := Module[
+  {nb, show, level, conf, parts, written = {}},
+  nb = OptionValue["Notebook"] /. Automatic :> InputNotebook[];
+  level = SourceVaultObjectPrivacyLevel[uri];
+  conf = level > 0.5;
+  show = OptionValue["Show"];
+  If[! MatchQ[nb, _NotebookObject],
+    Return[<|"Status" -> "NoNotebook", "URI" -> uri, "PrivacyLevel" -> level,
+      "Confidential" -> conf,
+      "Data" -> If[MemberQ[{"Data", "Both"}, show], SourceVaultObjectData[uri], Missing[]],
+      "Properties" -> If[MemberQ[{"Properties", "Both"}, show], SourceVaultObjectProperties[uri], Missing[]]|>]];
+  parts = Which[
+    show === "Data", {{"data", SourceVaultObjectData[uri]}},
+    show === "Properties", {{"props", SourceVaultObjectProperties[uri]}},
+    True, {{"props", SourceVaultObjectProperties[uri]}, {"data", SourceVaultObjectData[uri]}}];
+  Scan[Function[pr,
+    Module[{kind = pr[[1]], val = pr[[2]], tag, idxs, idx},
+      tag = "sourcevault-object-" <> kind <> "-" <>
+        StringTake[Hash[uri, "SHA256", "HexString"] <> "0000000000", 10];
+      NBAccess`NBWriteCell[nb, iSVOVCellExpr[val, tag]];
+      idxs = NBAccess`NBCellIndicesByTag[nb, tag];
+      If[ListQ[idxs] && Length[idxs] > 0,
+        idx = Last[idxs];
+        NBAccess`NBMarkCellConfidential[nb, idx, level];
+        AppendTo[written, <|"Part" -> kind, "CellIndex" -> idx, "Tag" -> tag|>]]]],
+    parts];
+  <|"Status" -> "OK", "URI" -> uri, "PrivacyLevel" -> level,
+    "Confidential" -> conf, "Cells" -> written|>];
+SourceVaultObjectToCell[___] := <|"Status" -> "Failed", "Reason" -> "BadArguments"|>;
+
+End[]  (* `ObjectViewPrivate` *)
+
 EndPackage[];
 
 (* ============================================================

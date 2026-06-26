@@ -40,6 +40,12 @@ SourceVaultCanonicalBytes::usage =
 SourceVaultCryptoSelfTest::usage =
   "SourceVaultCryptoSelfTest[] は capability probe・canonical 決定性・encrypt-then-MAC roundtrip・改ざん検出を検査し、結果 Association を返す。";
 
+SourceVaultHMACSHA256Hex::usage =
+  "SourceVaultHMACSHA256Hex[keyBA_ByteArray, msgBA_ByteArray] は RFC2104 HMAC-SHA256 を hex 文字列で返す。AccessGrant 署名等の MAC に使う公開ラッパー。";
+
+SourceVaultConstantTimeEqualQ::usage =
+  "SourceVaultConstantTimeEqualQ[a_String, b_String] は2つの hex/文字列を best-effort 定数時間で比較する (署名検証用)。";
+
 Begin["`Private`"];
 
 (* ------------------------------------------------------------
@@ -81,6 +87,10 @@ iSVConstantTimeEqual[a_String, b_String] :=
      ca = ToCharacterCode[a]; cb = ToCharacterCode[b];
      BitOr @@ MapThread[BitXor, {ca, cb}] === 0
    ];
+
+(* 公開ラッパー: grant 署名/検証など crypto 層外から使う *)
+SourceVaultHMACSHA256Hex[keyBA_ByteArray, msgBA_ByteArray] := iSVHMACSHA256Hex[keyBA, msgBA];
+SourceVaultConstantTimeEqualQ[a_String, b_String] := TrueQ[iSVConstantTimeEqual[a, b]];
 
 (* ------------------------------------------------------------
    canonical bytes

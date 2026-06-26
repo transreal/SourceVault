@@ -1,222 +1,222 @@
 # SourceVault_promptrouter API リファレンス
 
-パッケージ: `SourceVault_promptrouter` ([GitHub](https://github.com/transreal/SourceVault_promptrouter))
-コンテキスト: `SourceVault`` (独立パッケージではなく [SourceVault](https://github.com/transreal/SourceVault) 拡張)
-ロード方法: SourceVault.wl の bootstrap が `Get[]` で自動ロード。`Needs["SourceVault_promptrouter`"]` は使わない。
-依存: [SourceVault](https://github.com/transreal/SourceVault) (必須), [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime) / [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) (オプション、公開シンボル名から存在検出のみ)
-冪等性: `Get[]` 再実行でクリーン再定義される。
+パッケージ: `SourceVault`` (拡張モジュール)
+GitHub: https://github.com/transreal/SourceVault_promptrouter
+SourceVault.wlのGet[]ブートストラップから読み込まれる。単独パッケージではなくSourceVault`コンテキストの拡張。ClaudeRuntime/ClaudeOrchestrator不在でも読み込み可能。読み込みは冪等。
 
-## アーキテクチャ注意事項
-
-- `Needs["ClaudeRuntime`"]` / `Needs["ClaudeOrchestrator`"]` を呼ばない。存在検出は公開シンボル名のみ。
-- ClaudeRuntime / ClaudeOrchestrator 不在でもロード可能。
-- write API は rule 103 により DryRun -> True がデフォルト(明示的に DryRun -> False を渡さなければ書き込まない)。
-- 追記専用 JSONL ストア (<PrivateVault>/promptrouter/runs/) はコンパイル済みレジストリとは別。
-- ClaudeEval への返り値は評価済み結果ではなく未評価式 HoldComplete[...] でなければならない(spec 5.2)。
-
-## 設定変数
+## ステータス・可用性
 
 ### $SourceVaultPromptRouterVersion
 型: String
-PromptRouter 拡張のバージョン文字列。
-
-### $SourceVaultPromptAutoSave
-型: Boolean, 初期値: True
-True のとき ClaudeEval 実行プロンプトを毎回 SourceVaultAutoSaveLastPrompt で自動保存する。再ロード時に値を保持する(ClearAll 対象外)。
-
-### $SourceVaultPromptSavedProposalActive
-型: Boolean, 初期値: True
-True のとき ClaudeEval は LLM 呼び出し前に保存済みプロンプトを照合して提案する。再ロード時に値を保持する。
-
-### $SourceVaultPromptBypassOnce
-型: String | Missing["None"], 初期値: Missing["None"]
-ワンショット正規化キー。SourceVaultProposeSavedPromptRoute がこのキーに一致するプロンプトを検出するとキーをリセットして提案をスキップし ClaudeEval を LLM パスにフォールスルーさせる。「LLM に再度聞く」ボタンがこれをセットする。
-
-### $SourceVaultContextPlannerEnabled
-型: Boolean, 初期値: True
-True のとき ClaudeCode`$ClaudeEvalContextPlanner に SourceVaultClassifyPromptContextDependency を使うプランナーを登録する。False で no-op (ベースパッケージのデフォルトプランにフォールバック)。再ロード時に値を保持する。
-
-### $SourceVaultContextPlannerTrimSelfContained
-型: Boolean, 初期値: False
-True のとき SELF-CONTAINED (マーカーなし) プロンプトのノートブックコンテキストを Notebook "None" に切り詰める。軽量モデルが前セルを模倣するのを防ぐが、マーカーなしのノートブック依存プロンプトを飢餓させるリスクがある。再ロード時に値を保持する。
-
-## ステータス / 可用性 API
+このextensionのバージョン文字列。
 
 ### SourceVaultPromptRouterStatus[] → Association
-PromptRouter 拡張の状態を返す。キー: Version, Phase, claudecode 利用可否, SourceVault 利用可否, ClaudeRuntime 利用可否, ClaudeOrchestrator 利用可否, ClaudeEval 自動ディスパッチがアクティブか。
+PromptRouter extensionの状態を返す。キー: Version, Phase, claudecode/SourceVault/ClaudeRuntime/ClaudeOrchestrator可用性, ClaudeEval自動ディスパッチの有効状態。
 
-### SourceVaultPromptRouterAvailableQ[] → True | False
-拡張が `SourceVault`` コンテキストにロードされているとき True を返す。ClaudeRuntime / ClaudeOrchestrator の存在は意味しない。
+### SourceVaultPromptRouterAvailableQ[] → True|False
+PromptRouter extensionがSourceVault`コンテキストに読み込まれているときTrueを返す。ClaudeRuntime/ClaudeOrchestratorの存在は含意しない。
 
-### SourceVaultPromptRouterActiveQ[caller] → True | False
-PromptRouter が指定 caller のリクエストを処理すべきとき True を返す。caller: "Manual" | "ClaudeEval" | Automatic (省略時 Automatic、"ClaudeEval" として扱う)。Manual は拡張ロード時に常にアクティブ。自動 ClaudeEval ディスパッチは ClaudeOrchestrator がロード済みのときのみアクティブ。
+### SourceVaultPromptRouterActiveQ[caller] → True|False
+callerからのリクエストをPromptRouterが処理すべきときTrueを返す。caller: "Manual"|"ClaudeEval"|Automatic (デフォルトAutomatic、"ClaudeEval"として扱われる)。Manual APIはextension読み込み済みなら常にアクティブ。ClaudeEval自動ディスパッチはClaudeOrchestratorが読み込まれているときのみアクティブ。
 
-## ルーティング解決 / 実行 API
+## ルート解決・実行
 
 ### SourceVaultResolvePromptRoute[prompt, opts]
-プロンプトをルート決定 Association に解決する(実行しない)。決定論的マッチ → FunctionRoute、キーワードマッチ → LexicalMatch、未一致 → NotFound。
-→ Association: Status, Decision, Route, Parameters 等
+プロンプトをルート決定Associationに解決する（実行しない）。Phase A: 常にStatus "NotFound", Decision "NotImplemented"を返す骨格実装。Phase B以降で決定論的・LLMバック解決を実装予定。
+→ Association
 Options: "DryRun" -> False, "AllowLLMRouter" -> Automatic, "AllowWorkflow" -> Automatic, "PrivacyLevel" -> Automatic, "StorePrompt" -> "HashOnly", "FallbackToClaudeEval" -> True, "Caller" -> Automatic
 
 ### SourceVaultExecutePromptRoute[prompt, opts]
-プロンプトルートを解決して実行する。NotDispatched のとき ClaudeEval の従来ルートにフォールバックする。
-→ Association: Status, Decision, Result 等
-Options: SourceVaultResolvePromptRoute と同じ
+プロンプトルートを解決して実行する。Phase A: 常に<|"Status"->"NotDispatched",...|>を返すのでClaudeEval弱呼び出しパスが既存ルートにフォールバックする。
+→ Association
+Options: "DryRun" -> False, "AllowLLMRouter" -> Automatic, "AllowWorkflow" -> Automatic, "PrivacyLevel" -> Automatic, "StorePrompt" -> "HashOnly", "FallbackToClaudeEval" -> True, "Caller" -> Automatic
 
-### SourceVaultRouteExplain[prompt, opts] → String
-プロンプトがどのようにルーティングされるかの説明を返す。現在の RouterStatus をエコーする。
+### SourceVaultRouteExplain[prompt, opts]
+プロンプトがどのようにルーティングされるかの人間可読な説明を返す。Phase A: 骨格実装。現在のルーターステータスをエコーする。
+→ Association
 
 ### SourceVaultProposePromptRoute[prompt_String, opts]
-ClaudeEval 向け PromptRouter API (spec v11 5.3)。スケジュールプロンプトを未評価の提案式に解決して返す。式は評価しない。非スケジュールプロンプトは Status NotDispatched を返す。
-→ PromptRouteProposal Association ("ProposedExpression" フィールドに HoldComplete[SourceVaultUpcomingSchedule[..., "FilterSpec" -> <|...|>]] を持つ)
+ClaudeEval向けPromptRouter API (spec v11 5.3)。スケジュールプロンプトをUNEVALUATEDな提案式に解決する。戻り値の"ProposedExpression"フィールドにHoldComplete[SourceVaultUpcomingSchedule[..., "FilterSpec" -> <|...|>]]を格納。式は評価しない。ClaudeEvalブリッジはそのフィールドのみをRuntimeに渡す。スケジュール以外のプロンプトはStatus NotDispatched。
+→ PromptRouteProposal Association
+Options: opts
 
-例: `SourceVaultProposePromptRoute["今後3日の予定を見せて"]` → ProposedExpression: `HoldComplete[SourceVaultUpcomingSchedule["Period" -> Quantity[3,"Days"], "FallbackToCloud" -> "Deny"]]`
+例: SourceVaultProposePromptRoute["今週のスケジュールを見せて"] → <|"Status"->"Dispatched", "ProposedExpression"->HoldComplete[SourceVaultUpcomingSchedule["Period"->Quantity[7,"Days"],...]], ...|>
 
-## PromptRun 履歴 API
+## PromptRunログ（追記専用JSOuLストア）
 
 ### SourceVaultPromptRunRecord[prompt, routeDecision, result, opts]
-PromptRun レコードを追記専用 JSONL ストア (<PrivateVault>/promptrouter/runs/prompt-runs.jsonl) に追記する。実行履歴であり、コンパイル済みレジストリには書かない。デフォルトではプロンプト生テキストを保存せずハッシュのみ保持する。
-→ <|"Status" -> "OK" | "DryRun" | "Skipped" | "Failed", "RunId" -> ..., "Record" -> ...|>
-Options: "StorePrompt" -> "HashOnly" ("PrivateRaw" | "Off" も可), "PrivacyLevel" -> 0.0, "PrivacyOrigin" -> {}, "AllowedTrustDomains" -> Automatic, "CloudFallback" -> "Ask", "Dependencies" -> <||>, "ModelResolution" -> <||>, "DryRun" -> False
+PromptRunレコードを<PrivateVault>/promptrouter/runs/prompt-runs.jsonlに追記する。実行履歴であり、コンパイル済みレジストリには書かない(spec 9.0, 24.1)。デフォルトでは生プロンプトは保存せずハッシュのみ。
+→ <|"Status"->"OK"|"DryRun"|"Skipped"|"Failed", "RunId"->_, "Record"->_|>
+Options: "StorePrompt" -> "HashOnly" ("PrivateRaw"|"Off"も可), "PrivacyLevel" -> 0.0, "PrivacyOrigin" -> {}, "AllowedTrustDomains" -> Automatic, "CloudFallback" -> "Ask", "Dependencies" -> <||>, "ModelResolution" -> <||>, "DryRun" -> False
 
 ### SourceVaultPromptRunHistory[opts]
-追記専用ストアから PromptRun レコードのリストを新しい順で返す。
-→ List of Association
-Options: "MaxResults" -> Automatic, "RouteId" -> Automatic, "Decision" -> Automatic, "Since" -> Automatic (ISO 日時文字列; Timestamp >= Since のレコードのみ)
+追記専用ストアからPromptRunレコードのリストを返す（新着順）。
+→ List
+Options: "MaxResults" -> Automatic, "RouteId" -> Automatic, "Decision" -> Automatic, "Since" -> Automatic (ISO日時文字列; Timestamp >= Sinceのレコードのみ保持)
 
 ### SourceVaultCaptureLastPromptRun[opts]
-追記専用履歴から最新の PromptRun を返す。履歴が空のとき Status NoPromptRun を返す。
-→ <|"Status" -> "OK", "PromptRun" -> ...|> | <|"Status" -> "NoPromptRun", ...|>
+追記専用履歴から最新のPromptRunを返す。履歴が空の場合はStatus "NoPromptRun"。
+→ <|"Status"->"OK","PromptRun"->_|> または <|"Status"->"NoPromptRun",...|>
 
-### SourceVaultPromotePromptRun[runId_String, opts]
-記録済み PromptRun を分類し (spec 10.3)、決定論的ルートヒットの場合はそのルートの Matcher をフィンガープリントと生例で強化する。WorkflowRoute トレースと LLM オンリー実行は分類のみで自動昇格しない。
-→ Association: Status, Classification, RouteId 等
-Options: "DryRun" -> True (デフォルト、rule 103), "Confirm" -> False, "Channel" -> "public"
+## PromptRouteレジストリ
 
-## レジストリ管理 API
+### SourceVaultCallableAllowlistRegistry[] → Association
+SourceVault所有の呼び出し許可リスト。キー: FunctionId。値: Symbol, UseAsFunctionRoute/UseAsHandlerRefフラグ, SideEffectClass。SourceVault.wlに実在するcallableのみ登録(SourceVaultUpcomingSchedule, SourceVaultFindNotebooks等)。SourceVaultReviewQueue/SourceVaultOpenTodoListはIntentIdとして扱うため未登録(spec 7.3/25)。
+
+### SourceVaultCallableAllowlistView[] → Association
+SourceVault所有許可リストとClaudeOrchestrator所有ハンドラー許可リストのマージビューを返す。FunctionRouteディスパッチとHandlerRef解決はこのビューを参照。キー衝突時はSourceVault所有エントリが優先。
 
 ### SourceVaultRegisterPromptRoute[route_Association, opts]
-コンパイル済みプロンプトルートレジストリにルートを追加または置換する。DryRun -> True (デフォルト) は計画を報告するだけで書き込まない。DryRun -> False は atomic 書き込み (encode → verify → tmp → rename) を実行する。
-→ Association: WrittenCount, SkippedCount, ByAction, Topic, Channel, Path
+PromptRouteをコンパイル済みprompt-route-registryに追加または置換する。DryRun -> True(デフォルト、rule 103)は計画(Topic/RouteId/アクション)を報告するだけで書き込まない。DryRun -> Falseは原子書き込み(encode→verify→tmp→rename)。
+→ <|"WrittenCount"->_, "SkippedCount"->_, "ByAction"->_, "Topic"->_, "Channel"->_, "Path"->_|>
 Options: "DryRun" -> True
 
 ### SourceVaultListPromptRoutes[opts]
-チャンネルの PromptRoute リストを返す。
-→ List of Association
-Options: "IncludeSeed" -> True (True のときレジストリにない RouteId の組み込みシードルートを追加), "Channel" -> Automatic
+チャンネルのPromptRouteリストを返す。
+→ List
+Options: "IncludeSeed" -> True (Trueのとき、レジストリにないRouteIdについてビルトインシードルートを追加)
 
 ### SourceVaultGetPromptRoute[routeId_String, opts]
-指定 RouteId の PromptRoute を返す。見つからない場合は Status NotFound の Association を返す。
+指定RouteIdのPromptRouteを返す。見つからない場合はStatus NotFoundのAssociationを返す。
 → Association
 
-### SourceVaultCallableAllowlistRegistry[] → Association
-SourceVault 所有の callable allowlist を返す。キー: FunctionId。値: Symbol, UseAsFunctionRoute/UseAsHandlerRef フラグ, SideEffectClass, OwnerPackage。SourceVault.wl に実在する関数のみ登録 (SourceVaultUpcomingSchedule [ReadOnly], SourceVaultFindNotebooks [ReadOnly], SourceVaultNewNotebook [SafeCreate] 等)。SourceVaultReviewQueue / SourceVaultOpenTodoList は IntentId として扱うため未登録。
-
-### SourceVaultCallableAllowlistView[] → Association
-SourceVault 所有 allowlist と (ClaudeOrchestrator ロード時は) Orchestrator 所有ハンドラ allowlist のマージビューを返す。FunctionRoute ディスパッチと HandlerRef 解決はこのビューを参照する。キー衝突時は SourceVault 所有エントリが優先。
-
-### SourceVaultPromptReprocessPlan[opts]
-PromptRoute レジストリをスキャンして陳腐化ルート (スキーマ/レジストリバージョン不一致、または StaleRouteIds で指定) の再処理計画を返す (読み取り専用)。実際の再処理は行わない。ポリシー: FunctionRoute (ReadOnly callable) → "AutoRecomputable", Intent → "OnDemandRefresh", WorkflowRoute → "NeedsApproval"。
-→ Association: StalePolicies リスト
-Options: "StaleRouteIds" -> {}
-
-## プロンプトキャプチャ / バージョン管理 API
-
-### SaveLastPrompt[memo_String]
-直近の成功した ClaudeEval / ContinueEval プロンプト実行を名前付き PromptRoute として保存する。memo は Memo フィールドに格納されるフリーテキスト (プロンプトテーブルに表示)。Encrypt -> True 指定時は SourceVaultEncryptedPut (encrypt-then-MAC) で生プロンプトと TargetExprString を暗号化して EncryptedPayload に埋め込む (暗号化モジュールと SourceVaultInitializeEncryption[] が必要; 未実装時は Status NotImplemented)。復号は SourceVaultDecryptPromptRoute[route] で行う。
-→ Association: Status, RouteId 等
-Options: "Channel" -> Automatic ("public" | "private" | "local"、Automatic はプライバシーから解決), "Encrypt" -> False, "DryRun" -> False, "RouteId" -> Automatic
-
-### SourceVaultAutoSaveLastPrompt[prompt_String, opts]
-直近の ClaudeEval/ContinueEval 実行を NEW バージョンとして保存する (既存バージョンを上書きしない)。同一正規化プロンプトのバージョンは PromptGroupId を共有。最新バージョンと TargetExprString が重複する場合はスキップ。$SourceVaultPromptAutoSave でゲート制御。ClaudeEval が自動呼び出しするキャプチャパス (手動・メモ付きの対応関数は SaveLastPrompt)。
-→ SaveLastPrompt の結果 | <|"Status" -> "Skipped"|>
-Options: "Memo" -> "", SaveLastPrompt の各オプション
-
-### SourceVaultMatchSavedPromptVersions[prompt_String, opts]
-prompt の正規化形式が完全一致する保存済み PromptRoute を全チャンネルから返す (プライマリ優先→新しい順)。一致なしのとき {}。
-→ List of Association
-Options: "Channel" -> All, "IncludeSeed" -> False
-
-### SourceVaultPrimaryPromptRoute[prompt_String] → Association | Missing["NoPrimary"]
-prompt のグループのプライマリ保存ルートを返す。"Primary" フィールドが True のルート。なければ Missing["NoPrimary"]。
-
-### SourceVaultSetPrimaryPromptRoute[routeId_String, opts]
-PromptGroupId 内でルートをプライマリとしてマークし、同グループ内の他ルートの Primary をクリアする (全チャンネル横断)。AutoExecute -> True は EnvironmentIndependent ルートのみ有効。可逆なメタデータ変更なので DryRun デフォルト False。
-→ Association: Status, RouteId, Channel, ClearedSiblings
-Options: "AutoExecute" -> True | False, "DryRun" -> False
-
 ### SourceVaultDeletePromptRoute[routeId_String, opts]
-チャンネルレジストリから保存済み PromptRoute を削除する (atomic 書き換え)。非破壊的デフォルト: DryRun -> True は計画のみ報告。実削除には "Confirm" -> True かつ DryRun -> False が必要。
-→ Association: Status, RouteId, Channel, Removed, WasPrimary
+保存済みPromptRouteをチャンネルレジストリから削除する(原子書き換え)。非破壊的デフォルト: DryRun -> True(デフォルト)は計画のみ報告。実際の削除はDryRun -> FalseかつConfirm -> Trueが必要。
+→ <|"Status"->_, "RouteId"->_, "Channel"->_, "Removed"->_, "WasPrimary"->_|>
 Options: "DryRun" -> True, "Confirm" -> False
 
+## PromptRun促進・キャプチャ
+
+### SourceVaultPromotePromptRun[runId_String, opts]
+記録済みPromptRunを分類し(spec 10.3)、決定論的ルートヒットの場合そのルートのMatcherを実行のフィンガープリントと生例で強化する。DryRun -> True(デフォルト)は計画を報告のみ。WorkflowトレースとLLMオンリー実行は分類のみで自動促進しない。
+→ Association
+Options: "DryRun" -> True, "Confirm" -> False, "Channel" -> "public"
+
+## プライバシー
+
+### SourceVaultResolvePromptPrivacy[components_Association, opts]
+プロンプトのプライバシー寄与を結合してPrivacyLevel(各コンポーネントのMax、spec 11.2)とAllowedTrustDomains/CloudFallback/CloudRouterAllowedメタデータを返す。SecretCellまたはPrivateModelExecutionコンポーネントでlevel >= 0.75に引き上げ(spec 11.3/11.4)。
+→ Association
+コンポーネントキー(全て数値0.0～1.0): "PromptCellPrivacyLevel", "PromptTextPrivacyLevel", "NotebookDependencyPrivacyLevel", "ModelExecutionPrivacyFloor", "ResultPrivacyLevel", "UserSpecifiedPrivacyLevel"。ブール特殊キー: "SecretCell", "PrivateModelExecution"
+
+### SourceVaultPromptPrivacyAllowsCloudRouter[level] → True|False
+PrivacyLevelが0.5(クラウド送信境界)未満のときのみTrueを返す(spec 11.5)。Associationも受け付ける。非数値入力はFalse。
+
+## モデル解決
+
+### SourceVaultResolveModelForPromptRouter[query_Association, opts]
+モデルリゾルバーcontract層(spec 12)。クエリをModelIntent/WeightClass/PrivacyLevel/AllowedTrustDomains/CloudFallback/RequiredCapabilities/DegradationPolicyの完全contractに正規化し、SourceVaultResolve["Model", query]を弱呼び出し。リゾルバー不在または結果が未分類ならNeedsModelClassification。PrivacyLevel >= 0.5でLocal/Private未確認モデルはNeedsPrivateModel(クラウドフォールバック不可、spec 12.4)。
+→ Association (Requested/Resolved/FallbackKind/CloudFallbackUsed)
+Options: opts
+
+### SourceVaultClassifyProviderTrustDomain[label] → "Cloud"|"Local"|"Private"|Missing["UnclassifiedTrustDomain"]
+プロバイダー/ルートラベルをTrustDomainにマップする(spec 12.2)。"chatgptcodex"/"ChatGPTCodexCLI"/"ClaudeCodeCLI"/"CloudLLM"/"anthropic"/"openai" -> "Cloud"; "LocalOnly" -> "Local"; "PrivateLLM" -> "Private"。曖昧または不明なラベル(LocalOpenAICompatible, ExternalAPI等)はMissing["UnclassifiedTrustDomain"]でホストリゾルバーがTrustDomainを明示する必要がある。ChatGPT CodexはクラウドバックCLI(ファイルシステムはローカルだがLLM推論はクラウド)。
+
+## 再処理計画
+
+### SourceVaultPromptReprocessPlan[opts]
+PromptRouteレジストリをスキャンして陳腐化ルートの再処理計画を返す(spec 14.2/14.3)。読み取り専用。再処理は実行しない。陳腐化判定: SchemaVersion不一致、CompiledRegistryVersion不一致、またはStaleRouteIdsに直接指定。分類ポリシー: FunctionRoute(ReadOnly callable) -> "AutoRecomputable", Intentルート -> "OnDemandRefresh", WorkflowRoute -> "NeedsApproval"。
+→ Association (計画のみ、キュー)
+Options: "StaleRouteIds" -> {} (直接指定する陳腐化RouteIdのリスト)
+
+## プロンプト保存・検索・UI
+
+### SaveLastPrompt[memo_String, opts]
+最新の成功したClaudeEval/ContinueEvalプロンプト実行を名前付きPromptRouteとして保存する。memoはRouteのMemoフィールドに格納される自由記述メモ。Encrypt -> Trueのとき生プロンプトとTargetExprStringを暗号化保存(EncryptedPayload埋め込み、Examplesは空、PromptStorageClassは"Encrypted")。Memoはプレーンテキストで保持。SourceVaultDecryptPromptRoute[route]で平文を復元。
+→ Association
+Options: "Channel" -> Automatic ("public"|"private"|"local"; プライバシーから解決), "Encrypt" -> False (Trueのとき暗号化モジュールとSourceVaultInitializeEncryption[]が必要), "DryRun" -> False, "RouteId" -> Automatic
+
+### AddPromptMemo[memo_String, opts]
+最新のClaudeEval/ContinueEvalプロンプトに自由記述メモを付与する。SourceVaultAutoSaveLastPromptで自動保存された最新バージョンのMemoをインプレース更新する(SourceVaultUpdatePromptRouteMemo経由、新バージョンを作らない)。保存バージョンが存在しない場合はSaveLastPromptにフォールバック。
+→ <|"Status"->_, "RouteId"->_, "Memo"->_, "Action"->"MemoUpdated"|"MemoSavedNewVersion"|>
+Options: "PromptText" -> Automatic, "RouteId" -> Automatic
+
+### SourceVaultDecryptPromptRoute[route_Association]
+暗号化PromptRouteのEncryptedPayloadを復号する(SaveLastPrompt Encrypt->Trueで作成)。復号前にMACを検証。失敗時はplaintextを返さない。
+→ <|"Status"->"Ok","Plaintext"->_|> またはエラーAssociation
+
+### SourceVaultSearchPromptRoutes[query_String, opts]
+保存済みPromptRouteのうちプロンプト例またはmemoにqueryを部分一致するものを返す。query ""は全件マッチ。実行しない。
+→ List (routeのAssociationのリスト)
+Options: "CreatedAt" -> <|"From"->_,"To"->_|>, "UpdatedAt" -> <|"From"->_,"To"->_|>, "Channel" -> All|"public"|"private"|"local", "IncludeSeed" -> True
+
+### SourceVaultFormatPromptRouteList[routes_List, opts]
+保存済みPromptRouteをGridでレンダリングする。列: Prompt, Memo, Target, CreatedAt, UpdatedAt, Privacy。各行にPreview(ドライラン)/Run(実行)/ToInput(Input cellに式を書き込み)ボタン。SourceVaultFormatNotebookListに準ずる。プロンプトルートリストのデフォルト表示形式。
+→ Grid
+
+### SourceVaultReplayRoute[route_Association, opts]
+保存済みPromptRouteを再実行クラスに応じて再構成し、評価用の式文字列を返す。Replayable: TargetExprStringをそのまま返す。LightLLM: 新プロンプトなしは元のTargetExprStringを復元、新プロンプト文字列を与えると軽量LLM("ExtractModel" -> AutomaticはSourceVault既定モデル)で各パラメータスロットの新InputForm値を抽出してParameterTemplateを埋めた式文字列を返す。HeavyLLMまたは式が記録されていないルートはClaudeEval[...]形式の式を返す。
+→ <|"Status"->_, "ReplayClass"->_, "ExprString"->_, "SlotValues"->_|>
+Options: "NewPrompt" -> Automatic, "ExtractModel" -> Automatic
+
+### SourceVaultPromptRoutePanel[opts]
+保存済みPromptRouteのUIパネルを返す。キーワード/memoで検索、チャンネルフィルタ、各ルートのPreview/Run/ToInput/Primary/Memo/削除管理(SourceVaultFormatPromptRouteList経由)。SourceVaultWorkflowPanelに準ずる(手動リフレッシュ、FEフリーズセーフ)。
+→ Dynamic UI Panel
+Options: "Channel" -> All|"public"|"private"|"local" (初期チャンネルフィルタ)
+
+## 自動保存・バージョン管理
+
+### $SourceVaultPromptAutoSave
+型: True|False, 初期値: True
+ClaudeEvalが実行するnotebookプロンプトをSourceVaultAutoSaveLastPromptで新バージョンとして自動保存するかどうかを制御する。Falseで自動キャプチャを無効化。
+
+### $SourceVaultPromptSavedProposalActive
+型: True|False, 初期値: True
+ClaudeEvalがLLM呼び出し前に保存済みプロンプトの完全一致(正規化)を参照して提案するかどうかを制御する。FalseでClaudeEvalエントリの保存済みプロンプト提案を無効化。
+
+### $SourceVaultPromptBypassOnce
+型: String|Missing["None"], 初期値: Missing["None"]
+ワンショット正規化プロンプトキー。SourceVaultProposeSavedPromptRouteがこれにマッチするプロンプトを検出するとキーを消費(Missing["None"]にリセット)して提案を拒否し、ClaudeEvalがLLMパスにフォールスルーする。保存済みプロンプトリストの「LLMに再度聞く」ボタンがセットする。
+
+### $SourceVaultContextPlannerEnabled
+型: True|False, 初期値: True
+Trueのとき、SourceVaultがClaudeCode`$ClaudeEvalContextPlannerにコンテキストプランナーを登録する。プランナーはSourceVaultClassifyPromptContextDependencyを使って各プロンプトのContextPlanを絞り込む。FalseでプランナーをNo-opにする(ベースパッケージがデフォルトプランにフォールバック)。リロード不要。
+
+### $SourceVaultContextPlannerTrimSelfContained
+型: True|False, 初期値: False
+Trueのとき、プランナーはSELF-CONTAINED(マーカーなし)プロンプトのnotebookコンテキストをNoneにトリムする(デフォルトのbounded Tailではなく)。軽量モデルが些細なプロンプトで前のセルを模倣するのを防ぐが、マーカーなしのnotebook依存プロンプトが文脈を失うリスクがある。保守的なデフォルトFalse。
+
+### SourceVaultAutoSaveLastPrompt[prompt_String, opts]
+最新の成功したClaudeEval/ContinueEval実行を新しい保存済みPromptRouteバージョンとして保存する(既存バージョンを上書きしない)。ClaudeEvalが自動的に呼び出すデフォルトオンキャプチャパス。同一(正規化)プロンプトのバージョンはPromptGroupIdを共有する。TargetExprStringがグループの最新バージョンと重複する場合はスキップ。$SourceVaultPromptAutoSaveでゲート制御。
+→ SaveLastPromptの結果 または <|"Status"->"Skipped"|>
+Options: "Memo" -> "", SaveLastPromptの全オプション
+
+### SourceVaultMatchSavedPromptVersions[prompt_String, opts]
+正規化プロンプトが完全一致する保存済みPromptRouteを全チャンネルから返す(PromptHash正規化と同じ正規化を使用)。primaryを先頭に、その後新着順。マッチなしは{}。
+→ List
+Options: "Channel" -> All, "IncludeSeed" -> False
+
+### SourceVaultPrimaryPromptRoute[prompt_String]
+プロンプトグループのプライマリ保存済みPromptRouteを返す。"Primary"フィールドがTrueのルートがプライマリ(SourceVaultSetPrimaryPromptRouteでセット)。
+→ Association|Missing["NoPrimary"]
+
+### SourceVaultSetPrimaryPromptRoute[routeId_String, opts]
+ルートをPromptGroupId内のプライマリバージョンとしてマークし、兄弟ルートのPrimaryをクリアする(チャンネル横断)。AutoExecute -> TrueのときClaudeEvalは確認ダイアログなしにルートの凍結式をリリース評価できる(ReplaySafety "EnvironmentIndependent"のルートのみ有効)。可逆なメタデータトグルのためDryRunデフォルトFalse。
+→ <|"Status"->_, "RouteId"->_, "Channel"->_, "ClearedSiblings"->_|>
+Options: "AutoExecute" -> False
+
 ### SourceVaultRunPrimaryRoute[groupId_String, opts]
-プライマリルートの凍結式のゲート付き実行。TargetExprString を評価せずにパースし、head が ReadOnly/SafeCreate SourceVault callable かつ ReplaySafety が "EnvironmentIndependent" の場合のみ評価する。Set/SetDelayed/AppendTo/ClaudeAttach/SystemCredential および未分類 head は拒否して評価しない。ClaudeEval は HoldComplete[SourceVaultRunPrimaryRoute[..]] 提案経由でのみアクセスする (ClaudeEval が保存式を直接解放しない)。
-→ Association: Status, Result 等
+プライマリルートの凍結式のゲート付きエグゼキュータ。TargetExprStringを評価なしにパースし、(a)headがReadOnly/SafeCreate SourceVault callableで(b)ReplaySafety "EnvironmentIndependent"のときのみ評価する。Set/SetDelayed/AppendTo/ClaudeAttach/SystemCredentialおよび未分類headは拒否。ClaudeEvalはHoldComplete[SourceVaultRunPrimaryRoute[..]]提案経由でのみ到達する(ClaudeEvalが保存式を直接リリースすることはない)。
+→ Association
+
+### SourceVaultPromptVersionsUI[normKey_String, prompt_String, opts]
+プロンプトグループの保存済みバージョン(SourceVaultFormatPromptRouteList経由)をヘッダーと「LLMに再度聞く」ボタン付きでレンダリングする。保存済みバージョンが存在するが自動実行プライマリが未設定のときClaudeEvalがLLMの代わりにこれを表示する。
+→ Dynamic UI
 
 ### SourceVaultProposeSavedPromptRoute[prompt_String, opts]
-ClaudeEval エントリの保存済みプロンプト提案器 (claudecode から LLM 呼び出し前に weak-call される)。
-- EnvironmentIndependent プライマリ + AutoExecute 有効 → HoldComplete[SourceVaultRunPrimaryRoute[groupId]] を ProposedExpression に持つ PromptRouteProposal を返す
-- 保存バージョンが存在するが AutoExecute なし → HoldComplete[SourceVaultPromptVersionsUI[..]] を返す
-- 機能オフ ($SourceVaultPromptSavedProposalActive = False)、$SourceVaultPromptBypassOnce 一致、一致なし → Status NotDispatched
+ClaudeEvalエントリの保存済みプロンプト提案器(claudecodeからLLM呼び出し前に弱呼び出し)。"ProposedExpression"として、AutoExecuteありEnvironmentIndependentプライマリのときHoldComplete[SourceVaultRunPrimaryRoute[groupId]]、保存バージョンがあるときHoldComplete[SourceVaultPromptVersionsUI[..]]を返す。機能がオフ・ワンショットバイパスキーマッチ・保存バージョン不一致のときStatus NotDispatched。
 → PromptRouteProposal Association
 
 ### SourceVaultUpdatePromptRouteMemo[routeId_String, memo_String]
-保存済み PromptRoute の Memo フィールドを更新して UpdatedAt をバンプする (atomic チャンネル書き換え)。暗号化ルートでも Memo は平文で保存 (表示ラベルのため)。
-→ Association: Status, RouteId, Channel, Memo
+保存済みPromptRouteのMemoフィールドを設定し(チャンネル原子書き換え)、UpdatedAtを更新する。暗号化ルートでもMemoはプレーンテキストで保存される(表示ラベルのため)。SourceVaultFormatPromptRouteListの編集可能Memoセルが使用する。
+→ <|"Status"->_, "RouteId"->_, "Channel"->_, "Memo"->_|>
 
-### SourceVaultDecryptPromptRoute[route_Association]
-Encrypt -> True で SaveLastPrompt が作成した EncryptedPayload を復号する。復号前に MAC を検証し、失敗時は平文を返さない。
-→ <|"Status" -> "Ok", "Plaintext" -> ...|> | エラー Association
-
-## ルート再実行 / UI API
-
-### SourceVaultReplayRoute[route_Association, opts]
-保存済み PromptRoute を ReplayClass に応じて再構成し、評価用の式文字列を返す。Replayable: TargetExprString をそのまま返す。LightLLM: "NewPrompt" なしなら元の TargetExprString を復元、新プロンプト文字列指定時は軽量 LLM で各パラメータスロットの新 InputForm 値を抽出し ParameterTemplate を埋めた式文字列を返す。HeavyLLM / 式未記録ルート: ClaudeEval[...] 形式の式を返す。
-→ <|"Status" -> ..., "ReplayClass" -> ..., "ExprString" -> ..., "SlotValues" -> ...|>
-Options: "NewPrompt" -> Automatic, "ExtractModel" -> Automatic (Automatic は SourceVault デフォルトモデル)
-
-### SourceVaultPromptVersionsUI[normKey_String, prompt_String, opts]
-プロンプトグループの保存バージョン (SourceVaultFormatPromptRouteList 経由) をヘッダーと「LLM に再度聞く」ボタン付きで描画する。「再度聞く」ボタンは $SourceVaultPromptBypassOnce をセットして提案を一度バイパスし ClaudeEval を LLM 経由で再実行する。自動実行プライマリが未設定のとき ClaudeEval が LLM の代わりにこれを表示する。
-→ Dynamic UI オブジェクト
-
-### SourceVaultFormatPromptRouteList[routes_List, opts]
-保存済み PromptRoute を Grid としてレンダリングする。列: Prompt, Memo, Target, CreatedAt, UpdatedAt, Privacy。各行にアクションボタン: Preview (ドライラン)・Run (即時実行)・ToInput (Input セルに式を書き込む)。プロンプトルートリスト表示のデフォルト形式。
-→ Grid
-
-### SourceVaultSearchPromptRoutes[query_String, opts]
-query を部分文字列として例プロンプトまたは Memo に含む保存済み PromptRoute を返す。query "" は全件一致。
-→ List of Association
-Options: "CreatedAt" -> <|"From" -> _, "To" -> _|>, "UpdatedAt" -> <|"From" -> _, "To" -> _|>, "Channel" -> All | "public" | "private" | "local", "IncludeSeed" -> True
-
-## プライバシー / モデル解決 API
-
-### SourceVaultResolvePromptPrivacy[components_Association, opts]
-プロンプトの各プライバシー寄与の Max を 1 つの PrivacyLevel とし AllowedTrustDomains / CloudFallback / CloudRouterAllowed メタデータを統合する。SecretCell または PrivateModelExecution は PrivacyLevel を 0.75 以上に引き上げ AllowedTrustDomains を Local/Private に制限し CloudFallback を Deny にする。
-→ Association: PrivacyLevel, AllowedTrustDomains, CloudFallback, CloudRouterAllowed
-components の有効キー: "PromptCellPrivacyLevel", "PromptTextPrivacyLevel", "NotebookDependencyPrivacyLevel", "ModelExecutionPrivacyFloor", "ResultPrivacyLevel", "UserSpecifiedPrivacyLevel" (各 0.0–1.0 の数値), "SecretCell" -> Boolean, "PrivateModelExecution" -> Boolean
-
-### SourceVaultPromptPrivacyAllowsCloudRouter[level] → True | False
-PrivacyLevel が 0.5 未満 (クラウド送信境界) のときのみ True を返す。Association を渡したときは PrivacyLevel フィールドを使う。非数値入力は安全でないとみなし False を返す。
-
-### SourceVaultResolveModelForPromptRouter[query_Association, opts]
-モデルリゾルバコントラクト層 (spec 12)。クエリを正規化してホストリゾルバを weak-call する。リゾルバ不在または結果が未分類の場合は NeedsModelClassification を返す。PrivacyLevel >= 0.5 で Local/Private 確認できないモデルは NeedsPrivateModel を返す (クラウドフォールバックを使わない)。
-→ Association: Requested, Resolved, FallbackKind, CloudFallbackUsed
-query の有効キー (デフォルト値): "ModelIntent" -> "router", "WeightClass" -> Automatic, "PrivacyLevel" -> 0.0, "AllowedTrustDomains" -> Automatic, "CloudFallback" -> "Ask", "RequiredCapabilities" -> {"TextIn","TextOut"}, "DegradationPolicy" -> "Flexible"
-
-### SourceVaultClassifyProviderTrustDomain[label] → "Cloud" | "Local" | "Private" | Missing["UnclassifiedTrustDomain"]
-プロバイダ/ルートラベルを TrustDomain にマップする (spec 12.2)。"chatgptcodex" / "ChatGPTCodexCLI" / "ClaudeCodeCLI" / "CloudLLM" / "anthropic" / "openai" → "Cloud"; "LocalOnly" → "Local"; "PrivateLLM" → "Private"。曖昧または未知のラベル (LocalOpenAICompatible, ExternalAPI 等) は Missing["UnclassifiedTrustDomain"] を返し、ホストリゾルバが TrustDomain を明示的に宣言する必要がある。ChatGPT Codex はファイルシステムサンドボックスはローカルだが LLM 推論はクラウドのため Cloud に分類される。
-
-## 安全性分類 API
+## コンテキスト依存分類
 
 ### SourceVaultClassifyPromptReplaySafety[prompt_String, exprString_, contextBinding_]
-生成済み式が凍結定数として再実行可能かを分類する。ContextBound 判定条件: 式がノートブックコンテキストを埋め込む / %/Out/In/SelectedCells/NotebookRead 等のセッション遷移シンボルを参照 / プロンプトが指示詞 (「上のセル」「選択中」等) を使う。EnvironmentIndependent ルートのみ auto-execute 可能。ContextBound は ReplayClass HeavyLLM に強制される。
-→ <|"ReplaySafety" -> "EnvironmentIndependent" | "ContextBound" | "Unknown", "ContextBinding" -> <|...|>|>
+生成済み式を凍結定数として再生可能かどうかを分類する。ContextBound条件: 式にキャプチャされたnotebookコンテキストが直接埋め込まれている、セッション過渡シンボル(%/Out/In/SelectedCells/NotebookRead/...)を参照、またはプロンプトに指示詞("cell above"等)を含む。EnvironmentIndependentルートのみ自動実行可能。ContextBoundルートはReplayClass HeavyLLMに強制。
+→ <|"ReplaySafety"->"EnvironmentIndependent"|"ContextBound"|"Unknown", "ContextBinding"-><|...|>|>
 
 ### SourceVaultClassifyPromptContextDependency[prompt_String]
-LLM なし・プロンプトのみの事前フィルタ。式生成前に新規プロンプトが必要とするコンテキストを推論する (SourceVaultClassifyPromptReplaySafety は生成済み式を分類する点と異なる)。指示詞パターンテーブルは iSVPRDeicticQ と共有。ノートブック参照と会話履歴参照を混同しない。何も検出されない場合は DependencyKinds {"SelfContained"} (floor 空) を返す。RequiredContext は最低限の floor であり、コンテキストプランナーがこれと要求/デフォルトプランを組み合わせる。
-→ Association:
-  "DependencyKinds" -> {...}
-  "RequiredContext" -> <|"Notebook" -> <|"Mode" -> "None" | "PreviousCellGroup" | "Tail" | "Full"|>, "SelectedCells" -> True | False, "History" -> <|"Mode" -> "None" | "Recent"|>|>
-  "Confidence" -> "High" | "Low"
-  "Reasons" -> {...}
+LLMフリー・プロンプトのみの事前フィルタ。新プロンプトが式生成前に必要とするコンテキストを推論する(SourceVaultClassifyPromptReplaySafetyとは異なり生成済み式を対象としない)。iSVPRDeicticQと指示詞パターンテーブルを共有。notebookの参照と会話履歴の参照を混同しない。何も検出されない場合はfloor空(DependencyKinds {"SelfContained"}, Confidence "Low")。RequiredContextは必要な最低限(floor)。コンテキストプランナーがこれとリクエスト/デフォルトプランを組み合わせる。
+→ <|"DependencyKinds"->{...}, "RequiredContext"-><|"Notebook"-><|"Mode"->"None"|"PreviousCellGroup"|"Tail"|"Full"|>, "SelectedCells"->True|False, "History"-><|"Mode"->"None"|"Recent"|>|>, "Confidence"->"High"|"Low", "Reasons"->{...}|>

@@ -1,232 +1,247 @@
 # SourceVault_webingest API リファレンス
 
-パッケージ: `SourceVault_webingest` ([GitHub](https://github.com/transreal/SourceVault_webingest))
-依存: [SourceVault_core](https://github.com/transreal/SourceVault_core) の `SourceVaultRoot`, `SourceVaultCoreRoot`, `SourceVaultCommitBlob`, `SourceVaultSaveImmutableSnapshot`
-名前空間: `SourceVault``
-ロード: `Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault_webingest.wl"]]`
+パッケージ: `SourceVault_webingest`
+GitHub: https://github.com/transreal/SourceVault_webingest
+コンテキスト: `SourceVault`` コンテキスト内に定義される service-loadable な Web ingest / SearXNG 層。FrontEnd/Notebook/UI 依存なし。main kernel・service kernel 両方で動作する。
 
-## 設定変数
+依存: [SourceVault_core](https://github.com/transreal/SourceVault_core) (`SourceVaultRoot`, `SourceVaultCoreRoot`, `SourceVaultStorageDir`, `SourceVaultCommitBlob`, `SourceVaultSaveImmutableSnapshot`)
 
-### $SourceVaultSearXNGEndpoint
-型: String, 初期値: `"http://127.0.0.1:8888"`
-SearXNG の既定エンドポイント。`SourceVaultSearXNGSearch` の `"Endpoint" -> Automatic` 時に参照される。既存値がある場合は上書きしない。
+## 検索
 
-### $SourceVaultWebSearchAsync
-型: Boolean, 初期値: `True`
-`SourceVaultWebSearchSubmit` を非同期 (`SessionSubmit`) で実行するか。`False` なら inline 実行 (テスト用)。
+### SourceVaultSearXNGSearch[query_String, opts]
+SearXNG JSON API を叩き、候補 URL を正規化した Association を返す。
+→ `<|"Provider","Endpoint","Query","Language","ResultCount","TotalAvailable","Results","Suggestions","UnresponsiveEngines","FetchedAt","Status"|>` または `Failure`
+Results 各要素: `<|"Title","Url","Snippet","Engine","Category","Score","Rank","PublishedDate"|>`
+Options: "Endpoint" -> Automatic (未指定時は `$SourceVaultSearXNGEndpoint`), "MaxResults" -> 10, "Language" -> "ja", "SafeSearch" -> 1, "TimeoutSeconds" -> 20, "Categories" -> Automatic, "PageNo" -> Automatic
 
-### $SourceVaultRollupIntervalSeconds
-型: Number, 初期値: `21600` (6h)
-service heartbeat ループが `SourceVaultRollupReferenceEvents` を自動実行する最小間隔 (秒)。変更反映には service 再起動が必要。
-
-### $SourceVaultRefEventWeights
-型: Association, 初期値: `<|"Displayed"->0.2, "Retrieved"->0.3, "Searched"->0.3, "Selected"->0.5, "Ingested"->0.5, "Summarized"->0.7, "Exported"->0.8, "UsedInAnswer"->1.0, "Cited"->1.5, "UserPinned"->2.0|>`
-参照イベント eventType → 重みの対応。`SourceVaultRecordImportance` の重み付き集計に使う。
-
-### $SourceVaultSummaryEndpoint
-型: String, 初期値: `"http://localhost:1234/v1/chat/completions"`
-要約用 LLM (LM Studio OpenAI 互換) の chat completions エンドポイント。
-
-### $SourceVaultSummaryModel
-型: String | Automatic, 初期値: `Automatic`
-要約用モデル ID。`Automatic` なら `/v1/models` から動的解決する (モデル名をハードコードしない)。
-
-### $SourceVaultSummaryToken
-型: String | Automatic, 初期値: `Automatic`
-LM Studio API token。`Automatic` なら `ClaudeCode``$ClaudeLMStudioAPIToken` / NBAccess / `LocalState/secrets/sourcevault-summary-token.json` の順で解決する。
-
-### $SourceVaultWebSearchIntegrationId
-型: String, 初期値: `"mcp/sourcevault"`
-SearXNG 可用時に使う LM Studio integration ID。
-
-### $SourceVaultExaFallbackIntegrationId
-型: String, 初期値: `"mcp/exa"`
-SearXNG 不可時の後方互換 fallback integration ID。
-
-## SearXNG 検索
-
-### SourceVaultSearXNGSearch[query, opts]
-SearXNG JSON API を叩き候補 URL を正規化した Association を返す。
-→ `<|"Provider", "Endpoint", "Query", "Language", "ResultCount", "TotalAvailable", "Results", "Suggestions", "UnresponsiveEngines", "FetchedAt", "Status"|>` または `Failure`
-Results の各要素: `<|"Title", "Url", "Snippet", "Engine", "Category", "Score", "Rank", "PublishedDate"|>`
-Options: `"Endpoint" -> Automatic` (既定は `$SourceVaultSearXNGEndpoint`), `"MaxResults" -> 10`, `"Language" -> "ja"`, `"SafeSearch" -> 1` (0=off/1=mod/2=strict), `"TimeoutSeconds" -> 20`, `"Categories" -> Automatic` (SearXNG カテゴリ文字列), `"PageNo" -> Automatic`
-失敗時: `Failure["SearXNGTimeout"|"SearXNGRequestFailed"|"SearXNGHTTPError"|"SearXNGJSONParseFailed", ...]`
-
-### SourceVaultWebSearch[query, opts]
-`SourceVaultSearXNGSearch` に最小 provenance と RunId を付けた SearchRun Association を返す。検索の監査記録 (WebSearchRun) を core に永続化し参照イベント (Searched) も append する。
-→ SearXNGSearch の戻り値に `<|"RunId", "IngestProvenance", "FetchPages", "SearchRunRef"|>` を追加した Association または `Failure`
-Options: `SourceVaultSearXNGSearch` の全オプションに加え、`"FetchPages" -> False` (True なら上位 MaxFetch 件を `SourceVaultWebFetch` で取得), `"MaxFetch" -> 3`, `"StoreSearchRun" -> True` (WebSearchRun 永続化), `"RequestChannel" -> "Notebook"`, `"InitiationType" -> "UserPromptSearch"`, `"Actor" -> Automatic` (`<|"Type"->"HumanUser"|>` に解決), `"PromptRef" -> None`
-例: `SourceVaultWebSearch["Wolfram Language tutorial", "FetchPages" -> True, "MaxFetch" -> 5]`
-
-## ジョブ管理 (非同期二層)
-
-### SourceVaultWebSearchSubmit[input]
-### SourceVaultWebSearchSubmit[query, opts]
-WebSearch job を作成し `$SourceVaultWebSearchAsync` に従い実行する。job 状態は `LocalState/jobs/<jobId>.json` に保存。
-→ `<|"JobId", "Status" -> "Running"|"Unknown", "Async" -> True|False|>` または `Failure["JobCreateFailed", ...]`
-`$SourceVaultWebSearchAsync = True` (既定) なら `SessionSubmit` で非同期実行し即 `Status -> "Running"` を返す。結果は `SourceVaultWebJobResult[jobId]` でポーリング取得する。
-Association 形式の input は `"Query"`, `"Provenance"`, `SourceVaultWebSearch` の任意オプションを含める。
-
-### SourceVaultWebJobStatus[jobId] → Association
-job の状態 Association を返す。
-→ `<|"JobId", "Status" -> "Queued"|"Running"|"Succeeded"|"Failed"|"NotFound", "JobType", "CreatedAt", "UpdatedAt", "FailureReason"|>`
-
-### SourceVaultWebJobResult[jobId] → Association
-完了 job の結果を返す。`"Ready" -> False` なら未完了。
-→ Succeeded: `<|"JobId", "Status"->"Succeeded", "Ready"->True, "Result"->...|>`
-→ Failed: `<|"JobId", "Status"->"Failed", "Ready"->True, "FailureReason"->...|>`
-→ その他: `<|"JobId", "Status"->st, "Ready"->False|>`
-
-### SourceVaultWebJobList[] → List
-`LocalState/jobs/` 上の全 job レコード Association のリストを返す。
-
-### SourceVaultWebRecoverStaleJobs[] → Association
-service 起動時に残った `Running`/`Queued` 状態の job を `Failed` (`StaleJobRecovered:ServiceRestarted`) に更新する。
-→ `<|"Recovered" -> n, "Scanned" -> total|>`
-
-## URL フェッチ / WebDocument
-
-### SourceVaultWebFetch[url, opts]
-URL 本文を取得し HTML clean-text 抽出 + ContentHash を行い、WebDocument を content-addressed store (不変 snapshot) に保存する。`ExtractionStatus = "Succeeded"` かつ snapshot 保存成功時のみ `Ingested` 参照イベントを append し、Priority sidecar を `LocalState/derived/web_priority/<recordId>.json` に書く。非 2xx は `FetchFailed` として EvidenceGap に記録し snapshot を作成しない。
-→ `<|"ObjectClass"->"WebDocument", "Url", "CanonicalUrl", "StatusCode", "ContentType", "ByteCount", "ContentHash", "RawBlobRef", "CleanTextRef", "CleanTextLength", "Title", "ExtractionStatus", "ExtractionQuality", "ExtractionReason", "FetchedAt", "IngestProvenance", "CleanTextPreview", "SnapshotRef", "SnapshotStatus", "Priority"|>`
-Options: `"TimeoutSeconds" -> 30`, `"StoreEvidence" -> True` (False なら snapshot を作成しない), `"Provenance" -> <||>` (IngestProvenance として埋め込む Association), `"RecordGap" -> True` (失敗時 EvidenceGap 記録)
-`ExtractionStatus` 値: `"Succeeded"` / `"Failed"` / `"FetchFailed"` / `"Skipped"` (PDF 等)
-`ExtractionQuality` 値: `"Good"` (≥1500 chars) / `"Fair"` (≥200) / `"Poor"` (<200)
+### SourceVaultWebSearch[query_String, opts]
+`SourceVaultSearXNGSearch` に最小 provenance と RunId を付加した SearchRun Association を返す。`"StoreSearchRun" -> True` 時に WebSearchRun 不変 snapshot と参照イベント (Searched) を自動保存する。
+→ `<|"Provider","Endpoint","Query","ResultCount","Results","RunId","IngestProvenance","FetchPages","SearchRunRef",...|>` または `Failure`
+Options: `SourceVaultSearXNGSearch` の全オプション に加え、"FetchPages" -> False (True で本文取得; 後続 increment), "MaxFetch" -> 3, "StoreSearchRun" -> True, "RequestChannel" -> "Notebook", "InitiationType" -> "UserPromptSearch", "Actor" -> Automatic, "PromptRef" -> None
 
 ### SourceVaultWebSearchRunList[] → List
-CoreRoot の `snapshots/WebSearchRun/` から保存済み WebSearchRun レコード一覧を返す。
+保存済み WebSearchRun (検索監査記録) の Association リストを返す。
+
+## ジョブ管理 (command/job 二層)
+
+### SourceVaultWebSearchSubmit[input_Association] → Association
+### SourceVaultWebSearchSubmit[query_String, opts] → Association
+WebSearch job を作成し即座に返す。`$SourceVaultWebSearchAsync` が True なら `SessionSubmit` で非同期実行し `Status -> "Running"` を即返す。False なら inline 実行 (テスト用)。job 状態は `LocalState/jobs/<jobId>.json` に保存。
+→ `<|"JobId","Status","Async"|>`
+
+### SourceVaultWebJobStatus[jobId_String] → Association
+→ `<|"JobId","Status","JobType","CreatedAt","UpdatedAt","FailureReason"|>`。未存在なら `Status -> "NotFound"`。
+
+### SourceVaultWebJobResult[jobId_String] → Association
+完了 job の結果を返す。未完了なら `"Ready" -> False`。
+→ 成功: `<|"JobId","Status" -> "Succeeded","Ready" -> True,"Result"|>`; 失敗: `<|...,"FailureReason"|>`; 未完了: `<|...,"Ready" -> False|>`
+
+### SourceVaultWebJobList[] → List
+LocalState 上の全 job Association リストを返す。
+
+### SourceVaultWebRecoverStaleJobs[] → Association
+service 起動時に残った Running/Queued job を `Failed (StaleJobRecovered:ServiceRestarted)` に掃く。
+→ `<|"Recovered","Scanned"|>`
+
+## URL 取得・WebDocument
+
+### SourceVaultWebFetch[url_String, opts]
+URL 本文を取得し HTML clean-text 抽出 + ContentHash を行い、WebDocument を content-addressed store に不変 snapshot として保存する。取得/抽出失敗は EvidenceGap に記録。抽出成功時のみ `Ingested` 参照イベントを emit。provenance ベース構造 Priority を LocalState sidecar に保存。登録済み IngestHook を完了後に実行。
+→ `<|"ObjectClass" -> "WebDocument","Url","CanonicalUrl","StatusCode","ContentType","ByteCount","ContentHash","RawBlobRef","CleanTextRef","CleanTextLength","Title","ExtractionStatus","ExtractionQuality","ExtractionReason","FetchedAt","IngestProvenance","CleanTextPreview","SnapshotRef","SnapshotStatus","Priority","IngestHooks"|>`
+Options: "TimeoutSeconds" -> 30, "StoreEvidence" -> True, "Provenance" -> `<||>`, "RecordGap" -> True
+ExtractionStatus 値: "Succeeded" / "Failed" / "FetchFailed" / "Skipped"
+ExtractionQuality 値: "Good" (≥1500文字) / "Fair" (200-1499) / "Poor" (<200)
+例: `SourceVaultWebFetch["https://example.com", "Provenance" -> <|"UserSpecifiedUrl" -> True, "RequestChannel" -> "Notebook"|>]`
+
+## Web Ingest フック
+
+### SourceVaultRegisterWebIngestHook[name_String, f_] → Association
+`SourceVaultWebFetch` 完了時に呼ぶフック `f[ctx]` を登録する拡張点。`ctx = <|"Result", "Url"|>`。hook 失敗は fetch を壊さない。
+→ `<|"Status" -> "Registered","Name"|>`
+
+### SourceVaultUnregisterWebIngestHook[name_String] → Association
+登録フックを解除する。→ `<|"Status" -> "Unregistered","Name"|>`
+
+### SourceVaultWebIngestHooks[] → List
+登録済み web ingest フック名のリストを返す。
 
 ## 参照イベントログ
 
-### SourceVaultAddReferenceEvent[event] → Association
-参照イベントを `LocalState/hotlog/reference_events/YYYY-MM.jsonl` に追記する (append-only)。`EventId` (UUID 12文字) と `Weight -> 1.0` を自動付与し dedup キーとして使う。
-→ `<|"Status"->"Appended", "RecordId", "Shard"|>` または `Failure`
-event は `<|"recordId"->..., "recordClass"->..., "eventType"->..., "channel"->...|>` の形式。eventType は `$SourceVaultRefEventWeights` のキーが有効。
+### SourceVaultAddReferenceEvent[event_Association] → Association
+参照イベントを append-only log (`LocalState/hotlog/reference_events/YYYY-MM.jsonl`) に追記する。自動で `At`/`EventId`/`Weight -> 1.0` を付与。
+→ `<|"Status" -> "Appended","RecordId","Shard"|>` または `Failure`
+event 必須キー: `"recordId"`, `"recordClass"`, `"eventType"`
+eventType の重みは `$SourceVaultRefEventWeights` 参照。
 
-### SourceVaultRefCount[recordId] → Integer
-recordId の参照イベント数をローカルホットログ ∪ CoreRoot rollup から算出して返す。
+### SourceVaultRefCount[recordId_String] → Integer
+recordId の参照イベント数を local hot ログ ∪ CoreRoot rollup から返す。
 
-### SourceVaultRecordImportance[recordId, opts]
-参照イベントから recency-aware な重要度を計算する。ローカルホットログ ∪ CoreRoot rollup (全 host) を読み EventId で dedup する。
-→ `<|"RecordId", "RefCount", "FirstReferencedAt", "LastReferencedAt", "RecentReferenceScore", "HistoricalImportance", "CurrentImportance"|>`
-Options: `"HalfLifeDays" -> 90` (指数減衰の半減期), `"BasePriority" -> 0.0` (CurrentImportance に加算)
+### SourceVaultRecordImportance[recordId_String, opts]
+参照イベントから recency-aware な重要度を計算する (spec v6 §36-38)。local ∪ rollup を読み dedup して集計。
+→ `<|"RecordId","RefCount","FirstReferencedAt","LastReferencedAt","RecentReferenceScore","HistoricalImportance","CurrentImportance"|>`
+Options: "HalfLifeDays" -> 90, "BasePriority" -> 0.0
 
-## 参照イベント Rollup / 集約
+### $SourceVaultRefEventWeights
+型: Association, 初期値: `<|"Displayed"->0.2,"Retrieved"->0.3,"Searched"->0.3,"Selected"->0.5,"Ingested"->0.5,"Summarized"->0.7,"Exported"->0.8,"UsedInAnswer"->1.0,"Cited"->1.5,"UserPinned"->2.0,"Deposited"->0.1|>`
+eventType → 重み の対応表。`SourceVaultRecordImportance` / `SourceVaultWebImportance` で使用。
+
+## 参照イベント Rollup (CoreRoot/Dropbox 集約)
 
 ### SourceVaultRollupReferenceEvents[opts]
-LocalState の hot ログ未集約分を `CoreRoot/rollup/reference_events/<host>/<shard>.jsonl` へ追記する。watermark で増分管理し追記のみ (非破壊)。低頻度バッチで呼ぶ前提。
-→ `<|"Status"->"OK"|"DryRun"|"NoLocalEvents"|"Error", "Host", "Shards", "NewEvents", "RolledShards", "PerShard", "RollupDir"|>`
-Options: `"DryRun" -> False`
+LocalState の参照イベント hot ログ (machine-local) の未集約分を `CoreRoot/rollup/reference_events/<host>/<shard>.jsonl` に追記する。watermark で増分管理し追記のみ (非破壊)。低頻度バッチ用。
+→ `<|"Status","Host","Shards","NewEvents","RolledShards","PerShard","RollupDir"|>`
+Options: "DryRun" -> False
 
 ### SourceVaultReferenceEventStoreStatus[] → Association
 参照イベントストアの可観測性情報を返す。
-→ `<|"LocalShards", "LocalTotal", "UnrolledEvents", "RollupByHost", "RollupTotal", "Host", "Watermark", "LocalDir", "RollupDir"|>`
+→ `<|"LocalShards","LocalTotal","UnrolledEvents","RollupByHost","RollupTotal","Host","Watermark","LocalDir","RollupDir"|>`
 
 ### SourceVaultPruneRolledReferenceEvents[opts]
-CoreRoot rollup に集約済みの古い local shard を削除して hot ログの肥大を抑える。rollup に同数以上のイベントが存在することを確認した shard のみ削除する。破壊的操作のため既定 `DryRun -> True`。
-→ `<|"Status"->"DryRun"|"OK"|"NoLocalEvents", "Host", "PrunedCount", "Pruned", "Kept"|>`
-Options: `"DryRun" -> True`, `"KeepMonths" -> 2` (最新 N ヶ月分は削除対象外)
+CoreRoot rollup に集約済みの古い local shard を削除して hot ログ肥大を抑える。rollup に同数以上のイベントが存在する shard のみ削除。破壊的操作のため既定 DryRun -> True。
+→ `<|"Status","Host","PrunedCount","Pruned","Kept"|>`
+Options: "DryRun" -> True (rule103 により既定 safe), "KeepMonths" -> 2 (最新 N ヶ月分は残す)
 
-## 構造 Priority / 重要度
+### $SourceVaultRollupIntervalSeconds
+型: Integer, 初期値: 21600 (6時間)
+service heartbeat ループが `SourceVaultRollupReferenceEvents` を自動実行する最小間隔 (秒)。反映には service 再起動が必要。
 
-### SourceVaultWebComputePriority[provenance] → Association
-### SourceVaultWebComputePriority[provenance, doc] → Association
-WebDocument の構造的重要度 0.0–1.0 を決定的に計算する (LLM 不要)。シグナル: ドメイン重み + 検索ランク (指数減衰 `0.20 * 2^(-(rank-1)/4)`) + SearXNG スコア (0.10) + ユーザ明示 URL (+0.15) + 抽出品質 (Good:+0.05 / Poor:-0.10 / FetchFailed:-0.20)。
-→ `<|"Priority", "Components" -> <|"DomainWeight", "Domain", "Rank", "RankAdj", "Score", "ScoreAdj", "UserSpecifiedUrl", "DirectAdj", "ExtractionQuality", "QualityAdj"|>|>`
-provenance は `SourceVaultWebSearch` / `SourceVaultWebFetch` の `"IngestProvenance"` または `iWebResultProvenance` が作る Association。
+## 構造 Priority (provenance ベース)
 
-### SourceVaultWebPriority[recordId] → Association | Missing
-recordId (snapshot Ref) の保存済み Priority sidecar (`LocalState/derived/web_priority/`) を返す。
-→ `<|"RecordId", "Priority", "Components", "Url", "ComputedAt"|>` または `Missing["NoPriority"]`
+### SourceVaultWebComputePriority[provenance_Association] → Association
+### SourceVaultWebComputePriority[provenance_Association, doc_Association] → Association
+WebDocument の構造的重要度 0.0-1.0 を決定的に計算する (LLM 不要)。シグナル: ドメイン重み + 検索ランク (指数減衰) + SearXNG スコア + ユーザ明示 URL + 抽出品質。
+→ `<|"Priority","Components" -> <|"DomainWeight","Domain","Rank","RankAdj","Score","ScoreAdj","UserSpecifiedUrl","DirectAdj","ExtractionQuality","QualityAdj"|>|>`
+例: `SourceVaultWebComputePriority[<|"UserSpecifiedUrl"->True,"SearchRank"->1|>, <|"Url"->"https://arxiv.org/...", "ExtractionQuality"->"Good"|>]`
 
-### SourceVaultWebImportance[recordId, opts]
-構造 Priority (provenance 初期推定) と使用ベース CurrentImportance (参照イベント) を統合した順位スコアを返す。
-→ `<|"RecordId", "Priority", "PriorityComponents", "RefCount", "RecentReferenceScore", "CurrentImportance", "LastReferencedAt", "CombinedScore"|>`
-CombinedScore = `Clip[PriorityWeight * Priority + (1-PriorityWeight) * Clip[CurrentImportance], {0,1}]`
-Options: `"PriorityWeight" -> 0.5`, `"HalfLifeDays" -> 90`
+### SourceVaultWebPriority[recordId_String] → Association
+recordId の保存済み構造 Priority sidecar を返す。Priority は可変メタのため `LocalState/derived/web_priority/<recordId>.json` に置く。
+→ `<|"RecordId","Priority","Components","Url","ComputedAt"|>` または `Missing["NoPriority"]`
+
+### SourceVaultWebImportance[recordId_String, opts]
+構造 Priority (provenance 初期推定) と使用ベース CurrentImportance (参照イベント) を統合して返す。
+→ `<|"RecordId","Priority","PriorityComponents","RefCount","RecentReferenceScore","CurrentImportance","LastReferencedAt","CombinedScore"|>`
+CombinedScore = `PriorityWeight * Priority + (1 - PriorityWeight) * Clip[CurrentImportance]`
+Options: "PriorityWeight" -> 0.5, "HalfLifeDays" -> 90
 
 ### SourceVaultWebRecomputePriorities[opts]
-保存済み WebDocument snapshot の `IngestProvenance` + 現行ドメイン重みから構造 Priority を再計算し sidecar を更新する。LLM 不要・高速。
-→ `<|"Status", "Scanned", "Updated", "Failed", "SnapshotFiles"|>`
-Options: `"Limit" -> Automatic` (Automatic = 全件, Integer で件数制限)
+保存済み WebDocument snapshot の `IngestProvenance` と現行ドメイン重みから構造 Priority を LLM なしで再計算し sidecar を更新する。
+→ `<|"Status","Scanned","Updated","Failed","SnapshotFiles"|>`
+Options: "Limit" -> Automatic (Automatic = 全件)
 
 ## ドメイン重み
 
-### SourceVaultSetWebDomainWeight[domain, weight, opts]
-ソースドメインの重み (0.0–1.0) を登録し `PrivateVault/config/web_domain_weights.json` に保存する。`"www."` は無視し正規化。サブドメインは親ドメイン重みを継承する。
-→ `<|"Status"->"Set"|"Error", "Domain", "Weight"|>`
-Options: `"Persist" -> True`
+### SourceVaultSetWebDomainWeight[domain_String, weight_?NumericQ, opts]
+ソースドメインの重み (0.0-1.0) を登録し `PrivateVault/config/web_domain_weights.json` に保存する。"www." は無視し正規化。
+→ `<|"Status","Domain","Weight"|>`
+Options: "Persist" -> True
 
 ### SourceVaultWebDomainWeights[] → Association
-登録済みドメイン重みの `domain -> weight` Association を返す (未ロードなら自動ロード)。
+登録済みドメイン重みの全 Association (domain -> weight) を返す。
 
-### SourceVaultWebDomainWeightFor[domain] → Real
-ドメイン (またはサブドメイン) に適用される重みを返す。完全一致 → 親ドメイン継承の順で解決し、未登録なら既定値 `0.4` を返す。
+### SourceVaultWebDomainWeightFor[domain_String] → Real
+ドメイン (またはサブドメイン) に適用される重みを返す。完全一致 → 親ドメイン継承の順で解決し、未登録なら既定値 0.4 を返す。
 
 ### SourceVaultWebDomainWeightsLoad[] → Association
-`PrivateVault/config/web_domain_weights.json` からドメイン重み config を再読み込みする。
-→ `<|"Status"->"Loaded"|"NoRoot", "Count"|>`
+ドメイン重み config を再読み込みする。→ `<|"Status","Count"|>`
 
-## ハイライト抽出
+## ハイライト・要約
 
-### SourceVaultWebHighlights[text, query, opts]
-text を文に分割しクエリ語との重なりでスコアして上位を返す (LLM 不要)。
-→ `<|"Query", "Highlights" -> {文...}, "Count"|>`
-Options: `"MaxHighlights" -> 5`, `"MinChars" -> 20` (最短文字数フィルタ)
+### SourceVaultWebHighlights[text_String, query_String, opts]
+text からクエリ関連の文を抽出して返す (LLM 不要・TextSentences ベース)。
+→ `<|"Query","Highlights" -> {文...},"Count"|>`
+Options: "MaxHighlights" -> 5, "MinChars" -> 20
 
-## LLM 要約
+### SourceVaultSummarizeText[text_String, opts]
+ローカル LLM (LM Studio OpenAI 互換) で text を要約する。MCP 経路から自動では呼ばない (再入回避)。`"Persist" -> True` で Succeeded 時に DerivedArtifact 不変 snapshot を保存し `"ArtifactRef"` を戻り値に付加する。
+→ `<|"Summary","Model","Status"|>` または `Failure`; Persist 時は `"ArtifactRef"` を追加
+Options: "Instruction" -> (モデル既定), "MaxTokens" -> (モデル既定), "Temperature" -> (モデル既定), "Endpoint" -> Automatic, "Model" -> Automatic, "TimeoutSeconds" -> (既定), "Persist" -> False, "SourceRefs" -> {}, "SourceUrls" -> {}, "Query" -> None, "Provenance" -> `<||>`
 
-### SourceVaultSummarizeText[text, opts]
-ローカル LLM (LM Studio) で text を要約する。MCP 経路から自動で呼ばない (再入回避)。`"Persist" -> True` なら要約を DerivedArtifact 不変 snapshot として保存し戻り値に `"ArtifactRef"` を付ける (Succeeded 時のみ)。
-→ `<|"Summary", "Model", "Status"|>` または `Failure`
-Options: `"Instruction" -> Automatic`, `"MaxTokens" -> Automatic`, `"Temperature" -> Automatic`, `"Endpoint" -> Automatic` (`$SourceVaultSummaryEndpoint` 使用), `"Model" -> Automatic`, `"TimeoutSeconds" -> Automatic`, `"Persist" -> False`, `"SourceRefs" -> {}`, `"SourceUrls" -> {}`, `"Query" -> None`, `"Provenance" -> <||>`
-
-### SourceVaultSummarizeResults[run, query]
-検索結果 (run の Results: title/url/snippet) をローカル LLM で要約する。run は `SourceVaultWebSearch` の戻り値または Results リスト。`"Persist" -> True` なら run の `SearchRunRef` / Documents の `SnapshotRef` / 結果 URL を `SourceRefs`/`SourceUrls` として自動付与し DerivedArtifact を保存する。
-→ `SourceVaultSummarizeText` と同形式
-
-### SourceVaultStoreSummaryToken[opts]
-main kernel で解決した LM Studio token を `LocalState/secrets/sourcevault-summary-token.json` (非 Dropbox) に保存する。service kernel (NBAccess 不在) でも token を解決できるようにする。戻り値に token 文字列は含めない。
-→ `<|"Status"->"Stored"|"Error", "Path", "TokenLength"|>`
-Options: `"Token" -> Automatic` (Automatic なら live 解決を試みる)
+### SourceVaultSummarizeResults[run, query_String, opts]
+検索結果 (run の Results: title/url/snippet) をローカル LLM で要約する。run は `SourceVaultWebSearch` の戻り値または Results リスト。`"Persist" -> True` なら SearchRunRef / SnapshotRef / URL を SourceRefs/SourceUrls として自動付与し DerivedArtifact を保存する。
+→ `SourceVaultSummarizeText` と同形
 
 ## DerivedArtifact
 
-### SourceVaultSaveDerivedArtifact[artifact]
-派生成果物を `ObjectClass "DerivedArtifact"` の不変 snapshot として content-addressed store に保存する。`ArtifactType = "Summary"` の場合、`SourceRefs` の各レコードに `"Summarized"` 参照イベントを emit する。
-→ `<|"Status", "Ref", "ArtifactId", ...|>`
-artifact 必須キー: `"ArtifactType"` (例: `"Summary"`), `"Text"`
-任意キー: `"SourceRefs"`, `"SourceUrls"`, `"Query"`, `"Model"`, `"Provenance"`
+### SourceVaultSaveDerivedArtifact[artifact_Association] → Association
+派生成果物 (要約等) を `ObjectClass "DerivedArtifact"` の不変 snapshot として content-addressed store に保存する。`ArtifactType = "Summary"` 時、SourceRefs の各レコードに `"Summarized"` 参照イベントを emit して importance に反映する。
+artifact 必須キー: `"ArtifactType"`, `"Text"`; 任意: `"SourceRefs"`, `"SourceUrls"`, `"Query"`, `"Model"`, `"Provenance"`
+→ `<|"Status","Ref","ArtifactId",...|>`
 
-### SourceVaultDerivedArtifact[ref] → Association
-DerivedArtifact snapshot を ref から読み出す。
+### SourceVaultDerivedArtifact[ref_String] → Association
+DerivedArtifact snapshot を ref から読み出す薄いロードラッパー。
 
-### SourceVaultDerivedArtifactList[opts]
+### SourceVaultDerivedArtifactList[opts] → List
 保存済み DerivedArtifact の一覧 (各 assoc に `"Ref"` を付与) を返す。
-→ List
-Options: `"ArtifactType" -> All` (種別フィルタ; 例: `"ArtifactType" -> "Summary"`)
+Options: "ArtifactType" -> All
 
-### SourceVaultDerivedArtifactsForSource[recordId] → List
-`SourceRefs` に recordId を含む DerivedArtifact を返す (逆引き: 「この source から作られた要約」)。
+### SourceVaultDerivedArtifactsForSource[recordId_String] → List
+`SourceRefs` に recordId を含む DerivedArtifact を返す (source → 派生成果物 の逆引き)。
 
-## SearXNG 可用性 / Backend 切替
+## LLM 設定変数
 
-### SourceVaultSearXNGAvailableQ[opts]
-`$SourceVaultSearXNGEndpoint` が到達可能かを返す。結果は既定 60 秒キャッシュ。
-→ `True | False`
-Options: `"CacheSeconds" -> 60`, `"TimeoutSeconds" -> Automatic`
+### $SourceVaultSummaryEndpoint
+型: String, 初期値: "http://localhost:1234/v1/chat/completions"
+要約に使う LLM の chat completions エンドポイント (LM Studio OpenAI 互換)。
 
-### SourceVaultSwapWebSearchBackend[integrations]
-integrations 中の web 検索 backend を SearXNG 可用時は SourceVault MCP に、不可時は exa に統一する。string ID と `<|"id"->...|>` 形式の両方に対応。web 検索以外の要素は不変。
-→ integrations と同形式の List
+### $SourceVaultSummaryModel
+型: String|Automatic, 初期値: Automatic
+要約に使うモデル id。Automatic なら `/v1/models` から動的解決する (rule 02: ハードコードしない)。
+
+### $SourceVaultSummaryToken
+型: String|Automatic, 初期値: Automatic
+LM Studio API token。Automatic なら `ClaudeCode`$ClaudeLMStudioAPIToken` / NBAccess / `LocalState/secrets/sourcevault-summary-token.json` の順で解決する (rule 20: ハードコードしない)。
+
+### SourceVaultStoreSummaryToken[opts] → Association
+main kernel で解決した LM Studio token を `LocalState/secrets/sourcevault-summary-token.json` (非 Dropbox) に保存する。service kernel (NBAccess 不在) での要約用 token 解決に使う。戻り値に token 文字列を含めない (rule 20)。
+Options: "Token" -> Automatic (明示指定可)
+
+## SearXNG 可用性・backend 切替
+
+### SourceVaultSearXNGAvailableQ[opts] → True|False
+SearXNG (`$SourceVaultSearXNGEndpoint`) が到達可能かを返す。結果はキャッシュされる。
+Options: "CacheSeconds" -> 60, "TimeoutSeconds" -> (既定)
+
+### SourceVaultSwapWebSearchBackend[integrations_List] → List
+integrations 中の web 検索 backend を SearXNG 可用時は SourceVault MCP に、不可時は exa に差し替えて返す。string ID と `<|"id"->...|>` 形式の両方に対応。web 検索以外の要素は不変。
 
 ### SourceVaultWebSearchIntegration[] → List
 現在使うべき web 検索 integration リストを返す。SearXNG 可用なら `{$SourceVaultWebSearchIntegrationId}`、不可なら `{$SourceVaultExaFallbackIntegrationId}`。
-例: `ClaudeCode``$ClaudeLMStudioIntegrations := SourceVaultWebSearchIntegration[]`
+例: `ClaudeCode`$ClaudeLMStudioIntegrations := SourceVaultWebSearchIntegration[]`
 
-## データ構造
+## backend 切替変数
 
-IngestProvenance (最小): `<|"ProvenanceId", "InitiationType", "RequestChannel", "UrlOrigin", "UserSpecifiedUrl", "UserSpecifiedQuery", "Actor", "PromptRef", "CreatedAt"|>`
-ResultProvenance (fetch 用): IngestProvenance + `<|"Url", "SourceDomain", "SearchRank", "SearchScore", "SearchEngine"|>`
-WebDocument snapshot キー: `"ObjectClass"->"WebDocument"`, `"Url"`, `"ContentHash"`, `"RawBlobRef"`, `"CleanTextRef"`, `"ExtractionStatus"`, `"IngestProvenance"` ほか
-job 状態遷移: `"Queued"` → `"Running"` → `"Succeeded"` | `"Failed"` (service 再起動時は `SourceVaultWebRecoverStaleJobs` で `"Failed"` に掃く)
+### $SourceVaultSearXNGEndpoint
+型: String, 初期値: "http://127.0.0.1:8888"
+SearXNG の既定エンドポイント。`SourceVaultSearXNGSearch` の `"Endpoint" -> Automatic` 時に使用。
+
+### $SourceVaultWebSearchAsync
+型: True|False, 初期値: True
+`SourceVaultWebSearchSubmit` を非同期 (`SessionSubmit`) で実行するか。False なら inline 実行 (テスト/デバッグ用)。
+
+### $SourceVaultWebSearchIntegrationId
+型: String, 初期値: "mcp/sourcevault"
+SearXNG 可用時に使う LM Studio integration ID。
+
+### $SourceVaultExaFallbackIntegrationId
+型: String, 初期値: "mcp/exa"
+SearXNG 不可時の後方互換 integration ID。
+
+## 戻り値キー早見表
+
+| 関数 | 重要キー |
+|---|---|
+| SourceVaultSearXNGSearch | Provider / Results[]{Title,Url,Snippet,Rank} / Status |
+| SourceVaultWebSearch | RunId / IngestProvenance / SearchRunRef / Results |
+| SourceVaultWebSearchSubmit | JobId / Status / Async |
+| SourceVaultWebJobResult | Ready / Result / FailureReason |
+| SourceVaultWebFetch | SnapshotRef / ContentHash / CleanTextRef / ExtractionStatus / Priority |
+| SourceVaultRecordImportance | RefCount / RecentReferenceScore / CurrentImportance |
+| SourceVaultWebImportance | Priority / CombinedScore / CurrentImportance |
+| SourceVaultWebComputePriority | Priority / Components{DomainWeight,RankAdj,ScoreAdj,DirectAdj,QualityAdj} |
+| SourceVaultRollupReferenceEvents | NewEvents / RolledShards / PerShard |
+| SourceVaultSaveDerivedArtifact | Status / Ref / ArtifactId |
+
+## provenance 構造
+
+`SourceVaultWebSearch` / `SourceVaultWebFetch` の `"Provenance"` オプションに渡す Association の主要キー:
+`"InitiationType"` ("UserPromptSearch" 等), `"RequestChannel"` ("Notebook" 等), `"UrlOrigin"` ("SearchResult"/"UserSpecified"), `"UserSpecifiedUrl"` (True/False), `"UserSpecifiedQuery"` (True/False), `"Actor"` (`<|"Type"->"HumanUser"|>` 等), `"PromptRef"`, `"SearchRank"` (Integer), `"SearchScore"` (Real), `"SearchEngine"` (String), `"SourceDomain"` (String)

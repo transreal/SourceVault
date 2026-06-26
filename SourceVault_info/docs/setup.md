@@ -39,12 +39,15 @@ GitHubInstallPackage["SourceVault",
 
 `SourceVault.wl` のロード時には、同じディレクトリにある以下の補助サブファイルが自動的に読み込まれます。これらも `$packageDirectory` 直下に配置してください。
 
-- `SourceVault_core.wl` — コアサブファイル
-- `SourceVault_searchindex.wl` — 検索インデックス
-- `SourceVault_servicemanager.wl` — サービスマネージャ
+- `SourceVault_core.wl` — コア基盤（排他制御・不変 snapshot・event log・blob・pointer）
+- `SourceVault_searchindex.wl` — 検索インデックス・公開ポリシー
+- `SourceVault_servicemanager.wl` — サービス管理・Python proxy
+- `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得
+- `SourceVault_mcp.wl` — MCP tool schema / dispatch ＋ sv:// オブジェクト解決
+- `SourceVault_workflowregistry.wl` — コード化ワークフローのオンデマンドローダ
 - `SourceVault_promptrouter.wl` — PromptRouter 拡張
 
-リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。
+リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。暗号化・メールを使う場合は `SourceVault_crypto.wl` / `SourceVault_identity.wl` / `SourceVault_maildb.wl` も、Eagle 統合を使う場合は `SourceVault_eagle.wl`（手動ロード）も同様に配置します。
 
 依存パッケージも同様にインストールできます。
 
@@ -87,18 +90,21 @@ $packageDirectory
 ```
 $packageDirectory\
   SourceVault.wl                 ← 本体
-  SourceVault_core.wl            ← コアサブファイル（本体ロード時に自動ロード）
+  SourceVault_core.wl            ← コア基盤（本体ロード時に自動ロード）
   SourceVault_searchindex.wl     ← 検索インデックス（本体ロード時に自動ロード）
-  SourceVault_servicemanager.wl  ← サービスマネージャ（本体ロード時に自動ロード）
+  SourceVault_servicemanager.wl  ← サービス管理（本体ロード時に自動ロード）
+  SourceVault_webingest.wl       ← SearXNG/Web 検索（本体ロード時に自動ロード）
+  SourceVault_mcp.wl             ← MCP + sv:// オブジェクト解決（本体ロード時に自動ロード）
+  SourceVault_workflowregistry.wl ← ワークフローレジストリ（本体ロード時に自動ロード）
   SourceVault_promptrouter.wl    ← PromptRouter 拡張（本体ロード時に自動ロード）
   NBAccess.wl
   claudecode.wl
   ...
 ```
 
-> サブフォルダには配置しないでください。
+> サブフォルダには配置しないでください（コード化ワークフローを置く `SourceVault_workflows/` のみ例外で、これは本体が自動で解決します）。
 >
-> `SourceVault_core.wl`・`SourceVault_searchindex.wl`・`SourceVault_servicemanager.wl`・`SourceVault_promptrouter.wl` はいずれも `SourceVault.wl` のロード時に同じディレクトリから自動的に読み込まれます。
+> 上記の `SourceVault_*.wl` はいずれも `SourceVault.wl` のロード時に同じディレクトリから自動的に読み込まれます（旧 `SourceVault_objectview.wl` は `mcp`/`eagle` に統合され廃止）。
 
 ### 3. `$Path` の設定
 
@@ -171,7 +177,7 @@ Needs["SourceVault`", "SourceVault.wl"]
 
 `$SourceVaultDefaultNotebookFolder` は、SourceVault が管理するノートブックのデフォルト保存先フォルダを指定します。PresentationListener の保存先としても使用されます。
 
-- 既定値は `Automatic` で、`Global`$onWork` に解決し、未定義の場合は `$packageDirectory` にフォールバックします。
+- 既定値は `Automatic` で、`Global`$onWork`` に解決し、未定義の場合は `$packageDirectory` にフォールバックします。
 - 絶対パスの文字列を設定すると、そのフォルダがデフォルトの Scope になります。
 
 ```mathematica
@@ -401,35 +407,82 @@ SourceVault`SourceVaultPriorityGroupWeights[]
 
 LM Studio などのローカル LLM の Web 検索を、外部 API (Exa 等) ではなく **ローカル SearXNG → SourceVault → MCP** ゲートウェイ経由にする構成です。検索が SourceVault に監査記録され（誰が・いつ・何を検索したか、結果 URL、取得本文）、importance / 構造 Priority / クロスマシン集約と連携します。この節は任意で、使わない場合はスキップして構いません。
 
-実装は `SourceVault_webingest.wl`（SearXNG クライアント・本文取得・job・参照イベント・importance・要約）と `SourceVault_mcp.wl`（MCP tool schema / dispatch）に分かれ、`SourceVault.wl` ロード時に自動で読み込まれます。
+実装は `SourceVault_webingest.wl`（SearXNG クライアント・本文取得・job・参照イベント・importance・要約）と `SourceVault_mcp.wl`（MCP tool schema / dispatch）に分かれ、`SourceVault.wl` ロード時に自動で読み込まれます。MCP の HTTP/JSON-RPC endpoint 自体は `SourceVault_servicemanager.wl` が起動する Python proxy 側にあります。
 
-### 1. SearXNG のインストール
+### 構成（どこで何が動くか）
 
-[SearXNG](https://docs.searxng.org/) をローカル（`127.0.0.1`）に立てます。Docker が手軽です。
+このゲートウェイは **Mathematica 単体では完結せず**、複数のコンポーネントが連携します。下表の順に設定します。
 
-```bash
-# searxng-docker (推奨): https://github.com/searxng/searxng-docker
-git clone https://github.com/searxng/searxng-docker.git
-cd searxng-docker
-# .env で SEARXNG_HOSTNAME=localhost、ポートを 8888 に調整
-docker compose up -d
+| コンポーネント | 役割 | 動かす場所 | 設定する場所 |
+|---|---|---|---|
+| **SearXNG** | メタ検索エンジン | Docker コンテナ（`127.0.0.1:8888`） | `settings.yml`（手順 1） |
+| **WL service kernel** | MCP dispatch（検索・本文取得の実体） | headless wolframscript（`SourceVaultStartMCP[]` が起動） | Mathematica（手順 2〜3） |
+| **Python proxy** | `POST /sv/mcp` の HTTP/JSON-RPC endpoint | `SourceVaultStartMCP[]` が同時起動（`127.0.0.1:8731`） | 自動（手順 3） |
+| **MCP クライアント** | Claude Code / Codex / LM Studio | 各クライアント | `claude mcp add` / `config.toml` / `mcp.json`（手順 4） |
+
+```text
+Claude Code / Codex / LM Studio
+        |  remote MCP over HTTP (POST /sv/mcp, JSON-RPC)
+        v
+Python proxy (127.0.0.1:8731) --file command queue--> WL service kernel
+                                                          | SourceVaultMCPDispatch
+                                                          v
+                                                 SourceVaultWebSearch / WebFetch
+                                                          |
+                                                          v
+                                                 SearXNG (127.0.0.1:8888)
 ```
 
-`searxng/settings.yml` で **JSON API を有効化**します（SourceVault は JSON 形式を使うため必須）。
+要するに **(手順 1) Docker で SearXNG を立てる → (手順 2) Mathematica から到達確認 → (手順 3) `SourceVaultStartMCP[]` で WL service + Python proxy を起動 → (手順 4) 各 MCP クライアント（Claude Code / Codex / LM Studio）を `/sv/mcp` に向ける → (手順 7) 動作確認** という流れです。Python proxy の実行には Python（`$SourceVaultPython`）が必要です。
+
+### 1. SearXNG のインストール（Docker）
+
+SourceVault が必要とするのは **ローカルの SearXNG JSON API** だけです。Caddy や公開ホスト名は不要なので、**SearXNG 単体コンテナ**を立てるのが最も簡単・確実です（Windows でも host networking の問題を避けられます）。
+
+> ⚠️ 旧来の `searxng-docker` リポジトリ（`git clone .../searxng-docker`）は **deprecated** になり、`master` から compose ファイルが削除されました。clone しても `docker-compose.yaml` が無く、`docker compose up -d` が `no configuration file provided: not found` になります。下記の単体構成を使ってください。
+
+任意の作業フォルダ（例 `searxng-local`）に次の 2 ファイルを置きます。
+
+`docker-compose.yaml`:
 
 ```yaml
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"        # ホスト 8888 → コンテナ 8080。SourceVault 既定が 8888
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+```
+
+`searxng/settings.yml`（**JSON API を有効化**。SourceVault は JSON 形式を使うため必須）:
+
+```yaml
+use_default_settings: true
+server:
+  secret_key: "<ランダムな秘密鍵に置換>"
+  limiter: false        # ローカル単独利用ならボット検出を緩める
+  image_proxy: false
 search:
   formats:
     - html
-    - json          # ← これが無いと SourceVault からの検索が 403 になる
-server:
-  bind_address: "127.0.0.1"
-  port: 8888
-  secret_key: "<ランダムな秘密鍵>"
-  limiter: false    # ローカル単独利用ならボット検出を緩める
+    - json              # ← これが無いと SourceVault からの検索が 403 になる
 ```
 
-> SearXNG が `403` / 空結果を返す場合は、`search.formats` に `json` が含まれているか、`limiter` / `botdetection` がローカルアクセスをブロックしていないかを確認してください（`SourceVaultSearXNGSearch` のエラーメッセージにもこのヒントが出ます）。
+起動して JSON API の応答を確認します。
+
+```bash
+docker compose up -d
+curl "http://127.0.0.1:8888/search?q=test&format=json"   # JSON が返れば OK
+```
+
+> `settings.yml` を編集したら `docker compose restart` で反映します。SearXNG が `403` / 空結果を返す場合は、`search.formats` に `json` が含まれているか、`limiter` がローカルアクセスをブロックしていないかを確認してください（`SourceVaultSearXNGSearch` のエラーメッセージにもヒントが出ます）。
+>
+> 公式の新しい導入手順（compose instancing）は [SearXNG ドキュメント](https://docs.searxng.org/admin/installation-docker.html) を参照。どうしても旧 `searxng-docker` の compose を使いたい場合は deprecated 直前の commit を checkout します（`git checkout 0c7875a`）。ただし既定では SearXNG が `127.0.0.1:8080` 公開・Caddy 同梱なので、`$SourceVaultSearXNGEndpoint` を `:8080` にするか、`docker-compose.yaml` の `searxng` のポートを `127.0.0.1:8888:8080` に変更してください。
 
 ### 2. エンドポイント設定と可用確認
 
@@ -457,11 +510,32 @@ SourceVault`SourceVaultMCPRunningQ[]                (* True / False *)
 ```
 
 - 既定 serviceId は `$SourceVaultMCPServiceId`（既定 `"sourcevault"`）。
-- ポート・トークンは `$SourceVaultMCPPort` / `$SourceVaultMCPToken`（既定 `Automatic` = 既存 `proxy.config.json` から解決、無ければ 8731 / 認証なし）。明示するなら `SourceVaultStartMCP["Port" -> 9700, "MCPToken" -> "○○○"]`。
+- ポート・トークンは `$SourceVaultMCPPort` / `$SourceVaultMCPToken`（既定 `Automatic` = 既存 `proxy.config.json` から解決、無ければ **8731** / 認証なし）。明示するなら `SourceVaultStartMCP["Port" -> 8731, "MCPToken" -> "○○○"]`。
+  - **正規ポートは 8731 です。** 全クライアント（Claude Code / Codex / LM Studio）の登録 URL を 8731 に揃えてください。過去に `9700` を使っていた設定が残っていると `ECONNREFUSED` になります（`9700` は旧テスト用 serviceId の名残で、現行 `sourcevault` サービスでは使いません）。
 - 既定は `127.0.0.1` バインドの localhost 限定。トークン未設定なら認証なし（localhost のみ）。
 - **`.wl` を更新したら稼働中サービスには反映されません。** `SourceVaultRestartService["sourcevault"]`（または `SourceVaultStopMCP[]` → `SourceVaultStartMCP[]`）で再起動します。
 
 `ShowClaudePalette[]`（claudecode）のプライバシー直下にも **MCP 起動/停止トグル**が出ます（SourceVault がロードされている場合）。ラベルは実状態に追従します。
+
+> **ボタンの状態判定について（2026-06）**: パレットの「実行中／停止中」は `SourceVaultMCPRunningQ[]` に追従し、これは単に proxy ポートが listen しているかではなく **`/health` の `healthState=="OK"`（背後の WL サービスカーネルが心拍を打っているか）** で判定します。これにより「proxy だけ生きていてサービスカーネルが死んでいる」状態を「実行中」と誤表示しません（誤表示するとトグルが逆に Stop してしまうため）。
+
+#### ログオン時の自動起動（任意・推奨）
+
+毎回 Mathematica を開いてトグルを押す手間を省き、再起動後も自動で MCP を上げるには、**Startup フォルダ**（`shell:startup`）に proxy と service の hidden ランチャへのショートカットを置きます。各ランチャは `SourceVaultStartMCP[]` が生成済みの `runtime\<machine>\{proxies,services}\sourcevault\launch_hidden.vbs` です（一度 `SourceVaultStartMCP[]` を実行して生成しておくこと）。
+
+```powershell
+$startup = [Environment]::GetFolderPath('Startup')
+$ws = New-Object -ComObject WScript.Shell
+foreach($p in @(
+    @("SourceVaultProxy.lnk",   "...\runtime\<machine>\proxies\sourcevault\launch_hidden.vbs"),
+    @("SourceVaultService.lnk", "...\runtime\<machine>\services\sourcevault\launch_hidden.vbs"))){
+  $lnk = $ws.CreateShortcut((Join-Path $startup $p[0]))
+  $lnk.TargetPath = "C:\Windows\System32\wscript.exe"
+  $lnk.Arguments  = ('//B //Nologo "{0}"' -f $p[1]); $lnk.WindowStyle = 7; $lnk.Save()
+}
+```
+
+proxy（Python）と service（WL カーネル）はファイルコマンドキュー連携で起動順に依存しないため、両方を独立に Startup 起動して構いません。service は launch_hidden.vbs が生成済み `run.wls`（注入 root/hash 入り）を使うため、root 構成が安定している限りそのまま動きます。**サービスカーネルは Wolfram ライセンスの同時メインカーネル席を 1 つ使います**（席が枯渇していると `unregistered` で即死します。次の「ライセンス席」の項を参照）。
 
 停止は:
 
@@ -469,9 +543,58 @@ SourceVault`SourceVaultMCPRunningQ[]                (* True / False *)
 SourceVault`SourceVaultStopMCP[]                    (* proxy + service を停止 *)
 ```
 
-### 4. LM Studio の mcp.json 設定
+### 4. MCP クライアントの登録（Claude Code / Codex / LM Studio）
 
-LM Studio の MCP 設定（`mcp.json`、LM Studio の「Program」→ Edit mcp.json から編集）に、SourceVault を **remote MCP（URL）** として登録します。`SourceVaultMCPStatus[]` が返す `Url` をそのまま使います。
+`SourceVaultMCPStatus[]` が返す `Url`（既定 `http://127.0.0.1:8731/sv/mcp`、`proxy.config.json` に既存値があればそれ）を、各クライアントに **remote MCP（streamable HTTP）** として登録します。トークンを設定した場合のみヘッダ `X-SourceVault-Token` を付けます（未設定なら localhost 限定で認証なし）。提供ツールは `sourcevault_web_search` / `sourcevault_submit_web_search` / `sourcevault_job_status` / `sourcevault_job_result` / `sourcevault_get_document` の 5 つです。
+
+> いずれのクライアントも、登録前に手順 3 で MCP サーバが起動済みである必要があります（`SourceVaultMCPRunningQ[]` が `True`）。ポートは必ず `SourceVaultMCPStatus[]` の `Url` に合わせてください。
+
+#### 4-a. Claude Code
+
+CLI で追加します（`--transport` / `--header` / `--scope` はサーバ名より前に置きます）。
+
+```bash
+# 全プロジェクトで使う (user スコープ)
+claude mcp add --transport http --scope user sourcevault http://127.0.0.1:8731/sv/mcp
+
+# トークンを設定している場合
+claude mcp add --transport http --scope user sourcevault http://127.0.0.1:8731/sv/mcp \
+  --header "X-SourceVault-Token: <token>"
+```
+
+プロジェクト単位で共有するなら `--scope project`（リポジトリ直下の `.mcp.json` に書かれ、git に commit できます）。
+
+**検証:**
+
+```bash
+claude mcp list            # sourcevault が ✓ Connected と表示されれば OK
+claude mcp get sourcevault # URL / 状態の詳細
+```
+
+Claude Code セッション内では `/mcp` でも接続状態とツール一覧を確認できます。
+
+#### 4-b. Codex（OpenAI Codex CLI）
+
+`~/.codex/config.toml`（プロジェクト限定なら `.codex/config.toml`）に streamable HTTP サーバとして追記します。`url` があると HTTP サーバとして扱われます。
+
+```toml
+[mcp_servers.sourcevault]
+url = "http://127.0.0.1:8731/sv/mcp"
+# トークンを設定している場合のみ（静的ヘッダ）
+# http_headers = { "X-SourceVault-Token" = "<token>" }
+```
+
+**検証:**
+
+```bash
+codex mcp list             # sourcevault が一覧に出れば OK
+```
+
+接続できない場合は `url` のポートが `SourceVaultMCPStatus[]` の `Url` と一致しているか、proxy が起動しているか（`SourceVaultMCPRunningQ[]`）を確認します。
+
+#### 4-c. LM Studio
+
+LM Studio の MCP 設定（`mcp.json`、「Program」→ Edit mcp.json から編集）に、SourceVault を **remote MCP（URL）** として登録します。`SourceVaultMCPStatus[]` が返す `Url` をそのまま使います。
 
 ```json
 {
@@ -496,7 +619,9 @@ LM Studio の MCP 設定（`mcp.json`、LM Studio の「Program」→ Edit mcp.j
 }
 ```
 
-ポートは実際の公開ポート（既定解決なら 8731、`proxy.config.json` に既存値があればそれ）に合わせてください。LM Studio はこの MCP が提供する `sourcevault_web_search` / `sourcevault_submit_web_search` / `sourcevault_job_status` / `sourcevault_job_result` / `sourcevault_get_document` ツールを使って検索・本文取得を行います。
+ポートは実際の公開ポート（既定解決なら 8731、`proxy.config.json` に既存値があればそれ）に合わせてください。LM Studio はこの MCP が提供するツールを使って検索・本文取得を行います。
+
+**検証:** LM Studio のチャットで Web 検索を促し、`sourcevault_web_search` が呼ばれること、および Mathematica 側で `SourceVaultWebSearchRunList[]` の監査記録が増えること（手順 7）を確認します。
 
 ### 5. 要約トークンの保存（任意・サービス側要約を使う場合）
 
@@ -557,6 +682,8 @@ result["SnapshotId"]
 SourceVaultContext[result["SnapshotId"], {1, 100}]
 ```
 
+> `SourceVaultIngest` の戻り値には、content-addressed な正準 URI `"URI" -> sv://snapshot/sha256/<hex>` が含まれます。これは `SourceVaultSources` の行や MCP の `SourceVaultParseURI` と共通の join / 参照キーで、絶対パスや内部 Id より machine / provider 非依存です。
+
 ### Notebook ソースの動作確認
 
 任意の `.nb` ファイルを first-class source として登録できます。
@@ -575,29 +702,85 @@ NBReadHeader[nbPath]
 NBReadTodos[nbPath]
 ```
 
-### ソース一覧・横断検索の動作確認（SourceVaultSources / SourceVaultSummaries）
+### ソース一覧・横断検索の動作確認（SourceVaultSources / SourceVaultArXiv / SourceVaultSummaries）
 
-登録済みのすべてのソースを一覧表示する `SourceVaultSources` と、Eagle 保存済みサマリー等の登録プロバイダ横断で検索・統合表示する `SourceVaultSummaries` が利用できます。arXiv 論文ソースについては、タイトル・著者・出版日が arXiv API（export.arxiv.org）から自動取得され、メタデータとしてキャッシュされます。
+登録済みのすべてのソースを一覧表示する `SourceVaultSources`、arXiv ソースだけを表示する `SourceVaultArXiv`、Eagle 保存済みサマリー等の登録プロバイダ横断で検索・統合表示する `SourceVaultSummaries` が利用できます。arXiv 論文ソースについては、タイトル・著者・出版日が arXiv API（export.arxiv.org）から自動取得され、メタデータとしてキャッシュされます。ingest 時には arXiv アブストラクトを取得して `$Language` へ翻訳したものが Summary として自動付与されます。各行には URL リンク（▶ URL）と、ingest 済みファイルを現在の PC で開くリンク（▶ 開く）が付きます。
 
 ```mathematica
 (* 登録済みソースの一覧を Grid で表示 *)
 SourceVaultSources[]
 
+(* 部分一致で絞り込み（Title/Authors/Summary/URL/Id 等） *)
+SourceVaultSources["transformer"]
+
+(* arXiv だけを、今日 ingest した分に絞って表示 *)
+SourceVaultSources["", "Kind" -> "arxiv", "On" -> Today]
+
 (* 登録プロバイダ横断でサマリー等を検索し統合表で表示 *)
-SourceVaultSummaries["検索語",
+SourceVaultSummaries["可逆計算",
   "FetchMetadata" -> Automatic,   (* Automatic: 未取得のみ取得 | False: ネットワーク不使用 | True: 強制再取得 *)
   "Format" -> "Grid"              (* "Grid"（既定）| "Dataset" | "Rows" *)
 ]
+```
+
+`SourceVaultSources` の主なオプション:
+
+| オプション | 既定値 | 説明 |
+|-----------|--------|------|
+| `"Limit"` | `Automatic` | 表示件数の上限（`Automatic` / 整数） |
+| `"Kind"` | `All` | 種別フィルタ。`All` / `"arxiv"` / `"web"` / `"local"` |
+| `"FetchMetadata"` | `Automatic` | `Automatic`: 未取得のみ取得 / `False`: ネットワーク不使用 / `True`: 強制再取得 |
+| `"Since"` / `"Until"` / `"On"` | 未指定 | ingest 日での絞り込み。日付文字列 `"yyyy-mm-dd"` / `Today` / `DateObject`。`"On"` は単日、`"Since"` / `"Until"` は範囲（両端含む） |
+| `"Author"` | 未指定 | 著者名の部分一致 |
+| `"Format"` | `"Grid"` | `"Grid"`: テーブル表示 / `"Dataset"`: Dataset として返す / `"Rows"`: 行リスト |
+
+`SourceVaultArXiv` は `SourceVaultSources[query, "Kind" -> "arxiv", ...]` の薄いラッパで、オプションは `SourceVaultSources` と同じです。Eagle の `SourceVaultEagleSummaries` やメールの `SourceVaultMailSearchSummary` と同じ種別専用ビューで、横断検索 `SourceVaultSummaries` にも相乗りします。
+
+```mathematica
+(* arXiv ソースだけを共通スキーマ表で表示 *)
+SourceVaultArXiv["", "On" -> Today]
+SourceVaultArXiv["reversible", "Author" -> "Bennett"]
 ```
 
 `SourceVaultSummaries` の主なオプション:
 
 | オプション | 既定値 | 説明 |
 |-----------|--------|------|
+| `"Providers"` | `All` | 横断する provider。`All` / `{"sources", "eagle", ...}` |
+| `"Limit"` | `Automatic` | 表示件数の上限 |
+| `"Kind"` | `All` | 種別フィルタ |
 | `"FetchMetadata"` | `Automatic` | `Automatic`: 未取得のみ取得 / `False`: ネットワーク不使用 / `True`: 強制再取得 |
+| `"Since"` / `"Until"` / `"On"` | 未指定 | 登録 / 生成日での絞り込み |
+| `"Author"` | 未指定 | 著者名の部分一致 |
 | `"Format"` | `"Grid"` | `"Grid"`: テーブル表示 / `"Dataset"`: Dataset として返す / `"Rows"`: 行リスト |
 
-タイトルをクリックすると、そのソースの全メタ情報が別ウインドウで表示されます。
+> 横断検索 provider を自分で増やす場合は `SourceVaultRegisterSummaryProvider[name, fn]` で登録します。`fn[query_String, opts_Association]` は共通スキーマ行（`SourceVaultSourceRow` 参照）のリストを返してください。`SourceVaultSourceRow[sourceId]` が返す行は `<|"Kind", "Id", "URI", "Title", "Authors", "Published", "Summary", "URL", "File", "Date", "PrivacyLevel"|>` のキーを持ち、`"URI"` は正準 `sv://snapshot/..`（混在データセットの join / 参照キー）です。登録済み provider は `$SourceVaultSummaryProviders` で確認できます。
+
+表でタイトルまたはサマリーをクリックすると、`SourceVaultShowSourceSummary` が呼ばれ、そのソース（arXiv / web / local 共通）のサマリーが**編集可能なノートブックで開きます**。保存済みのユーザー追記版があればそれが開き（追記が正本）、無ければ Title・著者・出版・URL・要約から生成されます。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が開きます。`"Fresh" -> True` を渡すと保存版を無視し、record から新規生成して開きます。開くノートのスタイルは `$SourceVaultSummaryNotebookStyle`（既定 `"SourceVault default.nb"`）で変更できます。
+
+「▶ 開く」リンクは `SourceVaultOpenSourceFile` の実体で、保存時の絶対パスではなく ContentHash から現在の PC の vault パスを再算出して開くため、別 PC（Dropbox 同期）でも開けます。
+
+#### arXiv アブストラクトの一括付与（backfill）
+
+既存の arXiv ソースのうち Summary が未設定（または過去の LLM エラー本文）のものに、arXiv アブストラクトを取得し `$Language` へ翻訳して Summary として付与できます（ingest 時の自動付与と同じ処理）。なお ingest 時の自動付与は新規 ingest / RebuiltMetadata で実行され、既に Summary を持つ既存ソース（AlreadyCurrent）は対象外のため、過去分の補完にはこの backfill を使います。
+
+```mathematica
+SourceVault`SourceVaultBackfillArXivSummaries[]
+(* → <|"Candidates", "Updated", "AlreadyPresent", "NoAbstract", "Failed", "Results"|> *)
+```
+
+> 翻訳はクラウド LLM を使います（arXiv は公開データなので PrivacyLevel 0.0）。日本語に訳すには `$Language` が `"Japanese"` のセッションで実行してください（headless では英語原文のまま格納されます）。`"Force" -> True` で既存 Summary も再生成、`"Limit" -> n` で処理件数を制限できます。LLM の利用制限・エラー本文は弾かれるため、それらが要約として保存されることはありません。
+
+#### 公開ソースの PrivacyLevel 是正
+
+ingest 済みの公開 origin ソース（arXiv / 公開 URL）で、PrivacyLevel が機密閾値 0.5 以上に誤設定されているものを、本来の公開既定値（OfficialDocs / OfficialAPI = 0.0、PublicWeb = 0.4）に一括是正できます。旧版が arXiv 等の公開データを機密扱いしていた件の修復用（冪等）です。
+
+```mathematica
+SourceVault`SourceVaultReclassifyPublicPrivacy[]
+(* → <|"Status", "Count", "Changed" -> {<|SourceId, From, To|>...}|> *)
+```
+
+> arXiv・wikipedia・公式 docs 等の公開 web データは PrivacyLevel 0.0（クラウド LLM 可・機密閾値 0.5 未満）として扱われます。一覧（`SourceVaultSources["", "Kind" -> "arxiv"]` 等）の公開 arxiv セルが Max PL 1.0 と誤判定され機密化される不具合は修正済みで、本関数で過去分を是正できます。
 
 ### メールサブシステムの動作確認（IMAP アカウント登録済みが前提）
 
@@ -638,19 +821,28 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |
 | `ReadList` が空配列を返す | 罠 #20 (Windows JSONL/UTF-8)。`ReadByteArray` + `ByteArrayToString` + `StringSplit` 経路を使うこと |
 | パッケージロード時に `Syntax::stresc` が大量に出る | 罠 #11 (`\uXXXX` エスケープ混入)。`\:XXXX` に書き直す必要あり |
-| `$SourceVaultDefaultNotebookFolder` が正しいフォルダを返さない | `Global`$onWork` が未定義で `$packageDirectory` にフォールバックしていないか確認。絶対パスを直接代入することで固定できます |
-| `SourceVaultSummaries` が arXiv メタデータを取得しない | ネットワーク接続を確認するか、`"FetchMetadata" -> True` を明示して強制再取得してください |
+| `$SourceVaultDefaultNotebookFolder` が正しいフォルダを返さない | `Global`$onWork`` が未定義で `$packageDirectory` にフォールバックしていないか確認。絶対パスを直接代入することで固定できます |
+| `SourceVaultSources` / `SourceVaultArXiv` が arXiv メタデータを取得しない | ネットワーク接続を確認するか、`"FetchMetadata" -> True` を明示して強制再取得してください |
+| arXiv ソースの Summary が空・英語のまま | `SourceVaultBackfillArXivSummaries[]` を `$Language = "Japanese"` のセッションで実行。LLM エラー本文が残っている場合は `"Force" -> True` で再生成 |
+| 公開 arXiv / Web ソースが機密扱い（PrivacyLevel 0.5 以上）になっている | 旧版の誤タグの名残。`SourceVaultReclassifyPublicPrivacy[]` で公開既定値（0.0 / 0.4）に是正（冪等） |
+| `SourceVaultShowSourceSummary` がいつも自動生成版を開く（追記が反映されない） | ノート内の「このノートを保存する」ボタンを押して `<PrivateVault>/sources/summary-notes/` に保存したか確認。保存版が正本として優先されます。逆に保存版を無視して record から作り直したい場合は `"Fresh" -> True` |
 | `SourceVaultWebSearch` / `SourceVaultSearXNGAvailableQ` が失敗・空を返す | SearXNG が `127.0.0.1:8888`（`$SourceVaultSearXNGEndpoint`）で稼働しているか、`settings.yml` の `search.formats` に `json` が含まれるか、`limiter`/`botdetection` がローカルアクセスをブロックしていないか確認 |
 | MCP トグル/検索を変更したのに反映されない | detached service は起動時コードを保持。`SourceVaultRestartService["sourcevault"]`（または `SourceVaultStopMCP[]`→`SourceVaultStartMCP[]`）で再起動する |
-| LM Studio から `/sv/mcp` が `401` | `mcp.json` の `headers` の `X-SourceVault-Token` が `$SourceVaultMCPToken`（または `proxy.config.json` の値）と一致しているか確認。トークン未設定なら `headers` は不要 |
+| MCP クライアント（Claude Code / Codex / LM Studio）から検索できない・ツールが見えない | `SourceVaultMCPRunningQ[]` が `True` か、登録 URL のポートが `SourceVaultMCPStatus[]` の `Url` と一致するか、`claude mcp list` / `codex mcp list` に `sourcevault` が出るか確認。proxy 未起動なら `SourceVaultStartMCP[]`。`.wl` 変更後は `SourceVaultRestartService["sourcevault"]` |
+| MCP クライアントから `/sv/mcp` が `401` | トークン設定時のみ。`X-SourceVault-Token` が `$SourceVaultMCPToken`（または `proxy.config.json` の値）と一致するか確認（Claude Code: `--header`、Codex: `http_headers`、LM Studio: `headers`）。トークン未設定なら認証不要（localhost のみ） |
 | `SourceVaultStartHTTPProxy` が `Pending` を返す | Python（`$SourceVaultPython`）が解決できているか、ポートが他プロセスと衝突していないか確認 |
+| クライアントが `ECONNREFUSED 127.0.0.1:<port>` | 登録 URL のポートが proxy と不一致（典型は **9700 の残骸**）。正規は **8731**。`SourceVaultMCPStatus[]` の `Url` に全クライアントを合わせる。proxy 自体が落ちていれば `SourceVaultStartMCP[]` |
+| **再起動後**、クライアントが `MCP error -32001: Request timed out`（proxy は到達するが応答しない） | proxy は上がっているが**背後の WL サービスカーネルが死んでいる/起動していない**。`SourceVaultMCPStatus[]` で `healthState` が `Stale`/`Unknown`、`heartbeatAgeSeconds` が大きい/`null` なら確定。復旧 = `SourceVaultStartMCP["RestartService" -> True]`、または service の `launch_hidden.vbs` を `wscript //B //Nologo` で直接起動。恒久対策は上の「ログオン時の自動起動」 |
+| サービスカーネルが起動直後に消える（`stdout.log` 末尾に *"The product exited because an error occurred … unregistered"*） | **Wolfram ライセンスの同時メインカーネル席の枯渇**。FE＋並列 subkernel の親＋ネイティブ Wolfram MCP（Claude Code がセッション毎に起動）＋wolframscript ジョブが席を食うと、detached サービスカーネルが弾かれる。`/health` は proxy 生存で緑のままなので気づきにくい。対策 = 余分な Wolfram メインカーネルを減らす（ネイティブ Wolfram MCP を単一共有カーネルの HTTP ゲートウェイに集約 / claudecode の前置並列カーネルを `$ClaudeParallelKernelCount` で削減 / Claude Code の余分セッションを閉じる） |
+| パレットの「実行中／停止中」が実態と食い違う | 旧実装は proxy 到達性のみで判定していた。`healthState=="OK"` 判定に修正済み（2026-06）。稼働中カーネルで `Get["SourceVault_servicemanager.wl"]` 再読込すると反映される |
+| パレットの「MCP実行」を押したのに起動しない／`SourceVaultSvc_<id>` タスクが消えている | 上記の状態誤判定で、トグルが「実行中」と誤認して逆に Stop（Svc タスク削除）した名残。RunningQ 修正で再発防止済み。当座は service の `launch_hidden.vbs` を直接起動するか `SourceVaultStartMCP[]` を再実行（タスクは再生成される） |
 
 ---
 
 ## 関連リンク
 
 - [SourceVault リポジトリ](https://github.com/transreal/SourceVault)
-- [SearXNG](https://docs.searxng.org/) / [searxng-docker](https://github.com/searxng/searxng-docker) — ローカル Web 検索メタサーチ（MCP ゲートウェイのバックエンド）
+- [SearXNG](https://docs.searxng.org/) — ローカル Web 検索メタサーチ（MCP ゲートウェイのバックエンド）
 - [NBAccess](https://github.com/transreal/NBAccess)
 - [claudecode](https://github.com/transreal/claudecode)
 - [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)

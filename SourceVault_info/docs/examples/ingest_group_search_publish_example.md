@@ -18,6 +18,7 @@ PDF / Web ページ / arXiv 論文
    ▼
 グループ (= 検索単位)
    │ SourceVaultSources / SourceVaultSummaries     ← provider 横断一覧・検索
+   │ SourceVaultArXiv                              ← arXiv 専用ビュー
    │ SourceVaultSearch (gate 付き検索)             ← 関数で検索
    │ ClaudeQuery + 検索                            ← ClaudeEval プロンプトで検索
    │ PDFGroupSearchProfile + StartHTTPProxy        ← Web 公開
@@ -33,12 +34,12 @@ PDF / Web ページ / arXiv 論文
 
 ```mathematica
 Block[{$CharacterEncoding = "UTF-8"},
-  Get[FileNameJoin[{$packageDirectory, "SourceVault.wl"}]];   (* core/searchindex/servicemanager を自動ロード *)
+  Get[FileNameJoin[{$packageDirectory, "SourceVault.wl"}]];   (* core/searchindex/servicemanager/objectview を自動ロード *)
   Get[FileNameJoin[{$packageDirectory, "PDFIndex.wl"}]];       (* 検索バックエンド *)
   Get[FileNameJoin[{$packageDirectory, "NBAccess.wl"}]]];      (* LLM トークン *)
 ```
 
-> **自動ロード**: `Get["SourceVault.wl"]` 単体で `SourceVault_core.wl` / `SourceVault_searchindex.wl` / `SourceVault_servicemanager.wl` が自動でロードされます。`$CharacterEncoding` を UTF-8 に固定することで、日本語リテラルが正しくロードされます。
+> **自動ロード**: `Get["SourceVault.wl"]` 単体で `SourceVault_core.wl` / `SourceVault_searchindex.wl` / `SourceVault_servicemanager.wl` / `SourceVault_mcp.wl` / **`SourceVault_objectview.wl`** が自動でロードされます。`$CharacterEncoding` を UTF-8 に固定することで、日本語リテラルが正しくロードされます。
 
 ### `$SourceVaultDefaultNotebookFolder`（新規）
 
@@ -83,7 +84,19 @@ PDFIndex`pdfIndexDirectory["F:\\docs\\papers",
 >
 > 取り込み後は `PDFIndex\`pdfStatus[]` / `PDFIndex\`pdfListDocs["handbook"]` で確認できます。埋め込みモデルは bge-m3（既定）。索引後に埋め込みモデルを変えたら `PDFIndex\`pdfReembed["handbook"]`。
 
-> **arXiv 論文**: arXiv の論文 PDF を `pdfIndexURL` で取り込んだ場合、後述の `SourceVaultSources` / `SourceVaultSummaries` を `"FetchMetadata" -> Automatic` で呼び出すと、arXiv API（`export.arxiv.org`）から論文タイトル・著者・出版日を自動取得してメタにキャッシュします。取得された `Authors`（著者リスト）はメタ情報の `"Authors"` フィールドとして検索結果からも参照できます。
+> **arXiv 論文**: arXiv の論文 PDF を `pdfIndexURL` で取り込んだ場合、後述の `SourceVaultSources` / `SourceVaultSummaries` を `"FetchMetadata" -> Automatic` で呼び出すと、arXiv API（`export.arxiv.org`）から論文タイトル・著者・出版日・アブストラクトを自動取得してメタにキャッシュします。取得された `Authors`（著者リスト）はメタ情報の `"Authors"` フィールドとして検索結果からも参照できます。
+
+### 1b. ingest 済みのプライバシーレベル是正（`SourceVaultReclassifyPublicPrivacy`）
+
+arXiv 等の公開ソースがプライバシーレベル 0.5 以上に誤タグされていた場合、`SourceVaultReclassifyPublicPrivacy` で一括是正できます。本来の公開既定値（`OfficialDocs` / `OfficialAPI` = 0.0、`PublicWeb` = 0.4）に source・snapshot 両メタを書き換えます。
+
+```mathematica
+(* arXiv 等の公開ソースを本来の PrivacyLevel に是正する (冪等) *)
+result = SourceVaultReclassifyPublicPrivacy[];
+(* => <|"Status" -> "OK", "Count" -> n, "Changed" -> {<|"SourceId" -> ..., "From" -> 0.6, "To" -> 0.0|>, ...|>}|> *)
+```
+
+> **用途**: 旧版が arXiv 等の `OfficialDocs` を 0.6 と誤タグした件など、過去の誤設定を一度きり修正する保守関数です。通常の運用では不要ですが、公開ソースが誤って機密扱いになっている場合（`SourceVaultSources` に表示されない等）に使用します。
 
 ---
 
@@ -110,6 +123,33 @@ SourceVaultRegisterPDFIndexMigrationRule["student-handbook", <|
 ```
 
 研究資料グループも同様に別名で登録します（`research-internal` / `research` profile など）。release context を分ければ、グループごとに公開範囲を変えられます。
+
+### 2b. 不変スナップショット（Immutable Snapshot）のプライバシー管理
+
+SourceVault は **content-addressed な不変スナップショット**をサポートしています。スナップショット ID は `snapshot:class:hex` または `sv://snapshot/..` 形式の URI で識別されます。
+
+不変スナップショットは**本体ファイルを書き換えない**設計（content-addressed）になっており、プライバシーレベルの変更はサイドレコードへ委譲されます。
+
+#### 主な API
+
+| 関数 | 説明 |
+|---|---|
+| `SourceVaultImmutableSnapshotExistsQ[snapshotId]` | 指定した snapshotId の不変スナップショットが存在するか判定する。`True` / `False` を返す。 |
+| `SourceVaultSetImmutableSnapshotPrivacyLevel[snapshotId, lv]` | 不変スナップショットのプライバシーレベルを `lv` に設定する。本体は書き換えずサイドレコードに記録される。 |
+
+```mathematica
+(* スナップショット URI の形式例 *)
+(* "snapshot:pdf:a3f2c1..." または "sv://snapshot/a3f2c1..." *)
+
+(* 存在確認 *)
+SourceVaultImmutableSnapshotExistsQ["snapshot:pdf:a3f2c1d4e5b6..."]
+(* => True / False *)
+
+(* プライバシーレベルの変更 (本体不変・サイドレコードに記録) *)
+SourceVaultSetImmutableSnapshotPrivacyLevel["snapshot:pdf:a3f2c1d4e5b6...", 0.3];
+```
+
+> **設計上の注意**: 不変スナップショットは content-addressed であるため、本体ファイルは一切変更されません。`SourceVaultSetImmutableSnapshotPrivacyLevel` による変更はサイドレコードにのみ反映され、スナップショットのハッシュ値（整合性）は維持されます。リリース判定時にはサイドレコードのプライバシーレベルが優先参照されます。
 
 ---
 
@@ -180,6 +220,9 @@ PDFIndex・Eagle 保存済みサマリー等、**登録済み provider を横断
 | オプション | 既定値 | 説明 |
 |---|---|---|
 | `"FetchMetadata"` | `Automatic` | `Automatic`：未取得のみ arXiv API 等から取得。`False`：ネットワークアクセスなし。`True`：強制再取得。 |
+| `"Kind"` | `All` | `"arxiv"` / `"web"` / `"local"` / `All` でソース種別を絞り込む。 |
+| `"Since"` / `"Until"` / `"On"` | - | ingest 日での絞り込み（日付文字列 `"yyyy-mm-dd"` / `Today` / `DateObject`）。`"On"` は単日、`"Since"` / `"Until"` は範囲（両端含む）。 |
+| `"Author"` | - | 著者名の部分一致フィルタ。 |
 | `"Format"` | `"Grid"` | `"Grid"`（UI 表示用グリッド）/ `"Dataset"`（Dataset 型）/ `"Rows"`（Association のリスト）。 |
 | `"Limit"` | `Automatic` | 表示件数の上限。 |
 
@@ -195,15 +238,43 @@ SourceVaultSources["arXiv 機械学習",
   "Format" -> "Dataset",
   "Limit" -> 50]
 
+(* 今日 ingest した arXiv ソースだけを表示 *)
+SourceVaultSources["", "Kind" -> "arxiv", "On" -> Today]
+
+(* 著者名で絞り込み *)
+SourceVaultSources["可逆計算", "Author" -> "Bennett", "Format" -> "Grid"]
+
+(* 期間指定（2025-06-01 以降に ingest） *)
+SourceVaultSources["", "Since" -> "2025-06-01", "Format" -> "Dataset"]
+
 (* Eagle 保存済みサマリー等も含めた統合表で横断検索 *)
 SourceVaultSummaries["強化学習",
   "FetchMetadata" -> False,   (* ネットワーク不要な場合 *)
   "Format" -> "Grid"]
 ```
 
+`SourceVaultSummaries` も同じ `"Since"` / `"Until"` / `"On"` / `"Author"` / `"Format"` オプションを受け付けます。さらに `"Providers" -> All | {"sources", "eagle", ...}` で横断対象の provider を絞り込めます。
+
+### arXiv 専用ビュー（`SourceVaultArXiv`）
+
+`SourceVaultArXiv` は arXiv ソースだけを共通スキーマ表で表示する薄ラッパです（`SourceVaultSources[query, "Kind" -> "arxiv", ...]` と等価）。`SourceVaultSources` と同じオプション（`"On"` / `"Since"` / `"Until"` / `"Author"` / `"Limit"` / `"Format"` 等）を受け付けます。
+
+```mathematica
+(* 今日 ingest した arXiv 論文を一覧 *)
+SourceVaultArXiv["", "On" -> Today]
+
+(* "可逆" かつ著者 "Bennett" で絞り込み *)
+SourceVaultArXiv["可逆", "Author" -> "Bennett"]
+
+(* 期間指定 + Dataset 形式 *)
+SourceVaultArXiv["quantum", "Since" -> "2025-01-01", "Format" -> "Dataset"]
+```
+
+> **横断検索との連携**: `SourceVaultArXiv` は `SourceVaultSummaries` の横断検索にも相乗りしており、`SourceVaultSummaries["クエリ"]` を実行した際にも arXiv ソースが含まれます。
+
 ### arXiv 論文のメタ自動取得
 
-arXiv 論文を取り込んでいる場合、`"FetchMetadata" -> Automatic`（または `True`）を指定すると arXiv API からタイトル・著者・出版日を一括取得してメタにキャッシュします。取得済みであれば `Automatic` でも再取得しません。
+arXiv 論文を取り込んでいる場合、`"FetchMetadata" -> Automatic`（または `True`）を指定すると arXiv API からタイトル・著者・出版日・アブストラクトを一括取得してメタにキャッシュします。取得済みであれば `Automatic` でも再取得しません。
 
 ```mathematica
 (* arXiv 論文の著者・日付付き一覧 *)
@@ -218,7 +289,71 @@ Dataset[<|
   "File"    -> Lookup[#, "File", ""]|> & /@ rows]
 ```
 
-> **メタのキャッシュ**: 取得された `Authors`（著者名リスト）・タイトル・出版日はメタに永続化されるため、次回以降は arXiv への通信なしに利用できます。オフライン環境では `"FetchMetadata" -> False` を指定してください。
+> **メタのキャッシュ**: 取得された `Authors`（著者名リスト）・タイトル・出版日・アブストラクトはメタに永続化されるため、次回以降は arXiv への通信なしに利用できます。オフライン環境では `"FetchMetadata" -> False` を指定してください。
+
+### arXiv サマリーのバックフィル（`SourceVaultBackfillArXivSummaries`）
+
+`SourceVaultBackfillArXivSummaries` は、既存の arXiv ソースのうち Summary が未設定（または過去の LLM エラー本文が保存されてしまったもの）に対して、arXiv アブストラクトを取得し `$Language` へ翻訳して Summary として付与します。ingest 時の自動付与と同じ処理です。
+
+```mathematica
+(* 未設定のサマリーを一括生成（翻訳は cloud LLM、arXiv は公開データなので PrivacyLevel 0.0） *)
+result = SourceVaultBackfillArXivSummaries[];
+(* => <|"Candidates" -> n, "Updated" -> k, "AlreadyPresent" -> m,
+        "NoAbstract" -> 0, "Failed" -> 0, "Results" -> {...}|> *)
+
+(* 既存 Summary も含めて強制再生成する場合 *)
+SourceVaultBackfillArXivSummaries["Force" -> True]
+
+(* 処理件数を上限 10 件に制限 *)
+SourceVaultBackfillArXivSummaries["Limit" -> 10]
+```
+
+> **実行環境**: 翻訳に cloud LLM（arXiv は公開データなので PrivacyLevel 0.0）を使用します。`$Language` が `Japanese` のセッションで実行してください（headless では英語原文のまま格納されます）。
+
+### サマリーノートを開く（`SourceVaultShowSourceSummary` / `SourceVaultOpenSourceFile`）
+
+`SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries` の表でタイトルまたはサマリーをクリックすると、`SourceVaultShowSourceSummary` が呼ばれ、ソースのサマリーを編集可能なノートブックで開きます。
+
+```mathematica
+(* タイトルクリックと同等の操作を手動実行する場合 *)
+SourceVaultShowSourceSummary["src-xxxxxxxx"]
+
+(* 保存版を無視して record から新規生成する場合 *)
+SourceVaultShowSourceSummary["src-xxxxxxxx", "Fresh" -> True]
+```
+
+- **保存済みのユーザー追記版があればそれを開きます**（正本）。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が正本として開かれます。
+- 保存版がなければ、タイトル・著者・出版日・URL・要約から自動生成したノートを表示します。
+- ノートのスタイルは `$SourceVaultSummaryNotebookStyle`（既定: `"SourceVault default.nb"`）で変更できます。
+
+`SourceVaultOpenSourceFile` は ingest 済みソースの raw ファイル（PDF 等）を `SystemOpen` で開くユーティリティで、`SourceVaultSources` / `SourceVaultArXiv` の「▶ 開く」ボタンの実体です。保存時の絶対パスではなく `ContentHash` から現在の PC の vault パスを live 再算出するため、Dropbox 同期後の別 PC でも正しく開けます。
+
+```mathematica
+(* raw ファイルをシステムのデフォルトアプリで開く *)
+SourceVaultOpenSourceFile["src-xxxxxxxx"]
+```
+
+### 共通スキーマ行（`SourceVaultSourceRow`）
+
+`SourceVaultSourceRow` は 1 ソースの共通スキーマ行を Association として返します。`SourceVaultSources` / `SourceVaultArXiv` の各行や `SourceVaultSummaries` の統合表が内部で使用しており、横断データセットの join キーとして利用できます。
+
+```mathematica
+row = SourceVaultSourceRow["src-xxxxxxxx"]
+(* =>
+  <|"Kind" -> "arxiv",
+    "Id"   -> "src-xxxxxxxx",
+    "URI"  -> "sv://snapshot/sha256/<hex>",   (* 正準 URI: content-addressed *)
+    "Title"   -> "...",
+    "Authors" -> {...},
+    "Published" -> "2024-03-15",
+    "Summary"  -> "...",
+    "URL"      -> "https://arxiv.org/abs/...",
+    "File"     -> "F:\\...",
+    "Date"     -> "2025-06-01",
+    "PrivacyLevel" -> 0.0|> *)
+```
+
+> **`"URI"` フィールド**: `sv://snapshot/sha256/<hex>` 形式の content-addressed な正準 URI です。`SourceVaultEagleSummaryRow` と同じキーを共有しており、Eagle・arXiv・web・local など異種ソースを混在させたデータセットを `"URI"` キーで join・参照する際の共通識別子として使用します。
 
 ---
 
@@ -347,17 +482,30 @@ SourceVaultStartHTTPProxy["research-web-svc", "PDFGroupProfile" -> "research-web
 | 取り込み | `PDFIndex\`pdfIndex` / `pdfIndexDirectory` / `pdfIndexURL` / `pdfStatus` / `pdfListDocs` / `pdfReembed` |
 | グループ化 | `SourceVaultRegisterReleaseContext` / `RegisterPDFIndexProfile` / `RegisterPDFIndexMigrationRule` |
 | 補足知識 | `SourceVaultRegisterCuratedKnowledge` / `DraftCuratedTranscription` / `ListCuratedKnowledge` |
-| ソース一覧・横断検索 | `SourceVaultSources` / `SourceVaultSummaries`（provider 横断。オプション: `"FetchMetadata"` / `"Format"` / `"Limit"`） |
+| 不変スナップショット | `SourceVaultImmutableSnapshotExistsQ`（存在確認）/ `SourceVaultSetImmutableSnapshotPrivacyLevel`（プライバシー設定・サイドレコード委譲）。URI 形式: `snapshot:class:hex` / `sv://snapshot/..` |
+| ソース一覧・横断検索 | `SourceVaultSources` / `SourceVaultSummaries`（provider 横断。オプション: `"FetchMetadata"` / `"Kind"` / `"Since"` / `"Until"` / `"On"` / `"Author"` / `"Format"` / `"Limit"`） |
+| arXiv 専用ビュー | `SourceVaultArXiv`（`SourceVaultSources["", "Kind"->"arxiv"]` の薄ラッパ。`"On"` / `"Author"` 等で絞り込み可） |
+| サマリーノート | `SourceVaultShowSourceSummary`（ソースのサマリーを編集可能ノートで開く。タイトル/サマリークリックの既定アクション）/ `$SourceVaultSummaryNotebookStyle`（ノートスタイル） |
+| ファイルを開く | `SourceVaultOpenSourceFile`（ContentHash から現 PC の vault パスを live 再算出して SystemOpen） |
+| 共通スキーマ行 | `SourceVaultSourceRow`（キー: `"Kind"` / `"Id"` / `"URI"` / `"Title"` / `"Authors"` / `"Published"` / `"Summary"` / `"URL"` / `"File"` / `"Date"` / `"PrivacyLevel"`） |
+| arXiv バックフィル | `SourceVaultBackfillArXivSummaries`（既存 arXiv ソースにアブストラクト翻訳を一括付与） |
+| プライバシー是正 | `SourceVaultReclassifyPublicPrivacy`（公開ソースの誤タグを本来の既定値に是正） |
 | 検索 | `SourceVaultSearch`（gate 付き） / `PDFIndex\`pdfSearch`（ungated） / `PDFIndex\`pdfGetChunk` |
 | ClaudeEval 検索 | 上記 + `ClaudeCode\`ClaudeQuery` / `ClaudeQueryBg` / `PDFIndex\`pdfAskLLM`（簡易） |
 | Web 公開 | `SourceVaultCreatePDFGroupSearchProfile` / `ClonePDFGroupSearchProfile` / `StartService` / `StartHTTPProxy` |
-| グローバル設定 | `$SourceVaultDefaultNotebookFolder`（ノートブック保存先。Automatic → `$onWork` → `$packageDirectory`） |
+| グローバル設定 | `$SourceVaultDefaultNotebookFolder`（ノートブック保存先。Automatic → `$onWork` → `$packageDirectory` の順に解決） |
 | メール（関連） | `SourceVaultMailEnsureLoaded` / `SourceVaultMailView` / `SourceVaultMailDataset` / `SourceVaultMailFetchNew` / `SourceVaultMailComposeReply` / `SourceVaultSearchMailSnapshots` / `SourceVaultInferMailDerivedBatch`（[SourceVault_maildb](https://github.com/transreal/SourceVault_maildb) サブシステム） |
 
 要点:
 
 - **グループ = コレクション ＋ release context ＋ profile ＋ migration rule ＋ 補足知識**。release context でグループごとに公開範囲を制御。
-- **provider 横断の一覧・検索**は `SourceVaultSources` / `SourceVaultSummaries`。`"FetchMetadata" -> Automatic` で arXiv 論文のタイトル・著者・出版日を自動取得してキャッシュします。
+- **`Get["SourceVault.wl"]` で `SourceVault_objectview.wl` も自動ロード**されます（従来の core / searchindex / servicemanager / mcp に加えて追加）。
+- **不変スナップショット**（URI: `snapshot:class:hex` / `sv://snapshot/..`）は content-addressed で本体不変。プライバシーレベルの変更は `SourceVaultSetImmutableSnapshotPrivacyLevel` でサイドレコードに委譲されます。存在確認は `SourceVaultImmutableSnapshotExistsQ`。
+- **provider 横断の一覧・検索**は `SourceVaultSources` / `SourceVaultSummaries`。`"FetchMetadata" -> Automatic` で arXiv 論文のタイトル・著者・出版日・アブストラクトを自動取得してキャッシュします。`"On"` / `"Since"` / `"Until"` / `"Author"` / `"Kind"` でさらに絞り込めます。
+- **arXiv 専用ビュー**は `SourceVaultArXiv`（`SourceVaultSources["", "Kind"->"arxiv"]` の薄ラッパ）。タイトルまたはサマリーをクリックすると `SourceVaultShowSourceSummary` が開き、編集可能なサマリーノートが表示されます。
+- **arXiv サマリーの一括生成**は `SourceVaultBackfillArXivSummaries`。Summary 未設定のソースにアブストラクト翻訳を付与します（`$Language` = `Japanese` 推奨）。
+- **共通スキーマ行**（`SourceVaultSourceRow`）は `"URI"` フィールド（`sv://snapshot/sha256/<hex>`）を含み、Eagle・arXiv・web・local など異種ソースを混在させたデータセットの join キーとして使用できます。
+- **プライバシーの誤タグ是正**は `SourceVaultReclassifyPublicPrivacy`。公開ソース（arXiv 等）が 0.5 以上に誤設定されている場合に本来の既定値へ一括是正します（冪等）。
 - 公開検索は必ず **`SourceVaultSearch`（gate 付き）**。`pdfSearch`/`pdfAskLLM` は ungated（確認用）。
 - 凡例・崩れ表は **補足知識（人手レビュー済み）** で補う。永続化され service も自動利用。
 - Web 公開は **`PDFGroupSearchProfile` 1 つ＋ start 2 ステップ**。別グループは clone で横展開。

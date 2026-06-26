@@ -66,6 +66,7 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultProposePromptRoute",
   "SourceVault`SourceVaultClassifyProviderTrustDomain",
   "SourceVault`SaveLastPrompt",
+  "SourceVault`AddPromptMemo",
   "SourceVault`SourceVaultDecryptPromptRoute",
   "SourceVault`SourceVaultSearchPromptRoutes",
   "SourceVault`SourceVaultFormatPromptRouteList",
@@ -249,6 +250,9 @@ SourceVaultClassifyProviderTrustDomain::usage =
 SaveLastPrompt::usage =
   "SaveLastPrompt[memo_String] saves the most recent successful ClaudeEval / ContinueEval prompt run as a named PromptRoute so it can be searched and re-run later. memo is a free-text note (e.g. \"this function only works where an LLM is available\") stored in the route's Memo field and shown in the prompt table. Options: \"Channel\" -> \"public\"|\"private\"|\"local\" (default Automatic, resolved from privacy), \"Encrypt\" -> False; when True the raw prompt and TargetExprString are encrypted at rest via SourceVaultEncryptedPut (encrypt-then-MAC, keys via NBAccess) and embedded as an EncryptedPayload in the route, with Examples emptied and PromptStorageClass set to \"Encrypted\" (Memo is kept in plaintext as the display label). Requires the SourceVault encryption modules to be loaded and SourceVaultInitializeEncryption[] to have run. \"DryRun\" -> False, \"RouteId\" -> Automatic. Privacy is tracked via SourceVaultResolvePromptPrivacy; with Encrypt -> False the raw prompt/function are stored in plaintext, but PrivacyLevel and CloudFallback are recorded on the route. Use SourceVaultDecryptPromptRoute[route] to recover the plaintext from an encrypted route.";
 
+AddPromptMemo::usage =
+  "AddPromptMemo[memo_String] attaches a free-text memo to the most recent ClaudeEval / ContinueEval prompt. Because every run is already auto-captured as a versioned PromptRoute (SourceVaultAutoSaveLastPrompt), AddPromptMemo updates the Memo of that newest saved version IN PLACE via SourceVaultUpdatePromptRouteMemo - it does not create a redundant new version the way SaveLastPrompt does. The target prompt is resolved from the last run (override with \"PromptText\") and its newest version in the prompt group (override with \"RouteId\"). When no saved version exists yet - e.g. a HeavyLLM one-shot answer that auto-save intentionally skips - it falls back to SaveLastPrompt so the memo still gets a home. Returns <|\"Status\"->...,\"RouteId\"->...,\"Memo\"->...,\"Action\"->\"MemoUpdated\"|\"MemoSavedNewVersion\"|>. Options: \"PromptText\" -> Automatic, \"RouteId\" -> Automatic.";
+
 SourceVaultDecryptPromptRoute::usage =
   "SourceVaultDecryptPromptRoute[route_Association] decrypts the EncryptedPayload of an encrypted PromptRoute (created via SaveLastPrompt with Encrypt -> True), returning <|\"Status\"->\"Ok\",\"Plaintext\"->...|> or an error association. MAC is verified before decryption; on failure no plaintext is returned.";
 
@@ -382,6 +386,14 @@ SourceVaultClassifyPromptContextDependency::usage =
   "MINIMUM (a floor); a context planner combines it with the requested/default " <>
   "plan. When nothing is detected the floor is empty (DependencyKinds " <>
   "{\"SelfContained\"}, Confidence \"Low\") so trivial prompts get minimal context.";
+
+SourceVaultPromptRoutePanel::usage =
+  "SourceVaultPromptRoutePanel[] returns a UI panel that lists the saved " <>
+  "PromptRoutes and lets you search them by keyword/memo, filter by channel, " <>
+  "and manage each one (Preview / Run / ToInput / Primary / Memo / delete) " <>
+  "via SourceVaultFormatPromptRouteList. It is the saved-prompt counterpart of " <>
+  "SourceVaultWorkflowPanel (manual refresh, FE-freeze safe). Options: " <>
+  "\"Channel\" -> All|\"public\"|\"private\"|\"local\" (initial channel filter).";
 
 Begin["`Private`"];
 
@@ -3195,8 +3207,21 @@ Options[SourceVaultProposePromptRoute] = {
    - FunctionId \:304c allowlist (View) \:306b\:5b58\:5728\:3057\:3001UseAsFunctionRoute==True \:304b\:3064
      SideEffectClass \:304c ReadOnly / SafeCreate \:3067\:3042\:308b\:3053\:3068\:3092\:8981\:6c42 (\:5371\:967a\:306a\:526f\:4f5c\:7528\:306f\:81ea\:52d5\:8d77\:52d5\:3057\:306a\:3044)
    - \:5f15\:6570\:306f\:7121\:3057 (FunctionId[]) \:3067 held \:5316\:3002\:73fe\:72b6 SourceVaultNewNotebook \:306f\:30aa\:30d7\:30b7\:30e7\:30f3\:7121\:3057\:3067\:52d5\:304f\:3002 *)
+(* Build HoldComplete[sym[args...]] from a symbol and route-declared literal
+   Target.Args. With-substitution injects the locals even into the held body,
+   so e.g. PackageCommitPlan["github"] is held unevaluated. *)
+iSVPRFunctionRouteHeld[sym_, args_List] :=
+  Switch[Length[args],
+    0, With[{s = sym}, HoldComplete[s[]]],
+    1, With[{s = sym, a1 = args[[1]]}, HoldComplete[s[a1]]],
+    2, With[{s = sym, a1 = args[[1]], a2 = args[[2]]}, HoldComplete[s[a1, a2]]],
+    3, With[{s = sym, a1 = args[[1]], a2 = args[[2]], a3 = args[[3]]},
+         HoldComplete[s[a1, a2, a3]]],
+    _, With[{s = sym, a = args}, HoldComplete[s[a]]]];
+iSVPRFunctionRouteHeld[sym_, _] := With[{s = sym}, HoldComplete[s[]]];
+
 iSVPRProposeFunctionRoute[prompt_String] :=
-  Module[{decision, target, fid, callable, sym, sideEffect, held},
+  Module[{decision, target, fid, callable, sym, sideEffect, held, args},
     decision = Quiet @ Check[
       SourceVaultResolvePromptRoute[prompt], $Failed];
     If[!AssociationQ[decision] ||
@@ -3218,8 +3243,11 @@ iSVPRProposeFunctionRoute[prompt_String] :=
       Return[Missing["NonAutoDispatchSideEffect"]]];
     sym = Lookup[callable, "Symbol", Missing[]];
     If[MissingQ[sym], Return[Missing["NoSymbol"]]];
-    (* \:5f15\:6570\:7121\:3057\:547c\:3073\:51fa\:3057\:3092 held \:5316 (sym \:306f\:8a55\:4fa1\:3055\:305b\:305a\:30b7\:30f3\:30dc\:30eb\:306e\:307e\:307e\:6271\:3046) *)
-    held = With[{s = sym}, HoldComplete[s[]]];
+    (* route-declared Target.Args -> HoldComplete[sym[args...]] (deterministic).
+       No Args -> sym[] (backward compatible; sym stays a held symbol). *)
+    args = Lookup[target, "Args", {}];
+    If[!ListQ[args], args = {}];
+    held = iSVPRFunctionRouteHeld[sym, args];
     <|
       "Type"     -> "PromptRouteProposal",
       "Status"   -> "Proposed",
@@ -3227,7 +3255,7 @@ iSVPRProposeFunctionRoute[prompt_String] :=
       "Decision" -> <|
         "RouteId" -> Lookup[decision, "RouteId", Missing[]],
         "Method"  -> "DeterministicFunctionRoute",
-        "FunctionId" -> fid|>,
+        "FunctionId" -> fid, "Args" -> args|>,
       "ProposedExpression" -> held,
       "ValidationHints" -> <|
         "ExpectedHeads" -> {sym},
@@ -3964,7 +3992,7 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
       Return[Style[
         "\:8a72\:5f53\:3059\:308b\:4fdd\:5b58\:6e08\:307f\:30d7\:30ed\:30f3\:30d7\:30c8\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
         FontFamily -> "Yu Gothic UI"]]];
-    cols = {"Prompt", "Memo", "Target", "CreatedAt", "UpdatedAt",
+    cols = {"Prompt", "Memo", "Target", "\:4f5c\:6210/\:66f4\:65b0",
             "Privacy", "State", "Actions"};
     header = Map[
       Style[#, Bold, FontFamily -> "Yu Gothic UI"] &, cols];
@@ -3999,21 +4027,21 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
           {
             (* Prompt \:5217: \:30af\:30ea\:30c3\:30af\:3067 ClaudeEval[\"<\:30d7\:30ed\:30f3\:30d7\:30c8>\"] \:3092\:5165\:529b\:30bb\:30eb\:306b\:66f8\:304f *)
             If[StringQ[promptEval],
-              Tooltip[
-                Button[
-                  Style[iSVPRTruncateDisplay[prompt],
-                    FontFamily -> "Yu Gothic UI"],
-                  With[{pe = promptEval},
+              With[{pe = promptEval},
+                Tooltip[
+                  Button[
+                    Style[iSVPRTruncateDisplay[prompt, 42],
+                      FontFamily -> "Yu Gothic UI"],
                     Module[{target = InputNotebook[]},
                       If[Head[target] === NotebookObject,
                         NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                          target, pe, False]]]],
-                  Appearance -> "Frameless",
-                  BaseStyle -> {},
-                  Method -> "Queued"],
-                prompt],
+                          target, pe, False]]],
+                    Appearance -> "Frameless",
+                    BaseStyle -> {},
+                    Method -> "Queued"],
+                  prompt]],
               Tooltip[
-                Style[iSVPRTruncateDisplay[prompt], FontFamily -> "Yu Gothic UI"],
+                Style[iSVPRTruncateDisplay[prompt, 42], FontFamily -> "Yu Gothic UI"],
                 prompt]],
             (* Memo: editable in place (auto-saved prompts have no memo;
                add/revise here and 保存 writes it back to the registry) *)
@@ -4036,17 +4064,22 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                       ""]]}]
                 }, Spacings -> 0.1]]],
             Column[{
-              Style[targetSym, FontFamily -> "Courier"],
+              Tooltip[
+                Style[iSVPRTruncateDisplay[targetSym, 16],
+                  FontFamily -> "Courier", FontSize -> 9],
+                targetSym],
               Style[replayClass, FontFamily -> "Yu Gothic UI", FontSize -> 9,
                 Which[
                   replayClass === "Replayable", RGBColor[0.15, 0.45, 0.30],
                   replayClass === "LightLLM", RGBColor[0.6, 0.5, 0.2],
                   True, GrayLevel[0.5]]]
             }, Spacings -> 0.2],
-            Style[ToString[created], FontFamily -> "Yu Gothic UI",
-              FontSize -> 10],
-            Style[ToString[updated], FontFamily -> "Yu Gothic UI",
-              FontSize -> 10],
+            Column[{
+              Style[iSVPRDateOnly[created], FontFamily -> "Yu Gothic UI",
+                FontSize -> 10],
+              Style[iSVPRDateOnly[updated], FontFamily -> "Yu Gothic UI",
+                FontSize -> 9, GrayLevel[0.5]]
+            }, Spacings -> 0.15],
             Style[privLabel, FontFamily -> "Yu Gothic UI",
               Which[
                 privLabel === "Public", GrayLevel[0.5],
@@ -4069,89 +4102,35 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                     RGBColor[0.6, 0.5, 0.2],
                   True, GrayLevel[0.5]]]
             }, Spacings -> 0.15],
-            Row[{
-              (* Preview: dry-run, shows what would execute *)
-              Button[
-                Style["Preview", FontFamily -> "Yu Gothic UI", FontSize -> 10],
-                With[{rid = routeId},
-                  MessageDialog[
-                    Column[{
-                      Style["Preview (dry-run): " <> rid, Bold],
-                      Quiet @ Check[
-                        SourceVaultExecutePromptRoute[
-                          iSVPRRouteDisplayPrompt[rt], "DryRun" -> True],
-                        "(preview failed)"]}]]],
-                Appearance -> "Frameless",
-                BaseStyle -> {"Hyperlink"},
-                Method -> "Queued"],
-              "  ",
-              (* Run: ToInput + \:81ea\:52d5\:8a55\:4fa1\:3002\:4fdd\:5b58\:5f0f\:3092\:65b0\:898f\:5165\:529b\:30bb\:30eb\:306b
-                 \:66f8\:304d\:8fbc\:307f\:3001\:305d\:306e\:307e\:307e\:8a55\:4fa1\:3059\:308b (ToInput \:3068\:540c\:30ed\:30b8\:30c3\:30af\:3067
-                 \:6700\:7d42\:5f15\:6570\:306e\:8a55\:4fa1\:30d5\:30e9\:30b0\:3060\:3051 True)\:3002 *)
-              Button[
-                Style["Run", FontFamily -> "Yu Gothic UI", FontSize -> 10,
-                  RGBColor[0.15, 0.45, 0.30]],
-                With[{ie = proposedExpr, pe = promptEval,
-                      rc = replayClass, theRoute = rt},
+            With[{rid = routeId, ie = proposedExpr, rc = replayClass,
+                  theRoute = rt, safe = Lookup[rt, "ReplaySafety", "Unknown"]},
+              Column[{
+                (* ToInput: \:4fdd\:5b58\:6642\:306e\:63d0\:6848\:5f0f\:3092\:65b0\:898f\:5165\:529b\:30bb\:30eb\:306b\:66f8\:304f (\:8a55\:4fa1\:306f\:3057\:306a\:3044)\:3002
+                   \:5024\:306f build \:6642\:306b\:5916\:5074 With \:3067\:30ea\:30c6\:30e9\:30eb\:5316\:3055\:308c\:308b (Module \:5c40\:6240\:5909\:6570\:6f0f\:308c\:9632\:6b62) *)
+                Button[
+                  Style["ToInput", FontFamily -> "Yu Gothic UI", FontSize -> 10,
+                    RGBColor[0.2, 0.38, 0.65]],
                   Module[{target = InputNotebook[], replay, exprStr},
                     If[rc === "LightLLM",
-                      (* LightLLM: \:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:2192\:518d\:69cb\:6210\:5f0f\:3092\:66f8\:3044\:3066\:8a55\:4fa1 *)
                       replay = Quiet @ Check[
                         iSVPRLightLLMReplayDialog[theRoute], $Failed];
-                      If[replay === $Canceled,
-                        Return[Null, Module]];
-                      exprStr = If[AssociationQ[replay],
-                        Lookup[replay, "ExprString", Missing[]], Missing[]];
-                      If[!StringQ[exprStr], exprStr = ie];
-                      If[!StringQ[exprStr], exprStr = pe];
-                      If[Head[target] === NotebookObject && StringQ[exprStr],
-                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                          target, exprStr, True]],
-                      (* Replayable / HeavyLLM: \:4fdd\:5b58\:5f0f\:3092\:66f8\:3044\:3066\:8a55\:4fa1\:3002
-                         \:5f0f\:304c\:7121\:3051\:308c\:3070\:30d7\:30ed\:30f3\:30d7\:30c8\:306e ClaudeEval \:5f0f\:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af *)
-                      exprStr = If[StringQ[ie], ie, pe];
-                      If[Head[target] === NotebookObject && StringQ[exprStr],
-                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                          target, exprStr, True]]]]],
-                Appearance -> "Frameless",
-                BaseStyle -> {"Hyperlink"},
-                Method -> "Queued"],
-              "  ",
-              (* ToInput: \:4fdd\:5b58\:6642\:306b\:5b9f\:884c\:3055\:308c\:305f\:63d0\:6848\:5f0f\:3092\:65b0\:898f\:5165\:529b\:30bb\:30eb\:306b\:66f8\:304f
-                 (\:8a55\:4fa1\:306f\:3057\:306a\:3044)\:3002\:30d7\:30ed\:30f3\:30d7\:30c8\:6587\:306e ClaudeEval \:3067\:306f\:306a\:304f\:63d0\:6848\:5f0f\:81ea\:4f53\:3002 *)
-              Button[
-                Style["ToInput", FontFamily -> "Yu Gothic UI", FontSize -> 10,
-                  RGBColor[0.2, 0.38, 0.65]],
-                With[{ie = proposedExpr, p = iSVPRRouteDisplayPrompt[rt],
-                      rc = replayClass, theRoute = rt},
-                  Module[{target = InputNotebook[], replay, exprStr},
-                    If[rc === "LightLLM",
-                      (* LightLLM: \:69cb\:9020\:5316\:30c0\:30a4\:30a2\:30ed\:30b0\:3067\:65b0\:30d7\:30ed\:30f3\:30d7\:30c8\:2192\:518d\:69cb\:6210\:5f0f\:3092\:66f8\:304f (\:8a55\:4fa1\:306a\:3057) *)
-                      replay = Quiet @ Check[
-                        iSVPRLightLLMReplayDialog[theRoute], $Failed];
-                      If[replay === $Canceled,
-                        Return[Null, Module]];
+                      If[replay === $Canceled, Return[Null, Module]];
                       exprStr = If[AssociationQ[replay],
                         Lookup[replay, "ExprString", Missing[]], Missing[]];
                       If[!StringQ[exprStr], exprStr = ie];
                       If[Head[target] === NotebookObject && StringQ[exprStr],
                         NBAccess`NBWriteInputCellAndMaybeEvaluate[
                           target, exprStr, False]],
-                      (* Replayable / HeavyLLM: \:5f93\:6765\:901a\:308a\:63d0\:6848\:5f0f\:3092\:305d\:306e\:307e\:307e\:66f8\:304f *)
-                      If[Head[target] === NotebookObject,
+                      If[Head[target] === NotebookObject && StringQ[ie],
                         NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                          target, ie, False]]]]],
-                Appearance -> "Frameless",
-                BaseStyle -> {"Hyperlink"},
-                Method -> "Queued"],
-              "  ",
-              (* Primary\:8a2d\:5b9a: \:30b0\:30eb\:30fc\:30d7\:5185\:3067\:3053\:306e\:7248\:3092\:30d7\:30e9\:30a4\:30de\:30ea\:306b\:3002
-                 EnvironmentIndependent \:306e\:5834\:5408\:306e\:307f\:300cPrimary+\:81ea\:52d5\:5b9f\:884c\:300d\:3092\:63d0\:793a\:3002 *)
-              Button[
-                Style["Primary\:8a2d\:5b9a", FontFamily -> "Yu Gothic UI",
-                  FontSize -> 10, RGBColor[0.5, 0.3, 0.55]],
-                With[{rid = routeId,
-                      safe = Lookup[rt, "ReplaySafety", "Unknown"]},
+                          target, ie, False]]]],
+                  Appearance -> "Frameless",
+                  BaseStyle -> {"Hyperlink"},
+                  Method -> "Queued"],
+                (* Primary\:8a2d\:5b9a *)
+                Button[
+                  Style["Primary\:8a2d\:5b9a", FontFamily -> "Yu Gothic UI",
+                    FontSize -> 10, RGBColor[0.5, 0.3, 0.55]],
                   Module[{choice},
                     choice = ChoiceDialog[
                       Column[{
@@ -4173,16 +4152,14 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                         SourceVaultSetPrimaryPromptRoute[rid,
                           "AutoExecute" -> (choice === "PrimaryAuto")],
                         Style["\:6700\:65b0\:72b6\:614b\:306f\:518d\:8868\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
-                          FontSize -> 10, GrayLevel[0.4]]}]]]]],
-                Appearance -> "Frameless",
-                BaseStyle -> {"Hyperlink"},
-                Method -> "Queued"],
-              "  ",
-              (* \:524a\:9664: \:78ba\:8a8d\:30c0\:30a4\:30a2\:30ed\:30b0\:5f8c\:306b DryRun->False, Confirm->True \:3067\:5b9f\:524a\:9664 *)
-              Button[
-                Style["\:524a\:9664", FontFamily -> "Yu Gothic UI",
-                  FontSize -> 10, RGBColor[0.7, 0.15, 0.15]],
-                With[{rid = routeId},
+                          FontSize -> 10, GrayLevel[0.4]]}]]]],
+                  Appearance -> "Frameless",
+                  BaseStyle -> {"Hyperlink"},
+                  Method -> "Queued"],
+                (* \:524a\:9664: \:78ba\:8a8d\:30c0\:30a4\:30a2\:30ed\:30b0\:5f8c\:306b DryRun->False, Confirm->True \:3067\:5b9f\:524a\:9664 *)
+                Button[
+                  Style["\:524a\:9664", FontFamily -> "Yu Gothic UI",
+                    FontSize -> 10, RGBColor[0.7, 0.15, 0.15]],
                   Module[{ok},
                     ok = ChoiceDialog[
                       Style["\:524a\:9664\:3057\:307e\:3059\:304b: " <> rid,
@@ -4193,11 +4170,11 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                         SourceVaultDeletePromptRoute[rid,
                           "DryRun" -> False, "Confirm" -> True],
                         Style["\:6700\:65b0\:72b6\:614b\:306f\:518d\:8868\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
-                          FontSize -> 10, GrayLevel[0.4]]}]]]]],
-                Appearance -> "Frameless",
-                BaseStyle -> {"Hyperlink"},
-                Method -> "Queued"]
-            }]
+                          FontSize -> 10, GrayLevel[0.4]]}]]]],
+                  Appearance -> "Frameless",
+                  BaseStyle -> {"Hyperlink"},
+                  Method -> "Queued"]
+              }, Spacings -> 0.35]]
           }]],
       filtered];
     Grid[
@@ -4215,6 +4192,60 @@ SourceVaultFormatPromptRouteList[___] :=
   <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
     "Hint" ->
       "Expected SourceVaultFormatPromptRouteList[routes_List, opts]."|>;
+
+(* ---------- panel: search box + managed listing (mirrors SourceVaultWorkflowPanel) ---------- *)
+
+Options[SourceVaultPromptRoutePanel] = {"Channel" -> All};
+
+SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
+  DynamicModule[{query = "", channel, routes},
+    channel = OptionValue[SourceVaultPromptRoutePanel, {opts}, "Channel"];
+    routes = Quiet @ Check[
+      SourceVaultSearchPromptRoutes["", "Channel" -> channel], {}];
+    Panel[Column[{
+      Style["SourceVault \:4fdd\:5b58\:30d7\:30ed\:30f3\:30d7\:30c8\:4e00\:89a7", Bold, 15,
+        FontFamily -> "Yu Gothic UI"],
+      Row[{
+        InputField[Dynamic[query], String,
+          FieldHint -> "\:30ad\:30fc\:30ef\:30fc\:30c9 / \:30e1\:30e2\:691c\:7d22", ImageSize -> 300,
+          BaseStyle -> {FontFamily -> "Yu Gothic UI"}],
+        Spacer[6],
+        PopupMenu[Dynamic[channel],
+          {All -> "\:5168\:30c1\:30e3\:30cd\:30eb", "public" -> "public",
+           "private" -> "private", "local" -> "local"},
+          BaseStyle -> {FontFamily -> "Yu Gothic UI"}],
+        Spacer[6],
+        Button[Style["\:691c\:7d22", FontFamily -> "Yu Gothic UI"],
+          routes = Quiet @ Check[
+            SourceVaultSearchPromptRoutes[query, "Channel" -> channel], {}],
+          Method -> "Queued"],
+        Spacer[4],
+        Button[Style["\:5168\:4ef6", FontFamily -> "Yu Gothic UI"],
+          query = "";
+          routes = Quiet @ Check[
+            SourceVaultSearchPromptRoutes["", "Channel" -> channel], {}],
+          Method -> "Queued"],
+        Spacer[4],
+        Tooltip[
+          Button[Style["\:518d\:8aad\:8fbc", FontFamily -> "Yu Gothic UI"],
+            routes = Quiet @ Check[
+              SourceVaultSearchPromptRoutes[query, "Channel" -> channel], {}],
+            Method -> "Queued"],
+          "\:5b9f\:884c\:30fbPrimary\:8a2d\:5b9a\:30fb\:524a\:9664\:306e\:5f8c\:306f\:518d\:8aad\:8fbc\:3067\:6700\:65b0\:72b6\:614b\:306b\:3057\:3066\:304f\:3060\:3055\:3044\:3002"]}],
+      Dynamic[
+        Row[{
+          Style[ToString[Length[If[ListQ[routes], routes, {}]]] <> " \:4ef6",
+            FontFamily -> "Yu Gothic UI", FontSize -> 10, GrayLevel[0.45]]}],
+        TrackedSymbols :> {routes}],
+      Dynamic[
+        SourceVaultFormatPromptRouteList[If[ListQ[routes], routes, {}]],
+        TrackedSymbols :> {routes}]},
+      Spacings -> 0.6],
+      ImageMargins -> 4]];
+
+SourceVaultPromptRoutePanel[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "Expected SourceVaultPromptRoutePanel[opts]."|>;
 
 
 (* ============================================================
@@ -4852,8 +4883,89 @@ SourceVaultUpdatePromptRouteMemo[routeId_String, memo_String] :=
 SourceVaultUpdatePromptRouteMemo[___] :=
   <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
 
+(* ---------- add / revise the memo on the last run's saved version ----------
+   The prompt is already auto-captured on every ClaudeEval / ContinueEval run
+   (SourceVaultAutoSaveLastPrompt), so the natural manual gesture after a run
+   is to ATTACH A MEMO to that already-saved newest version - not to save the
+   prompt again. AddPromptMemo updates the Memo of the last run's newest saved
+   version in place (no redundant new version). When no saved version exists
+   yet - e.g. a HeavyLLM one-shot answer that auto-save intentionally skips -
+   it falls back to SaveLastPrompt so the memo still gets a home. *)
+
+(* the prompt string of the most recent ClaudeEval / ContinueEval run.
+   ClaudeEval records it in ClaudeCode`$iClaudeEvalAutoSaveTask at turn start
+   (and never clears it) - the same handle the auto-saver keys on - so we read
+   it weakly. Falls back to the last successful PromptRun capture. *)
+iSVPRLastEvalPrompt[] :=
+  Module[{p, cap, run},
+    p = Quiet @ Check[
+      Symbol["ClaudeCode`$iClaudeEvalAutoSaveTask"], Missing["NoGlobal"]];
+    If[StringQ[p] && StringTrim[p] =!= "", Return[p]];
+    cap = Quiet @ Check[SourceVaultCaptureLastPromptRun[], <||>];
+    If[AssociationQ[cap] && Lookup[cap, "Status", ""] === "OK",
+      run = Lookup[cap, "PromptRun", <||>];
+      If[AssociationQ[run],
+        p = Which[
+          StringQ[Lookup[run, "RawPrompt", Missing[]]],  run["RawPrompt"],
+          StringQ[Lookup[run, "PromptText", Missing[]]], run["PromptText"],
+          True, Missing["NoPrompt"]];
+        If[StringQ[p], Return[p]]]];
+    Missing["NoLastPrompt"]];
+
+Options[AddPromptMemo] = {"PromptText" -> Automatic, "RouteId" -> Automatic};
+
+AddPromptMemo[memo_String, opts:OptionsPattern[]] :=
+  Module[{routeIdOpt, promptOpt, prompt, gid, latest,
+          routeId = Missing["None"], upd, saveRes},
+    routeIdOpt = OptionValue[AddPromptMemo, {opts}, "RouteId"];
+    promptOpt  = OptionValue[AddPromptMemo, {opts}, "PromptText"];
+
+    (* prompt of the run whose memo we are setting *)
+    prompt = If[StringQ[promptOpt] && StringTrim[promptOpt] =!= "",
+      promptOpt, iSVPRLastEvalPrompt[]];
+
+    (* target route: explicit RouteId wins; else the newest saved version in
+       the last run's prompt group (the version auto-save just created) *)
+    Which[
+      StringQ[routeIdOpt] && routeIdOpt =!= "",
+        routeId = routeIdOpt,
+      StringQ[prompt],
+        gid = iSVPRPromptGroupId[prompt];
+        latest = If[StringQ[gid],
+          First[iSVPRGroupRoutes[gid], Missing[]], Missing[]];
+        If[AssociationQ[latest],
+          routeId = Lookup[latest, "RouteId", Missing["None"]]]];
+
+    (* in-place memo update on the existing newest version *)
+    If[StringQ[routeId] && routeId =!= "",
+      upd = SourceVaultUpdatePromptRouteMemo[routeId, memo];
+      If[AssociationQ[upd] && Lookup[upd, "Status", ""] === "OK",
+        Return[Join[upd, <|"Action" -> "MemoUpdated"|>]]]];
+
+    (* fallback: nothing saved for this run yet -> save a version with the memo *)
+    saveRes = If[StringQ[prompt],
+      SaveLastPrompt[memo, "PromptText" -> prompt],
+      SaveLastPrompt[memo]];
+    If[!AssociationQ[saveRes],
+      saveRes = <|"Status" -> "Failed", "Reason" -> "SaveFailed"|>];
+    Join[saveRes,
+      <|"Action" -> If[Lookup[saveRes, "Status", ""] === "OK",
+          "MemoSavedNewVersion", "MemoNotSaved"]|>]
+  ];
+
+AddPromptMemo[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "Expected AddPromptMemo[memo_String, opts]."|>;
+
 (* truncate a display string so a long prompt does not break the Grid
    layout; the full text is kept for matching and shown via Tooltip. *)
+(* ISO 日時文字列 ("2026-06-02T16:44:32") -> 日付のみ ("2026-06-02")。
+   "T" / 空白で切って先頭 (日付) を返す。非文字列・空はそのまま文字列化。 *)
+iSVPRDateOnly[s_] := Module[{t},
+  t = ToString[s];
+  If[StringTrim[t] === "", Return[t]];
+  First[StringSplit[t, "T" | " "], t]];
+
 iSVPRTruncateDisplay[s_String, n_Integer:64] :=
   Module[{flat},
     flat = StringReplace[s, RegularExpression["\\s+"] -> " "];

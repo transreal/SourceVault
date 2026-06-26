@@ -173,14 +173,57 @@ SourceVaultSources::usage =
   "arXiv は論文タイトル・著者・出版日 (arXiv API から自動取得し meta にキャッシュ)、\n" <>
   "Web ページは HTML <title>、ローカルファイルはファイル名を Title に出す。\n" <>
   "各行に URL リンク (▶ URL) と ingest 済みファイルを開くリンク (▶ 開く) が付く。\n" <>
-  "query は Title/Authors/URL/Id 等の部分一致 (\"\" または省略で全件)。\n" <>
+  "query は Title/Authors/Summary/URL/Id 等の部分一致 (\"\" または省略で全件)。\n" <>
   "Options: \"Limit\" -> Automatic|n, \"Kind\" -> All|\"arxiv\"|\"web\"|\"local\",\n" <>
   "  \"FetchMetadata\" -> Automatic (未取得のみ取得)|False (network なし)|True (再取得),\n" <>
-  "  \"Format\" -> \"Grid\" (既定)|\"Dataset\"|\"Rows\"";
+  "  \"Since\"/\"Until\"/\"On\" -> ingest 日での絞り込み (日付文字列\\\"yyyy-mm-dd\\\"/Today/DateObject。\n" <>
+  "    \"On\" は単日、\"Since\"/\"Until\" は範囲。両端含む),\n" <>
+  "  \"Author\" -> 著者名の部分一致,\n" <>
+  "  \"Format\" -> \"Grid\" (既定)|\"Dataset\"|\"Rows\"\n" <>
+  "例: SourceVaultSources[\"\", \"Kind\" -> \"arxiv\", \"On\" -> Today]  (今日 ingest した arXiv)";
+
+SourceVaultArXiv::usage =
+  "SourceVaultArXiv[query] は arXiv ソースだけを共通スキーマ表で表示する\n" <>
+  "(SourceVaultSources[query, \"Kind\" -> \"arxiv\", ...] の薄ラッパ)。\n" <>
+  "Eagle の SourceVaultEagleSummaries / mail の SourceVaultMailSearchSummary と同じ\n" <>
+  "種別専用ビューで、リンク開き・絞り込み検索を持ち、横断検索 SourceVaultSummaries にも相乗りする。\n" <>
+  "Options は SourceVaultSources と同じ (\"On\"/\"Since\"/\"Until\"/\"Author\"/\"Limit\"/\"Format\" 等)。\n" <>
+  "例: SourceVaultArXiv[\"\", \"On\" -> Today]、SourceVaultArXiv[\"reversible\", \"Author\" -> \"Bennett\"]";
+
+SourceVaultBackfillArXivSummaries::usage =
+  "SourceVaultBackfillArXivSummaries[] は既存の arXiv ソースのうち Summary が\n" <>
+  "未設定 (または過去の LLM エラー本文) のものに、arXiv アブストラクトを取得し\n" <>
+  "$Language へ翻訳して Summary として付与する (ingest 時の自動付与と同じ処理)。\n" <>
+  "翻訳は cloud LLM (arXiv は公開データなので PrivacyLevel 0.0)。$Language が\n" <>
+  "Japanese のセッションで実行すること (headless では英語原文のまま格納される)。\n" <>
+  "Options: \"Force\" -> False (True で既存 Summary も再生成),\n" <>
+  "  \"Model\" -> Automatic, \"Limit\" -> Automatic|n (処理件数の上限)\n" <>
+  "戻り値: <|\"Candidates\", \"Updated\", \"AlreadyPresent\", \"NoAbstract\", \"Failed\", \"Results\"|>";
+
+SourceVaultShowSourceSummary::usage =
+  "SourceVaultShowSourceSummary[sourceId] は ingest 済みソース (arXiv / web / local) の\n" <>
+  "サマリーを編集可能なノートブックで開く。Eagle の SourceVaultEagleShowSummary と同じ枠組み。\n" <>
+  "保存済みのユーザー追記版があればそれを開き (正本)、無ければ Title/著者/出版/URL/要約から\n" <>
+  "ノートを生成する。ノート内の「このノートを保存する」ボタンを押すと\n" <>
+  "<PrivateVault>/sources/summary-notes/ に保存され、以後はその保存版が開く。\n" <>
+  "SourceVaultSources / SourceVaultArXiv / SourceVaultSummaries の表でタイトルまたは\n" <>
+  "サマリーをクリックすると呼ばれる (arxiv/web/local の既定アクション)。\n" <>
+  "Option: \"Fresh\" -> False (True で保存版を無視し record から新規生成)。";
+
+$SourceVaultSummaryNotebookStyle::usage =
+  "$SourceVaultSummaryNotebookStyle は SourceVaultShowSourceSummary が開くノートの\n" <>
+  "StyleDefinitions。既定 \"SourceVault default.nb\" (Eagle サマリーノートと同じスタイル)。";
+
+SourceVaultOpenSourceFile::usage =
+  "SourceVaultOpenSourceFile[sourceId] は ingest 済みソースの raw ファイルを\n" <>
+  "現在の PC で解決して SystemOpen で開く。保存時の絶対パスではなく ContentHash から\n" <>
+  "現 PC の vault パスを live 再算出するため、別 PC (Dropbox 同期) でも開ける。\n" <>
+  "SourceVaultSources / SourceVaultArXiv の「▶ 開く」ボタンの実体。";
 
 SourceVaultSourceRow::usage =
   "SourceVaultSourceRow[sourceId] は 1 ソースの共通スキーマ行を返す:\n" <>
-  "<|\"Kind\", \"Id\", \"Title\", \"Authors\", \"Published\", \"Summary\", \"URL\", \"File\", \"Date\", \"PrivacyLevel\"|>\n" <>
+  "<|\"Kind\", \"Id\", \"URI\", \"Title\", \"Authors\", \"Published\", \"Summary\", \"URL\", \"File\", \"Date\", \"PrivacyLevel\"|>\n" <>
+  "\"URI\" は正準 sv://snapshot/.. (混在データセットの join/参照キー)。\n" <>
   "SourceVaultEagleSummaryRow と同じキーを共有する。";
 
 SourceVaultSummaries::usage =
@@ -188,6 +231,7 @@ SourceVaultSummaries::usage =
   "Eagle 保存済みサマリー等、登録 provider 横断) を検索し統合表で表示する。\n" <>
   "例: SourceVaultSummaries[\"可逆計算\"]\n" <>
   "Options: \"Providers\" -> All|{\"sources\", \"eagle\", ...}, \"Limit\", \"Kind\",\n" <>
+  "  \"Since\"/\"Until\"/\"On\" -> 登録/生成日での絞り込み, \"Author\" -> 著者部分一致,\n" <>
   "  \"FetchMetadata\", \"Format\" -> \"Grid\" (既定)|\"Dataset\"|\"Rows\"";
 
 SourceVaultRegisterSummaryProvider::usage =
@@ -228,7 +272,9 @@ SourceVaultIngest::usage =
   "    \:30b8\:30e7\:30d6\:30ad\:30e5\:30fc\:306b\:6295\:5165\:3057 JobId \:3092\:5373\:6642 return\:3002LLMGraphDAGCreate (claudecode.wl) \:5fc5\:9808\:3002" <>
   "  EnsureUUID -> Automatic | True | False (.nb \:53d6\:308a\:8fbc\:307f\:6642\:306e UUID \:81ea\:52d5\:4ed8\:4e0e)\n" <>
   "    Automatic / True: .nb \:306a\:3089 hash \:8a08\:7b97\:306e\:524d\:306b SourceVaultEnsureNotebookUUID \:3092\:547c\:3073\:5143\:30d5\:30a1\:30a4\:30eb\:306b UUID \:3092\:57cb\:3081\:8fbc\:3080\n" <>
-  "    .nb \:4ee5\:5916\:3068\:5de8\:5927\:30d5\:30a1\:30a4\:30eb (>$SourceVaultMaxFileSizeMB) \:306f\:30b9\:30ad\:30c3\:30d7\:3002\:4ed8\:4e0e\:306b\:5931\:6557\:3057\:3066\:3082 ingest \:306f\:7d9a\:884c\:3059\:308b";
+  "    .nb \:4ee5\:5916\:3068\:5de8\:5927\:30d5\:30a1\:30a4\:30eb (>$SourceVaultMaxFileSizeMB) \:306f\:30b9\:30ad\:30c3\:30d7\:3002\:4ed8\:4e0e\:306b\:5931\:6557\:3057\:3066\:3082 ingest \:306f\:7d9a\:884c\:3059\:308b\n" <>
+  "\:623b\:308a\:5024\:306b\:306f content-addressed \:306a\:6b63\:6e96 URI \"URI\" -> sv://snapshot/sha256/<hex> \:3092\:542b\:3080\n" <>
+  "  (SourceVaultSources \:306e\:884c\:30fbSourceVaultParseURI/mcp \:3068\:5171\:901a\:306e join/\:53c2\:7167\:30ad\:30fc)\:3002";
 
 SourceVaultIngestWait::usage =
   "SourceVaultIngestWait[ingestResult, timeoutSec] \:306f\:975e\:540c\:671f ingest \:306e\:5b8c\:4e86\:3092\:5f85\:3064\:3002\n" <>
@@ -236,6 +282,13 @@ SourceVaultIngestWait::usage =
   "  - Status: Queued \:306e\:5834\:5408\:3001SourceId \:306e snapshot \:5897\:52a0\:3092 polling \:3057\:3066\:65b0\:898f snapshot \:51fa\:73fe\:3067\:5b8c\:4e86\:3002\n" <>
   "  - timeoutSec (\:30c7\:30d5\:30a9\:30eb\:30c8 60) \:79d2\:8d85\:904e\:3067 Status: Timeout \:3092\:8fd4\:3059\:3002\n" <>
   "  - \:7b2c\:4e00\:5f15\:6570\:306f SourceVaultIngest \:306e\:7d50\:679c Association \:307e\:305f\:306f SourceId String\:3002";
+
+SourceVaultReclassifyPublicPrivacy::usage =
+  "SourceVaultReclassifyPublicPrivacy[] \:306f ingest \:6e08\:307f\:306e\:516c\:958b origin \:30bd\:30fc\:30b9 (ArXiv / \:516c\:958b URL) \:3067\n" <>
+  "PrivacyLevel \:304c\:6a5f\:5bc6\:95be\:5024 0.5 \:4ee5\:4e0a\:306b\:8aa4\:8a2d\:5b9a\:3055\:308c\:3066\:3044\:308b\:3082\:306e\:3092\:3001\:672c\:6765\:306e\:516c\:958b\:65e2\:5b9a\:5024\n" <>
+  "  (OfficialDocs/OfficialAPI=0.0, PublicWeb=0.4) \:306b\:662f\:6b63\:3059\:308b\:4fdd\:5b88\:95a2\:6570\:3002source/snapshot \:4e21\:30e1\:30bf\:3092\:66f8\:304d\:63db\:3048\:308b\:3002\n" <>
+  "\:65e7\:7248\:304c arXiv \:7b49\:306e OfficialDocs \:3092 0.6 \:3068\:8aa4\:30bf\:30b0\:3057\:305f\:4ef6\:306e\:4e00\:5ea6\:304d\:308a\:306e\:4fee\:5fa9\:7528 (\:51aa\:7b49)\:3002\n" <>
+  "\:8fd4\:308a\:5024: <|\"Status\", \"Count\", \"Changed\" -> {<|SourceId, From, To|>...}|>";
 
 (* \[HorizontalLine]\[HorizontalLine] Stage 4 Phase 4B: PDF page extraction \[HorizontalLine]\[HorizontalLine] *)
 
@@ -1956,12 +2009,44 @@ Options[SourceVaultIngest] = {
   "EnsureUUID"  -> Automatic
 };
 
+(* content hash (sha256-<hex> / snap-sha256-<hex> / 素の <hex>) -> \:6b63\:6e96 snapshot URI
+   sv://snapshot/sha256/<hex>\:3002content-addressed namespace \:306a\:306e\:3067 SourceVaultParseURI /
+   mcp \:306e iSVSnapshotResolve \:304c\:89e3\:6c7a\:3067\:304d\:308b\:3002\:6df7\:5728\:30c7\:30fc\:30bf\:30bb\:30c3\:30c8\:306e\:6c4e\:7528 join/\:53c2\:7167\:30ad\:30fc\:3002
+   \:7a7a\:30cf\:30c3\:30b7\:30e5\:306f Missing\:3002 *)
+iSVSnapshotURIOfHash[ch_String] :=
+  Module[{hx},
+    hx = Which[
+      StringStartsQ[ch, "snap-sha256-"], StringDrop[ch, StringLength["snap-sha256-"]],
+      StringStartsQ[ch, "sha256-"],      StringDrop[ch, StringLength["sha256-"]],
+      True, ch];
+    If[StringTrim[hx] === "", Missing["NoHash"], "sv://snapshot/sha256/" <> hx]];
+iSVSnapshotURIOfHash[_] := Missing["NoHash"];
+
+(* assoc \:306e afterKey \:306e\:76f4\:5f8c\:306b rule \:3092\:633f\:5165 (\:9806\:5e8f\:4fdd\:6301)\:3002afterKey \:4e0d\:5728\:306a\:3089\:672b\:5c3e\:306b\:8ffd\:52a0\:3002 *)
+iSVAssocInsertAfter[a_Association, afterKey_, (k_ -> v_)] :=
+  Module[{keys = Keys[a], i},
+    i = First @ FirstPosition[keys, afterKey, {Length[keys]}, {1}];
+    Association[KeyTake[a, Take[keys, i]], k -> v, KeyTake[a, Drop[keys, i]]]];
+iSVAssocInsertAfter[a_, _, _] := a;
+
+(* ingest \:7d50\:679c\:306b\:6b63\:6e96 snapshot URI \:3092\:4ed8\:4e0e (ContentHash \:512a\:5148\:3001\:7121\:3051\:308c\:3070 SnapshotId)\:3002
+   async/\:5931\:6557\:3067 hash \:304c\:7121\:3044\:7d50\:679c (Queued/Failed \:7b49) \:306f\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002 *)
+iSVIngestAttachURI[res_Association] :=
+  Module[{uri},
+    If[KeyExistsQ[res, "URI"], Return[res]];
+    uri = iSVSnapshotURIOfHash[ToString @ Lookup[res, "ContentHash", ""]];
+    If[! StringQ[uri],
+      uri = iSVSnapshotURIOfHash[ToString @ Lookup[res, "SnapshotId", ""]]];
+    If[! StringQ[uri], Return[res]];
+    iSVAssocInsertAfter[res, "SnapshotId", "URI" -> uri]];
+iSVIngestAttachURI[x_] := x;
+
 SourceVaultIngest[source_String, opts:OptionsPattern[]] :=
   Module[{tp, parsed},
     iEnsureRoots[];
     parsed = iParseSourceRef[source];
     tp = parsed["Type"];
-    Switch[tp,
+    iSVIngestAttachURI @ Switch[tp,
       "LocalFile", iIngestLocalFile[parsed["Identifier"], opts],
       "ArXiv",     iIngestArXiv[parsed["Identifier"], opts],
       "URL",       iIngestURL[parsed["Identifier"], opts],
@@ -2229,6 +2314,14 @@ iCanonicalizeURL[ref_String] :=
   ];
 
 (* TrustLevel \:81ea\:52d5\:63a8\:5b9a *)
+(* trust level -> 自動 PrivacyLevel 既定値。公開ドキュメント (OfficialAPI/OfficialDocs:
+   arxiv・wikipedia・公式 docs 等) は公開 web データなので 0.0 (クラウド LLM 可・機密閾値 0.5 未満)。
+   iAccessLabelForSource の ArXiv/URL 公開既定 0.0 と整合させる。一般 PublicWeb は 0.4。 *)
+iSVAutoPrivacyForTrust[trustLevel_] := Switch[ToString[trustLevel],
+  "OfficialAPI" | "OfficialDocs", 0.0,
+  "PublicWeb", 0.4,
+  _, 0.4];
+
 iAutoTrustLevel[url_String] :=
   Module[{lower},
     lower = ToLowerCase[url];
@@ -2380,11 +2473,7 @@ iIngestURL[url_String, opts:OptionsPattern[]] :=
       trustLevel = iAutoTrustLevel[canonicalUrl]];
     
     privacy = OptionValue[SourceVaultIngest, baseOpts, PrivacyLabel];
-    If[privacy === Automatic,
-      privacy = Switch[trustLevel,
-        "OfficialAPI" | "OfficialDocs", 0.6,
-        "PublicWeb", 0.4,
-        _, 0.4]];
+    If[privacy === Automatic, privacy = iSVAutoPrivacyForTrust[trustLevel]];
     
     (* Topic: Automatic \[Rule] Null (JSON \:5b89\:5168) *)
     topicVal = OptionValue[SourceVaultIngest, baseOpts, Topic];
@@ -2560,9 +2649,20 @@ iIngestURL[url_String, opts:OptionsPattern[]] :=
     
     iSourceMetaSave[sourceId, sourceMeta];
     iSnapshotMetaSave[snapshotId, snapshotMeta];
-    
+
     iLockRelease[lockInfo];
-    
+
+    (* arXiv: アブストラクトを取得し $Language へ翻訳して Summary に格納する
+       (best-effort)。網羅: 新規 ingest / RebuiltMetadata。網羅外 (AlreadyCurrent
+       早期 return) は SourceVaultBackfillArXivSummaries で補完する。
+       network + cloud LLM を伴うため TimeConstrained で上限を設け、失敗しても
+       ingest は成功扱い (Summary 無しになるだけ)。lock 解放後に実行。 *)
+    If[isArXivHint && StringQ[arXivId],
+      Quiet @ Check[
+        TimeConstrained[
+          iSVArXivAttachSummary[sourceId, arXivId, Automatic, False],
+          90, Null], Null]];
+
     iLog["Ingest", <|
       "SourceType" -> If[isArXivHint, "ArXiv", "URL"],
       "SourceId" -> sourceId,
@@ -2788,10 +2888,49 @@ SourceVaultIngestWait[ingestResultOrSourceId_, timeoutSec_:60] :=
             "Status" -> "Ready",
             "SourceId" -> sourceId,
             "SnapshotId" -> Last[snaps],
+            "URI" -> iSVSnapshotURIOfHash[ToString @ Last[snaps]],
             "WaitedSeconds" -> waited
           |>]]];
       Pause[0.5]]
   ];
+
+
+(* ingest 済み公開 origin (ArXiv / 公開 URL) ソースで、PrivacyLevel が機密閾値 0.5 以上に
+   誤設定されているもの (旧版が OfficialDocs/OfficialAPI を 0.6 と誤タグした件) を、本来の
+   公開既定値に是正する保守関数。冪等。source/snapshot 両メタを書き換える。
+   ユーザーが意図的に下げた低 PL や正常な PublicWeb 0.4 には触れない (0.5 以上のみ対象)。 *)
+SourceVaultReclassifyPublicPrivacy[] :=
+  Module[{ids, changed = {}},
+    iEnsureRoots[];
+    ids = SourceVaultList[];
+    Scan[
+      Function[id,
+        Module[{meta, st, trust, pl, newpl, snaps},
+          meta = iSourceMetaLoad[id];
+          If[AssociationQ[meta],
+            st = ToString @ Lookup[meta, "SourceType", ""];
+            trust = ToString @ Lookup[meta, "TrustLevel", ""];
+            pl = Lookup[meta, "PrivacyLevel", Missing[]];
+            newpl = iSVAutoPrivacyForTrust[trust];
+            If[MemberQ[{"ArXiv", "URL"}, st] && NumericQ[pl] &&
+               N[pl] >= 0.5 && N[pl] != N[newpl],
+              meta["PrivacyLevel"] = newpl;
+              iSourceMetaSave[id, meta];
+              snaps = Lookup[meta, "Snapshots", {}];
+              Scan[
+                Function[sid,
+                  Module[{sm = iSnapshotMetaLoad[sid]},
+                    If[AssociationQ[sm] &&
+                       NumericQ[Lookup[sm, "PrivacyLevel", Missing[]]] &&
+                       N[Lookup[sm, "PrivacyLevel"]] >= 0.5,
+                      sm["PrivacyLevel"] = newpl;
+                      iSnapshotMetaSave[sid, sm]]]],
+                If[ListQ[snaps], snaps, {}]];
+              AppendTo[changed,
+                <|"SourceId" -> id, "From" -> N[pl], "To" -> N[newpl]|>]]]]],
+      ids];
+    <|"Status" -> "Reclassified", "Count" -> Length[changed],
+      "Changed" -> changed|>];
 
 
 (* ============================================================
@@ -2898,12 +3037,19 @@ SourceVaultResolvePath[ref_, OptionsPattern[]] :=
    11.5 ソース一覧 / 横断検索 (SourceVaultSources / SourceVaultSummaries)
 
    共通行スキーマ (provider 契約):
-     <|"Kind" -> "arxiv"|"web"|"local"|"eagle"|...,
-       "Id" -> _String, "Title" -> _String, "Authors" -> _String,
+     <|"Kind" -> "arxiv"|"web"|"local"|"eagle"|"mail"|...,
+       "Id" -> _String,
+       "URI" -> _String (正準 sv:// URI。例 sv://object/eagle-<id> /
+         sv://record/svmail-<id> / sv://snapshot/<class>/<hex>。無ければ Missing),
+       "Title" -> _String, "Authors" -> _String,
        "Published" -> _String (内容の出版日 ISO / ""),
        "Summary" -> _String, "URL" -> _String, "File" -> _String,
        "Date" -> _String (登録/生成日時), "PrivacyLevel" -> _Real|>
    SourceVaultEagleSummaryRow (SourceVault_eagle.wl) と同じキーを共有する。
+   類似項目は全 Kind で同名 (Summary/Title/Date/PrivacyLevel/URI) に揃え、
+   JoinAcross 等で混在データセットを総検索できるようにする。Kind 固有の項目だけ
+   別名にする。**クロスデータセット/クロス環境の参照は必ず "URI" を使う**
+   (絶対 File パスや内部 Id はマシン依存・provider 依存のため join キーにしない)。
    provider は SourceVaultRegisterSummaryProvider[name, fn] で登録し、
    fn[query_String, opts_Association] が共通行のリストを返す。
    ============================================================ *)
@@ -2949,7 +3095,7 @@ iSVArXivMetaFetchBatch[ids : {__String}] :=
       Cases[xml, XMLElement["entry", _, _], Infinity]];
     Scan[
       Function[entry,
-        Module[{eid, title, authors, published, key},
+        Module[{eid, title, authors, published, abstract, key},
           eid = FirstCase[entry,
             XMLElement["id", _, {s_String}] :> s, "", Infinity];
           eid = StringReplace[eid,
@@ -2965,6 +3111,11 @@ iSVArXivMetaFetchBatch[ids : {__String}] :=
             Infinity];
           published = FirstCase[entry,
             XMLElement["published", _, {p_String}] :> p, "", Infinity];
+          (* <summary> = アブストラクト本文。改行・連続空白を 1 個に正規化 *)
+          abstract = FirstCase[entry,
+            XMLElement["summary", _, {sm_String}] :> sm, "", Infinity];
+          abstract = StringTrim @
+            StringReplace[abstract, WhitespaceCharacter .. -> " "];
           (* リクエスト id との対応付け: 完全一致 -> version 抜き一致 *)
           key = SelectFirst[ids, # === eid &,
             SelectFirst[ids,
@@ -2974,13 +3125,97 @@ iSVArXivMetaFetchBatch[ids : {__String}] :=
             out[key] = <|
               "Title" -> title,
               "Authors" -> Select[authors, StringQ],
-              "Published" -> published|>]
+              "Published" -> published,
+              "Abstract" -> abstract|>]
         ]],
       entries];
     Scan[If[!KeyExistsQ[out, #], $iSVArXivFetchFailed[#] = True] &, ids];
     out
   ];
 iSVArXivMetaFetchBatch[{}] := <||>;
+
+(* $Language から要約言語を解決 (Japanese か否かの 2 値。iL と同じ判定基準)。 *)
+iSVEffectiveLang[] :=
+  If[MemberQ[Flatten[{$Language}], "Japanese"], "Japanese", "English"];
+
+(* arXiv アブストラクトを $Language へ翻訳する (best-effort)。
+   - 目標言語が English なら arXiv abstract は元々英語なので原文をそのまま返す
+     (LLM 往復を省く)。
+   - それ以外 (Japanese 等) は cloud LLM で翻訳。arXiv は公開 web データなので
+     PrivacyLevel 0.0 (cloud 可)。
+   - 翻訳失敗 (LLM 未ロード / エラー本文 / 空) は原文アブストラクトへ fallback し
+     "Translated" -> False を返す。iCallSummaryLLM が iSVLooksLikeLLMError で
+     利用制限・エラー本文を弾くので、それらが要約として保存されることはない。
+   戻り値: <|"Text" -> _String, "Translated" -> _?BooleanQ, "Lang" -> _String|> *)
+iSVTranslateAbstract[abstract_String, model_:Automatic] :=
+  Module[{lang, prompt, res},
+    lang = iSVEffectiveLang[];
+    If[lang === "English",
+      Return[<|"Text" -> abstract, "Translated" -> False, "Lang" -> lang|>]];
+    prompt = StringJoin[
+      "Translate the following academic paper abstract into natural ", lang,
+      ". Use plain form (da/dearu style), not polite form. ",
+      "Preserve technical terms and meaning faithfully. ",
+      "Output ONLY the translated abstract text. ",
+      "No commentary, headings, labels, or notes.\n\n",
+      "=== Abstract ===\n", abstract];
+    res = iCallSummaryLLM[prompt, model, 0.0];
+    If[AssociationQ[res] && Lookup[res, "Status", ""] === "OK" &&
+        StringQ[Lookup[res, "Response", Null]] &&
+        StringTrim[Lookup[res, "Response", ""]] =!= "",
+      <|"Text" -> StringTrim[res["Response"]], "Translated" -> True,
+        "Lang" -> lang|>,
+      <|"Text" -> abstract, "Translated" -> False, "Lang" -> lang,
+        "Reason" -> Lookup[res, "Reason", "TranslateUnavailable"]|>]
+  ];
+iSVTranslateAbstract[_, ___] :=
+  <|"Text" -> "", "Translated" -> False, "Lang" -> iSVEffectiveLang[]|>;
+
+(* arXiv ソース 1 件に翻訳済みアブストラクトを Summary として付与する。
+   ingest フック (iIngestURL) と SourceVaultBackfillArXivSummaries の共通本体。
+   force 無しで既存の正常な Summary があれば再翻訳しない (AlreadyPresent)。
+   meta は再 load してから書き戻すので、呼び出し側が保存済みでも安全。
+   戻り値: <|"Status" -> "OK"|"AlreadyPresent"|"NoAbstract"|"Failed", ...|> *)
+iSVArXivAttachSummary[sourceId_String, arXivId_String, model_:Automatic,
+    force:(True | False) : False] :=
+  Module[{meta, existing, batch, hit, abstract, tr},
+    meta = iSourceMetaLoad[sourceId];
+    If[!AssociationQ[meta],
+      Return[<|"Status" -> "Failed", "Reason" -> "NoMeta",
+        "SourceId" -> sourceId|>]];
+    existing = Lookup[meta, "Summary", Missing[]];
+    If[!force && StringQ[existing] && StringTrim[existing] =!= "" &&
+        !iSVLooksLikeLLMError[existing],
+      Return[<|"Status" -> "AlreadyPresent", "SourceId" -> sourceId|>]];
+    batch = iSVArXivMetaFetchBatch[{arXivId}];
+    hit = Lookup[batch, arXivId, Missing[]];
+    abstract = If[AssociationQ[hit], ToString @ Lookup[hit, "Abstract", ""], ""];
+    If[!StringQ[abstract] || StringTrim[abstract] === "",
+      Return[<|"Status" -> "NoAbstract", "SourceId" -> sourceId,
+        "ArXivId" -> arXivId|>]];
+    tr = iSVTranslateAbstract[abstract, model];
+    meta["Summary"] = Lookup[tr, "Text", abstract];
+    meta["SummarySource"] = "arXivAbstract";
+    meta["SummaryLanguage"] = Lookup[tr, "Lang", iSVEffectiveLang[]];
+    meta["SummaryTranslated"] = TrueQ[Lookup[tr, "Translated", False]];
+    meta["SummaryFetchedAt"] = iIsoNow[];
+    (* API entry を取得したついでに表示メタも欠落していれば補完 *)
+    If[AssociationQ[hit],
+      If[iSVSourceTitleMissingQ[meta] &&
+          StringQ[Lookup[hit, "Title", Null]] && hit["Title"] =!= "",
+        meta["Title"] = hit["Title"]];
+      If[!KeyExistsQ[meta, "Authors"] || Lookup[meta, "Authors", {}] === {},
+        meta["Authors"] = Lookup[hit, "Authors", {}]];
+      If[ToString @ Lookup[meta, "Published", ""] === "",
+        meta["Published"] = Lookup[hit, "Published", ""]]];
+    iSourceMetaSave[sourceId, meta];
+    <|"Status" -> "OK", "SourceId" -> sourceId, "ArXivId" -> arXivId,
+      "Translated" -> meta["SummaryTranslated"],
+      "Language" -> meta["SummaryLanguage"],
+      "SummaryChars" -> StringLength[ToString @ meta["Summary"]]|>
+  ];
+iSVArXivAttachSummary[___] :=
+  <|"Status" -> "Failed", "Reason" -> "BadArgs"|>;
 
 (* 保存済み HTML snapshot から <title> を抽出 (network なし、先頭 256KB のみ)。
    チャンク末尾で UTF-8 マルチバイト列が切れると decode が失敗するので、
@@ -3076,17 +3311,40 @@ iSVSourcesEnrich[metas_List, fetch_] :=
     Map[iSVSourceEnrichOne[#, fetch, batch] &, metas]
   ];
 
+(* snapshot の raw ファイルの「現 PC での」絶対パス。
+   保存済み Path は ingest した PC の絶対パスなので別 PC では解決しない。
+   vault root は iResolveDropboxRoot[] で PC ごとに live 算出されるので、
+   ContentHash から iRawPathOf で再算出し、現 PC で実在するものを優先する。 *)
+iSVLiveRawPathOf[snap_Association] :=
+  Module[{stored, ch, hashOnly, ext, live},
+    stored = ToString @ Lookup[snap, "Path", ""];
+    ch = ToString @ Lookup[snap, "ContentHash", ""];
+    hashOnly = StringReplace[ch, "sha256-" -> ""];
+    ext = If[stored =!= "", FileExtension[stored], ""];
+    live = If[hashOnly =!= "", iRawPathOf[hashOnly, ext], ""];
+    Which[
+      live =!= "" && FileExistsQ[live], live,
+      stored =!= "" && FileExistsQ[stored], stored,
+      True, ""]];
+iSVLiveRawPathOf[_] := "";
+
 (* meta -> 共通スキーマ行 *)
 iSVSourceRowOf[meta_Association] :=
   Module[{kind, id, title, authors, published, url, file, date, pl,
-          snaps, snap, aid},
+          snaps, snap, aid, uri},
     id = ToString @ Lookup[meta, "SourceId", ""];
     kind = iSVKindOfSourceType[Lookup[meta, "SourceType", ""]];
     snaps = Lookup[meta, "Snapshots", {}];
     snap = If[ListQ[snaps] && snaps =!= {},
       iSnapshotMetaLoad[Last[snaps]], Missing[]];
-    file = If[AssociationQ[snap], ToString @ Lookup[snap, "Path", ""], ""];
-    If[file =!= "" && !FileExistsQ[file], file = ""];  (* purge 済み raw は空欄 *)
+    (* 正準 snapshot URI: 混在データセットの汎用 join/参照キー (eagle/mail と同じ規則)。
+       content-addressed なので絶対パス・内部 Id より machine/provider 非依存。 *)
+    uri = If[AssociationQ[snap],
+      iSVSnapshotURIOfHash[ToString @ Lookup[snap, "ContentHash", ""]],
+      Missing["NoSnapshot"]];
+    (* 別 PC でも開けるよう ContentHash から現 PC の raw パスを live 再算出。
+       保存済み Path は ingest した PC の絶対パスで別 PC では解決しないため。 *)
+    file = iSVLiveRawPathOf[snap];
     aid = iSVArXivIdOfMeta[meta];
     url = Which[
       kind === "arxiv" && StringQ[aid], "https://arxiv.org/abs/" <> aid,
@@ -3109,7 +3367,8 @@ iSVSourceRowOf[meta_Association] :=
     date = ToString @ Lookup[meta, "CreatedAt", ""];
     pl = With[{p = Lookup[meta, "PrivacyLevel", Missing[]]},
       If[NumericQ[p], N[p], 1.0]];
-    <|"Kind" -> kind, "Id" -> id, "Title" -> title, "Authors" -> authors,
+    <|"Kind" -> kind, "Id" -> id, "URI" -> uri,
+      "Title" -> title, "Authors" -> authors,
       "Published" -> published,
       "Summary" -> ToString @ Lookup[meta, "Summary", ""],
       "URL" -> url, "File" -> file, "Date" -> date, "PrivacyLevel" -> pl|>
@@ -3157,6 +3416,125 @@ iSVSourceShowInfo[sourceId_String] :=
     <|"Status" -> "Opened", "SourceId" -> sourceId|>
   ];
 
+(* ============================================================
+   ソースサマリーの編集可能ノート (Eagle の SourceVaultEagleShowSummary と同じ枠組み)
+   - 一覧でタイトル/サマリーをクリックすると要約をノートブックで開く
+   - 追記して「このノートを保存する」を押すと notes へ保存され、以後はその
+     保存版 (ユーザー追記 = 正本) が開く
+   arXiv / web / local など全 ingest ソース共通。
+   ============================================================ *)
+
+(* ユーザー追記つきサマリーノートの保存先 (Eagle 側 notes とは別ディレクトリ) *)
+iSVSourceNotesDir[] :=
+  FileNameJoin[{SourceVault`$SourceVaultRoots["PrivateVault"],
+    "sources", "summary-notes"}];
+
+iSVSourceNoteSafeName[s_String] :=
+  StringTake[
+    StringReplace[s, {"\\" -> "_", "/" -> "_", ":" -> "_", "*" -> "_",
+      "?" -> "_", "\"" -> "_", "<" -> "_", ">" -> "_", "|" -> "_"}],
+    UpTo[60]];
+
+(* sourceId に対応する保存済みノート (<安全名>_<sourceId>.nb)。無ければ Missing。 *)
+iSVSourceSummaryNoteFile[sourceId_String] :=
+  Module[{dir = iSVSourceNotesDir[], hits},
+    If[!TrueQ[Quiet@Check[DirectoryQ[dir], False]], Return[Missing["NoNote"]]];
+    hits = FileNames["*" <> sourceId <> ".nb", dir];
+    If[hits === {}, Missing["NoNote"], First[hits]]];
+
+If[!ValueQ[$SourceVaultSummaryNotebookStyle],
+  $SourceVaultSummaryNotebookStyle = "SourceVault default.nb"];
+
+Options[SourceVaultShowSourceSummary] = {"Fresh" -> False};
+SourceVaultShowSourceSummary[sourceId_String, OptionsPattern[]] :=
+  Module[{meta, noteFile, row, title, summaryText, urlStr, notesDir,
+          savePath, infoLine},
+    iEnsureRoots[];
+    meta = iSourceMetaLoad[sourceId];
+    If[!AssociationQ[meta],
+      Return[<|"Status" -> "Error", "Reason" -> "NotFound",
+        "SourceId" -> sourceId|>]];
+    (* 保存済みノートがあればそれを開く (ユーザーの追記が正本) *)
+    noteFile = iSVSourceSummaryNoteFile[sourceId];
+    If[!TrueQ[OptionValue["Fresh"]] && StringQ[noteFile],
+      Quiet@Check[NotebookOpen[noteFile], $Failed];
+      Return[<|"Status" -> "OpenedSaved", "SourceId" -> sourceId,
+        "Note" -> noteFile|>]];
+    row = iSVSourceRowOf[meta];
+    title = ToString @ Lookup[row, "Title", sourceId];
+    If[StringTrim[title] === "", title = sourceId];
+    summaryText = ToString @ Lookup[row, "Summary", ""];
+    urlStr = ToString @ Lookup[row, "URL", ""];
+    notesDir = iSVSourceNotesDir[];
+    savePath = FileNameJoin[{notesDir,
+      iSVSourceNoteSafeName[title] <> "_" <> sourceId <> ".nb"}];
+    infoLine = StringRiffle[
+      DeleteCases[{
+        With[{a = ToString@Lookup[row, "Authors", ""]},
+          If[StringTrim[a] === "", Nothing, "著者: " <> a]],
+        With[{p = ToString@Lookup[row, "Published", ""]},
+          If[StringTrim[p] === "", Nothing, "出版: " <> StringTake[p, UpTo[10]]]],
+        With[{d = ToString@Lookup[row, "Date", ""]},
+          If[StringTrim[d] === "", Nothing, "登録: " <> StringTake[d, UpTo[10]]]],
+        With[{pl = Lookup[row, "PrivacyLevel", Missing[]]},
+          If[NumericQ[pl], "PL: " <> ToString[N[pl]], Nothing]],
+        With[{lg = ToString@Lookup[meta, "SummaryLanguage", ""]},
+          If[StringTrim[lg] === "", Nothing, "要約言語: " <> lg]]},
+        Nothing], " / "];
+    Quiet@Check[
+      CreateDocument[
+        Join[
+          {Cell[title, "Subtitle"]},
+          If[infoLine =!= "", {Cell[infoLine, "Text"]}, {}],
+          If[StringStartsQ[urlStr, "http"],
+            {Cell[BoxData[ToBoxes[Hyperlink[urlStr, urlStr]]], "Text"]}, {}],
+          {Cell["要約", "Subsection"],
+           If[StringTrim[summaryText] === "",
+             Cell["(自動サマリー未生成。ここに補足を追記して保存できます。" <>
+               "arXiv は SourceVaultBackfillArXivSummaries[] で自動生成可。)", "Text"],
+             Cell[summaryText, "Text"]]},
+          (* 保存ボタン: notes/ へ即保存し、以後はその保存版が開かれる。
+             With で保存先パスをリテラル埋め込み (再オープン後も動くよう
+             System` シンボルのみで構成)。Eagle の枠組みと同一。 *)
+          {With[{p = savePath, ndir = notesDir},
+             Cell[BoxData[ToBoxes[
+               Button[
+                 Style[Row[{"このノートを保存する (補足を追記したら押す。以後この保存版が開きます)"}],
+                   "Hyperlink"],
+                 (If[!DirectoryQ[ndir],
+                    CreateDirectory[ndir, CreateIntermediateDirectories -> True]];
+                  NotebookSave[ButtonNotebook[], p]),
+                 Method -> "Queued", Appearance -> "Frameless",
+                 BaseStyle -> "Hyperlink"]]], "Text"]]}],
+        WindowTitle -> "Source summary: " <> title,
+        StyleDefinitions -> $SourceVaultSummaryNotebookStyle],
+      $Failed];
+    <|"Status" -> "OpenedNew", "SourceId" -> sourceId|>
+  ];
+
+(* ソースの raw ファイルを現 PC で解決して開く (クリック時解決 = 別 PC でも有効)。
+   グリッドの「開く」ボタンは絶対パスを焼かず sourceId だけ焼くのでノート保存後も移植可。 *)
+SourceVaultOpenSourceFile[sourceId_String] :=
+  Module[{meta, snaps, snap, path},
+    iEnsureRoots[];
+    meta = iSourceMetaLoad[sourceId];
+    If[!AssociationQ[meta],
+      Return[<|"Status" -> "Error", "Reason" -> "NotFound",
+        "SourceId" -> sourceId|>]];
+    snaps = Lookup[meta, "Snapshots", {}];
+    snap = If[ListQ[snaps] && snaps =!= {},
+      iSnapshotMetaLoad[Last[snaps]], Missing[]];
+    If[!AssociationQ[snap],
+      Return[<|"Status" -> "Error", "Reason" -> "NoSnapshot",
+        "SourceId" -> sourceId|>]];
+    path = iSVLiveRawPathOf[snap];
+    If[path === "" || !FileExistsQ[path],
+      Return[<|"Status" -> "Error", "Reason" -> "FileNotFound",
+        "SourceId" -> sourceId, "Path" -> path|>]];
+    Quiet@Check[SystemOpen[path], Null];
+    <|"Status" -> "Opened", "SourceId" -> sourceId, "Path" -> path|>
+  ];
+
 (* Kind ごとの行アクション (adapter が上書き登録できる):
    $iSVRowTitleActions[kind] = fn[id]  (タイトルクリック。既定: メタ情報ウインドウ)
    $iSVRowOpenActions[kind]  = fn[id]  (ファイルを開く。既定: row の File を SystemOpen) *)
@@ -3172,7 +3550,7 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
       {"種別", "タイトル", "著者", "出版", "サマリー", "PL", "URL", "ファイル", "登録"};
     body = Function[row,
       Module[{kind, id, title, authors, published, summary, pl, url, file,
-              date, titleAct, openAct},
+              date, titleAct, openAct, act},
         kind = ToString @ Lookup[row, "Kind", ""];
         id = ToString @ Lookup[row, "Id", ""];
         title = ToString @ Lookup[row, "Title", ""];
@@ -3185,19 +3563,25 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
         date = ToString @ Lookup[row, "Date", ""];
         titleAct = Lookup[$iSVRowTitleActions, kind, Automatic];
         openAct = Lookup[$iSVRowOpenActions, kind, Automatic];
+        (* 既定 (arxiv/web/local) は編集可能サマリーノートを開く。
+           eagle/mail/workflow は各 adapter 登録のアクション。 *)
+        act = If[titleAct === Automatic, SourceVaultShowSourceSummary, titleAct];
         {kind,
-         With[{act = If[titleAct === Automatic, iSVSourceShowInfo, titleAct],
-               theId = id},
+         With[{a = act, theId = id},
            Tooltip[
              Button[Style[iSVTruncStr[title, 60], "Hyperlink", FontFamily -> ff],
-               act[theId], Appearance -> "Frameless", Method -> "Queued",
+               a[theId], Appearance -> "Frameless", Method -> "Queued",
                BaseStyle -> "Hyperlink"],
-             title <> "\nId: " <> theId]],
+             title <> "\n(クリックで要約ノートを開く)  Id: " <> theId]],
          If[authors === "", "",
            Tooltip[Style[iSVTruncStr[authors, 40], FontFamily -> ff], authors]],
          StringTake[published, UpTo[7]],
          If[summary === "", "",
-           Tooltip[Style[iSVTruncStr[summary, 60], FontFamily -> ff], summary]],
+           With[{a = act, theId = id},
+             Tooltip[
+               Button[Style[iSVTruncStr[summary, 60], FontFamily -> ff],
+                 a[theId], Appearance -> "Frameless", Method -> "Queued"],
+               summary]]],
          If[NumericQ[pl], ToString[N[pl]], ""],
          If[StringStartsQ[url, "http"],
            Tooltip[Hyperlink[Style["▶ URL", FontFamily -> ff], url], url], ""],
@@ -3208,10 +3592,11 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
                  act[theId], Appearance -> "Frameless", Method -> "Queued",
                  BaseStyle -> "Hyperlink"]],
            file =!= "",
-             With[{f = file},
+             With[{theId = id, f = file},
                Tooltip[
                  Button[Style["▶ 開く", "Hyperlink", FontFamily -> ff],
-                   SystemOpen[f], Appearance -> "Frameless", Method -> "Queued",
+                   SourceVaultOpenSourceFile[theId],
+                   Appearance -> "Frameless", Method -> "Queued",
                    BaseStyle -> "Hyperlink"], f]],
            True, ""],
          If[date === "", "",
@@ -3233,6 +3618,38 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
       Column[{capLine, grid}]]
   ];
 
+(* ---- 共通スキーマ行の絞り込み (登録/生成日 "Date" と "Authors" で refine)。
+   SourceVaultSources (種別別) と SourceVaultSummaries (横断) が共用する。
+   日付は ISO 文字列の語彙順 = 時系列順を利用 (OrderedQ。文字列に >= は使えない)。 *)
+
+(* None/All/Automatic/Missing -> None、文字列/Today/DateObject/{y,m,d} -> "yyyy-mm-dd" *)
+iSVNormDate[d_] := Which[
+  d === None || d === All || d === Automatic || MissingQ[d], None,
+  StringQ[d], With[{t = StringTrim[d]}, If[t === "", None, StringTake[t, UpTo[10]]]],
+  True, Quiet @ Check[
+    With[{s = DateString[d, "ISODate"]}, If[StringQ[s], s, None]], None]];
+
+(* 共通行の登録/生成日 (ingest した日)。"Date" の ISO 先頭 10 文字。 *)
+iSVRowDateKey[r_] := StringTake[StringTrim[ToString @ Lookup[r, "Date", ""]], UpTo[10]];
+
+iSVApplyCommonFilters[rows_List, opts_Association] :=
+  Module[{since, until, on, author, r = rows},
+    on    = iSVNormDate[Lookup[opts, "On", None]];
+    since = iSVNormDate[Lookup[opts, "Since", None]];
+    until = iSVNormDate[Lookup[opts, "Until", None]];
+    If[StringQ[on], since = on; until = on];   (* "On" は Since=Until=その日 の糖衣 *)
+    If[StringQ[since],
+      r = Select[r, OrderedQ[{since, iSVRowDateKey[#]}] &]];
+    If[StringQ[until],
+      r = Select[r, OrderedQ[{iSVRowDateKey[#], until}] &]];
+    author = Lookup[opts, "Author", None];
+    If[StringQ[author] && StringTrim[author] =!= "",
+      r = Select[r, StringContainsQ[
+        ToString @ Lookup[#, "Authors", ""], author, IgnoreCase -> True] &]];
+    r];
+iSVApplyCommonFilters[rows_, _] := rows;
+
+
 (* ---- 公開: ingest 済みソース一覧 ---- *)
 
 Options[SourceVaultSourceRow] = {"FetchMetadata" -> Automatic};
@@ -3246,12 +3663,16 @@ SourceVaultSourceRow[sourceId_String, OptionsPattern[]] :=
 
 Options[SourceVaultSources] = {
   "Limit" -> Automatic, "Kind" -> All,
-  "FetchMetadata" -> Automatic, "Format" -> "Grid"};
+  "FetchMetadata" -> Automatic, "Format" -> "Grid",
+  "Since" -> None, "Until" -> None, "On" -> None, "Author" -> None};
 SourceVaultSources[query_String : "", OptionsPattern[]] :=
   Module[{rows, total, lim},
     rows = iSVSourcesRows[query, <|
       "FetchMetadata" -> OptionValue["FetchMetadata"],
       "Kind" -> OptionValue["Kind"]|>];
+    rows = iSVApplyCommonFilters[rows, <|
+      "Since" -> OptionValue["Since"], "Until" -> OptionValue["Until"],
+      "On" -> OptionValue["On"], "Author" -> OptionValue["Author"]|>];
     rows = ReverseSortBy[rows, ToString @ Lookup[#, "Date", ""] &];
     total = Length[rows];
     lim = OptionValue["Limit"];
@@ -3260,6 +3681,58 @@ SourceVaultSources[query_String : "", OptionsPattern[]] :=
       "Rows", rows,
       "Dataset", Dataset[rows],
       _, iSVRenderRowsGrid[rows, total, "Ingest 済みソース一覧"]]
+  ];
+
+(* ---- 公開: arXiv 専用ビュー (SourceVaultSources の "Kind" -> "arxiv" 薄ラッパ) ----
+   Eagle (SourceVaultEagleSummaries) / mail (SourceVaultMailSearchSummary) と同じく
+   種別専用の呼び出し口。本体は共通行スキーマ・横断検索 provider ("sources") に相乗り
+   するため、別 provider 登録は不要。"Kind" は先頭で固定するので arxiv に強制される。 *)
+Options[SourceVaultArXiv] = Options[SourceVaultSources];
+SourceVaultArXiv[query_String : "", opts:OptionsPattern[]] :=
+  SourceVaultSources[query, "Kind" -> "arxiv", opts];
+
+(* ---- 公開: arXiv サマリー backfill ----
+   既存の arXiv ソースのうち Summary 未設定 (または過去の LLM エラー本文) のものに、
+   アブストラクトを取得し $Language へ翻訳して Summary を付与する。
+   ingest フック (iIngestURL) と同じ iSVArXivAttachSummary を共用。
+   注意: $Language が Japanese のセッションで実行すること。headless で $Language を
+   明示設定しないと英語原文のまま格納される (rule: 背景カーネルの $Language 継承)。 *)
+Options[SourceVaultBackfillArXivSummaries] = {
+  "Force" -> False, "Model" -> Automatic, "Limit" -> Automatic};
+SourceVaultBackfillArXivSummaries[OptionsPattern[]] :=
+  Module[{force, model, limit, ids, metas, targets, results,
+          ok, already, noabs, failed},
+    iEnsureRoots[];
+    force = TrueQ[OptionValue["Force"]];
+    model = OptionValue["Model"];
+    limit = OptionValue["Limit"];
+    ids = SourceVaultList[];
+    metas = Select[iSourceMetaLoad /@ ids, AssociationQ];
+    targets = Select[metas, Function[m,
+      ToString @ Lookup[m, "SourceType", ""] === "ArXiv" &&
+        StringQ[iSVArXivIdOfMeta[m]] &&
+        (force || With[{s = Lookup[m, "Summary", Missing[]]},
+          !StringQ[s] || StringTrim[s] === "" || iSVLooksLikeLLMError[s]])]];
+    If[IntegerQ[limit] && limit >= 0,
+      targets = Take[targets, UpTo[limit]]];
+    results = Map[
+      Function[m,
+        iSVArXivAttachSummary[
+          ToString @ Lookup[m, "SourceId", ""],
+          iSVArXivIdOfMeta[m], model, force]],
+      targets];
+    ok      = Count[results, _?(Lookup[#, "Status", ""] === "OK" &)];
+    already = Count[results, _?(Lookup[#, "Status", ""] === "AlreadyPresent" &)];
+    noabs   = Count[results, _?(Lookup[#, "Status", ""] === "NoAbstract" &)];
+    failed  = Length[results] - ok - already - noabs;
+    <|"Status" -> "Done",
+      "Candidates" -> Length[targets],
+      "Updated" -> ok,
+      "AlreadyPresent" -> already,
+      "NoAbstract" -> noabs,
+      "Failed" -> failed,
+      "Language" -> iSVEffectiveLang[],
+      "Results" -> results|>
   ];
 
 (* ---- 公開: 横断検索 (provider 横断) ---- *)
@@ -3276,7 +3749,8 @@ SourceVaultRegisterSummaryProvider["sources", iSVSourcesRows];
 
 Options[SourceVaultSummaries] = {
   "Limit" -> Automatic, "Providers" -> All, "Kind" -> All,
-  "FetchMetadata" -> Automatic, "Format" -> "Grid"};
+  "FetchMetadata" -> Automatic, "Format" -> "Grid",
+  "Since" -> None, "Until" -> None, "On" -> None, "Author" -> None};
 SourceVaultSummaries[query_String : "", OptionsPattern[]] :=
   Module[{provs, sel, o, rows, total, lim},
     provs = If[AssociationQ[$SourceVaultSummaryProviders],
@@ -3290,6 +3764,10 @@ SourceVaultSummaries[query_String : "", OptionsPattern[]] :=
       Function[fn, Module[{r = Quiet @ Check[fn[query, o], {}]},
         If[ListQ[r], Select[r, AssociationQ], {}]]],
       Values[provs]];
+    (* 全 Kind 共通の Date/Authors 絞り込み (provider 非依存・横断で一様に効く) *)
+    rows = iSVApplyCommonFilters[rows, <|
+      "Since" -> OptionValue["Since"], "Until" -> OptionValue["Until"],
+      "On" -> OptionValue["On"], "Author" -> OptionValue["Author"]|>];
     rows = ReverseSortBy[rows, ToString @ Lookup[#, "Date", ""] &];
     total = Length[rows];
     lim = OptionValue["Limit"];
@@ -3308,35 +3786,77 @@ SourceVaultSummaries[query_String : "", OptionsPattern[]] :=
 
 iSVCatalogViewInputQ[text_String] :=
   StringContainsQ[text,
-    RegularExpression["SourceVault(Sources|Summaries)\\s*\\["]];
+    RegularExpression["SourceVault(Sources|Summaries|ArXiv)\\s*\\["]];
 iSVCatalogViewInputQ[_] := False;
 
-(* read-only プローブ: Format->"Rows" で再実行し最大 PL を返す。
-   Limit は外して superset を見る (安全側)。network 再取得はしない。 *)
-iSVCatalogPLProbe[query_String : "", opts___] :=
-  Module[{rows},
-    rows = Quiet @ Check[
-      SourceVaultSummaries[query, "Format" -> "Rows",
-        "FetchMetadata" -> False, "Limit" -> Automatic, opts],
-      $Failed];
-    If[!ListQ[rows], Return[1.0]];
-    If[rows === {}, Return[0.0]];
-    Max[Map[
+(* read-only プローブ: セルが実際に呼ぶ View 関数を Format->"Rows" で再実行し、
+   表示行の最大 PL を返す。Limit は外して superset を見る (安全側)。network 再取得は
+   しない (FetchMetadata->False)。probe はセルの表示内容と一致させること:
+   - SourceVaultSummaries セルは全 provider 横断表示なので Summaries で probe。
+   - SourceVaultSources / SourceVaultArXiv セルは sources provider のみ ("Kind"
+     フィルタ有効) を表示するので SourceVaultSources で probe。
+
+   罠 (2026-06-24 修正): 以前は Sources/ArXiv セルでも常に Summaries で probe していた。
+   eagle/mail provider は "Kind" オプションを無視して自分の行 (PL 0.85〜1.0) を返すため、
+   公開 arxiv だけを表示する SourceVaultSources["", "Kind"->"arxiv"] セルが Max PL 1.0 と
+   誤判定され、SourceVaultMarkConfidentialViewCells で機密マークされていた
+   (公開ソースの誤機密化)。probe を呼び出し関数に揃えて解消。 *)
+iSVCatalogProbeMaxPL[rows_] :=
+  Which[
+    !ListQ[rows], 1.0,
+    rows === {}, 0.0,
+    True, Max[Map[
       Function[r, With[{p = Lookup[r, "PrivacyLevel", Missing[]]},
         If[NumericQ[p], N[p], 1.0]]],
-      rows]]
-  ];
-iSVCatalogPLProbe[___] := 1.0;
+      rows]]];
+
+(* セル PL = 表示 (=テーブルに含まれる) 行の PL 最大値。opts (セルの実オプション) を
+   先頭固定オプションの後ろに置くことで:
+   - "Format"->"Rows" / "FetchMetadata"->False は先頭=最優先で必ず勝つ
+     (表示形式に依らず行を得る・network 再取得しない)。
+   - "Limit" は opts のセル指定が末尾の Automatic より先に来て勝つため、Limit で
+     絞った場合は「表示された行のみ」で最大を取る (非表示行の高 PL を拾わない)。
+     opts に Limit が無ければ末尾の Automatic が効き全行を見る。
+   catch-all の [___]:=1.0 は置かない: Optional 引数 (query_String:"") と競合し、
+   Mathematica の規則順序で catch-all が先に並んで常に 1.0 を返す誤爆があった
+   (公開 arxiv も機密化されていた一因)。非リスト/失敗時の 1.0 は iSVCatalogProbeMaxPL
+   が担う。非文字列 query もこの 1 定義が Optional 既定 "" + opts___ で吸収する。 *)
+
+(* 全 provider 横断 (SourceVaultSummaries セル用)。 *)
+iSVCatalogPLProbe[query_String : "", opts___] :=
+  iSVCatalogProbeMaxPL[Quiet @ Check[
+    SourceVaultSummaries[query, "Format" -> "Rows",
+      "FetchMetadata" -> False, opts, "Limit" -> Automatic],
+    $Failed]];
+
+(* sources provider のみ ("Kind" フィルタ有効。SourceVaultSources/ArXiv セル用)。 *)
+iSVCatalogPLProbeSources[query_String : "", opts___] :=
+  iSVCatalogProbeMaxPL[Quiet @ Check[
+    SourceVaultSources[query, "Format" -> "Rows",
+      "FetchMetadata" -> False, opts, "Limit" -> Automatic],
+    $Failed]];
 
 iSVCatalogCellMaxPLFromText[text_String] :=
   Module[{held, vals},
     held = Quiet @ Check[ToExpression[text, InputForm, HoldComplete], $Failed];
     If[held === $Failed, Return[1.0]];
     vals = Quiet @ Check[
-      Cases[held,
-        HoldPattern[(SourceVaultSources | SourceVaultSummaries)[a___]] :>
-          iSVCatalogPLProbe[a],
-        {0, Infinity}], {}];
+      Join[
+        (* Sources は sources provider のみ表示 → sources で probe *)
+        Cases[held,
+          HoldPattern[SourceVaultSources[a___]] :>
+            iSVCatalogPLProbeSources[a],
+          {0, Infinity}],
+        (* Summaries は全 provider 横断表示 → Summaries で probe *)
+        Cases[held,
+          HoldPattern[SourceVaultSummaries[a___]] :>
+            iSVCatalogPLProbe[a],
+          {0, Infinity}],
+        (* arXiv ラッパは SourceVaultSources[Kind->"arxiv"] と等価 *)
+        Cases[held,
+          HoldPattern[SourceVaultArXiv[a___]] :>
+            iSVCatalogPLProbeSources[a, "Kind" -> "arxiv"],
+          {0, Infinity}]], {}];
     If[ListQ[vals] && Length[vals] > 0 && AllTrue[vals, NumericQ],
       Max[vals], 1.0]];
 iSVCatalogCellMaxPLFromText[_] := 1.0;
@@ -5682,8 +6202,13 @@ SourceVaultRefreshSnapshot[oldSnapId_String, newSnapId_String,
    \:30d5\:30a1\:30a4\:30eb\:5b58\:5728\:3067\:5224\:5225\:3057\:3001\:3069\:3061\:3089\:3067\:3082\:306a\:3051\:308c\:3070 "NotFound"\:3002 *)
 iSVSnapshotKindOf[snapshotId_String] :=
   Which[
+    (* content-addressed 不変スナップショット (snapshot:class:hex / sv://snapshot/..)。
+       コロンを含むので legacy の colon-path FileExistsQ より前に pattern で判定する。 *)
+    (StringStartsQ[snapshotId, "snapshot:"] || StringStartsQ[snapshotId, "sv://snapshot/"]) &&
+      SourceVaultImmutableSnapshotExistsQ[snapshotId], "Immutable",
     FileExistsQ[iNotebookSnapshotPath[snapshotId]], "Notebook",
     FileExistsQ[iSnapshotMetaPathOf[snapshotId]], "PdfUrl",
+    SourceVaultImmutableSnapshotExistsQ[snapshotId], "Immutable",
     True, "NotFound"
   ];
 
@@ -5702,6 +6227,11 @@ SourceVaultSetSnapshotPrivacyLevel[snapshotId_String, level_?NumericQ] :=
       Return[<|"Status" -> "Failed",
         "Reason" -> "SnapshotNotFound",
         "SnapshotId" -> snapshotId|>]];
+    (* content-addressed 不変スナップショットは本体不変。privacy は core の
+       サイドレコードへ委譲する (本体ファイルは書き換えない)。 *)
+    If[kind === "Immutable",
+      Return[Join[<|"SnapshotId" -> snapshotId|>,
+        SourceVaultSetImmutableSnapshotPrivacyLevel[snapshotId, lv]]]];
     path = If[kind === "Notebook",
       iNotebookSnapshotPath[snapshotId],
       iSnapshotMetaPathOf[snapshotId]];
@@ -6867,11 +7397,24 @@ iSVRootMatchCands[symName_String] :=
 (* \:30b7\:30f3\:30dc\:30eb\:540d (\"$onWork\" \:7b49) \[Rule] \:5b9f\:30d1\:30b9 (\:73fe PC)\:3002
    \:672a\:5b9a\:7fa9\:30fb\:975e\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:306a\:3089 Missing\:3002 *)
 iSVCloudRootValue[symName_String] :=
-  Module[{bareName, v},
+  Module[{bareName, v, fb},
     (* \"$onWork\" \:304b\:3089\:5148\:982d\:306e $ \:3092\:5916\:3057\:3001Global\` \:30b3\:30f3\:30c6\:30ad\:30b9\:30c8\:3067\:89e3\:6c7a *)
     bareName = StringTrim[symName, "$"];
     v = Quiet @ ToExpression["Global`$" <> bareName];
-    If[StringQ[v] && DirectoryQ[v], ExpandFileName[v], Missing[]]
+    If[StringQ[v] && DirectoryQ[v], Return[ExpandFileName[v]]];
+    (* Global シンボル未定義/無効時は既知ルートをコアの解決機構で補完する。
+       $dropbox は Global`$dropbox が無くても iResolveDropboxRoot[] で現 PC の
+       実体に解決できる (別 PC で Eagle ライブラリ等のシンボリックパスが開けない
+       主因がこれ)。$packageDirectory も同様にコアから補完。 *)
+    fb = Switch[ToLowerCase[bareName],
+      "dropbox", iResolveDropboxRoot[],
+      "packagedirectory", iPackageDir[],
+      "onwork", With[{db = iResolveDropboxRoot[]},
+        If[StringQ[db], FileNameJoin[{db, "On Work"}], Missing[]]],
+      "offwork", With[{db = iResolveDropboxRoot[]},
+        If[StringQ[db], FileNameJoin[{db, "Off Work"}], Missing[]]],
+      _, Missing[]];
+    If[StringQ[fb] && DirectoryQ[fb], ExpandFileName[fb], Missing[]]
   ];
 
 (* \:7d76\:5bfe\:30d1\:30b9 -> \:30b7\:30f3\:30dc\:30ea\:30c3\:30af\:30d1\:30b9 {"$root", "sub", ..., "file.nb"}\:3002
@@ -9248,7 +9791,25 @@ iSVLooksLikeLLMError[s_String] :=
       StringContainsQ[head,
         RegularExpression["\"error\"\\s*:\\s*\\{"]],
       StringContainsQ[head, "Model unloaded"],
-      StringContainsQ[head, "internal_error"]
+      StringContainsQ[head, "internal_error"],
+      (* Claude CLI \:5229\:7528\:5236\:9650\:30d0\:30ca\:30fc:
+         "You've hit your session limit \[CenterDot] resets 8:30pm (Asia/Tokyo)" \:7b49\:3002
+         "Error:" \:524d\:7f6e\:3082 StatusCode \:3082\:7121\:3044\:30d7\:30ec\:30fc\:30f3\:6587\:3002 *)
+      StringContainsQ[head, "hit your" ~~ Shortest[___] ~~ "limit",
+        IgnoreCase -> True],
+      StringContainsQ[head, "session limit", IgnoreCase -> True],
+      StringContainsQ[head, "usage limit", IgnoreCase -> True],
+      (* HTTP 過負荷/レート制限/サーバエラー本文。翻訳/要約 LLM が
+         エラー本文を正常応答として返すケースを弾く (例: "API Error: 529
+         Overloaded. This is a server-side issue, usually ...")。
+         これらが要約として保存されるのを防ぐ。 *)
+      StringStartsQ[StringTrim[head], "API Error", IgnoreCase -> True],
+      StringContainsQ[head, "overloaded", IgnoreCase -> True],
+      StringContainsQ[head, "server-side issue", IgnoreCase -> True],
+      StringContainsQ[head, "rate_limit", IgnoreCase -> True],
+      StringContainsQ[head,
+        RegularExpression[
+          "(?i)\\b(429|500|502|503|504|529)\\b[^0-9]{0,30}(error|overload|unavailable|too many|server)"]]
     ]
   ];
 iSVLooksLikeLLMError[_] := False;
@@ -9296,8 +9857,11 @@ SourceVaultNotebookSummary[path_String, opts:OptionsPattern[]] :=
       If[AssociationQ[statusResult] &&
           Lookup[statusResult, "Status", ""] === "Current",
         existingRec = SourceVaultGetNotebookSummary[abs];
+        (* \:904e\:53bb\:306b LLM \:30a8\:30e9\:30fc/\:5229\:7528\:5236\:9650\:672c\:6587\:304c\:305d\:306e\:307e\:307e\:4fdd\:5b58\:3055\:308c\:305f
+           record \:306f\:6709\:52b9\:306a\:6982\:8981\:3068\:307f\:306a\:3055\:305a\:3001\:518d\:751f\:6210\:3078\:9032\:3080\:3002 *)
         If[AssociationQ[existingRec] &&
-            Lookup[existingRec, "Status", ""] === "OK",
+            Lookup[existingRec, "Status", ""] === "OK" &&
+            ! iSVLooksLikeLLMError[ToString@Lookup[existingRec, "Summary", ""]],
           Return[Join[existingRec, <|"Cached" -> True|>]]]]];
 
     (* notebook \:306e header / todo / lint \:3092\:53d6\:5f97 *)
@@ -14186,6 +14750,20 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
     Scan[
       Function[f, Module[{p = FileNameJoin[{svDir, f}]},
         Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
-      {"SourceVault_core.wl", "SourceVault_searchindex.wl",
+      {"SourceVault_core.wl", "SourceVault_mining.wl", "SourceVault_searchindex.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
-       "SourceVault_mcp.wl"}]]];
+       "SourceVault_mcp.wl", "SourceVault_workflowregistry.wl",
+       "SourceVault_workflowcatalog.wl"}]]];
+
+(* ============================================================
+   mining 本番フック結線: maildb / mining が両方ロードされた後に、mining が
+   提供する結線ドライバを呼ぶ (依存注入)。maildb は mining に依存しないまま、
+   メール派生サマリーの本文 pre-scan などが装着される。冪等・失敗してもロード継続。
+   ============================================================ *)
+Quiet @ Check[
+  SourceVault`Private`$iSVMiningWireResult =
+    If[Length[Names["SourceVault`SourceVaultMiningWireProductionHooks"]] > 0,
+      SourceVault`SourceVaultMiningWireProductionHooks[],
+      <|"Status" -> "Skipped", "Reason" -> "MiningUnavailable"|>],
+  SourceVault`Private`$iSVMiningWireResult =
+    <|"Status" -> "Failed", "Reason" -> "WireException"|>];

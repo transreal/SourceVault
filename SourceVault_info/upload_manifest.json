@@ -11,10 +11,14 @@
 		"SourceVault_servicemanager.wl",
 		"SourceVault_webingest.wl",
 		"SourceVault_mcp.wl",
-		"SourceVault_eagle.wl"
+		"SourceVault_eagle.wl",
+		"SourceVault_workflowregistry.wl",
+		"SourceVault_workflowcatalog.wl",
+		"SourceVault_mining.wl"
 	],
 	"directories":[
-		"SourceVault_info"
+		"SourceVault_info",
+		"SourceVault_workflows"
 	],
 	"excludePatterns":[
 		"SourceVault_info\/history\/",
@@ -22,6 +26,9 @@
 		"SourceVault_info\/runtime\/",
 		"SourceVault_info\/cache\/",
 		"SourceVault_info\/local\/",
-		"SourceVault_info\/secrets\/"
+		"SourceVault_info\/secrets\/",
+		"SourceVault_workflows\/testing\/",
+		"SourceVault_workflows\/personal\/",
+		"SourceVault_workflows\/archive\/"
 	]
 }
