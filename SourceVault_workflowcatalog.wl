@@ -446,11 +446,23 @@ SourceVaultDemoteWorkflow[slug_String]  := SourceVaultSetWorkflowStatus[slug, "t
    一覧 (束ねオブジェクトの Dataset)
    ============================================================ *)
 
-iSVWFCatalogRow[wfRow_Association] := Module[{slug, rec},
+(* \:8d77\:52d5\:30fb\:30a8\:30e9\:30fc\:7d71\:8a08 (\:5171\:6709\:30b5\:30a4\:30c9\:30ab\:30fc) \:3078\:306e\:8584\:3044\:30e9\:30c3\:30d1\:3002
+   \:3053\:306e\:30d5\:30a1\:30a4\:30eb\:306f `WorkflowCatalogPrivate` \:6587\:8108\:306a\:306e\:3067
+   SourceVault`Private` \:306e\:5171\:6709\:5b9f\:88c5\:3092\:30d5\:30eb\:30d1\:30b9\:3067\:53c2\:7167\:3059\:308b\:3002id \:306f "wf:"<>slug\:3002 *)
+iSVWFStatsId[slug_String] := "wf:" <> slug;
+iSVWFStatsGet[slug_String] := SourceVault`Private`iSVLaunchStatsGet[iSVWFStatsId[slug]];
+iSVWFStatsScore[slug_String] := SourceVault`Private`iSVLaunchStatsScore[iSVWFStatsId[slug]];
+iSVWFStatsBump[slug_String, err_:False] :=
+  SourceVault`Private`iSVLaunchStatsBump[iSVWFStatsId[slug], err];
+
+iSVWFCatalogRow[wfRow_Association] := Module[{slug, rec, st},
   slug = wfRow["Slug"];
   rec = SourceVaultWorkflowCatalogRecord[slug];
   rec = If[AssociationQ[rec], rec, <||>];
+  st = iSVWFStatsGet[slug];
   <|"Slug" -> slug,
+    "LaunchCount" -> Lookup[st, "LaunchCount", 0],
+    "ErrorCount" -> Lookup[st, "ErrorCount", 0],
     "Stage" -> Lookup[wfRow, "Stage", "system"],
     "Name" -> Lookup[rec, "Name", slug],
     "Summary" -> Lookup[rec, "Summary", ""],
@@ -588,7 +600,12 @@ iSVWFPanelRows[query_String, archiveQ_:False] := Module[{cat, q},
     Select[cat, Lookup[#, "Stage", ""] === "archive" &],
     Select[cat, Lookup[#, "Stage", ""] =!= "archive" &]];
   q = ToLowerCase @ StringTrim[query];
-  If[q === "", cat, Select[cat, iSVWFRowMatchCat[#, q] &]]];
+  cat = If[q === "", cat, Select[cat, iSVWFRowMatchCat[#, q] &]];
+  (* 検索時も通常一覧も「起動回数 - エラー回数」の大きい順に並べる (同点は名前昇順)。
+     -score を第1キーにすることで SortBy 昇順 = score 降順、ties は Name 昇順。 *)
+  SortBy[cat,
+    {-(Lookup[#, "LaunchCount", 0] - Lookup[#, "ErrorCount", 0]),
+     ToString[Lookup[#, "Name", ""]]} &]];
 
 iSVWFStageBadge[stage_String] := Framed[
   Style[stage, White, FontSize -> 10, Bold],
@@ -684,6 +701,12 @@ iSVWFMarkdownToCells[md_String] := Module[
   flush[];
   cells];
 
+(* 起動 = example 展開 + 起動回数カウント。展開が失敗 ($Failed) ならエラー回数も加算。 *)
+iSVWFLaunchAndCount[slug_String] := Module[{r},
+  r = Quiet @ Check[iSVWFInsertExample[slug], $Failed];
+  iSVWFStatsBump[slug, r === $Failed || r === $Aborted];
+  r];
+
 iSVWFInsertExample[slug_String] := Module[{exf, md, cells},
   Quiet @ Check[SourceVaultLoadWorkflow[slug], $Failed];
   exf = iSVWFExampleFile[slug];
@@ -737,10 +760,13 @@ iSVWFMakePanel[archiveQ_] := DynamicModule[{rows, query = ""},
                 {iSVWFStageBadge[stage],
                  iSVWFNameCell[c],
                  Tooltip[
-                   Button["起動", iSVWFInsertExample[slug], Method -> "Queued"],
+                   Button["起動",
+                     (iSVWFLaunchAndCount[slug]; rows = iSVWFPanelRows[query, archiveQ]),
+                     Method -> "Queued"],
                    "使用例 (example.md) を実行可能セルとして新規ノートに展開します。" <>
                    "引数なし launch は副作用なしの報告のみなので、実走は展開された引数付き" <>
-                   "フォーム (\"Execute\"->True / セル・変数指定 等) を評価してください。"],
+                   "フォーム (\"Execute\"->True / セル・変数指定 等) を評価してください。" <>
+                   "クリックごとに起動回数を加算します。"],
                  If[TrueQ[archiveQ],
                    (* アーカイブ一覧: testing へ戻す *)
                    Tooltip[
@@ -766,11 +792,22 @@ iSVWFMakePanel[archiveQ_] := DynamicModule[{rows, query = ""},
                    Method -> "Queued"],
                  Tooltip[
                    Button["フォルダ", iSVWFOpenFolder[slug], Method -> "Queued"],
-                   "ワークフローの格納フォルダを開く"]}]] /@ rows,
+                   "ワークフローの格納フォルダを開く"],
+                 (* 起動回数 *)
+                 Tooltip[
+                   Style[ToString[Lookup[c, "LaunchCount", 0]], FontSize -> 12],
+                   "このワークフローを起動した回数"],
+                 (* エラー回数 (>0 は赤) *)
+                 With[{ec = Lookup[c, "ErrorCount", 0]},
+                   Tooltip[
+                     Style[ToString[ec], FontSize -> 12,
+                       If[TrueQ[ec > 0], RGBColor[0.7, 0.15, 0.15], GrayLevel[0.4]]],
+                     "起動がエラーになった回数"]]}]] /@ rows,
             {Style["stage", Bold], Style["名前 / サマリー", Bold],
              Style["起動", Bold],
              Style[If[TrueQ[archiveQ], "復帰", "切替/保管"], Bold],
-             Style["要約", Bold], Style["フォルダ", Bold]}],
+             Style["要約", Bold], Style["フォルダ", Bold],
+             Style["起動回数", Bold], Style["エラー回数", Bold]}],
           Alignment -> {Left, Center}, Frame -> All,
           FrameStyle -> GrayLevel[0.8], Background -> {None, {GrayLevel[0.93]}},
           Spacings -> {1, 0.6}]],

@@ -14,7 +14,10 @@
 		"SourceVault_eagle.wl",
 		"SourceVault_workflowregistry.wl",
 		"SourceVault_workflowcatalog.wl",
-		"SourceVault_mining.wl"
+		"SourceVault_mining.wl",
+		"SourceVault_comfyui.wl",
+		"SourceVault_autotrigger.wl",
+		"SourceVault_diagnostics.wl"
 	],
 	"directories":[
 		"SourceVault_info",

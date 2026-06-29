@@ -6431,6 +6431,51 @@ iSaveRegistryEntries[path_String, entries_List] :=
     <|"Status" -> "OK", "Path" -> path, "Count" -> Length[entries]|>
   ];
 
+(* ============================================================
+   \:8d77\:52d5\:30fb\:30a8\:30e9\:30fc\:7d71\:8a08 (launch / error counters)
+   \:30ef\:30fc\:30af\:30d5\:30ed\:30fc\:4e00\:89a7 / \:30d7\:30ed\:30f3\:30d7\:30c8\:4e00\:89a7\:304c\:5171\:6709\:3059\:308b\:8efd\:91cf\:30b5\:30a4\:30c9\:30ab\:30fc\:3002
+   compiled/<channel>/launch-stats.json \:306b
+   {<|"Id"->id, "LaunchCount"->n, "ErrorCount"->m, "LastLaunchUTC"->iso|>...}
+   \:3092\:683c\:7d0d\:3002id \:306f\:547c\:51fa\:3057\:5074\:3067\:885d\:7a81\:3057\:306a\:3044\:63a5\:982d\:8f9e\:3092\:4ed8\:3051\:308b
+   ("wf:"<>slug \:30ef\:30fc\:30af\:30d5\:30ed\:30fc / "pr:"<>routeId \:30d7\:30ed\:30f3\:30d7\:30c8)\:3002
+   \:8d77\:52d5\:7d71\:8a08\:306f\:30ed\:30fc\:30ab\:30eb\:904b\:7528\:30e1\:30bf\:306a\:306e\:3067 channel="local" \:56fa\:5b9a\:3002
+   \:65e2\:5b58\:306e iCompiledPath / iLoadRegistryEntries / iSaveRegistryEntries
+   (JSON byte-exact I/O) \:3092\:305d\:306e\:307e\:307e\:518d\:5229\:7528\:3059\:308b\:3002
+   workflowcatalog \:306f\:5225\:30b5\:30d6\:6587\:8108\:306a\:306e\:3067 SourceVault`Private` \:3092\:660e\:793a\:53c2\:7167\:3059\:308b\:3002
+   ============================================================ *)
+$iSVLaunchStatsChannel = "local";
+iSVLaunchStatsPath[] := iCompiledPath["launch-stats", $iSVLaunchStatsChannel];
+iSVStatsInt[x_] := Which[IntegerQ[x], x, NumericQ[x], Round[x], True, 0];
+iSVLaunchStatsLoad[] := Module[{e},
+  e = Quiet @ Check[iLoadRegistryEntries[iSVLaunchStatsPath[]], {}];
+  If[ListQ[e], Select[e, AssociationQ], {}]];
+iSVLaunchStatsGet[id_String] := Module[{hit},
+  hit = SelectFirst[iSVLaunchStatsLoad[], Lookup[#, "Id", ""] === id &, <||>];
+  <|"LaunchCount" -> iSVStatsInt[Lookup[hit, "LaunchCount", 0]],
+    "ErrorCount" -> iSVStatsInt[Lookup[hit, "ErrorCount", 0]]|>];
+iSVLaunchStatsGet[_] := <|"LaunchCount" -> 0, "ErrorCount" -> 0|>;
+iSVLaunchStatsScore[id_String] := With[{s = iSVLaunchStatsGet[id]},
+  s["LaunchCount"] - s["ErrorCount"]];
+iSVLaunchStatsScore[_] := 0;
+iSVLaunchStatsBump[id_String, isError_:False] := Module[{e, found = False, upd},
+  e = iSVLaunchStatsLoad[];
+  upd = Map[Function[r,
+    If[Lookup[r, "Id", ""] === id,
+      (found = True;
+       Join[r, <|
+         "LaunchCount" -> iSVStatsInt[Lookup[r, "LaunchCount", 0]] + 1,
+         "ErrorCount" -> iSVStatsInt[Lookup[r, "ErrorCount", 0]] +
+            If[TrueQ[isError], 1, 0],
+         "LastLaunchUTC" -> DateString["ISODateTime"]|>]),
+      r]], e];
+  If[! found,
+    AppendTo[upd, <|"Id" -> id, "LaunchCount" -> 1,
+      "ErrorCount" -> If[TrueQ[isError], 1, 0],
+      "LastLaunchUTC" -> DateString["ISODateTime"]|>]];
+  Quiet @ Check[iSaveRegistryEntries[iSVLaunchStatsPath[], upd], $Failed];
+  iSVLaunchStatsGet[id]];
+iSVLaunchStatsBump[___] := $Failed;
+
 (*
   Query match: query Association \:306e\:5168\:30ad\:30fc\:304c entry \:3068\:4e00\:81f4\:3059\:308c\:3070 True\:3002
     - query \:306e\:30ad\:30fc\:306f entry \:306b\:5b58\:5728\:3057\:3066\:3044\:308b\:5fc5\:8981\:304c\:3042\:308b
@@ -14675,7 +14720,8 @@ SourceVault`Private`iSVLoadPromptRouterExtension[] :=
          identity=addressbook+senderauth+identity+messagerelease /
          maildb=maildb+imap+mailui。NBAccess_crypto は別文脈で分離。 *)
       {"NBAccess_crypto.wl", "SourceVault_crypto.wl",
-       "SourceVault_identity.wl", "SourceVault_maildb.wl"}];
+       "SourceVault_identity.wl", "SourceVault_maildb.wl",
+       "SourceVault_diagnostics.wl", "SourceVault_autotrigger.wl"}];
 
     path = FileNameJoin[{base, "SourceVault_promptrouter.wl"}];
     If[!FileExistsQ[path],

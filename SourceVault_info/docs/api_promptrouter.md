@@ -61,7 +61,7 @@ Options: "MaxResults" -> Automatic, "RouteId" -> Automatic, "Decision" -> Automa
 ## PromptRouteレジストリ
 
 ### SourceVaultCallableAllowlistRegistry[] → Association
-SourceVault所有の呼び出し許可リスト。キー: FunctionId。値: Symbol, UseAsFunctionRoute/UseAsHandlerRefフラグ, SideEffectClass。SourceVault.wlに実在するcallableのみ登録(SourceVaultUpcomingSchedule, SourceVaultFindNotebooks等)。SourceVaultReviewQueue/SourceVaultOpenTodoListはIntentIdとして扱うため未登録(spec 7.3/25)。
+SourceVault所有の呼び出し許可リスト。キー: FunctionId。値: Symbol, UseAsFunctionRoute/UseAsHandlerRefフラグ, SideEffectClass。SourceVault.wlに実在するcallableのみ登録: SourceVaultUpcomingSchedule (ReadOnly), SourceVaultFindNotebooks (ReadOnly), SourceVaultNewNotebook (SafeCreate)。SourceVaultReviewQueue/SourceVaultOpenTodoListはIntentIdとして扱うため未登録(spec 7.3/25)。
 
 ### SourceVaultCallableAllowlistView[] → Association
 SourceVault所有許可リストとClaudeOrchestrator所有ハンドラー許可リストのマージビューを返す。FunctionRouteディスパッチとHandlerRef解決はこのビューを参照。キー衝突時はSourceVault所有エントリが優先。
@@ -122,9 +122,9 @@ Options: "StaleRouteIds" -> {} (直接指定する陳腐化RouteIdのリスト)
 ## プロンプト保存・検索・UI
 
 ### SaveLastPrompt[memo_String, opts]
-最新の成功したClaudeEval/ContinueEvalプロンプト実行を名前付きPromptRouteとして保存する。memoはRouteのMemoフィールドに格納される自由記述メモ。Encrypt -> Trueのとき生プロンプトとTargetExprStringを暗号化保存(EncryptedPayload埋め込み、Examplesは空、PromptStorageClassは"Encrypted")。Memoはプレーンテキストで保持。SourceVaultDecryptPromptRoute[route]で平文を復元。
+最新の成功したClaudeEval/ContinueEvalプロンプト実行を名前付きPromptRouteとして保存する。memoはRouteのMemoフィールドに格納される自由記述メモ。Encrypt -> Trueは現在未実装(マスターキー基盤未整備): Status NotImplementedを返す(生プロンプトをサイレントに平文保存しない)。Encrypt -> Falseは生プロンプト/関数を平文保存し、PrivacyLevelとCloudFallbackをルートに記録。SourceVaultDecryptPromptRoute[route]で将来の暗号化ルートを復元。
 → Association
-Options: "Channel" -> Automatic ("public"|"private"|"local"; プライバシーから解決), "Encrypt" -> False (Trueのとき暗号化モジュールとSourceVaultInitializeEncryption[]が必要), "DryRun" -> False, "RouteId" -> Automatic
+Options: "Channel" -> Automatic ("public"|"private"|"local"; プライバシーから解決), "Encrypt" -> False, "DryRun" -> False, "RouteId" -> Automatic
 
 ### AddPromptMemo[memo_String, opts]
 最新のClaudeEval/ContinueEvalプロンプトに自由記述メモを付与する。SourceVaultAutoSaveLastPromptで自動保存された最新バージョンのMemoをインプレース更新する(SourceVaultUpdatePromptRouteMemo経由、新バージョンを作らない)。保存バージョンが存在しない場合はSaveLastPromptにフォールバック。

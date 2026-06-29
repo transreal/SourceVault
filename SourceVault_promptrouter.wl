@@ -789,6 +789,11 @@ SourceVaultExecutePromptRoute[prompt_String,
         <|"Kind" -> "FunctionResult"|>],
       <|"Status" -> "Failed"|>];
 
+    (* 決定論ディスパッチも起動回数に計上 (RouteId 基準)。
+       result===$Failed ならエラー回数も加算。 *)
+    iSVPRBumpLaunchId[
+      ToString[Lookup[decision, "RouteId", ""]], result === $Failed];
+
     Join[base, <|
       "Status" -> If[result === $Failed, "DispatchFailed", "Dispatched"],
       "Plan"   -> plan,
@@ -1353,6 +1358,15 @@ iSVPRClassifyReplay[exprStr_String] :=
       ToExpression[exprStr, InputForm, HoldComplete], $Failed];
     If[held === $Failed || !MatchQ[held, _HoldComplete],
       Return["HeavyLLM"]];
+    (* \:30ef\:30fc\:30af\:30d5\:30ed\:30fc\:547c\:3073\:51fa\:3057\:5f0f (SourceVaultLoadWorkflow + SourceVaultWorkflow` \:6587\:8108\:306e
+       Launch) \:306f\:518d\:5b9f\:884c\:53ef\:80fd (Replayable) \:3068\:307f\:306a\:3059\:3002Launch \:30b7\:30f3\:30dc\:30eb\:306e leaf \:540d\:304c
+       \:65e5\:672c\:8a9e\:7b49\:3067 "SourceVault" \:59cb\:307e\:308a\:3067\:306a\:304f\:3066\:3082 head \:691c\:67fb\:3067 HeavyLLM \:306b\:843d\:3061\:305a\:3001
+       auto-save \:3055\:308c\:308b\:3088\:3046\:306b\:3059\:308b (\:30d7\:30ed\:30f3\:30d7\:30c8\:304c\:30ef\:30fc\:30af\:30d5\:30ed\:30fc\:3092\:9a45\:52d5\:3057\:305f\:5834\:5408\:306f
+       \:518d\:5229\:7528\:4fa1\:5024\:304c\:9ad8\:3044)\:3002ClaudeEval/ContinueEval \:3092\:542b\:3080\:5834\:5408\:306f\:5f93\:6765\:901a\:308a HeavyLLM\:3002 *)
+    If[(StringContainsQ[trimmed, "SourceVaultWorkflow`"] ||
+        StringContainsQ[trimmed, "SourceVaultLoadWorkflow"]) &&
+       !StringContainsQ[trimmed, "ClaudeEval" | "ContinueEval"],
+      Return["Replayable"]];
     (* \:5f0f\:4e2d\:306e\:5168\:30b7\:30f3\:30dc\:30eb head \:3092\:62bd\:51fa (\:672a\:8a55\:4fa1)\:3002
        held = HoldComplete[expr] \:306e\:30e9\:30c3\:30d1\:30fc\:81ea\:4f53\:306f\:9664\:304d\:3001\:4e2d\:8eab expr \:306e head \:3092\:898b\:308b\:3002 *)
     heads = Quiet @ Check[
@@ -3983,6 +3997,19 @@ iSVPRPrivacyLabel[route_Association] :=
       True,       "Public"]];
 iSVPRPrivacyLabel[_] := "Unknown";
 
+(* \:8d77\:52d5\:30fb\:30a8\:30e9\:30fc\:7d71\:8a08 (\:5171\:6709\:30b5\:30a4\:30c9\:30ab\:30fc SourceVault`Private`iSVLaunchStats\:7cfb) \:3078\:306e
+   \:30d7\:30ed\:30f3\:30d7\:30c8\:7528\:30e9\:30c3\:30d1\:3002id \:306f "pr:" <> RouteId\:3002 *)
+iSVPRRouteStatsId[rt_Association] := "pr:" <> ToString[Lookup[rt, "RouteId", ""]];
+iSVPRRouteStats[rt_Association]   := iSVLaunchStatsGet[iSVPRRouteStatsId[rt]];
+iSVPRRouteScore[rt_Association]   := iSVLaunchStatsScore[iSVPRRouteStatsId[rt]];
+(* routeId 文字列から直接加算 (実行チョークポイント用)。空 id は無視。 *)
+iSVPRBumpLaunchId[routeId_String, err_:False] :=
+  If[StringTrim[routeId] =!= "",
+    iSVLaunchStatsBump["pr:" <> routeId, err], $Failed];
+iSVPRBumpLaunchId[___] := $Failed;
+iSVPRBumpLaunch[rt_Association, err_:False] :=
+  iSVPRBumpLaunchId[ToString[Lookup[rt, "RouteId", ""]], err];
+
 Options[SourceVaultFormatPromptRouteList] = {};
 
 SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
@@ -3992,8 +4019,12 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
       Return[Style[
         "\:8a72\:5f53\:3059\:308b\:4fdd\:5b58\:6e08\:307f\:30d7\:30ed\:30f3\:30d7\:30c8\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
         FontFamily -> "Yu Gothic UI"]]];
+    (* \:691c\:7d22\:6642\:3082\:4e00\:89a7\:3082\:300c\:8d77\:52d5\:56de\:6570 - \:30a8\:30e9\:30fc\:56de\:6570\:300d\:306e\:5927\:304d\:3044\:9806\:306b\:4e26\:3079\:308b\:3002
+       -score \:3092\:7b2c1\:30ad\:30fc\:306b\:3057 SortBy \:6607\:9806 = score \:964d\:9806\:3001ties \:306f\:65e2\:5b58\:9806\:3092\:7dad\:6301\:3002 *)
+    filtered = SortBy[filtered, -iSVPRRouteScore[#] &];
     cols = {"Prompt", "Memo", "Target", "\:4f5c\:6210/\:66f4\:65b0",
-            "Privacy", "State", "Actions"};
+            "Privacy", "State", "Actions",
+            "\:8d77\:52d5\:56de\:6570", "\:30a8\:30e9\:30fc\:56de\:6570"};
     header = Map[
       Style[#, Bold, FontFamily -> "Yu Gothic UI"] &, cols];
     body = Map[
@@ -4032,6 +4063,9 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                   Button[
                     Style[iSVPRTruncateDisplay[prompt, 42],
                       FontFamily -> "Yu Gothic UI"],
+                    (* セルに ClaudeEval[..] を挿入するだけ (評価=False)。
+                       評価されれば実行チョークポイントで起動回数が加算されるので、
+                       ここでは加算しない (二重計数回避)。 *)
                     Module[{target = InputNotebook[]},
                       If[Head[target] === NotebookObject,
                         NBAccess`NBWriteInputCellAndMaybeEvaluate[
@@ -4110,7 +4144,7 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                 Button[
                   Style["ToInput", FontFamily -> "Yu Gothic UI", FontSize -> 10,
                     RGBColor[0.2, 0.38, 0.65]],
-                  Module[{target = InputNotebook[], replay, exprStr},
+                  Module[{target = InputNotebook[], replay, exprStr, wrote = False},
                     If[rc === "LightLLM",
                       replay = Quiet @ Check[
                         iSVPRLightLLMReplayDialog[theRoute], $Failed];
@@ -4120,10 +4154,12 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                       If[!StringQ[exprStr], exprStr = ie];
                       If[Head[target] === NotebookObject && StringQ[exprStr],
                         NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                          target, exprStr, False]],
+                          target, exprStr, False]; wrote = True],
                       If[Head[target] === NotebookObject && StringQ[ie],
                         NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                          target, ie, False]]]],
+                          target, ie, False]; wrote = True]];
+                    (* 起動回数を加算 (書き込めなかった場合はエラー扱い) *)
+                    iSVPRBumpLaunch[theRoute, ! wrote]],
                   Appearance -> "Frameless",
                   BaseStyle -> {"Hyperlink"},
                   Method -> "Queued"],
@@ -4174,7 +4210,19 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                   Appearance -> "Frameless",
                   BaseStyle -> {"Hyperlink"},
                   Method -> "Queued"]
-              }, Spacings -> 0.35]]
+              }, Spacings -> 0.35]],
+            (* \:8d77\:52d5\:56de\:6570 / \:30a8\:30e9\:30fc\:56de\:6570 (\:5171\:6709\:30b5\:30a4\:30c9\:30ab\:30fc\:3088\:308a\:3001format \:6642\:306b\:8aad\:3080)\:3002
+               \:5024\:306f Prompt / ToInput \:30af\:30ea\:30c3\:30af\:6642\:306b\:52a0\:7b97\:3055\:308c\:308b\:3002\:518d\:8aad\:8fbc\:3067\:6700\:65b0\:5316\:3002 *)
+            With[{stt = iSVPRRouteStats[rt]},
+              Tooltip[
+                Style[ToString[Lookup[stt, "LaunchCount", 0]],
+                  FontFamily -> "Yu Gothic UI", FontSize -> 12],
+                "\:3053\:306e\:30d7\:30ed\:30f3\:30d7\:30c8\:3092\:8d77\:52d5 (Prompt/ToInput \:30af\:30ea\:30c3\:30af) \:3057\:305f\:56de\:6570"]],
+            With[{ec = Lookup[iSVPRRouteStats[rt], "ErrorCount", 0]},
+              Tooltip[
+                Style[ToString[ec], FontFamily -> "Yu Gothic UI", FontSize -> 12,
+                  If[TrueQ[ec > 0], RGBColor[0.7, 0.15, 0.15], GrayLevel[0.4]]],
+                "\:8d77\:52d5\:304c\:30a8\:30e9\:30fc\:306b\:306a\:3063\:305f\:56de\:6570"]]
           }]],
       filtered];
     Grid[
@@ -4195,13 +4243,33 @@ SourceVaultFormatPromptRouteList[___] :=
 
 (* ---------- panel: search box + managed listing (mirrors SourceVaultWorkflowPanel) ---------- *)
 
+(* \:30ef\:30fc\:30af\:30d5\:30ed\:30fc\:7531\:6765\:30eb\:30fc\:30c8\:306e\:5224\:5b9a: impl-<slug> \:306e discovery route \:3084
+   Target.Kind=="Workflow" \:306f\:300c\:30d7\:30ed\:30f3\:30d7\:30c8\:300d\:3067\:306f\:306a\:304f\:30ef\:30fc\:30af\:30d5\:30ed\:30fc\:306a\:306e\:3067
+   \:4e00\:89a7\:304b\:3089\:9664\:5916\:3059\:308b\:3002\:30ef\:30fc\:30af\:30d5\:30ed\:30fc\:306f docs/api.md \:3092\:4ecb\:3057\:3066
+   \:81ea\:7136\:8a00\:8a9e\:30d7\:30ed\:30f3\:30d7\:30c8\:304b\:3089\:547c\:3073\:51fa\:3059 (\:540d\:524d\:3092\:30d7\:30ed\:30f3\:30d7\:30c8\:5316\:3057\:306a\:3044)\:3002 *)
+iSVPRWorkflowRouteQ[rt_Association] :=
+  Lookup[Lookup[rt, "Target", <||>], "Kind", ""] === "Workflow" ||
+  StringStartsQ[ToString[Lookup[rt, "RouteId", ""]], "impl-"];
+iSVPRWorkflowRouteQ[_] := False;
+
+(* \:30d1\:30cd\:30eb\:8868\:793a\:7528: \:691c\:7d22\:7d50\:679c\:304b\:3089\:30ef\:30fc\:30af\:30d5\:30ed\:30fc\:30eb\:30fc\:30c8\:3092\:9664\:5916\:3059\:308b\:3002
+   (\:30eb\:30fc\:30bf\:30fc\:5074\:306e\:30eb\:30fc\:30c8\:89e3\:6c7a\:306b\:306f\:5f71\:97ff\:305b\:305a\:3001\:8868\:793a\:306e\:307f\:30d5\:30a3\:30eb\:30bf\:3059\:308b\:3002) *)
+iSVPRPanelRoutes[query_String, channel_] :=
+  Module[{r},
+    r = Quiet @ Check[
+      SourceVaultSearchPromptRoutes[query, "Channel" -> channel], {}];
+    If[!ListQ[r], r = {}];
+    DeleteCases[r,
+      x_ /; (AssociationQ[x] &&
+        iSVPRWorkflowRouteQ[Quiet @ Check[iSVPRNormalizeRoute[x], x]])]];
+
 Options[SourceVaultPromptRoutePanel] = {"Channel" -> All};
 
 SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
   DynamicModule[{query = "", channel, routes},
     channel = OptionValue[SourceVaultPromptRoutePanel, {opts}, "Channel"];
     routes = Quiet @ Check[
-      SourceVaultSearchPromptRoutes["", "Channel" -> channel], {}];
+      iSVPRPanelRoutes["", channel], {}];
     Panel[Column[{
       Style["SourceVault \:4fdd\:5b58\:30d7\:30ed\:30f3\:30d7\:30c8\:4e00\:89a7", Bold, 15,
         FontFamily -> "Yu Gothic UI"],
@@ -4217,19 +4285,19 @@ SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
         Spacer[6],
         Button[Style["\:691c\:7d22", FontFamily -> "Yu Gothic UI"],
           routes = Quiet @ Check[
-            SourceVaultSearchPromptRoutes[query, "Channel" -> channel], {}],
+            iSVPRPanelRoutes[query, channel], {}],
           Method -> "Queued"],
         Spacer[4],
         Button[Style["\:5168\:4ef6", FontFamily -> "Yu Gothic UI"],
           query = "";
           routes = Quiet @ Check[
-            SourceVaultSearchPromptRoutes["", "Channel" -> channel], {}],
+            iSVPRPanelRoutes["", channel], {}],
           Method -> "Queued"],
         Spacer[4],
         Tooltip[
           Button[Style["\:518d\:8aad\:8fbc", FontFamily -> "Yu Gothic UI"],
             routes = Quiet @ Check[
-              SourceVaultSearchPromptRoutes[query, "Channel" -> channel], {}],
+              iSVPRPanelRoutes[query, channel], {}],
             Method -> "Queued"],
           "\:5b9f\:884c\:30fbPrimary\:8a2d\:5b9a\:30fb\:524a\:9664\:306e\:5f8c\:306f\:518d\:8aad\:8fbc\:3067\:6700\:65b0\:72b6\:614b\:306b\:3057\:3066\:304f\:3060\:3055\:3044\:3002"]}],
       Dynamic[
@@ -5043,7 +5111,11 @@ SourceVaultRunPrimaryRoute[groupId_String, opts:OptionsPattern[]] :=
           "Decision" -> "PrimaryAutoExecute"|>,
         <|"Kind" -> "FunctionResult"|>],
       Null];
-    Quiet @ Check[ReleaseHold[held], $Failed]];
+    Module[{res},
+      res = Quiet @ Check[ReleaseHold[held], $Failed];
+      (* AUTO 実行も起動回数に計上。$Failed ならエラー回数も加算。 *)
+      iSVPRBumpLaunch[primary, res === $Failed || res === $Aborted];
+      res]];
 SourceVaultRunPrimaryRoute[___] :=
   <|"Status" -> "Failed", "Reason" -> "InvalidArguments"|>;
 

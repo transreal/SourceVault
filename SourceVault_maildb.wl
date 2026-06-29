@@ -22,6 +22,7 @@ BeginPackage["SourceVault`", {"NBAccess`"}];
 SourceVaultMailSnapshotFromMaildb::usage = "SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, opts] は旧 maildb record を SourceVaultMailSnapshot に変換する。body は暗号化、PL は fail-safe。";
 SourceVaultImportMaildbFile::usage = "SourceVaultImportMaildbFile[file_String, mbox_String, opts] は旧 maildb 月次 .wl を読み、各 record を MailSnapshot に変換する。Persist->True で snapshot store に保存。";
 SourceVaultMailSnapshotPut::usage = "SourceVaultMailSnapshotPut[snapshot, opts] は snapshot を RecordId をキーに store へ保存 (冪等)。";
+SourceVaultBackfillMailBodies::usage = "SourceVaultBackfillMailBodies[opts] はロード済み snapshot のうち本文が HTML の旧 record を、読める平文へ変換して再格納する (原文は BodyRaw に温存、MailMetadataPublic[\"BodyWasHTML\"]->True)。ingest 時 HTML テキスト化を導入する前のメール用 backfill。opts: \"Limit\"(既定 Infinity), \"DryRun\"->True(件数だけ数え書込まない), \"Persist\"(既定 True), \"CheckpointEvery\"(既定 20)。要約も作り直すには別途 SourceVaultInferMailDerivedBatch[\"Refresh\"->...] を実行する。";
 SourceVaultMailSnapshotGet::usage = "SourceVaultMailSnapshotGet[recordId] は保存済み snapshot を返す。";
 SourceVaultMailSnapshotList::usage = "SourceVaultMailSnapshotList[] は保存済み snapshot を返す。";
 SourceVaultIdentityBackfillFromMail::usage = "SourceVaultIdentityBackfillFromMail[] は現在ロード済みの snapshot の平文 From/To/Cc を走査して識別子(2層アドレス帳)を一括生成する。再取込不要。スコープは先に SourceVaultMailEnsureLoaded で決める。";
@@ -119,12 +120,50 @@ iSVMDIdentitySaveSafe[] :=
   Quiet@Check[If[Length[DownValues[SourceVault`SourceVaultIdentitySave]] > 0,
      SourceVault`SourceVaultIdentitySave[], Null], Null];
 
+(* ============================================================ *)
+(* 本文を「読める平文」に正規化するコアヘルパ (ingest / 派生 / 表示 / 引用 / 翻訳で共用)
+   (1) 改行コードを LF に統一 (\r\n / \r 由来の二重改行を防ぐ。SMTP 再正規化で
+       \r が残ると \r\r\n になり受信側で空行が入る ── 旧 maildb replyMail 踏襲)。
+   (2) 本文が HTML ならプレーンテキストへ変換 (HTML メールを読めるように)。
+   FE 非依存なので headless でも動く。 *)
+(* ============================================================ *)
+iSVUINormalizeNewlines[s_String] := StringReplace[s, {"\r\n" -> "\n", "\r" -> "\n"}];
+iSVUINormalizeNewlines[_] := "";
+
+iSVUILooksLikeHTML[s_String] :=
+  StringContainsQ[s,
+    {"<!doctype html", "<html", "<body", "<div", "<table", "<p>", "<br", "<span", "<meta "},
+    IgnoreCase -> True];
+iSVUILooksLikeHTML[_] := False;
+
+(* HTML -> プレーンテキスト。FE 非依存の ImportString を優先し、失敗時はタグ除去で代替。 *)
+iSVUIHtmlToText[s_String] :=
+  Module[{t},
+    t = TimeConstrained[
+      Quiet@Check[ImportString[s, {"HTML", "Plaintext"}], $Failed], 15, $Failed];
+    If[! StringQ[t] || StringTrim[t] === "",
+      (* フォールバック: script/style 除去 -> タグ除去 -> 主要エンティティ復元 *)
+      t = StringReplace[s, {
+        RegularExpression["(?is)<(script|style)[^>]*>.*?</\\1>"] -> " ",
+        RegularExpression["(?s)<[^>]+>"] -> ""}];
+      t = StringReplace[t, {
+        "&nbsp;" -> " ", "&amp;" -> "&", "&lt;" -> "<", "&gt;" -> ">",
+        "&quot;" -> "\"", "&#39;" -> "'", "&apos;" -> "'"}]];
+    (* 連続する空行を最大1つに圧縮 (HTML 変換は空行を量産しがち) *)
+    StringTrim@StringReplace[iSVUINormalizeNewlines[t], RegularExpression["\\n{3,}"] -> "\n\n"]];
+
+(* 表示・引用・翻訳・派生に使う読める本文 *)
+iSVUIReadableBody[s_String] :=
+  With[{t = iSVUINormalizeNewlines[s]},
+    If[iSVUILooksLikeHTML[t], iSVUIHtmlToText[t], t]];
+iSVUIReadableBody[_] := "";
+
 Options[SourceVaultMailSnapshotFromMaildb] = {
   "PrivacyLevel" -> Automatic, "EncryptHeaders" -> False, "StoreBody" -> "Encrypted"};
 
 SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPattern[]] :=
-  Module[{msgId, recId, pl, subject, from, to, cc, body, encHeaders,
-     bodyRef, headerEnc, mdPrivacy, mailDelivery, snapshot},
+  Module[{msgId, recId, pl, subject, from, to, cc, body, bodyStored, bodyWasHTML,
+     encHeaders, bodyRef, headerEnc, mdPrivacy, mailDelivery, snapshot},
     msgId = ToString[Lookup[record, "id", Lookup[record, "MessageID", "unknown"]]];
     recId = iSVMDRecordId[mbox, msgId];
     pl = OptionValue["PrivacyLevel"] /. Automatic -> $SourceVaultDefaultImportedMailPL;
@@ -135,6 +174,15 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
     cc   = ToString[Lookup[record, "cc", ""]];
     body = Lookup[record, "body", Missing["NoBody"]];
     mdPrivacy = Lookup[record, "privacy", Missing["Unknown"]];
+
+    (* 本文を ingest 時に「読める平文」へ。HTML メールはここでテキスト化して格納し、
+       表示・検索・要約をクリーンにする。HTML だった場合のみ原文を BodyRaw として温存
+       (URL 等の欠落に備える)。平文は LF 正規化のみ。ヘルパ未ロード時は素通り。 *)
+    {bodyStored, bodyWasHTML} = If[
+       StringQ[body] && Length[DownValues[iSVUIHtmlToText]] > 0,
+       With[{norm = iSVUINormalizeNewlines[body]},
+         If[iSVUILooksLikeHTML[norm], {iSVUIHtmlToText[body], True}, {norm, False}]],
+       {body, False}];
 
     (* 配送 feature (§8.1.1, 配線(b)): raw header を fetch 時に parse し coarse feature だけ保存。
        raw header 本体は snapshot に載せない (privacy)。mining 未ロード/raw header 無しは Missing。 *)
@@ -147,11 +195,15 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
             "SnapshotFeatures", Missing["NoFeatures"]], Missing["DeliveryParseFailed"]],
         Missing["NoRawHeader"]]];
 
-    (* body: 既定で暗号化 (PL fail-safe)。inline EncryptedPayload record。 *)
+    (* body: 既定で暗号化 (PL fail-safe)。inline EncryptedPayload record。
+       Body=読める平文。HTML だった場合は原文を BodyRaw として併せて暗号化温存。 *)
     bodyRef = If[StringQ[body] && OptionValue["StoreBody"] === "Encrypted",
-       With[{put = SourceVault`SourceVaultEncryptedPut[<|"Body" -> body|>,
+       With[{put = SourceVault`SourceVaultEncryptedPut[
+            If[TrueQ[bodyWasHTML],
+              <|"Body" -> bodyStored, "BodyRaw" -> body|>,
+              <|"Body" -> bodyStored|>],
             "PrivacyLevel" -> pl, "ContentType" -> "MailBody", "Persist" -> False,
-            "SensitiveFields" -> {"Body"}]},
+            "SensitiveFields" -> If[TrueQ[bodyWasHTML], {"Body", "BodyRaw"}, {"Body"}]]},
          If[Lookup[put, "Status", ""] === "Stored", put["Record"], Missing["EncryptFailed"]]],
        If[StringQ[body], Missing["NotStored"], Missing["NoBody"]]];
 
@@ -189,7 +241,10 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
          "SubjectToken" -> iSVMDMailToken[subject],
          "AttachmentCount" -> iSVMDAttachmentCount[Lookup[record, "attachment", ""]],
          "Attachments" -> iSVMDAttachmentNames[Lookup[record, "attachment", ""]],
-         "HasBody" -> StringQ[body]|>,
+         "HasBody" -> StringQ[body],
+         (* 本文が HTML 由来か (ingest 時にテキスト化した)。原文は PayloadRefs.Body の
+            BodyRaw に暗号化温存。format フラグなので非機密 (公開メタ)。 *)
+         "BodyWasHTML" -> TrueQ[bodyWasHTML]|>,
       "AddressBookRefs" -> With[{
           fromIds = iSVMDIngestIds[from, mbox],
           toIds = iSVMDIngestIds[to, mbox],
@@ -260,6 +315,15 @@ iSVMDShardKey[snapshot_] :=
     ym = If[StringQ[d] && StringLength[d] >= 7,
        StringTake[d, 4] <> StringTake[d, {6, 7}], "unknown"];
     mbox <> "/" <> ym];
+
+(* IMAP の生メッセージ (キー "date") から、それが格納される shard key を、
+   実際の snapshot ([[iSVMDShardKey]]) と同一ロジックで算出する。
+   fetch 前に対象月シャードを先読みするために使う (Date 正規化は iSVMDToUTC で一致)。 *)
+iSVMDShardKeyForMsg[mbox_String, m_Association] :=
+  iSVMDShardKey[<|
+     "MailSource" -> <|"MBox" -> mbox|>,
+     "MailMetadataPublic" -> <|
+        "Date" -> iSVMDToUTC[Lookup[m, "date", Missing["Unknown"]]]|>|>];
 
 Options[SourceVaultMailSnapshotPut] = {"Persist" -> True};
 SourceVaultMailSnapshotPut[snapshot_Association, OptionsPattern[]] :=
@@ -1438,7 +1502,9 @@ iSVSnapMailspec[snap_Association] :=
       "from" -> ToString@Lookup[md, "From", ""],
       "to" -> ToString@Lookup[md, "To", ""],
       "cc" -> ToString@Lookup[md, "Cc", ""],
-      "body" -> If[Lookup[bodyR, "Status", ""] === "Ok", bodyR["Body"], ""],
+      (* 要約・カテゴリ・〆切などの派生は読める平文から (旧 snapshot の生 HTML 対策。
+         新 ingest は既に readable なので冪等)。 *)
+      "body" -> If[Lookup[bodyR, "Status", ""] === "Ok", iSVUIReadableBody[bodyR["Body"]], ""],
       "_bodyStatus" -> Lookup[bodyR, "Status", "Error"]|>;
     iSVMDEnrichMailspec[spec, snap]];
 
@@ -1496,6 +1562,51 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
       "Failed" -> failBody + failLLM,
       "FailedBodyDecrypt" -> failBody, "FailedLLM" -> failLLM,
       "RemainingPending" -> Length[SourceVaultMailDerivedPending[]]|>];
+
+(* ---- 既存 snapshot の HTML 本文を読める平文へ backfill ----
+   ingest 時テキスト化を導入する前に取り込んだメールが対象。本文を復号し、HTML なら
+   テキスト化して再暗号化格納 (原文は BodyRaw に温存)、BodyWasHTML フラグを立てる。
+   平文メールは触らない。冪等 (BodyWasHTML 済み / 平文は skip)。 *)
+Options[SourceVaultBackfillMailBodies] =
+  {"Limit" -> Infinity, "DryRun" -> False, "Persist" -> True, "CheckpointEvery" -> 20};
+SourceVaultBackfillMailBodies[OptionsPattern[]] :=
+  Module[{lim, dry, persist, ck, all, candidates, batch,
+      done = 0, failBody = 0, failEnc = 0, skipped = 0, sinceCk = 0},
+    lim = OptionValue["Limit"]; dry = TrueQ[OptionValue["DryRun"]];
+    persist = TrueQ[OptionValue["Persist"]]; ck = OptionValue["CheckpointEvery"];
+    all = SourceVaultMailSnapshotList[];
+    (* 既に BodyWasHTML 済みは対象外 *)
+    candidates = Select[all,
+      ! TrueQ[Lookup[Lookup[#, "MailMetadataPublic", <||>], "BodyWasHTML", False]] &];
+    batch = If[IntegerQ[lim] && lim >= 0, Take[candidates, UpTo[lim]], candidates];
+    Do[
+      Module[{bodyR, raw, readable, pl, put, snap2, pr, md},
+        bodyR = SourceVaultMailSnapshotDecryptBody[snap];
+        If[Lookup[bodyR, "Status", ""] =!= "Ok", failBody++; Continue[]];
+        raw = bodyR["Body"];
+        (* 平文メールは変換不要 (触らない) *)
+        If[! iSVUILooksLikeHTML[iSVUINormalizeNewlines[raw]], skipped++; Continue[]];
+        If[dry, done++; Continue[]];
+        readable = iSVUIHtmlToText[raw];
+        pl = With[{p = Lookup[Lookup[snap, "Derived", <||>], "PrivacyLevel", Automatic]},
+          If[NumericQ[p], p, $SourceVaultDefaultImportedMailPL]];
+        put = SourceVault`SourceVaultEncryptedPut[
+          <|"Body" -> readable, "BodyRaw" -> raw|>,
+          "PrivacyLevel" -> pl, "ContentType" -> "MailBody", "Persist" -> False,
+          "SensitiveFields" -> {"Body", "BodyRaw"}];
+        If[Lookup[put, "Status", ""] =!= "Stored", failEnc++; Continue[]];
+        snap2 = snap;
+        pr = snap2["PayloadRefs"]; pr["Body"] = put["Record"]; snap2["PayloadRefs"] = pr;
+        md = snap2["MailMetadataPublic"]; md["BodyWasHTML"] = True;
+        snap2["MailMetadataPublic"] = md;
+        SourceVaultMailSnapshotPut[snap2, "Persist" -> False];
+        done++; sinceCk++;
+        If[persist && sinceCk >= ck, SourceVaultMailStoreSave["All" -> False]; sinceCk = 0]],
+      {snap, batch}];
+    If[! dry && persist && sinceCk > 0, SourceVaultMailStoreSave["All" -> False]];
+    <|"Status" -> "Ok", "Candidates" -> Length[candidates], "Selected" -> Length[batch],
+      "Converted" -> done, "SkippedPlain" -> skipped,
+      "FailedBodyDecrypt" -> failBody, "FailedEncrypt" -> failEnc, "DryRun" -> dry|>];
 
 (* 「<mbox>の新着メールにサマリーを追加」の正準1関数。EnsureLoaded(スコープ確定)→
    その mbox の未処理だけをバッチ要約・永続化、を内包する。
@@ -1669,6 +1780,19 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
         "Detail" -> Lookup[First[errs], "_error", ""]|>]];
     msgs = Select[msgs, AssociationQ];
     iSVMDIdentityEnsureLoaded[];  (* 識別子を上書きしないよう先に load *)
+    (* 取り込み対象月の既存シャードを先にロードする。
+       未ロードのまま put -> save すると iSVMDWriteShard は in-memory の
+       $iSVMDShardMembers (=新着のみ) でその月のシャードファイル全体を再生成し、
+       既存メールの要約 (Derived) ごと上書き消失させてしまう。先読みしておけば
+       既存メールが store/members に乗り、シャード書き戻しで保全される。
+       (存在しない月/unknown はファイルが無いので no-op。) *)
+    Module[{shardKeys},
+      shardKeys = DeleteDuplicates[iSVMDShardKeyForMsg[mbox, #] & /@ msgs];
+      Scan[
+        Function[sk,
+          If[! TrueQ[Lookup[$iSVMDLoadedShards, sk, False]],
+            Quiet@Check[SourceVaultMailLoadShard[sk], 0]]],
+        shardKeys]];
     overwrite = TrueQ[OptionValue["Overwrite"]];
     existsQ = ! MissingQ[SourceVaultMailSnapshotGet[
        iSVMDRecordId[mbox, ToString[Lookup[#, "id", "unknown"]]]]] &;
@@ -1725,9 +1849,13 @@ SourceVaultMailAttachmentDir::usage = "SourceVaultMailAttachmentDir[mbox, yyyymm
 SourceVaultMailAttachments::usage = "SourceVaultMailAttachments[recordId] は添付 {Name, Path, Exists} のリストを返す。";
 SourceVaultMailOpenAttachment::usage = "SourceVaultMailOpenAttachment[recordId, name] は添付ファイルを開く (front end / SystemOpen)。";
 SourceVaultMailComposeReply::usage = "SourceVaultMailComposeReply[recordId, opts] は返信ドラフト <|To,Cc,Subject,InReplyToToken,Quoted,Body|> を生成する。\"ReplyAll\"->True で Cc 含む。";
-SourceVaultMailOpenReplyNotebook::usage = "SourceVaultMailOpenReplyNotebook[recordId, opts] は返信ドラフトのノートブックを開く (front end)。";
+SourceVaultMailOpenReplyNotebook::usage = "SourceVaultMailOpenReplyNotebook[recordId, opts] は返信用ウインドウ (To/Cc/件名/本文編集・ファイル添付・確認付き送信) を開く (front end)。opts: \"ReplyAll\"->True で全員に返信、\"Translate\"->True で日本語で書いて元メールの言語に翻訳して送る (旧 maildb replyMailTr 踏襲)。";
 SourceVaultMailView::usage = "SourceVaultMailView[query_String:\"\", opts] は検索結果を、行ごとに 本文表示(✉)/添付ポップアップ(📎)/返信(↩) のクリック操作を備えた表 (Dataset) で返す。旧 maildb showMails 踏襲。";
 SourceVaultMailRowActions::usage = "SourceVaultMailRowActions[snapshot] は1行分のアクション (Body/Attachments/Reply ボタン) を返す。";
+SourceVaultMailSend::usage = "SourceVaultMailSend[spec] はメールを送信する。spec=<|\"To\",\"Cc\",\"Bcc\",\"Subject\",\"Body\",\"Attachments\"->{パス...}|>。Bcc を省略すると $SourceVaultMailSendBccSelf が True のときオーナーの主アドレス宛に自分の控えを送る。$SourceVaultMailSignature が非空なら本文末尾に署名を付加する。返り値 <|\"Status\"->\"Sent\"|...|> / 失敗時 <|\"Status\"->\"Error\",\"Reason\"->...|>。Mathematica の SendMail 設定 (Preferences > Internet Connectivity > Mail Settings) が必要。";
+SourceVaultMailTranslateBody::usage = "SourceVaultMailTranslateBody[recordId] はメール本文を $Language (表示言語) に翻訳して返す (LLM, headless テスト可)。返り値 <|\"Status\"->\"Ok\",\"Text\"->訳文,\"Translated\"->True,\"Lang\"->...|>。";
+$SourceVaultMailSignature::usage = "$SourceVaultMailSignature は送信メール本文の末尾に付加する署名文字列。既定 \"\" (付加しない)。";
+$SourceVaultMailSendBccSelf::usage = "$SourceVaultMailSendBccSelf が True (既定) のとき、SourceVaultMailSend は Bcc 省略時にオーナーの主メールアドレスを Bcc に入れ、自分に控えを送る。";
 SourceVaultAddressBookView::usage = "SourceVaultAddressBookView[] は連絡先を整形表 (Dataset) で表示する。Uid/表示名/かな/メール/分類/信頼/MaxPL/AccessTags。";
 SourceVaultIdentityLinkUI::usage = "SourceVaultIdentityLinkUI[opts] は識別子を実体に紐付ける編集表(front end)。各行で 新規(ヘッダ継承で実体作成)/マージ(既存実体にアドレス追加)。opts: \"ShowLinked\"(既定False=未リンクのみ), \"Limit\"(既定200)。";
 SourceVaultEntityView::usage = "SourceVaultEntityView[] は実体(人/組織/Bot/ML)の一覧表(Dataset)。各行に編集ボタン。Uid/種別/表示名/かな/識別子数/グループ/重み/信頼。";
@@ -1807,10 +1935,15 @@ iSVUIReplyAddresses[snap_] :=
     cc = SourceVault`SourceVaultMailParseEmails[ToString@Lookup[snap["MailMetadataPublic"], "Cc", ""]];
     {to, cc}];
 
+(* 本文 readable 化ヘルパ (iSVUINormalizeNewlines/iSVUILooksLikeHTML/iSVUIHtmlToText/
+   iSVUIReadableBody) はコア (第1ブロック、ingest も使う) に定義済み。 *)
 iSVUIQuote[from_, date_, body_] :=
-  StringJoin[
-    If[StringQ[date], date <> " ", ""], If[StringQ[from], from, ""], " wrote:\n",
-    StringRiffle["> " <> # & /@ StringSplit[If[StringQ[body], body, ""], "\n"], "\n"]];
+  With[{b = iSVUIReadableBody[body]},
+    StringJoin[
+      If[StringQ[date], date <> " ", ""], If[StringQ[from], from, ""], " wrote:\n",
+      (* 全行 (空行含む) に "> " を付ける。StringSplit は空行を落とし段落が潰れるため
+         改行を "\n> " 置換にする (標準的なメール引用)。 *)
+      "> " <> StringReplace[b, "\n" -> "\n> "]]];
 
 Options[SourceVaultMailComposeReply] = {"ReplyAll" -> False, "Body" -> ""};
 SourceVaultMailComposeReply[record_, OptionsPattern[]] :=
@@ -1838,9 +1971,331 @@ SourceVaultMailComposeReply[record_, OptionsPattern[]] :=
       "Body" -> OptionValue["Body"],
       "RecordId" -> Lookup[snap, "RecordId", Missing[]]|>];
 
+(* ============================================================ *)
+(* 翻訳 / 送信 / 返信パネル -- 旧 maildb replyMail/replyMailTr/sendReply 踏襲
+   ロジック (翻訳・送信) は headless テスト可能。パネルは front end が要る。 *)
+(* ============================================================ *)
+
+If[! ValueQ[$SourceVaultMailSignature], $SourceVaultMailSignature = ""];
+If[! ValueQ[$SourceVaultMailSendBccSelf], $SourceVaultMailSendBccSelf = True];
+
+(* LLM 呼び出し: 本文は機密たりうるので privacyLevel=1.0 (private/local 優先)。
+   iCallSummaryLLM / iSVLooksLikeLLMError は同一 SourceVault`Private` 文脈の
+   本体定義を再利用する (部分ロードで未定義でも AssociationQ ガードで安全に $Failed)。 *)
+iSVUILLM[prompt_String] :=
+  Module[{r = Quiet@Check[iCallSummaryLLM[prompt, Automatic, 1.0], $Failed]},
+    If[AssociationQ[r] && Lookup[r, "Status", ""] === "OK" &&
+        StringQ[Lookup[r, "Response", Null]] &&
+        ! TrueQ@Quiet@Check[iSVLooksLikeLLMError[r["Response"]], False] &&
+        StringTrim[r["Response"]] =!= "",
+      StringTrim[r["Response"]], $Failed]];
+
+(* 表示言語 (返信翻訳・本文翻訳の既定ターゲット読み手言語) *)
+iSVUIReadingLang[] := If[$Language === "Japanese", "日本語", ToString[$Language]];
+
+(* 外国語メール本文を読み手言語へ翻訳 (読むため)。HTML/改行は readable 化してから。 *)
+iSVUITranslateBodyToReading[body_String] :=
+  Module[{lang = iSVUIReadingLang[], readable = iSVUIReadableBody[body]},
+    If[StringTrim[readable] === "", Return[""]];
+    iSVUILLM[
+      "次のメール本文を" <> lang <> "に翻訳せよ。翻訳結果のみを出力し、" <>
+      "説明・見出し・注記は一切付けない。人名・団体名・固有名詞は原文の表記のまま残す。\n\n" <> readable]];
+
+(* 公開: 本文翻訳 (headless) *)
+SourceVaultMailTranslateBody[record_] :=
+  Module[{r = SourceVaultMailGetBody[record], tr, lang = iSVUIReadingLang[]},
+    If[Lookup[r, "Status", ""] =!= "Ok",
+      Return[<|"Status" -> "Error",
+        "Reason" -> Lookup[r, "Reason", Lookup[r, "Status", "Unknown"]]|>]];
+    tr = iSVUITranslateBodyToReading[r["Body"]];
+    If[StringQ[tr],
+      <|"Status" -> "Ok", "Text" -> tr, "Translated" -> True, "Lang" -> lang|>,
+      <|"Status" -> "Error", "Reason" -> "TranslateFailed", "Lang" -> lang|>]];
+
+(* 元メールの言語・フォーマル度を判定 (返信翻訳のため) *)
+iSVUIDetectLangFormality[body_String] :=
+  Module[{snippet = StringTake[body, UpTo[2000]], lang, form},
+    lang = iSVUILLM[
+      "次のメール本文の言語を英語で一語で答えよ (English, Chinese, Korean, French など)。" <>
+      "日本語なら Japanese。\n\n" <> snippet];
+    form = iSVUILLM[
+      "次のメールのフォーマル度を一語で答えよ。formal / semi-formal / informal のいずれかのみ。\n\n" <> snippet];
+    {If[StringQ[lang], lang, "English"], If[StringQ[form], form, "semi-formal"]}];
+
+iSVUIReplyDetect[record_] :=
+  Module[{r = SourceVaultMailGetBody[record]},
+    If[Lookup[r, "Status", ""] === "Ok",
+      iSVUIDetectLangFormality[r["Body"]], {"English", "semi-formal"}]];
+
+(* 返信文 (日本語) の敬体/常体を簡易判定 (正規表現の二重エスケープを避け literal で) *)
+iSVUIDetectReplyStyle[replyText_String] :=
+  If[StringContainsQ[replyText,
+      {"ます。", "ます、", "ます ", "ます\n", "です。", "です、", "です ", "です\n",
+       "ください", "いたします", "ございます", "でしょうか", "願います"}],
+    "keigo", "casual"];
+
+(* 日本語返信を元メールの言語へ翻訳 (旧 maildb sendReplyTr 踏襲) *)
+iSVUITranslateReply[replyText_String, targetLang_String, origFormality_String] :=
+  Module[{style = iSVUIDetectReplyStyle[replyText], instr},
+    instr = "相手の元メールのフォーマル度は " <> origFormality <> " である。" <>
+      If[style === "keigo",
+        "返信者は丁寧な文体で書いているので、元メールより少しフォーマルに翻訳せよ。",
+        "返信者はカジュアルな文体で書いているので、元メールより少しインフォーマルに翻訳せよ。"];
+    iSVUILLM[
+      "次の日本語のメール返信を" <> targetLang <> "に翻訳せよ。\n" <> instr <> "\n" <>
+      "人名・イニシャル・団体名は翻訳せず原文のアルファベット表記のまま残す。\n" <>
+      "できるだけ簡潔な文章として翻訳し、翻訳結果のみを出力せよ。\n\n" <> replyText]];
+
+(* ---- 送信 (SendMail) ---- *)
+iSVUIOwnerPrimaryEmail[] :=
+  With[{e = iSVMDOwnerPrimaryEmail[]}, If[StringQ[e] && e =!= "", e, Missing[]]];
+
+SourceVaultMailSend[spec_Association] :=
+  Module[{to, cc, bcc, subject, body, atts, mailSpec, result, sig, self, rawAtts},
+    to = StringTrim@ToString@Lookup[spec, "To", ""];
+    If[to === "", Return[<|"Status" -> "Error", "Reason" -> "NoRecipient"|>]];
+    cc = StringTrim@ToString@Lookup[spec, "Cc", ""];
+    subject = ToString@Lookup[spec, "Subject", ""];
+    body = ToString@Lookup[spec, "Body", ""];
+    sig = If[StringQ[$SourceVaultMailSignature] && StringTrim[$SourceVaultMailSignature] =!= "",
+      "\n\n" <> $SourceVaultMailSignature, ""];
+    body = body <> sig;
+    (* 改行を LF に統一。\r が残ると SMTP の \n->\r\n 正規化で \r\r\n になり
+       受信側で二重改行になる (旧 maildb と同じ対策)。 *)
+    body = iSVUINormalizeNewlines[body];
+    rawAtts = Lookup[spec, "Attachments", {}];
+    rawAtts = If[ListQ[rawAtts], rawAtts, {rawAtts}];
+    atts = Select[rawAtts, StringQ[#] && FileExistsQ[#] &];
+    (* 指定されたが存在しない添付は送信前に弾く (黙って欠落させない) *)
+    With[{missing = Select[rawAtts, StringQ[#] && ! FileExistsQ[#] &]},
+      If[missing =!= {},
+        Return[<|"Status" -> "Error", "Reason" -> "AttachmentNotFound",
+          "Missing" -> missing|>]]];
+    bcc = Lookup[spec, "Bcc", Automatic];
+    self = iSVUIOwnerPrimaryEmail[];
+    bcc = If[bcc === Automatic,
+      If[TrueQ[$SourceVaultMailSendBccSelf] && StringQ[self], self, ""],
+      StringTrim@ToString[bcc]];
+    mailSpec = <|"To" -> to, "Subject" -> subject, "Body" -> body|>;
+    If[cc =!= "", mailSpec["Cc"] = cc];
+    If[StringQ[bcc] && bcc =!= "", mailSpec["Bcc"] = bcc];
+    If[atts =!= {}, mailSpec["Attachments"] = atts];
+    result = Quiet@Check[SendMail[mailSpec], $Failed];
+    If[FailureQ[result] || result === $Failed,
+      <|"Status" -> "Error", "Reason" -> "SendMailFailed",
+        "Detail" -> ToString[result], "To" -> to, "Subject" -> subject|>,
+      <|"Status" -> "Sent", "To" -> to, "Cc" -> cc, "Bcc" -> bcc,
+        "Subject" -> subject, "Attachments" -> atts|>]];
+
+(* 送信前の確認ダイアログ (外向きの不可逆操作なので明示確認する) *)
+iSVUISendConfirm[spec_Association] :=
+  Module[{to = ToString@Lookup[spec, "To", ""], subj = ToString@Lookup[spec, "Subject", ""],
+      cc = StringTrim@ToString@Lookup[spec, "Cc", ""],
+      natt = Length@Select[Lookup[spec, "Attachments", {}], StringQ]},
+    ChoiceDialog[
+      Column[{
+        Style["このメールを送信しますか？", "Subsection"],
+        Row[{Style["To: ", Bold], to}],
+        If[cc =!= "", Row[{Style["Cc: ", Bold], cc}], Nothing],
+        Row[{Style["件名: ", Bold], subj}],
+        Row[{Style["添付: ", Bold], ToString[natt] <> " 件"}]}],
+      {"送信する" -> True, "キャンセル" -> False}, WindowTitle -> "送信確認"]];
+
+(* ---- 添付チップ (削除ボタン付き) ---- *)
+iSVUIAttachChips[attachments_, removeFn_] :=
+  If[attachments === {}, Style["(添付なし)", Gray],
+    Row[Riffle[
+      (With[{ff = #},
+         Framed[Row[{
+           Tooltip[Style[FileNameTake[ff], "Text"], ff], Spacer[3],
+           Button[Style["×", Red, Bold], removeFn[ff],
+             Appearance -> "Frameless"]}],
+           RoundingRadius -> 4, FrameStyle -> GrayLevel[0.75],
+           Background -> GrayLevel[0.96]]] & /@ attachments),
+      Spacer[5]]]];
+
+(* ---- 返信用ノートブックのセル読み書き ----
+   返信本文は「普通のノートブックセル」(CellTags 付き Text セル) にする。
+   こうすると documentation.wl (DocExpandIdea/DocRefine/DocPolish/DocTranslate/
+   ShowDocPalette 等) が対象セルとしてそのまま使える。
+   制御パネル (To/Cc/件名/添付/送信) だけ DynamicModule、本文/翻訳/引用はセル。 *)
+
+(* セル式 -> 平文。FE の PlainText エクスポートを使い、稀に残る \:XXXX を実文字へ。 *)
+iSVUICellPlainText[cellExpr_] :=
+  Module[{txt},
+    txt = Quiet@Check[
+      First@FrontEndExecute[FrontEnd`ExportPacket[cellExpr, "PlainText"]], $Failed];
+    If[! StringQ[txt], Return[$Failed]];
+    (* FE は \r\n を返しうる。LF に統一してから \:XXXX を実文字へ。 *)
+    txt = iSVUINormalizeNewlines[txt];
+    StringReplace[txt,
+      RegularExpression["\\\\:([0-9a-fA-F]{4})"] :> FromCharacterCode[FromDigits["$1", 16]]]];
+
+(* CellTags でセルを探し平文を返す。無ければ Missing["NoCell"]。 *)
+iSVUIReadTaggedCell[nb_, tag_String] :=
+  Module[{cells = Quiet@Check[Cells[nb, CellTags -> tag], {}]},
+    If[! ListQ[cells] || cells === {}, Return[Missing["NoCell"]]];
+    iSVUICellPlainText[NotebookRead[First[cells]]]];
+
+(* 翻訳結果を本文セル直後の「普通の編集可能セル」(svReplyTranslated) として書く。
+   再プレビューでは旧セルを消してから書く (重複防止)。書込後に元メール PL を再付与。
+   返り値: 翻訳セル。 *)
+iSVUIWriteTranslatedCell[nb_, text_String, pl_ : 1.0] :=
+  Module[{bodyCells, tc},
+    Quiet@Scan[NotebookDelete, Cells[nb, CellTags -> "svReplyTranslated"]];
+    bodyCells = Quiet@Check[Cells[nb, CellTags -> "svReplyBody"], {}];
+    If[! ListQ[bodyCells] || bodyCells === {}, Return[$Failed]];
+    SelectionMove[First[bodyCells], After, Cell];
+    NotebookWrite[nb,
+      Cell[text, "Text", CellTags -> {"svReplyTranslated"},
+        CellFrameMargins -> 6]];
+    tc = First[Cells[nb, CellTags -> "svReplyTranslated"], $Failed];
+    (* 新規翻訳セルにも元メールの PrivacyLevel を付与 (全セル再マークで冪等) *)
+    iSVUIMarkCellsConfidential[nb, pl];
+    tc];
+
+(* ---- 機密保持: メールウインドウの全セルを元メールの PrivacyLevel でマーク ----
+   表示・返信ウインドウの本文/引用/翻訳などのセルが元メールの PL を保持し、その
+   ウインドウからの LLM 呼び出し (documentation.wl / ClaudeEval 等) の文脈構築時に
+   NBMakeContextPacket が高 PL セルをクラウドへ送らない (クラウド閾値 0.5 / ローカル 1.0)。
+   PL < 0.5 (公開メール) はマークしない (クラウド可)。マークは NBAccess 公開 API 経由。 *)
+iSVUIMailWindowPL[snap_] :=
+  With[{p = Quiet@Check[iSVMailProbePL[snap], 1.0]}, If[NumericQ[p], N[p], 1.0]];
+
+iSVUIMarkCellsConfidential[nb_, pl_] :=
+  If[Head[nb] === NotebookObject && NumericQ[pl] && pl >= 0.5,
+    Module[{n},
+      Quiet@Check[NBAccess`NBInvalidateCellsCache[nb], Null];
+      n = Quiet@Check[NBAccess`NBCellCount[nb], 0];
+      If[IntegerQ[n] && n > 0,
+        Do[Quiet@Check[NBAccess`NBMarkCellConfidential[nb, i, N[pl]], Null], {i, n}]]],
+    Null];
+
+(* ---- 返信制御パネル (DynamicModule) ----
+   本文セル (svReplyBody)・翻訳セル (svReplyTranslated)・引用セル (svReplyQuote) は
+   このパネルと同じノートブックにある。ボタンは EvaluationNotebook[] でそれらを読む。 *)
+iSVUIReplyControl[draft_Association, translateMode_, pl_ : 1.0] :=
+  DynamicModule[{
+      to = ToString@Lookup[draft, "To", ""],
+      cc = StringRiffle[Cases[Lookup[draft, "Cc", {}], _String], ", "],
+      subject = ToString@Lookup[draft, "Subject", ""],
+      rid = ToString@Lookup[draft, "RecordId", ""],
+      origLang = "", origFormality = "",
+      attachments = {}, includeQuote = True, busy = False, status = "",
+      tr = TrueQ[translateMode]},
+    Panel@Column[{
+      Style[If[tr, "返信 (日本語で書いて翻訳して送信)", "返信"], "Subtitle"],
+      Grid[{
+        {"To:", InputField[Dynamic[to], String, FieldSize -> {45, 1}]},
+        {"Cc:", InputField[Dynamic[cc], String, FieldSize -> {45, 1}]},
+        {"件名:", InputField[Dynamic[subject], String, FieldSize -> {45, 1}]}},
+        Alignment -> {{Right, Left}, Center}],
+      Row[{
+        Button["ファイル添付",
+          With[{f = SystemDialogInput["FileOpen", WindowTitle -> "添付ファイルを選択"]},
+            If[StringQ[f], attachments = DeleteDuplicates@Append[attachments, f]]],
+          Method -> "Queued"],
+        Spacer[8],
+        Dynamic[iSVUIAttachChips[attachments,
+          Function[ff, attachments = DeleteCases[attachments, ff]]]]}],
+      Row[{Checkbox[Dynamic[includeQuote]], Spacer[4], "引用元を含めて送信する"}],
+      If[tr,
+        Row[{
+          Button["翻訳プレビュー",
+            Module[{nb = EvaluationNotebook[], bodyTxt, t},
+              busy = True;
+              bodyTxt = iSVUIReadTaggedCell[nb, "svReplyBody"];
+              If[! StringQ[bodyTxt] || StringTrim[bodyTxt] === "",
+                status = Style["返信本文セルに日本語を入力してください", Red]; busy = False,
+                If[origLang === "",
+                  With[{lf = iSVUIReplyDetect[rid]},
+                    origLang = lf[[1]]; origFormality = lf[[2]]]];
+                t = iSVUITranslateReply[StringTrim[bodyTxt], origLang, origFormality];
+                iSVUIWriteTranslatedCell[nb, If[StringQ[t], t, "[翻訳に失敗しました]"], pl];
+                status = Style["翻訳結果セルを確認・編集してから送信してください", Gray];
+                busy = False]],
+            Method -> "Queued"],
+          Spacer[6], Dynamic[If[busy, ProgressIndicator[Appearance -> "Necklace"], ""]],
+          Spacer[6], Dynamic[If[origLang === "", "",
+            Style["→ " <> origLang <> " (" <> origFormality <> ")", Gray]]]}],
+        Nothing],
+      Row[{
+        Button[Style["送信", Bold],
+          Module[{nb = EvaluationNotebook[], mainTxt, finalBody, q, spec, ok},
+            mainTxt = If[tr,
+              iSVUIReadTaggedCell[nb, "svReplyTranslated"],
+              iSVUIReadTaggedCell[nb, "svReplyBody"]];
+            Which[
+              tr && ! StringQ[mainTxt],
+                status = Style["先に「翻訳プレビュー」を押してください", Red],
+              ! StringQ[mainTxt] || StringTrim[mainTxt] === "",
+                status = Style["本文が空です", Red],
+              True,
+                finalBody = StringTrim[mainTxt];
+                If[TrueQ[includeQuote],
+                  q = iSVUIReadTaggedCell[nb, "svReplyQuote"];
+                  If[StringQ[q] && StringTrim[q] =!= "",
+                    finalBody = finalBody <> "\n\n" <> StringTrim[q]]];
+                spec = <|"To" -> to, "Cc" -> cc, "Subject" -> subject,
+                   "Body" -> finalBody, "Attachments" -> attachments|>;
+                ok = iSVUISendConfirm[spec];
+                If[TrueQ[ok],
+                  busy = True;
+                  With[{res = SourceVaultMailSend[spec]},
+                    status = If[Lookup[res, "Status", ""] === "Sent",
+                      Style["✓ 送信しました", Bold, Darker@Green],
+                      Style["✗ 送信失敗: " <> ToString@Lookup[res, "Reason", ""], Red]]];
+                  busy = False]]],
+          Method -> "Queued"],
+        Spacer[10], Dynamic[status]}]
+    }, Spacer[8]]];
+
 (* ---- front end ラッパ (GUI が要る) ---- *)
+(* メール本文ヘッダ (差出人/宛先/日付) *)
+iSVUIBodyHeader[snap_] :=
+  Module[{md = Lookup[snap, "MailMetadataPublic", <||>], ff = iSVUIFont[]},
+    Style[Column[{
+      Row[{Style["From: ", Bold], iSVUIShow@Lookup[md, "From", ""]}],
+      Row[{Style["To: ", Bold], iSVUIShow@Lookup[md, "To", ""]}],
+      If[StringTrim[ToString@Lookup[md, "Cc", ""]] =!= "",
+        Row[{Style["Cc: ", Bold], Lookup[md, "Cc", ""]}], Nothing],
+      Row[{Style["Date: ", Bold], iSVUIFormatDateJST@Lookup[md, "Date", Missing[]]}]},
+      Spacing -> 0.3], "Text", Gray, FontFamily -> ff]];
+
+(* 本文表示パネル: 返信/全員に返信/翻訳して返信/翻訳表示/添付 ボタン付き。
+   翻訳表示は本文をインラインに $Language 訳で追記する。 *)
+iSVUIBodyPanel[snap_, subj_, body_, htmlQ_ : False] :=
+  DynamicModule[{trans = "", busy = False, r = ToString@Lookup[snap, "RecordId", ""]},
+    Panel@Column[{
+      Style[subj, "Subtitle"],
+      iSVUIBodyHeader[snap],
+      Row[{
+        Button["返信", SourceVaultMailOpenReplyNotebook[r], Method -> "Queued"],
+        Button["全員に返信", SourceVaultMailOpenReplyNotebook[r, "ReplyAll" -> True],
+          Method -> "Queued"],
+        Button["翻訳して返信",
+          SourceVaultMailOpenReplyNotebook[r, "ReplyAll" -> True, "Translate" -> True],
+          Method -> "Queued"],
+        iSVUIAttachMenu[snap],
+        Button["翻訳表示",
+          busy = True;
+          With[{t = iSVUITranslateBodyToReading[body]},
+            trans = If[StringQ[t], t, "[翻訳に失敗しました]"]];
+          busy = False, Method -> "Queued"],
+        Spacer[6], Dynamic[If[busy, ProgressIndicator[Appearance -> "Necklace"], ""]]},
+        Spacer[6]],
+      If[TrueQ[htmlQ],
+        Style["(HTML メールをテキストに変換して表示しています)", "Text", Gray, FontSlant -> Italic],
+        Nothing],
+      Pane[Style[body, "Text"], {Full, UpTo[460]}, Scrollbars -> Automatic],
+      Dynamic[If[trans === "", "",
+        Column[{
+          Style["【" <> iSVUIReadingLang[] <> "訳】", "Text", Bold],
+          Pane[Style[trans, "Text"], {Full, UpTo[360]}, Scrollbars -> Automatic]}]]]
+    }, Spacer[8]]];
+
 SourceVaultMailShowBody[record_] :=
-  Module[{snap = iSVUISnap[record], r, subj},
+  Module[{snap = iSVUISnap[record], r, subj, raw, readable, htmlQ, nb, pl},
     r = SourceVaultMailGetBody[snap];
     If[Lookup[r, "Status", ""] =!= "Ok",
       (* GUI button はリターン値を捨てるので、失敗理由をノートブックに出す *)
@@ -1853,26 +2308,53 @@ SourceVaultMailShowBody[record_] :=
           StyleDefinitions -> $SourceVaultMailNotebookStyle], $Failed];
       Return[r]];
     subj = ToString@Lookup[snap["MailMetadataPublic"], "Subject", "(no subject)"];
-    Quiet@Check[
-      CreateDocument[{Cell[subj, "Subtitle"], Cell[r["Body"], "Text"]},
+    raw = r["Body"];
+    htmlQ = iSVUILooksLikeHTML[iSVUINormalizeNewlines[raw]];
+    readable = iSVUIReadableBody[raw];
+    pl = iSVUIMailWindowPL[snap];
+    nb = Quiet@Check[
+      CreateDocument[
+        ExpressionCell[iSVUIBodyPanel[snap, subj, readable, htmlQ], "Output",
+          CellMargins -> {{15, 15}, {12, 12}}],
         WindowTitle -> subj,
         StyleDefinitions -> $SourceVaultMailNotebookStyle], $Failed];
-    <|"Status" -> "Shown"|>];
+    (* 本文セルに元メールの PrivacyLevel を付与: この窓からの LLM 呼び出しで
+       高 PL なら クラウドへ送られない (NBMakeContextPacket 閾値 0.5)。 *)
+    iSVUIMarkCellsConfidential[nb, pl];
+    <|"Status" -> "Shown", "PrivacyLevel" -> pl|>];
 
-SourceVaultMailOpenReplyNotebook[record_, opts : OptionsPattern[SourceVaultMailComposeReply]] :=
-  Module[{draft = SourceVaultMailComposeReply[record, opts], header},
+Options[SourceVaultMailOpenReplyNotebook] = {"ReplyAll" -> False, "Translate" -> False};
+SourceVaultMailOpenReplyNotebook[record_, opts : OptionsPattern[]] :=
+  Module[{draft, translate = TrueQ[OptionValue["Translate"]], subj, quoted, instr, nb,
+      snap, pl},
+    draft = SourceVaultMailComposeReply[record, "ReplyAll" -> TrueQ[OptionValue["ReplyAll"]]];
     If[Lookup[draft, "Status", ""] =!= "Draft", Return[draft]];
-    header = "To: " <> ToString[draft["To"]] <>
-       If[draft["Cc"] =!= {}, "\nCc: " <> StringRiffle[draft["Cc"], ", "], ""] <>
-       "\nSubject: " <> draft["Subject"];
-    Quiet@Check[
+    snap = iSVUISnap[record];
+    pl = iSVUIMailWindowPL[snap];
+    subj = ToString@Lookup[draft, "Subject", "Re:"];
+    quoted = ToString@Lookup[draft, "Quoted", ""];
+    instr = If[translate,
+      "↓ このセルに日本語で返信を入力し、上の「翻訳プレビュー」を押してください。本文は通常のノートブックセルなので文章作成パレット (ShowDocPalette 等) が使えます。",
+      "↓ このセルに返信本文を入力してください。本文は通常のノートブックセルなので文章作成パレット (ShowDocPalette 等) が使えます。"];
+    (* 制御パネル (Output) + 案内 + 本文セル + 引用セル。本文/引用/翻訳は普通の編集可能セル。 *)
+    nb = Quiet@Check[
       CreateDocument[{
-        Cell[header, "Text", FontColor -> GrayLevel[0.4]],
-        Cell["", "Input"],
-        Cell[draft["Quoted"], "Text", FontColor -> GrayLevel[0.55]]},
-        WindowTitle -> draft["Subject"],
+        ExpressionCell[iSVUIReplyControl[draft, translate, pl], "Output",
+          CellMargins -> {{15, 15}, {12, 8}}],
+        Cell[instr, "Text", FontColor -> Gray, FontSlant -> Italic],
+        Cell["", "Text", CellTags -> {"svReplyBody"}],
+        Cell[quoted, "Text", FontColor -> GrayLevel[0.55], CellTags -> {"svReplyQuote"}]},
+        WindowTitle -> subj,
         StyleDefinitions -> $SourceVaultMailNotebookStyle], $Failed];
-    <|"Status" -> "ReplyNotebookOpened", "Draft" -> draft|>];
+    (* 引用(元メール)・本文・翻訳セルに元メールの PrivacyLevel を付与: この窓からの
+       LLM 呼び出し (documentation.wl / ClaudeEval) で高 PL なら クラウドへ送られない。 *)
+    iSVUIMarkCellsConfidential[nb, pl];
+    (* カーソルを本文セルに置き、すぐ入力・パレット操作できるようにする *)
+    Quiet@Check[
+      With[{bc = Cells[nb, CellTags -> "svReplyBody"]},
+        If[ListQ[bc] && bc =!= {}, SelectionMove[First[bc], Before, CellContents]]], Null];
+    <|"Status" -> "ReplyNotebookOpened", "Draft" -> draft,
+      "Translate" -> translate, "PrivacyLevel" -> pl|>];
 
 (* ---- インタラクティブ表 (旧 maildb showMails 踏襲) ---- *)
 (* 日付: JST に変換しコンパクト表示 "2026/06/05 木 14:53" (maildb formatDateJST 踏襲) *)
@@ -2429,6 +2911,7 @@ iSVMDRegisterConfidentialHeads[] :=
         {{"SourceVaultMailGetBody", 1.0},
          {"SourceVaultMailSnapshotDecryptBody", 1.0},
          {"SourceVaultMailComposeReply", 1.0},
+         {"SourceVaultMailTranslateBody", 1.0},
          {"SourceVaultSearchMailSnapshots", 0.85},
          {"SourceVaultMailSnapshotGet", 0.85},
          {"SourceVaultMailSnapshotList", 0.85},
