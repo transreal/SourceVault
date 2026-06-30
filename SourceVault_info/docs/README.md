@@ -662,7 +662,9 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultTopicEnrichment[text, surfaceIndex, opts]` | auto-tag の topic を検索 index へ注入する `topics` フィールド文字列を生成（seed→検索の接続。本文に無い関連/正準トピックでヒット可に）。 |
 | `SourceVaultImportOOPSItemRelations[path, opts]` | `item-relation(-up).index` を S式 parse→重み付き有向 relation。 |
 | `SourceVaultBuildOOPSRelationGraph[tableDir]` | Down+Up を結合した relation graph（約 2875 ノード）。 |
-| `SourceVaultExpandTopicsByRelation[refs, graph, opts]` | seed topic を重み付き 1-hop 近傍へ拡張（KG 局所探索・auto-tag 拡張）。 |
+| `SourceVaultExpandTopicsByRelation[refs, graph, opts]` | seed topic を重み付き 1-hop 近傍へ拡張（auto-tag の RelationExpanded 用）。 |
+| `SourceVaultExpandSearchGraph[seeds, opts]` | §6.3 KG 局所探索。weighted topic relation を multi-hop BFS 展開（MaxHops/MaxNodes/top-k/MinEdgeWeight、edges+trace、cycle 安全）。 |
+| `SourceVaultConfirmCandidateTopics[candidates, opts]` | owner 確認済の AutoExtracted 候補を seed 同形の新 topic entry にして dict に merge（候補→確認済 topic→検索可能）。 |
 | **サービス管理 (SourceVault_servicemanager)** | |
 | `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
 | `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |

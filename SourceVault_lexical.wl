@@ -156,9 +156,14 @@ SourceVaultBuildSurfaceIndex[dict_Association] := iSVBuildSurfaceIndex[dict];
    これで短い Latin form の語中誤一致(例 "tar" が "starship" に当たる)を防ぐ。CJK は語境界が無いので substring。 *)
 iSVRegexEscape[s_String] := StringReplace[s, x : RegularExpression["[\\\\.^$*+?()\\[\\]{}|]"] :> "\\" <> x];
 iSVLatinFormQ[s_String] := StringMatchQ[s, RegularExpression["[A-Za-z0-9][A-Za-z0-9 .&'\\-]*"]];
+(* Latin 語境界は ASCII 英数のみで判定する。WL PCRE の \b は Unicode-aware で CJK を word 文字扱い
+   するため、"itmsの"/"Appleが" のように Latin が CJK に直接隣接すると \b 境界が成立せず取りこぼす。
+   lookaround で「直前/直後が ASCII 英数でない」ことだけを要求すれば、語中誤一致(tar∈starship)を
+   防ぎつつ Latin↔CJK 隣接を正しく拾える。 *)
 iSVSurfaceFormPresentQ[normText_String, sf_String] :=
   If[iSVLatinFormQ[sf],
-    StringContainsQ[normText, RegularExpression["\\b" <> iSVRegexEscape[sf] <> "\\b"]],
+    StringContainsQ[normText,
+      RegularExpression["(?<![A-Za-z0-9])" <> iSVRegexEscape[sf] <> "(?![A-Za-z0-9])"]],
     StringContainsQ[normText, sf]];
 
 (* normText に出現する surface form の entity term (OR-match)。Latin は単語境界一致。 *)

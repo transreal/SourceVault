@@ -59,7 +59,8 @@ mail 本文を段落に分割する（空行区切り、引用/署名/footer を
 各 prose 段落に seed 辞書の surface form OR-match で topic item を自動付与する（auto-tag）。`surfaceIndex` は `SourceVaultBuildSurfaceIndex[dict]`。
 `"RelationGraph"`（`SourceVaultBuildOOPSRelationGraph` の結果）を渡すと、SeedMatched の named topic から 1-hop の関連 topic を低 confidence の `AssignmentKind = "RelationExpanded"`（`ViaSeed` / `RelationWeight` 付き）として追加する。SeedMatched（conf ≤ 1.0）が常に RelationExpanded（conf = `Min[0.45, 0.2 + 0.03·Weight]`）より上位。`RelationGraph` 無しなら SeedMatched のみ（後方互換）。
 `"ExtractCandidates" -> True` で seed 非該当の新トピック候補（`SourceVaultExtractCandidateTopics`）を `AssignmentKind = "AutoExtracted"`（`TopicItemRef -> Missing["Unconfirmed"]`, `ProposedLabel`, `Status -> "Candidate"`, conf 0.2）として追加する（auto-confirm off、owner 確認で正規 topic 化）。
-Options: `"MinSurfaceLength" -> 2`, `"TopicLimit" -> 10`, `"ProseOnly" -> True`, `"RelationGraph" -> None`, `"MaxRelationTopics" -> 8`, `"MinRelationWeight" -> 2`, `"ExtractCandidates" -> False`, `"CandidateLimit" -> 8`
+`"RefLabel"`（ref→canonical label の Association）を渡すと、**同一 canonical label の SeedMatched 重複**（別 owner namespace / 重複 entry。例 ki195/e203 とも「映画」）を最高 confidence の 1 件に collapse し、他の ref を `AltRefs` に provenance として残す（軽量 owner disambiguation。曖昧は実データで 2.2% と稀）。
+Options: `"MinSurfaceLength" -> 2`, `"TopicLimit" -> 10`, `"ProseOnly" -> True`, `"RelationGraph" -> None`, `"MaxRelationTopics" -> 8`, `"MinRelationWeight" -> 2`, `"ExtractCandidates" -> False`, `"CandidateLimit" -> 8`, `"RefLabel" -> None`
 戻り値: `{<|"ParagraphIndex", "Kind", "Assignments" -> {<|"TopicItemRef", "MatchedSurfaceForms", "AssignmentKind" -> "SeedMatched"|"RelationExpanded"|"AutoExtracted", "Confidence", ("ViaSeed", "RelationWeight", "ProposedLabel", "ExtractionKind", "Status")|>...}|>...}`
 ノイズ対策（解消済み）: 短い Latin surface form の語中誤一致（例「tar」が「s**tar**ship」）は `iSVSurfaceFormPresentQ` の単語境界一致で解消（api_lexical 参照）。catch-all/退化 topic（ラベル「・」で数百 form を持つ `anonymous:0` 等）も `SourceVaultBuildSurfaceIndex` 構築時に除外済み。残: 同名 topic（例 ki195/e203 とも「映画」）は両方とも正当な topic ゆえ両マッチを許容（owner による後段 disambiguate は将来課題）。
 
@@ -76,9 +77,14 @@ Options: `"MinSurfaceLength" -> 2`, `"TopicLimit" -> 10`, `"ProseOnly" -> True`,
 戻り値: `<|"RelationGraph" -> <|"<TopicItemRef>" -> {neighbor...}|>, "Count", "TableDir"|>`（OOPS 実データで約 2875 ノード）。
 
 ### SourceVaultExpandTopicsByRelation[refs, relationGraph, opts] → {Association...}
-seed topic 集合（`refs`）を重み付き 1-hop 近傍へ拡張する。seed 自身は除外、`To` 単位で最大重みに dedup、重み降順。
+seed topic 集合（`refs`）を重み付き 1-hop 近傍へ拡張する。seed 自身は除外、`To` 単位で最大重みに dedup、重み降順。auto-tag の RelationExpanded に使う 1-hop 版。
 Options: `"MaxNeighborsPerSeed" -> 5`, `"MinWeight" -> 1`, `"MaxTotal" -> 20`
 戻り値: `{<|"To", "Weight", "Direction", "ViaSeed"|>...}`
+
+### SourceVaultExpandSearchGraph[seeds, opts] → Association（§6.3 KG local expansion）
+seed topic refs を weighted topic relation で **multi-hop BFS 展開**する検索用の KG 局所探索（spec §6.3 public API）。`SourceVaultExpandTopicsByRelation` が auto-tag 用 1-hop なのに対し、本関数は multi-hop で edges / trace を返す。cycle 安全（visited set）。
+Options: `"RelationGraph" -> None`（必須相当）, `"MaxHops" -> 2`, `"MaxNodes" -> 50`（総数）, `"MaxNeighborsPerNode" -> 10`（per-node top-k by weight、hub 爆発抑制 §6.5.4）, `"MinEdgeWeight" -> 1`, `"RefLabel" -> None`, `"EdgeKinds" -> {"TopicRelation"}`（SharedTag/SharedAuthor/Interaction は object infra 整備後）, `"ReleaseContext" -> None`（trace 記録。topic node は metadata で、release gate/revocation は対応 content chunk の検索時に適用）
+戻り値: `<|"Seeds", "Expanded" -> {<|"Ref", "Label", "Hop", "Weight", "ViaSeed"|>...}, "Edges" -> {<|"From", "To", "Weight", "Kind", "Direction"|>...}, "Trace", "NodeCount", "EdgeCount", "Capped"|>`
 
 ## AutoExtracted（seed 非該当の新トピック候補）
 
@@ -89,6 +95,11 @@ seed（1992–2005 語彙）に無い語（post-2005 や新しい固有名詞）
 Options: `"KnownSurfaceIndex" -> None`, `"Limit" -> 15`, `"MinKatakana" -> 3`, `"MinKanji" -> 2`, `"MaxKanji" -> 6`, `"MinLatin" -> 2`
 戻り値: `{<|"Surface", "ExtractionKind" -> "Katakana"|"Kanji"|"Latin"|"Quoted", "Count"|>...}`
 既知の限界: 辞書なし抽出ゆえ漢字連続が併合しうる（例「結局億単位」=結局+億単位）。正攻法は形態素分割（hybrid 実測後に保留）。候補は確認ゲート前提のため許容。
+
+### SourceVaultConfirmCandidateTopics[candidates, opts] → Association
+owner が確認した AutoExtracted 候補を seed と同形の新 topic entry にする（candidate → 確認済 topic → 検索可能の loop を閉じる）。`candidates` は `{<|"Surface","ExtractionKind"|>...}` か label 文字列のリスト。auto-confirm は行わない。
+Options: `"ExistingDictionary" -> None`（渡すと Entries を merge した `MergedDictionary` を返す → `SourceVaultBuildSurfaceIndex` で再 index すると確認 topic が SeedMatched で引けるようになる）, `"RefPrefix" -> "svtopic:extracted"`, `"StartId" -> 1`, `"OwnerRef" -> None`, `"PrivacyLevel" -> 0.3`
+戻り値: `<|"ConfirmedEntries" -> {<|"TopicItemRef", "CanonicalLabel", "SurfaceForms", "NamespaceKind" -> "Extracted", "OwnerRef", "PrivacyLevel", "Provenance"|>...}, "Count", ("MergedDictionary")|>`。確認 topic のファイル/DB 永続は owner 選択で別途。
 
 ## seed → 検索の接続（topic enrichment）
 

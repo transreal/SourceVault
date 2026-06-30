@@ -11,7 +11,7 @@
 - 既存 `KeywordBigram` / `iKeywordScore` は無変更で温存。本層は `KeywordBM25V1` 用の純関数。
 - lexical 先行: 正規化 → token / unigram / bigram → BM25。形態素解析は v1 非依存（後続 profile）。bigram を OOV 基盤として残す（CJK-IR）。
 - スコアは生 Boole でなく BM25（IDF + 文書長正規化 + TF 飽和）。
-- entity OR-match: query「Bruce Sterling」と doc「ブルース・スターリング」が、双方に entity term `entity:<topicRef>` が立つことで一致する（表記非一致/OOV 回復）。surface form の照合は **Latin(ASCII)語は単語境界 `\b` 一致、CJK 含む形は substring**（`iSVSurfaceFormPresentQ`）。これで短い Latin form の語中誤一致（例「tar」が「s**tar**ship」）を防ぎつつ、CJK の語境界なし照合（doc「ブルース・スターリング」に "ブルース・スターリング" が substring 一致）を保つ。
+- entity OR-match: query「Bruce Sterling」と doc「ブルース・スターリング」が、双方に entity term `entity:<topicRef>` が立つことで一致する（表記非一致/OOV 回復）。surface form の照合は **Latin(ASCII)語は ASCII 英数の境界一致、CJK 含む形は substring**（`iSVSurfaceFormPresentQ`）。短い Latin form の語中誤一致（例「tar」が「s**tar**ship」）を防ぎつつ、CJK substring 照合も保つ。境界判定は `\b` ではなく lookaround `(?<![A-Za-z0-9])…(?![A-Za-z0-9])` を使う（WL PCRE の `\b` は **Unicode-aware で CJK を word 文字扱い**するため、`itmsの`/`Appleが`/`iPodを` のように Latin が CJK に直接隣接すると `\b` 境界が成立せず取りこぼす。ASCII 英数のみ境界判定にすることで Latin↔CJK 隣接を正しく拾う）。
 
 ## 正規化・トークナイズ
 

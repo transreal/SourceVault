@@ -118,6 +118,21 @@ SourceVaultTopicEnrichment::usage =
   "\"MaxRelationTopics\"(6), \"MinRelationWeight\"(2)。" <>
   "戻り値 <|\"TopicRefs\", \"TopicLabels\", \"RelatedRefs\", \"RelatedLabels\", \"TopicsFieldText\"|>。";
 
+SourceVaultExpandSearchGraph::usage =
+  "SourceVaultExpandSearchGraph[seeds, opts] は §6.3 KG 局所探索。seed topic refs から重み付き topic relation を " <>
+  "multi-hop で BFS 展開し <|\"Seeds\", \"Expanded\", \"Edges\", \"Trace\"|> を返す(node 上限/weight 閾値/cycle 安全)。" <>
+  "ExpandTopicsByRelation は auto-tag 用 1-hop、本関数は検索用 multi-hop(edges/trace 付き)。" <>
+  "オプション \"RelationGraph\"(必須相当), \"MaxHops\"(2), \"MaxNodes\"(50), \"MinEdgeWeight\"(1), \"RefLabel\"(None), " <>
+  "\"EdgeKinds\"(既定 {\"TopicRelation\"}; SharedTag/SharedAuthor/Interaction は将来), \"ReleaseContext\"(None)。";
+
+SourceVaultConfirmCandidateTopics::usage =
+  "SourceVaultConfirmCandidateTopics[candidates, opts] は AutoExtracted 候補(owner が確認したもの)を " <>
+  "seed と同形の新 topic entry(TopicItemRef/CanonicalLabel/SurfaceForms/NamespaceKind=\"Extracted\"/Provenance) にする。" <>
+  "candidates は {<|\"Surface\",\"ExtractionKind\"|>...} か {label string...}。" <>
+  "オプション \"ExistingDictionary\"(渡すと Entries を merge した MergedDictionary を返す→BuildSurfaceIndex で検索可能に), " <>
+  "\"RefPrefix\"(\"svtopic:extracted\"), \"StartId\"(1), \"OwnerRef\"(None), \"PrivacyLevel\"(0.3)。" <>
+  "戻り値 <|\"ConfirmedEntries\", \"Count\", (\"MergedDictionary\")|>。永続(ファイル/DB)は owner 選択で別途。";
+
 Begin["`Private`"];
 
 (* ------------------------------------------------------------
@@ -418,12 +433,12 @@ SourceVaultParseMailParagraphs[body_String] := Module[{norm, blocks, paras},
 
 Options[SourceVaultAssignParagraphTopics] = {"MinSurfaceLength" -> 2, "TopicLimit" -> 10, "ProseOnly" -> True,
   "RelationGraph" -> None, "MaxRelationTopics" -> 8, "MinRelationWeight" -> 2,
-  "ExtractCandidates" -> False, "CandidateLimit" -> 8};
+  "ExtractCandidates" -> False, "CandidateLimit" -> 8, "RefLabel" -> None};
 SourceVaultAssignParagraphTopics[paragraphs_List, surfaceIndex_Association, OptionsPattern[]] :=
   Module[{minLen = OptionValue["MinSurfaceLength"], lim = OptionValue["TopicLimit"],
           proseOnly = OptionValue["ProseOnly"], keys,
           relGraph = OptionValue["RelationGraph"], maxRel = OptionValue["MaxRelationTopics"],
-          minRelW = OptionValue["MinRelationWeight"],
+          minRelW = OptionValue["MinRelationWeight"], refLabel = OptionValue["RefLabel"],
           extractCand = OptionValue["ExtractCandidates"], candLim = OptionValue["CandidateLimit"]},
     keys = Select[Keys[surfaceIndex], StringLength[#] >= minLen &];
     Map[Function[para,
@@ -439,6 +454,16 @@ SourceVaultAssignParagraphTopics[paragraphs_List, surfaceIndex_Association, Opti
                 "AssignmentKind" -> "SeedMatched",
                 "Confidence" -> Min[1.0, 0.4 + 0.12*Max[StringLength /@ sfs]]|>], byRef],
             #Confidence &], UpTo[lim]];
+          (* owner disambiguation(軽量): 同一 canonical label の重複(別 owner/重複 entry)を 1 件に collapse、
+             AltRefs に他 ref を provenance として残す (RefLabel 指定時) *)
+          If[AssociationQ[refLabel] && Length[seedAssigns] > 1,
+            seedAssigns = ReverseSortBy[
+              Values@GroupBy[seedAssigns, Lookup[refLabel, #["TopicItemRef"], #["TopicItemRef"]] &,
+                Function[grp, Module[{sorted = ReverseSortBy[grp, #["Confidence"] &]},
+                  Append[First[sorted], <|
+                    "MatchedSurfaceForms" -> DeleteDuplicates[Flatten[#["MatchedSurfaceForms"] & /@ grp]],
+                    "AltRefs" -> Rest[#["TopicItemRef"] & /@ sorted]|>]]]],
+              #["Confidence"] &]];
           (* relation 1-hop 拡張: named topic から関連 topic を低 confidence で付与 (RelationGraph 指定時) *)
           relAssigns = If[AssociationQ[relGraph] && seedAssigns =!= {},
             Map[<|"TopicItemRef" -> #["To"], "MatchedSurfaceForms" -> {},
@@ -574,6 +599,88 @@ SourceVaultTopicEnrichment[text_String, surfaceIndex_Association, OptionsPattern
     "RelatedLabels" -> DeleteDuplicates[labelOf /@ relRefs],
     "TopicsFieldText" -> StringRiffle[
       DeleteDuplicates[labelOf /@ Join[seedRefs, If[inclRel, relRefs, {}]]], " "]|>];
+
+(* ------------------------------------------------------------
+   §6.3  KG local expansion: seed topic refs を weighted topic relation で
+   multi-hop BFS 展開する (node 上限/weight 閾値/cycle 安全, edges+trace 付き)。
+   ExpandTopicsByRelation(auto-tag 用 1-hop) と役割分担。EdgeKinds は当面 TopicRelation のみ
+   (SharedTag/SharedAuthor/Interaction は object infra 整備後に追加)。
+   ------------------------------------------------------------ *)
+
+Options[SourceVaultExpandSearchGraph] = {"RelationGraph" -> None, "MaxHops" -> 2, "MaxNodes" -> 50,
+  "MinEdgeWeight" -> 1, "MaxNeighborsPerNode" -> 10, "RefLabel" -> None,
+  "EdgeKinds" -> {"TopicRelation"}, "ReleaseContext" -> None};
+SourceVaultExpandSearchGraph[seeds_List, OptionsPattern[]] := Module[
+  {relGraph = OptionValue["RelationGraph"], maxHops = OptionValue["MaxHops"],
+   maxNodes = OptionValue["MaxNodes"], minW = OptionValue["MinEdgeWeight"],
+   maxNbr = OptionValue["MaxNeighborsPerNode"],
+   refLabel = OptionValue["RefLabel"], edgeKinds = OptionValue["EdgeKinds"],
+   rc = OptionValue["ReleaseContext"], labelOf, visited, frontier, expanded, edges, trace, capped},
+  labelOf = If[AssociationQ[refLabel], Function[r, Lookup[refLabel, r, r]], Identity];
+  If[! AssociationQ[relGraph] || ! MemberQ[edgeKinds, "TopicRelation"],
+    Return[<|"Seeds" -> seeds, "Expanded" -> {}, "Edges" -> {}, "NodeCount" -> 0, "EdgeCount" -> 0,
+      "Capped" -> False, "Trace" -> {<|"Step" -> "init",
+        "Note" -> "RelationGraph 無し or TopicRelation edge kind 無効"|>}|>]];
+  visited = Association[(# -> True) & /@ seeds];
+  frontier = DeleteDuplicates[seeds]; expanded = {}; edges = {}; trace = {}; capped = False;
+  Do[
+    Module[{next = {}},
+      Do[
+        Module[{nbrs = Take[ReverseSortBy[
+            Select[Lookup[relGraph, node, {}], #["Weight"] >= minW &], #["Weight"] &],
+            UpTo[maxNbr]]},
+          Do[
+            With[{to = nb["To"], w = nb["Weight"]},
+              AppendTo[edges, <|"From" -> node, "To" -> to, "Weight" -> w,
+                "Kind" -> "TopicRelation", "Direction" -> Lookup[nb, "Direction", Missing[]]|>];
+              If[! KeyExistsQ[visited, to],
+                If[Length[expanded] >= maxNodes, capped = True,
+                  visited[to] = True;
+                  AppendTo[expanded, <|"Ref" -> to, "Label" -> labelOf[to], "Hop" -> hop,
+                    "Weight" -> w, "ViaSeed" -> node|>];
+                  AppendTo[next, to]]]],
+            {nb, nbrs}]],
+        {node, frontier}];
+      AppendTo[trace, <|"Step" -> "hop", "Hop" -> hop, "FrontierIn" -> Length[frontier],
+        "NewNodes" -> Length[next], "TotalNodes" -> Length[expanded]|>];
+      frontier = next;
+      If[frontier === {} || capped, Break[]]],
+    {hop, 1, maxHops}];
+  If[capped, AppendTo[trace, <|"Step" -> "cap", "Note" -> "MaxNodes に到達", "MaxNodes" -> maxNodes|>]];
+  If[StringQ[rc], AppendTo[trace, <|"Step" -> "gate",
+    "Note" -> "topic node は metadata。release gate/revocation は対応 content chunk 検索時に適用",
+    "ReleaseContext" -> rc|>]];
+  <|"Seeds" -> seeds, "Expanded" -> expanded, "Edges" -> edges,
+    "NodeCount" -> Length[expanded], "EdgeCount" -> Length[edges], "Capped" -> capped,
+    "Trace" -> trace|>];
+
+(* ------------------------------------------------------------
+   §6.5.5  AutoExtracted 確認ワークフロー: owner が確認した候補を seed と同形の
+   新 topic entry にして dictionary に merge する (candidate→確認済 topic→検索可能)。
+   永続(ファイル/DB)は owner 選択で別途。auto-confirm は行わない。
+   ------------------------------------------------------------ *)
+
+Options[SourceVaultConfirmCandidateTopics] = {"ExistingDictionary" -> None,
+  "RefPrefix" -> "svtopic:extracted", "StartId" -> 1, "OwnerRef" -> None, "PrivacyLevel" -> 0.3};
+SourceVaultConfirmCandidateTopics[candidates_List, OptionsPattern[]] := Module[
+  {prefix = OptionValue["RefPrefix"], startId = OptionValue["StartId"],
+   owner = OptionValue["OwnerRef"], pl = OptionValue["PrivacyLevel"],
+   existing = OptionValue["ExistingDictionary"], entries, result},
+  entries = MapIndexed[Function[{c, i},
+    Module[{surf = If[AssociationQ[c], Lookup[c, "Surface", ToString[c]], ToString[c]],
+            kind = If[AssociationQ[c], Lookup[c, "ExtractionKind", Missing[]], Missing[]],
+            id = startId + i[[1]] - 1},
+      <|"TopicItemRef" -> prefix <> ":" <> ToString[id],
+        "Namespace" -> "extracted", "LocalId" -> id,
+        "CanonicalLabel" -> surf, "SurfaceForms" -> {surf},
+        "NamespaceKind" -> "Extracted", "OwnerRef" -> owner, "PrivacyLevel" -> pl,
+        "Provenance" -> <|"Source" -> "AutoExtracted", "ExtractionKind" -> kind|>|>]],
+    candidates];
+  result = <|"ConfirmedEntries" -> entries, "Count" -> Length[entries]|>;
+  If[AssociationQ[existing],
+    result = Append[result, "MergedDictionary" -> Append[existing,
+      "Entries" -> Join[Lookup[existing, "Entries", {}], entries]]]];
+  result];
 
 End[];
 
