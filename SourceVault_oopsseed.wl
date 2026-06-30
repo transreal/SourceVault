@@ -103,6 +103,21 @@ SourceVaultExpandTopicsByRelation::usage =
   "seed 自身は除外し To 単位で最大重みに dedup、重み降順。KG 局所探索(§6.3)・auto-tag 拡張に使う。" <>
   "オプション \"MaxNeighborsPerSeed\"(既定5), \"MinWeight\"(既定1), \"MaxTotal\"(既定20)。";
 
+SourceVaultExtractCandidateTopics::usage =
+  "SourceVaultExtractCandidateTopics[text] は seed に無い新トピック候補を本文から抽出する(語彙外対応)。" <>
+  "katakana 連続/漢字熟語/Latin トークン/「」『』 引用語を salient な候補として返す。" <>
+  "seed 既知語(KnownSurfaceIndex)・stopword・退化語は除外、出現数→長さで順位。" <>
+  "オプション \"KnownSurfaceIndex\"(既定 None), \"Limit\"(既定15), \"MinKatakana\"(3), \"MinKanji\"(2), \"MaxKanji\"(6), \"MinLatin\"(2)。" <>
+  "戻り値 {<|\"Surface\", \"ExtractionKind\", \"Count\"|>...}。auto-tag では AssignmentKind=\"AutoExtracted\"(要確認候補)。";
+
+SourceVaultTopicEnrichment::usage =
+  "SourceVaultTopicEnrichment[text, surfaceIndex] は本文に auto-tag を走らせ、検索 index に注入する " <>
+  "topic 情報(SeedMatched の正準ラベル＋RelationExpanded の関連ラベル)を返す。chunk の SearchFields[\"topics\"] に " <>
+  "TopicsFieldText を載せると「本文に出ない正準/関連ラベル」で検索ヒットするようになる(seed→検索の接続)。" <>
+  "オプション \"RefLabel\"(ref->canonical label の Association), \"RelationGraph\"(既定 None), \"IncludeRelated\"(既定 True), " <>
+  "\"MaxRelationTopics\"(6), \"MinRelationWeight\"(2)。" <>
+  "戻り値 <|\"TopicRefs\", \"TopicLabels\", \"RelatedRefs\", \"RelatedLabels\", \"TopicsFieldText\"|>。";
+
 Begin["`Private`"];
 
 (* ------------------------------------------------------------
@@ -402,17 +417,19 @@ SourceVaultParseMailParagraphs[body_String] := Module[{norm, blocks, paras},
   paras];
 
 Options[SourceVaultAssignParagraphTopics] = {"MinSurfaceLength" -> 2, "TopicLimit" -> 10, "ProseOnly" -> True,
-  "RelationGraph" -> None, "MaxRelationTopics" -> 8, "MinRelationWeight" -> 2};
+  "RelationGraph" -> None, "MaxRelationTopics" -> 8, "MinRelationWeight" -> 2,
+  "ExtractCandidates" -> False, "CandidateLimit" -> 8};
 SourceVaultAssignParagraphTopics[paragraphs_List, surfaceIndex_Association, OptionsPattern[]] :=
   Module[{minLen = OptionValue["MinSurfaceLength"], lim = OptionValue["TopicLimit"],
           proseOnly = OptionValue["ProseOnly"], keys,
           relGraph = OptionValue["RelationGraph"], maxRel = OptionValue["MaxRelationTopics"],
-          minRelW = OptionValue["MinRelationWeight"]},
+          minRelW = OptionValue["MinRelationWeight"],
+          extractCand = OptionValue["ExtractCandidates"], candLim = OptionValue["CandidateLimit"]},
     keys = Select[Keys[surfaceIndex], StringLength[#] >= minLen &];
     Map[Function[para,
       If[proseOnly && para["Kind"] =!= "Prose",
         <|"ParagraphIndex" -> para["Index"], "Kind" -> para["Kind"], "Assignments" -> {}|>,
-        Module[{nt = iSVNormalizeSearchText[para["Text"]], matches, byRef, seedAssigns, relAssigns},
+        Module[{nt = iSVNormalizeSearchText[para["Text"]], matches, byRef, seedAssigns, relAssigns, candAssigns},
           matches = Flatten@Map[Function[sf,
              If[iSVSurfaceFormPresentQ[nt, sf], (sf -> #) & /@ surfaceIndex[sf], {}]], keys];
           byRef = GroupBy[matches, Last -> First];  (* ref -> {surfaceForm...} *)
@@ -431,8 +448,16 @@ SourceVaultAssignParagraphTopics[paragraphs_List, surfaceIndex_Association, Opti
               SourceVaultExpandTopicsByRelation[#["TopicItemRef"] & /@ seedAssigns, relGraph,
                 "MaxTotal" -> maxRel, "MinWeight" -> minRelW]],
             {}];
+          (* AutoExtracted: seed 非該当の新トピック候補 (要確認; ExtractCandidates->True 時) *)
+          candAssigns = If[TrueQ[extractCand],
+            Map[<|"TopicItemRef" -> Missing["Unconfirmed"], "ProposedLabel" -> #["Surface"],
+                  "MatchedSurfaceForms" -> {#["Surface"]}, "ExtractionKind" -> #["ExtractionKind"],
+                  "AssignmentKind" -> "AutoExtracted", "Confidence" -> 0.2, "Status" -> "Candidate"|> &,
+              SourceVaultExtractCandidateTopics[para["Text"],
+                "KnownSurfaceIndex" -> surfaceIndex, "Limit" -> candLim]],
+            {}];
           <|"ParagraphIndex" -> para["Index"], "Kind" -> para["Kind"],
-            "Assignments" -> Join[seedAssigns, relAssigns]|>]]],
+            "Assignments" -> Join[seedAssigns, relAssigns, candAssigns]|>]]],
       paragraphs]];
 
 (* ------------------------------------------------------------
@@ -474,6 +499,81 @@ SourceVaultExpandTopicsByRelation[refs_List, relationGraph_Association, OptionsP
     expanded = Select[expanded, ! MemberQ[seeds, #["To"]] &];
     expanded = Map[First@ReverseSortBy[#, #["Weight"] &] &, Values@GroupBy[expanded, #["To"] &]];
     Take[ReverseSortBy[expanded, #["Weight"] &], UpTo[OptionValue["MaxTotal"]]]];
+
+(* ------------------------------------------------------------
+   §6.5.5  AutoExtracted: seed 非該当の新トピック候補抽出 (語彙外/post-2005 対応)
+   seed surface に無い salient な語 (katakana 連続/漢字熟語/Latin/引用) を候補化する。
+   auto-confirm は既定 off (候補のみ; owner 確認で正規 topic 化)。
+   ------------------------------------------------------------ *)
+
+$svStopwordsEn = {"the", "and", "for", "you", "this", "that", "with", "are", "was", "but",
+  "not", "from", "have", "has", "will", "can", "all", "one", "out", "com", "www",
+  "http", "https", "org", "net", "your", "our", "its", "etc", "via", "per",
+  "ki", "mi", "aga", "tom", "ara", "lki", "caitsith"};  (* 末尾は OOPS namespace ref 残骸 *)
+$svStopwordsJa = {"場合", "問題", "情報", "時間", "今回", "以下", "以上", "内容", "必要",
+  "可能", "関係", "状態", "方法", "結果", "現在", "場所", "部分", "全体", "一部",
+  "自分", "相手", "世界", "日本", "今日", "明日", "昨日", "意味", "理由", "感じ",
+  "記事", "事実", "立場", "コメント", "メール", "予定", "確認", "以前"};
+
+Options[SourceVaultExtractCandidateTopics] = {"KnownSurfaceIndex" -> None, "Limit" -> 15,
+  "MinKatakana" -> 3, "MinKanji" -> 2, "MaxKanji" -> 6, "MinLatin" -> 2};
+SourceVaultExtractCandidateTopics[text_String, OptionsPattern[]] := Module[
+  {minKata = OptionValue["MinKatakana"], minKanji = OptionValue["MinKanji"],
+   maxKanji = OptionValue["MaxKanji"], minLatin = OptionValue["MinLatin"],
+   known = OptionValue["KnownSurfaceIndex"], lim = OptionValue["Limit"],
+   kata, kanji, latin, quoted, raw, knownQ, stop, grouped},
+  kata = StringCases[text,
+    RegularExpression["[\\x{30A0}-\\x{30FF}\\x{FF66}-\\x{FF9F}]{" <> ToString[minKata] <> ",}"]];
+  kanji = StringCases[text,
+    RegularExpression["[\\x{4E00}-\\x{9FFF}]{" <> ToString[minKanji] <> "," <> ToString[maxKanji] <> "}"]];
+  latin = StringCases[text,
+    RegularExpression["[A-Za-z][A-Za-z0-9\\-]{" <> ToString[Max[minLatin - 1, 0]] <> ",}"]];
+  (* 引用語は短いコンパクト語のみ (句読点/空白/改行を含む節・全文は topic でない。長さ上限で節を排除) *)
+  quoted = StringCases[text, RegularExpression["[「『]([^」』。、，．\\s]{2,8})[」』]"] -> "$1"];
+  raw = Join[{#, "Katakana"} & /@ kata, {#, "Kanji"} & /@ kanji,
+    {#, "Latin"} & /@ latin, {#, "Quoted"} & /@ quoted];
+  knownQ = If[AssociationQ[known],
+    Function[s, KeyExistsQ[known, iSVNormalizeSearchText[s]]], Function[s, False]];
+  stop = Join[$svStopwordsEn, $svStopwordsJa];
+  grouped = GroupBy[
+    Select[raw, Function[pair,
+      With[{s = pair[[1]], n = iSVNormalizeSearchText[pair[[1]]]},
+        StringLength[n] >= 2 && ! iSVDegenerateStrQ[s] && ! knownQ[s] && ! MemberQ[stop, n]]]],
+    iSVNormalizeSearchText[#[[1]]] &];
+  Take[ReverseSortBy[
+    KeyValueMap[Function[{normKey, members},
+      <|"Surface" -> First[Commonest[#[[1]] & /@ members]],
+        "ExtractionKind" -> First[Commonest[#[[2]] & /@ members]],
+        "Count" -> Length[members]|>], grouped],
+    {#["Count"], StringLength[#["Surface"]]} &], UpTo[lim]]];
+
+(* ------------------------------------------------------------
+   §6.5.6  seed → 検索の接続: auto-tag の topic を検索 index へ注入する enrichment
+   chunk["SearchFields"]["topics"] に TopicsFieldText を載せると、本文に出ない
+   正準ラベル/関連トピックでの検索が auto-tag 経由でヒットする (プロジェクトの主張)。
+   ------------------------------------------------------------ *)
+
+Options[SourceVaultTopicEnrichment] = {"RefLabel" -> None, "RelationGraph" -> None,
+  "IncludeRelated" -> True, "MaxRelationTopics" -> 6, "MinRelationWeight" -> 2};
+SourceVaultTopicEnrichment[text_String, surfaceIndex_Association, OptionsPattern[]] := Module[
+  {refLabel = OptionValue["RefLabel"], relGraph = OptionValue["RelationGraph"],
+   inclRel = TrueQ[OptionValue["IncludeRelated"]], assigns, seed, rel, labelOf, seedRefs, relRefs},
+  labelOf = If[AssociationQ[refLabel], Function[r, Lookup[refLabel, r, r]], Identity];
+  assigns = First[SourceVaultAssignParagraphTopics[
+      {<|"Index" -> 1, "Kind" -> "Prose", "Text" -> text|>}, surfaceIndex,
+      "ProseOnly" -> False, "RelationGraph" -> If[inclRel, relGraph, None],
+      "MaxRelationTopics" -> OptionValue["MaxRelationTopics"],
+      "MinRelationWeight" -> OptionValue["MinRelationWeight"]]]["Assignments"];
+  seed = Select[assigns, #["AssignmentKind"] === "SeedMatched" &];
+  rel = Select[assigns, #["AssignmentKind"] === "RelationExpanded" &];
+  seedRefs = #["TopicItemRef"] & /@ seed;
+  relRefs = #["TopicItemRef"] & /@ rel;
+  <|"TopicRefs" -> seedRefs,
+    "TopicLabels" -> DeleteDuplicates[labelOf /@ seedRefs],
+    "RelatedRefs" -> relRefs,
+    "RelatedLabels" -> DeleteDuplicates[labelOf /@ relRefs],
+    "TopicsFieldText" -> StringRiffle[
+      DeleteDuplicates[labelOf /@ Join[seedRefs, If[inclRel, relRefs, {}]]], " "]|>];
 
 End[];
 

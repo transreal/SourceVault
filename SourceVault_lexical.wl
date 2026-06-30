@@ -113,9 +113,11 @@ iSVFieldText[v_String] := v;
 iSVFieldText[v_List] := StringRiffle[Flatten[{v}] /. x_ :> ToString[x], " "];
 iSVFieldText[v_] := ToString[v];
 
+(* "topics" は auto-tag が注入する topic ラベル (canonical/related)。これを検索対象に含めることで
+   「本文に出ない正準/関連ラベル」での検索が auto-tag 経由でヒットする (プロジェクトの主張)。 *)
 iSVChunkText[chunk_Association] := Module[{sf = Lookup[chunk, "SearchFields", Missing[]]},
   If[AssociationQ[sf],
-    StringRiffle[iSVFieldText /@ DeleteMissing[Lookup[sf, {"title", "summary", "body", "tags", "author"}]], " "],
+    StringRiffle[iSVFieldText /@ DeleteMissing[Lookup[sf, {"title", "summary", "body", "tags", "topics", "author"}]], " "],
     iSVFieldText[Lookup[chunk, "Text", Lookup[chunk, "NormalizedText", ""]]]]];
 
 (* ------------------------------------------------------------

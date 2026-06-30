@@ -58,8 +58,9 @@ mail 本文を段落に分割する（空行区切り、引用/署名/footer を
 ### SourceVaultAssignParagraphTopics[paragraphs, surfaceIndex, opts] → {Association...}
 各 prose 段落に seed 辞書の surface form OR-match で topic item を自動付与する（auto-tag）。`surfaceIndex` は `SourceVaultBuildSurfaceIndex[dict]`。
 `"RelationGraph"`（`SourceVaultBuildOOPSRelationGraph` の結果）を渡すと、SeedMatched の named topic から 1-hop の関連 topic を低 confidence の `AssignmentKind = "RelationExpanded"`（`ViaSeed` / `RelationWeight` 付き）として追加する。SeedMatched（conf ≤ 1.0）が常に RelationExpanded（conf = `Min[0.45, 0.2 + 0.03·Weight]`）より上位。`RelationGraph` 無しなら SeedMatched のみ（後方互換）。
-Options: `"MinSurfaceLength" -> 2`, `"TopicLimit" -> 10`, `"ProseOnly" -> True`, `"RelationGraph" -> None`, `"MaxRelationTopics" -> 8`, `"MinRelationWeight" -> 2`
-戻り値: `{<|"ParagraphIndex", "Kind", "Assignments" -> {<|"TopicItemRef", "MatchedSurfaceForms", "AssignmentKind" -> "SeedMatched"|"RelationExpanded", "Confidence", ("ViaSeed", "RelationWeight")|>...}|>...}`
+`"ExtractCandidates" -> True` で seed 非該当の新トピック候補（`SourceVaultExtractCandidateTopics`）を `AssignmentKind = "AutoExtracted"`（`TopicItemRef -> Missing["Unconfirmed"]`, `ProposedLabel`, `Status -> "Candidate"`, conf 0.2）として追加する（auto-confirm off、owner 確認で正規 topic 化）。
+Options: `"MinSurfaceLength" -> 2`, `"TopicLimit" -> 10`, `"ProseOnly" -> True`, `"RelationGraph" -> None`, `"MaxRelationTopics" -> 8`, `"MinRelationWeight" -> 2`, `"ExtractCandidates" -> False`, `"CandidateLimit" -> 8`
+戻り値: `{<|"ParagraphIndex", "Kind", "Assignments" -> {<|"TopicItemRef", "MatchedSurfaceForms", "AssignmentKind" -> "SeedMatched"|"RelationExpanded"|"AutoExtracted", "Confidence", ("ViaSeed", "RelationWeight", "ProposedLabel", "ExtractionKind", "Status")|>...}|>...}`
 ノイズ対策（解消済み）: 短い Latin surface form の語中誤一致（例「tar」が「s**tar**ship」）は `iSVSurfaceFormPresentQ` の単語境界一致で解消（api_lexical 参照）。catch-all/退化 topic（ラベル「・」で数百 form を持つ `anonymous:0` 等）も `SourceVaultBuildSurfaceIndex` 構築時に除外済み。残: 同名 topic（例 ki195/e203 とも「映画」）は両方とも正当な topic ゆえ両マッチを許容（owner による後段 disambiguate は将来課題）。
 
 ## relation（重み付き有向）取り込み・1-hop 拡張
@@ -78,6 +79,26 @@ Options: `"MinSurfaceLength" -> 2`, `"TopicLimit" -> 10`, `"ProseOnly" -> True`,
 seed topic 集合（`refs`）を重み付き 1-hop 近傍へ拡張する。seed 自身は除外、`To` 単位で最大重みに dedup、重み降順。
 Options: `"MaxNeighborsPerSeed" -> 5`, `"MinWeight" -> 1`, `"MaxTotal" -> 20`
 戻り値: `{<|"To", "Weight", "Direction", "ViaSeed"|>...}`
+
+## AutoExtracted（seed 非該当の新トピック候補）
+
+seed（1992–2005 語彙）に無い語（post-2005 や新しい固有名詞）に対し、本文から salient な候補を抽出して新トピックの種にする。auto-confirm は既定 off で、候補は owner 確認を経て正規 topic 化する想定。
+
+### SourceVaultExtractCandidateTopics[text, opts] → {Association...}
+本文から新トピック候補を抽出する。katakana 連続（≥3）/漢字熟語（2–6）/Latin トークン（≥2）/「」『』 内の短語（≤8、句読点・空白・改行を含まない）を拾い、seed 既知語（`"KnownSurfaceIndex"` の正規化 surface に一致）・stopword（汎用 En/Ja 語＋OOPS namespace 残骸）・退化語を除外、正規化 surface で group して出現数→長さ順に返す。
+Options: `"KnownSurfaceIndex" -> None`, `"Limit" -> 15`, `"MinKatakana" -> 3`, `"MinKanji" -> 2`, `"MaxKanji" -> 6`, `"MinLatin" -> 2`
+戻り値: `{<|"Surface", "ExtractionKind" -> "Katakana"|"Kanji"|"Latin"|"Quoted", "Count"|>...}`
+既知の限界: 辞書なし抽出ゆえ漢字連続が併合しうる（例「結局億単位」=結局+億単位）。正攻法は形態素分割（hybrid 実測後に保留）。候補は確認ゲート前提のため許容。
+
+## seed → 検索の接続（topic enrichment）
+
+auto-tag した topic を検索 index に注入し、「本文に literal で出ない正準/関連トピック」でも文書がヒットするようにする。これがプロジェクトの主張（一般メールを seed 形式に変換して検索精度を上げる）の実体。
+
+### SourceVaultTopicEnrichment[text, surfaceIndex, opts] → Association
+`text` に auto-tag（`SourceVaultAssignParagraphTopics`、`ProseOnly -> False`）を走らせ、検索 index へ注入する topic 情報を返す。`"RefLabel"`（ref→canonical label の Association）で label を解決、`"RelationGraph"` を渡すと RelationExpanded の関連トピックも含める。
+Options: `"RefLabel" -> None`, `"RelationGraph" -> None`, `"IncludeRelated" -> True`, `"MaxRelationTopics" -> 6`, `"MinRelationWeight" -> 2`
+戻り値: `<|"TopicRefs", "TopicLabels"（SeedMatched 正準）, "RelatedRefs", "RelatedLabels"（RelationExpanded）, "TopicsFieldText"|>`
+使い方: chunk の `SearchFields["topics"]` に `TopicsFieldText` を載せて `SourceVaultBuildProjectionIndex` で build する（`iSVChunkText` が `topics` を検索対象に含む）。実証: mail の本文に無い関連トピック（例「Independence Day」）で、enrichment 有りの index だけがその mail を検索できる。
 
 ## 利用例
 

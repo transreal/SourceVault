@@ -657,7 +657,9 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultParseOOPSMailFile[path]` | UTF-8 mbox を parse（X-Ml-Counter で gold join）。 |
 | `SourceVaultStripOOPSMarkers[text]` | topic ID ref / ◎○・ / brace を除去（label は残す）。 |
 | `SourceVaultParseMailParagraphs[body]` | 本文を段落（Prose/Quote/Signature/Footer）に分割。 |
-| `SourceVaultAssignParagraphTopics[paras, surfaceIndex, opts]` | 各 prose 段落に seed 辞書 OR-match で topic 自動付与（auto-tag）。`"RelationGraph"` で named topic の 1-hop 関連 topic を `RelationExpanded` として追加。 |
+| `SourceVaultAssignParagraphTopics[paras, surfaceIndex, opts]` | 各 prose 段落に seed 辞書 OR-match で topic 自動付与（auto-tag）。`"RelationGraph"` で `RelationExpanded`、`"ExtractCandidates"` で seed 非該当の `AutoExtracted` 候補を追加。 |
+| `SourceVaultExtractCandidateTopics[text, opts]` | seed 非該当の新トピック候補（katakana/漢字熟語/Latin/引用語）を抽出（語彙外対応、要 owner 確認）。 |
+| `SourceVaultTopicEnrichment[text, surfaceIndex, opts]` | auto-tag の topic を検索 index へ注入する `topics` フィールド文字列を生成（seed→検索の接続。本文に無い関連/正準トピックでヒット可に）。 |
 | `SourceVaultImportOOPSItemRelations[path, opts]` | `item-relation(-up).index` を S式 parse→重み付き有向 relation。 |
 | `SourceVaultBuildOOPSRelationGraph[tableDir]` | Down+Up を結合した relation graph（約 2875 ノード）。 |
 | `SourceVaultExpandTopicsByRelation[refs, graph, opts]` | seed topic を重み付き 1-hop 近傍へ拡張（KG 局所探索・auto-tag 拡張）。 |

@@ -32,7 +32,7 @@ seed entity dictionary（`SourceVault_oopsseed` の `SourceVaultBuildSeedEntityD
 ## LexicalStats / BM25
 
 ### SourceVaultBuildLexicalStats[chunks, opts] → Association
-chunk list から BM25 用 LexicalStats を作る純関数。各 chunk は `"ChunkId"` と `"SearchFields"`（`<|"title","summary","body","tags","author"|>`）または `"Text"` を持つ Association。
+chunk list から BM25 用 LexicalStats を作る純関数。各 chunk は `"ChunkId"` と `"SearchFields"`（`<|"title","summary","body","tags","topics","author"|>`）または `"Text"` を持つ Association。`"topics"` フィールドは auto-tag が注入する topic ラベル（`SourceVault_oopsseed` の `SourceVaultTopicEnrichment`）で、これを検索対象に含めると「本文に出ない正準/関連トピック」でヒットする。
 Options: `"EntityDictionary" -> None`（seed entity dictionary を渡すと `entity` stream を追加し、surface form OR-match を有効化。§4.1.1）, `"NormalizationProfile" -> "ja-nfkc-v1"`, `"TokenizerProfile" -> "ja-ngram-v1"`
 戻り値: `<|"ObjectClass" -> "SourceVaultLexicalStats", "N", "Streams" -> {"token","unigram","bigram"(,"entity")}, "DF", "AvgDL", "Postings"（転置 index: term -> {ChunkId...}）, "ChunkTerms"（per-chunk term counts / NormText / DL）, "SurfaceIndex"|>`
 
