@@ -84,7 +84,24 @@ SourceVaultAssignParagraphTopics::usage =
   "SourceVaultAssignParagraphTopics[paragraphs, surfaceIndex] は各 prose 段落に対し、seed 辞書の " <>
   "surface form OR-match で topic item を自動割当する (auto-tag)。各割当は TopicItemRef / MatchedSurfaceForms / " <>
   "Confidence / AssignmentKind=\"SeedMatched\"。surfaceIndex は SourceVaultBuildSurfaceIndex[dict]。" <>
-  "オプション \"MinSurfaceLength\"(既定2), \"TopicLimit\"(既定10), \"ProseOnly\"(既定 True)。";
+  "\"RelationGraph\" を渡すと named topic から 1-hop の関連 topic を低 confidence の AssignmentKind=\"RelationExpanded\"" <>
+  "(ViaSeed/RelationWeight 付き) として追加する。" <>
+  "オプション \"MinSurfaceLength\"(既定2), \"TopicLimit\"(既定10), \"ProseOnly\"(既定 True), " <>
+  "\"RelationGraph\"(既定 None), \"MaxRelationTopics\"(既定8), \"MinRelationWeight\"(既定2)。";
+
+SourceVaultImportOOPSItemRelations::usage =
+  "SourceVaultImportOOPSItemRelations[path, opts] は item-relation.index / item-relation-up.index を読み、" <>
+  "<|TopicItemRef -> {<|\"To\", \"Weight\", \"Direction\"|>...}|> の重み付き有向 relation を返す。" <>
+  "オプション \"Direction\"(既定 \"Down\")。";
+
+SourceVaultBuildOOPSRelationGraph::usage =
+  "SourceVaultBuildOOPSRelationGraph[tableDir] は item-relation.index(Down)＋item-relation-up.index(Up) を" <>
+  "結合した relation graph <|TopicItemRef -> {neighbor...}|> を返す。";
+
+SourceVaultExpandTopicsByRelation::usage =
+  "SourceVaultExpandTopicsByRelation[refs, relationGraph] は seed topic 集合を重み付き 1-hop 近傍へ拡張する。" <>
+  "seed 自身は除外し To 単位で最大重みに dedup、重み降順。KG 局所探索(§6.3)・auto-tag 拡張に使う。" <>
+  "オプション \"MaxNeighborsPerSeed\"(既定5), \"MinWeight\"(既定1), \"MaxTotal\"(既定20)。";
 
 Begin["`Private`"];
 
@@ -384,25 +401,79 @@ SourceVaultParseMailParagraphs[body_String] := Module[{norm, blocks, paras},
   paras = MapIndexed[<|"Index" -> #2[[1]], "Kind" -> iSVParaKind[#1], "Text" -> #1|> &, blocks];
   paras];
 
-Options[SourceVaultAssignParagraphTopics] = {"MinSurfaceLength" -> 2, "TopicLimit" -> 10, "ProseOnly" -> True};
+Options[SourceVaultAssignParagraphTopics] = {"MinSurfaceLength" -> 2, "TopicLimit" -> 10, "ProseOnly" -> True,
+  "RelationGraph" -> None, "MaxRelationTopics" -> 8, "MinRelationWeight" -> 2};
 SourceVaultAssignParagraphTopics[paragraphs_List, surfaceIndex_Association, OptionsPattern[]] :=
   Module[{minLen = OptionValue["MinSurfaceLength"], lim = OptionValue["TopicLimit"],
-          proseOnly = OptionValue["ProseOnly"], keys},
+          proseOnly = OptionValue["ProseOnly"], keys,
+          relGraph = OptionValue["RelationGraph"], maxRel = OptionValue["MaxRelationTopics"],
+          minRelW = OptionValue["MinRelationWeight"]},
     keys = Select[Keys[surfaceIndex], StringLength[#] >= minLen &];
     Map[Function[para,
       If[proseOnly && para["Kind"] =!= "Prose",
         <|"ParagraphIndex" -> para["Index"], "Kind" -> para["Kind"], "Assignments" -> {}|>,
-        Module[{nt = iSVNormalizeSearchText[para["Text"]], matches, byRef, assigns},
+        Module[{nt = iSVNormalizeSearchText[para["Text"]], matches, byRef, seedAssigns, relAssigns},
           matches = Flatten@Map[Function[sf,
-             If[StringContainsQ[nt, sf], (sf -> #) & /@ surfaceIndex[sf], {}]], keys];
+             If[iSVSurfaceFormPresentQ[nt, sf], (sf -> #) & /@ surfaceIndex[sf], {}]], keys];
           byRef = GroupBy[matches, Last -> First];  (* ref -> {surfaceForm...} *)
-          assigns = KeyValueMap[Function[{ref, sfs},
-            <|"TopicItemRef" -> ref, "MatchedSurfaceForms" -> DeleteDuplicates[sfs],
-              "AssignmentKind" -> "SeedMatched",
-              "Confidence" -> Min[1.0, 0.4 + 0.12*Max[StringLength /@ sfs]]|>], byRef];
+          seedAssigns = Take[ReverseSortBy[
+            KeyValueMap[Function[{ref, sfs},
+              <|"TopicItemRef" -> ref, "MatchedSurfaceForms" -> DeleteDuplicates[sfs],
+                "AssignmentKind" -> "SeedMatched",
+                "Confidence" -> Min[1.0, 0.4 + 0.12*Max[StringLength /@ sfs]]|>], byRef],
+            #Confidence &], UpTo[lim]];
+          (* relation 1-hop 拡張: named topic から関連 topic を低 confidence で付与 (RelationGraph 指定時) *)
+          relAssigns = If[AssociationQ[relGraph] && seedAssigns =!= {},
+            Map[<|"TopicItemRef" -> #["To"], "MatchedSurfaceForms" -> {},
+                  "AssignmentKind" -> "RelationExpanded",
+                  "Confidence" -> Min[0.45, 0.2 + 0.03*#["Weight"]],
+                  "ViaSeed" -> #["ViaSeed"], "RelationWeight" -> #["Weight"]|> &,
+              SourceVaultExpandTopicsByRelation[#["TopicItemRef"] & /@ seedAssigns, relGraph,
+                "MaxTotal" -> maxRel, "MinWeight" -> minRelW]],
+            {}];
           <|"ParagraphIndex" -> para["Index"], "Kind" -> para["Kind"],
-            "Assignments" -> Take[ReverseSortBy[assigns, #Confidence &], UpTo[lim]]|>]]],
+            "Assignments" -> Join[seedAssigns, relAssigns]|>]]],
       paragraphs]];
+
+(* ------------------------------------------------------------
+   §6.5.4 / §6.3  weighted directed relation 取り込み ＋ 1-hop 拡張
+   ------------------------------------------------------------ *)
+
+Options[SourceVaultImportOOPSItemRelations] = {"Direction" -> "Down"};
+SourceVaultImportOOPSItemRelations[path_String, OptionsPattern[]] := Module[{s, exprs, rules, dir},
+  If[! FileExistsQ[path], Return[Failure["FileNotFound", <|"MessageTemplate" -> path|>]]];
+  dir = OptionValue["Direction"];
+  s = iSVDecodeLegacyJapaneseFile[path, "ShiftJIS"];
+  exprs = iSVReadAllSExpr[s];
+  rules = Reap[Module[{i = 1, len = Length[exprs], key, val},
+      While[i + 1 <= len,
+        key = exprs[[i]]; val = exprs[[i + 1]];
+        If[MatchQ[key, {SVSym[_String], _Integer}] && ListQ[val],
+          Sow[("svtopic:oops:" <> key[[1, 1]] <> ":" <> ToString[key[[2]]]) ->
+            Cases[val, {{SVSym[ns_String], lid_Integer}, w_Integer} :>
+              <|"To" -> "svtopic:oops:" <> ns <> ":" <> ToString[lid], "Weight" -> w, "Direction" -> dir|>]]];
+        i += 2]]][[2]];
+  rules = If[rules === {}, {}, First[rules]];
+  <|"Relations" -> Association[rules], "Count" -> Length[rules], "SourcePath" -> path, "Direction" -> dir|>];
+
+SourceVaultBuildOOPSRelationGraph[tableDir_String, opts___] := Module[{down, up, merged},
+  down = SourceVaultImportOOPSItemRelations[FileNameJoin[{tableDir, "item-relation.index"}], "Direction" -> "Down"];
+  up = SourceVaultImportOOPSItemRelations[FileNameJoin[{tableDir, "item-relation-up.index"}], "Direction" -> "Up"];
+  If[FailureQ[down], Return[down]];
+  merged = Merge[{Lookup[down, "Relations", <||>],
+     If[FailureQ[up], <||>, Lookup[up, "Relations", <||>]]}, Apply[Join]];
+  <|"RelationGraph" -> merged, "Count" -> Length[merged], "TableDir" -> tableDir|>];
+
+Options[SourceVaultExpandTopicsByRelation] = {"MaxNeighborsPerSeed" -> 5, "MinWeight" -> 1, "MaxTotal" -> 20};
+SourceVaultExpandTopicsByRelation[refs_List, relationGraph_Association, OptionsPattern[]] :=
+  Module[{seeds = Union[refs], expanded},
+    expanded = Flatten@Map[Function[ref,
+      Module[{nbrs = Select[Lookup[relationGraph, ref, {}], #["Weight"] >= OptionValue["MinWeight"] &]},
+        Map[Append[#, "ViaSeed" -> ref] &,
+          Take[ReverseSortBy[nbrs, #["Weight"] &], UpTo[OptionValue["MaxNeighborsPerSeed"]]]]]], seeds];
+    expanded = Select[expanded, ! MemberQ[seeds, #["To"]] &];
+    expanded = Map[First@ReverseSortBy[#, #["Weight"] &] &, Values@GroupBy[expanded, #["To"] &]];
+    Take[ReverseSortBy[expanded, #["Weight"] &], UpTo[OptionValue["MaxTotal"]]]];
 
 End[];
 

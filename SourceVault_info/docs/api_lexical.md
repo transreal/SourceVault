@@ -11,7 +11,7 @@
 - 既存 `KeywordBigram` / `iKeywordScore` は無変更で温存。本層は `KeywordBM25V1` 用の純関数。
 - lexical 先行: 正規化 → token / unigram / bigram → BM25。形態素解析は v1 非依存（後続 profile）。bigram を OOV 基盤として残す（CJK-IR）。
 - スコアは生 Boole でなく BM25（IDF + 文書長正規化 + TF 飽和）。
-- entity OR-match: query「Bruce Sterling」と doc「ブルース・スターリング」が、双方に entity term `entity:<topicRef>` が立つことで一致する（表記非一致/OOV 回復）。
+- entity OR-match: query「Bruce Sterling」と doc「ブルース・スターリング」が、双方に entity term `entity:<topicRef>` が立つことで一致する（表記非一致/OOV 回復）。surface form の照合は **Latin(ASCII)語は単語境界 `\b` 一致、CJK 含む形は substring**（`iSVSurfaceFormPresentQ`）。これで短い Latin form の語中誤一致（例「tar」が「s**tar**ship」）を防ぎつつ、CJK の語境界なし照合（doc「ブルース・スターリング」に "ブルース・スターリング" が substring 一致）を保つ。
 
 ## 正規化・トークナイズ
 
@@ -25,7 +25,9 @@
 ## Seed entity 辞書
 
 ### SourceVaultBuildSurfaceIndex[dict] → Association
-seed entity dictionary（`SourceVault_oopsseed` の `SourceVaultBuildSeedEntityDictionary` 等が作る `<|"Entries" -> {<|"TopicItemRef", "SurfaceForms"|>...}|>`）から `<|正規化 surface form -> {topicRef...}|>` を作る。同じ surface form が複数 owner namespace に対応する場合は全 ref を保持（owner-scoped union）。長さ 2 未満の form は除外。
+seed entity dictionary（`SourceVault_oopsseed` の `SourceVaultBuildSeedEntityDictionary` 等が作る `<|"Entries" -> {<|"TopicItemRef", "CanonicalLabel", "SurfaceForms"|>...}|>`）から `<|正規化 surface form -> {topicRef...}|>` を作る。同じ surface form が複数 owner namespace に対応する場合は全 ref を保持（owner-scoped union）。長さ 2 未満の form は除外。
+
+**catch-all / 退化 topic の除外**: 記号のみの `CanonicalLabel`（正規化後が空、または `\p{P}\p{S}\p{Z}・◎○●` 等のみ＝`iSVDegenerateStrQ`）や、surface form 数が `$svMaxSurfaceFormsPerTopic`（既定 30）を超える「何にでもマッチする」catch-all エントリ（例: ラベル「・」で数百の surface form を持つ `anonymous:0`）は非トピックとして index から除外する。記号のみの surface form も個別に落とす。これで auto-tag と BM25 entity OR-match の双方からノイズ源が消える。
 
 ## LexicalStats / BM25
 

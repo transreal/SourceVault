@@ -124,20 +124,45 @@ iSVChunkText[chunk_Association] := Module[{sf = Lookup[chunk, "SearchFields", Mi
    entity:<ref> が立つので一致する (表記非一致/OOV 回復)。
    ------------------------------------------------------------ *)
 
+(* 退化文字列か: 正規化後が空 or 記号/句読点/空白のみ (・◎○● 等の構造マーカー含む)。
+   非トピック (label "・") や無意味 form のノイズ源を弾く。 *)
+iSVDegenerateStrQ[s_String] := With[{n = iSVNormalizeSearchText[s]},
+  StringLength[n] == 0 ||
+    StringMatchQ[n, RegularExpression["[\\p{P}\\p{S}\\p{Z}\\s・◎○●▽▼〇]+"]]];
+$svMaxSurfaceFormsPerTopic = 30;
+
+(* surface form -> topic ref。catch-all/退化 topic を除外する:
+   - 記号のみ CanonicalLabel (例 "・" の anonymous:0) は非トピック
+   - surface form 数が閾値超 (例 anonymous:0 は数百) は catch-all ゴミ
+   - 記号のみ surface form も個別に除外
+   これで auto-tag と BM25 entity OR-match の両方のノイズが消える。 *)
 iSVBuildSurfaceIndex[dict_Association] := Module[{entries = Lookup[dict, "Entries", {}]},
+  entries = Select[entries,
+    Length[Lookup[#, "SurfaceForms", {}]] <= $svMaxSurfaceFormsPerTopic &&
+      ! iSVDegenerateStrQ[Lookup[#, "CanonicalLabel", ""]] &];
   Merge[
     Flatten@Map[Function[ent,
       With[{ref = ent["TopicItemRef"]},
         (iSVNormalizeSearchText[#] -> ref) & /@
-          Select[Lookup[ent, "SurfaceForms", {}], StringLength[iSVNormalizeSearchText[#]] >= 2 &]]],
+          Select[Lookup[ent, "SurfaceForms", {}],
+            StringLength[iSVNormalizeSearchText[#]] >= 2 && ! iSVDegenerateStrQ[#] &]]],
       entries],
     DeleteDuplicates]];
 SourceVaultBuildSurfaceIndex[dict_Association] := iSVBuildSurfaceIndex[dict];
 
-(* normText に substring 出現する surface form の entity term (OR-match) *)
+(* surface form が text に出現するか。Latin 語(ASCII)は単語境界 \b 一致、CJK 含む形は substring。
+   これで短い Latin form の語中誤一致(例 "tar" が "starship" に当たる)を防ぐ。CJK は語境界が無いので substring。 *)
+iSVRegexEscape[s_String] := StringReplace[s, x : RegularExpression["[\\\\.^$*+?()\\[\\]{}|]"] :> "\\" <> x];
+iSVLatinFormQ[s_String] := StringMatchQ[s, RegularExpression["[A-Za-z0-9][A-Za-z0-9 .&'\\-]*"]];
+iSVSurfaceFormPresentQ[normText_String, sf_String] :=
+  If[iSVLatinFormQ[sf],
+    StringContainsQ[normText, RegularExpression["\\b" <> iSVRegexEscape[sf] <> "\\b"]],
+    StringContainsQ[normText, sf]];
+
+(* normText に出現する surface form の entity term (OR-match)。Latin は単語境界一致。 *)
 iSVEntityTerms[normText_String, surfaceIndex_Association] := Module[{refs},
   refs = DeleteDuplicates@Flatten@Map[
-     If[StringContainsQ[normText, #], surfaceIndex[#], {}] &, Keys[surfaceIndex]];
+     If[iSVSurfaceFormPresentQ[normText, #], surfaceIndex[#], {}] &, Keys[surfaceIndex]];
   ("entity:" <> #) & /@ refs];
 iSVEntityTerms[_, _] := {};
 
