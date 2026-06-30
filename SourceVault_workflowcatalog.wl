@@ -593,8 +593,21 @@ iSVWFShowInfo[slug_String] := Module[{rec},
    一覧 UI (手動更新・FE フリーズ回避: UpdateInterval を使わず TrackedSymbols のみ)
    ============================================================ *)
 
-iSVWFPanelRows[query_String, archiveQ_:False] := Module[{cat, q},
+(* 一覧行の算出。SourceVaultWorkflows[] は Dropbox 上のフォルダ+manifest 走査で
+   重く、Dropbox 同期中などは数秒〜十数秒かかり得る。同期的に評価すると FE の
+   Dynamic 評価予算を超えて中断 ($Aborted) し、一覧が表示されなくなる。よって
+   (1) 走査全体を TimeConstrained で上限付けし、(2) 例外・中断時は必ず空リストを
+   返すよう Quiet@Check で包む。返り値は常に「Association のリスト」を保証する。 *)
+iSVWFPanelRows[query_String, archiveQ_:False] :=
+  Module[{r},
+    r = Quiet @ CheckAbort[
+      Check[TimeConstrained[iSVWFPanelRowsCompute[query, archiveQ], 60, {}], {}],
+      {}];
+    If[ListQ[r], r, {}]];
+
+iSVWFPanelRowsCompute[query_String, archiveQ_:False] := Module[{cat, q},
   cat = iSVWFCatalogList[];
+  If[! ListQ[cat], cat = {}];
   (* archiveQ=True ならアーカイブのみ、False なら archive を除く *)
   cat = If[TrueQ[archiveQ],
     Select[cat, Lookup[#, "Stage", ""] === "archive" &],
@@ -729,8 +742,13 @@ iSVWFOpenArchivePanel[] := CreateDocument[
 
 (* 一覧パネル本体。archiveQ=False: 通常一覧 (archive を除く)、
    True: アーカイブ一覧 (切替列は「testingへ戻す」)。 *)
-iSVWFMakePanel[archiveQ_] := DynamicModule[{rows, query = ""},
-  rows = iSVWFPanelRows["", archiveQ];
+(* 行は DynamicModule の外 = SourceVaultWorkflowPanel[] の「通常評価」(パレット
+   クリックや手動評価) の段階で先に算出して埋め込む。DynamicModule 本体での評価は
+   FE の評価予算 abort の対象になり $Aborted を招くため、ここでは評価させない。
+   保存ノートを開き直した場合は rows にリテラルのリストが焼かれているのでそのまま
+   表示され、万一 rows がリストでなければ Initialization が SessionSubmit で再取得する。 *)
+iSVWFMakePanel[archiveQ_] := With[{initRows = iSVWFPanelRows["", archiveQ]},
+  DynamicModule[{rows = initRows, query = ""},
   Panel[Column[{
     Style[If[TrueQ[archiveQ],
         "SourceVault ワークフロー (アーカイブ)",
@@ -739,9 +757,13 @@ iSVWFMakePanel[archiveQ_] := DynamicModule[{rows, query = ""},
       InputField[Dynamic[query], String, FieldHint -> "キーワード/サマリー検索",
         ImageSize -> 320],
       Spacer[6],
-      Button["検索", rows = iSVWFPanelRows[query, archiveQ]],
+      Button["検索",
+        (rows = Automatic;
+         With[{q = query}, SessionSubmit[rows = iSVWFPanelRows[q, archiveQ]]])],
       Spacer[4],
-      Button["全件", query = ""; rows = iSVWFPanelRows["", archiveQ]],
+      Button["全件",
+        (query = ""; rows = Automatic;
+         SessionSubmit[rows = iSVWFPanelRows["", archiveQ]])],
       (* 通常一覧の右端のみ: アーカイブ一覧を開くボタン *)
       If[TrueQ[archiveQ], Nothing, Spacer[20]],
       If[TrueQ[archiveQ], Nothing,
@@ -749,10 +771,16 @@ iSVWFMakePanel[archiveQ_] := DynamicModule[{rows, query = ""},
           Button["アーカイブ", iSVWFOpenArchivePanel[], Method -> "Queued"],
           "アーカイブしたワークフローの一覧を開く"]]}],
     Dynamic[
-      If[rows === {},
+      Which[
+       (* 初期化中 (Dropbox 走査が背景で進行中): 中断せず読み込み中表示 *)
+       rows === Automatic,
+        Row[{ProgressIndicator[Appearance -> "Percolate"], Spacer[8],
+          Style["読み込み中…", Gray]}],
+       ! ListQ[rows] || rows === {},
         Style[If[TrueQ[archiveQ],
             "(アーカイブされたワークフローはありません)",
             "(該当ワークフローなし。仕様実装で生成すると testing に入ります)"], Gray],
+       True,
         Grid[
           Prepend[
             Function[c,
@@ -802,17 +830,32 @@ iSVWFMakePanel[archiveQ_] := DynamicModule[{rows, query = ""},
                    Tooltip[
                      Style[ToString[ec], FontSize -> 12,
                        If[TrueQ[ec > 0], RGBColor[0.7, 0.15, 0.15], GrayLevel[0.4]]],
-                     "起動がエラーになった回数"]]}]] /@ rows,
+                     "起動がエラーになった回数"]],
+                 (* 自動起動 (weak: SourceVault_autotrigger ロード時のみ。
+                    その slug に対する trigger があれば 自動トグル/優先度/エラー を表示) *)
+                 If[Length[Names["SourceVault`SourceVaultAutoTriggerStatusCell"]] > 0,
+                   Quiet @ Check[
+                     SourceVault`SourceVaultAutoTriggerStatusCell["Workflow", slug],
+                     Style["\:2014", Gray]],
+                   Style["\:2014", Gray]]}]] /@ rows,
             {Style["stage", Bold], Style["名前 / サマリー", Bold],
              Style["起動", Bold],
              Style[If[TrueQ[archiveQ], "復帰", "切替/保管"], Bold],
              Style["要約", Bold], Style["フォルダ", Bold],
-             Style["起動回数", Bold], Style["エラー回数", Bold]}],
+             Style["起動回数", Bold], Style["エラー回数", Bold],
+             Style["自動起動", Bold]}],
           Alignment -> {Left, Center}, Frame -> All,
           FrameStyle -> GrayLevel[0.8], Background -> {None, {GrayLevel[0.93]}},
           Spacings -> {1, 0.6}]],
       TrackedSymbols :> {rows}]}],
-    ImageMargins -> 4]];
+    ImageMargins -> 4],
+  (* フォールバック: 保存ノート再オープン等で rows がリストでない (=焼かれていない)
+     場合のみ、SessionSubmit で「通常の評価キュー」に投げて再取得する。SessionSubmit
+     は Dynamic 更新ではないので FE の予算 abort の対象外。通常 (パレットから生成) は
+     initRows が既にリストなので何も評価せず即表示される。 *)
+  Initialization :> If[! ListQ[rows],
+    (rows = Automatic; SessionSubmit[rows = iSVWFPanelRows["", archiveQ]])],
+  SynchronousInitialization -> False]];
 
 SourceVaultWorkflowPanel[] := iSVWFMakePanel[False];
 SourceVaultWorkflowArchivePanel[] := iSVWFMakePanel[True];

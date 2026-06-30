@@ -417,8 +417,19 @@ iRevocationEvents[] := Module[{evs},
   Select[evs, MemberQ[iRevClasses, Lookup[#, "EventClass"]] &]
 ];
 
-Options[SourceVaultBuildRevocationSet] = {};
-SourceVaultBuildRevocationSet[opts___] := Module[{evs, set = <||>, epoch, compacted},
+(* 安価な freshness token: 全 event ファイル数 (append-only ゆえ追加/compaction で必ず変化)。
+   read/parse せず FileNames のみなので軽い。cross-process correct。 *)
+iSVCheapEventCount[] := Quiet@Check[Length[SourceVault`CorePrivate`iAllEventFiles[]], $Failed];
+If[! AssociationQ[$svRevCache], $svRevCache = <|"Count" -> Missing["Init"], "Result" -> Missing["Init"]|>];
+
+(* count-keyed cache。event 数が不変なら revocation set を再構築せず返す (毎検索の全 log 読みを回避)。
+   append があれば count が変わり必ず無効化されるので revocation を取りこぼさない。"NoCache"->True で強制再構築。 *)
+Options[SourceVaultBuildRevocationSet] = {"NoCache" -> False};
+SourceVaultBuildRevocationSet[OptionsPattern[]] := Module[{cnt, evs, set = <||>, epoch, result},
+  cnt = iSVCheapEventCount[];
+  If[! TrueQ[OptionValue["NoCache"]] && IntegerQ[cnt] &&
+       $svRevCache["Count"] === cnt && AssociationQ[$svRevCache["Result"]],
+    Return[$svRevCache["Result"]]];
   evs = iRevocationEvents[];
   epoch = Length[evs];  (* high-water mark: revocation 系 event 数 (§6.3.1-4) *)
   (* effective 時刻順に適用 (CreatedAtUTC で安定ソート) *)
@@ -435,7 +446,9 @@ SourceVaultBuildRevocationSet[opts___] := Module[{evs, set = <||>, epoch, compac
         set = KeyDrop[set, Lookup[ev, "ObjectId"]]
     ],
     {ev, evs}];
-  <|"HotRevocationSet" -> set, "Epoch" -> epoch, "BuiltAtUTC" -> DateString[Now, "ISODateTime"]|>
+  result = <|"HotRevocationSet" -> set, "Epoch" -> epoch, "BuiltAtUTC" -> DateString[Now, "ISODateTime"]|>;
+  If[IntegerQ[cnt], $svRevCache = <|"Count" -> cnt, "Result" -> result|>];
+  result
 ];
 
 SourceVaultRevocationEpoch[opts___] := Length[iRevocationEvents[]];
@@ -735,15 +748,17 @@ iSnippet[text_String, q_String, maxLen_: 160] := Module[{toks = iTokenize[q], po
     start = Max[1, pos[[1, 1]] - 40];
     StringTake[text, {start, Min[StringLength[text], start + maxLen]}]]];
 
-Options[SourceVaultBuildProjectionIndex] = {"Chunks" -> None, "IndexId" -> Automatic};
+Options[SourceVaultBuildProjectionIndex] = {"Chunks" -> None, "IndexId" -> Automatic,
+  "IndexKind" -> "KeywordBigram", "EntityDictionary" -> None};
 SourceVaultBuildProjectionIndex[contextName_String, OptionsPattern[]] := Module[
-  {ctx, chunks, permitted, excluded, indexId, rec, saved},
+  {ctx, chunks, permitted, excluded, indexId, indexKind, lexStats, rec, saved},
   ctx = iResolve["ReleaseContext", contextName];
   If[FailureQ[ctx], Return[ctx]];
   chunks = OptionValue["Chunks"];
   If[! ListQ[chunks],
     Return[Failure["ChunksRequired", <|
       "MessageTemplate" -> "BuildProjectionIndex には \"Chunks\" (§7.2 chunk のリスト) が必須です。"|>]]];
+  indexKind = OptionValue["IndexKind"];
   (* build-time gate: Permit のみ収録 (§6.3) *)
   permitted = Select[chunks,
     Lookup[SourceVaultEvaluateReleasePolicy[#, contextName], "Decision"] === "Permit" &];
@@ -752,12 +767,17 @@ SourceVaultBuildProjectionIndex[contextName_String, OptionsPattern[]] := Module[
   rec = <|"ObjectClass" -> "SourceVaultProjectionIndex", "IndexId" -> indexId,
     "ReleaseContextRef" -> contextName, "PolicyDigest" -> SourceVault`SourceVaultSnapshotDigest[ctx],
     "Chunks" -> permitted, "ChunkCount" -> Length[permitted], "ExcludedCount" -> excluded,
-    "IndexKind" -> "KeywordBigram", "BuiltAtUTC" -> DateString[Now, "ISODateTime"]|>;
+    "IndexKind" -> indexKind, "BuiltAtUTC" -> DateString[Now, "ISODateTime"]|>;
+  (* KeywordBM25V1: BM25 LexicalStats を build して格納 (§5.1)。entity dict 任意 (§4.1.1) *)
+  If[indexKind === "KeywordBM25V1",
+    lexStats = SourceVault`SourceVaultBuildLexicalStats[permitted,
+      "EntityDictionary" -> OptionValue["EntityDictionary"]];
+    rec = Append[rec, "LexicalStats" -> lexStats]];
   saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultProjectionIndex", rec,
     "Alias" -> indexId];
   If[FailureQ[saved], Return[saved]];
   <|"Status" -> "OK", "IndexId" -> indexId, "Ref" -> Lookup[saved, "Ref"],
-    "ChunkCount" -> Length[permitted], "ExcludedCount" -> excluded|>
+    "ChunkCount" -> Length[permitted], "ExcludedCount" -> excluded, "IndexKind" -> indexKind|>
 ];
 
 SourceVaultLoadSearchIndex[indexIdOrRef_String, opts___] := Module[{rec, id},
@@ -786,30 +806,36 @@ SourceVaultSearchIndexStatus[indexId_String, opts___] := Module[{rec = Lookup[$l
       "ReleaseContextRef" -> Lookup[rec, "ReleaseContextRef"], "IndexKind" -> Lookup[rec, "IndexKind"]|>]
 ];
 
-(* native 検索: load 済み projection を keyword スコア → request-time gate 再評価
-   + revocation 照合 (§6.3.1) → Permit のみ top-N *)
-iNativeSearch[query_String, ctxName_String, indexId_String, limit_] := Module[
-  {rec, chunks, revSet, scored, top, results},
-  rec = Lookup[$loadedProjections, indexId, Missing[]];
-  If[! AssociationQ[rec],
-    Module[{ld = SourceVaultLoadSearchIndex[indexId]},
-      If[FailureQ[ld], Return[Failure["IndexNotLoaded", <|"IndexId" -> indexId|>]]];
-      rec = Lookup[$loadedProjections, indexId]]];
+(* scorer (IndexKind 別)。返り値は {<|"Chunk"->ch,"Score"->_,("Breakdown"->_)|>...} *)
+iScoreKeywordBigram[query_String, rec_Association, limit_] := Module[{chunks, scored},
   chunks = Lookup[rec, "Chunks", {}];
-  revSet = Lookup[SourceVault`SourceVaultBuildRevocationSet[], "HotRevocationSet", <||>];
   scored = Map[Function[ch,
     <|"Chunk" -> ch, "Score" -> iKeywordScore[
       Lookup[ch, "NormalizedText", Lookup[ch, "Text", ""]], query]|>], chunks];
   scored = Select[scored, Lookup[#, "Score"] > 0 &];
-  top = Take[ReverseSortBy[scored, Lookup[#, "Score"] &], UpTo[limit]];
-  results = Map[Function[sc, Module[{ch = Lookup[sc, "Chunk"], gate, objId, revoked, sr},
-      (* request-time gate 再評価 (ValidUntil/State/tags/privacy を NOW で) *)
+  Take[ReverseSortBy[scored, Lookup[#, "Score"] &], UpTo[limit]]];
+
+(* BM25: index 時に格納した LexicalStats を SourceVaultLexicalRank で採点し chunk に対応付け *)
+iScoreBM25V1[query_String, rec_Association, limit_] := Module[{stats, ranked, chunkById},
+  stats = Lookup[rec, "LexicalStats", Missing[]];
+  If[! AssociationQ[stats], Return[{}]];
+  ranked = SourceVault`SourceVaultLexicalRank[query, stats, "Limit" -> limit, "Breakdown" -> True];
+  chunkById = Association[(Lookup[#, "ChunkId"] -> #) & /@ Lookup[rec, "Chunks", {}]];
+  Map[Function[r, <|"Chunk" -> Lookup[chunkById, r["ChunkId"], <||>],
+     "Score" -> r["Score"], "Breakdown" -> Lookup[r, "Breakdown", Missing[]]|>], ranked]];
+
+(* 共有: request-time gate 再評価 + revocation 照合 (§6.3.1) → Permit かつ非 revoked のみ。
+   raw path は元から持ち込まない。RetrievalKind / ScoreBreakdown は追加キー (§1.3 後方互換)。 *)
+iGateBuildResults[top_List, ctxName_String, revSet_Association, query_String, retrievalKind_String] :=
+  Select[
+    Map[Function[sc, Module[{ch = Lookup[sc, "Chunk"], gate, objId, revoked, sr},
       gate = SourceVaultEvaluateReleasePolicy[ch, ctxName];
       objId = Lookup[ch, "SourceVaultObjectId", Missing[]];
       revoked = StringQ[objId] && KeyExistsQ[revSet, objId];
       sr = <|"ResultId" -> "res:" <> CreateUUID[],
         "ChunkId" -> Lookup[ch, "ChunkId", "?"],
         "Score" -> Lookup[sc, "Score"],
+        "RetrievalKind" -> retrievalKind,
         "Snippet" -> iSnippet[Lookup[ch, "NormalizedText", Lookup[ch, "Text", ""]], query],
         "EvidenceRef" -> "evid:" <> ToString @ Lookup[ch, "ChunkId", "?"],
         "Citation" -> <|"Title" -> Lookup[Lookup[ch, "SourceRef", <||>], "Title",
@@ -820,9 +846,26 @@ iNativeSearch[query_String, ctxName_String, indexId_String, limit_] := Module[
         "RequestTimeGateReevaluated" -> True,
         "PolicyDigestAtRequest" -> Lookup[gate, "PolicyDigest", Missing[]],
         "Why" -> If[revoked, Append[Lookup[gate, "Why", {}], "ObjectRevoked"], Lookup[gate, "Why", {}]]|>;
-      sr]], top];
-  (* raw path は元から持ち込まない。Permit かつ非 revoked のみ。 *)
-  Select[results, Lookup[#, "ReleaseDecision"] === "Permit" &]
+      If[! MissingQ[Lookup[sc, "Breakdown", Missing[]]], sr = Append[sr, "ScoreBreakdown" -> sc["Breakdown"]]];
+      sr]], top],
+    Lookup[#, "ReleaseDecision"] === "Permit" &];
+
+(* native 検索: IndexKind で dispatch → scorer → 共有 gate/revocation → Permit のみ *)
+iNativeSearch[query_String, ctxName_String, indexId_String, limit_] := Module[
+  {rec, revSet, kind, top},
+  rec = Lookup[$loadedProjections, indexId, Missing[]];
+  If[! AssociationQ[rec],
+    Module[{ld = SourceVaultLoadSearchIndex[indexId]},
+      If[FailureQ[ld], Return[Failure["IndexNotLoaded", <|"IndexId" -> indexId|>]]];
+      rec = Lookup[$loadedProjections, indexId]]];
+  revSet = Lookup[SourceVault`SourceVaultBuildRevocationSet[], "HotRevocationSet", <||>];
+  kind = Lookup[rec, "IndexKind", "KeywordBigram"];
+  top = Switch[kind,
+    "KeywordBigram", iScoreKeywordBigram[query, rec, limit],
+    "KeywordBM25V1", iScoreBM25V1[query, rec, limit],
+    _, Return[Failure["UnsupportedIndexKind", <|"IndexId" -> indexId, "IndexKind" -> kind|>]]];
+  iGateBuildResults[top, ctxName, revSet, query,
+    If[kind === "KeywordBM25V1", "KeywordBM25", "KeywordBigram"]]
 ];
 
 (* ============================================================

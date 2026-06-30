@@ -1230,7 +1230,7 @@ iSVSearchRowURI[r_Association, coll_String : "default"] := Module[{cid, oid, ci}
     True, Missing["NoURI"]]];
 
 iSVSearchAdapterSearch[spec_Association, accessRequest_Association] := Module[
-  {scope, rc, q, lim, prof, idx, coll, chunkColl, opts, rows},
+  {scope, rc, q, lim, prof, idx, coll, chunkColl, opts, rows, methods, bm25Idx},
   scope = Lookup[spec, "scope", <||>]; If[! AssociationQ[scope], scope = <||>];
   rc = Lookup[scope, "releaseContext", None];
   If[! StringQ[rc], Return[{}]];  (* §10.2: release context 必須。無ければ fail-closed で空。 *)
@@ -1241,6 +1241,13 @@ iSVSearchAdapterSearch[spec_Association, accessRequest_Association] := Module[
   prof = Lookup[scope, "pdfIndexProfile", Automatic];
   idx = Lookup[scope, "index", Automatic];
   coll = Lookup[scope, "collection", Automatic];
+  (* §8.2: methods に "bm25" があれば KeywordBM25V1 index を選ぶ。明示 scope.index が最優先、
+     無ければ scope.bm25Index、それも無ければ context 慣習 "<rc>-bm25"。実際の BM25/bigram は
+     index の IndexKind で iNativeSearch が dispatch する (method は advisory)。 *)
+  methods = Lookup[spec, "methods", {"keyword"}];
+  If[ListQ[methods] && MemberQ[methods, "bm25"] && ! StringQ[idx],
+    bm25Idx = Lookup[scope, "bm25Index", Automatic];
+    idx = If[StringQ[bm25Idx], bm25Idx, rc <> "-bm25"]];
   opts = {"ReleaseContext" -> rc, "Limit" -> lim,
     If[StringQ[prof], "PDFIndexProfile" -> prof, Nothing],
     If[StringQ[idx], "Index" -> idx, Nothing],
@@ -1258,7 +1265,8 @@ iSVSearchAdapterSearch[spec_Association, accessRequest_Association] := Module[
     "Score" -> Lookup[r, "Score", Missing["NotScored"]],
     "MatchedFields" -> {"snippet"},
     "Metadata" -> <|"EvidenceRef" -> Lookup[r, "EvidenceRef", Missing[]],
-      "SourceVaultObjectId" -> Lookup[r, "SourceVaultObjectId", Missing[]]|>,
+      "SourceVaultObjectId" -> Lookup[r, "SourceVaultObjectId", Missing[]],
+      "RetrievalKind" -> Lookup[r, "RetrievalKind", Missing[]]|>,
     "PrivacyClass" -> "Mixed",
     "Decision" -> Lookup[r, "ReleaseDecision", "Permit"],
     "RequestTimeGateReevaluated" -> TrueQ[Lookup[r, "RequestTimeGateReevaluated", False]],

@@ -43,6 +43,7 @@ SourceVaultMailShardPath::usage = "SourceVaultMailShardPath[\"mbox/yyyymm\"] は
 SourceVaultMailMigrateToShards::usage = "SourceVaultMailMigrateToShards[] は旧単一ファイル snapshots.svmail を mbox×月のシャードに移行し、旧ファイルを .bak にする。";
 SourceVaultMailStorePath::usage = "SourceVaultMailStorePath[] は旧単一ファイル (移行用) のパスを返す。";
 $SourceVaultMailStoreRoot::usage = "mail snapshot store のルート (既定 PrivateVault/mail/snapshots)。テストで上書き可。";
+SourceVaultMailInteractionStats::usage = "SourceVaultMailInteractionStats[recordId] はそのメールの操作記録 <|\"OpenCount\",\"LastOpened\",\"RepliedCount\",\"RepliedAt\"|> を返す (本文表示で開封回数、返信送信で返信済を記録)。SourceVaultMailInteractionStats[] は全件 (RecordId キー) を返す。記録は <storeRoot>/interaction.json (Dropbox 共有)。";
 SourceVaultMailSearchIndex::usage = "SourceVaultMailSearchIndex[query_String:\"\", opts] はディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) だけを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行 (SummaryRow 形 + Summary) を返す。opts は SourceVaultSearchMailSnapshots と同じ (To/Cc/FromContact 等 index 非保持の項目は無視)。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。";
 SourceVaultMailRebuildMetadataIndex::usage = "SourceVaultMailRebuildMetadataIndex[mbox_:All] はディスク上の各 shard を一時的に読み、低漏洩メタデータ索引 sidecar (.svmailidx) を再生成する ($iSVMDStore は変更しない)。既存 .svmail から索引を初回構築/再構築するのに使う。";
 SourceVaultMailIndexedCount::usage = "SourceVaultMailIndexedCount[mbox_:All] はディスク上の索引 sidecar に含まれる行数 (索引済みメール数) を返す。";
@@ -632,6 +633,76 @@ iSVMDReadShardFile[path_String] :=
     Select[snaps, AssociationQ]];
 
 (* ============================================================
+   メール操作の記録 (開封回数 / 返信済) ── RecordId キーのサイドカー JSON。
+   暗号シャードを毎回書き換えない (開封は高頻度)。<root>/interaction.json。
+   Dropbox 共有なので複数 PC でも累積する (書込前に再読込してマージ)。
+   本文・ヘッダは一切含めない (RecordId と回数・日時のみ)。
+   ============================================================ *)
+If[! ValueQ[$iSVMDInteraction], $iSVMDInteraction = <||>];
+If[! ValueQ[$iSVMDInteractionLoaded], $iSVMDInteractionLoaded = False];
+
+iSVMDInteractionPath[] := FileNameJoin[{SourceVaultMailStoreRoot[], "interaction.json"}];
+
+iSVMDInteractionLoad[] :=
+  Module[{path = iSVMDInteractionPath[], data},
+    data = If[FileExistsQ[path],
+      Quiet@Check[ImportByteArray[ReadByteArray[path], "RawJSON"], <||>], <||>];
+    $iSVMDInteraction = If[AssociationQ[data], data, <||>];
+    $iSVMDInteractionLoaded = True;
+    $iSVMDInteraction];
+
+iSVMDInteractionEnsureLoaded[] :=
+  If[! TrueQ[$iSVMDInteractionLoaded], iSVMDInteractionLoad[]];
+
+iSVMDInteractionSave[] :=
+  Module[{path = iSVMDInteractionPath[], dir, bytes},
+    dir = DirectoryName[path];
+    If[! DirectoryQ[dir], Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
+    bytes = Quiet@Check[ExportByteArray[$iSVMDInteraction, "RawJSON"], $Failed];
+    If[ByteArrayQ[bytes],
+      Quiet@Check[
+        With[{strm = OpenWrite[path, BinaryFormat -> True]},
+          BinaryWrite[strm, bytes]; Close[strm]; True], $Failed]]];
+
+iSVMDInteractionGet[rid_String] :=
+  (iSVMDInteractionEnsureLoaded[];
+   With[{e = Lookup[$iSVMDInteraction, rid, <||>]}, If[AssociationQ[e], e, <||>]]);
+
+iSVMDOpenCountOf[rid_String] :=
+  With[{c = Lookup[iSVMDInteractionGet[rid], "OpenCount", 0]}, If[IntegerQ[c], c, 0]];
+iSVMDOpenCountOf[_] := 0;
+
+iSVMDRepliedCountOf[rid_String] :=
+  With[{c = Lookup[iSVMDInteractionGet[rid], "RepliedCount", 0]}, If[IntegerQ[c], c, 0]];
+iSVMDRepliedCountOf[_] := 0;
+
+iSVMDRepliedAtOf[rid_String] :=
+  With[{a = Lookup[iSVMDInteractionGet[rid], "RepliedAt", ""]}, If[StringQ[a], a, ""]];
+
+(* 開封を記録 (書込前に再読込して他セッションの値とマージ)。返り値: 更新後の回数 *)
+iSVMDRecordOpen[rid_String] /; rid =!= "" :=
+  (iSVMDInteractionLoad[];
+   Module[{e = iSVMDInteractionGet[rid], n},
+     n = iSVMDOpenCountOf[rid] + 1;
+     $iSVMDInteraction[rid] =
+       Append[e, {"OpenCount" -> n, "LastOpened" -> DateString["ISODateTime"]}];
+     iSVMDInteractionSave[]; n]);
+iSVMDRecordOpen[_] := 0;
+
+(* 返信送信を記録。返り値: 更新後の返信回数 *)
+iSVMDRecordReplied[rid_String] /; rid =!= "" :=
+  (iSVMDInteractionLoad[];
+   Module[{e = iSVMDInteractionGet[rid], n},
+     n = iSVMDRepliedCountOf[rid] + 1;
+     $iSVMDInteraction[rid] =
+       Append[e, {"RepliedCount" -> n, "RepliedAt" -> DateString["ISODateTime"]}];
+     iSVMDInteractionSave[]; n]);
+iSVMDRecordReplied[_] := 0;
+
+SourceVaultMailInteractionStats[rid_String] := iSVMDInteractionGet[rid];
+SourceVaultMailInteractionStats[] := (iSVMDInteractionLoad[]; $iSVMDInteraction);
+
+(* ============================================================
    軽量メタデータ索引 (sidecar/shard) ── 本文暗号文をロードせず検索する。
    各 shard <root>/<mbox>/<yyyymm>.svmail と並べて
    <root>/<mbox>/<yyyymm>.svmailidx を持つ。1 行 = BinarySerialize した索引行
@@ -1011,11 +1082,11 @@ BeginPackage["SourceVault`", {"NBAccess`"}];
 SourceVaultMailFetchNew::usage =
   "SourceVaultMailFetchNew[mbox, opts] は IMAP から新着のみ取得し snapshot 化して store に保存する。既定は LLM 処理なし。opts: \"Period\"(\"Latest\"|n日|{from,to}|\"YYYYMM\"), \"Process\"(既定False), \"MessageSource\"(既定=実IMAP, 注入可), \"Inferencer\", \"Persist\"(既定True), \"MaxEmails\"。RecordId で既存と重複排除。";
 SourceVaultMailDerivedPending::usage =
-  "SourceVaultMailDerivedPending[] はロード済み store の中で派生 (PL/優先度/概要) 未処理の snapshot を返す。";
+  "SourceVaultMailDerivedPending[opts] はロード済み store の中で派生 (PL/優先度/概要) 未処理の snapshot を返す。opts: \"MBox\"(既定 Automatic。文字列でその mbox に限定), \"DateFrom\"/\"DateTo\"(既定 Automatic。DateObject/文字列/{y,m,d} で日付範囲に限定、日単位包含)。";
 SourceVaultMailDerivedPendingQ::usage =
   "SourceVaultMailDerivedPendingQ[snapshot] は派生が未処理 (\"Pending\") なら True。";
 SourceVaultInferMailDerivedBatch::usage =
-  "SourceVaultInferMailDerivedBatch[opts] は未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。中断耐性 (CheckpointEvery 件ごとに保存)。opts: \"Limit\"(既定50、フィルタ後の件数上限。範囲内すべてなら Infinity), \"DateFrom\"/\"DateTo\"(既定 Automatic。DateObject/文字列/{y,m,d} で対象メールを日付範囲に限定、日単位包含), \"Refresh\"(既定 None=Pending のみ。\"MissingCategory\"=Category 未生成の処理済み旧 snapshot も再処理, All=全件再処理, Function=述語に一致する snapshot を再処理。例: \"Refresh\"->Function[s, StringContainsQ[ToString@s[\"MailMetadataPublic\"][\"Subject\"], \"Cerezo\"]]), \"Inferencer\"(既定=実LLM, 注入可), \"CheckpointEvery\"(既定20), \"Persist\"(既定True)。";
+  "SourceVaultInferMailDerivedBatch[opts] は未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。中断耐性 (CheckpointEvery 件ごとに保存)。特定 mbox の指定期間メールにサマリーを付ける用途は SourceVaultMailAddSummaries[mbox, period] が正準 (EnsureLoaded を内包し外部ジョブでも自己完結)。opts: \"MBox\"(既定 Automatic。文字列を与えると対象 snapshot をその mbox に限定。Automatic=ロード済み全 mbox), \"Limit\"(既定50、フィルタ後の件数上限。範囲内すべてなら Infinity), \"DateFrom\"/\"DateTo\"(既定 Automatic。DateObject/文字列/{y,m,d} で対象メールを日付範囲に限定、日単位包含), \"Refresh\"(既定 None=Pending のみ。\"MissingCategory\"=Category 未生成の処理済み旧 snapshot も再処理, All=全件再処理, Function=述語に一致する snapshot を再処理。例: \"Refresh\"->Function[s, StringContainsQ[ToString@s[\"MailMetadataPublic\"][\"Subject\"], \"Cerezo\"]]), \"Inferencer\"(既定=実LLM, 注入可), \"CheckpointEvery\"(既定20), \"Persist\"(既定True)。";
 SourceVaultMailInferDerived::usage =
   "SourceVaultMailInferDerived[mailspec] は mailspec(date/subject/from/to/cc/body)からローカル LLM で <|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|> を返す(優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン、Deadline は ISO 文字列または Missing[\"None\"]。";
 SourceVaultMailAddSummaries::usage =
@@ -1135,8 +1206,19 @@ SourceVaultMailDerivedPendingQ[snap_Association] :=
       (* DerivedStatus 無しの旧 snapshot: summary が空なら pending *)
       True, ! (StringQ[sm] && StringTrim[sm] =!= "")]];
 
-SourceVaultMailDerivedPending[] :=
-  Select[SourceVaultMailSnapshotList[], SourceVaultMailDerivedPendingQ];
+(* 既定 (引数なし) はロード済み全 pending。"MBox"/"DateFrom"/"DateTo" を渡すと絞り込む。
+   オプション付きでも必ず評価されるので、Length[...] が「未評価式の引数数」に化けて
+   偽の件数を返す事故 (例: "MBox"->... を渡して常に 3) が起きない。 *)
+Options[SourceVaultMailDerivedPending] =
+  {"MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic};
+SourceVaultMailDerivedPending[OptionsPattern[]] :=
+  Module[{mb = OptionValue["MBox"], df, dt, pend},
+    df = iSVMDDayListOf[OptionValue["DateFrom"]];
+    dt = iSVMDDayListOf[OptionValue["DateTo"]];
+    pend = Select[SourceVaultMailSnapshotList[], SourceVaultMailDerivedPendingQ];
+    If[StringQ[mb], pend = Select[pend, Lookup[#["MailSource"], "MBox", Null] === mb &]];
+    If[df =!= Automatic || dt =!= Automatic, pend = Select[pend, iSVMDDateInRange[#, df, dt] &]];
+    pend];
 
 (* ---- ローカル LLM (LM Studio, OpenAI 互換) ----
    maildb の iQueryLMStudioDirect を踏襲: Headers に Content-Type + Authorization、
@@ -1509,16 +1591,17 @@ iSVSnapMailspec[snap_Association] :=
     iSVMDEnrichMailspec[spec, snap]];
 
 Options[SourceVaultInferMailDerivedBatch] = {
-   "Limit" -> 50, "DateFrom" -> Automatic, "DateTo" -> Automatic,
+   "MBox" -> Automatic, "Limit" -> 50, "DateFrom" -> Automatic, "DateTo" -> Automatic,
    "Refresh" -> None,
    "Inferencer" -> Automatic, "CheckpointEvery" -> 20, "Persist" -> True};
 
 SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
-  Module[{infer, lim, ck, persist, pendBefore, batch, pend, df, dt, ref,
+  Module[{infer, lim, ck, persist, pendBefore, batch, pend, df, dt, ref, mb,
       done = 0, failBody = 0, failLLM = 0, sinceCk = 0},
     infer = OptionValue["Inferencer"] /. Automatic -> SourceVaultMailInferDerived;
     lim = OptionValue["Limit"]; ck = OptionValue["CheckpointEvery"];
     persist = TrueQ[OptionValue["Persist"]];
+    mb = OptionValue["MBox"];
     (* 日付範囲フィルタ (任意)。SourceVaultSearchMailSnapshots と同じ
        iSVMDDayListOf / iSVMDDateInRange を使い、DateObject/文字列/{y,m,d} を
        日単位で包含比較する。Limit はフィルタ後に適用される件数上限。
@@ -1540,6 +1623,9 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
         Select[SourceVaultMailSnapshotList[],
           TrueQ[Quiet@Check[ref[#], False]] &],
       True, SourceVaultMailDerivedPending[]];
+    (* "MBox": 文字列ならその mbox の snapshot に限定 (Refresh で選んだ集合への直交後フィルタ)。
+       SourceVaultSearchMailSnapshots と同じ #["MailSource"]["MBox"] パスで判定する。 *)
+    If[StringQ[mb], pend = Select[pend, Lookup[#["MailSource"], "MBox", Null] === mb &]];
     pendBefore = Length[pend];
     If[df =!= Automatic || dt =!= Automatic,
       pend = Select[pend, iSVMDDateInRange[#, df, dt] &]];
@@ -1561,7 +1647,9 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
       "Processed" -> done,
       "Failed" -> failBody + failLLM,
       "FailedBodyDecrypt" -> failBody, "FailedLLM" -> failLLM,
-      "RemainingPending" -> Length[SourceVaultMailDerivedPending[]]|>];
+      "RemainingPending" -> Length[
+        If[StringQ[mb], SourceVaultMailDerivedPending["MBox" -> mb],
+           SourceVaultMailDerivedPending[]]]|>];
 
 (* ---- 既存 snapshot の HTML 本文を読める平文へ backfill ----
    ingest 時テキスト化を導入する前に取り込んだメールが対象。本文を復号し、HTML なら
@@ -1622,9 +1710,9 @@ SourceVaultMailAddSummaries[mbox_String, period_ : "Latest",
   Module[{ensured, result},
     ensured = SourceVaultMailEnsureLoaded[mbox, period];
     result = SourceVaultInferMailDerivedBatch[
-      "Refresh" -> Function[s,
-        SourceVaultMailDerivedPendingQ[s] &&
-          Quiet@Check[s["MailSource", "MBox"], Missing[]] === mbox],
+      (* 既定 Refresh=None (=Pending のみ) を mbox で絞る。MBox 後フィルタは
+         #["MailSource"]["MBox"] で判定し、他 mbox の未処理を巻き込まない。 *)
+      "MBox"    -> mbox,
       "Limit"   -> OptionValue["Limit"],
       "Persist" -> OptionValue["Persist"],
       (* 同期実行が打ち切られても進捗が残るよう頻繁に保存 (既定 3 件ごと)。 *)
@@ -2242,6 +2330,9 @@ iSVUIReplyControl[draft_Association, translateMode_, pl_ : 1.0] :=
                 If[TrueQ[ok],
                   busy = True;
                   With[{res = SourceVaultMailSend[spec]},
+                    If[Lookup[res, "Status", ""] === "Sent",
+                      (* 返信済を記録 (元メールの RecordId) *)
+                      Quiet@Check[iSVMDRecordReplied[rid], Null]];
                     status = If[Lookup[res, "Status", ""] === "Sent",
                       Style["✓ 送信しました", Bold, Darker@Green],
                       Style["✗ 送信失敗: " <> ToString@Lookup[res, "Reason", ""], Red]]];
@@ -2321,6 +2412,8 @@ SourceVaultMailShowBody[record_] :=
     (* 本文セルに元メールの PrivacyLevel を付与: この窓からの LLM 呼び出しで
        高 PL なら クラウドへ送られない (NBMakeContextPacket 閾値 0.5)。 *)
     iSVUIMarkCellsConfidential[nb, pl];
+    (* 開封回数を記録 (本文表示に成功したときのみ) *)
+    Quiet@Check[iSVMDRecordOpen[ToString@Lookup[snap, "RecordId", ""]], Null];
     <|"Status" -> "Shown", "PrivacyLevel" -> pl|>];
 
 Options[SourceVaultMailOpenReplyNotebook] = {"ReplyAll" -> False, "Translate" -> False};
@@ -2416,6 +2509,8 @@ iSVUIIdentityEnsureLoaded[] :=
 $iSVUILabels = <|
   "Att" -> <|"Japanese" -> "\:6dfb\:4ed8", "English" -> "Att"|>,
   "Reply" -> <|"Japanese" -> "\:8fd4\:4fe1", "English" -> "Reply"|>,
+  "Opens" -> <|"Japanese" -> "\:958b\:5c01", "English" -> "Opens"|>,
+  "Replied" -> <|"Japanese" -> "\:8fd4\:4fe1\:6e08", "English" -> "Replied"|>,
   "Date" -> <|"Japanese" -> "\:65e5\:4ed8", "English" -> "Date"|>,
   "Pri" -> <|"Japanese" -> "\:91cd\:8981", "English" -> "Pri"|>,
   "Sec" -> <|"Japanese" -> "\:79d8\:533f", "English" -> "Sec"|>,
@@ -2513,9 +2608,27 @@ iSVUIFormatDeadline[dl_] :=
       {"-" -> "/", "T" -> " "}]];
 
 Options[SourceVaultMailView] = Options[SourceVault`SourceVaultSearchMailSnapshots];
+(* 返信済セル: 返信回数>0 なら緑チェック (Tooltip に日時・回数)、なければ空。
+   Dataset セルでは ShowStringCharacters が効き素の文字列に引用符が付くため明示 False。 *)
+iSVUIRepliedCell[rid_, ff_] :=
+  With[{n = iSVMDRepliedCountOf[rid], at = iSVMDRepliedAtOf[rid]},
+    If[IntegerQ[n] && n > 0,
+      Tooltip[
+        Style["\:2713", Darker@Green, Bold, FontFamily -> ff, ShowStringCharacters -> False],
+        "返信済: " <> at <> If[n > 1, " (" <> ToString[n] <> "回)", ""]],
+      ""]];
+
+(* 開封回数セル: 0 は空、>0 は回数 (引用符抑止) *)
+iSVUIOpensCell[rid_, ff_] :=
+  With[{n = iSVMDOpenCountOf[rid]},
+    If[IntegerQ[n] && n > 0,
+      Style[ToString[n], FontFamily -> ff, ShowStringCharacters -> False], ""]];
+
 SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
   Module[{snaps, rows, ff = iSVUIFont[]},
     snaps = SourceVault`SourceVaultSearchMailSnapshots[query, opts];
+    (* 開封回数・返信済は最新をディスクから読む (他セッション/別 PC 反映) *)
+    iSVMDInteractionLoad[];
     (* アクションは maildb 同様に列を分ける (1 セルに詰めると幅超過で "..." になる)。
        フォントは Dataset の BaseStyle が無いのでセルごとに適用する。 *)
     rows = Function[s,
@@ -2525,6 +2638,8 @@ SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
            iSVL["Att"] -> iSVUIAttachMenu[s],
            iSVL["Reply"] -> Button["\:21a9", SourceVaultMailOpenReplyNotebook[r],
               Appearance -> "Frameless", Method -> "Queued"],
+           iSVL["Opens"] -> iSVUIOpensCell[r, ff],
+           iSVL["Replied"] -> iSVUIRepliedCell[r, ff],
            iSVL["Date"] -> Style[iSVUIFormatDateJST[Lookup[md, "Date", Missing[]]], FontFamily -> ff],
            iSVL["Pri"] -> Style[iSVUINumCell[Lookup[dv, "Priority", Missing[]]], FontFamily -> ff],
            iSVL["Sec"] -> Style[iSVUINumCell[Lookup[dv, "PrivacyLevel", Missing[]]], FontFamily -> ff],
@@ -2541,7 +2656,7 @@ SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
     iSVMDWrapConfidential[
       Pane[
         Dataset[rows,
-          ItemSize -> {2, {3, 4, 3, 15, 3, 3, 5, 12, 28, 14, 40}},
+          ItemSize -> {2, {3, 4, 3, 4, 4, 15, 3, 3, 5, 12, 28, 14, 40}},
           Alignment -> {Left, Center},
           (* MaxItems -> {最大行数, 最大列数}。第2要素を行数に縛ると
              少件数時に列が隠れるので All (全列・全行) にする。 *)

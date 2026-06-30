@@ -4024,7 +4024,7 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
     filtered = SortBy[filtered, -iSVPRRouteScore[#] &];
     cols = {"Prompt", "Memo", "Target", "\:4f5c\:6210/\:66f4\:65b0",
             "Privacy", "State", "Actions",
-            "\:8d77\:52d5\:56de\:6570", "\:30a8\:30e9\:30fc\:56de\:6570"};
+            "\:8d77\:52d5\:56de\:6570", "\:30a8\:30e9\:30fc\:56de\:6570", "\:81ea\:52d5"};
     header = Map[
       Style[#, Bold, FontFamily -> "Yu Gothic UI"] &, cols];
     body = Map[
@@ -4222,7 +4222,14 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
               Tooltip[
                 Style[ToString[ec], FontFamily -> "Yu Gothic UI", FontSize -> 12,
                   If[TrueQ[ec > 0], RGBColor[0.7, 0.15, 0.15], GrayLevel[0.4]]],
-                "\:8d77\:52d5\:304c\:30a8\:30e9\:30fc\:306b\:306a\:3063\:305f\:56de\:6570"]]
+                "\:8d77\:52d5\:304c\:30a8\:30e9\:30fc\:306b\:306a\:3063\:305f\:56de\:6570"]],
+            (* \:81ea\:52d5 (Scheduler \:306e Enabled\:3002weak: autotrigger \:30ed\:30fc\:30c9\:6642\:306e\:307f\:3002
+               \:305d\:306e routeId \:306b PromptRoute trigger \:304c\:3042\:308c\:3070\:72b6\:614b\:8868\:793a\:3001\:7121\:3051\:308c\:3070 em dash) *)
+            If[Length[Names["SourceVault`SourceVaultAutoTriggerStatusCell"]] > 0,
+              Quiet @ Check[
+                SourceVault`SourceVaultAutoTriggerStatusCell["PromptRoute", routeId],
+                Style["\:2014", Gray]],
+              Style["\:2014", Gray]]
           }]],
       filtered];
     Grid[
@@ -4265,11 +4272,15 @@ iSVPRPanelRoutes[query_String, channel_] :=
 
 Options[SourceVaultPromptRoutePanel] = {"Channel" -> All};
 
+(* routes は DynamicModule の外 = この関数の「通常評価」(パレットクリック/手動評価)
+   で先に算出して埋め込む。DynamicModule body での評価は FE の評価予算 abort の対象で
+   $Aborted を招くため、ここでは評価させない (ワークフロー一覧と同じ方針)。 *)
 SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
-  DynamicModule[{query = "", channel, routes},
-    channel = OptionValue[SourceVaultPromptRoutePanel, {opts}, "Channel"];
-    routes = Quiet @ Check[
-      iSVPRPanelRoutes["", channel], {}];
+  Module[{ch = OptionValue[SourceVaultPromptRoutePanel, {opts}, "Channel"],
+          initRoutes},
+    initRoutes = Quiet @ Check[iSVPRPanelRoutes["", ch], {}];
+    If[! ListQ[initRoutes], initRoutes = {}];
+    DynamicModule[{query = "", channel = ch, routes = initRoutes},
     Panel[Column[{
       Style["SourceVault \:4fdd\:5b58\:30d7\:30ed\:30f3\:30d7\:30c8\:4e00\:89a7", Bold, 15,
         FontFamily -> "Yu Gothic UI"],
@@ -4309,7 +4320,12 @@ SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
         SourceVaultFormatPromptRouteList[If[ListQ[routes], routes, {}]],
         TrackedSymbols :> {routes}]},
       Spacings -> 0.6],
-      ImageMargins -> 4]];
+      ImageMargins -> 4],
+    (* フォールバック: 保存ノート再オープン等で routes が未確定の時のみ再取得。
+       SessionSubmit は通常評価キューなので FE の予算 abort の対象外。 *)
+    Initialization :> If[! ListQ[routes],
+      SessionSubmit[routes = Quiet @ Check[iSVPRPanelRoutes["", channel], {}]]],
+    SynchronousInitialization -> False]];
 
 SourceVaultPromptRoutePanel[___] :=
   <|"Status" -> "Failed", "Reason" -> "InvalidArguments",

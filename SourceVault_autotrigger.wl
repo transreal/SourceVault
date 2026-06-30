@@ -64,7 +64,10 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultAutoTriggerCapability",
   "SourceVault`SourceVaultAutoTriggerListData",
   "SourceVault`SourceVaultAutoTriggerPanel",
-  "SourceVault`SourceVaultAutoTriggerSourceIdResolver"
+  "SourceVault`SourceVaultAutoTriggerSourceIdResolver",
+  "SourceVault`SourceVaultAutoTriggerForTarget",
+  "SourceVault`SourceVaultAutoTriggerStatusCell",
+  "SourceVault`SourceVaultAutoTriggerSourcesURIResolver"
 ]];
 
 $SourceVaultAutoTriggerVersion = "0.1-phase1.1";
@@ -275,6 +278,24 @@ SourceId (String) used by SourceVaultEvent conditions to reconcile a canonical \
 sv:// URI to the internal SourceId the event log keys by. Defaults to Automatic \
 (no built-in resolver); until wired, a URI atom matches only events that carry \
 that URI directly.";
+
+SourceVaultAutoTriggerForTarget::usage =
+  "SourceVaultAutoTriggerForTarget[targetType, targetId] returns the \
+SourceVaultAutoTriggerListData row for the registered trigger whose Target matches \
+(e.g. a WorkflowTemplate trigger for a catalog slug), or Missing[\"NoTrigger\"]. \
+Lets the existing workflow / saved-prompt lists show auto-run status per row.";
+
+SourceVaultAutoTriggerStatusCell::usage =
+  "SourceVaultAutoTriggerStatusCell[targetType, targetId] renders a compact cell \
+(auto toggle badge + priority + warning icon) for the trigger on that target, or a \
+gray dash when none is registered. Designed to drop into an existing list Grid.";
+
+SourceVaultAutoTriggerSourcesURIResolver::usage =
+  "SourceVaultAutoTriggerSourcesURIResolver[uri] resolves a canonical sv:// URI to \
+a SourceId via SourceVaultSources (opt-in; assign it to \
+SourceVaultAutoTriggerSourceIdResolver to let SourceVaultEvent conditions match by \
+URI). Returns Missing when the URI is not found or the sources listing is \
+unavailable.";
 
 (* pluggable resolver: slug (String) -> a workflow net wid (String) or a
    ClaudeCreateWorkflowNet spec (Association), or $Failed/Missing when the
@@ -641,6 +662,23 @@ If[!ValueQ[SourceVaultAutoTriggerSourceIdResolver],
    log uses). A producer can wire SourceVaultAutoTriggerSourceIdResolver; until
    then a URI atom matches an event only if the event itself carries that URI. *)
 iSVATDefaultURIToSourceId[uri_] := Missing["NoDefaultResolver"];
+
+(* opt-in producer-side resolver: map a canonical sv:// URI -> SourceId via the
+   SourceVault sources listing (rows carry both URI and Id/SourceId). Not the
+   default (a full sources scan per resolution is not free, and a row Id is not
+   guaranteed to equal the event-log SourceId for every Kind); enable it with
+     SourceVaultAutoTriggerSourceIdResolver = SourceVaultAutoTriggerSourcesURIResolver
+   after confirming the mapping holds for your vault. *)
+SourceVaultAutoTriggerSourcesURIResolver[uri_String] :=
+  Module[{rows, match, sid},
+    If[Length[Names["SourceVault`SourceVaultSources"]] == 0,
+      Return[Missing["NoSourcesFn"]]];
+    rows = Quiet @ Check[SourceVault`SourceVaultSources["", "Format" -> "Rows"], $Failed];
+    If[!ListQ[rows], Return[Missing["SourcesUnavailable"]]];
+    match = SelectFirst[rows, Lookup[#, "URI", ""] === uri &, Missing[]];
+    If[!AssociationQ[match], Return[Missing["URINotFound"]]];
+    sid = Lookup[match, "SourceId", Lookup[match, "Id", Missing[]]];
+    If[StringQ[sid], sid, Missing["NoSourceId"]]];
 
 iSVATResolveURIToSourceId[uri_] :=
   Module[{resolver = SourceVaultAutoTriggerSourceIdResolver, r},
@@ -1785,6 +1823,8 @@ SourceVaultAutoTriggerListData[] :=
           SourceVaultAutoTriggerNextFire[Lookup[spec, "Schedule", <||>], iSVATUTCNow[]],
           Missing[]];
         <|"TriggerId" -> tid, "Name" -> Lookup[spec, "Name", tid],
+          "TargetType" -> Lookup[Lookup[spec, "Target", <||>], "TargetType", Missing[]],
+          "TargetId" -> Lookup[Lookup[spec, "Target", <||>], "TargetId", Missing[]],
           "Enabled" -> TrueQ[Lookup[spec, "Enabled", False]],
           "ExecutionMode" -> cap["ExecutionMode"],
           "AutoRunCapability" -> cap["AutoRunCapability"],
@@ -1845,6 +1885,66 @@ SourceVaultAutoTriggerPanel[] :=
       Grid[Prepend[rows, header], Alignment -> Left, Frame -> All,
         FrameStyle -> LightGray,
         Background -> {None, {LightBlue, {White}}}]}, Spacings -> 1]];
+
+(* join: the ListData row for the trigger on (targetType, targetId), if any.
+   Lets existing lists (workflow catalog / saved prompts) show auto-run status
+   per row without re-implementing the classification. *)
+(* per-target lookup for list-row badges (workflow / saved-prompt panels).
+   IMPORTANT: do NOT go through SourceVaultAutoTriggerListData[], which computes
+   SourceVaultAutoTriggerNextFire (a schedule-horizon scan ~3.5s/trigger) for
+   EVERY trigger. The list panels call this per row inside a Dynamic, so the
+   full ListData cost gets multiplied by row*2 and the Dynamic render exceeds
+   the FE evaluation budget -> the panel shows $Aborted. The status badge only
+   needs AutoToggle / Priority / error fields, so build the row directly from
+   the matching spec and skip NextFire (NextFire -> Missing["NotComputed"]). *)
+SourceVaultAutoTriggerForTarget[targetType_String, targetId_String] :=
+  Module[{specs, hit, tid, spec, cap, lastRun, err},
+    specs = Quiet @ Check[SourceVaultListAutoTriggers[], {}];
+    If[! ListQ[specs], specs = {}];
+    hit = SelectFirst[specs,
+      With[{s = Quiet @ Check[
+          SourceVaultGetAutoTrigger[Lookup[#, "TriggerId", ""]], Missing[]]},
+        AssociationQ[s] &&
+          Lookup[Lookup[s, "Target", <||>], "TargetType", Missing[]] === targetType &&
+          Lookup[Lookup[s, "Target", <||>], "TargetId", Missing[]] === targetId] &,
+      Missing["NoTrigger"]];
+    If[! AssociationQ[hit], Return[Missing["NoTrigger"]]];
+    tid = Lookup[hit, "TriggerId", Missing[]];
+    spec = If[StringQ[tid], SourceVaultGetAutoTrigger[tid], <||>];
+    If[! AssociationQ[spec], spec = <||>];
+    cap = SourceVaultAutoTriggerCapability[spec];
+    lastRun = iSVATLastRunForTrigger[tid];
+    err = iSVATTriggerErrorInfo[lastRun];
+    <|"TriggerId" -> tid, "Name" -> Lookup[spec, "Name", tid],
+      "TargetType" -> Lookup[Lookup[spec, "Target", <||>], "TargetType", Missing[]],
+      "TargetId" -> Lookup[Lookup[spec, "Target", <||>], "TargetId", Missing[]],
+      "Enabled" -> TrueQ[Lookup[spec, "Enabled", False]],
+      "ExecutionMode" -> cap["ExecutionMode"],
+      "AutoRunCapability" -> cap["AutoRunCapability"],
+      "AutoToggle" -> Which[! cap["AutoEligible"], "\:4e0d\:53ef",
+        TrueQ[Lookup[spec, "Enabled", False]], "ON", True, "OFF"],
+      "Priority" -> Lookup[Lookup[spec, "RunPolicy", <||>], "Priority", "Normal"],
+      "NextFire" -> Missing["NotComputed"],
+      "LastRunStatus" -> If[AssociationQ[lastRun],
+        Lookup[lastRun, "Status", Missing["NoRun"]], Missing["NoRun"]],
+      "HasError" -> err["HasError"], "ErrorSummary" -> err["Summary"]|>];
+
+(* compact cell to drop into an existing list Grid: auto toggle + priority +
+   warning icon, or a gray dash when no trigger is registered for the target. *)
+SourceVaultAutoTriggerStatusCell[targetType_String, targetId_String] :=
+  Module[{row},
+    row = If[targetType === "Workflow",
+      (* meta-type: a catalog slug may be a WorkflowTemplate or WorkflowRoute *)
+      SelectFirst[
+        {SourceVaultAutoTriggerForTarget["WorkflowTemplate", targetId],
+         SourceVaultAutoTriggerForTarget["WorkflowRoute", targetId]},
+        AssociationQ, Missing["NoTrigger"]],
+      SourceVaultAutoTriggerForTarget[targetType, targetId]];
+    If[!AssociationQ[row],
+      Style["\:2014", Gray],   (* em dash: no auto-trigger *)
+      Row[{iSVATAutoToggleBadge[Lookup[row, "AutoToggle", ""]], " ",
+        iSVATPriorityBadge[Lookup[row, "Priority", "Normal"]], " ",
+        iSVATErrorIcon[row]}]]];
 
 End[];
 

@@ -113,7 +113,24 @@ SourceVaultSearch["履修登録の手順",
   "Limit" -> 8]
 ```
 
-**Profile Registry** には検索インデックス・PDFIndex・検索バックエンド・OCR バックエンドを登録できます。**Object Revocation** では `SourceVaultRevokeObject[objectId]` で個別 object を tombstone 化し、`SourceVaultBuildRevocationSet[]` で HotRevocationSet を replay 構築します。**Versioned Snapshot** (`SourceVaultSaveRetrievalWorkflowSnapshot` / `SourceVaultFreezeCorpusSnapshot`) で検索ワークフローの設定と検索対象集合を immutable に固定できます。
+**Profile Registry** には検索インデックス・PDFIndex・検索バックエンド・OCR バックエンドを登録できます。**Object Revocation** では `SourceVaultRevokeObject[objectId]` で個別 object を tombstone 化し、`SourceVaultBuildRevocationSet[]` で HotRevocationSet を replay 構築します（全 event 数を freshness token にした count-keyed cache 付き。append があれば必ず無効化＝revocation を取りこぼさない）。**Versioned Snapshot** (`SourceVaultSaveRetrievalWorkflowSnapshot` / `SourceVaultFreezeCorpusSnapshot`) で検索ワークフローの設定と検索対象集合を immutable に固定できます。
+
+### 日本語 BM25 検索と seed オントロジ auto-tag (SourceVault_lexical / SourceVault_oopsseed)
+
+`SourceVault_lexical.wl` は日本語に強い lexical 検索層（正規化・n-gram トークナイズ・BM25・転置インデックス）を提供し、`SourceVaultBuildProjectionIndex[..., "IndexKind" -> "KeywordBM25V1"]` がこれを使います。従来の `KeywordBigram` は無変更で温存され、`SourceVaultSearch` は index の `IndexKind` で scorer を dispatch します（release gate / revocation は両者で共有）。
+
+**entity OR-match** により、seed entity dictionary を `"EntityDictionary"` に渡すと、query「Bruce Sterling」と doc「ブルース・スターリング」が双方の entity term で一致します（表記非一致 / OOV 回復）。MCP からは `sourcevault_search` の `methods` に `"bm25"` を含めると BM25 index 経路に入ります。
+
+`SourceVault_oopsseed.wl` は 1992–2005 の個人メーリングリスト（OOPS、約 6500 通・約 4100 topic item）の **seed オントロジ取り込み**（Common Lisp S式 reader・ShiftJIS/UTF-8 decode・owner-scoped namespace・別名/日英併記の surface form）と、一般メールの段落への **topic 自動付与**（`SourceVaultParseMailParagraphs` → `SourceVaultAssignParagraphTopics`）を提供します。「seed を取り込み、一般メールを同形式に変換して検索精度を上げる」方針の基盤です。詳細は [`api_lexical.md`](api_lexical.md) / [`api_oopsseed.md`](api_oopsseed.md)。
+
+```mathematica
+(* seed 辞書を entity dictionary として BM25 index に載せる *)
+dict = SourceVaultImportOOPSSeedDictionary["…/db/table/item-name.index"]["Dictionary"];
+SourceVaultBuildProjectionIndex["public",
+  "Chunks" -> chunks, "IndexId" -> "pub-bm25",
+  "IndexKind" -> "KeywordBM25V1", "EntityDictionary" -> dict];
+SourceVaultSearch["Bruce Sterling", "ReleaseContext" -> "public", "Index" -> "pub-bm25"]
+```
 
 ### Web サービス管理 (SourceVault_servicemanager)
 
@@ -157,7 +174,9 @@ SourceVault をロードすると、以下が自動的に設定されます。
 $SourceVaultRoots["PrivateVault"]       自動初期化 (PrivateVault ディレクトリの作成)
 SourceVault_core.wl                     コア基盤 (排他制御・event log・blob・pointer)
 SourceVault_mining.wl                   マイニング (タグ/著者/実体リンク抽出・pre-scan・検索 boost・記憶代謝)
-SourceVault_searchindex.wl              検索基盤 (release context・profiles・revocation)
+SourceVault_lexical.wl                  日本語 lexical 層 (正規化・n-gram・BM25・entity OR-match)
+SourceVault_searchindex.wl              検索基盤 (release context・profiles・revocation・KeywordBM25V1)
+SourceVault_oopsseed.wl                 OOPS seed オントロジ取り込み・一般メール topic auto-tag
 SourceVault_servicemanager.wl           サービス管理 (Web サービス・detached service・MCP proxy)
 SourceVault_webingest.wl                Web 検索 (SearXNG・本文取得・importance・rollup・要約)
 SourceVault_mcp.wl                      MCP tool schema / dispatch + sv:// オブジェクト解決
@@ -623,7 +642,22 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultBuildRevocationSet[]` | revocation 系 event を replay して HotRevocationSet を構築。 |
 | `SourceVaultSaveRetrievalWorkflowSnapshot[name, spec, opts]` | retrieval ワークフロー設定を immutable 保存（credential / 実パスは含めない）。 |
 | `SourceVaultFreezeCorpusSnapshot[corpusId, opts]` | 検索対象集合を immutable CorpusSnapshot に固定。 |
-| `SourceVaultSearch[query, opts]` | release context gate 付き検索。`"ReleaseContext"` / `"PDFIndexProfile"` / `"Limit"` オプション対応。 |
+| `SourceVaultSearch[query, opts]` | release context gate 付き検索。`"ReleaseContext"` / `"PDFIndexProfile"` / `"Limit"` / `"Index"`（native projection。`IndexKind` で KeywordBigram/KeywordBM25V1 を dispatch）対応。 |
+| `SourceVaultBuildProjectionIndex[ctx, opts]` | chunk を build-time gate して projection index 化。`"IndexKind"`（KeywordBigram/KeywordBM25V1）/ `"EntityDictionary"` 対応。 |
+| **日本語 lexical (SourceVault_lexical)** | |
+| `SourceVaultNormalizeSearchText[text]` | ja-nfkc-v1 正規化（NFKC / 全半角 / 半角カナ / 数値桁区切り / 空白）。 |
+| `SourceVaultSearchTerms[normText]` | token / unigram(CJK・かな) / bigram の term stream。 |
+| `SourceVaultBuildLexicalStats[chunks, opts]` | BM25 用 LexicalStats（N/DF/AvgDL/Postings/ChunkTerms）。`"EntityDictionary"` で entity stream を追加。 |
+| `SourceVaultLexicalRank[query, stats, opts]` | 転置 index で BM25 採点。`"Limit"` / `"Breakdown"`。entity OR-match で表記非一致/OOV 回復。 |
+| `SourceVaultBuildSurfaceIndex[dict]` | seed entity dictionary → `<\|正規化 surface form -> {topicRef...}\|>`（owner union）。 |
+| `SourceVaultExplainSearchScore[query, chunk, stats]` | 1 chunk の BM25 score breakdown（デバッグ用）。 |
+| **OOPS seed / auto-tag (SourceVault_oopsseed)** | |
+| `SourceVaultImportOOPSSeedDictionary[path, opts]` | `item-name.index` から owner-scoped seed entity dictionary を build。 |
+| `SourceVaultImportOOPSMailToItem[path]` / `…MailInfo[path]` | mail→topic gold / mail メタ（list/author/offset）を読む。 |
+| `SourceVaultParseOOPSMailFile[path]` | UTF-8 mbox を parse（X-Ml-Counter で gold join）。 |
+| `SourceVaultStripOOPSMarkers[text]` | topic ID ref / ◎○・ / brace を除去（label は残す）。 |
+| `SourceVaultParseMailParagraphs[body]` | 本文を段落（Prose/Quote/Signature/Footer）に分割。 |
+| `SourceVaultAssignParagraphTopics[paras, surfaceIndex, opts]` | 各 prose 段落に seed 辞書 OR-match で topic 自動付与（auto-tag）。 |
 | **サービス管理 (SourceVault_servicemanager)** | |
 | `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
 | `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |

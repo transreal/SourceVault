@@ -72,7 +72,15 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultDiagnosticsReadHeartbeats",
   "SourceVault`SourceVaultDiagnosticsActiveAggregator",
   "SourceVault`SourceVaultDiagnosticsAggregatorRollup",
-  "SourceVault`SourceVaultDiagnosticsCloudHeartbeat"
+  "SourceVault`SourceVaultDiagnosticsCloudHeartbeat",
+  "SourceVault`SourceVaultDiagnosticsCloudChannel",
+  "SourceVault`SourceVaultDiagnosticsCloudSend",
+  "SourceVault`SourceVaultDiagnosticsCloudListen",
+  "SourceVault`SourceVaultDiagnosticsCloudStopListen",
+  "SourceVault`SourceVaultDiagnosticsCloudInbox",
+  "SourceVault`SourceVaultDiagnosticsCloudCommsStatus",
+  "SourceVault`SourceVaultDiagnosticsCloudPeerLiveness",
+  "SourceVault`SourceVaultDiagnosticsCloudConsume"
 ]];
 
 $SourceVaultDiagnosticsVersion = "0.1-phase0";
@@ -166,10 +174,49 @@ maintenance task.";
 
 SourceVaultDiagnosticsCloudHeartbeat::usage =
   "SourceVaultDiagnosticsCloudHeartbeat[opts] reports Wolfram Cloud comms health \
-weakly: if not $CloudConnected it returns Channel->Unavailable with \
-Fallback->SourceVaultPolling, so coordination never hard-depends on the cloud. \
-Real channel send/receive (ChannelListen / CloudExpression) is a multi-machine \
-follow-up.";
+and (opt \"Send\"->True) sends a Heartbeat message over the coordination channel. \
+If not $CloudConnected it returns Channel->Unavailable with \
+Fallback->SourceVaultPolling, so coordination never hard-depends on the cloud.";
+
+SourceVaultDiagnosticsCloudChannel::usage =
+  "SourceVaultDiagnosticsCloudChannel[] ensures and returns the shared Wolfram \
+Cloud coordination ChannelObject (all machines on the same Wolfram account share \
+it). Returns Available->False with the polling fallback when not cloud-connected.";
+
+SourceVaultDiagnosticsCloudSend::usage =
+  "SourceVaultDiagnosticsCloudSend[message_Association] ChannelSends message \
+(enriched with this MachineTag / AtUTC / Type) over the coordination channel for \
+inter-machine heartbeat / wakeup / negotiation. No-op fallback when offline.";
+
+SourceVaultDiagnosticsCloudListen::usage =
+  "SourceVaultDiagnosticsCloudListen[] starts (idempotently) a ChannelListen on \
+the coordination channel; incoming packets are recorded to a bounded inbox as \
+DATA ONLY (message content is never evaluated) and deduped by MessageID.";
+
+SourceVaultDiagnosticsCloudStopListen::usage =
+  "SourceVaultDiagnosticsCloudStopListen[] removes this session's channel listener.";
+
+SourceVaultDiagnosticsCloudInbox::usage =
+  "SourceVaultDiagnosticsCloudInbox[opts] returns received channel messages \
+(MessageID / FromWolframID / FromMachineTag / Type / Message / ReceivedAtUTC). \
+Options: \"Type\"->All, \"MaxItems\"->All.";
+
+SourceVaultDiagnosticsCloudCommsStatus::usage =
+  "SourceVaultDiagnosticsCloudCommsStatus[] reports cloud-connected state, channel \
+name, whether our listener is still alive (watchdog), and inbox count.";
+
+SourceVaultDiagnosticsCloudPeerLiveness::usage =
+  "SourceVaultDiagnosticsCloudPeerLiveness[] derives per-peer liveness from the \
+latest cloud Heartbeat message received from each machine tag (OK if within \
+$iSVDiagCloudPeerStaleSeconds, else Stale). SourceVaultDiagnosticsAggregatorRollup \
+folds this in so a peer seen over the cloud channel is counted live even when its \
+Dropbox-synced file heartbeat lags.";
+
+SourceVaultDiagnosticsCloudConsume::usage =
+  "SourceVaultDiagnosticsCloudConsume[] is the SAFE inbox consumer: returns peer \
+heartbeats (data) and, if any Wakeup messages were received, sets a wakeup flag - \
+it never evaluates cloud message content. A caller may, on WakeupRequested, run \
+its own local tick and reset the flag.";
 
 SourceVaultDiagnosticsRegisterProbe::usage =
   "SourceVaultDiagnosticsRegisterProbe[id_String, probeFn_] registers a producer \
@@ -791,16 +838,220 @@ SourceVaultDiagnosticsActiveAggregator[] :=
   iSVDiagAggregatorFromHeartbeats[SourceVaultDiagnosticsReadHeartbeats[]];
 
 SourceVaultDiagnosticsAggregatorRollup[] :=
-  iSVDiagRollupFromHeartbeats[SourceVaultDiagnosticsReadHeartbeats[]];
+  iSVDiagMergeCloudIntoRollup[
+    iSVDiagRollupFromHeartbeats[SourceVaultDiagnosticsReadHeartbeats[]],
+    iSVDiagCloudPeerHeartbeats[]];
 
-Options[SourceVaultDiagnosticsCloudHeartbeat] = {};
+iSVDiagCloudConnectedQ[] := TrueQ[Quiet @ Check[$CloudConnected, False]];
+
+(* shared coordination channel name. All machines on the SAME Wolfram account
+   reference the same named channel, so cross-machine send/recv just works.
+   Configurable via the mail/comms config; default fixed name. *)
+If[!ValueQ[$iSVDiagCloudChannelName], $iSVDiagCloudChannelName = "sourcevault-coordination"];
+If[!ValueQ[$iSVDiagCloudInbox], $iSVDiagCloudInbox = {}];
+If[!ValueQ[$iSVDiagCloudSeenIds], $iSVDiagCloudSeenIds = {}];
+If[!ValueQ[$iSVDiagCloudInboxMax], $iSVDiagCloudInboxMax = 200];
+If[!ValueQ[$iSVDiagCloudListener], $iSVDiagCloudListener = Null];
+
+(* ensure the named channel exists (idempotent) and return its ChannelObject *)
+iSVDiagCloudChannelObj[] :=
+  Module[{name = $iSVDiagCloudChannelName},
+    Quiet @ Check[CreateChannel[name, Permissions -> "Private"], Null];
+    ChannelObject[name]];
+
+SourceVaultDiagnosticsCloudChannel[] :=
+  If[!iSVDiagCloudConnectedQ[],
+    <|"Available" -> False, "Reason" -> "NotCloudConnected",
+      "Fallback" -> "SourceVaultPolling"|>,
+    Module[{ch = Quiet @ Check[iSVDiagCloudChannelObj[], $Failed]},
+      <|"Available" -> (ch =!= $Failed), "Channel" -> ToString[ch],
+        "Name" -> $iSVDiagCloudChannelName|>]];
+
+(* receiver: DATA ONLY. Records the incoming packet to a bounded inbox; never
+   evaluates message content (cloud messages are data, not commands). Dedups by
+   MessageID. The payload sits under the "Message" key (see channel API). *)
+iSVDiagCloudReceiver[pkt_] :=
+  Module[{msg, mid},
+    If[!AssociationQ[pkt], Return[Null]];
+    msg = Lookup[pkt, "Message", <||>];
+    mid = ToString @ Lookup[pkt, "MessageID", ""];
+    If[mid =!= "" && MemberQ[$iSVDiagCloudSeenIds, mid], Return[Null]];
+    AppendTo[$iSVDiagCloudSeenIds, mid];
+    If[Length[$iSVDiagCloudSeenIds] > 2 $iSVDiagCloudInboxMax,
+      $iSVDiagCloudSeenIds = Take[$iSVDiagCloudSeenIds, -$iSVDiagCloudInboxMax]];
+    AppendTo[$iSVDiagCloudInbox, <|
+      "MessageID" -> mid,
+      "FromWolframID" -> Lookup[pkt, "RequesterWolframID", Missing[]],
+      "FromMachineTag" -> If[AssociationQ[msg], Lookup[msg, "MachineTag", Missing[]], Missing[]],
+      "Type" -> If[AssociationQ[msg], Lookup[msg, "Type", Missing[]], Missing[]],
+      "Message" -> msg,
+      "ReceivedAtUTC" -> iSVDiagUTCNow[],
+      "ReceivedAbs" -> AbsoluteTime[]|>];   (* monotonic, for liveness age *)
+    If[Length[$iSVDiagCloudInbox] > $iSVDiagCloudInboxMax,
+      $iSVDiagCloudInbox = Take[$iSVDiagCloudInbox, -$iSVDiagCloudInboxMax]];
+    Null];
+
+(* is OUR listener still registered with the broker? (watchdog, spec r8) *)
+iSVDiagCloudListenerAliveQ[] :=
+  $iSVDiagCloudListener =!= Null &&
+    TrueQ[Quiet @ Check[
+      MemberQ[ChannelListeners[], $iSVDiagCloudListener] ||
+        MemberQ[ToString /@ ChannelListeners[], ToString[$iSVDiagCloudListener]],
+      False]];
+
+SourceVaultDiagnosticsCloudListen[] :=
+  Module[{ch, lis},
+    If[!iSVDiagCloudConnectedQ[],
+      Return[<|"Status" -> "Skipped", "Reason" -> "NotCloudConnected",
+        "Fallback" -> "SourceVaultPolling"|>]];
+    If[iSVDiagCloudListenerAliveQ[],
+      Return[<|"Status" -> "AlreadyListening",
+        "Listener" -> ToString[$iSVDiagCloudListener]|>]];
+    ch = Quiet @ Check[iSVDiagCloudChannelObj[], $Failed];
+    If[ch === $Failed, Return[<|"Status" -> "Failed", "Reason" -> "ChannelUnresolved"|>]];
+    lis = Quiet @ Check[ChannelListen[ch, iSVDiagCloudReceiver], $Failed];
+    If[lis === $Failed, Return[<|"Status" -> "Failed", "Reason" -> "ChannelListenFailed"|>]];
+    $iSVDiagCloudListener = lis;
+    <|"Status" -> "Listening", "Channel" -> ToString[ch],
+      "Listener" -> ToString[lis]|>];
+
+SourceVaultDiagnosticsCloudStopListen[] :=
+  Module[{lis = $iSVDiagCloudListener},
+    If[lis === Null, Return[<|"Status" -> "NotListening"|>]];
+    Quiet @ Check[RemoveChannelListener[lis], Null];
+    $iSVDiagCloudListener = Null;
+    <|"Status" -> "Stopped"|>];
+
+SourceVaultDiagnosticsCloudSend[message_Association] :=
+  Module[{ch, payload, res},
+    If[!iSVDiagCloudConnectedQ[],
+      Return[<|"Sent" -> False, "Reason" -> "NotCloudConnected",
+        "Fallback" -> "SourceVaultPolling"|>]];
+    ch = Quiet @ Check[iSVDiagCloudChannelObj[], $Failed];
+    If[ch === $Failed, Return[<|"Sent" -> False, "Reason" -> "ChannelUnresolved"|>]];
+    payload = Join[
+      <|"Type" -> "Message", "MachineTag" -> iSVDiagMachineTag[],
+        "AtUTC" -> iSVDiagUTCNow[]|>, message];
+    res = Quiet @ Check[ChannelSend[ch, payload], $Failed];
+    If[res === $Failed,
+      <|"Sent" -> False, "Reason" -> "ChannelSendFailed"|>,
+      <|"Sent" -> True, "Channel" -> ToString[ch], "Type" -> payload["Type"]|>]];
+
+Options[SourceVaultDiagnosticsCloudInbox] = {"Type" -> All, "MaxItems" -> All};
+SourceVaultDiagnosticsCloudInbox[opts : OptionsPattern[]] :=
+  Module[{items = $iSVDiagCloudInbox, ty = OptionValue["Type"], mx = OptionValue["MaxItems"]},
+    If[StringQ[ty], items = Select[items, Lookup[#, "Type", ""] === ty &]];
+    If[IntegerQ[mx] && Length[items] > mx, items = Take[items, -mx]];
+    items];
+
+SourceVaultDiagnosticsCloudCommsStatus[] :=
+  <|"CloudConnected" -> iSVDiagCloudConnectedQ[],
+    "ChannelName" -> $iSVDiagCloudChannelName,
+    "ListenerAlive" -> iSVDiagCloudListenerAliveQ[],
+    "InboxCount" -> Length[$iSVDiagCloudInbox],
+    "Fallback" -> "SourceVaultPolling",
+    "AtUTC" -> iSVDiagUTCNow[]|>;
+
+(* heartbeat over the channel: send a Heartbeat message if connected, else
+   report the polling fallback. Round-trip visibility is via the inbox. *)
+Options[SourceVaultDiagnosticsCloudHeartbeat] = {"Send" -> True};
 SourceVaultDiagnosticsCloudHeartbeat[opts : OptionsPattern[]] :=
-  Module[{connected = TrueQ[Quiet @ Check[$CloudConnected, False]]},
+  Module[{connected = iSVDiagCloudConnectedQ[], sent},
     If[!connected,
-      <|"Channel" -> "Unavailable", "Fallback" -> "SourceVaultPolling",
-        "Reason" -> "NotCloudConnected", "AtUTC" -> iSVDiagUTCNow[]|>,
-      <|"Channel" -> "Connected", "Fallback" -> "SourceVaultPolling",
-        "CloudBase" -> Quiet @ Check[$CloudBase, Missing[]], "AtUTC" -> iSVDiagUTCNow[]|>]];
+      Return[<|"Channel" -> "Unavailable", "Fallback" -> "SourceVaultPolling",
+        "Reason" -> "NotCloudConnected", "AtUTC" -> iSVDiagUTCNow[]|>]];
+    sent = If[TrueQ[OptionValue["Send"]],
+      SourceVaultDiagnosticsCloudSend[<|"Type" -> "Heartbeat",
+        "GlobalHealth" -> Quiet @ Check[
+          SourceVaultDiagnosticsLightweightDoctor[]["GlobalHealth"], Missing[]]|>],
+      <|"Sent" -> False, "Reason" -> "SendDisabled"|>];
+    <|"Channel" -> "Connected", "Fallback" -> "SourceVaultPolling",
+      "CloudBase" -> Quiet @ Check[$CloudBase, Missing[]],
+      "ListenerAlive" -> iSVDiagCloudListenerAliveQ[],
+      "HeartbeatSent" -> Lookup[sent, "Sent", False],
+      "AtUTC" -> iSVDiagUTCNow[]|>];
+
+(* ------------------------------------------------------------
+   Cloud-channel consumption: derive peer liveness from received
+   Heartbeat messages, and a SAFE consumer that only sets a wakeup
+   flag (no eval of cloud content). Used to enrich the multi-PC
+   rollup so a peer seen via cloud is live even if its file
+   heartbeat (Dropbox-synced) lags.
+   ------------------------------------------------------------ *)
+
+If[!ValueQ[$iSVDiagCloudPeerStaleSeconds], $iSVDiagCloudPeerStaleSeconds = 180];
+If[!ValueQ[$iSVDiagCloudWakeupRequested], $iSVDiagCloudWakeupRequested = False];
+
+(* latest cloud Heartbeat per peer machine -> liveness (from the inbox) *)
+iSVDiagCloudPeerHeartbeats[] :=
+  Module[{hbs, byTag},
+    hbs = Select[$iSVDiagCloudInbox,
+      Lookup[#, "Type", ""] === "Heartbeat" &&
+        StringQ[Lookup[#, "FromMachineTag", Missing[]]] &];
+    byTag = GroupBy[hbs, Lookup[#, "FromMachineTag", ""] &];
+    Association @ KeyValueMap[
+      Function[{tag, msgs},
+        Module[{latest = Last[SortBy[msgs, Lookup[#, "ReceivedAbs", 0] &]], age},
+          age = AbsoluteTime[] - Lookup[latest, "ReceivedAbs", 0];
+          tag -> <|
+            "GlobalHealth" -> Lookup[Lookup[latest, "Message", <||>], "GlobalHealth", "Unknown"],
+            "AgeSeconds" -> age,
+            "Liveness" -> If[age < $iSVDiagCloudPeerStaleSeconds, "OK", "Stale"],
+            "Source" -> "Cloud"|>]],
+      byTag]];
+
+SourceVaultDiagnosticsCloudPeerLiveness[] := iSVDiagCloudPeerHeartbeats[];
+
+(* SAFE consumer: peer heartbeats (data) + a wakeup flag. Never evaluates
+   cloud message content. A caller may, on WakeupRequested, run its own tick
+   (a safe local action) and then reset the flag. *)
+SourceVaultDiagnosticsCloudConsume[] :=
+  Module[{wakeups = Select[$iSVDiagCloudInbox, Lookup[#, "Type", ""] === "Wakeup" &]},
+    If[wakeups =!= {}, $iSVDiagCloudWakeupRequested = True];
+    <|"PeerHeartbeats" -> iSVDiagCloudPeerHeartbeats[],
+      "WakeupRequested" -> $iSVDiagCloudWakeupRequested,
+      "WakeupCount" -> Length[wakeups],
+      "InboxCount" -> Length[$iSVDiagCloudInbox]|>];
+
+(* merge cloud-derived liveness into a file-based rollup: a machine is OK if
+   EITHER source is fresh; cloud-only machines are added. *)
+iSVDiagBestLiveness[fileL_, cloudL_] :=
+  Which[
+    fileL === "OK" || cloudL === "OK", "OK",
+    StringQ[fileL] && fileL =!= "NoHeartbeat", fileL,
+    StringQ[cloudL], cloudL,
+    True, fileL];
+
+iSVDiagMergeCloudIntoRollup[rollup_Association, cloudPeers_Association] :=
+  Module[{machines = Lookup[rollup, "Machines", {}], seen, merged, cloudOnly,
+          all, global, problems},
+    seen = Lookup[#, "MachineTag", ""] & /@ machines;
+    merged = Map[
+      Function[m,
+        Module[{tag = Lookup[m, "MachineTag", ""], cp},
+          cp = Lookup[cloudPeers, tag, Missing[]];
+          If[AssociationQ[cp],
+            Append[m, <|"CloudLiveness" -> cp["Liveness"],
+              "Liveness" -> iSVDiagBestLiveness[Lookup[m, "Liveness", ""], cp["Liveness"]],
+              "LivenessSources" -> {"File", "Cloud"}|>],
+            Append[m, "LivenessSources" -> {"File"}]]]],
+      machines];
+    cloudOnly = KeyValueMap[
+      Function[{tag, cp},
+        <|"MachineTag" -> tag, "Liveness" -> cp["Liveness"],
+          "GlobalHealth" -> cp["GlobalHealth"], "AgeSeconds" -> cp["AgeSeconds"],
+          "CloudLiveness" -> cp["Liveness"], "LivenessSources" -> {"Cloud"}|>],
+      KeySelect[cloudPeers, !MemberQ[seen, #] &]];
+    all = Join[merged, cloudOnly];
+    global = Which[
+      AnyTrue[all, #["Liveness"] === "Failing" &] ||
+        MemberQ[Lookup[#, "GlobalHealth", "Unknown"] & /@ all, "Failing"], "Failing",
+      AnyTrue[all, MemberQ[{"Stale", "NoHeartbeat"}, #["Liveness"]] &] ||
+        MemberQ[Lookup[#, "GlobalHealth", "Unknown"] & /@ all, "Degraded"], "Degraded",
+      True, "OK"];
+    problems = #["MachineTag"] & /@ Select[all, #["Liveness"] =!= "OK" &];
+    Join[rollup, <|"Machines" -> all, "GlobalHealth" -> global,
+      "ProblemMachines" -> problems, "CloudPeersConsidered" -> Length[cloudPeers]|>]];
 
 (* ------------------------------------------------------------
    Status / panel.
@@ -1092,7 +1343,8 @@ iSVDiagSendMailReal[recipient_, subject_, body_] :=
 
 SourceVaultDiagnosticsEscalate[event_Association] :=
   Module[{enriched, fe, key, prior, now = AbsoluteTime[], coalesced,
-          shouldMail, recipient, body, subject, dryRun, mailResult, mailIntent},
+          shouldMail, recipient, body, subject, dryRun, mailResult, mailIntent,
+          forceMail},
     iSVDiagEnsureMailConfig[];
     enriched = Join[
       <|"AtUTC" -> iSVDiagUTCNow[], "MachineTag" -> iSVDiagMachineTag[]|>, event];
@@ -1121,11 +1373,16 @@ SourceVaultDiagnosticsEscalate[event_Association] :=
       ToString @ Lookup[enriched, "Health", "?"] <> " " <>
       ToString @ Lookup[enriched, "Component", "?"] <> " " <>
       ToString @ Lookup[enriched, "ReasonCode", "?"] <> " @ " <> iSVDiagMachineTag[];
-    dryRun = !(TrueQ[$iSVDiagMailEnabled] && StringQ[recipient]);
+    (* the operator's intent: when the FE is in use, surface in the status band,
+       do NOT mail (mail is for when they are away from the machine = headless).
+       "ForceMail"->True overrides (e.g. to test delivery from the FE). *)
+    forceMail = TrueQ[Lookup[event, "ForceMail", False]];
+    dryRun = !(TrueQ[$iSVDiagMailEnabled] && StringQ[recipient]) || (fe && !forceMail);
     mailResult = If[dryRun,
       <|"Sent" -> False, "Reason" ->
         Which[!TrueQ[$iSVDiagMailEnabled], "DryRun:MailDisabled",
               !StringQ[recipient], "DryRun:RecipientUnconfigured",
+              fe && !forceMail, "DeferredToFEStatusBand",
               True, "DryRun"]|>,
       iSVDiagSendMailReal[recipient, subject, body]];
     mailIntent = <|

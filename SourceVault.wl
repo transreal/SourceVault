@@ -6446,9 +6446,25 @@ iSaveRegistryEntries[path_String, entries_List] :=
 $iSVLaunchStatsChannel = "local";
 iSVLaunchStatsPath[] := iCompiledPath["launch-stats", $iSVLaunchStatsChannel];
 iSVStatsInt[x_] := Which[IntegerQ[x], x, NumericQ[x], Round[x], True, 0];
-iSVLaunchStatsLoad[] := Module[{e},
+(* 統計ロードはパネル描画で行/ルート数だけ繰り返し呼ばれる (iSVLaunchStatsGet/Score)。
+   そのたびに Dropbox 上の JSON を読み+パースし iEnsureDir まで走ると N 倍の I/O に
+   なり、パネル本体 (DynamicModule body) の評価が数秒かかって FE に外部 abort され
+   $Aborted になる。短 TTL のメモ化で 1 回の描画内では実ファイル読込を 1 回に畳む。
+   書込 (iSVLaunchStatsBump) はキャッシュを破棄して次回読込で最新化する。 *)
+If[! AssociationQ[$iSVLaunchStatsCache],
+  $iSVLaunchStatsCache = <|"Time" -> -1, "Entries" -> {}|>];
+If[! NumericQ[$iSVLaunchStatsCacheTTL], $iSVLaunchStatsCacheTTL = 3];
+iSVLaunchStatsInvalidate[] :=
+  ($iSVLaunchStatsCache = <|"Time" -> -1, "Entries" -> {}|>);
+iSVLaunchStatsLoad[] := Module[{now = AbsoluteTime[], e},
+  If[AssociationQ[$iSVLaunchStatsCache] &&
+     NumericQ[Lookup[$iSVLaunchStatsCache, "Time", -1]] &&
+     now - Lookup[$iSVLaunchStatsCache, "Time", -1] < $iSVLaunchStatsCacheTTL,
+    Return[Lookup[$iSVLaunchStatsCache, "Entries", {}]]];
   e = Quiet @ Check[iLoadRegistryEntries[iSVLaunchStatsPath[]], {}];
-  If[ListQ[e], Select[e, AssociationQ], {}]];
+  e = If[ListQ[e], Select[e, AssociationQ], {}];
+  $iSVLaunchStatsCache = <|"Time" -> now, "Entries" -> e|>;
+  e];
 iSVLaunchStatsGet[id_String] := Module[{hit},
   hit = SelectFirst[iSVLaunchStatsLoad[], Lookup[#, "Id", ""] === id &, <||>];
   <|"LaunchCount" -> iSVStatsInt[Lookup[hit, "LaunchCount", 0]],
@@ -6473,6 +6489,7 @@ iSVLaunchStatsBump[id_String, isError_:False] := Module[{e, found = False, upd},
       "ErrorCount" -> If[TrueQ[isError], 1, 0],
       "LastLaunchUTC" -> DateString["ISODateTime"]|>]];
   Quiet @ Check[iSaveRegistryEntries[iSVLaunchStatsPath[], upd], $Failed];
+  iSVLaunchStatsInvalidate[];
   iSVLaunchStatsGet[id]];
 iSVLaunchStatsBump[___] := $Failed;
 
@@ -14796,7 +14813,8 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
     Scan[
       Function[f, Module[{p = FileNameJoin[{svDir, f}]},
         Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
-      {"SourceVault_core.wl", "SourceVault_mining.wl", "SourceVault_searchindex.wl",
+      {"SourceVault_core.wl", "SourceVault_mining.wl",
+       "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_workflowregistry.wl",
        "SourceVault_workflowcatalog.wl"}]]];

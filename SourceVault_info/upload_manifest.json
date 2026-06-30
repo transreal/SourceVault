@@ -17,7 +17,9 @@
 		"SourceVault_mining.wl",
 		"SourceVault_comfyui.wl",
 		"SourceVault_autotrigger.wl",
-		"SourceVault_diagnostics.wl"
+		"SourceVault_diagnostics.wl",
+		"SourceVault_lexical.wl",
+		"SourceVault_oopsseed.wl"
 	],
 	"directories":[
 		"SourceVault_info",

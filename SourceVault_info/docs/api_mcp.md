@@ -164,7 +164,7 @@ Options: "BatchId" -> All, "SessionId" -> All, "Limit" -> Automatic
 ## 検索契約層 (spec §5 / §6 / §8 / §11)
 
 ### SourceVaultNormalizeSearchSpec[spec] → Association
-MCP の SearchSpec (spec §5.1) を既定補完して正規化する。kinds に "all" があれば個別指定を無視。filters の accessLevelMax を正準、privacyMax を alias とする。return.format 既定 "compactText"、scope.untagged 既定 "MetadataOnly"。
+MCP の SearchSpec (spec §5.1) を既定補完して正規化する。kinds に "all" があれば個別指定を無視。filters の accessLevelMax を正準、privacyMax を alias とする。return.format 既定 "compactText"、scope.untagged 既定 "MetadataOnly"。`methods` 既定は `{"keyword", "metadata"}`（後方互換）。`"bm25"` を含めると search adapter が日本語 BM25 + entity OR-match の `KeywordBM25V1` index を選ぶ（§8.2）。
 
 ### SourceVaultNormalizeSearchResult[row, opts] → Association
 adapter の生 result row を SearchResult (spec §6) に正規化する。URI を canonical 化し Summary/Snippet を MaxChars で truncation する。未開示は `Missing["NotReleased"]` 等で示す。release gate 判定は呼び出し側で行う。
@@ -176,6 +176,7 @@ format: "compactText" (LLM 可読 text) | "referencesOnly" (URI+citation のみ 
 
 ### SourceVaultMCPSearch[searchSpec, opts]
 SearchSpec を正規化し kinds に適合する available な search adapter を選び、各 adapter search → SearchResult 正規化 → limit/offset → render する横断検索 orchestration (spec §11.1)。per-result release gate (SourceVaultMCPReleaseGate) を通す。`sourcevault_search` tool の実体。
+**method=bm25 (§8.2)**: `methods` に `"bm25"` があり明示 `scope.index` が無ければ、search adapter は `scope.bm25Index` → 慣習 `"<releaseContext>-bm25"` の順で `KeywordBM25V1` index を選ぶ。実際の BM25/bigram は index の `IndexKind` で `iNativeSearch` が dispatch する（method は advisory）。結果 Metadata に `RetrievalKind`（"KeywordBM25"/"KeywordBigram"）を載せる。query が英語・doc が日本語でも entity term で一致する（表記非一致/OOV 回復）。
 → Association
 Options: "Principal" -> Automatic, "Trusted" -> <||>
 返値 key: Results / Count / TotalBeforeLimit / Adapters / Format / Rendered / AccessRequest / ReleaseGated
