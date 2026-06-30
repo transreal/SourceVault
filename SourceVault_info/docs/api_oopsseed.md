@@ -45,7 +45,7 @@ import + dictionary build を一括で行う便宜関数。戻り値: `<|"Dictio
 ## mail parse・auto-tag
 
 ### SourceVaultParseOOPSMailFile[path] → Association
-UTF-8 の `oops*.txt` を mbox として parse（CR 行終端）。`X-Ml-Counter` で gold と join する。
+UTF-8 の `oops*.txt` を mbox として parse（CR 行終端）。`X-Ml-Counter` で gold と join する。`Subject` / `From` は **RFC 2047 MIME encoded-word（`=?charset?B/Q?text?=`）を復号**する（`iSVDecodeMimeWords`）。ISO-2022-JP は WL 非対応のため JIS X 0208 バイトを +0x80 して EUC-JP 経由で復号（例 `=?ISO-2022-JP?B?GyRCRT42UBsoSg==?=` → 「転勤」）。Shift_JIS / UTF-8 / EUC-JP も対応。
 戻り値: `<|"Mails" -> {<|"Counter", "MlName", "Subject", "From", "Date", "Body"|>...}, "MailCount", "SourcePath"|>`
 
 ### SourceVaultStripOOPSMarkers[text] → String

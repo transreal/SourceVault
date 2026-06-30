@@ -384,6 +384,57 @@ iSVHdr[headers_String, key_String] :=
   FirstCase[StringCases[headers, RegularExpression["(?:^|\\r|\\n)" <> key <> ":[ \\t]*([^\\r\\n]*)"] :> "$1"],
     _String, "", {1}];
 
+(* ------------------------------------------------------------
+   RFC 2047 MIME encoded-word (=?charset?B/Q?text?=) 復号。Subject/From の日本語見出しを decode。
+   ISO-2022-JP は WL 非対応ゆえ JIS X 0208 バイトを +0x80 して EUC-JP 経由で復号する。
+   ------------------------------------------------------------ *)
+
+iSVIso2022jpToEuc[bytes_List] := Module[{out = {}, i = 1, n = Length[bytes], mode = "ascii"},
+  While[i <= n,
+    If[bytes[[i]] == 27 && i + 2 <= n,
+      Which[
+        bytes[[i + 1]] == 36 && MemberQ[{64, 66}, bytes[[i + 2]]], mode = "jis"; i += 3,  (* ESC $ @/B *)
+        bytes[[i + 1]] == 40 && MemberQ[{66, 74, 72}, bytes[[i + 2]]], mode = "ascii"; i += 3,  (* ESC ( B/J/H *)
+        True, i += 1],
+      If[mode == "jis" && i + 1 <= n && bytes[[i]] < 128 && bytes[[i + 1]] < 128,
+        AppendTo[out, BitOr[bytes[[i]], 128]]; AppendTo[out, BitOr[bytes[[i + 1]], 128]]; i += 2,
+        AppendTo[out, bytes[[i]]]; i += 1]]];
+  out];
+
+iSVDecodeQPBytes[text_String] := Module[{chars = Characters[StringReplace[text, "_" -> " "]], out = {}, i = 1, n},
+  n = Length[chars];
+  While[i <= n,
+    If[chars[[i]] === "=" && i + 2 <= n &&
+        StringMatchQ[chars[[i + 1]] <> chars[[i + 2]], RegularExpression["[0-9A-Fa-f]{2}"]],
+      AppendTo[out, FromDigits[chars[[i + 1]] <> chars[[i + 2]], 16]]; i += 3,
+      AppendTo[out, First@ToCharacterCode[chars[[i]]]]; i += 1]];
+  out];
+
+iSVMimeWordBytes[enc_String, text_String] := Switch[ToUpperCase[enc],
+  "B", Quiet@Check[Normal@BaseDecode[StringTrim[text]], $Failed],
+  "Q", iSVDecodeQPBytes[text],
+  _, $Failed];
+
+iSVBytesToStringByCharset[bytes_List, charset_String] := Module[{cs = ToUpperCase[charset]},
+  Which[
+    StringContainsQ[cs, "2022"],
+      Quiet@Check[ByteArrayToString[ByteArray[iSVIso2022jpToEuc[bytes]], "EUC-JP"], $Failed],
+    StringContainsQ[cs, "UTF-8"] || cs === "UTF8",
+      Quiet@Check[ByteArrayToString[ByteArray[bytes], "UTF-8"], $Failed],
+    StringContainsQ[cs, "SHIFT"] || MemberQ[{"SJIS", "X-SJIS", "CP932", "MS_KANJI", "WINDOWS-31J"}, cs],
+      Quiet@Check[ByteArrayToString[ByteArray[bytes], "ShiftJIS"], $Failed],
+    StringContainsQ[cs, "EUC"],
+      Quiet@Check[ByteArrayToString[ByteArray[bytes], "EUC-JP"], $Failed],
+    True, Quiet@Check[ByteArrayToString[ByteArray[bytes], "ASCII"], Quiet@Check[FromCharacterCode[bytes], $Failed]]]];
+
+iSVDecodeMimeWords[s0_String] := Module[{s},
+  s = StringReplace[s0, RegularExpression["\\?=\\s+=\\?"] -> "?==?"];  (* 隣接 encoded-word 間の空白を除去 (RFC2047) *)
+  StringReplace[s,
+    Shortest["=?" ~~ cs : (Except["?"] ..) ~~ "?" ~~ en : ("B" | "b" | "Q" | "q") ~~ "?" ~~ tx : (Except["?"] ...) ~~ "?="] :>
+      Module[{by = iSVMimeWordBytes[en, tx], str},
+        str = If[ListQ[by], iSVBytesToStringByCharset[by, cs], $Failed];
+        If[StringQ[str], str, "=?" <> cs <> "?" <> en <> "?" <> tx <> "?="]]]];
+
 SourceVaultParseOOPSMailFile[path_String] := Module[{s, parts, mails},
   If[! FileExistsQ[path], Return[Failure["FileNotFound", <|"MessageTemplate" -> path|>]]];
   s = iSVDecodeMailFile[path];
@@ -397,8 +448,8 @@ SourceVaultParseOOPSMailFile[path_String] := Module[{s, parts, mails},
         Sow[<|
           "Counter" -> ToExpression[First[counter]],
           "MlName" -> StringTrim@iSVHdr[headers, "X-Ml-Name"],
-          "Subject" -> StringTrim@iSVHdr[headers, "Subject"],
-          "From" -> StringTrim@iSVHdr[headers, "From"],
+          "Subject" -> StringTrim@iSVDecodeMimeWords@iSVHdr[headers, "Subject"],
+          "From" -> StringTrim@iSVDecodeMimeWords@iSVHdr[headers, "From"],
           "Date" -> StringTrim@iSVHdr[headers, "Date"],
           "Body" -> body|>]]],
       {part, parts}]][[2]];
