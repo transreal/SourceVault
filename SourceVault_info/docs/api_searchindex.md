@@ -231,6 +231,23 @@ index の読込状態/chunk 数/context を返す。
 ロード済み: `<|"IndexId", "Loaded" -> True, "ChunkCount", "ReleaseContextRef", "IndexKind" -> "KeywordBigram"|"KeywordBM25V1"|>`
 未ロード: `<|"IndexId", "Loaded" -> False|>`
 
+## Mining Primer (§6.1/6.2)
+
+mining サマリー由来の低コスト探索層。raw chunk でなく summary item を index し、importance / freshness を加味して採点する。BuildProjectionIndex と同型だが item は summary レベル。
+
+### SourceVaultBuildPrimerIndex[contextName, opts] → Association | Failure
+primer item に build-time release gate を適用し Permit のみの `SourceVaultPrimerIndex` を immutable 保存する。各 item の summary/title/tags/authors を lexical chunk に写像し `SourceVaultBuildLexicalStats` で BM25 stats を作る。
+Options: `"Items" -> None`（必須: `{<|"ObjectURI", "SourceVaultObjectId", "Title", "Summary", "Tags", "Authors", "Signals" -> <|"EffectiveImportance" -> _|>, "Freshness" -> "Fresh"|"StalePrimer", "PrivacyLevel", "State"|>...}`。mining 層が供給）, `"PrimerId" -> Automatic`（既定 contextName <> `"-primer"`）
+→ `<|"Status" -> "OK", "PrimerId", "Ref", "ItemCount", "ExcludedCount"|>`
+
+### SourceVaultLoadPrimerIndex[primerIdOrRef] → Association | Failure
+primer index を memory（`$loadedPrimers`）に読み込む。`SourceVaultPrimerSearch` は未ロードなら自動 load。
+
+### SourceVaultPrimerSearch[query, opts] → {Association...}
+primer を採点して Permit のみ返す。`PrimerScore = BM25(summary/title/tags/authors) + MiningBoost + EffectiveImportance·ImportanceWeight − StalePrimerPenalty`。`MiningBoost = Min[MaxBoost, MaxBoost·EffectiveImportance]`（bounded）。`Freshness == "StalePrimer"` のとき `StalePrimerPenalty` を引く。request-time gate / revocation を再評価し、結果は `EvidenceKind -> "SummaryPrimer"`（回答根拠にはしない）。
+必須 `"ReleaseContext"`（fail-closed）。Options: `"PrimerIndex" -> Automatic`（既定 `<rc>-primer`）, `"Limit" -> 20`, `"MaxBoost" -> 0.2`, `"ImportanceWeight" -> 0.1`, `"StalePrimerPenalty" -> 0.15`, `"UseSummaries" -> True`, `"UseMining" -> True`
+戻り値: `{<|"ResultId", "SourceVaultObjectId", "ObjectURI", "Title", "Summary", "Score", "BM25", "MiningBoost", "ImportanceTerm", "FreshnessPenalty", "Freshness", "EvidenceKind" -> "SummaryPrimer", "ReleaseDecision", "Revoked", "RequestTimeGateReevaluated", "Why"|>...}`
+
 ## TPO 制約 / 目的別 Index / 低遅延 Interaction (§16, Phase 7)
 
 ### SourceVaultRegisterTPOProfile[tpoId, spec] → Association | Failure

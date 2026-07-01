@@ -164,6 +164,22 @@ SourceVaultReloadSearchIndex::usage =
 SourceVaultListSearchIndexes::usage =
   "SourceVaultListSearchIndexes[] は memory に読み込み済みの index id を返す。";
 
+(* ---- §6.1/6.2 Mining primer (summary 由来の低コスト探索) ---- *)
+SourceVaultBuildPrimerIndex::usage =
+  "SourceVaultBuildPrimerIndex[context, opts] は mining サマリー由来の primer item に build-time release gate を\n" <>
+  "適用し Permit のみの SourceVaultPrimerIndex を immutable 保存する (§6.1)。\n" <>
+  "必須 opts \"Items\" -> {<|\"ObjectURI\",\"SourceVaultObjectId\",\"Title\",\"Summary\",\"Tags\",\"Authors\",\n" <>
+  "\"Signals\"(<|\"EffectiveImportance\"->_|>),\"Freshness\"(\"Fresh\"|\"StalePrimer\"),\"PrivacyLevel\",\"State\"|>...}。\n" <>
+  "任意 \"PrimerId\" (既定 context+\"-primer\")。戻り値 <|\"Status\",\"PrimerId\",\"Ref\",\"ItemCount\",\"ExcludedCount\"|>。";
+SourceVaultLoadPrimerIndex::usage =
+  "SourceVaultLoadPrimerIndex[primerIdOrRef] は primer index を memory に読み込む。";
+SourceVaultPrimerSearch::usage =
+  "SourceVaultPrimerSearch[query, opts] は primer を BM25(summary/title/tags/authors) + bounded MiningBoost +\n" <>
+  "EffectiveImportance*ImportanceWeight - StalePrimerPenalty で採点し、request-time gate/revocation 後 Permit のみ返す (§6.2)。\n" <>
+  "結果は EvidenceKind=\"SummaryPrimer\" (回答根拠にしない)。必須 \"ReleaseContext\"。\n" <>
+  "opts \"PrimerIndex\"(既定 <rc>-primer), \"Limit\"(20), \"MaxBoost\"(0.2), \"ImportanceWeight\"(0.1),\n" <>
+  "\"StalePrimerPenalty\"(0.15), \"UseSummaries\"(True), \"UseMining\"(True)。";
+
 (* ---- TPO 制約 / 目的別 index / 低遅延 interaction (§16。Phase 7) ---- *)
 SourceVaultRegisterTPOProfile::usage =
   "SourceVaultRegisterTPOProfile[tpoId, spec] は TPOProfile (場所/イベント/役割/許可話題/回答長/遅延) を登録する (§16.2)。\n" <>
@@ -804,6 +820,100 @@ SourceVaultSearchIndexStatus[indexId_String, opts___] := Module[{rec = Lookup[$l
     <|"IndexId" -> indexId, "Loaded" -> False|>,
     <|"IndexId" -> indexId, "Loaded" -> True, "ChunkCount" -> Lookup[rec, "ChunkCount"],
       "ReleaseContextRef" -> Lookup[rec, "ReleaseContextRef"], "IndexKind" -> Lookup[rec, "IndexKind"]|>]
+];
+
+(* ============================================================
+   §6.1/6.2  Mining primer index (summary 由来の低コスト探索)
+   BuildProjectionIndex と同型だが item は summary レベル。BM25(summary/title/tags/authors)
+   + bounded MiningBoost + EffectiveImportance*weight - StalePrimerPenalty。EvidenceKind=SummaryPrimer。
+   ============================================================ *)
+
+If[! AssociationQ[$loadedPrimers], $loadedPrimers = <||>];
+
+Options[SourceVaultBuildPrimerIndex] = {"Items" -> None, "PrimerId" -> Automatic};
+SourceVaultBuildPrimerIndex[contextName_String, OptionsPattern[]] := Module[
+  {ctx, items, permitted, excluded, primerId, chunks, lexStats, rec, saved},
+  ctx = iResolve["ReleaseContext", contextName];
+  If[FailureQ[ctx], Return[ctx]];
+  items = OptionValue["Items"];
+  If[! ListQ[items],
+    Return[Failure["ItemsRequired", <|
+      "MessageTemplate" -> "SourceVaultBuildPrimerIndex には \"Items\" (§6.1 primer item のリスト) が必須です。"|>]]];
+  permitted = Select[items,
+    Lookup[SourceVaultEvaluateReleasePolicy[#, contextName], "Decision"] === "Permit" &];
+  excluded = Length[items] - Length[permitted];
+  primerId = OptionValue["PrimerId"] /. Automatic -> (contextName <> "-primer");
+  (* summary fields を lexical chunk に写像 (title/summary/tags/author) *)
+  chunks = Map[Function[it,
+    <|"ChunkId" -> Lookup[it, "SourceVaultObjectId", Lookup[it, "ObjectURI", CreateUUID[]]],
+      "SearchFields" -> <|"title" -> Lookup[it, "Title", ""], "summary" -> Lookup[it, "Summary", ""],
+        "tags" -> Lookup[it, "Tags", {}], "author" -> Lookup[it, "Authors", {}]|>|>], permitted];
+  lexStats = SourceVault`SourceVaultBuildLexicalStats[chunks];
+  rec = <|"ObjectClass" -> "SourceVaultPrimerIndex", "PrimerId" -> primerId,
+    "ReleaseContextRef" -> contextName, "PolicyDigest" -> SourceVault`SourceVaultSnapshotDigest[ctx],
+    "Items" -> permitted, "ItemCount" -> Length[permitted], "ExcludedCount" -> excluded,
+    "LexicalStats" -> lexStats, "BuiltAtUTC" -> DateString[Now, "ISODateTime"]|>;
+  saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultPrimerIndex", rec, "Alias" -> primerId];
+  If[FailureQ[saved], Return[saved]];
+  <|"Status" -> "OK", "PrimerId" -> primerId, "Ref" -> Lookup[saved, "Ref"],
+    "ItemCount" -> Length[permitted], "ExcludedCount" -> excluded|>
+];
+
+SourceVaultLoadPrimerIndex[primerIdOrRef_String, opts___] := Module[{rec, id},
+  rec = If[StringMatchQ[primerIdOrRef, "snapshot:" ~~ __],
+    SourceVault`SourceVaultLoadImmutableSnapshot[primerIdOrRef],
+    SourceVault`SourceVaultLoadImmutableSnapshot["SourceVaultPrimerIndex/" <> primerIdOrRef]];
+  If[FailureQ[rec], Return[rec]];
+  id = Lookup[rec, "PrimerId", primerIdOrRef];
+  $loadedPrimers[id] = rec;
+  <|"Status" -> "Loaded", "PrimerId" -> id, "ItemCount" -> Lookup[rec, "ItemCount"]|>
+];
+
+Options[SourceVaultPrimerSearch] = {"ReleaseContext" -> None, "PrimerIndex" -> Automatic, "Limit" -> 20,
+  "UseSummaries" -> True, "UseMining" -> True, "MaxBoost" -> 0.2, "ImportanceWeight" -> 0.1,
+  "StalePrimerPenalty" -> 0.15};
+SourceVaultPrimerSearch[query_String, OptionsPattern[]] := Module[
+  {rc = OptionValue["ReleaseContext"], primerId, rec, revSet, ranked, itemsById,
+   maxBoost = OptionValue["MaxBoost"], impW = OptionValue["ImportanceWeight"],
+   stalePen = OptionValue["StalePrimerPenalty"], useMining = TrueQ[OptionValue["UseMining"]],
+   useSummaries = TrueQ[OptionValue["UseSummaries"]], lim = OptionValue["Limit"], results},
+  If[! StringQ[rc],
+    Return[Failure["ReleaseContextRequired", <|
+      "MessageTemplate" -> "SourceVaultPrimerSearch には \"ReleaseContext\" が必須です (fail-closed)。"|>]]];
+  primerId = OptionValue["PrimerIndex"] /. Automatic -> (rc <> "-primer");
+  rec = Lookup[$loadedPrimers, primerId, Missing[]];
+  If[! AssociationQ[rec],
+    Module[{ld = SourceVaultLoadPrimerIndex[primerId]},
+      If[FailureQ[ld], Return[Failure["PrimerNotLoaded", <|"PrimerId" -> primerId|>]]];
+      rec = Lookup[$loadedPrimers, primerId]]];
+  revSet = SourceVaultBuildRevocationSet[];
+  ranked = SourceVault`SourceVaultLexicalRank[query, Lookup[rec, "LexicalStats"],
+    "Limit" -> 2 lim, "Breakdown" -> False];
+  itemsById = Association[
+    (Lookup[#, "SourceVaultObjectId", Lookup[#, "ObjectURI", ""]] -> #) & /@ Lookup[rec, "Items", {}]];
+  results = Map[Function[r,
+    Module[{it = Lookup[itemsById, r["ChunkId"], <||>], bm25 = r["Score"],
+       imp, fresh, mining, impTerm, penalty, objId, revoked, gate, score},
+      imp = Lookup[Lookup[it, "Signals", <||>], "EffectiveImportance", 0.];
+      fresh = Lookup[it, "Freshness", "Fresh"];
+      mining = If[useMining, Min[maxBoost, maxBoost*imp], 0.];
+      impTerm = impW*imp;
+      penalty = If[fresh === "StalePrimer", stalePen, 0.];
+      score = bm25 + mining + impTerm - penalty;
+      objId = Lookup[it, "SourceVaultObjectId", Missing[]];
+      revoked = StringQ[objId] && KeyExistsQ[revSet, objId];
+      gate = SourceVaultEvaluateReleasePolicy[it, rc];
+      <|"ResultId" -> "primer:" <> CreateUUID[], "SourceVaultObjectId" -> objId,
+        "ObjectURI" -> Lookup[it, "ObjectURI", Missing[]], "Title" -> Lookup[it, "Title", ""],
+        "Summary" -> If[useSummaries, Lookup[it, "Summary", ""], Missing["Hidden"]],
+        "Score" -> score, "BM25" -> bm25, "MiningBoost" -> mining, "ImportanceTerm" -> impTerm,
+        "FreshnessPenalty" -> penalty, "Freshness" -> fresh, "EvidenceKind" -> "SummaryPrimer",
+        "ReleaseDecision" -> If[revoked, "Deny", Lookup[gate, "Decision", "Deny"]], "Revoked" -> revoked,
+        "RequestTimeGateReevaluated" -> True,
+        "Why" -> If[revoked, Append[Lookup[gate, "Why", {}], "ObjectRevoked"], Lookup[gate, "Why", {}]]|>]],
+    ranked];
+  results = Select[results, #["ReleaseDecision"] === "Permit" &];
+  Take[ReverseSortBy[results, #["Score"] &], UpTo[lim]]
 ];
 
 (* scorer (IndexKind 別)。返り値は {<|"Chunk"->ch,"Score"->_,("Breakdown"->_)|>...} *)

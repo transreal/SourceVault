@@ -131,7 +131,46 @@ SourceVaultConfirmCandidateTopics::usage =
   "candidates は {<|\"Surface\",\"ExtractionKind\"|>...} か {label string...}。" <>
   "オプション \"ExistingDictionary\"(渡すと Entries を merge した MergedDictionary を返す→BuildSurfaceIndex で検索可能に), " <>
   "\"RefPrefix\"(\"svtopic:extracted\"), \"StartId\"(1), \"OwnerRef\"(None), \"PrivacyLevel\"(0.3)。" <>
-  "戻り値 <|\"ConfirmedEntries\", \"Count\", (\"MergedDictionary\")|>。永続(ファイル/DB)は owner 選択で別途。";
+  "戻り値 <|\"ConfirmedEntries\", \"Count\", (\"MergedDictionary\")|>。永続は SourceVaultSaveExtractedTopics。";
+
+SourceVaultBuildMailChunks::usage =
+  "SourceVaultBuildMailChunks[mail, surfaceIndex, opts] は parse 済 mail を §7.2 検索 chunk のリストにする。" <>
+  "各 chunk は SearchFields(title/body/author/topics)＋Text/NormalizedText＋PrivacyLevel/State/Tags＋TopicRefs/RelatedRefs。" <>
+  "topics は SourceVaultTopicEnrichment で auto-tag 注入。" <>
+  "オプション \"Granularity\"(\"Paragraph\"既定/\"Mail\"), \"RelationGraph\", \"RefLabel\", \"PrivacyLevel\"(0.5), " <>
+  "\"ReleaseState\"(\"Published\"), \"IncludeRelated\"(True), \"ObjectIdPrefix\"(\"svobj:oops\")。" <>
+  "Paragraph 粒度なら topic は段落単位で付くので whole-mail より precision が高い。";
+
+SourceVaultSaveExtractedTopics::usage =
+  "SourceVaultSaveExtractedTopics[entries, path] は確認済 extracted topic entry を WXF で永続化する。" <>
+  "SourceVaultLoadExtractedTopics[path] で読み戻し、dict[\"Entries\"] に Join すれば seed に編入できる。";
+SourceVaultLoadExtractedTopics::usage =
+  "SourceVaultLoadExtractedTopics[path] は SourceVaultSaveExtractedTopics で保存した entry リストを返す。";
+
+SourceVaultImportOOPSQuoteTable::usage =
+  "SourceVaultImportOOPSQuoteTable[path] は quote-table.index を読み <|mailNumber -> {<|\"Index\",\"FromMail\",\"StandardQuoteId\"|>...}|> を返す。" <>
+  "各メールが引用している元メール(FromMail)と seed の standard-quote id。OOPS seed の authoritative な引用グラフ。";
+
+SourceVaultExtractMailQuoteMarkers::usage =
+  "SourceVaultExtractMailQuoteMarkers[mail] は本文の `-*- Quote (from N) -*-` マーカーを抽出する。" <>
+  "N が整数なら ExplicitMarker(FromMail)、URL なら ExternalURL(FromRef)。戻り値 {<|\"QuoteKind\",(\"FromMail\"|\"FromRef\"),\"SourceMarker\"|>...}。";
+
+SourceVaultBuildMailQuoteEdges::usage =
+  "SourceVaultBuildMailQuoteEdges[mails, opts] は SourceVaultMailQuoteEdge のリストを作る(§6.5 quote tracking)。" <>
+  "seed quote-table(authoritative)を \"QuoteTable\" で渡すと SeedStandardQuote edge を、本文マーカーからは ExplicitMarker/ExternalURL edge を作る。" <>
+  "各 edge: <|\"ObjectClass\",\"QuoteEdgeId\",\"SeedQuoteId\",\"FromMailRef\",\"ToMailRef\",\"QuoteKind\",\"Confidence\",\"SourceMarker\"|>。オプション \"QuoteTable\"(None)。";
+
+SourceVaultBuildMailSessions::usage =
+  "SourceVaultBuildMailSessions[mails, quoteEdges, opts] は quote edge の連結成分＋Subject の Re:/Fwd: 正規化で" <>
+  "メールをセッション(スレッド)にまとめる(§6.5 session/cluster)。戻り値 {SourceVaultMailSession...}: " <>
+  "<|MailSessionId,MailCounters,MailRefs,MailCount,SessionKind(ReplyThread|QuoteCluster|Singleton),Subject,StartMailCounter,EndMailCounter|>。" <>
+  "オプション \"SubjectThreading\"(既定 True)。quote 連結が有れば QuoteCluster、Subject のみなら ReplyThread。";
+
+SourceVaultBuildTopicItemGraph::usage =
+  "SourceVaultBuildTopicItemGraph[mails, opts] は段落 auto-tag の topic をノード、同一段落共起=CoParagraph、" <>
+  "quote edge 越し=QuoteTransition、seed relation=SeedRelation の辺を張った SourceVaultTopicItemGraph を作る(§6.5)。" <>
+  "戻り値 <|Nodes(TopicItemRef/Label/SupportParagraphs), Edges(From/To/EdgeKind/Weight/EvidenceRefs), NodeCount, EdgeCount|>。" <>
+  "必須オプション \"SurfaceIndex\"。任意 \"RelationGraph\"/\"RefLabel\"/\"QuoteEdges\"/\"SessionRefs\"。";
 
 Begin["`Private`"];
 
@@ -166,17 +205,24 @@ iSVReadList[s_String, cs_, n_Integer, p0_Integer] := Module[{p, items},
 iSVReadString[s_String, cs_, n_Integer, p0_Integer] := Module[{p = p0, raw},
   While[p <= n && cs[[p]] =!= "\"",
     If[cs[[p]] === "\\" && p < n, p += 2, p++]];
-  raw = If[p > p0, StringTake[s, {p0, p - 1}], ""];
+  (* cs から切り出す。StringTake[s,{p0,p-1}] は位置 p まで走査する O(位置) で、
+     大きな index では O(n^2) になり wedge していた。 *)
+  raw = If[p > p0, StringJoin[cs[[p0 ;; p - 1]]], ""];
   raw = StringReplace[raw, {"\\\"" -> "\"", "\\\\" -> "\\", "\\n" -> "\n", "\\t" -> "\t"}];
   {raw, p + 1}  (* +1 skips closing quote *)];
 
 iSVReadAtom[s_String, cs_, n_Integer, p0_Integer] := Module[{p = p0, tok},
   While[p <= n && ! iSVWhiteQ[cs[[p]]] && ! iSVDelimQ[cs[[p]]], p++];
-  tok = StringTake[s, {p0, p - 1}];
+  tok = StringJoin[cs[[p0 ;; p - 1]]];  (* cs から切り出す (O(トークン長)) *)
   {iSVClassifyAtom[tok], p}];
 
+(* 整数は FromDigits で解釈する。ToExpression はフルパーサ起動で 1 整数あたり ms 級ゆえ、
+   quote-table(整数 ~20万)等の大きな index で wedge していた。FromDigits は桁違いに速い。 *)
 iSVClassifyAtom[tok_String] :=
-  If[StringMatchQ[tok, ("-" | "") ~~ DigitCharacter ..], ToExpression[tok], SVSym[tok]];
+  Which[
+    StringMatchQ[tok, DigitCharacter ..], FromDigits[tok],
+    StringMatchQ[tok, "-" ~~ DigitCharacter ..], -FromDigits[StringDrop[tok, 1]],
+    True, SVSym[tok]];
 
 iSVReadAllSExpr[s_String] := Module[{cs = Characters[s], n = StringLength[s], p},
   p = iSVSkipWS[cs, n, 1];
@@ -732,6 +778,225 @@ SourceVaultConfirmCandidateTopics[candidates_List, OptionsPattern[]] := Module[
     result = Append[result, "MergedDictionary" -> Append[existing,
       "Entries" -> Join[Lookup[existing, "Entries", {}], entries]]]];
   result];
+
+(* ------------------------------------------------------------
+   §7.2  mail → 検索 chunk ビルダ (auto-tag topic enrichment を粒度別に baked-in)
+   Paragraph 粒度なら topic は段落単位で付き whole-mail より precision が高い。
+   ------------------------------------------------------------ *)
+
+Options[SourceVaultBuildMailChunks] = {"Granularity" -> "Paragraph", "RelationGraph" -> None,
+  "RefLabel" -> None, "PrivacyLevel" -> 0.5, "ReleaseState" -> "Published",
+  "IncludeRelated" -> True, "ObjectIdPrefix" -> "svobj:oops"};
+SourceVaultBuildMailChunks[mail_Association, surfaceIndex_Association, OptionsPattern[]] := Module[
+  {gran = OptionValue["Granularity"], relGraph = OptionValue["RelationGraph"],
+   refLabel = OptionValue["RefLabel"], pl = OptionValue["PrivacyLevel"],
+   state = OptionValue["ReleaseState"], inclRel = OptionValue["IncludeRelated"],
+   objPrefix = OptionValue["ObjectIdPrefix"], counter, subject, from, objId, body, mk, paras},
+  counter = ToString @ Lookup[mail, "Counter", "?"];
+  subject = Lookup[mail, "Subject", ""]; from = Lookup[mail, "From", ""];
+  objId = objPrefix <> ":" <> counter;
+  body = SourceVaultStripOOPSMarkers[Lookup[mail, "Body", ""]];
+  mk = Function[{cid, txt}, Module[{enr = SourceVaultTopicEnrichment[txt, surfaceIndex,
+      "RefLabel" -> refLabel, "RelationGraph" -> relGraph, "IncludeRelated" -> inclRel]},
+    <|"ChunkId" -> cid, "SourceVaultObjectId" -> objId,
+      "SearchFields" -> <|"title" -> subject, "body" -> txt, "author" -> from,
+        "topics" -> enr["TopicsFieldText"]|>,
+      "Text" -> txt, "NormalizedText" -> SourceVaultNormalizeSearchText[txt],
+      "PrivacyLevel" -> pl, "State" -> state, "Tags" -> {},
+      "TopicRefs" -> enr["TopicRefs"], "RelatedRefs" -> enr["RelatedRefs"],
+      "SourceRef" -> <|"Title" -> subject|>|>]];
+  If[gran === "Mail",
+    {mk["oops-" <> counter, body]},
+    paras = Select[SourceVaultParseMailParagraphs[body], #["Kind"] === "Prose" &];
+    MapIndexed[mk["oops-" <> counter <> "-p" <> ToString[#2[[1]]], #1["Text"]] &, paras]]];
+
+(* 確認済 extracted topic の永続 (owner store)。dict["Entries"] に Join で seed 編入。 *)
+SourceVaultSaveExtractedTopics[entries_List, path_String] := Module[{dir = DirectoryName[path]},
+  If[StringQ[dir] && dir =!= "" && ! DirectoryQ[dir],
+    Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
+  Quiet@Check[Export[path, <|"Version" -> 1, "Entries" -> entries|>, "WXF"];
+    <|"Status" -> "Saved", "Path" -> path, "Count" -> Length[entries]|>,
+    Failure["SaveFailed", <|"MessageTemplate" -> path|>]]];
+SourceVaultLoadExtractedTopics[path_String] := If[! FileExistsQ[path],
+  Failure["FileNotFound", <|"MessageTemplate" -> path|>],
+  Module[{d = Quiet@Check[Import[path, "WXF"], $Failed]},
+    If[AssociationQ[d], Lookup[d, "Entries", {}], Failure["BadFile", <|"MessageTemplate" -> path|>]]]];
+
+(* ------------------------------------------------------------
+   §6.5  quote tracking: 引用グラフ (メール→引用元メール)
+   seed quote-table(authoritative) ＋ 本文 `-*- Quote (from N) -*-` マーカー。
+   ------------------------------------------------------------ *)
+
+(* quote-table.index: <mail#> ((idx (from src)(standard-quote qid))...) | nil の交互ペア *)
+SourceVaultImportOOPSQuoteTable[path_String, opts___] := Module[{s, exprs, rules},
+  If[! FileExistsQ[path], Return[Failure["FileNotFound", <|"MessageTemplate" -> path|>]]];
+  s = iSVDecodeLegacyJapaneseFile[path, "ShiftJIS"];
+  exprs = iSVReadAllSExpr[s];
+  rules = Reap[Module[{i = 1, len = Length[exprs], key, val},
+      While[i + 1 <= len,
+        key = exprs[[i]]; val = exprs[[i + 1]];
+        If[IntegerQ[key],
+          Sow[key -> If[ListQ[val],
+            Cases[val, {idx_Integer, {SVSym["from"], src_Integer}, {SVSym["standard-quote"], qid_Integer}} :>
+              <|"Index" -> idx, "FromMail" -> src, "StandardQuoteId" -> qid|>],
+            {}]]];
+        i += 2]]][[2]];
+  rules = If[rules === {}, {}, First[rules]];
+  <|"Quotes" -> Association[rules], "Count" -> Length[rules], "SourcePath" -> path|>];
+
+SourceVaultExtractMailQuoteMarkers[mail_Association] := Module[{body = Lookup[mail, "Body", ""], marks},
+  marks = StringCases[body, "-*- Quote (from " ~~ ref : Shortest[__] ~~ ") -*-" :> StringTrim[ref]];
+  Map[Function[r,
+    If[StringMatchQ[r, DigitCharacter ..],
+      <|"QuoteKind" -> "ExplicitMarker", "FromMail" -> FromDigits[r],
+        "SourceMarker" -> "-*- Quote (from " <> r <> ") -*-"|>,
+      <|"QuoteKind" -> "ExternalURL", "FromRef" -> r,
+        "SourceMarker" -> "-*- Quote (from " <> r <> ") -*-"|>]], DeleteDuplicates[marks]]];
+
+Options[SourceVaultBuildMailQuoteEdges] = {"QuoteTable" -> None};
+SourceVaultBuildMailQuoteEdges[mails_List, OptionsPattern[]] := Module[
+  {qt = OptionValue["QuoteTable"], mailRef, edges},
+  mailRef = Function[n, "sv://mail/" <> ToString[n]];
+  edges = Flatten@Map[Function[m,
+    Module[{counter = Lookup[m, "Counter", Missing[]], seed, markers, seedFroms, seedEdges, markerEdges},
+      (* seed quote-table(authoritative) *)
+      seed = If[AssociationQ[qt], Lookup[qt, counter, {}], {}];
+      seedEdges = Map[Function[q,
+        <|"ObjectClass" -> "SourceVaultMailQuoteEdge",
+          "QuoteEdgeId" -> "svquote:" <> ToString[counter] <> ":sq" <> ToString[q["StandardQuoteId"]],
+          "SeedQuoteId" -> "standard-quote:" <> ToString[q["StandardQuoteId"]],
+          "FromMailRef" -> mailRef[counter], "ToMailRef" -> mailRef[q["FromMail"]],
+          "QuoteKind" -> "SeedStandardQuote", "Confidence" -> 1.0, "SourceMarker" -> Missing[]|>], seed];
+      seedFroms = #["FromMail"] & /@ seed;
+      (* 本文マーカー: seed に無い from(URL含む)・非 seed メール向け *)
+      markers = SourceVaultExtractMailQuoteMarkers[m];
+      markerEdges = Map[Function[mk,
+        Which[
+          mk["QuoteKind"] === "ExternalURL",
+            <|"ObjectClass" -> "SourceVaultMailQuoteEdge",
+              "QuoteEdgeId" -> "svquote:" <> ToString[counter] <> ":url" <> IntegerString[Hash[mk["FromRef"]], 16, 8],
+              "SeedQuoteId" -> Missing[], "FromMailRef" -> mailRef[counter], "ToMailRef" -> mk["FromRef"],
+              "QuoteKind" -> "ExternalURL", "Confidence" -> 0.9, "SourceMarker" -> mk["SourceMarker"]|>,
+          ! MemberQ[seedFroms, mk["FromMail"]],  (* seed 未収録の explicit marker のみ(重複回避) *)
+            <|"ObjectClass" -> "SourceVaultMailQuoteEdge",
+              "QuoteEdgeId" -> "svquote:" <> ToString[counter] <> ":m" <> ToString[mk["FromMail"]],
+              "SeedQuoteId" -> Missing[], "FromMailRef" -> mailRef[counter], "ToMailRef" -> mailRef[mk["FromMail"]],
+              "QuoteKind" -> "ExplicitMarker", "Confidence" -> 0.9, "SourceMarker" -> mk["SourceMarker"]|>,
+          True, Nothing]], markers];
+      Join[seedEdges, markerEdges]]], mails];
+  edges];
+
+(* ------------------------------------------------------------
+   §6.5  mail session / cluster: quote edge 連結成分 ＋ Subject Re:/Fwd: スレッド化
+   ------------------------------------------------------------ *)
+
+iSVMailRefNumber[ref_] := With[
+  {m = StringCases[ToString[ref], "sv://mail/" ~~ n : DigitCharacter .. :> FromDigits[n]]},
+  If[m === {}, Missing[], First[m]]];
+iSVNormalizeSubject[subj_] := StringTrim@StringReplace[ToString[subj],
+  StartOfString ~~ Longest[(("re" | "fwd" | "fw") ~~ (WhitespaceCharacter ...) ~~ ":" ~~ (WhitespaceCharacter ...)) ..] -> "",
+  IgnoreCase -> True];
+
+Options[SourceVaultBuildMailSessions] = {"SubjectThreading" -> True};
+SourceVaultBuildMailSessions[mails_List, quoteEdges_List, OptionsPattern[]] := Module[
+  {counters, byCounter, qEdges, sEdges, g, comps},
+  counters = DeleteMissing[Lookup[#, "Counter", Missing[]] & /@ mails];
+  byCounter = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ mails];
+  (* quote edge (present-mail 間の無向辺) *)
+  qEdges = DeleteDuplicates@DeleteCases[Map[Function[e,
+    Module[{f = iSVMailRefNumber[e["FromMailRef"]], t = iSVMailRefNumber[e["ToMailRef"]]},
+      If[IntegerQ[f] && IntegerQ[t] && f =!= t && MemberQ[counters, f] && MemberQ[counters, t],
+        UndirectedEdge @@ Sort[{f, t}], Nothing]]], quoteEdges], Nothing];
+  (* Subject 正規化スレッド (Re:/Fwd: を剥がし同一 subject を連結) *)
+  sEdges = If[TrueQ[OptionValue["SubjectThreading"]],
+    DeleteDuplicates@Flatten@Values@GroupBy[mails,
+      iSVNormalizeSubject[Lookup[#, "Subject", ""]] &,
+      Function[grp, With[{cs = Sort[Lookup[#, "Counter"] & /@ grp]},
+        If[Length[cs] > 1, UndirectedEdge @@@ Partition[cs, 2, 1], {}]]]],
+    {}];
+  g = Graph[counters, DeleteDuplicates[Join[qEdges, sEdges]]];
+  comps = ConnectedComponents[g];
+  Map[Function[comp, Module[{cms = Sort[comp], sessMails, hasQuote, kind},
+    sessMails = DeleteMissing[Lookup[byCounter, cms]];
+    hasQuote = AnyTrue[qEdges, MemberQ[cms, #[[1]]] && MemberQ[cms, #[[2]]] &];
+    kind = Which[Length[cms] == 1, "Singleton", hasQuote, "QuoteCluster", True, "ReplyThread"];
+    <|"ObjectClass" -> "SourceVaultMailSession",
+      "MailSessionId" -> "svmailsession:" <> ToString[First[cms]] <> "-" <> ToString[Last[cms]],
+      "MailCounters" -> cms, "MailRefs" -> ("sv://mail/" <> ToString[#] & /@ cms),
+      "MailCount" -> Length[cms], "SessionKind" -> kind,
+      "Subject" -> If[sessMails === {}, "", Lookup[First[sessMails], "Subject", ""]],
+      "StartMailCounter" -> First[cms], "EndMailCounter" -> Last[cms]|>]],
+    ReverseSortBy[comps, Length]]];
+
+(* ------------------------------------------------------------
+   §6.5  topic item graph: 段落 topic ＋ quote/relation を束ねたグラフ
+   Nodes = topic item (SupportParagraphs 付き)。Edges =
+   CoParagraph(同一段落共起) / QuoteTransition(quote edge 越し) / SeedRelation(seed 関係)。
+   ------------------------------------------------------------ *)
+
+Options[SourceVaultBuildTopicItemGraph] = {"SurfaceIndex" -> None, "RelationGraph" -> None,
+  "RefLabel" -> None, "QuoteEdges" -> {}, "SessionRefs" -> {}};
+SourceVaultBuildTopicItemGraph[mails_List, OptionsPattern[]] := Module[
+  {sidx = OptionValue["SurfaceIndex"], relGraph = OptionValue["RelationGraph"],
+   refLabel = OptionValue["RefLabel"], quoteEdges = OptionValue["QuoteEdges"],
+   label, paraTopics, nodeGroups, nodes, nodeRefs, coEdges, mailTopics, qtEdges, seedEdges},
+  If[! AssociationQ[sidx], Return[Failure["SurfaceIndexRequired",
+    <|"MessageTemplate" -> "SourceVaultBuildTopicItemGraph には \"SurfaceIndex\" が必須です。"|>]]];
+  label = If[AssociationQ[refLabel], Function[r, Lookup[refLabel, r, r]], Identity];
+  (* 各メール各 prose 段落の SeedMatched topic *)
+  paraTopics = Flatten@Map[Function[m,
+    Module[{counter = Lookup[m, "Counter", "?"], paras, assigned},
+      paras = SourceVaultParseMailParagraphs[SourceVaultStripOOPSMarkers[Lookup[m, "Body", ""]]];
+      assigned = SourceVaultAssignParagraphTopics[paras, sidx, "RefLabel" -> refLabel];
+      Map[Function[a,
+        With[{trefs = DeleteDuplicates[#["TopicItemRef"] & /@
+             Select[a["Assignments"], #["AssignmentKind"] === "SeedMatched" &]]},
+          If[trefs === {}, Nothing,
+            <|"MailCounter" -> counter,
+              "ParaRef" -> "svmailpara:" <> ToString[counter] <> ":" <> ToString[a["ParagraphIndex"]],
+              "TopicRefs" -> trefs|>]]], assigned]]], mails];
+  (* nodes: topic -> SupportParagraphs *)
+  nodeGroups = GroupBy[
+    Flatten@Map[Function[pt, (<|"Ref" -> #, "ParaRef" -> pt["ParaRef"]|>) & /@ pt["TopicRefs"]], paraTopics],
+    #["Ref"] &];
+  nodes = KeyValueMap[Function[{ref, es},
+    <|"TopicItemRef" -> ref, "Label" -> label[ref],
+      "SupportParagraphs" -> DeleteDuplicates[#["ParaRef"] & /@ es]|>], nodeGroups];
+  nodeRefs = Keys[nodeGroups];
+  (* CoParagraph: 同一段落に出た topic ペア *)
+  coEdges = KeyValueMap[Function[{pair, paraRefs},
+    <|"From" -> pair[[1]], "To" -> pair[[2]], "EdgeKind" -> "CoParagraph",
+      "Weight" -> Length[DeleteDuplicates[paraRefs]], "EvidenceRefs" -> DeleteDuplicates[paraRefs]|>],
+    GroupBy[Flatten[Function[pt, With[{tr = pt["TopicRefs"]},
+      If[Length[tr] >= 2, (Sort[#] -> pt["ParaRef"]) & /@ Subsets[tr, {2}], {}]]] /@ paraTopics, 1],
+      First -> Last]];
+  (* QuoteTransition: quote edge の from-mail topic ↔ to-mail topic *)
+  mailTopics = Association @ KeyValueMap[#1 -> DeleteDuplicates@Flatten[#["TopicRefs"] & /@ #2] &,
+    GroupBy[paraTopics, #["MailCounter"] &]];
+  qtEdges = KeyValueMap[Function[{pair, evs},
+    <|"From" -> pair[[1]], "To" -> pair[[2]], "EdgeKind" -> "QuoteTransition",
+      "Weight" -> Length[DeleteDuplicates[evs]], "EvidenceRefs" -> DeleteDuplicates[evs]|>],
+    GroupBy[Flatten[Map[Function[e,
+      Module[{f = iSVMailRefNumber[e["FromMailRef"]], t = iSVMailRefNumber[e["ToMailRef"]], ft, tt},
+        ft = Lookup[mailTopics, f, {}]; tt = Lookup[mailTopics, t, {}];
+        If[ft =!= {} && tt =!= {},
+          DeleteCases[Flatten[Outer[If[#1 =!= #2, Sort[{#1, #2}] -> e["QuoteEdgeId"], Nothing] &, ft, tt], 1], Nothing],
+          {}]]], quoteEdges], 1], First -> Last]];
+  (* SeedRelation: グラフ内 node 間に seed 関係がある辺 *)
+  seedEdges = If[AssociationQ[relGraph],
+    DeleteDuplicatesBy[Flatten@Map[Function[a,
+      Map[<|"From" -> a, "To" -> #["To"], "EdgeKind" -> "SeedRelation",
+          "Weight" -> #["Weight"], "EvidenceRefs" -> {}|> &,
+        Select[Lookup[relGraph, a, {}], MemberQ[nodeRefs, #["To"]] &]]], nodeRefs],
+      {#["From"], #["To"]} &],
+    {}];
+  <|"ObjectClass" -> "SourceVaultTopicItemGraph",
+    "GraphId" -> "svtopicgraph:" <> ToString[Min[DeleteMissing[Lookup[#, "Counter", Missing[]] & /@ mails]]],
+    "Nodes" -> nodes, "Edges" -> Join[coEdges, qtEdges, seedEdges],
+    "MailSessionRefs" -> OptionValue["SessionRefs"],
+    "NodeCount" -> Length[nodes], "EdgeCount" -> Length[coEdges] + Length[qtEdges] + Length[seedEdges],
+    "EdgeKindTally" -> <|"CoParagraph" -> Length[coEdges], "QuoteTransition" -> Length[qtEdges],
+      "SeedRelation" -> Length[seedEdges]|>|>];
 
 End[];
 

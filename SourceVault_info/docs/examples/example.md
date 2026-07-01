@@ -1450,7 +1450,7 @@ Import[pages["HashesPath"], "RawJSON"]
 
 ```
 <|"0003" -> "sha256-..."|>     (* SourceVaultExtractPages の戻り値の Hashes は string 4 桁 key + sha256 string *)
-"C:\\Users\\imai_\\Dropbox\\udb\\sourcevault\\parsed\\snap-sha256-.../page-hashes.json"
+"C:...\\sourcevault\\parsed\\snap-sha256-.../page-hashes.json"
 <|"0001" -> "sha256-...", "0002" -> ..., "0003" -> "sha256-..."|>     (* json には D-1/D-3 と累積で保存される *)
 ```
 
@@ -4014,7 +4014,7 @@ SourceVaultFindNotebooks["Status" -> "Todo"]     (* Header メタデータ未更
 複数 notebook を一括処理:
 
 ```mathematica
-result = SourceVaultIndexNotebookFolder["C:\\Users\\imai_\\Documents\\notebooks",
+result = SourceVaultIndexNotebookFolder["C:...\\notebooks",
   "Recursive" -> True];
 
 result["Processed"]   (* → 成功した件数 *)

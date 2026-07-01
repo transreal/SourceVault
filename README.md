@@ -644,6 +644,8 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultFreezeCorpusSnapshot[corpusId, opts]` | 検索対象集合を immutable CorpusSnapshot に固定。 |
 | `SourceVaultSearch[query, opts]` | release context gate 付き検索。`"ReleaseContext"` / `"PDFIndexProfile"` / `"Limit"` / `"Index"`（native projection。`IndexKind` で KeywordBigram/KeywordBM25V1 を dispatch）対応。 |
 | `SourceVaultBuildProjectionIndex[ctx, opts]` | chunk を build-time gate して projection index 化。`"IndexKind"`（KeywordBigram/KeywordBM25V1）/ `"EntityDictionary"` 対応。 |
+| `SourceVaultBuildPrimerIndex[ctx, opts]` / `…LoadPrimerIndex` | §6.1 mining サマリー由来 primer item を gate して index 化（summary/title/tags/authors を BM25）。 |
+| `SourceVaultPrimerSearch[query, opts]` | §6.2 primer 検索。BM25 + bounded MiningBoost + EffectiveImportance·weight − StalePrimerPenalty、EvidenceKind=SummaryPrimer。 |
 | **日本語 lexical (SourceVault_lexical)** | |
 | `SourceVaultNormalizeSearchText[text]` | ja-nfkc-v1 正規化（NFKC / 全半角 / 半角カナ / 数値桁区切り / 空白）。 |
 | `SourceVaultSearchTerms[normText]` | token / unigram(CJK・かな) / bigram の term stream。 |
@@ -665,6 +667,12 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultExpandTopicsByRelation[refs, graph, opts]` | seed topic を重み付き 1-hop 近傍へ拡張（auto-tag の RelationExpanded 用）。 |
 | `SourceVaultExpandSearchGraph[seeds, opts]` | §6.3 KG 局所探索。weighted topic relation を multi-hop BFS 展開（MaxHops/MaxNodes/top-k/MinEdgeWeight、edges+trace、cycle 安全）。 |
 | `SourceVaultConfirmCandidateTopics[candidates, opts]` | owner 確認済の AutoExtracted 候補を seed 同形の新 topic entry にして dict に merge（候補→確認済 topic→検索可能）。 |
+| `SourceVaultSaveExtractedTopics` / `…LoadExtractedTopics` | 確認済 extracted topic を WXF で永続化・読み戻し（owner store、seed 編入用）。 |
+| `SourceVaultBuildMailChunks[mail, surfaceIndex, opts]` | parse 済 mail を §7.2 検索 chunk（topics 注入済）に。Granularity=Paragraph/Mail。seed→検索 pipeline の入口。 |
+| `SourceVaultImportOOPSQuoteTable[path]` | `quote-table.index` を読み `mail#→{引用元mail, standard-quote id}`（authoritative 引用グラフ）。 |
+| `SourceVaultExtractMailQuoteMarkers[mail]` / `…BuildMailQuoteEdges[mails, opts]` | 本文 `-*- Quote (from N) -*-` 抽出／`SourceVaultMailQuoteEdge`（SeedStandardQuote/ExplicitMarker/ExternalURL）を構築。 |
+| `SourceVaultBuildMailSessions[mails, quoteEdges, opts]` | quote edge 連結成分＋Subject Re:/Fwd: でメールをスレッド（`SourceVaultMailSession`）に。 |
+| `SourceVaultBuildTopicItemGraph[mails, opts]` | 段落 topic をノード、CoParagraph/QuoteTransition/SeedRelation を辺にした `SourceVaultTopicItemGraph`（§6.5）。 |
 | **サービス管理 (SourceVault_servicemanager)** | |
 | `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
 | `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |

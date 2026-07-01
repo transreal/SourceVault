@@ -110,7 +110,8 @@ iSVSearchTerms[normText_String, profile_String : "ja-ngram-v1"] := Module[
    ------------------------------------------------------------ *)
 
 iSVFieldText[v_String] := v;
-iSVFieldText[v_List] := StringRiffle[Flatten[{v}] /. x_ :> ToString[x], " "];
+(* 各要素を ToString する。/. x_:>ToString[x] は最外のリスト自体にマッチして "{...}" 化する誤りだった。 *)
+iSVFieldText[v_List] := StringRiffle[ToString /@ Flatten[{v}], " "];
 iSVFieldText[v_] := ToString[v];
 
 (* "topics" は auto-tag が注入する topic ラベル (canonical/related)。これを検索対象に含めることで

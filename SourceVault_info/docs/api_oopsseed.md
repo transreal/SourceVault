@@ -99,7 +99,16 @@ Options: `"KnownSurfaceIndex" -> None`, `"Limit" -> 15`, `"MinKatakana" -> 3`, `
 ### SourceVaultConfirmCandidateTopics[candidates, opts] → Association
 owner が確認した AutoExtracted 候補を seed と同形の新 topic entry にする（candidate → 確認済 topic → 検索可能の loop を閉じる）。`candidates` は `{<|"Surface","ExtractionKind"|>...}` か label 文字列のリスト。auto-confirm は行わない。
 Options: `"ExistingDictionary" -> None`（渡すと Entries を merge した `MergedDictionary` を返す → `SourceVaultBuildSurfaceIndex` で再 index すると確認 topic が SeedMatched で引けるようになる）, `"RefPrefix" -> "svtopic:extracted"`, `"StartId" -> 1`, `"OwnerRef" -> None`, `"PrivacyLevel" -> 0.3`
-戻り値: `<|"ConfirmedEntries" -> {<|"TopicItemRef", "CanonicalLabel", "SurfaceForms", "NamespaceKind" -> "Extracted", "OwnerRef", "PrivacyLevel", "Provenance"|>...}, "Count", ("MergedDictionary")|>`。確認 topic のファイル/DB 永続は owner 選択で別途。
+戻り値: `<|"ConfirmedEntries" -> {<|"TopicItemRef", "CanonicalLabel", "SurfaceForms", "NamespaceKind" -> "Extracted", "OwnerRef", "PrivacyLevel", "Provenance"|>...}, "Count", ("MergedDictionary")|>`。
+
+### SourceVaultSaveExtractedTopics[entries, path] / SourceVaultLoadExtractedTopics[path]
+確認済 extracted topic entry を WXF で永続化・読み戻す（owner store）。読み戻した entry を `dict["Entries"]` に `Join` すれば seed に編入でき、次回以降 SeedMatched で引ける。`Save` は `<|"Status","Path","Count"|>`、`Load` は entry リストを返す。
+
+## mail → 検索 chunk ビルダ
+
+### SourceVaultBuildMailChunks[mail, surfaceIndex, opts] → {Association...}
+parse 済 mail（`SourceVaultParseOOPSMailFile` の 1 要素）を §7.2 検索 chunk のリストにする。各 chunk は `SearchFields`（title/body/author/**topics**）＋`Text`/`NormalizedText`＋`PrivacyLevel`/`State`/`Tags`＋`TopicRefs`/`RelatedRefs`＋`SourceRef`。`topics` は `SourceVaultTopicEnrichment` が auto-tag で注入する。これを `SourceVaultBuildProjectionIndex` の `"Chunks"` に渡せば seed→検索の pipeline が完成。
+Options: `"Granularity" -> "Paragraph"`（既定。各 prose 段落を 1 chunk＝段落単位 topic で precision 高い）` | "Mail"`（mail 全体で 1 chunk）, `"RelationGraph"`, `"RefLabel"`, `"PrivacyLevel" -> 0.5`, `"ReleaseState" -> "Published"`, `"IncludeRelated" -> True`, `"ObjectIdPrefix" -> "svobj:oops"`
 
 ## seed → 検索の接続（topic enrichment）
 
@@ -110,6 +119,35 @@ auto-tag した topic を検索 index に注入し、「本文に literal で出
 Options: `"RefLabel" -> None`, `"RelationGraph" -> None`, `"IncludeRelated" -> True`, `"MaxRelationTopics" -> 6`, `"MinRelationWeight" -> 2`
 戻り値: `<|"TopicRefs", "TopicLabels"（SeedMatched 正準）, "RelatedRefs", "RelatedLabels"（RelationExpanded）, "TopicsFieldText"|>`
 使い方: chunk の `SearchFields["topics"]` に `TopicsFieldText` を載せて `SourceVaultBuildProjectionIndex` で build する（`iSVChunkText` が `topics` を検索対象に含む）。実証: mail の本文に無い関連トピック（例「Independence Day」）で、enrichment 有りの index だけがその mail を検索できる。
+
+## メール構造化（quote / session, §6.5）
+
+メールを「段落 topic ＋ 引用関係 ＋ スレッド」に構造化する。OOPS はスレッドヘッダ（In-Reply-To / References）を持たず Message-Id のみなので、seed の `quote-table.index` を authoritative な引用グラフとする。
+
+> **注意（S 式パース速度）**: `quote-table.index`（約 477KB、整数 ~20 万）などの大きな index は、S 式リーダの `iSVClassifyAtom` が整数を `FromDigits` で（旧 `ToExpression` は 1 整数 ms 級で数分かかり共有カーネルが wedge する）、`iSVReadAtom`/`iSVReadString` が `StringJoin[cs[[...]]]` で（旧 `StringTake[s,{...}]` は O(位置) で O(n²)）読むよう修正済み。477KB でも約 6 秒。
+
+### SourceVaultImportOOPSQuoteTable[path] → Association
+`quote-table.index` を読み `<|mailNumber -> {<|"Index", "FromMail", "StandardQuoteId"|>...}|>` を返す。各メールが引用している元メール（`FromMail`）と seed の standard-quote id。`<mail#> ((idx (from src) (standard-quote qid))...)` の交互ペア（`nil` は空）。
+
+### SourceVaultExtractMailQuoteMarkers[mail] → {Association...}
+本文の `-*- Quote (from N) -*-` マーカーを抽出する。`N` が整数なら `QuoteKind -> "ExplicitMarker"`（`FromMail`）、URL なら `"ExternalURL"`（`FromRef`）。
+
+### SourceVaultBuildMailQuoteEdges[mails, opts] → {Association...}
+`SourceVaultMailQuoteEdge` のリストを作る。`"QuoteTable"`（`SourceVaultImportOOPSQuoteTable[...]["Quotes"]`）を渡すと seed から `SeedStandardQuote`（Confidence 1.0, authoritative）edge を、本文マーカーから `ExternalURL`（URL）と seed 未収録の `ExplicitMarker` edge を作る。各 edge: `<|"ObjectClass" -> "SourceVaultMailQuoteEdge", "QuoteEdgeId", "SeedQuoteId", "FromMailRef", "ToMailRef", "QuoteKind", "Confidence", "SourceMarker"|>`。
+
+### SourceVaultBuildMailSessions[mails, quoteEdges, opts] → {SourceVaultMailSession...}
+quote edge の連結成分と Subject の `Re:`/`Fwd:` 正規化（`iSVNormalizeSubject`）による同一 subject 連結を `ConnectedComponents` でまとめ、メールをセッション（スレッド）にする。
+Options: `"SubjectThreading" -> True`
+戻り値: `<|"ObjectClass" -> "SourceVaultMailSession", "MailSessionId", "MailCounters", "MailRefs", "MailCount", "SessionKind" -> "QuoteCluster"|"ReplyThread"|"Singleton", "Subject", "StartMailCounter", "EndMailCounter"|>`。quote 連結が有れば `QuoteCluster`、Subject のみなら `ReplyThread`。
+
+### SourceVaultBuildTopicItemGraph[mails, opts] → Association（§6.5 topic item graph）
+段落 topic・引用・seed 関係を 1 つのグラフに束ねる。各メール各 prose 段落を auto-tag（SeedMatched）してノード（topic item）を作り、辺を張る:
+- **CoParagraph**: 同じ段落に共起した topic ペア（`Weight` = 共起段落数）。
+- **QuoteTransition**: quote edge の引用元メール topic × 引用先メール topic（`QuoteEdges` 経由）。
+- **SeedRelation**: グラフ内 node 間に seed relation graph の辺があるもの。
+必須 Options: `"SurfaceIndex"`。任意: `"RelationGraph"`（SeedRelation 用）, `"RefLabel"`, `"QuoteEdges"`（`SourceVaultBuildMailQuoteEdges` の結果。QuoteTransition 用）, `"SessionRefs"`。
+戻り値: `<|"ObjectClass" -> "SourceVaultTopicItemGraph", "GraphId", "Nodes" -> {<|"TopicItemRef", "Label", "SupportParagraphs"|>...}, "Edges" -> {<|"From", "To", "EdgeKind", "Weight", "EvidenceRefs"|>...}, "NodeCount", "EdgeCount", "EdgeKindTally"|>`
+> QuoteTransition は引用元×引用先 topic の all-pairs なので、quote が多いスレッドでは辺が増える（将来 top-k / Primary 限定で剪定予定）。
 
 ## 利用例
 
