@@ -111,6 +111,21 @@ SourceVaultMailStructThread::usage =
   "SourceVaultMailStructThread[sessionId, opts] はキャッシュから 1 session の詳細 (current/historical digest) を返す。" <>
   "CloudSafe->True で私的メールを含む session は Released->False。opts \"CloudSafe\"(True)。";
 
+(* ---- Inc 6 (任意): HTML DOM parser / Negotiation session / LLMProposed topic ---- *)
+SourceVaultParseHTMLMailParagraphs::usage =
+  "SourceVaultParseHTMLMailParagraphs[html] は HTML 本文を block 要素 (p/div/li/h*/td/blockquote/br) で段落分割し、" <>
+  "タグ除去・entity 復号した段落列 <|Index, Kind(Prose|Quote), Text, RawText|> を返す (FlattenedHTML より構造的)。" <>
+  "blockquote は Kind=Quote。ParseMailParagraphs 互換の形。";
+SourceVaultClassifyMailSessionKind::usage =
+  "SourceVaultClassifyMailSessionKind[session, records, opts] は session の speech-act を rule で判定し " <>
+  "SessionKind (Negotiation|Announcement|Discussion|Reply) と Negotiation の resolution を返す。" <>
+  "Negotiation = 提案 + (合意|却下) の speech-act を含む日程調整/交渉スレッド。" <>
+  "戻り値 <|SessionKind, IsNegotiation, ResolutionMailRef, ResolutionDate, ActBreakdown|>。";
+SourceVaultLLMProposeTopics::usage =
+  "SourceVaultLLMProposeTopics[text, queryFn, opts] は queryFn(prompt->response) で LLM にトピックを提案させ、" <>
+  "<|Surface, ExtractionKind->\"LLMProposed\"|> の候補列を返す (GrowTopicVocabulary の \"Extractor\" に渡せる)。" <>
+  "queryFn は外部注入 (core は LLM を直接持たない)。opts \"MaxTopics\"(10), \"KnownSurfaceIndex\"。";
+
 Begin["`MailStructPrivate`"]
 
 (* ---- vocab コンストラクタ (r3: privacy scope / profile digest / build id 付き) ---- *)
@@ -208,7 +223,8 @@ Options[SourceVaultGrowTopicVocabulary] = {"PrivacyScope" -> Automatic,
   "MinSupport" -> Automatic, "MaxNewTopics" -> 200, "OwnerRef" -> None,
   "Rounds" -> 1, "PerMailLimit" -> 40,
   "CandidateBlockFilters" -> {"Quote", "Signature", "Footer"},
-  "TopicStoplist" -> Automatic, "MaxDocFreqFraction" -> 0.5, "ImportRunId" -> Automatic};
+  "TopicStoplist" -> Automatic, "MaxDocFreqFraction" -> 0.5, "ImportRunId" -> Automatic,
+  "Extractor" -> Automatic, "CandidateSource" -> "AutoExtracted"};
 
 SourceVaultGrowTopicVocabulary[vocab_Association, mails_List, OptionsPattern[]] := Module[
   {scope = iSVMSResolveScope[OptionValue["PrivacyScope"]],
@@ -217,6 +233,7 @@ SourceVaultGrowTopicVocabulary[vocab_Association, mails_List, OptionsPattern[]] 
    rounds = OptionValue["Rounds"], perLim = OptionValue["PerMailLimit"],
    blockFilters = OptionValue["CandidateBlockFilters"],
    minSupportOpt = OptionValue["MinSupport"],
+   extractor = OptionValue["Extractor"], candSource = OptionValue["CandidateSource"],
    stoplistNorm, maxDF,
    ownerslug, threshold, profileDigest, importRunId, cur, round, changed, lastReport},
   ownerslug = owner /. {None -> "owner", o_String :> Last[StringSplit[o, ":"]]};
@@ -253,7 +270,10 @@ SourceVaultGrowTopicVocabulary[vocab_Association, mails_List, OptionsPattern[]] 
         prose = Select[paras, ! MemberQ[blockFilters, #["Kind"]] &];
         body = SourceVaultStripOOPSMarkers[StringRiffle[#["Text"] & /@ prose, "\n"]];
         cands = DeleteDuplicatesBy[
-          SourceVaultExtractCandidateTopics[body, "KnownSurfaceIndex" -> known, "Limit" -> perLim],
+          If[extractor === Automatic,
+            SourceVaultExtractCandidateTopics[body, "KnownSurfaceIndex" -> known, "Limit" -> perLim],
+            (* LLMProposed 等の注入 extractor: body/known/limit を受け <|Surface, ExtractionKind|> を返す *)
+            With[{ex = Quiet@Check[extractor[body, known, perLim], {}]}, If[ListQ[ex], ex, {}]]],
           iSVMSNormKey[#["Surface"]] &];
         <|"MailRef" -> mref, "Sender" -> sender, "ThreadKey" -> threadKey, "Session" -> sess,
           "PrivacyLevel" -> pl, "Tags" -> tags, "Candidates" -> cands|>]], mails];
@@ -306,7 +326,7 @@ SourceVaultGrowTopicVocabulary[vocab_Association, mails_List, OptionsPattern[]] 
           "VisibilityPolicy" -> <|"MaxPrivacyLevel" -> pmax, "DenyTags" -> a["SupportTags"]|>,
           "SupersededBy" -> Missing[],
           "PrivacyLevel" -> pmax,
-          "Provenance" -> <|"Source" -> "AutoExtracted", "ExtractionKind" -> a["ExtractionKind"],
+          "Provenance" -> <|"Source" -> candSource, "ExtractionKind" -> a["ExtractionKind"],
             "ProfileDigest" -> profileDigest, "ImportRunId" -> importRunId|>|>]] /@ accepted;
      newRefs = #["TopicItemRef"] & /@ newEntries;
      (* 5. merge: 同 ref の既存 entry は再生成版で置換 (deterministic → 重複しない) *)
@@ -1015,6 +1035,90 @@ SourceVaultMailStructThread[sessionId_String, OptionsPattern[]] := Module[{st, s
        "Released" -> False, "Why" -> {"PrivateMail"}|>]];
   dig = SourceVaultMailStructSessionDigest[sess, st];
   Append[dig, "Released" -> True]];
+
+(* ================= Inc 6 (任意): HTML DOM / Negotiation / LLMProposed ================= *)
+
+(* ---- (3) HTML DOM parser ---- *)
+$svMSHTMLEntities = {"&amp;" -> "&", "&lt;" -> "<", "&gt;" -> ">", "&quot;" -> "\"",
+  "&nbsp;" -> " ", "&apos;" -> "'", "&#39;" -> "'", "&hellip;" -> "…", "&mdash;" -> "—"};
+iSVMSDecodeHTMLEntities[s_String] := StringReplace[StringReplace[s, $svMSHTMLEntities],
+  {"&#" ~~ d : DigitCharacter .. ~~ ";" :> Quiet@Check[FromCharacterCode[FromDigits[d]], ""],
+   "&#x" ~~ h : (HexadecimalCharacter ..) ~~ ";" :> Quiet@Check[FromCharacterCode[FromDigits[h, 16]], ""]}];
+
+(* U+E000/E001 = quote region sentinel (本文に出ない private-use) *)
+iSVMSHTMLToText[html_String] := Module[{s = html},
+  s = StringReplace[s, RegularExpression["(?is)<(script|style|head)[^>]*>.*?</\\1>"] -> " "];
+  s = StringReplace[s, {RegularExpression["(?i)<blockquote[^>]*>"] -> "\n\n\:e000\n\n",
+     RegularExpression["(?i)</blockquote>"] -> "\n\n\:e001\n\n"}];
+  s = StringReplace[s, RegularExpression["(?i)<br\\s*/?>"] -> "\n"];
+  s = StringReplace[s, RegularExpression["(?i)</(p|div|li|h[1-6]|tr|table|ul|ol|section|article|header|footer|pre|blockquote)>"] -> "\n\n"];
+  s = StringReplace[s, RegularExpression["<[^>]+>"] -> ""];
+  iSVMSDecodeHTMLEntities[s]];
+
+SourceVaultParseHTMLMailParagraphs[html_String] := Module[{txt, blocks, quoteState = False, out},
+  txt = iSVMSHTMLToText[html];
+  blocks = Select[StringTrim /@ StringSplit[txt, RegularExpression["\\n[ \\t]*\\n+"]], # =!= "" &];
+  out = {};
+  Do[Which[
+     StringContainsQ[b, "\:e000"], quoteState = True,
+     StringContainsQ[b, "\:e001"], quoteState = False,
+     True, With[{clean = StringTrim@StringReplace[b, RegularExpression["\\s+"] -> " "]},
+       If[clean =!= "", AppendTo[out, <|"Kind" -> If[quoteState, "Quote", "Prose"],
+          "RawText" -> clean, "Text" -> clean|>]]]],
+     {b, blocks}];
+  MapIndexed[Append[#1, "Index" -> #2[[1]]] &, out]];
+
+(* ---- (2) Negotiation session (speech-act 判定) ---- *)
+$svMSActPatterns = <|
+  "Proposal" -> {"提案", "いかがでしょう", "はどうでしょう", "でよろしいでしょうか", "でいかが", "ご都合",
+     "候補", "でお願いできます", "に設定", "を提案", "でどうでしょう", "はいかが"},
+  "Acceptance" -> {"承知", "了解", "問題ありません", "確定", "でお願いします", "大丈夫", "承りました",
+     "かしこまりました", "それで結構", "賛成", "異存", "で確定", "で進め"},
+  "Rejection" -> {"難しい", "都合が悪い", "都合がつかない", "別の候補", "再調整", "あいにく",
+     "できかねます", "変更をお願い", "見送り", "延期"}|>;
+iSVMSDetectActs[text_String] := Select[Keys[$svMSActPatterns],
+  Function[act, AnyTrue[$svMSActPatterns[act], StringContainsQ[text, #] &]]];
+
+Options[SourceVaultClassifyMailSessionKind] = {};
+SourceVaultClassifyMailSessionKind[session_Association, records_List, OptionsPattern[]] := Module[
+  {recByRef, sm, actsByMail, allActs, isNego, kind, resMail},
+  recByRef = Association[(#["MailRef"] -> #) & /@ records];
+  sm = DeleteMissing[Lookup[recByRef, Lookup[session, "MailRefs", {}]]];
+  sm = SortBy[sm, Lookup[#, "Date", ""] &];
+  actsByMail = Function[m, <|"MailRef" -> Lookup[m, "MailRef", ""], "Date" -> Lookup[m, "Date", ""],
+     "Acts" -> If[StringQ[Lookup[m, "Body", ""]], iSVMSDetectActs[m["Body"]], {}]|>] /@ sm;
+  allActs = DeleteDuplicates[Flatten[#["Acts"] & /@ actsByMail]];
+  isNego = MemberQ[allActs, "Proposal"] && (MemberQ[allActs, "Acceptance"] || MemberQ[allActs, "Rejection"]);
+  (* resolution = 最後に Acceptance を含むメール *)
+  resMail = SelectFirst[Reverse[actsByMail], MemberQ[#["Acts"], "Acceptance"] &, Missing[]];
+  kind = Which[
+     isNego, "Negotiation",
+     Length[sm] <= 1, "Announcement",
+     allActs =!= {}, "Discussion",
+     True, "Reply"];
+  <|"SessionKind" -> kind, "IsNegotiation" -> isNego,
+    "ResolutionMailRef" -> If[AssociationQ[resMail], resMail["MailRef"], Missing[]],
+    "ResolutionDate" -> If[AssociationQ[resMail], resMail["Date"], Missing[]],
+    "ActBreakdown" -> actsByMail|>];
+
+(* ---- (1) LLMProposed topic (LLM 提案トピックのフック。queryFn は外部注入) ---- *)
+Options[SourceVaultLLMProposeTopics] = {"MaxTopics" -> 10, "KnownSurfaceIndex" -> None};
+SourceVaultLLMProposeTopics[text_String, queryFn_, OptionsPattern[]] := Module[
+  {n = OptionValue["MaxTopics"], known = OptionValue["KnownSurfaceIndex"], prompt, resp, lines, stop},
+  prompt = "次のメール本文から、検索に有用な具体的トピック(固有名・専門用語・企画名・製品名等)を最大 " <>
+     ToString[n] <> " 個、1 行に 1 語で抽出してください。汎用語(詳細/送信/確認/連絡 等)や機能語は除外。トピックのみ改行区切りで出力:\n\n" <>
+     StringTake[text, UpTo[3000]];
+  resp = Quiet@Check[queryFn[prompt], ""];
+  If[! StringQ[resp], Return[{}]];
+  stop = iSVMSNormKey /@ $svMSTopicStoplist;
+  lines = Select[StringTrim /@ StringSplit[resp, "\n"],
+     StringLength[#] >= 2 && StringLength[#] <= 40 &];
+  (* 箇条書き記号除去 + 既知/stopword 除外 *)
+  lines = StringTrim@StringReplace[#, RegularExpression["^[\\-*・\\d.)\\s]+"] -> ""] & /@ lines;
+  lines = Select[DeleteDuplicates[lines],
+     # =!= "" && ! MemberQ[stop, iSVMSNormKey[#]] &&
+     ! (AssociationQ[known] && KeyExistsQ[known, iSVMSNormKey[#]]) &];
+  <|"Surface" -> #, "ExtractionKind" -> "LLMProposed"|> & /@ Take[lines, UpTo[n]]];
 
 End[]
 

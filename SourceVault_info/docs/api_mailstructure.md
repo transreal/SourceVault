@@ -89,6 +89,19 @@ BuildSearchIndex の結果(or IndexId 文字列)で release-gate 付き検索(`S
 **§9 current session の結論と historical reference を分離**した digest。本 session の timeline を `CurrentDigest` に、`CrossSessionReferences`(EvidenceCitation/AnnualEventReuse/TemplateReuse/ForwardedContext) を `HistoricalReferences`(Role/Subject/Excerpt/ToSession) に分ける。過去参照を current の結論本文に混ぜない。
 戻り値: `<|"SessionId", "Subject", "MailCount", "Topics", "CurrentDigest", "HistoricalReferences"|>`。Options: `"ParaChars"`(120), `"MaxMails"`(8)。
 
+## Inc 6（任意）: HTML DOM / Negotiation / LLMProposed
+
+### SourceVaultParseHTMLMailParagraphs[html] → {paragraph...}
+`BodyWasHTML` の本文を block 要素（p/div/li/h*/td/tr/blockquote/br）で段落分割し、タグ除去・HTML entity 復号（`&amp;`/`&nbsp;`/`&#165;`/`&#x3002;` 等）した段落列 `<|Index, Kind(Prose|Quote), Text, RawText|>` を返す（FlattenedHTML より構造的）。`blockquote` は `Kind=Quote`。`ParseMailParagraphs` 互換なので topic パイプラインにそのまま流せる。
+
+### SourceVaultClassifyMailSessionKind[session, records] → Association
+session の speech-act を rule で判定し `SessionKind`（Negotiation|Announcement|Discussion|Reply）と Negotiation の resolution を返す。**Negotiation = Proposal（提案/候補/いかがでしょう…）＋（Acceptance（承知/確定/でお願い…）∨ Rejection（難しい/再調整…））** を含む日程調整/交渉スレッド。`ResolutionMailRef`/`ResolutionDate` = 最後に Acceptance を含むメール（§6.6 の `FindNegotiationOutcome` / `MailSessionResolutionDate` に対応）。戻り値 `<|SessionKind, IsNegotiation, ResolutionMailRef, ResolutionDate, ActBreakdown|>`。
+
+### SourceVaultLLMProposeTopics[text, queryFn, opts] → {\<Surface, ExtractionKind→"LLMProposed"\>...}
+`queryFn`（prompt→response、**外部注入**。core は LLM を直接持たない）で LLM にトピックを提案させ、箇条書き記号除去・既知語（`KnownSurfaceIndex`）/stoplist 除外した候補を返す。`GrowTopicVocabulary` の `"Extractor"` オプションに `Function[{body, known, limit}, SourceVaultLLMProposeTopics[body, queryFn, "MaxTopics"->limit, "KnownSurfaceIndex"->known]]` として渡すと、決定論 AutoExtracted の代わりに LLM 提案を候補にできる（`"CandidateSource"->"LLMProposed"` で Provenance を区別、ReviewState=Candidate で human 確認前提）。opts `"MaxTopics"`(10), `"KnownSurfaceIndex"`。
+
+`GrowTopicVocabulary` opts 追加: `"Extractor"`(Automatic=決定論 `ExtractCandidateTopics` / 関数=注入抽出器), `"CandidateSource"`("AutoExtracted" | "LLMProposed" 等、Provenance.Source に反映)。
+
 ## MCP 統合 (§9b)
 
 一般メール構造化を MCP tool として公開し、Claude Code / LM Studio 等からスレッド検索・digest 取得できる。domain 関数は本ファイル、tool 定義/handler は `SourceVault_mcp.wl`（OOPS と同じ分離）。
