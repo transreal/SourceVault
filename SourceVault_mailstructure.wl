@@ -169,12 +169,33 @@ iSVMSMailRef[m_Association, idx_Integer] := Which[
   StringQ[Lookup[m, "RecordId", Null]], "sv://mail/" <> m["RecordId"],
   True, "mail:" <> ToString[idx]];
 
+(* topic にすべきでない汎用メール語 (mail-mechanics / 機能語)。遍在固有名は MaxDocFreqFraction で別途除外。
+   "課題"/"工学部" 等の実トピックは入れない (差替は opts "TopicStoplist")。 *)
+$svMSTopicStoplist = {
+  "詳細", "送信", "確認", "連絡", "報告", "案内", "資料", "質問", "返信", "転送", "件名", "本文",
+  "添付", "以上", "以下", "記載", "各位", "皆様", "対応", "内容", "予定", "実施", "参加", "出席",
+  "欠席", "開催", "変更", "追加", "削除", "修正", "訂正", "承認", "依頼", "提出", "入力", "登録",
+  "選択", "表示", "利用", "使用", "設定", "情報", "名前", "番号", "日時", "期限", "締切", "下記",
+  "メールアドレス", "アドレス", "メール", "アカウント", "アクセス", "タイトル",
+  (* mail header / 通知システム boilerplate (実データで頻出した汎用語) *)
+  "送信日時", "差出人", "宛先", "設定画面", "自動送信", "受信設定", "通知", "お知らせ", "掲示",
+  "受付開始日時", "受付終了日時", "提出者", "作成者", "差出", "宛名",
+  "address", "message", "subject", "email", "e-mail", "http", "https", "www", "please", "thanks",
+  "regards", "to", "on", "cc", "bcc", "from", "date", "re", "fwd", "fw", "reply", "url", "tel",
+  "fax", "home", "reminder", "preferences", "notification", "noreply", "no-reply", "news",
+  (* 英語機能語 (topic ではない。"On ... wrote:" 引用ヘッダ由来の wrote を含む) *)
+  "of", "in", "and", "the", "for", "with", "this", "that", "your", "you", "are", "is", "be",
+  "at", "by", "or", "an", "as", "we", "our", "it", "will", "has", "have", "was", "were", "but",
+  "not", "all", "can", "if", "do", "does", "wrote", "dear", "hi", "hello", "sent", "wed", "thu",
+  "mon", "tue", "fri", "sat", "sun", "am", "pm"};
+
 Options[SourceVaultGrowTopicVocabulary] = {"PrivacyScope" -> Automatic,
   "GroupingKind" -> "Mail", "Sessions" -> None,
   "DistinctMailMin" -> 2, "DistinctThreadMin" -> 2, "DistinctSessionMin" -> 2,
   "MinSupport" -> Automatic, "MaxNewTopics" -> 200, "OwnerRef" -> None,
   "Rounds" -> 1, "PerMailLimit" -> 40,
-  "CandidateBlockFilters" -> {"Quote", "Signature", "Footer"}, "ImportRunId" -> Automatic};
+  "CandidateBlockFilters" -> {"Quote", "Signature", "Footer"},
+  "TopicStoplist" -> Automatic, "MaxDocFreqFraction" -> 0.5, "ImportRunId" -> Automatic};
 
 SourceVaultGrowTopicVocabulary[vocab_Association, mails_List, OptionsPattern[]] := Module[
   {scope = iSVMSResolveScope[OptionValue["PrivacyScope"]],
@@ -183,15 +204,20 @@ SourceVaultGrowTopicVocabulary[vocab_Association, mails_List, OptionsPattern[]] 
    rounds = OptionValue["Rounds"], perLim = OptionValue["PerMailLimit"],
    blockFilters = OptionValue["CandidateBlockFilters"],
    minSupportOpt = OptionValue["MinSupport"],
+   stoplistNorm, maxDF,
    ownerslug, threshold, profileDigest, importRunId, cur, round, changed, lastReport},
   ownerslug = owner /. {None -> "owner", o_String :> Last[StringSplit[o, ":"]]};
+  (* 汎用語 stoplist (正規化) と 遍在語 上限 (DistinctMails > maxDF は topic 化しない) *)
+  stoplistNorm = iSVMSNormKey /@ (OptionValue["TopicStoplist"] /. Automatic -> $svMSTopicStoplist);
+  maxDF = Max[8, Ceiling[OptionValue["MaxDocFreqFraction"] * Length[mails]]];
   threshold = If[IntegerQ[minSupportOpt], minSupportOpt,
     Switch[grouping,
       "PreliminaryThread", OptionValue["DistinctThreadMin"],
       "Session", OptionValue["DistinctSessionMin"],
       _, OptionValue["DistinctMailMin"]]];
   profileDigest = "pd:" <> iSVMSShortHash[
-    {"passA-v1", grouping, threshold, maxNew, Sort[blockFilters], scope["ReleaseContext"]}];
+    {"passA-v2", grouping, threshold, maxNew, Sort[blockFilters], scope["ReleaseContext"],
+     maxDF, Length[stoplistNorm]}];
   importRunId = OptionValue["ImportRunId"] /. Automatic ->
     "run:" <> iSVMSShortHash[{profileDigest, Length[mails]}];
   cur = vocab; round = 0; changed = True; lastReport = Missing["NotGrown"];
@@ -240,9 +266,11 @@ SourceVaultGrowTopicVocabulary[vocab_Association, mails_List, OptionsPattern[]] 
           "SupportPrivacyMax" -> Max[#["PrivacyLevel"] & /@ infos],
           "SupportTags" -> DeleteDuplicates[Flatten[#["Tags"] & /@ infos]]|>]],
         byKey];
-     (* 3. salience gate + privacy 継承フィルタ *)
+     (* 3. salience gate + privacy 継承フィルタ + 汎用語/遍在語除外 *)
      accepted = Select[aggregated, Function[a,
         a["SupportUnitCount"] >= threshold &&
+        a["DistinctMails"] <= maxDF &&                       (* 遍在語 (多数メール出現) は topic にしない *)
+        ! MemberQ[stoplistNorm, a["NormKey"]] &&             (* 汎用メール語 stoplist *)
         a["SupportPrivacyMax"] <= scope["MaxPrivacyLevel"] &&
         Intersection[a["SupportTags"], scope["DenyTags"]] === {}]];
      rejected = Complement[aggregated, accepted];
@@ -766,18 +794,21 @@ SourceVaultBuildMailTopicGraph[relationGraph_Association, topicsByMail_Associati
   GroupBy[(Append[#, "Weight" -> Round[#["Weight"], 0.01]] & /@ Values[trans]), #["From"] &]];
 
 Options[SourceVaultStructureMail] = {"Seed" -> None, "Grow" -> True, "PassB" -> True,
-  "QuotePass" -> "Full", "PrivacyScope" -> Automatic, "OwnerRef" -> None, "MaxTopicsPerMail" -> 8};
+  "QuotePass" -> "Full", "PrivacyScope" -> Automatic, "OwnerRef" -> None, "MaxTopicsPerMail" -> 8,
+  "VocabOptions" -> {}};
 SourceVaultStructureMail[mails_List, OptionsPattern[]] := Module[
   {seed = OptionValue["Seed"], grow = TrueQ[OptionValue["Grow"]], passB = TrueQ[OptionValue["PassB"]],
    quotePass = OptionValue["QuotePass"], scope = OptionValue["PrivacyScope"],
    owner = OptionValue["OwnerRef"], maxTopics = OptionValue["MaxTopicsPerMail"],
+   vocabOpts = OptionValue["VocabOptions"],
    vocab0, vocabA, graph, sessions, sessionMap, vocabB, paraTopics, topicsByMail, topicGraph, vocabFinal, report},
   (* pass A 語彙 (mail-level) *)
   vocab0 = If[AssociationQ[seed],
      SourceVaultTopicVocabularyFromSeed[seed, "PrivacyScope" -> scope],
      SourceVaultNewTopicVocabulary["OwnerRef" -> owner, "PrivacyScope" -> scope]];
   vocabA = If[grow,
-     SourceVaultGrowTopicVocabulary[vocab0, mails, "OwnerRef" -> owner, "PrivacyScope" -> scope], vocab0];
+     SourceVaultGrowTopicVocabulary[vocab0, mails, "OwnerRef" -> owner, "PrivacyScope" -> scope,
+        Sequence @@ vocabOpts], vocab0];
   (* relation graph + sessions *)
   graph = SourceVaultBuildMailRelationGraph[mails, "QuotePass" -> quotePass, "PrivacyScope" -> scope];
   sessions = SourceVaultMineMailSessions[graph];
@@ -786,7 +817,7 @@ SourceVaultStructureMail[mails_List, OptionsPattern[]] := Module[
   (* pass B: session-aware 語彙 refine (循環依存を断つ 2-pass, §4.3) *)
   vocabB = If[passB && grow,
      SourceVaultGrowTopicVocabulary[vocabA, mails, "OwnerRef" -> owner, "PrivacyScope" -> scope,
-        "Sessions" -> sessionMap, "GroupingKind" -> "Session"], vocabA];
+        "Sessions" -> sessionMap, "GroupingKind" -> "Session", Sequence @@ vocabOpts], vocabA];
   (* 段落 topic 付与 *)
   paraTopics = Association[(#["MailRef"] -> #) & /@ (iSVMSAssignRecord[#, vocabB, maxTopics] & /@ mails)];
   topicsByMail = #["TopicRefs"] & /@ paraTopics;
