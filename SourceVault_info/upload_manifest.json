@@ -19,7 +19,8 @@
 		"SourceVault_autotrigger.wl",
 		"SourceVault_diagnostics.wl",
 		"SourceVault_lexical.wl",
-		"SourceVault_oopsseed.wl"
+		"SourceVault_oopsseed.wl",
+		"SourceVault_mailstructure.wl"
 	],
 	"directories":[
 		"SourceVault_info",
