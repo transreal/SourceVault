@@ -3054,7 +3054,23 @@ SourceVaultMCPTools[] := {
       "properties" -> <|
         "path" -> <|"type" -> "string", "description" -> "Absolute file path under <allowed-root>/SourceVault_workflows/ (parent dirs are created)."|>,
         "content" -> <|"type" -> "string", "description" -> "Full UTF-8 text content to write (replaces the file)."|>|>,
-      "required" -> {"path", "content"}|>|>
+      "required" -> {"path", "content"}|>|>,
+  <|"name" -> "sourcevault_oops_status",
+    "description" -> "Load (idempotent) and report the OOPS mailing-list corpus state: mailCount, sessionCount (threads), topicCount. Call once to initialize before searching threads. Scope is a bounded recent slice by default ($svOOPSMCPScope).",
+    "inputSchema" -> <|"type" -> "object", "properties" -> <||>, "required" -> {}|>|>,
+  <|"name" -> "sourcevault_oops_search_threads",
+    "description" -> "Search OOPS mailing-list threads (mail sessions) by query (Japanese or English). Returns thread id, subject, score, snippet. A thread is a quote-connected mail cluster with topic structure. Use sourcevault_oops_thread to get a thread's digest.",
+    "inputSchema" -> <|"type" -> "object",
+      "properties" -> <|
+        "query" -> <|"type" -> "string", "description" -> "Search query."|>,
+        "limit" -> <|"type" -> "integer", "description" -> "Max threads (default 10)."|>|>,
+      "required" -> {"query"}|>|>,
+  <|"name" -> "sourcevault_oops_thread",
+    "description" -> "Get one OOPS thread (mail session) detail: subject, kind, mail numbers, a deterministic digest (LLM-free summary with per-mail timeline), and topic labels. session id looks like 'svmailsession:4431-4449' (from sourcevault_oops_search_threads).",
+    "inputSchema" -> <|"type" -> "object",
+      "properties" -> <|
+        "session" -> <|"type" -> "string", "description" -> "The svmailsession:... id."|>|>,
+      "required" -> {"session"}|>|>
   };
 
 (* ---- text content helper ---- *)
@@ -3081,6 +3097,19 @@ iMCPProvenance[args_Association] := <|
   "UserSpecifiedUrl" -> "Unknown",
   "Actor" -> <|"Type" -> "MCPClient",
     "ClientName" -> Lookup[args, "_mcpClient", "LM Studio"]|>|>;
+
+(* ---- OOPS メールスレッド検索 (thin wrapper over SourceVault_oopsseed) ----
+   全コーパス (161 ファイル / 数千 session) を service カーネルで on-demand build すると
+   重すぎる (session index = per-session TopicEnrichment)。既定は最新 1 ファイルの bounded
+   scope に絞る ($svOOPSMCPScope で拡張可)。SourceVaultOOPSEnsureLoaded は冪等なので、この
+   scope で先にロードしておけば SearchThreads/Thread が内部で呼ぶ引数なし EnsureLoaded[] は
+   no-op になる (既定 All での全ロードを回避)。 *)
+If[! ListQ[SourceVault`$svOOPSMCPScope],
+  SourceVault`$svOOPSMCPScope = {"oops 200506.txt"}];
+
+iSVOOPSMCPEnsureLoaded[] := Module[{st},
+  st = SourceVault`SourceVaultOOPSEnsureLoaded["MailFiles" -> SourceVault`$svOOPSMCPScope];
+  If[AssociationQ[st], Append[st, "Scope" -> SourceVault`$svOOPSMCPScope], st]];
 
 (* ---- tool 実行 ---- *)
 SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
@@ -3240,6 +3269,44 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
          iSVRecordToolCall (that log = read observation / observed-read-max). *)
       Module[{o = iSVFSWriteFile[ToString @ Lookup[args, "path", ""], Lookup[args, "content", ""]]},
         iMCPJSONText[o]],
+    "sourcevault_oops_status",
+      Module[{o},
+        o = Quiet @ Check[iSVOOPSMCPEnsureLoaded[], $Failed];
+        iSVRecordToolCall["sourcevault_oops_status", args, o];
+        If[AssociationQ[o],
+          iMCPJSONText[KeyTake[o, {"Loaded", "MailCount", "SessionCount", "TopicCount", "Files", "SessionIndexBuilt", "Scope"}]],
+          iMCPError["OOPS corpus load failed (check $svOOPSMCPScope / archive path)."]]],
+    "sourcevault_oops_search_threads",
+      Module[{load, rows},
+        load = Quiet @ Check[iSVOOPSMCPEnsureLoaded[], $Failed];
+        If[! AssociationQ[load],
+          iMCPError["OOPS corpus load failed (check $svOOPSMCPScope / archive path)."],
+          (* CloudSafe: MCP は cloud 到達し得るので §6.5.3 私的リストスレッドを gate する *)
+          rows = Quiet @ Check[
+            Normal @ SourceVault`SourceVaultOOPSSearchThreads[
+              ToString @ Lookup[args, "query", ""],
+              "Limit" -> With[{n = Lookup[args, "limit", 10]}, If[IntegerQ[n] && n > 0, n, 10]],
+              "CloudSafe" -> True],
+            {}];
+          rows = If[ListQ[rows], rows, {}];
+          iSVRecordToolCall["sourcevault_oops_search_threads", args, <|"Count" -> Length[rows]|>];
+          iMCPJSONText[<|"count" -> Length[rows], "threads" -> rows|>]]],
+    "sourcevault_oops_thread",
+      Module[{sid, o},
+        sid = ToString @ Lookup[args, "session", ""];
+        Quiet @ Check[iSVOOPSMCPEnsureLoaded[], Null];
+        (* CloudSafe: 私的リストスレッドは digest を出さず Released->False を返す *)
+        o = Quiet @ Check[SourceVault`SourceVaultOOPSThread[sid, "CloudSafe" -> True], $Failed];
+        iSVRecordToolCall["sourcevault_oops_thread", args, <|"Session" -> sid, "Found" -> AssociationQ[o]|>];
+        Which[
+          ! AssociationQ[o], iMCPError["Thread not found: " <> sid],
+          TrueQ[! Lookup[o, "Released", True]],
+            iMCPJSONText[<|"Session" -> sid, "Subject" -> Lookup[o, "Subject", ""],
+              "Released" -> False, "Why" -> Lookup[o, "Why", {"PrivateList"}]|>],
+          True,
+            iMCPJSONText[Append[
+              KeyTake[o, {"Session", "Subject", "SessionKind", "MailCounters", "Digest", "TopicLabels"}],
+              "MailCount" -> Length[Lookup[o, "MailCounters", {}]]]]]],
     _,
       iMCPError["Unknown tool: " <> name]
   ]];

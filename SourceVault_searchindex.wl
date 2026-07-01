@@ -215,6 +215,20 @@ SourceVaultBuildMediaIndex::usage =
   "SourceVaultBuildMediaIndex[sessionId, opts] は media 由来 (transcript/caption/OCR/summary) を release gate して projection index 化する (§17.14)。\n" <>
   "raw audio/frame は入れない。必須 opts \"ReleaseContext\"。任意 \"IndexId\", \"Modalities\"。";
 
+(* ---- Dense / hybrid retrieval (embedding arm) ---- *)
+SourceVaultRegisterEmbeddingProvider::usage =
+  "SourceVaultRegisterEmbeddingProvider[name, fn] は embedding provider を登録する。fn[{text..}] は数値ベクトルのリストを返す " <>
+  "(L2 正規化推奨、次元は全 text で一定)。実測用の意味的 embedder (Wolfram NetModel / LM Studio 等) をここで差し込む。";
+SourceVaultListEmbeddingProviders::usage = "SourceVaultListEmbeddingProviders[] は登録済み embedding provider 名のリストを返す。";
+SourceVaultSetEmbeddingProvider::usage = "SourceVaultSetEmbeddingProvider[name] は既定 embedding provider を切り替える。";
+SourceVaultEmbeddingProvider::usage = "SourceVaultEmbeddingProvider[] は現在の既定 embedding provider 名を返す。";
+SourceVaultEmbedTexts::usage = "SourceVaultEmbedTexts[{text..}] は既定 provider で埋め込みベクトルのリストを返す。";
+$SourceVaultEmbeddingDim::usage = "既定(hashing)embedder の次元 (既定 256)。実 provider は自身の次元を返してよい。";
+SourceVaultHybridSearch::usage =
+  "SourceVaultHybridSearch[query, opts] は BM25 index と Dense index を検索して RRF (Reciprocal Rank Fusion) で融合し、" <>
+  "release gate 済み (両 arm とも Permit) の結果を FusedScore 降順で返す。opts \"ReleaseContext\"(必須), \"BM25Index\", \"DenseIndex\", " <>
+  "\"Limit\"(20), \"RetrievalDepth\"(50=各 arm の取得深さ), \"RRFConstant\"(60)。dense/hybrid go/no-go の評価入口。";
+
 Begin["`SearchIndexPrivate`"]
 
 (* ============================================================
@@ -789,6 +803,16 @@ SourceVaultBuildProjectionIndex[contextName_String, OptionsPattern[]] := Module[
     lexStats = SourceVault`SourceVaultBuildLexicalStats[permitted,
       "EntityDictionary" -> OptionValue["EntityDictionary"]];
     rec = Append[rec, "LexicalStats" -> lexStats]];
+  (* DenseV1: 各 chunk を embedding して格納 (dense arm)。query 側は index の provider で埋める。
+     anisotropy 対策: corpus 平均を引いて再正規化 (mean-centering) してから格納。共通成分を除き
+     弁別成分で cosine する。DenseMean を保存し query 側も同じ平均で center する。 *)
+  If[indexKind === "DenseV1",
+    Module[{vecs = SourceVaultEmbedTexts[iSVDenseChunkText /@ permitted], mean},
+      If[FailureQ[vecs], Return[vecs]];
+      mean = If[vecs === {}, {}, Mean[vecs]];
+      rec = Join[rec, <|"DenseVectors" -> (iSVCenterNormalize[#, mean] & /@ vecs),
+        "DenseMean" -> mean, "DenseDim" -> If[vecs === {}, 0, Length[First[vecs]]],
+        "EmbeddingProvider" -> $svEmbeddingProvider|>]]];
   saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultProjectionIndex", rec,
     "Alias" -> indexId];
   If[FailureQ[saved], Return[saved]];
@@ -973,10 +997,103 @@ iNativeSearch[query_String, ctxName_String, indexId_String, limit_] := Module[
   top = Switch[kind,
     "KeywordBigram", iScoreKeywordBigram[query, rec, limit],
     "KeywordBM25V1", iScoreBM25V1[query, rec, limit],
+    "DenseV1", iScoreDenseV1[query, rec, limit],
     _, Return[Failure["UnsupportedIndexKind", <|"IndexId" -> indexId, "IndexKind" -> kind|>]]];
   iGateBuildResults[top, ctxName, revSet, query,
-    If[kind === "KeywordBM25V1", "KeywordBM25", "KeywordBigram"]]
+    Switch[kind, "KeywordBM25V1", "KeywordBM25", "DenseV1", "DenseEmbedding", _, "KeywordBigram"]]
 ];
+
+(* ============================================================
+   Dense / hybrid retrieval — embedding arm ＋ RRF 融合
+   lexical(BM25)は精度の主軸、dense は表記に依らない意味的 recall を足す。両者を
+   Reciprocal Rank Fusion で混ぜる。embedder は injectable (既定=決定的 hashing、
+   実測は NetModel/LM Studio 等を register して差し替え)。dense/hybrid go/no-go の土台。
+   ============================================================ *)
+If[! ValueQ[$SourceVaultEmbeddingDim], $SourceVaultEmbeddingDim = 256];
+If[! AssociationQ[$svEmbeddingProviders], $svEmbeddingProviders = <||>];
+If[! StringQ[$svEmbeddingProvider], $svEmbeddingProvider = "HashingNGramV1"];
+
+(* 既定 embedder: 正規化テキストの char 2/3-gram を hashing trick で D 次元へ、L2 正規化。
+   モデル不要・再現的で配線検証向け (cosine ≒ n-gram 重なり)。意味的 embedder ではない。 *)
+iSVDenseNormalize[s_String] := ToLowerCase@StringTrim@StringReplace[s, RegularExpression["\\s+"] -> " "];
+iSVDenseNGrams[s_String] := Module[{cs = Characters[iSVDenseNormalize[s]], n},
+  n = Length[cs];
+  Join[If[n >= 2, StringJoin /@ Partition[cs, 2, 1], {}],
+       If[n >= 3, StringJoin /@ Partition[cs, 3, 1], If[n >= 1, cs, {}]]]];
+iSVHashEmbedOne[text_String, dim_Integer] := Module[{v = ConstantArray[0., dim], norm},
+  Do[With[{h = Mod[Hash[g, "MD5"], dim] + 1}, v[[h]] = v[[h]] + 1.], {g, iSVDenseNGrams[text]}];
+  norm = Sqrt[v . v];
+  If[norm > 0, v/norm, v]];
+iSVHashEmbed[texts_List] := iSVHashEmbedOne[If[StringQ[#], #, ""], $SourceVaultEmbeddingDim] & /@ texts;
+$svEmbeddingProviders["HashingNGramV1"] = iSVHashEmbed;
+
+SourceVaultRegisterEmbeddingProvider[name_String, fn_] :=
+  ($svEmbeddingProviders[name] = fn; <|"Status" -> "OK", "Provider" -> name|>);
+SourceVaultListEmbeddingProviders[] := Keys[$svEmbeddingProviders];
+SourceVaultEmbeddingProvider[] := $svEmbeddingProvider;
+SourceVaultSetEmbeddingProvider[name_String] := If[KeyExistsQ[$svEmbeddingProviders, name],
+  ($svEmbeddingProvider = name; <|"Status" -> "OK", "Provider" -> name|>),
+  Failure["UnknownEmbeddingProvider", <|"MessageTemplate" -> "未登録 provider: " <> name|>]];
+SourceVaultEmbedTexts[texts_List] := iSVEmbedWith[$svEmbeddingProvider, texts];
+iSVEmbedWith[provider_String, texts_List] := Module[{fn = Lookup[$svEmbeddingProviders, provider, Missing[]]},
+  If[MissingQ[fn], Failure["NoEmbeddingProvider", <|"MessageTemplate" -> "未登録 provider: " <> provider|>],
+    Quiet@Check[fn[texts], Failure["EmbeddingFailed", <|"Provider" -> provider|>]]]];
+
+(* dense 埋め込み対象テキスト。chunk が "EmbedText"(文字列) を持てばそれを優先
+   = dense arm 向けの焦点を絞った表現を呼び出し側が指定できる(短 query との対称性・
+   ノイズ除去)。無ければ SearchFields を連結(BM25 と同被覆)。 *)
+iSVDenseChunkText[chunk_Association] := Module[{sf = Lookup[chunk, "SearchFields", <||>], et},
+  et = Lookup[chunk, "EmbedText", Missing[]];
+  If[StringQ[et] && StringLength[et] > 0, Return[et]];
+  StringRiffle[Select[{Lookup[sf, "title", ""], Lookup[sf, "summary", ""],
+      Lookup[sf, "body", Lookup[chunk, "Text", ""]], Lookup[sf, "topics", ""],
+      Lookup[sf, "tags", ""], Lookup[sf, "author", ""]},
+    StringQ[#] && StringLength[#] > 0 &], " "]];
+
+(* anisotropy 対策: 平均を引いて (共通成分除去) L2 正規化。mean が空なら正規化のみ *)
+iSVCenterNormalize[v_List, mean_] := Module[{c = If[ListQ[mean] && Length[mean] === Length[v], v - mean, v], n},
+  n = Sqrt[c . c]; If[n > 0, c/n, c]];
+
+(* dense scorer: query を index の provider で埋め、DenseMean で center → 格納 vector(center 済) と cosine *)
+iScoreDenseV1[query_String, rec_Association, limit_] := Module[{chunks, mat, provider, mean, qv, sims, ord},
+  chunks = Lookup[rec, "Chunks", {}];
+  mat = Lookup[rec, "DenseVectors", {}];
+  If[chunks === {} || mat === {} || Length[chunks] =!= Length[mat], Return[{}]];
+  provider = Lookup[rec, "EmbeddingProvider", $svEmbeddingProvider];
+  mean = Lookup[rec, "DenseMean", {}];
+  qv = With[{e = iSVEmbedWith[provider, {query}]},
+    If[FailureQ[e] || ! MatchQ[e, {_List}], Return[{}, Module], First[e]]];
+  If[! VectorQ[qv, NumericQ] || Length[qv] =!= Length[First[mat]], Return[{}]];
+  qv = iSVCenterNormalize[qv, mean];
+  sims = (# . qv) & /@ mat;
+  ord = Take[Reverse@Ordering[sims], UpTo[limit]];
+  Map[Function[i, <|"Chunk" -> chunks[[i]], "Score" -> sims[[i]],
+     "Breakdown" -> <|"Embedding" -> sims[[i]]|>|>], Select[ord, sims[[#]] > 0. &]]];
+
+(* RRF 融合: 各 arm の rank(1-based) から score[id] += 1/(k+rank)、代表結果 assoc を保持 *)
+iSVRRFFuse[lists_List, k_, limit_Integer] := Module[{contrib = <||>, base = <||>},
+  Do[MapIndexed[Function[{res, pos}, Module[{id = Lookup[res, "ChunkId", Missing[]]},
+      If[StringQ[id],
+        contrib[id] = Lookup[contrib, id, 0.] + 1./(k + pos[[1]]);
+        If[! KeyExistsQ[base, id], base[id] = res]]]], lst],
+    {lst, lists}];
+  Take[ReverseSortBy[
+    KeyValueMap[Function[{id, sc}, Join[base[id], <|"FusedScore" -> sc, "RetrievalKind" -> "HybridRRF"|>]], contrib],
+    #["FusedScore"] &], UpTo[limit]]];
+
+Options[SourceVaultHybridSearch] = {"ReleaseContext" -> None, "BM25Index" -> None,
+  "DenseIndex" -> None, "Limit" -> 20, "RetrievalDepth" -> 50, "RRFConstant" -> 60};
+SourceVaultHybridSearch[query_String, OptionsPattern[]] := Module[
+  {rc = OptionValue["ReleaseContext"], bi = OptionValue["BM25Index"], di = OptionValue["DenseIndex"],
+   lim = OptionValue["Limit"], depth, kk = OptionValue["RRFConstant"], bres, dres},
+  If[! StringQ[rc],
+    Return[Failure["ReleaseContextRequired", <|
+      "MessageTemplate" -> "SourceVaultHybridSearch には \"ReleaseContext\" が必須です。"|>]]];
+  depth = Max[lim, OptionValue["RetrievalDepth"]];
+  bres = If[StringQ[bi], SourceVaultSearch[query, "ReleaseContext" -> rc, "Index" -> bi, "Limit" -> depth], {}];
+  dres = If[StringQ[di], SourceVaultSearch[query, "ReleaseContext" -> rc, "Index" -> di, "Limit" -> depth], {}];
+  If[FailureQ[bres], bres = {}]; If[FailureQ[dres], dres = {}];
+  iSVRRFFuse[{bres, dres}, kk, lim]];
 
 (* ============================================================
    §16 TPO 制約 / 目的別 index / 低遅延 interaction (Phase 7。device 非依存)

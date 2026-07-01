@@ -4,7 +4,7 @@
 
 対象: `SourceVault_oopsseed.wl` の §6.5 実装（quote / session / topic graph / session 検索 / session primer / 明示トピック）。関数仕様は [`../api_oopsseed.md`](../api_oopsseed.md)。seed オントロジ・auto-tag の基礎は [`oops_example.md`](oops_example.md) を参照。
 
-構成: **基本編**（引用・スレッド・明示トピック）→ **中級編**（topic graph・スレッド検索）→ **応用編**（スレッド要約 primer・privacy）。
+構成: **基本編**（引用・スレッド・明示トピック）→ **中級編**（topic graph・スレッド検索）→ **応用編**（スレッド要約 primer・privacy・受信者 defense-in-depth・cloud-safe 検索・MCP tool）。
 
 ---
 
@@ -184,12 +184,12 @@ SelectFirst[primerItems, #["SourceVaultObjectId"] === "svmailsession:4431-4449" 
  <|"obj" -> "svmailsession:4420-4420", "score" -> 4.22,  "ev" -> "SummaryPrimer"|>}
 
 [スレッド] Re: DV, FireWire, I-Link (9通/QuoteCluster)
-話題: コンセント, Macintosh, アポロ計画, Motorola, goo.ne.jp, quote, Radius EditDV, …
+話題: HandyCam, PowerPC 750, おめでた, テレビ, AltaVista
 #4431 "Katsunobu IMAI":  HandyCam  Radius EditDV  FireWire …
 #4440 "T. EBINE": やっぱり物量が必要だから，そう簡単には普及しな いか． …
 ```
 
-digest は Subject＋話題＋各メールの `#番号 著者: 先頭段落` のタイムライン。「日程・事項の結論」を探す query は、個別メールより session の digest primer が向きます。
+digest は Subject＋話題＋各メールの `#番号 著者: 先頭段落` のタイムライン。**話題は既定で各メールの ◎(Primary) 明示トピックに限定**され精密です（`PrimaryTopicsOnly -> True`）。◎ の無いスレッドは enrichment 上位に fallback。「日程・事項の結論」を探す query は、個別メールより session の digest primer が向きます。
 
 ## 例 7: 私的リストの gate（§6.5.3 privacy / trust class）
 
@@ -220,8 +220,85 @@ SourceVault`SearchIndexPrivate`iRegistrySave[];
 
 12 スレッド中 3 つが私的リスト由来（PrivateML）。cloud-llm context では公開 9 が Permit、私的 3 が **Deny**＝私的リストの内容が cloud LLM / 公開へ漏れません。
 
+## 例 8: 受信者(To/Cc)ベース privacy（defense-in-depth）
+
+`X-Ml-Name` に加え、**`To`/`Cc` の addr-spec だけからも** privacy を判定します（`SourceVaultMailRecipientPrivacy`）。私的リストアドレス（`oops-ura@…`）宛なら、たとえ `X-Ml-Name` が欠落・詐称されても私的と判定できます（独立した第 2 の防御）。ML でない一般メール（個人宛）にも使えます。
+
+```mathematica
+(* 私的メール（To: oops-ura@…）*)
+m = SelectFirst[mails, StringContainsQ[#["To"], "oops-ura"] &];
+KeyDrop[SourceVaultMailRecipientPrivacy[m], "Recipients"]
+
+(* defense-in-depth: X-Ml-Name を消しても To から私的判定できる *)
+KeyDrop[SourceVaultMailRecipientPrivacy[Append[m, "MlName" -> ""]], "Recipients"]
+
+(* 個人宛のみ / 公開リスト宛 *)
+KeyDrop[SourceVaultMailRecipientPrivacy[<|"To" -> "alice@example.com, bob@example.co.jp"|>], "Recipients"]
+KeyDrop[SourceVaultMailRecipientPrivacy[<|"To" -> "oops@satsuki.net"|>], "Recipients"]
+```
+
+**期待される出力例:**
+
+```
+<|"PrivacyLevel" -> 0.6, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"}, "Signal" -> "PrivateRecipient"|>
+<|"PrivacyLevel" -> 0.6, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"}, "Signal" -> "PrivateRecipient"|>
+<|"PrivacyLevel" -> 0.5, "Tags" -> {"DirectRecipients"}, "Signal" -> "IndividualRecipients"|>
+<|"PrivacyLevel" -> 0., "Tags" -> {}, "Signal" -> "None"|>
+```
+
+`SourceVaultBuildSessionChunks` / `...PrimerItems` は session の privacy を **list 名由来 ∪ 受信者由来** の max / union で採ります（`X-Ml-Name` と `To` の二重防御）。
+
+## 例 9: cloud-safe スレッド検索・詳細（MCP と同じ gate）
+
+ユーティリティ層 `SourceVaultOOPSEnsureLoaded` で 1 発初期化し、`SourceVaultOOPSSearchThreads` / `SourceVaultOOPSThread` を使います。**`CloudSafe -> True`** で §6.5.3 私的リストスレッドを gate します（後述の MCP tool `sourcevault_oops_*` はこれを常用）。
+
+```mathematica
+SourceVaultOOPSEnsureLoaded["MailFiles" -> "oops 9805.txt"];
+
+(* 「転勤」は私的スレッド: 通常検索では出るが CloudSafe では除外される *)
+#["Subject"] & /@ Normal @ SourceVaultOOPSSearchThreads["転勤"]
+#["Subject"] & /@ Normal @ SourceVaultOOPSSearchThreads["転勤", "CloudSafe" -> True]
+
+(* 私的スレッドの詳細は CloudSafe では withheld（Released -> False）*)
+SourceVaultOOPSThread["svmailsession:4444-4445", "CloudSafe" -> True]
+
+(* 公開スレッドの TopicLabels は ◎ Primary 寄せ（AllTopics に広い enrichment）*)
+th = SourceVaultOOPSThread["svmailsession:4431-4449"];
+{th["TopicLabels"], th["AllTopics"]}
+```
+
+**期待される出力例:**
+
+```
+{転勤, Adaptec 2940UW, Re: DV, FireWire, I-Link}
+{Adaptec 2940UW, Re: DV, FireWire, I-Link}
+<|"Session" -> "svmailsession:4444-4445", "Subject" -> "転勤", "SessionKind" -> "ReplyThread", "Released" -> False, "Why" -> {"PrivateList", "NoCloudLLM"}|>
+{{HandyCam, PowerPC 750, おめでた, テレビ, AltaVista},
+ {コンセント, Macintosh, アポロ計画, Motorola, goo.ne.jp, quote, Radius EditDV, PowerPC 750, 何でも鑑定団, PowerBook}}
+```
+
+私的「転勤」は CloudSafe 検索で消え、詳細も `Released -> False`。`TopicLabels`（◎ 主題のみで簡潔）と `AllTopics`（広い enrichment ＝俯瞰 / recall 用）を使い分けます。
+
+## MCP tool（ClaudeEval / LM Studio / Codex）
+
+上記の操作は MCP tool として自然文プロンプトから呼べます（実体は `SourceVaultOOPS...` の thin wrapper）。MCP は cloud 到達し得るため **3 tool すべて `CloudSafe -> True` を常用**し、私的リストスレッドを返しません。
+
+```text
+sourcevault_oops_status                          → 冪等ロード＋状態（MailCount/SessionCount/…）
+sourcevault_oops_search_threads {query, limit}   → スレッド検索（Session/Subject/Score/Snippet）
+sourcevault_oops_thread {session}                → スレッド詳細（Digest/TopicLabels/…、私的は Released:false）
+
+例）ユーザー: 「OOPS の転勤の話のスレッドを探して要点を教えて」
+  → sourcevault_oops_search_threads {"query": "転勤"}       （私的スレッドは gate 済で出ない）
+  → sourcevault_oops_thread {"session": "svmailsession:…"}  （公開スレッドの決定的 digest を要約）
+```
+
+負荷制御のため service カーネルでは既定で最新 1 ファイル（`$svOOPSMCPScope`）に絞ります。詳細は [`../api_mcp.md`](../api_mcp.md) の「OOPS メールスレッド検索ツール」節。
+
 ---
 
 ## クリーンアップ
 
 引用・スレッド・グラフ・digest は読み取りと純関数で完結します。release context を登録した例 5–7 は末尾で登録解除しています。index / primer snapshot は content-addressed で `IndexId`/`PrimerId` をユニークにしているため、残っても無害（再実行で衝突しません）。
+
+例 9 の `SourceVaultOOPSSearchThreads` は OOPS 検索の内部 release context `oops-corpus` / `oops-corpus-cloud` を登録します。これらは OOPS 検索インフラ本体（テスト用の使い捨てではない）なので**登録したまま**にします。

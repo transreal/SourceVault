@@ -69,12 +69,17 @@ SourceVaultImportOOPSMailInfo::usage =
 
 SourceVaultParseOOPSMailFile::usage =
   "SourceVaultParseOOPSMailFile[path] は UTF-8 の oops*.txt を mbox として parse し、" <>
-  "{<|\"Counter\",\"MlName\",\"Subject\",\"From\",\"Date\",\"Body\"|>, ...} を返す。" <>
+  "{<|\"Counter\",\"MlName\",\"Subject\",\"From\",\"To\",\"Cc\",\"Date\",\"Body\"|>, ...} を返す。" <>
   "Counter (X-Ml-Counter) で gold (mail-to-item) と join する。CR 行終端対応。";
 
 SourceVaultStripOOPSMarkers::usage =
   "SourceVaultStripOOPSMarkers[text] は OOPS の topic ID ref ([ns n])、brace wrapper、" <>
   "◎○・ structural marker を除去して query 用 plain text を返す。label 本文は残す (held-out で cheat 防止)。";
+
+SourceVaultMailRecipientPrivacy::usage =
+  "SourceVaultMailRecipientPrivacy[mail] は To/Cc の addr-spec から privacy シグナルを導く (§6.5.3 の defense-in-depth。" <>
+  "一般メール向け=X-Ml-Name に依らない)。<|PrivacyLevel, Tags, Signal, Recipients|>。私的リストアドレス(oops-ura 等)宛は " <>
+  "PrivateML/NoCloudLLM/NoPublicExport、個人宛のみは DirectRecipients、それ以外は neutral(0.0)。list 由来 privacy と max/union で結合する。";
 
 SourceVaultParseMailParagraphs::usage =
   "SourceVaultParseMailParagraphs[body] は mail 本文を段落に分割し、" <>
@@ -185,7 +190,8 @@ SourceVaultBuildSessionChunks::usage =
 
 SourceVaultBuildSessionDigest::usage =
   "SourceVaultBuildSessionDigest[session, mails, opts] は LLM を使わない決定的なスレッド要約(digest)文字列を作る。" <>
-  "Subject＋話題(topic ラベル)＋各メールの先頭 prose 段落のタイムライン。オプション \"SurfaceIndex\"/\"RefLabel\"/\"MaxMails\"(8)/\"ParaChars\"(120)。";
+  "Subject＋話題(topic ラベル)＋各メールの先頭 prose 段落のタイムライン。オプション \"SurfaceIndex\"/\"RefLabel\"/\"MaxMails\"(8)/\"ParaChars\"(120)/" <>
+  "\"PrimaryTopicsOnly\"(既定 True。話題を ◎ Primary 明示 topic に限定=精密。無ければ enrichment 上位に fallback)/\"FallbackTopics\"(6)。";
 
 SourceVaultOOPSEnsureLoaded::usage =
   "SourceVaultOOPSEnsureLoaded[opts] は OOPS メール構造化・検索の単一初期化。seed 辞書/surface index/relation graph/" <>
@@ -198,9 +204,12 @@ SourceVaultOOPSSessions::usage =
   "SourceVaultOOPSSessions[opts] は読み込んだ session を Dataset で返す(MailCount 降順)。オプション \"Limit\"(既定 30), \"MinMails\"(1)。";
 SourceVaultOOPSSearchThreads::usage =
   "SourceVaultOOPSSearchThreads[query, opts] はスレッド(session)を検索して Dataset(Session/Subject/Kind/Mails/Score/Snippet)を返す。" <>
-  "初回は session 検索 index を lazy build。オプション \"Limit\"(既定10)。ClaudeEval からの「○○のスレッドを探して」等に対応。";
+  "初回は session 検索 index を lazy build。オプション \"Limit\"(既定10), \"CloudSafe\"(既定 False。True で §6.5.3 私的リスト" <>
+  "(oops-ura/Under Ground)スレッドを DenyTags で gate=cloud 到達 client 向け)。ClaudeEval からの「○○のスレッドを探して」等に対応。";
 SourceVaultOOPSThread::usage =
-  "SourceVaultOOPSThread[sessionId] は 1 スレッドの <|Session, Subject, SessionKind, MailCounters, Digest, TopicLabels, QuoteEdges|> を返す(digest は決定的要約)。";
+  "SourceVaultOOPSThread[sessionId, opts] は 1 スレッドの <|Session, Subject, SessionKind, MailCounters, Digest, TopicLabels, AllTopics, Released, QuoteEdges|> を返す(digest は決定的要約)。" <>
+  "TopicLabels は ◎ Primary 寄せ(精密。digest 話題行と一貫)、AllTopics は広い enrichment(俯瞰/recall)。" <>
+  "オプション \"CloudSafe\"(既定 False。True で私的リストスレッドは digest を出さず Released->False を返す)。";
 
 SourceVaultOOPSTopicGraphPlot::usage =
   "SourceVaultOOPSTopicGraphPlot[topicItemGraph, opts] は SourceVaultTopicItemGraph を Graph 描画する。" <>
@@ -542,6 +551,8 @@ SourceVaultParseOOPSMailFile[path_String] := Module[{s, parts, mails},
           "MlName" -> StringTrim@iSVHdr[headers, "X-Ml-Name"],
           "Subject" -> StringTrim@iSVDecodeMimeWords@iSVHdr[headers, "Subject"],
           "From" -> StringTrim@iSVDecodeMimeWords@iSVHdr[headers, "From"],
+          "To" -> StringTrim@iSVDecodeMimeWords@iSVHdr[headers, "To"],
+          "Cc" -> StringTrim@iSVDecodeMimeWords@iSVHdr[headers, "Cc"],
           "Date" -> StringTrim@iSVHdr[headers, "Date"],
           "Body" -> body|>]]],
       {part, parts}]][[2]];
@@ -1098,6 +1109,35 @@ iSVOOPSListPrivacy[mlName_String] := Which[
     <|"PrivacyLevel" -> 0.6, "Tags" -> {"OOPS", "MailingList"}|>];
 iSVOOPSListPrivacy[_] := <|"PrivacyLevel" -> 0.6, "Tags" -> {"OOPS", "MailingList"}|>;
 
+(* ---- §6.5.3 recipient(To/Cc) ベース privacy (defense-in-depth, 一般メール向け) ----
+   X-Ml-Name に依らず To/Cc の addr-spec だけで privacy を推定する。私的リスト宛(oops-ura 等)は
+   X-Ml-Name が欠落/詐称されても To から私的判定できる (二重の防御)。 *)
+iSVExtractAddrSpecs[str_String] :=
+  ToLowerCase /@ DeleteDuplicates@StringCases[str,
+    RegularExpression["[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}"]];
+iSVExtractAddrSpecs[_] := {};
+(* list 的アドレス (個人宛でない): ML/announce/request/admin 等の慣習 local-part *)
+iSVListLikeAddrQ[addr_String] :=
+  StringContainsQ[addr, RegularExpression[
+    "(?i)(^|[._\\-])(oops|ml|mailing|list|listserv|majordomo|announce|news|info|noreply|no\\-reply)([._\\-]|@)"]] ||
+  StringContainsQ[addr, RegularExpression["(?i)(\\-adm|\\-admin|\\-request|\\-owner|\\-bounces|\\-ml|ml\\-)"]];
+
+SourceVaultMailRecipientPrivacy[mail_Association] := Module[{rcptStr, addrs, indiv},
+  rcptStr = StringRiffle[{Lookup[mail, "To", ""], Lookup[mail, "Cc", ""]}, " "];
+  addrs = iSVExtractAddrSpecs[rcptStr];
+  Which[
+    (* 私的リストアドレスが受信者にいる = 最強シグナル (X-Ml-Name と独立) *)
+    AnyTrue[addrs, iSVOOPSPrivateListQ] || iSVOOPSPrivateListQ[rcptStr],
+      <|"PrivacyLevel" -> 0.6, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"},
+        "Signal" -> "PrivateRecipient", "Recipients" -> addrs|>,
+    (* 受信者が個人アドレスのみ (list 的でない) = 個人間通信の軽いシグナル (一般メール) *)
+    addrs =!= {} && AllTrue[addrs, ! iSVListLikeAddrQ[#] &],
+      <|"PrivacyLevel" -> 0.5, "Tags" -> {"DirectRecipients"},
+        "Signal" -> "IndividualRecipients", "Recipients" -> addrs|>,
+    True,
+      <|"PrivacyLevel" -> 0.0, "Tags" -> {}, "Signal" -> "None", "Recipients" -> addrs|>]];
+SourceVaultMailRecipientPrivacy[_] := <|"PrivacyLevel" -> 0.0, "Tags" -> {}, "Signal" -> "None", "Recipients" -> {}|>;
+
 Options[SourceVaultBuildSessionChunks] = {"SurfaceIndex" -> None, "RelationGraph" -> None,
   "RefLabel" -> None, "PrivacyLevel" -> Automatic, "ReleaseState" -> "Published",
   "MaxBodyChars" -> 4000, "IncludeRelated" -> True};
@@ -1115,7 +1155,9 @@ SourceVaultBuildSessionChunks[mails_List, sessions_List, OptionsPattern[]] := Mo
         combined = StringTake[StringRiffle[
           SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, "\n\n"], UpTo[maxBody]];
         authors = DeleteDuplicates[Lookup[#, "From", ""] & /@ sessMails];
-        privInfo = iSVOOPSListPrivacy[Lookup[#, "MlName", ""]] & /@ sessMails;
+        (* §6.5.3: list 名(X-Ml-Name)由来 ∪ 受信者(To/Cc)由来 の privacy を max/union (defense-in-depth) *)
+        privInfo = Join[iSVOOPSListPrivacy[Lookup[#, "MlName", ""]] & /@ sessMails,
+          SourceVaultMailRecipientPrivacy /@ sessMails];
         priv = If[plOpt === Automatic, Max[#["PrivacyLevel"] & /@ privInfo], plOpt];
         tags = DeleteDuplicates@Flatten[#["Tags"] & /@ privInfo];
         topicsText = If[AssociationQ[sidx],
@@ -1136,20 +1178,39 @@ iSVMailFirstProse[mail_Association, chars_Integer] := Module[
   {ps = Select[SourceVaultParseMailParagraphs[Lookup[mail, "Body", ""]], #["Kind"] === "Prose" &]},
   If[ps === {}, "", StringTake[StringReplace[ps[[1]]["Text"], {"\n" -> " ", "\r" -> ""}], UpTo[chars]]]];
 
+(* §6.5 点1: session の話題を ◎(Primary) 明示 topic に限定 (人手付与=最高品質・精密)。
+   ◎ が無ければ whole-session enrichment 上位 fbN 件に fallback (widely-noisy を抑制)。
+   ラベルは著者の inline 表記 (CanonicalLabel) を使う。seed ref へのマッピングは id 再利用で
+   誤誘導し得る (例 ◎ iTunes Music Store[ki 2829] だが seed の ki:2829 は別ラベル)。
+   digest 話題行と thread の TopicLabels の両方で共有 (一貫した Primary 寄せ)。 *)
+iSVSessionPrimaryTopics[sessMails_List, sidx_, refLabel_, fbN_Integer] := Module[{primaryLabels},
+  primaryLabels = Keys@ReverseSort@Counts[#["CanonicalLabel"] & /@ Select[
+    Flatten[SourceVaultExtractExplicitTopics[Lookup[#, "Body", ""]] & /@ sessMails],
+    #["TopicRole"] === "Primary" &]];
+  If[primaryLabels =!= {}, primaryLabels,
+    If[AssociationQ[sidx],
+      Take[SourceVaultTopicEnrichment[
+          StringRiffle[SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, " "],
+          sidx, "RefLabel" -> refLabel, "IncludeRelated" -> False]["TopicLabels"], UpTo[fbN]],
+      {}]]];
+
 Options[SourceVaultBuildSessionDigest] = {"SurfaceIndex" -> None, "RefLabel" -> None,
-  "MaxMails" -> 8, "ParaChars" -> 120};
+  "MaxMails" -> 8, "ParaChars" -> 120, "PrimaryTopicsOnly" -> True, "FallbackTopics" -> 6};
 SourceVaultBuildSessionDigest[session_Association, mails_List, OptionsPattern[]] := Module[
   {byCounter, sidx = OptionValue["SurfaceIndex"], refLabel = OptionValue["RefLabel"],
    maxMails = OptionValue["MaxMails"], paraChars = OptionValue["ParaChars"],
+   primaryOnly = TrueQ[OptionValue["PrimaryTopicsOnly"]], fbN = OptionValue["FallbackTopics"],
    sessMails, subject, topicLabels, timeline, counters},
   byCounter = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ mails];
   sessMails = DeleteMissing[Lookup[byCounter, session["MailCounters"]]];
   subject = session["Subject"];
-  topicLabels = If[AssociationQ[sidx],
-    SourceVaultTopicEnrichment[
-        StringRiffle[SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, " "],
-        sidx, "RefLabel" -> refLabel, "IncludeRelated" -> False]["TopicLabels"],
-    {}];
+  topicLabels = If[primaryOnly,
+    iSVSessionPrimaryTopics[sessMails, sidx, refLabel, fbN],
+    If[AssociationQ[sidx],
+      SourceVaultTopicEnrichment[
+          StringRiffle[SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, " "],
+          sidx, "RefLabel" -> refLabel, "IncludeRelated" -> False]["TopicLabels"],
+      {}]];
   counters = Take[sessMails, UpTo[maxMails]];
   timeline = Map[Function[m,
     "#" <> ToString[Lookup[m, "Counter", "?"]] <> " " <>
@@ -1178,7 +1239,9 @@ SourceVaultBuildSessionPrimerItems[mails_List, sessions_List, OptionsPattern[]] 
             sidx, "RefLabel" -> refLabel, "RelationGraph" -> relGraph, "IncludeRelated" -> True], <||>];
         topicLabels = Lookup[enr, "TopicLabels", {}];
         authors = DeleteDuplicates[Lookup[#, "From", ""] & /@ sessMails];
-        privInfo = iSVOOPSListPrivacy[Lookup[#, "MlName", ""]] & /@ sessMails;
+        (* §6.5.3: list 名 ∪ 受信者(To/Cc) 由来 privacy を max/union (defense-in-depth) *)
+        privInfo = Join[iSVOOPSListPrivacy[Lookup[#, "MlName", ""]] & /@ sessMails,
+          SourceVaultMailRecipientPrivacy /@ sessMails];
         priv = Max[#["PrivacyLevel"] & /@ privInfo];
         tags = DeleteDuplicates@Join[Flatten[#["Tags"] & /@ privInfo], topicLabels];
         importance = Min[0.9, 0.3 + 0.06*sess["MailCount"]];  (* スレッド規模の決定的 proxy *)
@@ -1244,39 +1307,73 @@ SourceVaultOOPSSessions[OptionsPattern[]] := (SourceVaultOOPSEnsureLoaded[];
     Take[ReverseSortBy[Select[SourceVault`$svOOPSState["Sessions"], #["MailCount"] >= OptionValue["MinMails"] &],
       #["MailCount"] &], UpTo[OptionValue["Limit"]]]]);
 
+(* 検索用 release context を用意 (冪等)。
+   - oops-corpus:       全許可 (notebook/local。私的リストも見える)
+   - oops-corpus-cloud: §6.5.3 私的リスト tag を DenyTags で gate (cloud 到達 client 向け)。
+   MCP tool は cloud context を使い、私的リスト (oops-ura / Under Ground) スレッドを出さない。 *)
+iSVOOPSEnsureReleaseContexts[] := (
+  If[! MemberQ[SourceVaultListReleaseContexts[], "oops-corpus"],
+    SourceVaultRegisterReleaseContext["oops-corpus", <|"MaxPrivacyLevel" -> 1.0|>]];
+  If[! MemberQ[SourceVaultListReleaseContexts[], "oops-corpus-cloud"],
+    SourceVaultRegisterReleaseContext["oops-corpus-cloud",
+      <|"MaxPrivacyLevel" -> 1.0, "DenyTags" -> {"NoCloudLLM", "NoPublicExport", "PrivateML"}|>]]);
+
+(* session が私的リスト (NoCloudLLM) メールを含むか。SourceVaultOOPSThread の CloudSafe gate 用
+   (Thread は検索 gate を通らず直接 session を返すため個別に判定する)。 *)
+iSVOOPSSessionPrivateQ[sess_Association, st_Association] := Module[{byC, sessMails},
+  byC = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ st["Mails"]];
+  sessMails = DeleteMissing[Lookup[byC, Lookup[sess, "MailCounters", {}]]];
+  (* list 名 由来 ∪ 受信者(To/Cc) 由来の NoCloudLLM のどちらかで私的判定 (defense-in-depth) *)
+  AnyTrue[sessMails, Function[m,
+    iSVOOPSPrivateListQ[Lookup[m, "MlName", ""]] ||
+      MemberQ[Lookup[SourceVaultMailRecipientPrivacy[m], "Tags", {}], "NoCloudLLM"]]]];
+
 (* session 検索 index を lazy build (内部 release context oops-corpus) *)
 iSVOOPSEnsureSessionIndex[] := Module[{st = SourceVault`$svOOPSState, chunks, idx},
   If[! MissingQ[st["SessionIndex"]], Return[st["SessionIndex"]]];
   chunks = SourceVaultBuildSessionChunks[st["Mails"], st["Sessions"],
     "SurfaceIndex" -> st["SurfaceIndex"], "RelationGraph" -> st["RelationGraph"], "RefLabel" -> st["RefLabel"]];
-  If[! MemberQ[SourceVaultListReleaseContexts[], "oops-corpus"],
-    SourceVaultRegisterReleaseContext["oops-corpus", <|"MaxPrivacyLevel" -> 1.0|>]];
+  iSVOOPSEnsureReleaseContexts[];
   idx = "oops-corpus-bm25-" <> StringTake[StringDelete[CreateUUID[], "-"], 8];
   SourceVaultBuildProjectionIndex["oops-corpus", "Chunks" -> chunks,
     "IndexKind" -> "KeywordBM25V1", "EntityDictionary" -> st["Dict"], "IndexId" -> idx];
   SourceVault`$svOOPSState["SessionIndex"] = idx;
   idx];
 
-Options[SourceVaultOOPSSearchThreads] = {"Limit" -> 10};
-SourceVaultOOPSSearchThreads[query_String, OptionsPattern[]] := Module[{idx, res},
+Options[SourceVaultOOPSSearchThreads] = {"Limit" -> 10, "CloudSafe" -> False};
+SourceVaultOOPSSearchThreads[query_String, OptionsPattern[]] := Module[{idx, res, ctx},
   SourceVaultOOPSEnsureLoaded[];
   idx = iSVOOPSEnsureSessionIndex[];
-  res = SourceVaultSearch[query, "ReleaseContext" -> "oops-corpus", "Index" -> idx, "Limit" -> OptionValue["Limit"]];
+  iSVOOPSEnsureReleaseContexts[];
+  (* CloudSafe -> True で §6.5.3 私的リスト (NoCloudLLM 等) を gate する厳格 context を使う *)
+  ctx = If[TrueQ[OptionValue["CloudSafe"]], "oops-corpus-cloud", "oops-corpus"];
+  res = SourceVaultSearch[query, "ReleaseContext" -> ctx, "Index" -> idx, "Limit" -> OptionValue["Limit"]];
   Dataset[<|"Session" -> #["ChunkId"], "Subject" -> Lookup[Lookup[#, "Citation", <||>], "Title", ""],
       "Score" -> Round[#["Score"], 0.01],
       "Snippet" -> StringTake[StringReplace[Lookup[#, "Snippet", ""], {"\n" -> " ", "\r" -> ""}], UpTo[80]]|> & /@ res]];
 
-SourceVaultOOPSThread[sessionId_String] := Module[{st, sess, dig, enr},
+Options[SourceVaultOOPSThread] = {"CloudSafe" -> False};
+SourceVaultOOPSThread[sessionId_String, OptionsPattern[]] := Module[{st, sess, sessMails, dig, enr},
   SourceVaultOOPSEnsureLoaded[]; st = SourceVault`$svOOPSState;
   sess = SelectFirst[st["Sessions"], #["MailSessionId"] === sessionId &, Missing["SessionNotFound"]];
   If[MissingQ[sess], Return[sess]];
+  (* CloudSafe -> True で私的リスト (NoCloudLLM) スレッドは digest を出さず withheld を返す
+     (Thread は検索 gate を通らず直接 session を返すため個別に gate する) *)
+  If[TrueQ[OptionValue["CloudSafe"]] && iSVOOPSSessionPrivateQ[sess, st],
+    Return[<|"Session" -> sessionId, "Subject" -> sess["Subject"],
+      "SessionKind" -> sess["SessionKind"], "Released" -> False,
+      "Why" -> {"PrivateList", "NoCloudLLM"}|>]];
+  sessMails = DeleteMissing[Lookup[Association[(#["Counter"] -> #) & /@ st["Mails"]], sess["MailCounters"]]];
   dig = SourceVaultBuildSessionDigest[sess, st["Mails"], "SurfaceIndex" -> st["SurfaceIndex"], "RefLabel" -> st["RefLabel"]];
+  (* TopicLabels は Primary 寄せ (digest 話題行と一貫)。AllTopics に広い enrichment を残す (recall/俯瞰用) *)
   enr = SourceVaultTopicEnrichment[
-    StringRiffle[SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@
-      DeleteMissing[Lookup[Association[(#["Counter"] -> #) & /@ st["Mails"]], sess["MailCounters"]]], " "],
+    StringRiffle[SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, " "],
     st["SurfaceIndex"], "RefLabel" -> st["RefLabel"], "IncludeRelated" -> False];
   <|"Session" -> sessionId, "Subject" -> sess["Subject"], "SessionKind" -> sess["SessionKind"],
-    "MailCounters" -> sess["MailCounters"], "Digest" -> dig, "TopicLabels" -> enr["TopicLabels"],
+    "MailCounters" -> sess["MailCounters"], "Digest" -> dig,
+    "TopicLabels" -> iSVSessionPrimaryTopics[sessMails, st["SurfaceIndex"], st["RefLabel"], 6],
+    "AllTopics" -> enr["TopicLabels"],
+    "Released" -> True,
     "QuoteEdges" -> Select[st["QuoteEdges"],
       MemberQ["sv://mail/" <> ToString[#] & /@ sess["MailCounters"], #["FromMailRef"]] &]|>];
 

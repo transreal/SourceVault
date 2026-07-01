@@ -22,6 +22,22 @@ tool を実行し MCP result `<|"content", "isError"|>` を返す。
 ### SourceVaultMCPDispatch[method, params] → Association
 MCP JSON-RPC の method (initialize/tools/list/tools/call/ping) を処理し JSON-RPC result 相当の Association を返す。未知 method は `Failure["MCPMethodNotFound", ...]` (proxy が JSON-RPC error に変換)。
 
+## OOPS メールスレッド検索ツール (SourceVault_oopsseed 露出)
+
+ClaudeEval / LM Studio / Codex の自然文プロンプト (「○○のスレッドを探して」等) から OOPS メールコーパスのスレッド検索・閲覧を行う 3 tool。実体は [api_oopsseed.md](api_oopsseed.md) の `SourceVaultOOPS...` 関数群 (thin wrapper)。
+
+- **`sourcevault_oops_status`** — OOPS コーパスを冪等ロードし状態 (`Loaded / MailCount / SessionCount / TopicCount / Files / SessionIndexBuilt / Scope`) を返す。検索前に一度呼んで初期化する。実体 `SourceVaultOOPSEnsureLoaded` + `SourceVaultOOPSStatus`。
+- **`sourcevault_oops_search_threads`** {query, limit=10} — スレッド (mail session) を BM25 で検索し `{Session, Subject, Score, Snippet}` を返す。日本語・英語クエリ可。実体 `SourceVaultOOPSSearchThreads`。
+- **`sourcevault_oops_thread`** {session} — 1 スレッド詳細 `{Session, Subject, SessionKind, MailCounters, MailCount, Digest, TopicLabels}` を返す (Digest = LLM 非依存の決定的要約, per-mail timeline 付き)。QuoteEdges は返却から除外 (compact)。未知 id は `isError:true`「Thread not found: …」。実体 `SourceVaultOOPSThread`。
+
+**scope (負荷制御)**: 全コーパス (161 ファイル / 数千 session) を service カーネルで on-demand build すると重すぎる (session index = per-session TopicEnrichment)。既定 `SourceVault`$svOOPSMCPScope = {"oops 200506.txt"}` の bounded scope に絞る。初回 tool 呼び出しで ~10s (quote-table parse 込み) → 以降 cache。広げるには service カーネルで `$svOOPSMCPScope` を設定 (再起動 or `SourceVaultOOPSEnsureLoaded["Force"->True]` で反映)。
+
+**privacy gate (§6.5.3)**: OOPS アーカイブは公開リスト (`OOPS Mailing List`) と私的リスト (`... Under Ground` = oops-ura) のメールが同一ファイルに混在する。MCP tool は cloud 到達し得るので、3 tool すべて **cloud-safe gate を常に適用**する:
+- `search_threads` は厳格な release context `oops-corpus-cloud` (`DenyTags -> {NoCloudLLM, NoPublicExport, PrivateML}`) で検索し、私的リストスレッドを結果から除外する (`SourceVaultOOPSSearchThreads["CloudSafe" -> True]`)。
+- `thread` は session が私的リストメールを含む場合 digest を出さず `{Released: false, Why: [...]}` を返す (`SourceVaultOOPSThread["CloudSafe" -> True]`。Thread は検索 gate を通らず直接 session を返すため個別に gate)。
+
+notebook / local から直接 `SourceVaultOOPS...` を呼ぶ場合は既定 `CloudSafe -> False` でフルアクセス (私的スレッドも見える)。
+
 ## URI 層 (spec §3.1)
 
 ### $SourceVaultURINamespaces

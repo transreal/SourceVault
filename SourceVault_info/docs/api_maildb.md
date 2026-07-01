@@ -165,6 +165,8 @@ Options: "MBox" -> Automatic (文字列でその mbox に限定), "DateFrom" -> 
 mailspec (date/subject/from/to/cc/body) からローカル LLM で派生を推論する (優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン。Deadline は ISO 文字列または Missing["None"]。
 → Association `<|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|>`
 
+> **受信者ベースの決定的 privacy フロア (defense-in-depth)**: snapshot に派生を適用する際、LLM 推論 PrivacyLevel に **受信者(To/Cc)由来の下限**を `Max` で additive 適用する。**オーナーが直接の To/Cc 受信者・非 bulk・少数宛 (≤ 4 名)** のメール = 個人/小グループ通信とみなし `PrivacyLevel` を `$SourceVaultMailPersonalPrivacyFloor` (既定 0.6) 以上に保証する (LLM が個人メールの privacy を下げ過ぎて cloud gate を漏れるのを防ぐ)。ML/一斉配信はオーナーが To/Cc に入らず (position=Bulk)・bulk/多数宛は対象外 (floor 0.0)。フロアは privacy を**上げるだけ** (高い LLM 値は下げない)。`$SourceVaultMailPersonalPrivacyFloor = 0.0` で無効化。owner 未設定時は無効。
+
 ### SourceVaultInferMailDerivedBatch[opts]
 未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。CheckpointEvery 件ごとに dirty シャードを保存する (中断耐性)。
 **「<mbox> の (期間) メールにサマリーを追加」は SourceVaultMailAddSummaries[mbox, period] を使うこと** (EnsureLoaded を内包し外部ジョブでも自己完結)。本関数を直接呼ぶときは "MBox" で対象 mbox を必ず絞る — 無指定だとロード済み全 mbox を処理する。
