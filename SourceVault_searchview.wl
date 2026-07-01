@@ -71,6 +71,23 @@ SourceVaultApplySearchContextProfile::usage =
 SourceVaultExplainSearchContext::usage =
   "SourceVaultExplainSearchContext[result, profile] は 1 result の metadata contribution 内訳を返す (score breakdown に明示)。";
 
+(* ---- §7 AgenticKeywordSearch / Cascade (Phase 9-10) ---- *)
+SourceVaultClassifyQueryComplexity::usage =
+  "SourceVaultClassifyQueryComplexity[query, opts] は query を rule ベースで Simple|Complex 分類する (§7.5)。" <>
+  "multi-hop キーワード(比較/関係/なぜ/経緯/根拠…)・長クエリ・(index 指定時) BM25 top score 低で Complex。" <>
+  "opts \"ReleaseContext\", \"Index\", \"LongQueryTerms\"(6), \"LowScoreThreshold\"(3.0)。";
+SourceVaultAgenticSearch::usage =
+  "SourceVaultAgenticSearch[query, opts] は §7 の agentic keyword search ループ (既定 deterministic planner)。" <>
+  "complexity 分類→context profile 選択→episode memory→primer/chunk 検索→graph 展開→evidence 充足判定→" <>
+  "不足なら deterministic follow-up query→停止条件、を反復し、retrieval episode 記録＋SearchView 構築。" <>
+  "戻り値 <|Results, Views, AnswerDraft, Trace, Stopped(EnoughEvidence|MaxIterations|NoProgress|BudgetExceeded)|>。" <>
+  "opts \"ReleaseContext\"(必須), \"Index\", \"Limit\"(10), \"MaxIterations\"(3), \"MaxToolCalls\"(12), " <>
+  "\"MinGroundedEvidence\"(2), \"AllowLLMPlanning\"(False), \"PlannerFn\", \"RelationGraph\", \"RefLabel\", " <>
+  "\"ResultView\"(RankedList), \"RecordEpisode\"(True), \"ReturnTrace\"(True)。";
+SourceVaultCascadeSearch::usage =
+  "SourceVaultCascadeSearch[query, opts] は complexity で dispatch する (§7.5): Simple->SourceVaultSearch (BM25)、" <>
+  "Complex->SourceVaultAgenticSearch。戻り値は AgenticSearch 形。opts は両者に透過。";
+
 Begin["`SearchViewPrivate`"]
 
 If[! AssociationQ[$svSearchViews], $svSearchViews = <||>];   (* viewRef -> view (cache) *)
@@ -475,6 +492,128 @@ SourceVaultExplainSearchContext[result_Association, profile_Association] := Modu
     "MetadataContribution" -> Select[c["FieldParts"], # > 0 &],
     "PrimaryTemporalHit" -> c["PrimaryTemporalHit"], "SecondaryTemporalHit" -> c["SecondaryTemporalHit"],
     "Note" -> "context profile は ranking のみ変更・release gate は変えない。"|>];
+
+(* ================= §7 AgenticKeywordSearch / Cascade (Phase 9-10) ================= *)
+
+$svSVComplexKeywords = {"比較", "関係", "なぜ", "理由", "経緯", "誰が", "いつから", "矛盾", "根拠",
+  "違い", "推移", "結論", "交渉", "日程", "まとめ", "比べ", "どう", "背景", "対立",
+  "because", "why", "how", "compare", "relationship", "conflict", "history"};
+
+Options[SourceVaultClassifyQueryComplexity] = {"ReleaseContext" -> None, "Index" -> None,
+  "LongQueryTerms" -> 6, "LowScoreThreshold" -> 3.0};
+SourceVaultClassifyQueryComplexity[query_String, OptionsPattern[]] := Module[
+  {qn = ToLowerCase[query], terms, signals = {}, ctx = OptionValue["ReleaseContext"],
+   idx = OptionValue["Index"], topScore},
+  terms = iSVSVTerms[query];
+  If[AnyTrue[$svSVComplexKeywords, StringContainsQ[qn, ToLowerCase[#]] &],
+    AppendTo[signals, "MultiHopKeyword"]];
+  If[Length[terms] >= OptionValue["LongQueryTerms"], AppendTo[signals, "LongQuery"]];
+  If[StringQ[ctx] && StringQ[idx],
+    topScore = Quiet@Check[With[{r = SourceVaultSearch[query, "ReleaseContext" -> ctx, "Index" -> idx, "Limit" -> 3]},
+       If[Head[r] === Dataset, r = Normal[r]]; If[ListQ[r] && r =!= {}, Lookup[First[r], "Score", 0.], 0.]], 0.];
+    If[topScore < OptionValue["LowScoreThreshold"], AppendTo[signals, "LowBM25(" <> ToString[Round[topScore, 0.1]] <> ")"]]];
+  <|"Query" -> query, "Complexity" -> If[signals === {}, "Simple", "Complex"], "Signals" -> signals|>];
+
+(* result 群 + episode memory + relation neighbor から deterministic follow-up query 語を作る (§7.6) *)
+iSVSVFollowUpTerms[state_Association, evidence_List, episodeMem_Association, rg_, refLabel_] := Module[
+  {qterms, evTerms, memTerms, relTerms, cand},
+  qterms = iSVSVTerms[state["Query"]];
+  (* 1. top evidence の title terms *)
+  evTerms = Flatten[iSVSVTerms[Lookup[Lookup[#, "Citation", <||>], "Title", ""]] & /@ Take[evidence, UpTo[3]]];
+  (* 4. episode memory の high-influence terms *)
+  memTerms = Lookup[episodeMem, "CandidateTerms", {}];
+  (* 3. relation 1-hop neighbor label (evidence の topic ref から) *)
+  relTerms = If[AssociationQ[rg],
+    Module[{topicRefs = DeleteDuplicates[Flatten[Lookup[#, "TopicRefs", {}] & /@ Take[evidence, UpTo[3]]]]},
+      If[topicRefs === {}, {},
+        Lookup[Lookup[Quiet@Check[SourceVaultExpandSearchGraph[topicRefs, "RelationGraph" -> rg, "MaxHops" -> 1,
+           "RefLabel" -> refLabel, "MaxNodes" -> 6], <||>], "Expanded", {}], "Label", ""]]], {}];
+  (* 既出 query 語を除き最大 2 語 (制約: 同時 <=2) *)
+  cand = DeleteCases[DeleteDuplicates[Join[evTerms, memTerms, relTerms]], "" | Alternatives @@ qterms];
+  Take[cand, UpTo[2]]];
+
+Options[SourceVaultAgenticSearch] = {"ReleaseContext" -> None, "Index" -> None, "PrimerIndex" -> Automatic,
+  "Limit" -> 10, "MaxIterations" -> 3, "MaxToolCalls" -> 12, "MinGroundedEvidence" -> 2,
+  "NoProgressTermination" -> True, "AllowLLMPlanning" -> False, "PlannerFn" -> Automatic,
+  "ReadBody" -> False, "Grant" -> None, "ResultView" -> "RankedList", "ContextSubgraphDepth" -> 1,
+  "RelationGraph" -> None, "RefLabel" -> None, "RecordEpisode" -> True, "ReturnTrace" -> True,
+  "EvidenceScoreMin" -> 0.0, "Actor" -> <|"Kind" -> "Owner", "Ref" -> "sventity:owner:imai"|>};
+SourceVaultAgenticSearch[query_String, OptionsPattern[]] := Module[
+  {ctx = OptionValue["ReleaseContext"], idx = OptionValue["Index"], lim = OptionValue["Limit"],
+   maxIter = OptionValue["MaxIterations"], maxTools = OptionValue["MaxToolCalls"],
+   minEv = OptionValue["MinGroundedEvidence"], noProg = TrueQ[OptionValue["NoProgressTermination"]],
+   allowLLM = TrueQ[OptionValue["AllowLLMPlanning"]], plannerFn = OptionValue["PlannerFn"],
+   rg = OptionValue["RelationGraph"], refLabel = OptionValue["RefLabel"],
+   recEp = TrueQ[OptionValue["RecordEpisode"]], evMin = OptionValue["EvidenceScoreMin"],
+   complexity, profile, episodeMem, curQuery, tried = {}, trace = {}, iter = 0, toolCalls = 0,
+   evidenceById = <||>, ranked = {}, stopped = "MaxIterations", ep, epId = Missing[], view, followTerms, newQuery},
+  If[! StringQ[ctx], Return[Failure["ReleaseContextRequired",
+    <|"MessageTemplate" -> "SourceVaultAgenticSearch requires \"ReleaseContext\"."|>]]];
+  (* 1-3: classify / profile / episode memory recall *)
+  complexity = SourceVaultClassifyQueryComplexity[query, "ReleaseContext" -> ctx, "Index" -> idx];
+  profile = SourceVaultSelectSearchContextProfile[query];
+  episodeMem = Quiet@Check[SourceVaultSearchEpisodeMemory[query], <|"CandidateTerms" -> {}|>];
+  If[recEp, ep = SourceVaultStartRetrievalEpisode[<|"Actor" -> OptionValue["Actor"],
+     "Inputs" -> {"query:" <> query}|>]; epId = ep["EpisodeId"]];
+  curQuery = query;
+  While[iter < maxIter && toolCalls < maxTools,
+    iter++; AppendTo[tried, curQuery];
+    Module[{results, rows, rk, evRefs},
+     results = SourceVaultSearch[curQuery, "ReleaseContext" -> ctx, "Index" -> idx, "Limit" -> lim];
+     toolCalls++;
+     rows = If[Head[results] === Dataset, Normal[results], If[ListQ[results], results, {}]];
+     rows = Select[rows, Lookup[#, "ReleaseDecision", "Permit"] === "Permit" && ! TrueQ[Lookup[#, "Revoked", False]] &];
+     rk = SourceVaultApplySearchContextProfile[rows, profile];   (* 7: apply context profile *)
+     ranked = rk;
+     (* evidence 蓄積 (score floor 越え・distinct chunk) *)
+     Do[If[Lookup[r, "ContextScore", Lookup[r, "Score", 0.]] >= evMin,
+        evidenceById[Lookup[r, "ChunkId", ""]] = r], {r, rk}];
+     evRefs = DeleteCases[Keys[evidenceById], ""];
+     AppendTo[trace, <|"Iteration" -> iter, "Query" -> curQuery, "Hits" -> Length[rows],
+        "EvidenceTotal" -> Length[evRefs], "ToolCalls" -> toolCalls|>];
+     If[recEp, SourceVaultRecordSearchAttempt[epId, <|"QueryText" -> curQuery, "SearchMethod" -> "agentic",
+        "ResultRefs" -> (Lookup[#, "ChunkId", ""] & /@ rows),
+        "IncludedEvidenceRefs" -> (Lookup[#, "ChunkId", ""] & /@ Take[rk, UpTo[minEv]])|>]];
+     (* 充足判定 *)
+     If[Length[evRefs] >= minEv, stopped = "EnoughEvidence"; Break[]];
+     (* 8: follow-up query (deterministic or PlannerFn) *)
+     followTerms = If[allowLLM && (plannerFn =!= Automatic),
+        Quiet@Check[plannerFn[<|"Query" -> curQuery, "Evidence" -> Values[evidenceById], "Tried" -> tried|>], {}],
+        iSVSVFollowUpTerms[<|"Query" -> curQuery|>, Values[evidenceById], episodeMem, rg, refLabel]];
+     followTerms = If[ListQ[followTerms], Take[followTerms, UpTo[2]], {}];
+     newQuery = If[followTerms === {}, Missing[], curQuery <> " " <> StringRiffle[followTerms, " "]];
+     If[MissingQ[newQuery] || MemberQ[tried, newQuery],
+        If[noProg, stopped = "NoProgress"; Break[]], curQuery = newQuery]];
+  ];
+  If[iter >= maxIter && stopped === "MaxIterations", Null];
+  If[toolCalls >= maxTools && stopped =!= "EnoughEvidence", stopped = "BudgetExceeded"];
+  If[recEp, SourceVaultCloseRetrievalEpisode[epId, DeleteCases[Keys[evidenceById], ""],
+     "Outcome" -> If[stopped === "EnoughEvidence", "Succeeded", "Partial"], "Persist" -> True]];
+  (* SearchView 構築 (§6.8) *)
+  view = Quiet@Check[SourceVaultBuildSearchView[query, "ReleaseContext" -> ctx, "Index" -> idx,
+     "Limit" -> lim, "ResultView" -> OptionValue["ResultView"], "RelationGraph" -> rg, "RefLabel" -> refLabel], Missing[]];
+  <|"Results" -> ranked, "Views" -> If[AssociationQ[view], {view["ViewRef"]}, {}],
+    "AnswerDraft" -> Missing["DeterministicPlanner"],
+    "Complexity" -> complexity["Complexity"],
+    "Trace" -> If[TrueQ[OptionValue["ReturnTrace"]], <|"Steps" -> trace, "Complexity" -> complexity,
+       "Profile" -> Lookup[profile, "ProfileId", "?"], "TriedQueries" -> tried,
+       "Iterations" -> iter, "ToolCalls" -> toolCalls|>, Missing[]],
+    "Stopped" -> stopped|>];
+
+Options[SourceVaultCascadeSearch] = Options[SourceVaultAgenticSearch];
+SourceVaultCascadeSearch[query_String, opts : OptionsPattern[]] := Module[
+  {ctx = OptionValue["ReleaseContext"], idx = OptionValue["Index"], cx, rows},
+  cx = SourceVaultClassifyQueryComplexity[query, "ReleaseContext" -> ctx, "Index" -> idx];
+  If[cx["Complexity"] === "Complex",
+    (* Complex -> agentic *)
+    SourceVaultAgenticSearch[query, opts],
+    (* Simple -> BM25 直接 (agentic loop を回さない) *)
+    Module[{results},
+     results = SourceVaultSearch[query, "ReleaseContext" -> ctx, "Index" -> idx, "Limit" -> OptionValue["Limit"]];
+     rows = If[Head[results] === Dataset, Normal[results], If[ListQ[results], results, {}]];
+     <|"Results" -> rows, "Views" -> {}, "AnswerDraft" -> Missing[],
+       "Complexity" -> "Simple", "Trace" -> <|"Complexity" -> cx, "Dispatch" -> "BM25"|>,
+       "Stopped" -> If[Length[rows] >= OptionValue["MinGroundedEvidence"], "EnoughEvidence", "None"]|>]]];
 
 End[]
 

@@ -74,6 +74,23 @@ query intent を **rule ベース（LLM-free）** で推定し profile を選ぶ
 ### SourceVaultExplainSearchContext[result, profile] → Association
 1 result の metadata contribution 内訳（`MetadataContribution` field→weight, `PrimaryTemporalHit`）を返す（score breakdown への明示）。
 
+## §7 AgenticKeywordSearch / Cascade（Phase 9-10）
+
+検索の最上位オーケストレーション層。**既定は deterministic planner（`AllowLLMPlanning -> False`）**＝LLM 呼び出し無しの純関数ループ。LLM planning は `PlannerFn` フック（入力 text は data boundary、tool 権限は検索のみ）。§6.4 episode memory・§6.6 context profile・§6.8 SearchView を部品に使う。
+
+### SourceVaultClassifyQueryComplexity[query, opts] → Association（§7.5）
+rule ベースで `Simple`|`Complex` 分類。multi-hop キーワード（比較/関係/なぜ/経緯/根拠/矛盾…）・長クエリ・(index 指定時) BM25 top score 低 → Complex。戻り値 `<|Query, Complexity, Signals|>`。Options: `"ReleaseContext"`, `"Index"`, `"LongQueryTerms"`(6), `"LowScoreThreshold"`(3.0)。
+
+### SourceVaultAgenticSearch[query, opts] → Association（§7.2/§7.4）
+agentic ループ: **classify → context profile 選択 → episode memory recall → chunk 検索 → context profile 適用 → evidence 充足判定 → 不足なら deterministic follow-up query（§7.6: evidence title terms ∪ episode memory terms ∪ relation 1-hop neighbor、同時 ≤2、既出 query 除外）→ 停止条件** を反復。retrieval episode（§6.4）を記録し SearchView（§6.8）を構築。
+戻り値 `<|Results, Views(svview:…), AnswerDraft(deterministic は Missing), Complexity, Trace(Steps/Profile/TriedQueries/Iterations/ToolCalls), Stopped(EnoughEvidence|MaxIterations|NoProgress|BudgetExceeded)|>`。
+Options: `"ReleaseContext"`(必須), `"Index"`, `"Limit"`(10), `"MaxIterations"`(3), `"MaxToolCalls"`(12), `"MinGroundedEvidence"`(2), `"NoProgressTermination"`(True), `"AllowLLMPlanning"`(False), `"PlannerFn"`, `"RelationGraph"`, `"RefLabel"`, `"ResultView"`(RankedList), `"RecordEpisode"`(True), `"ReturnTrace"`(True)。
+
+### SourceVaultCascadeSearch[query, opts] → Association（§7.5）
+complexity で dispatch: **Simple → `SourceVaultSearch`（BM25 直接、ループ無し）／Complex → `SourceVaultAgenticSearch`**。戻り値は AgenticSearch 形。opts は両者に透過。
+
+**安全**: follow-up 候補も request-time gate / revocation / safety を通す。seed relation expansion が owner namespace を跨ぐ場合は provenance/confidence を trace に残す（今後）。LLM planning でも tool 権限は検索のみ。
+
 ## 一般メール構造化との接続（§9b）
 
 一般メール構造化（[api_mailstructure.md](api_mailstructure.md)）の結果を live view にできる。`SourceVaultMailStructBuildSearchIndex` で作った index を `BuildSearchView["...", "Index" -> idx, "ReleaseContext" -> "mailstruct-cloud"]` に渡せば、mail session の RankedList view が返る。topic graph（`st["TopicGraph"]`）と relation graph を `TopicGraph`/`RelationGraph`/`ContextSubgraphRoot` に渡せば ContextSubgraph も付く。annotation / interaction は session / paragraph topic / quote edge の ref を `targetRef`/`ToNodeRef` に使う。
