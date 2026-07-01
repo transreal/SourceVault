@@ -37,6 +37,40 @@ SourceVaultBuildInteractionMetaGraph::usage =
   "edge=Viewed/Followed/Cited/Annotated/BranchedFrom、actor weighting (Owner>Tool>LLM) + frequency 正規化。" <>
   "meta-layer boost は release gate を緩めない。opts \"Events\"(Automatic=TransactionLog), \"Limit\"(2000), \"ActorWeights\"。";
 
+(* ---- §6.4 Retrieval episode graph (Phase 5) ---- *)
+SourceVaultStartRetrievalEpisode::usage =
+  "SourceVaultStartRetrievalEpisode[spec, opts] は検索を伴う 1 作業セッションを episode として開始する (§6.4)。" <>
+  "spec: <|SessionId, Actor, TaskRef, Inputs|>。戻り値 SourceVaultRetrievalEpisode (EpisodeId、in-memory active cache)。";
+SourceVaultRecordSearchAttempt::usage =
+  "SourceVaultRecordSearchAttempt[episodeId, attempt, opts] は episode に検索試行を追記する。" <>
+  "attempt: <|QueryText, QueryModality, SearchMethod, ResultRefs, ClickedOrReadRefs, IncludedEvidenceRefs, RejectedRefs, ParentAttemptId|>。";
+SourceVaultCloseRetrievalEpisode::usage =
+  "SourceVaultCloseRetrievalEpisode[episodeId, outputs, opts] は episode を outputs/outcome で確定し event log に記録する " <>
+  "(高機密行動ログ: PrivacyLevel 1.0, Tags {PrivateBehaviorLog, NoCloudLLM})。opts \"Outcome\"(Succeeded|Partial|None), \"Persist\"(True)。";
+SourceVaultBuildRetrievalEpisodeGraph::usage =
+  "SourceVaultBuildRetrievalEpisodeGraph[opts] は記録した episode から探索グラフ (query->result->output) を作る。" <>
+  "opts \"Episodes\"(Automatic=TransactionLog), \"Limit\"(1000)。";
+SourceVaultEpisodeInfluenceScores::usage =
+  "SourceVaultEpisodeInfluenceScores[episodeId, opts] は episode の各 result の output への influence を推定する (§6.4)。" <>
+  "citation/read - ignored-after-read/rejected、actor factor (LLM<=0.7)、time decay Exp[-age/180]、自己引用 sublinear。" <>
+  "opts \"Episode\"(明示注入), \"HalfLifeDays\"(180)。戻り値 result ref -> score (降順)。";
+SourceVaultSearchEpisodeMemory::usage =
+  "SourceVaultSearchEpisodeMemory[query, opts] は過去 episode を primer として引き、query 拡張候補 (term/object) を返す。" <>
+  "**low-leak projection のみ** (raw path 非開示)。opts \"Episodes\"(Automatic), \"Limit\"(5), \"MinOverlap\"(0.2)。";
+
+(* ---- §6.6 SearchContextProfile (Phase 8) ---- *)
+SourceVaultRegisterSearchContextProfile::usage =
+  "SourceVaultRegisterSearchContextProfile[id, spec] は search context profile を登録する (§6.6)。" <>
+  "spec: <|Intent, PrimaryTemporalFields, SecondaryTemporalFields, MetadataWeights, TemporalInterpretation|>。既定 7 intent は自動登録。";
+SourceVaultSelectSearchContextProfile::usage =
+  "SourceVaultSelectSearchContextProfile[query, opts] は query intent を rule (LLM-free) で推定し profile を選ぶ。" <>
+  "opts \"Intent\"(ユーザー指定=最優先), \"Default\"(FindRecentWork)。戻り値 profile。";
+SourceVaultApplySearchContextProfile::usage =
+  "SourceVaultApplySearchContextProfile[results, profile, opts] は profile の MetadataWeights/temporal field で results を再ランクする。" <>
+  "**ranking のみ変更・release gate は変えない**。各 result の Metadata (Title/Author/TopicItems/date) を重み付け。opts \"BoostWeight\"(0.5)。";
+SourceVaultExplainSearchContext::usage =
+  "SourceVaultExplainSearchContext[result, profile] は 1 result の metadata contribution 内訳を返す (score breakdown に明示)。";
+
 Begin["`SearchViewPrivate`"]
 
 If[! AssociationQ[$svSearchViews], $svSearchViews = <||>];   (* viewRef -> view (cache) *)
@@ -207,6 +241,240 @@ SourceVaultBuildInteractionMetaGraph[OptionsPattern[]] := Module[
     "Nodes" -> nodes, "Edges" -> edges,
     "InteractionEventCount" -> Length[intev], "AnnotationCount" -> Length[annev],
     "Note" -> "meta-layer は行動ログ (高機密)。boost は release gate を緩めない。"|>];
+
+(* ================= §6.4 Retrieval episode graph (Phase 5) ================= *)
+
+If[! AssociationQ[$svActiveEpisodes], $svActiveEpisodes = <||>];   (* episodeId -> open episode *)
+$svSVLLMInfluenceCap = 0.7;   (* LLM actor の influence 上限 (自己強化抑制) *)
+
+iSVSVActorFactor[kind_] := Switch[kind, "Owner", 1.0, "Tool", 0.5, "LLM", $svSVLLMInfluenceCap, _, 0.5];
+iSVSVAgeDays[utc_] := Quiet@Check[
+  With[{d = DateObject[utc]}, If[Head[d] === DateObject, Max[0., QuantityMagnitude[DateDifference[d, Now, "Day"]]], 0.]], 0.];
+iSVSVTimeDecay[utc_, half_] := Exp[-iSVSVAgeDays[utc]/N[half]];
+
+Options[SourceVaultStartRetrievalEpisode] = {};
+SourceVaultStartRetrievalEpisode[spec_Association, OptionsPattern[]] := Module[{ep},
+  ep = <|"ObjectClass" -> "SourceVaultRetrievalEpisode", "EpisodeId" -> iSVSVId["svepisode"],
+    "SessionId" -> Lookup[spec, "SessionId", iSVSVId["svsession"]],
+    "Actor" -> Lookup[spec, "Actor", <|"Kind" -> "Owner", "Ref" -> "sventity:owner:imai"|>],
+    "TaskRef" -> Lookup[spec, "TaskRef", Missing[]],
+    "Inputs" -> Lookup[spec, "Inputs", {}],
+    "SearchAttempts" -> {}, "Outputs" -> {}, "Outcome" -> "None",
+    "StartedAtUTC" -> iSVSVNow[], "BuiltAtUTC" -> Missing["Open"]|>;
+  $svActiveEpisodes[ep["EpisodeId"]] = ep; ep];
+
+Options[SourceVaultRecordSearchAttempt] = {};
+SourceVaultRecordSearchAttempt[episodeId_String, attempt_Association, OptionsPattern[]] := Module[
+  {ep = Lookup[$svActiveEpisodes, episodeId, Missing[]], att},
+  If[! AssociationQ[ep], Return[Failure["EpisodeNotOpen", <|"MessageTemplate" -> "No open episode: `1`",
+    "MessageParameters" -> {episodeId}|>]]];
+  att = <|"AttemptId" -> Lookup[attempt, "AttemptId", iSVSVId["svattempt"]],
+    "ParentAttemptId" -> Lookup[attempt, "ParentAttemptId", Missing[]],
+    "QueryObjectRef" -> Lookup[attempt, "QueryObjectRef", iSVSVId["svquery"]],
+    "QueryText" -> Lookup[attempt, "QueryText", ""],
+    "QueryModality" -> Lookup[attempt, "QueryModality", "text"],
+    "SearchMethod" -> Lookup[attempt, "SearchMethod", "bm25"],
+    "ResultRefs" -> Lookup[attempt, "ResultRefs", {}],
+    "ClickedOrReadRefs" -> Lookup[attempt, "ClickedOrReadRefs", {}],
+    "IncludedEvidenceRefs" -> Lookup[attempt, "IncludedEvidenceRefs", {}],
+    "RejectedRefs" -> Lookup[attempt, "RejectedRefs", {}],
+    "StartedAtUTC" -> Lookup[attempt, "StartedAtUTC", iSVSVNow[]],
+    "EndedAtUTC" -> Lookup[attempt, "EndedAtUTC", iSVSVNow[]],
+    "TraceRef" -> Lookup[attempt, "TraceRef", Missing[]]|>;
+  ep["SearchAttempts"] = Append[ep["SearchAttempts"], att];
+  $svActiveEpisodes[episodeId] = ep; att];
+
+Options[SourceVaultCloseRetrievalEpisode] = {"Outcome" -> "Succeeded", "Persist" -> True};
+SourceVaultCloseRetrievalEpisode[episodeId_String, outputs_List, OptionsPattern[]] := Module[
+  {ep = Lookup[$svActiveEpisodes, episodeId, Missing[]]},
+  If[! AssociationQ[ep], Return[Failure["EpisodeNotOpen", <|"MessageTemplate" -> "No open episode: `1`",
+    "MessageParameters" -> {episodeId}|>]]];
+  ep = Append[ep, <|"Outputs" -> outputs, "Outcome" -> OptionValue["Outcome"], "BuiltAtUTC" -> iSVSVNow[]|>];
+  (* episode store は高機密行動ログ (§6.4 安全条件) *)
+  If[TrueQ[OptionValue["Persist"]],
+    Quiet@Check[SourceVault`SourceVaultAppendEvent[Append[ep,
+       <|"EventClass" -> "RetrievalEpisode", "PrivacyLevel" -> 1.0,
+         "Tags" -> {"PrivateBehaviorLog", "NoCloudLLM"}|>]], $Failed]];
+  $svActiveEpisodes = KeyDrop[$svActiveEpisodes, episodeId];
+  ep];
+
+(* result ref -> influence (structural: citation/read - ignored/rejected、actor factor、time decay、自己引用 sublinear) *)
+iSVSVEpisodeInfluence[ep_Association, half_] := Module[
+  {atts = Lookup[ep, "SearchAttempts", {}], factor, decay, raw = <||>, cites = <||>},
+  factor = iSVSVActorFactor[Lookup[Lookup[ep, "Actor", <||>], "Kind", "Owner"]];
+  decay = iSVSVTimeDecay[Lookup[ep, "BuiltAtUTC", Lookup[ep, "StartedAtUTC", Missing[]]], half];
+  Do[With[{inc = Lookup[att, "IncludedEvidenceRefs", {}], read = Lookup[att, "ClickedOrReadRefs", {}],
+      rej = Lookup[att, "RejectedRefs", {}], res = Lookup[att, "ResultRefs", {}]},
+    Do[cites[r] = Lookup[cites, r, 0] + 1;
+       raw[r] = Lookup[raw, r, 0.] + Which[
+          MemberQ[inc, r], 1.0,                              (* evidence inclusion = strong *)
+          MemberQ[read, r], 0.3,                             (* read/click *)
+          True, 0.05],                                       (* merely retrieved *)
+       {r, DeleteDuplicates[Join[res, read, inc]]}];
+    Do[raw[r] = Lookup[raw, r, 0.] - 0.4, {r, rej}];         (* rejected penalty *)
+    Do[If[MemberQ[read, r] && ! MemberQ[inc, r], raw[r] = Lookup[raw, r, 0.] - 0.1],
+       {r, read}]],                                          (* ignored-after-read penalty *)
+    {att, atts}];
+  (* 自己引用 sublinear + actor factor + time decay *)
+  KeySort@Association@KeyValueMap[Function[{r, s},
+    r -> Round[factor * decay * s / Max[1., Sqrt[Lookup[cites, r, 1]]], 0.001]], raw]];
+
+Options[SourceVaultEpisodeInfluenceScores] = {"Episode" -> Automatic, "HalfLifeDays" -> 180};
+SourceVaultEpisodeInfluenceScores[episodeId_String, OptionsPattern[]] := Module[
+  {ep = OptionValue["Episode"], scores},
+  If[ep === Automatic, ep = Lookup[$svActiveEpisodes, episodeId, Missing[]]];
+  If[! AssociationQ[ep], Return[Failure["EpisodeNotFound", <|"MessageTemplate" -> "Episode not found: `1` (pass \"Episode\")",
+    "MessageParameters" -> {episodeId}|>]]];
+  scores = iSVSVEpisodeInfluence[ep, OptionValue["HalfLifeDays"]];
+  ReverseSort[scores]];
+
+iSVSVEpisodesFromStore[injected_, limit_] := If[ListQ[injected], injected,
+  Select[Quiet@Check[SourceVault`SourceVaultTransactionLog["Limit" -> limit], {}] /. Except[_List] -> {},
+    Lookup[#, "EventClass", ""] === "RetrievalEpisode" &]];
+
+Options[SourceVaultBuildRetrievalEpisodeGraph] = {"Episodes" -> Automatic, "Limit" -> 1000};
+SourceVaultBuildRetrievalEpisodeGraph[OptionsPattern[]] := Module[
+  {eps = iSVSVEpisodesFromStore[OptionValue["Episodes"] /. Automatic -> Null, OptionValue["Limit"]],
+   edges = {}, nodes},
+  Do[With[{outs = Lookup[ep, "Outputs", {}], infl = iSVSVEpisodeInfluence[ep, 180]},
+    Do[With[{q = Lookup[att, "QueryObjectRef", "svquery:?"]},
+      (* query -> result (Retrieved) *)
+      Do[AppendTo[edges, <|"From" -> q, "To" -> r, "Kind" -> "Retrieved", "Weight" -> 0.2|>],
+         {r, Lookup[att, "ResultRefs", {}]}];
+      (* result -> output (Influenced, weight=influence) *)
+      Do[Do[AppendTo[edges, <|"From" -> r, "To" -> o, "Kind" -> "Influenced",
+             "Weight" -> Lookup[infl, r, 0.]|>], {o, outs}],
+         {r, Lookup[att, "IncludedEvidenceRefs", Lookup[att, "ResultRefs", {}]]}];
+      (* attempt refinement chain *)
+      If[StringQ[Lookup[att, "ParentAttemptId", Missing[]]],
+        AppendTo[edges, <|"From" -> att["ParentAttemptId"], "To" -> att["AttemptId"],
+          "Kind" -> "RefinedTo", "Weight" -> 0.1|>]]],
+      {att, Lookup[ep, "SearchAttempts", {}]}]],
+    {ep, eps}];
+  nodes = DeleteDuplicates[Flatten[{#["From"], #["To"]} & /@ edges]];
+  <|"ObjectClass" -> "SourceVaultRetrievalEpisodeGraph",
+    "EpisodeCount" -> Length[eps], "NodeCount" -> Length[nodes], "EdgeCount" -> Length[edges],
+    "Nodes" -> nodes, "Edges" -> edges,
+    "Note" -> "episode store は高機密行動ログ。influence boost は release gate を緩めない。"|>];
+
+iSVSVTerms[s_String] := DeleteCases[StringSplit[SourceVaultNormalizeSearchText[s], RegularExpression["\\s+"]], ""];
+
+Options[SourceVaultSearchEpisodeMemory] = {"Episodes" -> Automatic, "Limit" -> 5, "MinOverlap" -> 0.2};
+SourceVaultSearchEpisodeMemory[query_String, OptionsPattern[]] := Module[
+  {eps = iSVSVEpisodesFromStore[OptionValue["Episodes"] /. Automatic -> Null, 1000],
+   qterms, matched, minOv = OptionValue["MinOverlap"]},
+  qterms = iSVSVTerms[query];
+  If[qterms === {}, Return[<|"CandidateTerms" -> {}, "CandidateObjectRefs" -> {}, "MatchedEpisodes" -> 0|>]];
+  matched = DeleteMissing@Map[Function[ep, Module[
+     {epTerms = DeleteDuplicates[Flatten[iSVSVTerms[Lookup[#, "QueryText", ""]] & /@ Lookup[ep, "SearchAttempts", {}]]],
+      ov, infl},
+     ov = N[Length[Intersection[qterms, epTerms]]/Max[1, Length[Union[qterms, epTerms]]]];
+     If[ov < minOv, Missing[],
+       infl = ReverseSort[iSVSVEpisodeInfluence[ep, 180]];
+       <|"EpisodeId" -> Lookup[ep, "EpisodeId", "?"], "Overlap" -> Round[ov, 0.01],
+         "TopResultRefs" -> Take[Keys@Select[infl, # > 0 &], UpTo[5]],
+         "Terms" -> Complement[epTerms, qterms]|>]]], eps];
+  matched = Take[ReverseSortBy[matched, #["Overlap"] &], UpTo[OptionValue["Limit"]]];
+  (* low-leak projection: term / sv-ref のみ (raw local path 非開示) *)
+  <|"CandidateTerms" -> Take[DeleteDuplicates[Flatten[#["Terms"] & /@ matched]], UpTo[20]],
+    "CandidateObjectRefs" -> DeleteDuplicates[Flatten[#["TopResultRefs"] & /@ matched]],
+    "MatchedEpisodes" -> Length[matched], "Matches" -> matched,
+    "Note" -> "low-leak projection (raw path 非開示)。influence boost は release gate を緩めない。"|>];
+
+(* ================= §6.6 SearchContextProfile (Phase 8) ================= *)
+
+If[! AssociationQ[$svSearchContextProfiles], $svSearchContextProfiles = <||>];
+
+(* intent -> query キーワード (rule ベース LLM-free classifier) *)
+$svSVIntentKeywords = <|
+  "FindEvent" -> {"イベント", "開催", "行事", "予定", "運動会", "会議", "次の金曜", "next friday", "当日"},
+  "FindRecentWork" -> {"最近", "最新", "直近", "新しい", "次にすること", "todo", "recent", "latest"},
+  "FindIngest" -> {"追加", "取り込", "保存した", "ingest", "added", "recently added"},
+  "FindNegotiationOutcome" -> {"結論", "経緯", "前回", "交渉", "決定", "合意", "outcome", "まとめ"},
+  "FindOriginalArtifact" -> {"撮影", "元", "オリジナル", "原本", "original", "taken", "初出"},
+  "RecallPersonalMemory" -> {"去年", "昨年", "以前", "あの時", "思い出", "last year", "去々年"},
+  "FindCreation" -> {"作成", "書いた", "created", "初稿", "起草"}|>;
+
+(* 既定 profile を登録 (冪等) *)
+iSVSVEnsureContextProfiles[] := If[$svSearchContextProfiles === <||>,
+  Module[{baseW = <|"Title" -> 1.0, "Author" -> 0.7, "Sender" -> 0.7, "TopicItems" -> 1.0,
+     "EventDate" -> 1.0, "MessageDate" -> 0.4, "IngestedAt" -> 0.2,
+     "EXIFOriginalDate" -> 0.9, "FileMTime" -> 0.2, "CreatedAt" -> 0.6|>,
+    prim},
+   prim = <|"FindEvent" -> {"EventDate"}, "FindRecentWork" -> {"MessageDate", "IngestedAt"},
+     "FindIngest" -> {"IngestedAt"}, "FindNegotiationOutcome" -> {"MailSessionResolutionDate", "MessageDate"},
+     "FindOriginalArtifact" -> {"EXIFOriginalDate", "CreatedAt"}, "RecallPersonalMemory" -> {"EventDate", "MessageDate"},
+     "FindCreation" -> {"CreatedAt"}|>;
+   Do[SourceVaultRegisterSearchContextProfile["svsearchctx:default:" <> intent,
+       <|"Intent" -> intent, "PrimaryTemporalFields" -> prim[intent],
+         "SecondaryTemporalFields" -> {"MessageDate", "IngestedAt", "FileMTime"},
+         "MetadataWeights" -> baseW|>],
+     {intent, Keys[$svSVIntentKeywords]}]]];
+
+SourceVaultRegisterSearchContextProfile[id_String, spec_Association] := (
+  $svSearchContextProfiles[id] = <|"ObjectClass" -> "SourceVaultSearchContextProfile", "ProfileId" -> id,
+    "Intent" -> Lookup[spec, "Intent", "FindRecentWork"],
+    "PrimaryTemporalFields" -> Lookup[spec, "PrimaryTemporalFields", {"MessageDate"}],
+    "SecondaryTemporalFields" -> Lookup[spec, "SecondaryTemporalFields", {"IngestedAt"}],
+    "MetadataWeights" -> Lookup[spec, "MetadataWeights", <|"Title" -> 1.0, "TopicItems" -> 1.0|>],
+    "TemporalInterpretation" -> Lookup[spec, "TemporalInterpretation", <||>]|>;
+  $svSearchContextProfiles[id]);
+
+Options[SourceVaultSelectSearchContextProfile] = {"Intent" -> Automatic, "Default" -> "FindRecentWork"};
+SourceVaultSelectSearchContextProfile[query_String, OptionsPattern[]] := Module[
+  {qn = ToLowerCase[query], scores, intent, prof},
+  iSVSVEnsureContextProfiles[];
+  intent = OptionValue["Intent"];   (* ユーザー指定=最優先 *)
+  If[! StringQ[intent] || ! KeyExistsQ[$svSVIntentKeywords, intent],
+    scores = Association@KeyValueMap[Function[{it, kws},
+       it -> Total[Boole[StringContainsQ[qn, ToLowerCase[#]]] & /@ kws]], $svSVIntentKeywords];
+    intent = If[Max[Values[scores]] > 0, First[Keys[ReverseSort[scores]]], OptionValue["Default"]]];
+  prof = Lookup[$svSearchContextProfiles, "svsearchctx:default:" <> intent, Missing[]];
+  If[! AssociationQ[prof], prof = First[Values[$svSearchContextProfiles], Missing["NoProfile"]]];
+  prof];
+
+(* result の metadata を取り出す (Citation/既知キー ∪ result["Metadata"] 注入) *)
+iSVSVResultMeta[r_Association] := Join[
+  <|"Title" -> Lookup[Lookup[r, "Citation", <||>], "Title", Lookup[r, "Title", ""]],
+    "Author" -> Lookup[r, "Author", ""], "Sender" -> Lookup[r, "Sender", ""],
+    "TopicItems" -> Lookup[r, "TopicRefs", {}]|>,
+  Lookup[r, "Metadata", <||>]];
+
+iSVSVFieldPresent[v_] := Which[StringQ[v], StringTrim[v] =!= "", ListQ[v], v =!= {}, True, ! MissingQ[v] && v =!= Null && v =!= 0];
+
+(* profile contribution: MetadataWeights × field 有無 + primary/secondary temporal 加点、正規化 [0,1] *)
+iSVSVContextContribution[r_Association, profile_Association] := Module[
+  {meta = iSVSVResultMeta[r], weights = Lookup[profile, "MetadataWeights", <||>],
+   prim = Lookup[profile, "PrimaryTemporalFields", {}], sec = Lookup[profile, "SecondaryTemporalFields", {}],
+   parts, primPart, secPart, denom, total},
+  parts = Association@KeyValueMap[Function[{field, w},
+     field -> If[iSVSVFieldPresent[Lookup[meta, field, Missing[]]], N[w], 0.]], weights];
+  primPart = Total[If[iSVSVFieldPresent[Lookup[meta, #, Missing[]]], 1.0, 0.] & /@ prim];
+  secPart = 0.5 * Total[If[iSVSVFieldPresent[Lookup[meta, #, Missing[]]], 1.0, 0.] & /@ sec];
+  total = Total[Values[parts]] + primPart + secPart;
+  denom = Total[Values[weights]] + Length[prim] + 0.5 * Length[sec];
+  <|"Contribution" -> If[denom > 0, N[total/denom], 0.], "FieldParts" -> parts,
+    "PrimaryTemporalHit" -> primPart, "SecondaryTemporalHit" -> secPart|>];
+
+Options[SourceVaultApplySearchContextProfile] = {"BoostWeight" -> 0.5};
+SourceVaultApplySearchContextProfile[results_List, profile_Association, OptionsPattern[]] := Module[
+  {bw = OptionValue["BoostWeight"], scored},
+  (* ranking のみ変更。release gate は変えない (results は既に gated) *)
+  scored = Map[Function[r, Module[{base = N[Lookup[r, "Score", 0.]], c},
+     c = iSVSVContextContribution[r, profile];
+     Append[r, <|"BaseScore" -> base,
+        "ContextScore" -> Round[base * (1. + bw * c["Contribution"]), 0.0001],
+        "ContextProfile" -> Lookup[profile, "ProfileId", "?"],
+        "ContextContribution" -> Round[c["Contribution"], 0.001]|>]]], results];
+  ReverseSortBy[scored, #["ContextScore"] &]];
+
+SourceVaultExplainSearchContext[result_Association, profile_Association] := Module[
+  {c = iSVSVContextContribution[result, profile]},
+  <|"ProfileId" -> Lookup[profile, "ProfileId", "?"], "Intent" -> Lookup[profile, "Intent", "?"],
+    "Contribution" -> Round[c["Contribution"], 0.001],
+    "MetadataContribution" -> Select[c["FieldParts"], # > 0 &],
+    "PrimaryTemporalHit" -> c["PrimaryTemporalHit"], "SecondaryTemporalHit" -> c["SecondaryTemporalHit"],
+    "Note" -> "context profile は ranking のみ変更・release gate は変えない。"|>];
 
 End[]
 
