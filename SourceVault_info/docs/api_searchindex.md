@@ -210,7 +210,7 @@ rule なし: `<|"Status" -> "NoRule", "Profile", "Note"|>`
 ### SourceVaultBuildProjectionIndex[contextName, opts] → Association | Failure
 chunk 群に build-time release gate を適用し Permit のみの projection index を作り immutable 保存する (§6.3)。`"IndexKind"` で scorer を選ぶ: `"KeywordBigram"`（既定、従来の bigram スコア）/ `"KeywordBM25V1"`（日本語正規化 + unigram/bigram/exact の BM25。`SourceVault_lexical` の `SourceVaultBuildLexicalStats` で `LexicalStats` を build し record に格納する）/ `"DenseV1"`（各 chunk を既定 embedding provider で埋め込み `DenseVectors`/`DenseDim`/`EmbeddingProvider` を record に格納。表記に依らない意味的 recall の dense arm。BM25 と同じ SearchFields 被覆で埋め込む）。
 → `<|"Status" -> "OK", "IndexId", "Ref", "ChunkCount" -> _Integer, "ExcludedCount" -> _Integer, "IndexKind"|>`
-Options: `"Chunks" -> None`（必須: §7.2 chunk のリスト）, `"IndexId" -> Automatic`（既定: contextName <> `"-proj"`）, `"IndexKind" -> "KeywordBigram"`, `"EntityDictionary" -> None`（`KeywordBM25V1` 時に seed entity dictionary を渡すと entity stream を作り、surface form の OR-match で表記非一致/OOV の topic を index/query 両側で結ぶ。§4.1.1。`SourceVault_oopsseed` の `SourceVaultImportOOPSSeedDictionary` 等で作る）
+Options: `"Chunks" -> None`（必須: §7.2 chunk のリスト）, `"IndexId" -> Automatic`（既定: contextName <> `"-proj"`）, `"IndexKind" -> "KeywordBigram"`, `"EntityDictionary" -> None`（`KeywordBM25V1` 時に seed entity dictionary を渡すと entity stream を作り、surface form の OR-match で表記非一致/OOV の topic を index/query 両側で結ぶ。§4.1.1。`SourceVault_oopsseed` の `SourceVaultImportOOPSSeedDictionary` 等で作る）, `"Overwrite" -> False`（**同一 IndexId で内容を変えて再 build する場合に True**。snapshot alias は既定 create-only で、同 id 再 build は `Failure["NameCollision"]`＝古い snapshot を指したまま。`True` で alias を新 snapshot に張り替え＋memory cache 無効化し `Load` が新内容を返す。immutable blob は残る）
 例: `SourceVaultBuildProjectionIndex["public", "Chunks" -> chunks, "IndexId" -> "pub-bm25", "IndexKind" -> "KeywordBM25V1", "EntityDictionary" -> dict]`
 
 ### SourceVaultLoadSearchIndex[indexIdOrRef, opts] → Association | Failure
@@ -235,19 +235,19 @@ index の読込状態/chunk 数/context を返す。
 
 lexical(BM25)を精度の主軸に、表記に依らない意味的 recall を dense arm で足し、**RRF（Reciprocal Rank Fusion）**で融合する。embedder は injectable（既定は決定的 hashing。実測用の意味的 embedder＝Wolfram NetModel / LM Studio 等を register で差し替える）。`DenseV1` build は anisotropy 対策の **mean-centering**（corpus 平均 `DenseMean` を引いて再正規化）を適用し、query 側も同じ平均で center してから cosine する。
 
-> **既定 OFF のオプトイン**: dense/hybrid は既存の BM25/bigram 経路に影響しない追加機能。OOPS seed コーパス（小規模・entity 濃・seed ラベルが既に OOV/言い換えを橋渡し）での go/no-go 実測では、bge-m3 を centering しても BM25+seed を上回らず hybrid も改善しなかった（**NO-GO**）。**大規模コーパスや強い embedder での再評価**用に配線を保持している。seed ラベル層がある系では dense の増分価値は小さい。
+> **go/no-go = GO**（既定 OFF のオプトイン、既存の BM25/bigram 経路に影響なし）: OOPS seed コーパス（oops 9805, 12 スレッド, 言い換え query 5 件）での実測で **Dense/Hybrid（bge-m3）recall@3 = 5/5 が BM25 の 4/5 を上回った**。BM25 が落とす意味的一致（例「動画の圧縮コーデック」→ Sorenson Video）を dense が回収し hybrid が両取り。**⚠️ 注意: embedder provider は必ず UTF-8 バイトで body を送ること**（`ExportString[_,"RawJSON"]` の戻り値は UTF-8 バイトを Latin-1 char で並べた「バイト列文字列」で、そのまま HTTP body にすると二重エンコードで日本語が文字化けし、埋め込みが壊れる。下の登録例のように `StringToByteArray[..., "ISO8859-1"]` で ByteArray 化する）。N=5 の小 gold ゆえ大規模 gold での再確認は `SourceVaultEvaluateSearch` で。
+
+### SourceVaultRegisterHTTPEmbeddingProvider[name, opts] → Association
+OpenAI 互換 `/v1/embeddings`（LM Studio 等）を叩く embedding provider を登録する**正準ヘルパ**。**body を `ExportByteArray[_,"RawJSON"]` で UTF-8 バイト化**（`ExportString[_,"RawJSON"]` の戻り値は UTF-8 バイトを Latin-1 char で並べた「バイト列文字列」で、そのまま HTTP body にすると二重エンコードされ日本語が文字化けし埋め込みが壊れる。手書き provider の典型的な落とし穴を回避）＋応答を `index` でソート。
+Options: `"URL" -> Automatic`（`Global\`$embeddingEndpoint`）, `"Model" -> Automatic`（`Global\`$embeddingModel`）, `"AuthToken" -> None`（None｜文字列｜token を返す関数）, `"Normalize" -> False`, `"SetActive" -> True`, `"TimeoutSeconds" -> 60`
+```mathematica
+SourceVaultRegisterHTTPEmbeddingProvider["LMStudio"]   (* URL/Model は大域変数、認証は Automatic *)
+```
+`"AuthToken"` の既定 **`Automatic`** は、エンドポイントの**ベース URL**（`/v1/embeddings` を剥がし localhost↔127.0.0.1 正規化）で `NBGetLocalLLMAPIKey["lmstudio", base]` からトークンを自動解決する（FE カーネルのみ・NBAccess 必要。フルパスや host 差でキーが外れる典型ミスを内部で吸収）。明示するなら `"AuthToken" -> 文字列` か `token を返す関数`、認証不要なら `None`。
+埋め込みモデル/エンドポイントは単一の大域変数 **`Global\`$embeddingModel`**（既定 `"text-embedding-baai-bge-m3-568m"`）/ **`Global\`$embeddingEndpoint`**（既定 `"http://localhost:1234/v1/embeddings"`）で、`$ClaudeModel` と同様にユーザーが設定できる（PDFIndex の embedder と共有）。
 
 ### SourceVaultRegisterEmbeddingProvider[name, fn] → Association
-embedding provider を登録する。`fn[{text..}]` は数値ベクトルのリストを返す（L2 正規化推奨、次元は全 text で一定）。実 embedder はここで差し込む。
-例（LM Studio の OpenAI 互換 `/v1/embeddings` を使う場合）:
-```mathematica
-SourceVaultRegisterEmbeddingProvider["LMStudio", Function[texts,
-  With[{r = URLExecute[HTTPRequest["http://127.0.0.1:1234/v1/embeddings",
-       <|"Method" -> "POST", "ContentType" -> "application/json",
-         "Body" -> ExportString[<|"model" -> "text-embedding-bge-m3", "input" -> texts|>, "RawJSON"]|>], "RawJSON"]},
-    Lookup[#, "embedding"] & /@ Lookup[r, "data", {}]]]];
-SourceVaultSetEmbeddingProvider["LMStudio"];
-```
+低レベル: embedding provider を関数で直接登録する。`fn[{text..}]` は数値ベクトルのリストを返す（L2 正規化推奨、次元は全 text で一定）。HTTP エンドポイントを叩くなら上の `SourceVaultRegisterHTTPEmbeddingProvider` を使うこと（encoding の落とし穴を回避）。ローカルの決定論 embedder 等はこちらで差し込む。
 
 ### SourceVaultListEmbeddingProviders[] → {String...}
 登録済み provider 名。既定は `{"HashingNGramV1"}`。
@@ -264,10 +264,31 @@ SourceVaultSetEmbeddingProvider["LMStudio"];
 ### $SourceVaultEmbeddingDim → Integer
 既定(hashing)embedder の次元（既定 256）。実 provider は自身の次元を返してよい。
 
+### Global`$embeddingModel / Global`$embeddingEndpoint → String
+埋め込みモデル名・エンドポイントの**単一大域変数**（`$ClaudeModel` と同様にユーザー設定可）。既定 `"text-embedding-baai-bge-m3-568m"` / `"http://localhost:1234/v1/embeddings"`。`Global\`` context ゆえ PDFIndex（`iEmbedViaLMStudio`）と SourceVault（`SourceVaultRegisterHTTPEmbeddingProvider`）が結合なしで共有する。`SourceVaultRegisterHTTPEmbeddingProvider` の `"URL"`/`"Model"` の `Automatic` はこれを解決する。
+
 ### SourceVaultHybridSearch[query, opts] → {Association...} | Failure
 BM25 index と Dense index を検索し **RRF** で融合、両 arm とも release gate 済み（Permit）の結果を `FusedScore` 降順で返す。各結果は代表 SearchResult に `FusedScore` と `RetrievalKind -> "HybridRRF"` を付す。RRF: 各 arm の rank(1-based) から `score[id] += 1/(k + rank)`。
 Options: `"ReleaseContext" -> None`（必須）, `"BM25Index" -> None`, `"DenseIndex" -> None`, `"Limit" -> 20`, `"RetrievalDepth" -> 50`（各 arm の取得深さ）, `"RRFConstant" -> 60`
 例: `SourceVaultHybridSearch["サイバーパンク", "ReleaseContext" -> "kb", "BM25Index" -> "kb-bm25", "DenseIndex" -> "kb-dense"]`
+
+## 検索評価（held-out eval harness）
+
+gold query 群で検索品質（recall@k, MRR）を測る再利用可能ハーネス。arm 比較（BM25 vs dense vs hybrid）や tuning に使う。純関数（検索は searchFn に委譲）。
+
+### SourceVaultEvaluateSearch[queries, searchFn, opts] → Association
+`queries` は `{<|"Query", "RelevantIds" -> {chunkId..}|>..}` または `{q -> {relIds}..}`（両形式混在可）。`searchFn[query]` は結果 assoc（`ChunkId` 付き）または `ChunkId` 文字列のランク付きリストを返す。
+→ `<|"NumQueries", "RecallAtK" -> <|k -> 平均 recall|>, "MRR", "PerQuery" -> {<|"Query", "NumRelevant", "Retrieved", "RecallAtK", "ReciprocalRank"|>..}|>`
+Options: `"K" -> {1, 3, 5, 10}`, `"Limit" -> 10`
+例:
+```mathematica
+gold = {<|"Query" -> "サイバーパンク", "RelevantIds" -> {"c1", "c3"}|>, "カレー" -> {"c2"}};
+SourceVaultEvaluateSearch[gold, SourceVaultIndexSearcher["kb", "kb-bm25"], "K" -> {1, 3}]
+(* => <|"RecallAtK" -> <|1 -> 0.75, 3 -> 1.|>, "MRR" -> 1., ...|> *)
+```
+
+### SourceVaultIndexSearcher[releaseContext, indexId, opts] → Function
+`SourceVaultEvaluateSearch` 用の searchFn（query を index で引く closure）を返す。hybrid を評価するには `Function[q, SourceVaultHybridSearch[q, ...]]` を直接渡す。Options: `"Limit" -> 20`。
 
 ## Mining Primer (§6.1/6.2)
 

@@ -530,19 +530,19 @@ Options: "Probes" -> {}, "CompileFn" -> Automatic (SourceVaultQueryLocalLLM), "E
 ### SourceVaultSubmitReasoningRetrieve[query, opts]
 reasoning retrieval を ClaudeOrchestrator に非同期投入し即座に返す (FE 非ブロック)。"AsyncLLM"->True で assess の k sampling を URLSubmit で非同期化 (AwaitingLLM 機構)、HTTP 飛行中はカーネルを空ける=真の非ブロック。要 [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator)。
 → `<|"WorkflowId", "Kind", "Mode", "Status"|>`
-Options: SourceVaultReasoningRetrieve と同じ + "MaxWaitSeconds" -> 3600, "AsyncLLM" -> False, "SubmitFn" -> Automatic
+Options: SourceVaultReasoningRetrieve と同じ + "MaxWaitSeconds" -> 3600, "AsyncLLM" -> False, "SubmitFn" -> Automatic, "Persist" -> False (True で投入時に SourceVaultPersistJob=カーネル跨ぎ復元可能に)
 
 ### SourceVaultSubmitWikiCompileRefine[source, opts]
 WiCER compile-refine を ClaudeOrchestrator に非同期投入し即座に返す。"AsyncLLM"->True で compile を URLSubmit で非同期化 (AwaitingLLM)。要 ClaudeOrchestrator。
 → `<|"WorkflowId", "Kind", "Mode", "Status"|>`
-Options: SourceVaultRunWikiCompileRefine と同じ + "MaxWaitSeconds" -> 3600, "AsyncLLM" -> False, "SubmitFn" -> Automatic, "Temperature" -> 0.7
+Options: SourceVaultRunWikiCompileRefine と同じ + "MaxWaitSeconds" -> 3600, "AsyncLLM" -> False, "SubmitFn" -> Automatic, "Temperature" -> 0.7, "Persist" -> False
 
 ### SourceVaultJobStatus[wid]
 非同期ジョブの進捗を返す。
 → `<|"Kind", "Status" (Running/Completed), "WorkflowStatus", "Done", "Steps", "TerminationReason"|>`
 
 ### SourceVaultJobResult[wid]
-完了済みなら同期版と同形の結果を、未完了なら <|Status->Running, Steps|> を返す (Kind で抽出を振り分け)。
+完了済みなら同期版と同形の結果を、未完了なら <|Status->Running, Steps|> を返す (Kind で抽出を振り分け)。**復元ジョブ (ClaudeAsyncJobInfo に無い) でも workflow の終端 place (marking) から完了判定・抽出する** (抽出は marking 由来ゆえ closure 非依存)。
 → Association
 
 ### SourceVaultAwaitJob[wid, opts]
@@ -555,3 +555,23 @@ Options: "PollInterval" -> Automatic, "MaxWait" -> Automatic
 
 ### SourceVaultCancelJob[wid]
 非同期ジョブを Cancel し registry/polling tick をクリーンアップする。
+
+## カーネル跨ぎ job 永続化 (snapshot/restore)
+
+async job を snapshot にディスク永続化し、カーネル再起動を跨いで復元する。ClaudeAsyncJobInfo は snapshot 対象外ゆえ、復元ジョブの完了判定・結果抽出は workflow の marking (終端 place) 由来=closure 非依存。完了済みジョブは restore 後に結果をそのまま取り出せる。復元は新 WorkflowId を発行し mining registry に再登録する。
+
+### $SourceVaultMiningJobDir
+永続化 snapshot の保存先 (既定 Automatic = `<CoreRoot>/mining-jobs`)。
+
+### SourceVaultPersistJob[wid]
+ジョブの workflow marking + mining context を snapshot に永続化する。`SourceVaultSubmit...[..., "Persist" -> True]` で投入時に自動呼び出しも可。
+→ `<|"Status" -> "Persisted", "WorkflowId", "SnapshotDir", "Kind"|>`
+
+### SourceVaultRestoreJobs[opts]
+永続化された全ジョブを現カーネルへ復元 (workflow を新 WorkflowId で再構築＋registry 再登録)。以後 SourceVaultJobStatus/JobResult は復元ジョブでも動作する。
+→ `<|"Status" -> "OK", "Restored" -> {<|"OriginalWid", "WorkflowId"(新), "Kind", "Done"|>...}, "Count"|>`
+Options: `"SnapshotDir" -> Automatic`
+
+### SourceVaultListPersistedJobs[]
+永続化済みジョブ snapshot の一覧を返す。
+→ `{<|"OriginalWid", "Kind", "SnapshotDir", "PersistedAt"|>...}`

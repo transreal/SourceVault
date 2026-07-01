@@ -415,7 +415,7 @@ iSnapshotPath[class_String, digestHex_String] :=
 iAliasPath[class_String, alias_String] :=
   iSub["snapshot-alias", class, alias <> ".ref.json"];
 
-Options[SourceVaultSaveImmutableSnapshot] = {"Alias" -> None};
+Options[SourceVaultSaveImmutableSnapshot] = {"Alias" -> None, "AliasOverwrite" -> False};
 SourceVaultSaveImmutableSnapshot[class_String, assoc_Association, OptionsPattern[]] := Module[
   {digest, hex, path, ref, stored, json, status, aliasName, aliasRes},
   digest = SourceVaultSnapshotDigest[assoc];
@@ -445,24 +445,33 @@ SourceVaultSaveImmutableSnapshot[class_String, assoc_Association, OptionsPattern
   ];
   aliasName = OptionValue["Alias"];
   If[StringQ[aliasName],
-    aliasRes = SourceVaultAllocateSnapshotAlias[class, aliasName, ref];
+    aliasRes = SourceVaultAllocateSnapshotAlias[class, aliasName, ref,
+      "Overwrite" -> TrueQ[OptionValue["AliasOverwrite"]]];
     If[FailureQ[aliasRes], Return[aliasRes]]
   ];
   <|"Status" -> "OK", "Ref" -> ref, "Digest" -> digest, "Path" -> path,
     "Class" -> class, "Existed" -> (status === "Existed")|>
 ];
 
-SourceVaultAllocateSnapshotAlias[class_String, alias_String, ref_String, opts___] := Module[
-  {path, existing, rec, json},
+Options[SourceVaultAllocateSnapshotAlias] = {"Overwrite" -> False};
+SourceVaultAllocateSnapshotAlias[class_String, alias_String, ref_String, OptionsPattern[]] := Module[
+  {path, existing, rec, json, existedBefore = False, updated = False},
   path = iAliasPath[class, alias];
   If[FailureQ[path], Return[path]];
   If[FileExistsQ[path],
+    existedBefore = True;
     existing = iFromJSON[iReadStringUTF8[path]];
-    If[AssociationQ[existing] && Lookup[existing, "Ref"] === ref,
-      Return[<|"Status" -> "OK", "Alias" -> alias, "Ref" -> ref, "Existed" -> True|>],
-      Return[Failure["NameCollision", <|
-        "MessageTemplate" -> "alias `1` は既に別 ref に割り当て済みです。",
-        "Alias" -> alias, "Existing" -> Lookup[existing, "Ref"], "Requested" -> ref|>]]]
+    Which[
+      AssociationQ[existing] && Lookup[existing, "Ref"] === ref,
+        Return[<|"Status" -> "OK", "Alias" -> alias, "Ref" -> ref, "Existed" -> True, "Updated" -> False|>],
+      (* Overwrite: 同一 alias を新 ref に張り替える (immutable blob は残し alias ポインタのみ更新)。
+         同 id で内容を変えて再 build するケース (rebuildable index) 用。既定 (create-only) は不変。 *)
+      TrueQ[OptionValue["Overwrite"]],
+        Quiet @ DeleteFile[path]; updated = True,
+      True,
+        Return[Failure["NameCollision", <|
+          "MessageTemplate" -> "alias `1` は既に別 ref に割り当て済みです ( \"Overwrite\"->True で張り替え可 )。",
+          "Alias" -> alias, "Existing" -> Lookup[existing, "Ref"], "Requested" -> ref|>]]]
   ];
   rec = <|"Alias" -> alias, "Class" -> class, "Ref" -> ref, "CreatedAtUTC" -> iUTCNow[]|>;
   json = iToJSON[rec];
@@ -471,7 +480,7 @@ SourceVaultAllocateSnapshotAlias[class_String, alias_String, ref_String, opts___
     iCommitCreateOnly[tmp, path];
     Quiet @ If[FileExistsQ[tmp], DeleteFile[tmp]]
   ];
-  <|"Status" -> "OK", "Alias" -> alias, "Ref" -> ref, "Existed" -> False|>
+  <|"Status" -> "OK", "Alias" -> alias, "Ref" -> ref, "Existed" -> existedBefore, "Updated" -> updated|>
 ];
 
 iResolveRef[ref_String] := Module[{class, hex, aliasPath, rec},

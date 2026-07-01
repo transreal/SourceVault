@@ -224,10 +224,25 @@ SourceVaultSetEmbeddingProvider::usage = "SourceVaultSetEmbeddingProvider[name] 
 SourceVaultEmbeddingProvider::usage = "SourceVaultEmbeddingProvider[] は現在の既定 embedding provider 名を返す。";
 SourceVaultEmbedTexts::usage = "SourceVaultEmbedTexts[{text..}] は既定 provider で埋め込みベクトルのリストを返す。";
 $SourceVaultEmbeddingDim::usage = "既定(hashing)embedder の次元 (既定 256)。実 provider は自身の次元を返してよい。";
+SourceVaultRegisterHTTPEmbeddingProvider::usage =
+  "SourceVaultRegisterHTTPEmbeddingProvider[name, opts] は OpenAI 互換 /v1/embeddings HTTP エンドポイント(LM Studio 等)を叩く " <>
+  "embedding provider を登録する。**body は ExportByteArray で UTF-8 バイト化**し日本語の二重エンコード文字化けを防ぐ・応答は index でソート。opts " <>
+  "\"URL\"(Automatic=Global`$embeddingEndpoint), \"Model\"(Automatic=Global`$embeddingModel), " <>
+  "\"AuthToken\"(Automatic=エンドポイントのベース URL で LM Studio トークンを NBGetLocalLLMAPIKey 自動解決 (FE のみ)｜None｜文字列｜token を返す関数), " <>
+  "\"Normalize\"(False), \"SetActive\"(True), \"TimeoutSeconds\"(60)。手書き provider の encoding/認証 URL ミスを回避する正準ヘルパ。";
 SourceVaultHybridSearch::usage =
   "SourceVaultHybridSearch[query, opts] は BM25 index と Dense index を検索して RRF (Reciprocal Rank Fusion) で融合し、" <>
   "release gate 済み (両 arm とも Permit) の結果を FusedScore 降順で返す。opts \"ReleaseContext\"(必須), \"BM25Index\", \"DenseIndex\", " <>
   "\"Limit\"(20), \"RetrievalDepth\"(50=各 arm の取得深さ), \"RRFConstant\"(60)。dense/hybrid go/no-go の評価入口。";
+
+(* ---- 検索評価 (held-out eval harness) ---- *)
+SourceVaultEvaluateSearch::usage =
+  "SourceVaultEvaluateSearch[queries, searchFn, opts] は gold query 群で検索品質 (recall@k, MRR) を測る再利用可能ハーネス。" <>
+  "queries は {<|\"Query\", \"RelevantIds\"->{chunkId..}|>..} または {q -> {relIds}..}。searchFn[query] は結果 assoc (ChunkId 付き) " <>
+  "または ChunkId 文字列のランク付きリストを返す。opts \"K\"(既定 {1,3,5,10}), \"Limit\"(10)。戻り値 " <>
+  "<|NumQueries, RecallAtK (k->平均), MRR, PerQuery|>。BM25/dense/hybrid の arm 比較や tuning に使う。";
+SourceVaultIndexSearcher::usage =
+  "SourceVaultIndexSearcher[releaseContext, indexId, opts] は SourceVaultEvaluateSearch 用の searchFn (query を index で引く closure) を返す。opts \"Limit\"(20)。";
 
 Begin["`SearchIndexPrivate`"]
 
@@ -779,7 +794,7 @@ iSnippet[text_String, q_String, maxLen_: 160] := Module[{toks = iTokenize[q], po
     StringTake[text, {start, Min[StringLength[text], start + maxLen]}]]];
 
 Options[SourceVaultBuildProjectionIndex] = {"Chunks" -> None, "IndexId" -> Automatic,
-  "IndexKind" -> "KeywordBigram", "EntityDictionary" -> None};
+  "IndexKind" -> "KeywordBigram", "EntityDictionary" -> None, "Overwrite" -> False};
 SourceVaultBuildProjectionIndex[contextName_String, OptionsPattern[]] := Module[
   {ctx, chunks, permitted, excluded, indexId, indexKind, lexStats, rec, saved},
   ctx = iResolve["ReleaseContext", contextName];
@@ -814,8 +829,10 @@ SourceVaultBuildProjectionIndex[contextName_String, OptionsPattern[]] := Module[
         "DenseMean" -> mean, "DenseDim" -> If[vecs === {}, 0, Length[First[vecs]]],
         "EmbeddingProvider" -> $svEmbeddingProvider|>]]];
   saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultProjectionIndex", rec,
-    "Alias" -> indexId];
+    "Alias" -> indexId, "AliasOverwrite" -> TrueQ[OptionValue["Overwrite"]]];
   If[FailureQ[saved], Return[saved]];
+  (* Overwrite 再 build 時は memory cache の旧 rec を捨てて次回検索で再ロードさせる *)
+  If[TrueQ[OptionValue["Overwrite"]], $loadedProjections = KeyDrop[$loadedProjections, indexId]];
   <|"Status" -> "OK", "IndexId" -> indexId, "Ref" -> Lookup[saved, "Ref"],
     "ChunkCount" -> Length[permitted], "ExcludedCount" -> excluded, "IndexKind" -> indexKind|>
 ];
@@ -854,7 +871,7 @@ SourceVaultSearchIndexStatus[indexId_String, opts___] := Module[{rec = Lookup[$l
 
 If[! AssociationQ[$loadedPrimers], $loadedPrimers = <||>];
 
-Options[SourceVaultBuildPrimerIndex] = {"Items" -> None, "PrimerId" -> Automatic};
+Options[SourceVaultBuildPrimerIndex] = {"Items" -> None, "PrimerId" -> Automatic, "Overwrite" -> False};
 SourceVaultBuildPrimerIndex[contextName_String, OptionsPattern[]] := Module[
   {ctx, items, permitted, excluded, primerId, chunks, lexStats, rec, saved},
   ctx = iResolve["ReleaseContext", contextName];
@@ -877,8 +894,10 @@ SourceVaultBuildPrimerIndex[contextName_String, OptionsPattern[]] := Module[
     "ReleaseContextRef" -> contextName, "PolicyDigest" -> SourceVault`SourceVaultSnapshotDigest[ctx],
     "Items" -> permitted, "ItemCount" -> Length[permitted], "ExcludedCount" -> excluded,
     "LexicalStats" -> lexStats, "BuiltAtUTC" -> DateString[Now, "ISODateTime"]|>;
-  saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultPrimerIndex", rec, "Alias" -> primerId];
+  saved = SourceVault`SourceVaultSaveImmutableSnapshot["SourceVaultPrimerIndex", rec, "Alias" -> primerId,
+    "AliasOverwrite" -> TrueQ[OptionValue["Overwrite"]]];
   If[FailureQ[saved], Return[saved]];
+  If[TrueQ[OptionValue["Overwrite"]], $loadedPrimers = KeyDrop[$loadedPrimers, primerId]];
   <|"Status" -> "OK", "PrimerId" -> primerId, "Ref" -> Lookup[saved, "Ref"],
     "ItemCount" -> Length[permitted], "ExcludedCount" -> excluded|>
 ];
@@ -1039,6 +1058,61 @@ iSVEmbedWith[provider_String, texts_List] := Module[{fn = Lookup[$svEmbeddingPro
   If[MissingQ[fn], Failure["NoEmbeddingProvider", <|"MessageTemplate" -> "未登録 provider: " <> provider|>],
     Quiet@Check[fn[texts], Failure["EmbeddingFailed", <|"Provider" -> provider|>]]]];
 
+(* 埋め込みモデル/エンドポイントの単一大域変数 (PDFIndex 等と共有。$ClaudeModel と同様に
+   ユーザーが設定可)。Global` context ゆえパッケージ間で結合なしに共有できる。 *)
+If[! StringQ[Global`$embeddingModel], Global`$embeddingModel = "text-embedding-baai-bge-m3-568m"];
+If[! StringQ[Global`$embeddingEndpoint], Global`$embeddingEndpoint = "http://localhost:1234/v1/embeddings"];
+
+(* OpenAI 互換 /v1/embeddings を叩く正準 HTTP embedder。**body は ExportByteArray で UTF-8 バイト化**
+   (ExportString[_,"RawJSON"] の byte-string を文字列 body にすると二重エンコードで日本語が壊れる)。 *)
+iSVBaseURL[url_String] := StringReplace[url, RegularExpression["(https?://[^/]+).*"] -> "$1"];  (* path 除去 *)
+(* Automatic: LM Studio 等のトークンを **ベース URL** で NBGetLocalLLMAPIKey 解決 (FE のみ・NBAccess 必要。
+   /v1/embeddings のフルパスや localhost↔127.0.0.1 差でキーが外れる典型ミスを内部で吸収)。無ければ None。 *)
+iSVHTTPEmbedResolveToken[auth_, url_String] := Which[
+  StringQ[auth] && auth =!= "", auth,
+  auth === None, None,
+  auth === Automatic,
+    If[Length[DownValues[NBAccess`NBGetLocalLLMAPIKey]] > 0,
+      With[{t = Quiet@Check[NBAccess`NBGetLocalLLMAPIKey["lmstudio", iSVBaseURL[url],
+          PrivacySpec -> <|"AccessLevel" -> 1.0|>], $Failed]},
+        If[StringQ[t] && t =!= "", t, None]],
+      None],
+  True, With[{t = Quiet@Check[auth[], None]}, If[StringQ[t] && t =!= "", t, None]]];
+iSVHTTPEmbed[url_String, model_String, auth_, norm_, timeout_, texts_List] := Module[
+  {tok, headers, body, resp, r, vecs},
+  tok = iSVHTTPEmbedResolveToken[auth, url];
+  headers = If[StringQ[tok],
+    {"Content-Type" -> "application/json", "Authorization" -> "Bearer " <> tok},
+    {"Content-Type" -> "application/json"}];
+  body = Quiet@Check[ExportByteArray[<|"model" -> model, "input" -> texts|>, "RawJSON"], $Failed];
+  If[! ByteArrayQ[body], Return[Failure["EmbedEncodeFailed", <||>]]];
+  (* URLRead[req, {props..}] は props をキーにした Association を返す (リストではない) *)
+  resp = TimeConstrained[
+    Quiet@Check[URLRead[HTTPRequest[url, <|"Method" -> "POST", "Headers" -> headers, "Body" -> body|>],
+      {"StatusCode", "BodyByteArray"}], $Failed], timeout, $Failed];
+  If[! (AssociationQ[resp] && Lookup[resp, "StatusCode"] === 200 && ByteArrayQ[Lookup[resp, "BodyByteArray", Null]]),
+    Return[Failure["EmbedHTTPFailed", <|"StatusCode" -> If[AssociationQ[resp], Lookup[resp, "StatusCode", resp], resp]|>]]];
+  r = Quiet@Check[Developer`ReadRawJSONString[ByteArrayToString[resp["BodyByteArray"], "UTF-8"]], $Failed];
+  If[! AssociationQ[r] || ! KeyExistsQ[r, "data"], Return[Failure["EmbedParseFailed", <||>]]];
+  vecs = Lookup[#, "embedding"] & /@ SortBy[Lookup[r, "data", {}], Lookup[#, "index", 0] &];
+  If[TrueQ[norm], vecs = (With[{n = Sqrt[# . #]}, If[n > 0, #/n, #]] &) /@ vecs];
+  vecs];
+
+Options[SourceVaultRegisterHTTPEmbeddingProvider] = {"URL" -> Automatic, "Model" -> Automatic,
+  "AuthToken" -> Automatic, "Normalize" -> False, "SetActive" -> True, "TimeoutSeconds" -> 60};
+SourceVaultRegisterHTTPEmbeddingProvider[name_String, OptionsPattern[]] := Module[
+  {url, model, auth, norm, timeout, fn},
+  url = OptionValue["URL"] /. Automatic :> Global`$embeddingEndpoint;
+  model = OptionValue["Model"] /. Automatic :> Global`$embeddingModel;
+  If[! StringQ[url] || ! StringQ[model],
+    Return[Failure["EmbeddingConfigMissing", <|
+      "MessageTemplate" -> "URL/Model が未設定です (Global`$embeddingEndpoint/$embeddingModel)。"|>]]];
+  auth = OptionValue["AuthToken"]; norm = TrueQ[OptionValue["Normalize"]]; timeout = OptionValue["TimeoutSeconds"];
+  fn = Function[texts, iSVHTTPEmbed[url, model, auth, norm, timeout, texts]];
+  SourceVaultRegisterEmbeddingProvider[name, fn];
+  If[TrueQ[OptionValue["SetActive"]], SourceVaultSetEmbeddingProvider[name]];
+  <|"Status" -> "OK", "Provider" -> name, "URL" -> url, "Model" -> model|>];
+
 (* dense 埋め込み対象テキスト。chunk が "EmbedText"(文字列) を持てばそれを優先
    = dense arm 向けの焦点を絞った表現を呼び出し側が指定できる(短 query との対称性・
    ノイズ除去)。無ければ SearchFields を連結(BM25 と同被覆)。 *)
@@ -1094,6 +1168,50 @@ SourceVaultHybridSearch[query_String, OptionsPattern[]] := Module[
   dres = If[StringQ[di], SourceVaultSearch[query, "ReleaseContext" -> rc, "Index" -> di, "Limit" -> depth], {}];
   If[FailureQ[bres], bres = {}]; If[FailureQ[dres], dres = {}];
   iSVRRFFuse[{bres, dres}, kk, lim]];
+
+(* ============================================================
+   検索評価 (held-out eval harness): gold query で recall@k / MRR を測る再利用可能関数。
+   arm 比較 (BM25 vs dense vs hybrid) や tuning に。純関数 (検索は searchFn に委譲)。
+   ============================================================ *)
+
+(* 結果 (assoc list / string list) → ChunkId のランク順リスト *)
+iSVEvalResultIds[results_List, lim_] := DeleteMissing @ Take[
+  Which[
+    results === {}, {},
+    StringQ[First[results]], results,
+    AssociationQ[First[results]], Lookup[#, "ChunkId", Missing[]] & /@ results,
+    True, results],
+  UpTo[lim]];
+iSVEvalResultIds[_, _] := {};
+
+iSVNormalizeEvalQueries[queries_List] := Map[
+  Which[
+    MatchQ[#, _Rule], <|"Query" -> First[#], "RelevantIds" -> Flatten[{Last[#]}]|>,
+    AssociationQ[#], <|"Query" -> Lookup[#, "Query", ""], "RelevantIds" -> Flatten[{Lookup[#, "RelevantIds", {}]}]|>,
+    True, <|"Query" -> ToString[#], "RelevantIds" -> {}|>] &, queries];
+
+Options[SourceVaultEvaluateSearch] = {"K" -> {1, 3, 5, 10}, "Limit" -> 10};
+SourceVaultEvaluateSearch[queries_List, searchFn_, OptionsPattern[]] := Module[
+  {ks = OptionValue["K"], lim = OptionValue["Limit"], qs, perQ},
+  qs = iSVNormalizeEvalQueries[queries];
+  perQ = Map[Function[q,
+    Module[{query = q["Query"], rel = q["RelevantIds"], retrieved, ranks},
+      retrieved = iSVEvalResultIds[searchFn[query], lim];
+      ranks = Sort @ DeleteCases[First[FirstPosition[retrieved, #, {0}]] & /@ rel, 0];
+      <|"Query" -> query, "NumRelevant" -> Length[rel], "Retrieved" -> retrieved,
+        "RecallAtK" -> Association[Function[k,
+           k -> If[rel === {}, 0.,
+             N[Length[Intersection[Take[retrieved, UpTo[k]], rel]]/Length[rel]]]] /@ ks],
+        "ReciprocalRank" -> If[ranks === {}, 0., N[1./First[ranks]]]|>]], qs];
+  <|"NumQueries" -> Length[qs],
+    "RecallAtK" -> Association[Function[k, k -> N@Mean[(#["RecallAtK"][k]) & /@ perQ]] /@ ks],
+    "MRR" -> If[perQ === {}, 0., N@Mean[#["ReciprocalRank"] & /@ perQ]],
+    "PerQuery" -> perQ|>];
+
+Options[SourceVaultIndexSearcher] = {"Limit" -> 20};
+SourceVaultIndexSearcher[rc_String, indexId_String, OptionsPattern[]] :=
+  With[{lim = OptionValue["Limit"]},
+    Function[q, SourceVaultSearch[q, "ReleaseContext" -> rc, "Index" -> indexId, "Limit" -> lim]]];
 
 (* ============================================================
    §16 TPO 制約 / 目的別 index / 低遅延 interaction (Phase 7。device 非依存)

@@ -60,7 +60,7 @@ Options: `"DropFields" -> {}` (`SourceVaultCanonicalizeForDigest` と同じ)
 ### SourceVaultSaveImmutableSnapshot[class, assoc, opts]
 assoc を immutable snapshot として content-addressed store に保存する。同一内容の再保存は idempotent。
 → `<|"Status" -> "OK", "Ref" -> "snapshot:class:hex", "Digest" -> "sha256:...", "Path" -> path, "Class" -> class, "Existed" -> True|False|>` | Failure
-Options: `"Alias" -> None` (文字列を指定すると alias も同時に割り当てる)
+Options: `"Alias" -> None` (文字列を指定すると alias も同時に割り当てる), `"AliasOverwrite" -> False` (`True` で既存 alias を新 ref に張り替える＝同 alias で内容更新する rebuildable snapshot 用。既定は create-only で別 ref なら `NameCollision`)
 例: `SourceVaultSaveImmutableSnapshot["parsed", <|"Title" -> "foo", "Body" -> "bar"|>, "Alias" -> "latest"]`
 
 ### SourceVaultLoadImmutableSnapshot[ref] → Association | Failure
@@ -75,8 +75,8 @@ ref 形式: `"snapshot:class:hex"` または `"class/alias"`。
 → `<|"Status" -> "Valid"|"Mismatch", "Ref" -> ref, "StoredDigest" -> ..., "Recomputed" -> ..., "Valid" -> True|False|>`
 
 ### SourceVaultAllocateSnapshotAlias[class, alias, ref, opts] → Association | Failure
-alias → ref の割り当てを行う。同 alias に異なる ref を割り当てようとすると `Failure["NameCollision", ...]` で拒否する (idempotent: 同じ ref なら成功)。
-→ `<|"Status" -> "OK", "Alias" -> alias, "Ref" -> ref, "Existed" -> True|False|>`
+alias → ref の割り当てを行う。同 alias に異なる ref を割り当てようとすると `Failure["NameCollision", ...]` で拒否する (idempotent: 同じ ref なら成功)。`"Overwrite" -> True` で既存 alias を新 ref に張り替える (immutable blob は残し alias ポインタのみ更新)。
+→ `<|"Status" -> "OK", "Alias" -> alias, "Ref" -> ref, "Existed" -> True|False, "Updated" -> True|False|>`
 
 ### SourceVaultImmutableSnapshotExistsQ[ref] → True | False
 不変スナップショット本体がストアに存在するか判定する。

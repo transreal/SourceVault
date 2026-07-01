@@ -518,6 +518,16 @@ SourceVaultListMiningJobs::usage =
   "SourceVaultListMiningJobs[] は投入済み非同期ジョブの一覧 {<|WorkflowId, Kind, Status, SubmittedAt|>...} を返す。";
 SourceVaultCancelJob::usage =
   "SourceVaultCancelJob[wid] は非同期ジョブを Cancel し registry/polling tick をクリーンアップする。";
+$SourceVaultMiningJobDir::usage =
+  "$SourceVaultMiningJobDir は永続化ジョブ snapshot の保存先 (既定 Automatic = <CoreRoot>/mining-jobs)。";
+SourceVaultPersistJob::usage =
+  "SourceVaultPersistJob[wid] は非同期ジョブ (workflow marking + mining context) を snapshot にディスク永続化し、カーネル再起動後に " <>
+  "SourceVaultRestoreJobs で復元可能にする。完了済みジョブは restore 後に結果を抽出できる (抽出は marking 由来で closure 非依存)。";
+SourceVaultRestoreJobs::usage =
+  "SourceVaultRestoreJobs[opts] は永続化された全ジョブを現カーネルへ復元する (workflow を新 WorkflowId で再構築し mining registry に再登録)。" <>
+  "戻り {<|OriginalWid, WorkflowId(新), Kind, Done|>...}。以後 SourceVaultJobStatus/JobResult は復元ジョブでも marking から完了判定・抽出する。";
+SourceVaultListPersistedJobs::usage =
+  "SourceVaultListPersistedJobs[] は永続化済みジョブ snapshot の一覧 {<|OriginalWid, Kind, SnapshotDir, PersistedAt|>...} を返す。";
 
 Begin["`Private`"];
 
@@ -2038,7 +2048,7 @@ If[! AssociationQ[$iSVMJobRegistry], $iSVMJobRegistry = <||>];
 
 Options[SourceVaultSubmitReasoningRetrieve] = {"LLMFn" -> Automatic, "SearchFn" -> Automatic, "MaxIterations" -> 4,
   "Samples" -> 3, "Temperature" -> 0.7, "IntrinsicUncertaintyMax" -> 0.4, "TargetRef" -> "query",
-  "MaxWaitSeconds" -> 3600, "AsyncLLM" -> False, "SubmitFn" -> Automatic};
+  "MaxWaitSeconds" -> 3600, "AsyncLLM" -> False, "SubmitFn" -> Automatic, "Persist" -> False};
 SourceVaultSubmitReasoningRetrieve[query_String, opts : OptionsPattern[]] :=
   Module[{llmFn, searchFn, maxIt, k, temp, iuMax, tref, mws, asyncLLM, submitFn, wid, ar},
     If[! iSVMOrchestratorAvailableQ[], Return[<|"Status" -> "OrchestratorUnavailable"|>]];
@@ -2055,13 +2065,14 @@ SourceVaultSubmitReasoningRetrieve[query_String, opts : OptionsPattern[]] :=
     ar = ClaudeOrchestrator`Workflow`ClaudeRunWorkflow[wid, "Async" -> True, "MaxWait" -> Quantity[mws, "Seconds"]];
     AssociateTo[$iSVMJobRegistry, wid -> <|"Kind" -> "reasoning", "Query" -> query,
       "AsyncLLM" -> asyncLLM, "SubmittedAt" -> AbsoluteTime[]|>];
+    If[TrueQ[OptionValue["Persist"]], Quiet@SourceVaultPersistJob[wid]];
     <|"WorkflowId" -> wid, "Kind" -> "reasoning",
       "Mode" -> If[asyncLLM, "Orchestrator-AsyncLLM", "Orchestrator-Async"],
       "Status" -> Lookup[ar, "Status", "Async-Started"]|>];
 
 Options[SourceVaultSubmitWikiCompileRefine] = {"Probes" -> {}, "CompileFn" -> Automatic, "EvaluateFn" -> Automatic,
   "LLMFn" -> Automatic, "MaxIterations" -> 2, "TargetURI" -> "wiki", "RunID" -> Automatic, "MaxWaitSeconds" -> 3600,
-  "AsyncLLM" -> False, "SubmitFn" -> Automatic, "Temperature" -> 0};
+  "AsyncLLM" -> False, "SubmitFn" -> Automatic, "Temperature" -> 0, "Persist" -> False};
 SourceVaultSubmitWikiCompileRefine[source_String, opts : OptionsPattern[]] :=
   Module[{probes, compileFn, evalFn, llmFn, maxIt, tref, runId, mws, asyncLLM, submitFn, temp, wid, ar},
     If[! iSVMOrchestratorAvailableQ[], Return[<|"Status" -> "OrchestratorUnavailable"|>]];
@@ -2086,28 +2097,40 @@ SourceVaultSubmitWikiCompileRefine[source_String, opts : OptionsPattern[]] :=
     ar = ClaudeOrchestrator`Workflow`ClaudeRunWorkflow[wid, "Async" -> True, "MaxWait" -> Quantity[mws, "Seconds"]];
     AssociateTo[$iSVMJobRegistry, wid -> <|"Kind" -> "wikicompile", "Probes" -> probes, "TargetURI" -> tref,
       "RunID" -> runId, "AsyncLLM" -> asyncLLM, "SubmittedAt" -> AbsoluteTime[]|>];
+    If[TrueQ[OptionValue["Persist"]], Quiet@SourceVaultPersistJob[wid]];
     <|"WorkflowId" -> wid, "Kind" -> "wikicompile",
       "Mode" -> If[asyncLLM, "Orchestrator-AsyncLLM", "Orchestrator-Async"],
       "Status" -> Lookup[ar, "Status", "Async-Started"]|>];
 
+(* 復元ジョブは ClaudeAsyncJobInfo(snapshot 対象外)に無いので、完了は workflow の
+   終端 place(marking)から判定する。抽出も marking 由来ゆえ closure 非依存。 *)
+$iSVMTerminalPlaces = <|"reasoning" -> {"Answered", "Insufficient"},
+   "wikicompile" -> {"Accepted", "Exhausted"}|>;
+iSVMWorkflowDoneQ[wid_String, kind_] := Module[{state, marking, places},
+  state = Quiet@Check[ClaudeOrchestrator`Workflow`ClaudeWorkflowState[wid], <||>];
+  marking = Lookup[state, "Marking", <||>];
+  places = Lookup[$iSVMTerminalPlaces, kind, {}];
+  AnyTrue[places, Length[Lookup[marking, #, {}]] > 0 &]];
+
 SourceVaultJobStatus[wid_String] :=
   If[! iSVMOrchestratorAvailableQ[], <|"Status" -> "OrchestratorUnavailable", "WorkflowId" -> wid|>,
-    Module[{info, wfStatus, ctx},
+    Module[{info, wfStatus, ctx, kind, done},
       info = Quiet@Check[ClaudeOrchestrator`Workflow`ClaudeAsyncJobInfo[wid], <|"Status" -> "NotFound"|>];
       wfStatus = Lookup[Quiet@Check[ClaudeOrchestrator`Workflow`ClaudeWorkflowStatus[wid], <||>], "Status", "?"];
-      ctx = Lookup[$iSVMJobRegistry, wid, <||>];
-      <|"WorkflowId" -> wid, "Kind" -> Lookup[ctx, "Kind", "?"],
-        "Status" -> Lookup[info, "Status", "?"], "WorkflowStatus" -> wfStatus,
-        "Done" -> (Lookup[info, "Status", "?"] === "Completed"),
+      ctx = Lookup[$iSVMJobRegistry, wid, <||>]; kind = Lookup[ctx, "Kind", "?"];
+      done = (Lookup[info, "Status", "?"] === "Completed") || iSVMWorkflowDoneQ[wid, kind];
+      <|"WorkflowId" -> wid, "Kind" -> kind,
+        "Status" -> If[done, "Completed", Lookup[info, "Status", wfStatus]], "WorkflowStatus" -> wfStatus,
+        "Done" -> done,
         "Steps" -> Lookup[info, "Steps", 0], "TerminationReason" -> Lookup[info, "TerminationReason", Missing[]]|>]];
 
 SourceVaultJobResult[wid_String] :=
   If[! iSVMOrchestratorAvailableQ[], <|"Status" -> "OrchestratorUnavailable", "WorkflowId" -> wid|>,
     Module[{info, ctx, kind, runStatus},
       info = Quiet@Check[ClaudeOrchestrator`Workflow`ClaudeAsyncJobInfo[wid], <|"Status" -> "NotFound"|>];
-      If[Lookup[info, "Status", "?"] =!= "Completed",
-        Return[<|"Status" -> "Running", "WorkflowId" -> wid, "Steps" -> Lookup[info, "Steps", 0]|>]];
       ctx = Lookup[$iSVMJobRegistry, wid, <||>]; kind = Lookup[ctx, "Kind", "?"];
+      If[Lookup[info, "Status", "?"] =!= "Completed" && ! iSVMWorkflowDoneQ[wid, kind],
+        Return[<|"Status" -> "Running", "WorkflowId" -> wid, "Steps" -> Lookup[info, "Steps", 0]|>]];
       runStatus = Lookup[Quiet@Check[ClaudeOrchestrator`Workflow`ClaudeWorkflowStatus[wid], <||>], "Status",
         Lookup[info, "TerminationReason", "?"]];
       Switch[kind,
@@ -2143,6 +2166,69 @@ SourceVaultCancelJob[wid_String] :=
      Quiet@Check[ClaudeOrchestrator`Workflow`ClaudeCleanupAsyncJob[wid], Null];
      $iSVMJobRegistry = KeyDrop[$iSVMJobRegistry, wid];
      <|"WorkflowId" -> wid, "Status" -> "Cancelled"|>)];
+
+(* ---- カーネル跨ぎ job 永続化 (snapshot/restore) ----
+   workflow の marking + mining context を snapshot にディスク永続化し、カーネル再起動後に
+   復元する。ClaudeAsyncJobInfo は snapshot 対象外ゆえ復元ジョブの完了判定は marking 由来
+   (iSVMWorkflowDoneQ)、結果抽出も marking 由来ゆえ closure 非依存。復元は新 WorkflowId を
+   発行するので mining registry を新 wid に再登録する。 *)
+If[! ValueQ[$SourceVaultMiningJobDir], $SourceVaultMiningJobDir = Automatic];
+
+iSVMJobDir[] := Module[{d = $SourceVaultMiningJobDir, root},
+  If[StringQ[d], Return[d]];
+  root = Quiet@Check[SourceVault`SourceVaultCoreRoot[], $Failed];
+  If[! StringQ[root], Return[$Failed]];
+  FileNameJoin[{root, "mining-jobs"}]];
+
+iSVMReadMiningContext[dir_String] := Quiet@Check[
+  Block[{$CharacterEncoding = "UTF-8"}, Get[FileNameJoin[{dir, "mining-context.wl"}]]], $Failed];
+iSVMPersistedJobDirs[jobDir_String] := If[! DirectoryQ[jobDir], {},
+  Select[FileNames["*", jobDir], DirectoryQ[#] && FileExistsQ[FileNameJoin[{#, "mining-context.wl"}]] &]];
+
+SourceVaultPersistJob[wid_String] :=
+  If[! iSVMOrchestratorAvailableQ[], <|"Status" -> "OrchestratorUnavailable", "WorkflowId" -> wid|>,
+    Module[{ctx, jobDir, snap, snapDir},
+      ctx = Lookup[$iSVMJobRegistry, wid, Missing[]];
+      If[! AssociationQ[ctx], Return[<|"Status" -> "JobNotFound", "WorkflowId" -> wid|>]];
+      jobDir = iSVMJobDir[];
+      If[! StringQ[jobDir], Return[<|"Status" -> "NoCoreRoot", "WorkflowId" -> wid|>]];
+      snap = Quiet@Check[Catch[ClaudeOrchestrator`Workflow`ClaudeSnapshotWorkflow[wid, "SnapshotDir" -> jobDir], _], $Failed];
+      If[! AssociationQ[snap], Return[<|"Status" -> "SnapshotFailed", "WorkflowId" -> wid|>]];
+      snapDir = Lookup[snap, "SnapshotDir"];
+      Block[{$CharacterEncoding = "UTF-8"},
+        Put[<|"OriginalWid" -> wid, "Context" -> ctx, "PersistedAt" -> AbsoluteTime[]|>,
+          FileNameJoin[{snapDir, "mining-context.wl"}]]];
+      <|"Status" -> "Persisted", "WorkflowId" -> wid, "SnapshotDir" -> snapDir, "Kind" -> Lookup[ctx, "Kind", "?"]|>]];
+
+Options[SourceVaultRestoreJobs] = {"SnapshotDir" -> Automatic};
+SourceVaultRestoreJobs[OptionsPattern[]] :=
+  If[! iSVMOrchestratorAvailableQ[], <|"Status" -> "OrchestratorUnavailable"|>,
+    Module[{jobDir, dirs, restored},
+      jobDir = OptionValue["SnapshotDir"] /. Automatic :> iSVMJobDir[];
+      If[! StringQ[jobDir], Return[<|"Status" -> "NoCoreRoot"|>]];
+      dirs = iSVMPersistedJobDirs[jobDir];
+      restored = DeleteCases[Map[Function[dir,
+        Module[{mc = iSVMReadMiningContext[dir], ctx, r, newWid},
+          If[! AssociationQ[mc], Return[Nothing, Module]];
+          ctx = Lookup[mc, "Context", <||>];
+          r = Quiet@Check[Catch[ClaudeOrchestrator`Workflow`ClaudeRestoreWorkflow[dir], _], $Failed];
+          If[! AssociationQ[r], Return[Nothing, Module]];
+          newWid = Lookup[r, "WorkflowId", Missing[]];
+          If[! StringQ[newWid], Return[Nothing, Module]];
+          AssociateTo[$iSVMJobRegistry, newWid -> ctx];
+          <|"OriginalWid" -> Lookup[mc, "OriginalWid", "?"], "WorkflowId" -> newWid,
+            "Kind" -> Lookup[ctx, "Kind", "?"], "Done" -> iSVMWorkflowDoneQ[newWid, Lookup[ctx, "Kind", "?"]]|>]], dirs],
+        Nothing];
+      <|"Status" -> "OK", "Restored" -> restored, "Count" -> Length[restored]|>]];
+
+SourceVaultListPersistedJobs[] :=
+  Module[{jobDir = iSVMJobDir[]},
+    If[! StringQ[jobDir], Return[{}]];
+    Map[Function[dir, Module[{mc = iSVMReadMiningContext[dir]},
+      <|"OriginalWid" -> Lookup[If[AssociationQ[mc], mc, <||>], "OriginalWid", "?"],
+        "Kind" -> Lookup[Lookup[If[AssociationQ[mc], mc, <||>], "Context", <||>], "Kind", "?"],
+        "SnapshotDir" -> dir, "PersistedAt" -> Lookup[If[AssociationQ[mc], mc, <||>], "PersistedAt", Missing[]]|>]],
+      iSVMPersistedJobDirs[jobDir]]];
 
 (* ============================================================
    ClaudeOrchestrator workflow net 統合 (§6.3): 利用可能なら WorkflowNet、無ければ直接。
