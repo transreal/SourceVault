@@ -658,7 +658,8 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultImportOOPSMailToItem[path]` / `…MailInfo[path]` | mail→topic gold / mail メタ（list/author/offset）を読む。 |
 | `SourceVaultParseOOPSMailFile[path]` | UTF-8 mbox を parse（X-Ml-Counter で gold join）。 |
 | `SourceVaultStripOOPSMarkers[text]` | topic ID ref / ◎○・ / brace を除去（label は残す）。 |
-| `SourceVaultParseMailParagraphs[body]` | 本文を段落（Prose/Quote/Signature/Footer）に分割。 |
+| `SourceVaultParseMailParagraphs[body]` | RAW 本文を段落（Prose/Quote/Signature/Footer）に分割。各段落は RawText（マーカー保持）＋Text（strip 済）。 |
+| `SourceVaultExtractExplicitTopics[text]` | 明示トピック ◎Primary/○Secondary/・Mentioned `<label>[ns id]`・`{label[ns id]}` を抽出（人手付与の最高品質、§6.5 点1）。 |
 | `SourceVaultAssignParagraphTopics[paras, surfaceIndex, opts]` | 各 prose 段落に seed 辞書 OR-match で topic 自動付与（auto-tag）。`"RelationGraph"` で `RelationExpanded`、`"ExtractCandidates"` で seed 非該当の `AutoExtracted` 候補を追加。 |
 | `SourceVaultExtractCandidateTopics[text, opts]` | seed 非該当の新トピック候補（katakana/漢字熟語/Latin/引用語）を抽出（語彙外対応、要 owner 確認）。 |
 | `SourceVaultTopicEnrichment[text, surfaceIndex, opts]` | auto-tag の topic を検索 index へ注入する `topics` フィールド文字列を生成（seed→検索の接続。本文に無い関連/正準トピックでヒット可に）。 |
@@ -673,6 +674,8 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultExtractMailQuoteMarkers[mail]` / `…BuildMailQuoteEdges[mails, opts]` | 本文 `-*- Quote (from N) -*-` 抽出／`SourceVaultMailQuoteEdge`（SeedStandardQuote/ExplicitMarker/ExternalURL）を構築。 |
 | `SourceVaultBuildMailSessions[mails, quoteEdges, opts]` | quote edge 連結成分＋Subject Re:/Fwd: でメールをスレッド（`SourceVaultMailSession`）に。 |
 | `SourceVaultBuildTopicItemGraph[mails, opts]` | 段落 topic をノード、CoParagraph/QuoteTransition/SeedRelation を辺にした `SourceVaultTopicItemGraph`（§6.5）。 |
+| `SourceVaultBuildSessionChunks[mails, sessions, opts]` | session（スレッド）単位の検索 chunk。query がスレッド全体を引ける。private list（Under Ground）は §6.5.3 で PrivateML/NoCloudLLM 付与。 |
+| `SourceVaultBuildSessionDigest` / `…BuildSessionPrimerItems` | LLM 非依存の決定的スレッド要約と、その primer item 化（`SourceVaultPrimerSearch` で「スレッドの結論」を引く、§6.5）。 |
 | **サービス管理 (SourceVault_servicemanager)** | |
 | `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
 | `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |

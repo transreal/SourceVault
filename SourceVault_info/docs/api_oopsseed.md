@@ -52,11 +52,17 @@ UTF-8 の `oops*.txt` を mbox として parse（CR 行終端）。`X-Ml-Counter
 OOPS の topic ID ref（`[ns n]`）・brace wrapper・`◎○・` structural marker を除去して plain text を返す。label 本文は残す（held-out 評価で cheat 防止／一般メール化）。
 
 ### SourceVaultParseMailParagraphs[body] → {Association...}
-mail 本文を段落に分割する（空行区切り、引用/署名/footer を分離。§6.5）。
-戻り値: `{<|"Index", "Kind" -> "Prose"|"Quote"|"Signature"|"Footer", "Text"|>...}`
+**RAW body**（明示マーカー保持）を段落に分割する（空行区切り、引用/署名/footer を分離。§6.5）。各段落は `RawText`（生・`◎○・{}[ns id]` マーカー保持）と `Text`（`SourceVaultStripOOPSMarkers` 済）を持つ。
+戻り値: `{<|"Index", "Kind" -> "Prose"|"Quote"|"Signature"|"Footer", "RawText", "Text"|>...}`
+（従来どおり strip 済 body を渡しても動くが、その場合 RawText にマーカーが無く明示 topic は拾えない。）
+
+### SourceVaultExtractExplicitTopics[text] → {Association...}
+OOPS の**明示 topic マーカー**を抽出する（§6.5 点 1「明示 topic があれば採用」）。`◎` = Primary / `○` = Secondary / `・` = Mentioned の `<label>[ns id]` と、本文の `{label[ns id]}`。`[ns id]` が topic ref を直接与える**人手付与の最高品質シグナル**（surface form 照合より上）。
+戻り値: `{<|"TopicItemRef", "CanonicalLabel", "TopicRole" -> "Primary"|"Secondary"|"Mentioned", "AssignmentKind" -> "ExplicitOOPS", "Confidence" -> 1.0|>...}`
 
 ### SourceVaultAssignParagraphTopics[paragraphs, surfaceIndex, opts] → {Association...}
-各 prose 段落に seed 辞書の surface form OR-match で topic item を自動付与する（auto-tag）。`surfaceIndex` は `SourceVaultBuildSurfaceIndex[dict]`。
+各 prose 段落に topic item を自動付与する（auto-tag）。`surfaceIndex` は `SourceVaultBuildSurfaceIndex[dict]`。
+`"ExplicitTopics" -> True`（既定）で、段落の `RawText` から `SourceVaultExtractExplicitTopics` を走らせ `AssignmentKind = "ExplicitOOPS"`（`TopicRole` 付き, conf 1.0）を**最優先**で付与する（seed からは重複除外）。relation 拡張は 明示 ∪ seed から行う。
 `"RelationGraph"`（`SourceVaultBuildOOPSRelationGraph` の結果）を渡すと、SeedMatched の named topic から 1-hop の関連 topic を低 confidence の `AssignmentKind = "RelationExpanded"`（`ViaSeed` / `RelationWeight` 付き）として追加する。SeedMatched（conf ≤ 1.0）が常に RelationExpanded（conf = `Min[0.45, 0.2 + 0.03·Weight]`）より上位。`RelationGraph` 無しなら SeedMatched のみ（後方互換）。
 `"ExtractCandidates" -> True` で seed 非該当の新トピック候補（`SourceVaultExtractCandidateTopics`）を `AssignmentKind = "AutoExtracted"`（`TopicItemRef -> Missing["Unconfirmed"]`, `ProposedLabel`, `Status -> "Candidate"`, conf 0.2）として追加する（auto-confirm off、owner 確認で正規 topic 化）。
 `"RefLabel"`（ref→canonical label の Association）を渡すと、**同一 canonical label の SeedMatched 重複**（別 owner namespace / 重複 entry。例 ki195/e203 とも「映画」）を最高 confidence の 1 件に collapse し、他の ref を `AltRefs` に provenance として残す（軽量 owner disambiguation。曖昧は実データで 2.2% と稀）。
@@ -145,9 +151,24 @@ Options: `"SubjectThreading" -> True`
 - **CoParagraph**: 同じ段落に共起した topic ペア（`Weight` = 共起段落数）。
 - **QuoteTransition**: quote edge の引用元メール topic × 引用先メール topic（`QuoteEdges` 経由）。
 - **SeedRelation**: グラフ内 node 間に seed relation graph の辺があるもの。
-必須 Options: `"SurfaceIndex"`。任意: `"RelationGraph"`（SeedRelation 用）, `"RefLabel"`, `"QuoteEdges"`（`SourceVaultBuildMailQuoteEdges` の結果。QuoteTransition 用）, `"SessionRefs"`。
+必須 Options: `"SurfaceIndex"`。任意: `"RelationGraph"`（SeedRelation 用）, `"RefLabel"`, `"QuoteEdges"`（`SourceVaultBuildMailQuoteEdges` の結果。QuoteTransition 用）, `"SessionRefs"`, `"MaxTopicsPerMailForQuote" -> 4`（QuoteTransition の all-pairs 爆発を防ぐため、各メールの支持段落数 top-N トピックだけを引用遷移に使う）。
 戻り値: `<|"ObjectClass" -> "SourceVaultTopicItemGraph", "GraphId", "Nodes" -> {<|"TopicItemRef", "Label", "SupportParagraphs"|>...}, "Edges" -> {<|"From", "To", "EdgeKind", "Weight", "EvidenceRefs"|>...}, "NodeCount", "EdgeCount", "EdgeKindTally"|>`
 > QuoteTransition は引用元×引用先 topic の all-pairs なので、quote が多いスレッドでは辺が増える（将来 top-k / Primary 限定で剪定予定）。
+
+### SourceVaultBuildSessionChunks[mails, sessions, opts] → {Association...}
+session（スレッド）単位の §7.2 検索 chunk を作る。各 chunk は session の全メール本文を連結し、`SearchFields`（title=Subject / body=連結本文 / author=著者 union / topics=`SourceVaultTopicEnrichment` 注入）を持つ。`SourceVaultBuildProjectionIndex` に渡すと **query がスレッド全体を引ける**（§6.5「日程・事項の結論」query 向け）。
+`PrivacyLevel` / `Tags` は §6.5.3 の list（`iSVOOPSListPrivacy`）由来を session 内で **max / union** で採る（1 通でも私的リストなら session 全体が私的）。
+Options: `"SurfaceIndex"`, `"RelationGraph"`, `"RefLabel"`, `"PrivacyLevel" -> Automatic`（list 由来）, `"ReleaseState" -> "Published"`, `"MaxBodyChars" -> 4000`
+
+> **§6.5.3 privacy / trust class**: `X-Ml-Name` の実値は `"OOPS Mailing List"`（公開）と `"OOPS Mailing List Under Ground"`（= oops-ura, 私的）。`iSVOOPSListPrivacy` は "under ground" / "oops-ura" を検出した list を私的とし、`PrivacyLevel 0.6` ＋ `{"PrivateML", "NoCloudLLM", "NoPublicExport"}` を付ける。cloud LLM / public export の release context は `DenyTags` にこれらを持つので、私的リスト由来のスレッドは自動的に除外される。
+
+### SourceVaultBuildSessionDigest[session, mails, opts] → String
+LLM を使わない**決定的なスレッド要約**を返す。`[スレッド] <Subject> (<N>通/<SessionKind>)` ＋ `話題: <topic ラベル>` ＋ 各メールの `#<counter> <著者>: <先頭 prose 段落>` のタイムライン。
+Options: `"SurfaceIndex"`（話題抽出用）, `"RefLabel"`, `"MaxMails" -> 8`, `"ParaChars" -> 120`
+
+### SourceVaultBuildSessionPrimerItems[mails, sessions, opts] → {Association...}
+session を `SourceVaultPrimerIndex` の item にする（§6.5「session summary を primer に」）。各 item は `Title` = Subject、`Summary` = `SourceVaultBuildSessionDigest`、`Tags` = topic ラベル ∪ list tags（§6.5.3）、`Authors`、`Signals -> <|"EffectiveImportance" -> _|>`（`Min[0.9, 0.3 + 0.06·MailCount]` = スレッド規模の決定的 proxy）、`PrivacyLevel` / `Freshness`。これを `SourceVaultBuildPrimerIndex` の `"Items"` に渡すと、`SourceVaultPrimerSearch` が**スレッドを digest 付きで**引ける（大きいスレッドほど importance で上位）。「日程・事項の結論探し」query 向け。
+Options: `"SurfaceIndex"`, `"RelationGraph"`, `"RefLabel"`, `"Freshness" -> "Fresh"`
 
 ## 利用例
 

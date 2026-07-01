@@ -110,6 +110,11 @@ SourceVaultExtractCandidateTopics::usage =
   "オプション \"KnownSurfaceIndex\"(既定 None), \"Limit\"(既定15), \"MinKatakana\"(3), \"MinKanji\"(2), \"MaxKanji\"(6), \"MinLatin\"(2)。" <>
   "戻り値 {<|\"Surface\", \"ExtractionKind\", \"Count\"|>...}。auto-tag では AssignmentKind=\"AutoExtracted\"(要確認候補)。";
 
+SourceVaultExtractExplicitTopics::usage =
+  "SourceVaultExtractExplicitTopics[text] は OOPS の明示 topic マーカー ◎(Primary)/○(Secondary)/・(Mentioned) <label>[ns id] と " <>
+  "本文 {label[ns id]} を抽出する。[ns id] が topic ref を直接与える人手付与の最高品質シグナル(§6.5 点1)。" <>
+  "戻り値 {<|\"TopicItemRef\", \"CanonicalLabel\", \"TopicRole\", \"AssignmentKind\"=\"ExplicitOOPS\", \"Confidence\"=1.0|>...}。";
+
 SourceVaultTopicEnrichment::usage =
   "SourceVaultTopicEnrichment[text, surfaceIndex] は本文に auto-tag を走らせ、検索 index に注入する " <>
   "topic 情報(SeedMatched の正準ラベル＋RelationExpanded の関連ラベル)を返す。chunk の SearchFields[\"topics\"] に " <>
@@ -171,6 +176,22 @@ SourceVaultBuildTopicItemGraph::usage =
   "quote edge 越し=QuoteTransition、seed relation=SeedRelation の辺を張った SourceVaultTopicItemGraph を作る(§6.5)。" <>
   "戻り値 <|Nodes(TopicItemRef/Label/SupportParagraphs), Edges(From/To/EdgeKind/Weight/EvidenceRefs), NodeCount, EdgeCount|>。" <>
   "必須オプション \"SurfaceIndex\"。任意 \"RelationGraph\"/\"RefLabel\"/\"QuoteEdges\"/\"SessionRefs\"。";
+
+SourceVaultBuildSessionChunks::usage =
+  "SourceVaultBuildSessionChunks[mails, sessions, opts] は session(スレッド)単位の §7.2 検索 chunk を作る。" <>
+  "各 chunk は session の全メール本文を連結し、Subject/著者/topic(TopicEnrichment 注入)を持つ。query がスレッド全体を引ける" <>
+  "(§6.5「結論」query 向け)。PrivacyLevel/Tags は §6.5.3 の list(oops/oops-ura)由来を session 内 max/union で採る。" <>
+  "オプション \"SurfaceIndex\"/\"RelationGraph\"/\"RefLabel\"/\"PrivacyLevel\"(Automatic=list由来)/\"ReleaseState\"(\"Published\")/\"MaxBodyChars\"(4000)。";
+
+SourceVaultBuildSessionDigest::usage =
+  "SourceVaultBuildSessionDigest[session, mails, opts] は LLM を使わない決定的なスレッド要約(digest)文字列を作る。" <>
+  "Subject＋話題(topic ラベル)＋各メールの先頭 prose 段落のタイムライン。オプション \"SurfaceIndex\"/\"RefLabel\"/\"MaxMails\"(8)/\"ParaChars\"(120)。";
+
+SourceVaultBuildSessionPrimerItems::usage =
+  "SourceVaultBuildSessionPrimerItems[mails, sessions, opts] は session を SourceVaultPrimerIndex の item にする(§6.5「session summary を primer に」)。" <>
+  "各 item: Title=Subject / Summary=SourceVaultBuildSessionDigest / Tags=topic ラベル∪list tags / Authors / " <>
+  "Signals.EffectiveImportance(スレッド規模の決定的 proxy) / PrivacyLevel/Tags(§6.5.3) / Freshness。" <>
+  "SourceVaultBuildPrimerIndex の \"Items\" に渡す。オプション \"SurfaceIndex\"/\"RelationGraph\"/\"RefLabel\"/\"Freshness\"(\"Fresh\")。";
 
 Begin["`Private`"];
 
@@ -509,6 +530,19 @@ SourceVaultStripOOPSMarkers[text_String] := Module[{s = text},
   s = StringReplace[s, {"\r" -> "\n"}];
   StringReplace[s, RegularExpression["[ \\t]+"] -> " "]];
 
+(* 明示 topic マーカー: ◎(Primary)/○(Secondary)/・(Mentioned) <label>[ns id] と本文 {label[ns id]}。
+   [ns id] が topic ref を直接与える人手付与の最高品質シグナル (§6.5 点1)。 *)
+SourceVaultExtractExplicitTopics[text_String] := Module[{titleMarks, bodyMarks, mk},
+  titleMarks = StringCases[text,
+    RegularExpression["([◎○・])[ \\t]*([^\\[\\n\\r{}]+?)\\[([A-Za-z]+)[ \\t]*([0-9]+)\\]"] -> {"$1", "$2", "$3", "$4"}];
+  bodyMarks = StringCases[text,
+    RegularExpression["\\{([^\\[{}\\n\\r]+?)\\[([A-Za-z]+)[ \\t]*([0-9]+)\\]"] -> {"・", "$1", "$2", "$3"}];
+  mk = Function[{role, label, ns, id},
+    <|"TopicItemRef" -> "svtopic:oops:" <> ns <> ":" <> id, "CanonicalLabel" -> StringTrim[label],
+      "TopicRole" -> Switch[role, "◎", "Primary", "○", "Secondary", _, "Mentioned"],
+      "AssignmentKind" -> "ExplicitOOPS", "Confidence" -> 1.0|>];
+  DeleteDuplicatesBy[mk @@@ Join[titleMarks, bodyMarks], #["TopicItemRef"] &]];
+
 (* ------------------------------------------------------------
    §6.5  paragraph 分割 ＋ topic 自動付与 (auto-tag, Track B MVP)
    ------------------------------------------------------------ *)
@@ -521,30 +555,45 @@ iSVParaKind[t_String] := Which[
     StringContainsQ[t, "Reply-To:"], "Footer",
   True, "Prose"];
 
+(* RAW body を受け取り、各段落に RawText(明示マーカー保持) と Text(strip 済) を持たせる。
+   明示 topic(◎○・{}[ns id])は RawText から抽出する。従来どおり strip 済 body を渡しても
+   RawText=strip 済で explicit 抽出が空になるだけ(後方互換)。 *)
 SourceVaultParseMailParagraphs[body_String] := Module[{norm, blocks, paras},
   norm = StringReplace[body, "\r" -> "\n"];
   blocks = StringSplit[norm, RegularExpression["\\n[ \\t]*\\n+"]];
   blocks = Select[StringTrim /@ blocks, # =!= "" &];
-  paras = MapIndexed[<|"Index" -> #2[[1]], "Kind" -> iSVParaKind[#1], "Text" -> #1|> &, blocks];
+  paras = MapIndexed[
+    <|"Index" -> #2[[1]], "Kind" -> iSVParaKind[#1], "RawText" -> #1,
+      "Text" -> SourceVaultStripOOPSMarkers[#1]|> &, blocks];
   paras];
 
 Options[SourceVaultAssignParagraphTopics] = {"MinSurfaceLength" -> 2, "TopicLimit" -> 10, "ProseOnly" -> True,
   "RelationGraph" -> None, "MaxRelationTopics" -> 8, "MinRelationWeight" -> 2,
-  "ExtractCandidates" -> False, "CandidateLimit" -> 8, "RefLabel" -> None};
+  "ExtractCandidates" -> False, "CandidateLimit" -> 8, "RefLabel" -> None, "ExplicitTopics" -> True};
 SourceVaultAssignParagraphTopics[paragraphs_List, surfaceIndex_Association, OptionsPattern[]] :=
   Module[{minLen = OptionValue["MinSurfaceLength"], lim = OptionValue["TopicLimit"],
           proseOnly = OptionValue["ProseOnly"], keys,
           relGraph = OptionValue["RelationGraph"], maxRel = OptionValue["MaxRelationTopics"],
           minRelW = OptionValue["MinRelationWeight"], refLabel = OptionValue["RefLabel"],
-          extractCand = OptionValue["ExtractCandidates"], candLim = OptionValue["CandidateLimit"]},
+          extractCand = OptionValue["ExtractCandidates"], candLim = OptionValue["CandidateLimit"],
+          explicitOpt = OptionValue["ExplicitTopics"]},
     keys = Select[Keys[surfaceIndex], StringLength[#] >= minLen &];
     Map[Function[para,
       If[proseOnly && para["Kind"] =!= "Prose",
         <|"ParagraphIndex" -> para["Index"], "Kind" -> para["Kind"], "Assignments" -> {}|>,
-        Module[{nt = iSVNormalizeSearchText[para["Text"]], matches, byRef, seedAssigns, relAssigns, candAssigns},
+        Module[{nt = iSVNormalizeSearchText[para["Text"]], matches, byRef,
+                explicitAssigns, explicitRefs, seedAssigns, namedRefs, relAssigns, candAssigns},
+          (* 明示 OOPS topic (◎Primary/○Secondary/・Mentioned <label>[ns id], {label[ns id]}) を
+             RawText から。人手付与で最高品質＝最優先。seed からは重複除外する。 *)
+          explicitAssigns = If[TrueQ[explicitOpt],
+            Map[<|"TopicItemRef" -> #["TopicItemRef"], "CanonicalLabel" -> #["CanonicalLabel"],
+               "MatchedSurfaceForms" -> {}, "AssignmentKind" -> "ExplicitOOPS",
+               "TopicRole" -> #["TopicRole"], "Confidence" -> 1.0|> &,
+              SourceVaultExtractExplicitTopics[Lookup[para, "RawText", para["Text"]]]], {}];
+          explicitRefs = #["TopicItemRef"] & /@ explicitAssigns;
           matches = Flatten@Map[Function[sf,
              If[iSVSurfaceFormPresentQ[nt, sf], (sf -> #) & /@ surfaceIndex[sf], {}]], keys];
-          byRef = GroupBy[matches, Last -> First];  (* ref -> {surfaceForm...} *)
+          byRef = KeyDrop[GroupBy[matches, Last -> First], explicitRefs];  (* ref -> {surfaceForm...} 明示済み除外 *)
           seedAssigns = Take[ReverseSortBy[
             KeyValueMap[Function[{ref, sfs},
               <|"TopicItemRef" -> ref, "MatchedSurfaceForms" -> DeleteDuplicates[sfs],
@@ -561,13 +610,14 @@ SourceVaultAssignParagraphTopics[paragraphs_List, surfaceIndex_Association, Opti
                     "MatchedSurfaceForms" -> DeleteDuplicates[Flatten[#["MatchedSurfaceForms"] & /@ grp]],
                     "AltRefs" -> Rest[#["TopicItemRef"] & /@ sorted]|>]]]],
               #["Confidence"] &]];
-          (* relation 1-hop 拡張: named topic から関連 topic を低 confidence で付与 (RelationGraph 指定時) *)
-          relAssigns = If[AssociationQ[relGraph] && seedAssigns =!= {},
+          (* relation 1-hop 拡張: 明示＋seed の named topic から関連 topic を低 confidence で付与 *)
+          namedRefs = DeleteDuplicates[Join[explicitRefs, #["TopicItemRef"] & /@ seedAssigns]];
+          relAssigns = If[AssociationQ[relGraph] && namedRefs =!= {},
             Map[<|"TopicItemRef" -> #["To"], "MatchedSurfaceForms" -> {},
                   "AssignmentKind" -> "RelationExpanded",
                   "Confidence" -> Min[0.45, 0.2 + 0.03*#["Weight"]],
                   "ViaSeed" -> #["ViaSeed"], "RelationWeight" -> #["Weight"]|> &,
-              SourceVaultExpandTopicsByRelation[#["TopicItemRef"] & /@ seedAssigns, relGraph,
+              SourceVaultExpandTopicsByRelation[namedRefs, relGraph,
                 "MaxTotal" -> maxRel, "MinWeight" -> minRelW]],
             {}];
           (* AutoExtracted: seed 非該当の新トピック候補 (要確認; ExtractCandidates->True 時) *)
@@ -579,7 +629,7 @@ SourceVaultAssignParagraphTopics[paragraphs_List, surfaceIndex_Association, Opti
                 "KnownSurfaceIndex" -> surfaceIndex, "Limit" -> candLim]],
             {}];
           <|"ParagraphIndex" -> para["Index"], "Kind" -> para["Kind"],
-            "Assignments" -> Join[seedAssigns, relAssigns, candAssigns]|>]]],
+            "Assignments" -> Join[explicitAssigns, seedAssigns, relAssigns, candAssigns]|>]]],
       paragraphs]];
 
 (* ------------------------------------------------------------
@@ -686,7 +736,8 @@ SourceVaultTopicEnrichment[text_String, surfaceIndex_Association, OptionsPattern
       "ProseOnly" -> False, "RelationGraph" -> If[inclRel, relGraph, None],
       "MaxRelationTopics" -> OptionValue["MaxRelationTopics"],
       "MinRelationWeight" -> OptionValue["MinRelationWeight"]]]["Assignments"];
-  seed = Select[assigns, #["AssignmentKind"] === "SeedMatched" &];
+  (* ExplicitOOPS(人手明示 ◎○・{}) も named topic として扱う(最高品質) *)
+  seed = Select[assigns, MemberQ[{"SeedMatched", "ExplicitOOPS"}, #["AssignmentKind"]] &];
   rel = Select[assigns, #["AssignmentKind"] === "RelationExpanded" &];
   seedRefs = #["TopicItemRef"] & /@ seed;
   relRefs = #["TopicItemRef"] & /@ rel;
@@ -791,24 +842,26 @@ SourceVaultBuildMailChunks[mail_Association, surfaceIndex_Association, OptionsPa
   {gran = OptionValue["Granularity"], relGraph = OptionValue["RelationGraph"],
    refLabel = OptionValue["RefLabel"], pl = OptionValue["PrivacyLevel"],
    state = OptionValue["ReleaseState"], inclRel = OptionValue["IncludeRelated"],
-   objPrefix = OptionValue["ObjectIdPrefix"], counter, subject, from, objId, body, mk, paras},
+   objPrefix = OptionValue["ObjectIdPrefix"], counter, subject, from, objId, rawBody, body, mk, paras},
   counter = ToString @ Lookup[mail, "Counter", "?"];
   subject = Lookup[mail, "Subject", ""]; from = Lookup[mail, "From", ""];
   objId = objPrefix <> ":" <> counter;
-  body = SourceVaultStripOOPSMarkers[Lookup[mail, "Body", ""]];
-  mk = Function[{cid, txt}, Module[{enr = SourceVaultTopicEnrichment[txt, surfaceIndex,
+  rawBody = Lookup[mail, "Body", ""];
+  body = SourceVaultStripOOPSMarkers[rawBody];
+  (* displayTxt=strip 済(検索対象・表示), enrichTxt=raw(明示 ◎○・{} topic を拾う) *)
+  mk = Function[{cid, displayTxt, enrichTxt}, Module[{enr = SourceVaultTopicEnrichment[enrichTxt, surfaceIndex,
       "RefLabel" -> refLabel, "RelationGraph" -> relGraph, "IncludeRelated" -> inclRel]},
     <|"ChunkId" -> cid, "SourceVaultObjectId" -> objId,
-      "SearchFields" -> <|"title" -> subject, "body" -> txt, "author" -> from,
+      "SearchFields" -> <|"title" -> subject, "body" -> displayTxt, "author" -> from,
         "topics" -> enr["TopicsFieldText"]|>,
-      "Text" -> txt, "NormalizedText" -> SourceVaultNormalizeSearchText[txt],
+      "Text" -> displayTxt, "NormalizedText" -> SourceVaultNormalizeSearchText[displayTxt],
       "PrivacyLevel" -> pl, "State" -> state, "Tags" -> {},
       "TopicRefs" -> enr["TopicRefs"], "RelatedRefs" -> enr["RelatedRefs"],
       "SourceRef" -> <|"Title" -> subject|>|>]];
   If[gran === "Mail",
-    {mk["oops-" <> counter, body]},
-    paras = Select[SourceVaultParseMailParagraphs[body], #["Kind"] === "Prose" &];
-    MapIndexed[mk["oops-" <> counter <> "-p" <> ToString[#2[[1]]], #1["Text"]] &, paras]]];
+    {mk["oops-" <> counter, body, rawBody]},
+    paras = Select[SourceVaultParseMailParagraphs[rawBody], #["Kind"] === "Prose" &];
+    MapIndexed[mk["oops-" <> counter <> "-p" <> ToString[#2[[1]]], #1["Text"], #1["RawText"]] &, paras]]];
 
 (* 確認済 extracted topic の永続 (owner store)。dict["Entries"] に Join で seed 編入。 *)
 SourceVaultSaveExtractedTopics[entries_List, path_String] := Module[{dir = DirectoryName[path]},
@@ -935,22 +988,23 @@ SourceVaultBuildMailSessions[mails_List, quoteEdges_List, OptionsPattern[]] := M
    ------------------------------------------------------------ *)
 
 Options[SourceVaultBuildTopicItemGraph] = {"SurfaceIndex" -> None, "RelationGraph" -> None,
-  "RefLabel" -> None, "QuoteEdges" -> {}, "SessionRefs" -> {}};
+  "RefLabel" -> None, "QuoteEdges" -> {}, "SessionRefs" -> {}, "MaxTopicsPerMailForQuote" -> 4};
 SourceVaultBuildTopicItemGraph[mails_List, OptionsPattern[]] := Module[
   {sidx = OptionValue["SurfaceIndex"], relGraph = OptionValue["RelationGraph"],
    refLabel = OptionValue["RefLabel"], quoteEdges = OptionValue["QuoteEdges"],
+   maxQtTopics = OptionValue["MaxTopicsPerMailForQuote"],
    label, paraTopics, nodeGroups, nodes, nodeRefs, coEdges, mailTopics, qtEdges, seedEdges},
   If[! AssociationQ[sidx], Return[Failure["SurfaceIndexRequired",
     <|"MessageTemplate" -> "SourceVaultBuildTopicItemGraph には \"SurfaceIndex\" が必須です。"|>]]];
   label = If[AssociationQ[refLabel], Function[r, Lookup[refLabel, r, r]], Identity];
-  (* 各メール各 prose 段落の SeedMatched topic *)
+  (* 各メール各 prose 段落の named topic (ExplicitOOPS ＋ SeedMatched) *)
   paraTopics = Flatten@Map[Function[m,
     Module[{counter = Lookup[m, "Counter", "?"], paras, assigned},
-      paras = SourceVaultParseMailParagraphs[SourceVaultStripOOPSMarkers[Lookup[m, "Body", ""]]];
+      paras = SourceVaultParseMailParagraphs[Lookup[m, "Body", ""]];  (* raw: RawText で明示 topic を使う *)
       assigned = SourceVaultAssignParagraphTopics[paras, sidx, "RefLabel" -> refLabel];
       Map[Function[a,
         With[{trefs = DeleteDuplicates[#["TopicItemRef"] & /@
-             Select[a["Assignments"], #["AssignmentKind"] === "SeedMatched" &]]},
+             Select[a["Assignments"], MemberQ[{"SeedMatched", "ExplicitOOPS"}, #["AssignmentKind"]] &]]},
           If[trefs === {}, Nothing,
             <|"MailCounter" -> counter,
               "ParaRef" -> "svmailpara:" <> ToString[counter] <> ":" <> ToString[a["ParagraphIndex"]],
@@ -970,8 +1024,10 @@ SourceVaultBuildTopicItemGraph[mails_List, OptionsPattern[]] := Module[
     GroupBy[Flatten[Function[pt, With[{tr = pt["TopicRefs"]},
       If[Length[tr] >= 2, (Sort[#] -> pt["ParaRef"]) & /@ Subsets[tr, {2}], {}]]] /@ paraTopics, 1],
       First -> Last]];
-  (* QuoteTransition: quote edge の from-mail topic ↔ to-mail topic *)
-  mailTopics = Association @ KeyValueMap[#1 -> DeleteDuplicates@Flatten[#["TopicRefs"] & /@ #2] &,
+  (* QuoteTransition: quote edge の from-mail topic ↔ to-mail topic。
+     all-pairs 爆発を防ぐため、各メールの支持段落数 top-N トピックだけを使う。 *)
+  mailTopics = Association @ KeyValueMap[Function[{ctr, pts},
+      ctr -> Take[Keys@ReverseSort@Counts@Flatten[#["TopicRefs"] & /@ pts], UpTo[maxQtTopics]]],
     GroupBy[paraTopics, #["MailCounter"] &]];
   qtEdges = KeyValueMap[Function[{pair, evs},
     <|"From" -> pair[[1]], "To" -> pair[[2]], "EdgeKind" -> "QuoteTransition",
@@ -997,6 +1053,117 @@ SourceVaultBuildTopicItemGraph[mails_List, OptionsPattern[]] := Module[
     "NodeCount" -> Length[nodes], "EdgeCount" -> Length[coEdges] + Length[qtEdges] + Length[seedEdges],
     "EdgeKindTally" -> <|"CoParagraph" -> Length[coEdges], "QuoteTransition" -> Length[qtEdges],
       "SeedRelation" -> Length[seedEdges]|>|>];
+
+(* ------------------------------------------------------------
+   §6.5.3 / §6.5 検索接続: mailing list 由来 privacy ＋ session 単位の検索 chunk
+   ------------------------------------------------------------ *)
+
+(* §6.5.3 ListFallbacks: 宛先 list 名 → privacy floor / trust tags。
+   実データの X-Ml-Name は "OOPS Mailing List"(公開) / "OOPS Mailing List Under Ground"(=oops-ura, 私的)。
+   短縮形 oops-ura / oops-omote にも対応。私的リストは PrivateML 等の deny tag を付ける(漏洩防止)。 *)
+iSVOOPSPrivateListQ[mlName_String] :=
+  StringContainsQ[mlName, "under ground", IgnoreCase -> True] ||
+    StringContainsQ[mlName, "oops-ura", IgnoreCase -> True];
+iSVOOPSListPrivacy[mlName_String] := Which[
+  iSVOOPSPrivateListQ[mlName],
+    <|"PrivacyLevel" -> 0.6, "Tags" -> {"OOPS", "MailingList", "PrivateML", "NoCloudLLM", "NoPublicExport"}|>,
+  StringContainsQ[mlName, "omote", IgnoreCase -> True],
+    <|"PrivacyLevel" -> 0.4, "Tags" -> {"OOPS", "MailingList"}|>,
+  True,
+    <|"PrivacyLevel" -> 0.6, "Tags" -> {"OOPS", "MailingList"}|>];
+iSVOOPSListPrivacy[_] := <|"PrivacyLevel" -> 0.6, "Tags" -> {"OOPS", "MailingList"}|>;
+
+Options[SourceVaultBuildSessionChunks] = {"SurfaceIndex" -> None, "RelationGraph" -> None,
+  "RefLabel" -> None, "PrivacyLevel" -> Automatic, "ReleaseState" -> "Published",
+  "MaxBodyChars" -> 4000, "IncludeRelated" -> True};
+SourceVaultBuildSessionChunks[mails_List, sessions_List, OptionsPattern[]] := Module[
+  {byCounter, sidx = OptionValue["SurfaceIndex"], relGraph = OptionValue["RelationGraph"],
+   refLabel = OptionValue["RefLabel"], plOpt = OptionValue["PrivacyLevel"],
+   state = OptionValue["ReleaseState"], maxBody = OptionValue["MaxBodyChars"],
+   inclRel = OptionValue["IncludeRelated"]},
+  byCounter = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ mails];
+  Map[Function[sess,
+    Module[{sessMails, subject, combined, authors, privInfo, priv, tags, topicsText},
+      sessMails = DeleteMissing[Lookup[byCounter, sess["MailCounters"]]];
+      If[sessMails === {}, Nothing,
+        subject = sess["Subject"];
+        combined = StringTake[StringRiffle[
+          SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, "\n\n"], UpTo[maxBody]];
+        authors = DeleteDuplicates[Lookup[#, "From", ""] & /@ sessMails];
+        privInfo = iSVOOPSListPrivacy[Lookup[#, "MlName", ""]] & /@ sessMails;
+        priv = If[plOpt === Automatic, Max[#["PrivacyLevel"] & /@ privInfo], plOpt];
+        tags = DeleteDuplicates@Flatten[#["Tags"] & /@ privInfo];
+        topicsText = If[AssociationQ[sidx],
+          SourceVaultTopicEnrichment[combined, sidx, "RefLabel" -> refLabel,
+            "RelationGraph" -> relGraph, "IncludeRelated" -> inclRel]["TopicsFieldText"], ""];
+        <|"ChunkId" -> sess["MailSessionId"], "SourceVaultObjectId" -> sess["MailSessionId"],
+          "SearchFields" -> <|"title" -> subject, "body" -> combined, "author" -> authors, "topics" -> topicsText|>,
+          "Text" -> combined, "NormalizedText" -> SourceVaultNormalizeSearchText[combined],
+          "PrivacyLevel" -> priv, "State" -> state, "Tags" -> tags,
+          "MailRefs" -> sess["MailRefs"], "SessionKind" -> sess["SessionKind"],
+          "MailCount" -> sess["MailCount"], "SourceRef" -> <|"Title" -> subject|>|>]]], sessions]];
+
+(* ------------------------------------------------------------
+   §6.5  session summary → primer: LLM 非依存の決定的 digest とその primer item 化
+   ------------------------------------------------------------ *)
+
+iSVMailFirstProse[mail_Association, chars_Integer] := Module[
+  {ps = Select[SourceVaultParseMailParagraphs[Lookup[mail, "Body", ""]], #["Kind"] === "Prose" &]},
+  If[ps === {}, "", StringTake[StringReplace[ps[[1]]["Text"], {"\n" -> " ", "\r" -> ""}], UpTo[chars]]]];
+
+Options[SourceVaultBuildSessionDigest] = {"SurfaceIndex" -> None, "RefLabel" -> None,
+  "MaxMails" -> 8, "ParaChars" -> 120};
+SourceVaultBuildSessionDigest[session_Association, mails_List, OptionsPattern[]] := Module[
+  {byCounter, sidx = OptionValue["SurfaceIndex"], refLabel = OptionValue["RefLabel"],
+   maxMails = OptionValue["MaxMails"], paraChars = OptionValue["ParaChars"],
+   sessMails, subject, topicLabels, timeline, counters},
+  byCounter = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ mails];
+  sessMails = DeleteMissing[Lookup[byCounter, session["MailCounters"]]];
+  subject = session["Subject"];
+  topicLabels = If[AssociationQ[sidx],
+    SourceVaultTopicEnrichment[
+        StringRiffle[SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, " "],
+        sidx, "RefLabel" -> refLabel, "IncludeRelated" -> False]["TopicLabels"],
+    {}];
+  counters = Take[sessMails, UpTo[maxMails]];
+  timeline = Map[Function[m,
+    "#" <> ToString[Lookup[m, "Counter", "?"]] <> " " <>
+      StringReplace[Lookup[m, "From", ""], RegularExpression["\\s*<[^>]*>"] -> ""] <> ": " <>
+      iSVMailFirstProse[m, paraChars]], counters];
+  StringRiffle[Join[
+    {"[スレッド] " <> subject <> " (" <> ToString[session["MailCount"]] <> "通/" <> session["SessionKind"] <> ")",
+     If[topicLabels === {}, Nothing, "話題: " <> StringRiffle[topicLabels, ", "]]},
+    timeline], "\n"]];
+
+Options[SourceVaultBuildSessionPrimerItems] = {"SurfaceIndex" -> None, "RelationGraph" -> None,
+  "RefLabel" -> None, "Freshness" -> "Fresh"};
+SourceVaultBuildSessionPrimerItems[mails_List, sessions_List, OptionsPattern[]] := Module[
+  {byCounter, sidx = OptionValue["SurfaceIndex"], relGraph = OptionValue["RelationGraph"],
+   refLabel = OptionValue["RefLabel"], freshness = OptionValue["Freshness"]},
+  byCounter = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ mails];
+  Map[Function[sess,
+    Module[{sessMails, subject, digest, enr, topicLabels, authors, privInfo, priv, tags, importance},
+      sessMails = DeleteMissing[Lookup[byCounter, sess["MailCounters"]]];
+      If[sessMails === {}, Nothing,
+        subject = sess["Subject"];
+        digest = SourceVaultBuildSessionDigest[sess, mails, "SurfaceIndex" -> sidx, "RefLabel" -> refLabel];
+        enr = If[AssociationQ[sidx],
+          SourceVaultTopicEnrichment[
+            StringRiffle[SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, " "],
+            sidx, "RefLabel" -> refLabel, "RelationGraph" -> relGraph, "IncludeRelated" -> True], <||>];
+        topicLabels = Lookup[enr, "TopicLabels", {}];
+        authors = DeleteDuplicates[Lookup[#, "From", ""] & /@ sessMails];
+        privInfo = iSVOOPSListPrivacy[Lookup[#, "MlName", ""]] & /@ sessMails;
+        priv = Max[#["PrivacyLevel"] & /@ privInfo];
+        tags = DeleteDuplicates@Join[Flatten[#["Tags"] & /@ privInfo], topicLabels];
+        importance = Min[0.9, 0.3 + 0.06*sess["MailCount"]];  (* スレッド規模の決定的 proxy *)
+        <|"ObjectURI" -> "sv://mailsession/" <> StringDrop[sess["MailSessionId"], StringLength["svmailsession:"]],
+          "SourceVaultObjectId" -> sess["MailSessionId"], "Title" -> subject, "Summary" -> digest,
+          "Tags" -> tags, "Authors" -> authors,
+          "Signals" -> <|"EffectiveImportance" -> importance|>, "Freshness" -> freshness,
+          "PrivacyLevel" -> priv, "State" -> "Published",
+          "MailRefs" -> sess["MailRefs"], "SessionKind" -> sess["SessionKind"], "MailCount" -> sess["MailCount"]|>]]],
+    sessions]];
 
 End[];
 
