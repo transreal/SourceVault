@@ -676,6 +676,9 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultBuildTopicItemGraph[mails, opts]` | 段落 topic をノード、CoParagraph/QuoteTransition/SeedRelation を辺にした `SourceVaultTopicItemGraph`（§6.5）。 |
 | `SourceVaultBuildSessionChunks[mails, sessions, opts]` | session（スレッド）単位の検索 chunk。query がスレッド全体を引ける。private list（Under Ground）は §6.5.3 で PrivateML/NoCloudLLM 付与。 |
 | `SourceVaultBuildSessionDigest` / `…BuildSessionPrimerItems` | LLM 非依存の決定的スレッド要約と、その primer item 化（`SourceVaultPrimerSearch` で「スレッドの結論」を引く、§6.5）。 |
+| `SourceVaultOOPSEnsureLoaded[opts]` | OOPS コーパスの単一初期化（seed/quote/session を1発ロード、冪等）。`SourceVaultMailEnsureLoaded` 相当。 |
+| `SourceVaultOOPSSearchThreads` / `…Sessions` / `…Thread` / `…Status` | 初期化済みコーパスに対するスレッド検索・一覧・詳細（digest 付き）・状態。ClaudeEval 操作の土台。 |
+| `SourceVaultOOPSThreadGraph` / `…TopicGraphPlot` / `…ThreadView` / `…ThreadList` | 可視化（notebook）: topic graph 描画（色分け）・スレッド詳細（digest）・一覧（クリックで詳細）。 |
 | **サービス管理 (SourceVault_servicemanager)** | |
 | `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
 | `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |

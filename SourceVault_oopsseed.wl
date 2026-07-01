@@ -187,6 +187,31 @@ SourceVaultBuildSessionDigest::usage =
   "SourceVaultBuildSessionDigest[session, mails, opts] は LLM を使わない決定的なスレッド要約(digest)文字列を作る。" <>
   "Subject＋話題(topic ラベル)＋各メールの先頭 prose 段落のタイムライン。オプション \"SurfaceIndex\"/\"RefLabel\"/\"MaxMails\"(8)/\"ParaChars\"(120)。";
 
+SourceVaultOOPSEnsureLoaded::usage =
+  "SourceVaultOOPSEnsureLoaded[opts] は OOPS メール構造化・検索の単一初期化。seed 辞書/surface index/relation graph/" <>
+  "quote table を読み、指定メールファイルを parse し、quote edge と session を構築してメモリ状態 $svOOPSState に載せる(冪等)。" <>
+  "SourceVaultMailEnsureLoaded 相当。オプション \"MailFiles\"(All|{files}|\"oops 9805.txt\", 既定 All), " <>
+  "\"TableDir\"/\"MailDir\"(Automatic=$dropbox 由来), \"Force\"(既定 False)。戻り値は SourceVaultOOPSStatus[]。";
+SourceVaultOOPSStatus::usage =
+  "SourceVaultOOPSStatus[] は $svOOPSState の要約 <|Loaded, MailCount, SessionCount, TopicCount, Files, SessionIndexBuilt|> を返す。";
+SourceVaultOOPSSessions::usage =
+  "SourceVaultOOPSSessions[opts] は読み込んだ session を Dataset で返す(MailCount 降順)。オプション \"Limit\"(既定 30), \"MinMails\"(1)。";
+SourceVaultOOPSSearchThreads::usage =
+  "SourceVaultOOPSSearchThreads[query, opts] はスレッド(session)を検索して Dataset(Session/Subject/Kind/Mails/Score/Snippet)を返す。" <>
+  "初回は session 検索 index を lazy build。オプション \"Limit\"(既定10)。ClaudeEval からの「○○のスレッドを探して」等に対応。";
+SourceVaultOOPSThread::usage =
+  "SourceVaultOOPSThread[sessionId] は 1 スレッドの <|Session, Subject, SessionKind, MailCounters, Digest, TopicLabels, QuoteEdges|> を返す(digest は決定的要約)。";
+
+SourceVaultOOPSTopicGraphPlot::usage =
+  "SourceVaultOOPSTopicGraphPlot[topicItemGraph, opts] は SourceVaultTopicItemGraph を Graph 描画する。" <>
+  "edge を種別で色分け(CoParagraph=青/QuoteTransition=赤/SeedRelation=灰)、node サイズは支持段落数。オプション \"MaxNodes\"(既定15)。";
+SourceVaultOOPSThreadGraph::usage =
+  "SourceVaultOOPSThreadGraph[sessionId, opts] はそのスレッドの topic item graph を構築して描画する(SourceVaultOOPSTopicGraphPlot)。";
+SourceVaultOOPSThreadView::usage =
+  "SourceVaultOOPSThreadView[sessionId] は 1 スレッドの Subject/種別/話題/決定的 digest を Column で表示する。";
+SourceVaultOOPSThreadList::usage =
+  "SourceVaultOOPSThreadList[opts] は読み込んだスレッド一覧を Grid で表示する。Subject はボタンで、押すと SourceVaultOOPSThreadView を新規ノートブックで開く。オプション \"Limit\"(30), \"MinMails\"(1)。";
+
 SourceVaultBuildSessionPrimerItems::usage =
   "SourceVaultBuildSessionPrimerItems[mails, sessions, opts] は session を SourceVaultPrimerIndex の item にする(§6.5「session summary を primer に」)。" <>
   "各 item: Title=Subject / Summary=SourceVaultBuildSessionDigest / Tags=topic ラベル∪list tags / Authors / " <>
@@ -1164,6 +1189,159 @@ SourceVaultBuildSessionPrimerItems[mails_List, sessions_List, OptionsPattern[]] 
           "PrivacyLevel" -> priv, "State" -> "Published",
           "MailRefs" -> sess["MailRefs"], "SessionKind" -> sess["SessionKind"], "MailCount" -> sess["MailCount"]|>]]],
     sessions]];
+
+(* ------------------------------------------------------------
+   OOPS メール構造化・検索のユーティリティ層（SourceVaultMail... 相当の単一 init ＋操作）。
+   状態は $svOOPSState にキャッシュ。ClaudeEval からの各種操作の土台。
+   ------------------------------------------------------------ *)
+
+If[! AssociationQ[SourceVault`$svOOPSState], SourceVault`$svOOPSState = <||>];
+
+Options[SourceVaultOOPSEnsureLoaded] = {"TableDir" -> Automatic, "MailDir" -> Automatic,
+  "MailFiles" -> All, "Force" -> False};
+SourceVaultOOPSEnsureLoaded[OptionsPattern[]] := Module[
+  {tableDir, mailDir, mailFiles, files, dict, sidx, refLabel, relGraph, qt, mails, edges, sessions},
+  If[TrueQ[SourceVault`$svOOPSState["Loaded"]] && ! TrueQ[OptionValue["Force"]],
+    Return[SourceVaultOOPSStatus[]]];
+  tableDir = OptionValue["TableDir"] /. Automatic ->
+    FileNameJoin[{Global`$dropbox, "udb", "oops-ml-archive", "oops-ml-archive", "db", "table"}];
+  mailDir = OptionValue["MailDir"] /. Automatic ->
+    FileNameJoin[{Global`$dropbox, "udb", "oops-ml-archive", "oops-ml-archive", "oops-ml-generate"}];
+  If[! DirectoryQ[tableDir] || ! DirectoryQ[mailDir],
+    Return[Failure["OOPSArchiveNotFound", <|"MessageTemplate" -> "OOPS archive が見つかりません: " <> tableDir|>]]];
+  dict = SourceVaultImportOOPSSeedDictionary[FileNameJoin[{tableDir, "item-name.index"}]]["Dictionary"];
+  sidx = SourceVaultBuildSurfaceIndex[dict];
+  refLabel = Association[(#["TopicItemRef"] -> #["CanonicalLabel"]) & /@ dict["Entries"]];
+  relGraph = SourceVaultBuildOOPSRelationGraph[tableDir]["RelationGraph"];
+  qt = SourceVaultImportOOPSQuoteTable[FileNameJoin[{tableDir, "quote-table.index"}]]["Quotes"];
+  mailFiles = OptionValue["MailFiles"];
+  files = Which[
+    mailFiles === All, FileNames["oops*.txt", mailDir],
+    ListQ[mailFiles], Select[If[FileExistsQ[#], #, FileNameJoin[{mailDir, #}]] & /@ mailFiles, FileExistsQ],
+    StringQ[mailFiles], Select[{If[FileExistsQ[mailFiles], mailFiles, FileNameJoin[{mailDir, mailFiles}]]}, FileExistsQ],
+    True, FileNames["oops*.txt", mailDir]];
+  mails = Flatten[SourceVaultParseOOPSMailFile[#]["Mails"] & /@ files];
+  edges = SourceVaultBuildMailQuoteEdges[mails, "QuoteTable" -> qt];
+  sessions = SourceVaultBuildMailSessions[mails, edges];
+  SourceVault`$svOOPSState = <|"Loaded" -> True, "TableDir" -> tableDir, "MailDir" -> mailDir,
+    "Files" -> files, "Dict" -> dict, "SurfaceIndex" -> sidx, "RefLabel" -> refLabel,
+    "RelationGraph" -> relGraph, "QuoteTable" -> qt, "Mails" -> mails,
+    "QuoteEdges" -> edges, "Sessions" -> sessions, "SessionIndex" -> Missing["NotBuilt"]|>;
+  SourceVaultOOPSStatus[]];
+
+SourceVaultOOPSStatus[] := If[! TrueQ[SourceVault`$svOOPSState["Loaded"]],
+  <|"Loaded" -> False|>,
+  <|"Loaded" -> True, "MailCount" -> Length[SourceVault`$svOOPSState["Mails"]],
+    "SessionCount" -> Length[SourceVault`$svOOPSState["Sessions"]],
+    "TopicCount" -> Length[SourceVault`$svOOPSState["Dict"]["Entries"]],
+    "Files" -> Length[SourceVault`$svOOPSState["Files"]],
+    "SessionIndexBuilt" -> ! MissingQ[SourceVault`$svOOPSState["SessionIndex"]]|>];
+
+Options[SourceVaultOOPSSessions] = {"Limit" -> 30, "MinMails" -> 1};
+SourceVaultOOPSSessions[OptionsPattern[]] := (SourceVaultOOPSEnsureLoaded[];
+  Dataset[<|"Session" -> #["MailSessionId"], "Subject" -> #["Subject"], "Kind" -> #["SessionKind"],
+      "Mails" -> #["MailCount"]|> & /@
+    Take[ReverseSortBy[Select[SourceVault`$svOOPSState["Sessions"], #["MailCount"] >= OptionValue["MinMails"] &],
+      #["MailCount"] &], UpTo[OptionValue["Limit"]]]]);
+
+(* session 検索 index を lazy build (内部 release context oops-corpus) *)
+iSVOOPSEnsureSessionIndex[] := Module[{st = SourceVault`$svOOPSState, chunks, idx},
+  If[! MissingQ[st["SessionIndex"]], Return[st["SessionIndex"]]];
+  chunks = SourceVaultBuildSessionChunks[st["Mails"], st["Sessions"],
+    "SurfaceIndex" -> st["SurfaceIndex"], "RelationGraph" -> st["RelationGraph"], "RefLabel" -> st["RefLabel"]];
+  If[! MemberQ[SourceVaultListReleaseContexts[], "oops-corpus"],
+    SourceVaultRegisterReleaseContext["oops-corpus", <|"MaxPrivacyLevel" -> 1.0|>]];
+  idx = "oops-corpus-bm25-" <> StringTake[StringDelete[CreateUUID[], "-"], 8];
+  SourceVaultBuildProjectionIndex["oops-corpus", "Chunks" -> chunks,
+    "IndexKind" -> "KeywordBM25V1", "EntityDictionary" -> st["Dict"], "IndexId" -> idx];
+  SourceVault`$svOOPSState["SessionIndex"] = idx;
+  idx];
+
+Options[SourceVaultOOPSSearchThreads] = {"Limit" -> 10};
+SourceVaultOOPSSearchThreads[query_String, OptionsPattern[]] := Module[{idx, res},
+  SourceVaultOOPSEnsureLoaded[];
+  idx = iSVOOPSEnsureSessionIndex[];
+  res = SourceVaultSearch[query, "ReleaseContext" -> "oops-corpus", "Index" -> idx, "Limit" -> OptionValue["Limit"]];
+  Dataset[<|"Session" -> #["ChunkId"], "Subject" -> Lookup[Lookup[#, "Citation", <||>], "Title", ""],
+      "Score" -> Round[#["Score"], 0.01],
+      "Snippet" -> StringTake[StringReplace[Lookup[#, "Snippet", ""], {"\n" -> " ", "\r" -> ""}], UpTo[80]]|> & /@ res]];
+
+SourceVaultOOPSThread[sessionId_String] := Module[{st, sess, dig, enr},
+  SourceVaultOOPSEnsureLoaded[]; st = SourceVault`$svOOPSState;
+  sess = SelectFirst[st["Sessions"], #["MailSessionId"] === sessionId &, Missing["SessionNotFound"]];
+  If[MissingQ[sess], Return[sess]];
+  dig = SourceVaultBuildSessionDigest[sess, st["Mails"], "SurfaceIndex" -> st["SurfaceIndex"], "RefLabel" -> st["RefLabel"]];
+  enr = SourceVaultTopicEnrichment[
+    StringRiffle[SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@
+      DeleteMissing[Lookup[Association[(#["Counter"] -> #) & /@ st["Mails"]], sess["MailCounters"]]], " "],
+    st["SurfaceIndex"], "RefLabel" -> st["RefLabel"], "IncludeRelated" -> False];
+  <|"Session" -> sessionId, "Subject" -> sess["Subject"], "SessionKind" -> sess["SessionKind"],
+    "MailCounters" -> sess["MailCounters"], "Digest" -> dig, "TopicLabels" -> enr["TopicLabels"],
+    "QuoteEdges" -> Select[st["QuoteEdges"],
+      MemberQ["sv://mail/" <> ToString[#] & /@ sess["MailCounters"], #["FromMailRef"]] &]|>];
+
+(* ------------------------------------------------------------
+   可視化: topic item graph 描画 / スレッド一覧 / スレッド詳細ビュー
+   ------------------------------------------------------------ *)
+
+Options[SourceVaultOOPSTopicGraphPlot] = {"MaxNodes" -> 15};
+SourceVaultOOPSTopicGraphPlot[topicGraph_Association, OptionsPattern[]] := Module[
+  {nodes, topNodes, topRefs, labelOf, supOf, colorOf, gEdges, edgeStyles, edges},
+  nodes = Lookup[topicGraph, "Nodes", {}];
+  topNodes = Take[ReverseSortBy[nodes, Length[#["SupportParagraphs"]] &], UpTo[OptionValue["MaxNodes"]]];
+  topRefs = #["TopicItemRef"] & /@ topNodes;
+  labelOf = Association[(#["TopicItemRef"] -> #["Label"]) & /@ topNodes];
+  supOf = Association[(#["TopicItemRef"] -> Length[#["SupportParagraphs"]]) & /@ topNodes];
+  colorOf = <|"CoParagraph" -> RGBColor[0.2, 0.4, 0.8], "QuoteTransition" -> RGBColor[0.85, 0.3, 0.2],
+    "SeedRelation" -> GrayLevel[0.6]|>;
+  edges = DeleteDuplicatesBy[
+    Select[Lookup[topicGraph, "Edges", {}], MemberQ[topRefs, #["From"]] && MemberQ[topRefs, #["To"]] &],
+    {#["From"], #["To"], #["EdgeKind"]} &];
+  gEdges = DirectedEdge[#["From"], #["To"]] & /@ edges;
+  edgeStyles = MapThread[#1 -> Directive[Lookup[colorOf, #2["EdgeKind"], Black], Opacity[0.55]] &, {gEdges, edges}];
+  Graph[topRefs, gEdges,
+    VertexLabels -> ((# -> Placed[Lookup[labelOf, #, #], Center]) & /@ topRefs),
+    VertexSize -> ((# -> 0.2 + 0.06*Lookup[supOf, #, 1]) & /@ topRefs),
+    VertexStyle -> LightYellow, EdgeStyle -> edgeStyles,
+    GraphLayout -> "SpringElectricalEmbedding", ImageSize -> 600,
+    PlotLabel -> Style["topic graph (青=CoParagraph 赤=QuoteTransition 灰=SeedRelation)", 10]]];
+
+Options[SourceVaultOOPSThreadGraph] = {"MaxNodes" -> 15};
+SourceVaultOOPSThreadGraph[sessionId_String, OptionsPattern[]] := Module[{st, sess, sessMails, byC, qe, g},
+  SourceVaultOOPSEnsureLoaded[]; st = SourceVault`$svOOPSState;
+  sess = SelectFirst[st["Sessions"], #["MailSessionId"] === sessionId &, Missing["SessionNotFound"]];
+  If[MissingQ[sess], Return[sess]];
+  byC = Association[(#["Counter"] -> #) & /@ st["Mails"]];
+  sessMails = DeleteMissing[Lookup[byC, sess["MailCounters"]]];
+  qe = SourceVaultBuildMailQuoteEdges[sessMails, "QuoteTable" -> st["QuoteTable"]];
+  g = SourceVaultBuildTopicItemGraph[sessMails, "SurfaceIndex" -> st["SurfaceIndex"],
+    "RelationGraph" -> st["RelationGraph"], "RefLabel" -> st["RefLabel"], "QuoteEdges" -> qe];
+  SourceVaultOOPSTopicGraphPlot[g, "MaxNodes" -> OptionValue["MaxNodes"]]];
+
+SourceVaultOOPSThreadView[sessionId_String] := Module[{det = SourceVaultOOPSThread[sessionId]},
+  If[MissingQ[det], Return[det]];
+  Column[{
+    Style[det["Subject"], Bold, 16],
+    Style[Row[{det["SessionKind"], " — ", Length[det["MailCounters"]], " 通 (",
+      Row[det["MailCounters"], ", "], ")"}], GrayLevel[0.4]],
+    Style["話題: " <> StringRiffle[Take[det["TopicLabels"], UpTo[12]], ", "], GrayLevel[0.3]],
+    Style["スレッド要約:", Bold],
+    Framed[Style[det["Digest"], 11], FrameStyle -> LightGray, Background -> GrayLevel[0.97]]},
+    Spacings -> 1]];
+
+Options[SourceVaultOOPSThreadList] = {"Limit" -> 30, "MinMails" -> 1};
+SourceVaultOOPSThreadList[OptionsPattern[]] := Module[{sess},
+  SourceVaultOOPSEnsureLoaded[];
+  sess = Take[ReverseSortBy[
+    Select[SourceVault`$svOOPSState["Sessions"], #["MailCount"] >= OptionValue["MinMails"] &],
+    #["MailCount"] &], UpTo[OptionValue["Limit"]]];
+  Grid[Prepend[
+    Map[Function[s, {
+      Button[Style[s["Subject"], 12, RGBColor[0.1, 0.3, 0.7]],
+        CreateDocument[SourceVaultOOPSThreadView[s["MailSessionId"]]], Appearance -> "Frameless"],
+      s["SessionKind"], s["MailCount"]}], sess],
+    Style[#, Bold] & /@ {"Subject (クリックで詳細)", "Kind", "通数"}],
+    Frame -> All, Alignment -> {Left, Center}, Background -> {None, {LightBlue, None}}]];
 
 End[];
 

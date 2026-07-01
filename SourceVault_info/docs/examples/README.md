@@ -13,6 +13,7 @@
 |---|---|
 | [**search_foundation_example.md**](search_foundation_example.md) | **OOPS 非依存**の検索基盤。合成データだけで動く、正規化 / BM25 / release gate / entity OR-match / revocation / mining primer / KG。OOPS メールを一切ロードしない状態で使える。**0. 実運用シナリオ**→基本編→中級編→応用編。 |
 | [**oops_example.md**](oops_example.md) | **OOPS を用いた**例。seed 辞書取り込み・表記ゆれ回復・MIME 復号・段落 auto-tag・新トピック育成・seed→検索の接続（本文に無い関連トピックでヒット）・OOPS relation の KG。**0. 実運用シナリオ**→基本編→中級編→応用編。 |
+| [**mail_structuring_example.md**](mail_structuring_example.md) | **メール構造化・検索（§6.5）**。引用グラフ・スレッド（session）・明示トピック（◎/○/・, TopicRole）・topic item graph・**スレッド単位の検索**・スレッド要約 primer（結論探し）・私的リストの gate（§6.5.3 privacy）。基本編→中級編→応用編。 |
 
 この 2 分割は「OOPS メールをロードしなくても使える検索基盤」と「OOPS seed を活かす応用」を分けたものです。前者だけで release gate 付き日本語 BM25 検索・primer・KG が使え、後者で seed オントロジによる精度向上が加わります。
 

@@ -170,6 +170,48 @@ Options: `"SurfaceIndex"`（話題抽出用）, `"RefLabel"`, `"MaxMails" -> 8`,
 session を `SourceVaultPrimerIndex` の item にする（§6.5「session summary を primer に」）。各 item は `Title` = Subject、`Summary` = `SourceVaultBuildSessionDigest`、`Tags` = topic ラベル ∪ list tags（§6.5.3）、`Authors`、`Signals -> <|"EffectiveImportance" -> _|>`（`Min[0.9, 0.3 + 0.06·MailCount]` = スレッド規模の決定的 proxy）、`PrivacyLevel` / `Freshness`。これを `SourceVaultBuildPrimerIndex` の `"Items"` に渡すと、`SourceVaultPrimerSearch` が**スレッドを digest 付きで**引ける（大きいスレッドほど importance で上位）。「日程・事項の結論探し」query 向け。
 Options: `"SurfaceIndex"`, `"RelationGraph"`, `"RefLabel"`, `"Freshness" -> "Fresh"`
 
+## OOPS メール utility 層（単一 init ＋操作）
+
+`SourceVaultMailEnsureLoaded`（ライブ IMAP mail store）に相当する、OOPS コーパス用のワンショット初期化と操作関数。状態は `SourceVault\`$svOOPSState` にキャッシュされる。ClaudeEval からの各種操作（「○○のスレッドを探して」等）の土台。
+
+### SourceVaultOOPSEnsureLoaded[opts] → Association
+OOPS メール構造化・検索を 1 発で初期化する（冪等）。seed 辞書 / surface index / relation graph / quote table を読み、指定メールファイルを parse し、quote edge と session を構築して `$svOOPSState` に載せる。
+Options: `"MailFiles" -> All`（`All` / `{"oops 9805.txt", …}` / 単一文字列）, `"TableDir"` / `"MailDir" -> Automatic`（`Global\`$dropbox` の OOPS archive から導出）, `"Force" -> False`。戻り値は `SourceVaultOOPSStatus[]`。
+
+### SourceVaultOOPSStatus[] → Association
+`<|"Loaded", "MailCount", "SessionCount", "TopicCount", "Files", "SessionIndexBuilt"|>`。
+
+### SourceVaultOOPSSessions[opts] → Dataset
+読み込んだ session を `<|"Session", "Subject", "Kind", "Mails"|>` の Dataset（MailCount 降順）で返す。Options: `"Limit" -> 30`, `"MinMails" -> 1`。
+
+### SourceVaultOOPSSearchThreads[query, opts] → Dataset
+スレッド（session）を検索して `<|"Session", "Subject", "Score", "Snippet"|>` の Dataset を返す。初回は session 検索 index を内部 release context `oops-corpus` に lazy build する。Options: `"Limit" -> 10`。
+
+### SourceVaultOOPSThread[sessionId] → Association
+1 スレッドの詳細 `<|"Session", "Subject", "SessionKind", "MailCounters", "Digest"（決定的要約）, "TopicLabels", "QuoteEdges"|>`。
+
+```mathematica
+SourceVaultOOPSEnsureLoaded["MailFiles" -> "oops 9805.txt"]   (* 単一 init *)
+SourceVaultOOPSSearchThreads["FireWire"]                       (* スレッド検索 *)
+SourceVaultOOPSThread["svmailsession:4431-4449"]["Digest"]     (* スレッド要約 *)
+```
+
+## 可視化（ノートブック表示）
+
+utility 層の上に載る、ノートブック向けの表示関数。
+
+### SourceVaultOOPSTopicGraphPlot[topicItemGraph, opts] → Graph
+`SourceVaultBuildTopicItemGraph` の結果を `Graph` として描画する。edge を種別で色分け（**CoParagraph=青 / QuoteTransition=赤 / SeedRelation=灰**）、node サイズは支持段落数、支持数 top-N node（`"MaxNodes" -> 15`）に絞る。
+
+### SourceVaultOOPSThreadGraph[sessionId, opts] → Graph
+そのスレッドの topic item graph を構築して `SourceVaultOOPSTopicGraphPlot` で描画する（FireWire 等の中心トピックが大きく出る）。
+
+### SourceVaultOOPSThreadView[sessionId] → Column
+1 スレッドの Subject / 種別 / 通数 / 話題 / 決定的 digest を `Column` + `Framed` で表示する。
+
+### SourceVaultOOPSThreadList[opts] → Grid
+読み込んだスレッド一覧を `Grid` で表示する。`Subject` はボタンで、押すと `SourceVaultOOPSThreadView` を新規ノートブックで開く。Options: `"Limit" -> 30`, `"MinMails" -> 1`。
+
 ## 利用例
 
 ```mathematica
