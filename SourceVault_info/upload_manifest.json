@@ -20,7 +20,8 @@
 		"SourceVault_diagnostics.wl",
 		"SourceVault_lexical.wl",
 		"SourceVault_oopsseed.wl",
-		"SourceVault_mailstructure.wl"
+		"SourceVault_mailstructure.wl",
+		"SourceVault_searchview.wl"
 	],
 	"directories":[
 		"SourceVault_info",

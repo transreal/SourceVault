@@ -14815,7 +14815,7 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
         Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
       {"SourceVault_core.wl", "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
-       "SourceVault_mailstructure.wl",
+       "SourceVault_mailstructure.wl", "SourceVault_searchview.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_workflowregistry.wl",
        "SourceVault_workflowcatalog.wl"}]]];
