@@ -89,6 +89,23 @@ BuildSearchIndex の結果(or IndexId 文字列)で release-gate 付き検索(`S
 **§9 current session の結論と historical reference を分離**した digest。本 session の timeline を `CurrentDigest` に、`CrossSessionReferences`(EvidenceCitation/AnnualEventReuse/TemplateReuse/ForwardedContext) を `HistoricalReferences`(Role/Subject/Excerpt/ToSession) に分ける。過去参照を current の結論本文に混ぜない。
 戻り値: `<|"SessionId", "Subject", "MailCount", "Topics", "CurrentDigest", "HistoricalReferences"|>`。Options: `"ParaChars"`(120), `"MaxMails"`(8)。
 
+## MCP 統合 (§9b)
+
+一般メール構造化を MCP tool として公開し、Claude Code / LM Studio 等からスレッド検索・digest 取得できる。domain 関数は本ファイル、tool 定義/handler は `SourceVault_mcp.wl`（OOPS と同じ分離）。
+
+- `$svMailStructMCPScope`（既定 `{"univ", "202606"}`）= 対象 mbox/period（bounded scope）。
+- `SourceVaultMailStructEnsureIndex[opts]` — scope のメールをロード → StructureMail → BM25 index を **cloud PrivacyScope** で lazy build し `$svMailStructState` にキャッシュ（冪等）。opts `"Rebuild"`(False), `"Limit"`(200)。
+- `SourceVaultMailStructSetIndex[st, idxInfo, scope]` — 既存 structure から直接キャッシュ（テスト/明示ビルド）。
+- `SourceVaultMailStructSearchThreads[query, opts]` — キャッシュ index を検索し `{Session, Subject, Score, Snippet}` を返す。opts `"Limit"`(10), `"CloudSafe"`(True)。
+- `SourceVaultMailStructThread[sessionId, opts]` — 1 session の current/historical digest。私的メールを含む session は `Released -> False`。opts `"CloudSafe"`(True)。
+
+**MCP tools**（`sourcevault_mail_*`, いずれも CloudSafe=`mailstruct-cloud` で私的/第三者メールを gate）:
+- `sourcevault_mail_status` — ロード＋状態（mailCount/sessionCount/vocabSize/indexId）。
+- `sourcevault_mail_search_threads` — query → thread 行。
+- `sourcevault_mail_thread` — session id → digest（current/historical 分離）。私的 session は `Released:false`。
+
+**CloudSafe 二重防御**: (1) 私的 session chunk は cloud index の build-time release gate で除外され検索でヒットしない、(2) session id を直接渡しても `SourceVaultMailStructThread` が私的メールを含む session を `Released:false` で返す。
+
 ## 使用例（統合パイプライン → 検索 / digest）
 
 ```wolfram

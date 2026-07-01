@@ -98,6 +98,19 @@ SourceVaultMailStructSessionDigest::usage =
   "戻り値 <|SessionId, Subject, MailCount, Topics, CurrentDigest, HistoricalReferences|>。" <>
   "ThreadContinuation の timeline を CurrentDigest に、CrossSessionReferences(EvidenceCitation/AnnualEventReuse/TemplateReuse) を HistoricalReferences に。opts \"ParaChars\"(120), \"MaxMails\"(8)。";
 
+(* ---- MCP 統合用 domain 関数 (§9b。thin wrapper は SourceVault_mcp) ---- *)
+SourceVaultMailStructEnsureIndex::usage =
+  "SourceVaultMailStructEnsureIndex[opts] は $svMailStructMCPScope({mbox, period}) のメールをロードし StructureMail + BM25 index を " <>
+  "cloud PrivacyScope で lazy build して $svMailStructState にキャッシュする (冪等)。opts \"Rebuild\"(False), \"Limit\"(200)。";
+SourceVaultMailStructSetIndex::usage =
+  "SourceVaultMailStructSetIndex[structResult, indexInfo, scope] はキャッシュを与えた structure から直接作る (テスト/明示ビルド用)。";
+SourceVaultMailStructSearchThreads::usage =
+  "SourceVaultMailStructSearchThreads[query, opts] はキャッシュした index を release-gate 付きで検索し thread 行 {Session, Subject, Score, Snippet} を返す。" <>
+  "opts \"Limit\"(10), \"CloudSafe\"(True=mailstruct-cloud で私的メールを gate)。";
+SourceVaultMailStructThread::usage =
+  "SourceVaultMailStructThread[sessionId, opts] はキャッシュから 1 session の詳細 (current/historical digest) を返す。" <>
+  "CloudSafe->True で私的メールを含む session は Released->False。opts \"CloudSafe\"(True)。";
+
 Begin["`MailStructPrivate`"]
 
 (* ---- vocab コンストラクタ (r3: privacy scope / profile digest / build id 付き) ---- *)
@@ -932,6 +945,76 @@ SourceVaultMailStructSessionDigest[session_Association, st_Association, OptionsP
        {"[スレッド] " <> subject <> " (" <> ToString[Lookup[session, "MailCount", Length[sm]]] <> "通)",
         If[topicLabels === {}, Nothing, "話題: " <> StringRiffle[topicLabels, ", "]]}, timeline], "\n"],
     "HistoricalReferences" -> historical|>];
+
+(* ================= MCP 統合 domain (§9b) ================= *)
+
+If[! AssociationQ[$svMailStructState], $svMailStructState = <|"Loaded" -> False|>];
+If[! ListQ[$svMailStructMCPScope], $svMailStructMCPScope = {"univ", "202606"}];
+$svMSCloudScope := <|"ReleaseContext" -> "mailstruct-cloud", "MaxPrivacyLevel" -> 1.0,
+   "DenyTags" -> {"NoCloudLLM", "NoPublicExport", "PrivateML", "ThirdPartyContent"}|>;
+$svMSCloudDenyTags := {"NoCloudLLM", "NoPublicExport", "PrivateML", "ThirdPartyContent"};
+
+SourceVaultMailStructSetIndex[st_Association, idxInfo_Association, scope_: Automatic] := (
+  $svMailStructState = <|
+    "Loaded" -> True,
+    "Scope" -> If[scope === Automatic, $svMailStructMCPScope, scope],
+    "Structure" -> st, "IndexInfo" -> idxInfo,
+    "SessionById" -> Association[(#["MailSessionId"] -> #) & /@ Lookup[st, "Sessions", {}]],
+    "MailCount" -> Length[Lookup[st, "Records", {}]],
+    "SessionCount" -> Length[Lookup[st, "Sessions", {}]],
+    "VocabSize" -> Lookup[Lookup[st, "Report", <||>], "VocabSize", 0],
+    "IndexId" -> Lookup[idxInfo, "IndexId", Missing[]]|>;
+  $svMailStructState);
+
+Options[SourceVaultMailStructEnsureIndex] = {"Rebuild" -> False, "Limit" -> 200};
+SourceVaultMailStructEnsureIndex[OptionsPattern[]] := Module[
+  {mbox, period, records, st, idxInfo},
+  If[TrueQ[Lookup[$svMailStructState, "Loaded", False]] && ! TrueQ[OptionValue["Rebuild"]],
+    Return[$svMailStructState]];
+  {mbox, period} = Take[$svMailStructMCPScope, 2];
+  Quiet@Check[SourceVault`SourceVaultMailEnsureLoaded[mbox, period], $Failed];
+  records = Quiet@Check[SourceVaultMailRecordsForStructuring["MBox" -> mbox,
+     "ReleaseContext" -> "mailstruct-cloud", "Limit" -> OptionValue["Limit"]], {}];
+  If[! ListQ[records] || records === {}, Return[<|"Loaded" -> False, "Reason" -> "NoRecords"|>]];
+  st = SourceVaultStructureMail[records, "PrivacyScope" -> $svMSCloudScope,
+     "QuotePass" -> "Full", "OwnerRef" -> "owner:mcp"];
+  idxInfo = SourceVaultMailStructBuildSearchIndex[st, "ReleaseContext" -> "mailstruct-cloud"];
+  SourceVaultMailStructSetIndex[st, idxInfo, {mbox, period}]];
+
+Options[SourceVaultMailStructSearchThreads] = {"Limit" -> 10, "CloudSafe" -> True};
+SourceVaultMailStructSearchThreads[query_String, OptionsPattern[]] := Module[{res, ctx, rows},
+  If[! TrueQ[Lookup[$svMailStructState, "Loaded", False]], Return[{}]];
+  ctx = If[TrueQ[OptionValue["CloudSafe"]], "mailstruct-cloud", "mailstruct-local"];
+  res = SourceVaultMailStructSearch[query, $svMailStructState["IndexInfo"],
+     "ReleaseContext" -> ctx, "Limit" -> OptionValue["Limit"]];
+  rows = If[Head[res] === Dataset, Normal[res], If[ListQ[res], res, {}]];
+  Function[r, <|"Session" -> Lookup[r, "ChunkId", ""],
+     "Subject" -> Lookup[Lookup[r, "Citation", <||>], "Title", ""],
+     "Score" -> Round[Lookup[r, "Score", 0.], 0.01],
+     "Snippet" -> StringTake[StringReplace[Lookup[r, "Snippet", ""], {"\n" -> " ", "\r" -> ""}], UpTo[80]]|>] /@ rows];
+
+(* session が cloud gate を越える私的メールを含むか (defense-in-depth) *)
+iSVMSSessionCloudPrivateQ[sess_Association, st_Association] := Module[{recByRef, sm},
+  recByRef = Association[(#["MailRef"] -> #) & /@ Lookup[st, "Records", {}]];
+  sm = DeleteMissing[Lookup[recByRef, Lookup[sess, "MailRefs", {}]]];
+  AnyTrue[sm, Function[m,
+    With[{p = iSVMSPrivacyLevel[m]}, p > 0.99] ||
+    Intersection[Lookup[m, "Tags", {}], $svMSCloudDenyTags] =!= {}]]];
+
+Options[SourceVaultMailStructThread] = {"CloudSafe" -> True};
+SourceVaultMailStructThread[sessionId_String, OptionsPattern[]] := Module[{st, sess, recByRef, sm, dig},
+  If[! TrueQ[Lookup[$svMailStructState, "Loaded", False]], Return[Missing["NotLoaded"]]];
+  st = $svMailStructState["Structure"];
+  sess = Lookup[$svMailStructState["SessionById"], sessionId, Missing[]];
+  If[! AssociationQ[sess], Return[Missing["SessionNotFound"]]];
+  recByRef = Association[(#["MailRef"] -> #) & /@ Lookup[st, "Records", {}]];
+  sm = DeleteMissing[Lookup[recByRef, Lookup[sess, "MailRefs", {}]]];
+  If[TrueQ[OptionValue["CloudSafe"]] && iSVMSSessionCloudPrivateQ[sess, st],
+    Return[<|"Session" -> sessionId, "Subject" -> iSVMSSessionSubject[sm],
+       "MailCount" -> Lookup[sess, "MailCount", Length[sm]],
+       "Released" -> False, "Why" -> {"PrivateMail"}|>]];
+  dig = SourceVaultMailStructSessionDigest[sess, st];
+  Append[dig, "Released" -> True]];
 
 End[]
 

@@ -3070,6 +3070,22 @@ SourceVaultMCPTools[] := {
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
         "session" -> <|"type" -> "string", "description" -> "The svmailsession:... id."|>|>,
+      "required" -> {"session"}|>|>,
+  <|"name" -> "sourcevault_mail_status",
+    "description" -> "Load (idempotent) and report the general-mail structuring state for the bounded scope ($svMailStructMCPScope = {mbox, period}): mailCount, sessionCount (threads), vocabSize, indexId. General mail (e.g. university/univ inbox) is structured into reply/quote sessions with topic items. Call once before searching. Private mail is gated (cloud-safe).",
+    "inputSchema" -> <|"type" -> "object", "properties" -> <||>, "required" -> {}|>|>,
+  <|"name" -> "sourcevault_mail_search_threads",
+    "description" -> "Search general-mail threads (quote/subject-connected mail sessions) by query (Japanese or English). Returns session id, subject, score, snippet. Use sourcevault_mail_thread for a session's digest. Private/third-party mail is excluded (cloud-safe release gate).",
+    "inputSchema" -> <|"type" -> "object",
+      "properties" -> <|
+        "query" -> <|"type" -> "string", "description" -> "Search query."|>,
+        "limit" -> <|"type" -> "integer", "description" -> "Max threads (default 10)."|>|>,
+      "required" -> {"query"}|>|>,
+  <|"name" -> "sourcevault_mail_thread",
+    "description" -> "Get one general-mail session detail: subject, mail count, topics, a deterministic digest that separates the CURRENT session conclusion from HISTORICAL references (past mails cited as evidence / template / annual reuse). session id looks like 'svmailsess:...' (from sourcevault_mail_search_threads). Private sessions return Released=false.",
+    "inputSchema" -> <|"type" -> "object",
+      "properties" -> <|
+        "session" -> <|"type" -> "string", "description" -> "The svmailsess:... id."|>|>,
       "required" -> {"session"}|>|>
   };
 
@@ -3307,6 +3323,42 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
             iMCPJSONText[Append[
               KeyTake[o, {"Session", "Subject", "SessionKind", "MailCounters", "Digest", "TopicLabels"}],
               "MailCount" -> Length[Lookup[o, "MailCounters", {}]]]]]],
+    "sourcevault_mail_status",
+      Module[{o},
+        o = Quiet @ Check[SourceVault`SourceVaultMailStructEnsureIndex[], $Failed];
+        iSVRecordToolCall["sourcevault_mail_status", args, o];
+        If[AssociationQ[o] && TrueQ[Lookup[o, "Loaded", False]],
+          iMCPJSONText[KeyTake[o, {"Loaded", "Scope", "MailCount", "SessionCount", "VocabSize", "IndexId"}]],
+          iMCPError["General-mail structuring load failed (check $svMailStructMCPScope / mail shard loaded)."]]],
+    "sourcevault_mail_search_threads",
+      Module[{load, rows},
+        load = Quiet @ Check[SourceVault`SourceVaultMailStructEnsureIndex[], $Failed];
+        If[! (AssociationQ[load] && TrueQ[Lookup[load, "Loaded", False]]),
+          iMCPError["General-mail structuring load failed (check $svMailStructMCPScope / mail shard loaded)."],
+          (* CloudSafe: 私的/第三者メールを release gate する *)
+          rows = Quiet @ Check[
+            SourceVault`SourceVaultMailStructSearchThreads[
+              ToString @ Lookup[args, "query", ""],
+              "Limit" -> With[{n = Lookup[args, "limit", 10]}, If[IntegerQ[n] && n > 0, n, 10]],
+              "CloudSafe" -> True], {}];
+          rows = If[ListQ[rows], rows, {}];
+          iSVRecordToolCall["sourcevault_mail_search_threads", args, <|"Count" -> Length[rows]|>];
+          iMCPJSONText[<|"count" -> Length[rows], "threads" -> rows|>]]],
+    "sourcevault_mail_thread",
+      Module[{sid, o},
+        sid = ToString @ Lookup[args, "session", ""];
+        Quiet @ Check[SourceVault`SourceVaultMailStructEnsureIndex[], Null];
+        (* CloudSafe: 私的メールを含む session は digest を出さず Released->False *)
+        o = Quiet @ Check[SourceVault`SourceVaultMailStructThread[sid, "CloudSafe" -> True], $Failed];
+        iSVRecordToolCall["sourcevault_mail_thread", args, <|"Session" -> sid, "Found" -> AssociationQ[o]|>];
+        Which[
+          ! AssociationQ[o], iMCPError["Session not found: " <> sid],
+          TrueQ[! Lookup[o, "Released", True]],
+            iMCPJSONText[<|"Session" -> sid, "Subject" -> Lookup[o, "Subject", ""],
+              "Released" -> False, "Why" -> Lookup[o, "Why", {"PrivateMail"}]|>],
+          True,
+            iMCPJSONText[KeyTake[o, {"SessionId", "Subject", "MailCount", "Topics",
+              "CurrentDigest", "HistoricalReferences", "Released"}]]]],
     _,
       iMCPError["Unknown tool: " <> name]
   ]];
