@@ -68,6 +68,36 @@ SourceVaultMineMailSessions::usage =
   "EvidenceCitation/AnnualEventReuse/TemplateReuse は merge せず cross-session reference として残す。" <>
   "戻り値 {<|MailSessionId, MailRefs, SessionGraphRef, CrossSessionReferences, ...|>...}。opts \"MaxAmbiguityForMerge\"(2), \"MergeConfidenceMin\"(0.5)。";
 
+(* ---- Inc 4: 段落 topic 付与 + topic graph + 統合 (§7-§9, r3) ---- *)
+SourceVaultBuildMailTopicGraph::usage =
+  "SourceVaultBuildMailTopicGraph[relationGraph, topicsByMail, vocab, opts] は relation graph 駆動で " <>
+  "auto topic 間の ObservedRelationGraph を作る (§8)。RelationRole を topic transition に写像 " <>
+  "(ThreadContinuation->QuoteTransition / EvidenceCitation・AnnualEventReuse->HistoricalReferenceTransition / " <>
+  "TemplateReuse->TemplateReuseTransition)、同一メール内共起は CoParagraph。低 confidence 引用は bounded boost。" <>
+  "各 transition に Weight/EvidenceRefs/PrivacyMax。戻り値 <|fromRef -> {<|To,Kind,Weight,EvidenceRefs,PrivacyMax|>...}|>。" <>
+  "opts \"MaxTopicsPerMail\"(8), \"BoundedBoostCap\"(0.3)。";
+SourceVaultStructureMail::usage =
+  "SourceVaultStructureMail[mails, opts] は一般メール構造化の統合パイプライン (§2)。" <>
+  "pass A 語彙 -> relation graph + sessions -> pass B (session-aware 語彙 refine) -> 段落 topic 付与 -> topic graph。" <>
+  "戻り値 <|Vocabulary, RelationGraph, Sessions, TopicGraph, ParagraphTopics, Records, Report|>。" <>
+  "opts \"Seed\"(dict|None), \"Grow\"(True), \"PassB\"(True), \"QuotePass\"(Full), \"PrivacyScope\", \"OwnerRef\", \"MaxTopicsPerMail\"(8)。";
+
+(* ---- Inc 5: 検索 / primer 接続 (§9, r3) ---- *)
+SourceVaultMailStructSessionChunks::usage =
+  "SourceVaultMailStructSessionChunks[structResult, opts] は StructureMail の結果から session 単位の検索 chunk を作る。" <>
+  "privacy は record の PrivacyLevel/Tags (Inc2 adapter 継承。OOPS list privacy は使わない)、topic は vocab で enrichment。" <>
+  "opts \"MaxBodyChars\"(4000), \"ReleaseState\"(Published)。";
+SourceVaultMailStructBuildSearchIndex::usage =
+  "SourceVaultMailStructBuildSearchIndex[structResult, opts] は session chunk から KeywordBM25V1 projection index を作り load する。" <>
+  "戻り値 <|IndexId, Context, ChunkCount|>。opts \"ReleaseContext\"(mailstruct-local), \"IndexId\", \"IndexKind\"(KeywordBM25V1)。";
+SourceVaultMailStructSearch::usage =
+  "SourceVaultMailStructSearch[query, indexInfo, opts] は BuildSearchIndex の結果 (or IndexId 文字列) で release-gate 付き検索する。" <>
+  "opts \"ReleaseContext\", \"Limit\"(10)。";
+SourceVaultMailStructSessionDigest::usage =
+  "SourceVaultMailStructSessionDigest[session, structResult, opts] は current session の結論と historical reference を分離した digest を返す (§9)。" <>
+  "戻り値 <|SessionId, Subject, MailCount, Topics, CurrentDigest, HistoricalReferences|>。" <>
+  "ThreadContinuation の timeline を CurrentDigest に、CrossSessionReferences(EvidenceCitation/AnnualEventReuse/TemplateReuse) を HistoricalReferences に。opts \"ParaChars\"(120), \"MaxMails\"(8)。";
+
 Begin["`MailStructPrivate`"]
 
 (* ---- vocab コンストラクタ (r3: privacy scope / profile digest / build id 付き) ---- *)
@@ -178,7 +208,9 @@ SourceVaultGrowTopicVocabulary[vocab_Association, mails_List, OptionsPattern[]] 
         threadKey = With[{t = iSVMSNormThread[subj]}, If[t === "", mref, "thr:" <> t]];
         sess = If[AssociationQ[sessions], Lookup[sessions, mref, mref], mref];
         pl = iSVMSPrivacyLevel[m]; tags = Lookup[m, "Tags", {}];
-        paras = SourceVaultParseMailParagraphs[Lookup[m, "Body", ""]];
+        (* Body 復号失敗 (Missing) は段落無し。ParseMailParagraphs に非文字列を渡さない *)
+        paras = With[{bd = Lookup[m, "Body", ""]},
+           If[StringQ[bd], SourceVaultParseMailParagraphs[bd], {}]];
         prose = Select[paras, ! MemberQ[blockFilters, #["Kind"]] &];
         body = SourceVaultStripOOPSMarkers[StringRiffle[#["Text"] & /@ prose, "\n"]];
         cands = DeleteDuplicatesBy[
@@ -687,6 +719,188 @@ SourceVaultMineMailSessions[graph_Association, OptionsPattern[]] := Module[
           "To" -> #["ToMailRef"], "Role" -> #["RelationRole"],
           "ToSession" -> Lookup[sessOf, #["ToMailRef"], Missing[]]|> & /@ crefs)|>]],
    comps]];
+
+(* ================= Inc 4: 段落 topic 付与 + topic graph + 統合 ================= *)
+
+(* 1 メールの段落 topic 付与 → <|MailRef, Assignments, TopicRefs|> *)
+iSVMSAssignRecord[record_Association, vocab_Association, maxN_Integer] := Module[
+  {mref = Lookup[record, "MailRef", Missing[]], body = Lookup[record, "Body", ""], paras, asg, refs},
+  If[! StringQ[body], Return[<|"MailRef" -> mref, "Assignments" -> {}, "TopicRefs" -> {}|>]];
+  paras = SourceVaultParseMailParagraphs[body];
+  asg = SourceVaultAssignParagraphTopics[paras, Lookup[vocab, "SurfaceIndex", <||>],
+     "RelationGraph" -> Lookup[vocab, "SeedRelationGraph", None], "RefLabel" -> Lookup[vocab, "RefLabel", None]];
+  (* vocab match (SeedMatched) と明示 (ExplicitOOPS) の topic ref を distinct 抽出 *)
+  refs = Take[DeleteDuplicates[#["TopicItemRef"] & /@ Select[
+     Flatten[Lookup[#, "Assignments", {}] & /@ asg],
+     MemberQ[{"SeedMatched", "ExplicitOOPS"}, Lookup[#, "AssignmentKind", ""]] &]], UpTo[maxN]];
+  <|"MailRef" -> mref, "Assignments" -> asg, "TopicRefs" -> refs|>];
+
+Options[SourceVaultBuildMailTopicGraph] = {"MaxTopicsPerMail" -> 8, "BoundedBoostCap" -> 0.3};
+SourceVaultBuildMailTopicGraph[relationGraph_Association, topicsByMail_Association,
+   vocab_Association, OptionsPattern[]] := Module[
+  {cap = OptionValue["BoundedBoostCap"], trans = <||>, topicPriv, addT, kindOf},
+  topicPriv = Association[(#["TopicItemRef"] -> Lookup[#, "SupportPrivacyMax", 0.]) & /@
+     Lookup[Lookup[vocab, "Dictionary", <||>], "Entries", {}]];
+  (* key は String (List キーは Lookup が複数キー照会と誤解するため) *)
+  addT[a_, b_, kind_, w_, ev_] := With[{key = a <> "\[RightArrow]" <> b <> "\[RightArrow]" <> kind},
+    trans[key] = With[{prev = Lookup[trans, key,
+        <|"From" -> a, "To" -> b, "Kind" -> kind, "Weight" -> 0., "EvidenceRefs" -> {}, "PrivacyMax" -> 0.|>]},
+      <|"From" -> a, "To" -> b, "Kind" -> kind, "Weight" -> prev["Weight"] + w,
+        "EvidenceRefs" -> Take[DeleteDuplicates[Append[prev["EvidenceRefs"], ev]], UpTo[10]],
+        "PrivacyMax" -> Max[prev["PrivacyMax"], Lookup[topicPriv, a, 0.], Lookup[topicPriv, b, 0.]]|>]];
+  kindOf = Function[role, Switch[role,
+     "ThreadContinuation", "QuoteTransition",
+     "EvidenceCitation", "HistoricalReferenceTransition",
+     "AnnualEventReuse", "HistoricalReferenceTransition",
+     "TemplateReuse", "TemplateReuseTransition", _, Null]];
+  (* relation-driven topic transition (bounded boost = Min[confidence, cap]) *)
+  Do[With[{kind = kindOf[Lookup[e, "RelationRole", ""]],
+      tf = Lookup[topicsByMail, e["FromMailRef"], {}], tt = Lookup[topicsByMail, e["ToMailRef"], {}]},
+     If[kind =!= Null,
+       Do[Do[If[a =!= b, addT[a, b, kind, Min[Lookup[e, "Confidence", 0.], cap], e["EdgeId"]]],
+          {b, tt}], {a, tf}]]], {e, Lookup[relationGraph, "Edges", {}]}];
+  (* CoParagraph: 同一メールの topic 共起 *)
+  Do[With[{ts = topicsByMail[k]},
+     Do[Do[If[i < j, addT[ts[[i]], ts[[j]], "CoParagraph", 0.1, "mail:" <> ToString[k]]],
+        {j, Length[ts]}], {i, Length[ts]}]], {k, Keys[topicsByMail]}];
+  GroupBy[(Append[#, "Weight" -> Round[#["Weight"], 0.01]] & /@ Values[trans]), #["From"] &]];
+
+Options[SourceVaultStructureMail] = {"Seed" -> None, "Grow" -> True, "PassB" -> True,
+  "QuotePass" -> "Full", "PrivacyScope" -> Automatic, "OwnerRef" -> None, "MaxTopicsPerMail" -> 8};
+SourceVaultStructureMail[mails_List, OptionsPattern[]] := Module[
+  {seed = OptionValue["Seed"], grow = TrueQ[OptionValue["Grow"]], passB = TrueQ[OptionValue["PassB"]],
+   quotePass = OptionValue["QuotePass"], scope = OptionValue["PrivacyScope"],
+   owner = OptionValue["OwnerRef"], maxTopics = OptionValue["MaxTopicsPerMail"],
+   vocab0, vocabA, graph, sessions, sessionMap, vocabB, paraTopics, topicsByMail, topicGraph, vocabFinal, report},
+  (* pass A 語彙 (mail-level) *)
+  vocab0 = If[AssociationQ[seed],
+     SourceVaultTopicVocabularyFromSeed[seed, "PrivacyScope" -> scope],
+     SourceVaultNewTopicVocabulary["OwnerRef" -> owner, "PrivacyScope" -> scope]];
+  vocabA = If[grow,
+     SourceVaultGrowTopicVocabulary[vocab0, mails, "OwnerRef" -> owner, "PrivacyScope" -> scope], vocab0];
+  (* relation graph + sessions *)
+  graph = SourceVaultBuildMailRelationGraph[mails, "QuotePass" -> quotePass, "PrivacyScope" -> scope];
+  sessions = SourceVaultMineMailSessions[graph];
+  sessionMap = Association@Flatten[
+     Function[s, (# -> s["MailSessionId"]) & /@ s["MailRefs"]] /@ sessions];
+  (* pass B: session-aware 語彙 refine (循環依存を断つ 2-pass, §4.3) *)
+  vocabB = If[passB && grow,
+     SourceVaultGrowTopicVocabulary[vocabA, mails, "OwnerRef" -> owner, "PrivacyScope" -> scope,
+        "Sessions" -> sessionMap, "GroupingKind" -> "Session"], vocabA];
+  (* 段落 topic 付与 *)
+  paraTopics = Association[(#["MailRef"] -> #) & /@ (iSVMSAssignRecord[#, vocabB, maxTopics] & /@ mails)];
+  topicsByMail = #["TopicRefs"] & /@ paraTopics;
+  (* topic graph (ObservedRelationGraph) *)
+  topicGraph = SourceVaultBuildMailTopicGraph[graph, topicsByMail, vocabB, "MaxTopicsPerMail" -> maxTopics];
+  vocabFinal = Append[vocabB, "ObservedRelationGraph" -> topicGraph];
+  report = <|"MailCount" -> Length[mails],
+     "VocabSize" -> Length[Lookup[Lookup[vocabB, "Dictionary", <||>], "Entries", {}]],
+     "RelationEdges" -> Length[Lookup[graph, "Edges", {}]],
+     "SessionCount" -> Length[sessions],
+     "TopicGraphEdges" -> Total[Length /@ Values[topicGraph]],
+     "AssignedMails" -> Count[Values[topicsByMail], t_ /; t =!= {}]|>;
+  <|"Vocabulary" -> vocabFinal, "RelationGraph" -> graph, "Sessions" -> sessions,
+    "TopicGraph" -> topicGraph, "ParagraphTopics" -> paraTopics, "Records" -> mails,
+    "Report" -> report|>];
+
+(* ================= Inc 5: 検索 / primer 接続 ================= *)
+
+(* session mail 群の代表 subject (Re/Fwd 剥がし前の生 subject の最頻) *)
+iSVMSSessionSubject[sm_List] := With[
+  {subs = Select[Lookup[#, "Subject", ""] & /@ sm, StringQ[#] && StringTrim[#] =!= "" &]},
+  If[subs === {}, "(件名なし)", First[Commonest[subs]]]];
+
+Options[SourceVaultMailStructSessionChunks] = {"MaxBodyChars" -> 4000, "ReleaseState" -> "Published"};
+SourceVaultMailStructSessionChunks[st_Association, OptionsPattern[]] := Module[
+  {records = Lookup[st, "Records", {}], vocab = Lookup[st, "Vocabulary", <||>],
+   maxBody = OptionValue["MaxBodyChars"], state = OptionValue["ReleaseState"],
+   recByRef, sidx, refLabel, relGraph},
+  recByRef = Association[(#["MailRef"] -> #) & /@ records];
+  sidx = Lookup[vocab, "SurfaceIndex", <||>];
+  refLabel = Lookup[vocab, "RefLabel", <||>];
+  relGraph = Lookup[vocab, "SeedRelationGraph", <||>];
+  DeleteCases[Map[Function[sess, Module[
+     {sm, subject, combined, authors, priv, tags, topicsText},
+     sm = DeleteMissing[Lookup[recByRef, Lookup[sess, "MailRefs", {}]]];
+     If[sm === {}, Nothing,
+       subject = iSVMSSessionSubject[sm];
+       combined = StringTake[StringRiffle[
+          Select[Lookup[#, "Body", ""] & /@ sm, StringQ], "\n\n"], UpTo[maxBody]];
+       authors = DeleteDuplicates[Lookup[#, "From", ""] & /@ sm];
+       (* privacy は record の PrivacyLevel/Tags を継承 (Inc2 adapter。OOPS list privacy は使わない) *)
+       priv = Max[Append[iSVMSPrivacyLevel /@ sm, 0.]];
+       tags = DeleteDuplicates@Flatten[Lookup[#, "Tags", {}] & /@ sm];
+       topicsText = If[AssociationQ[sidx] && sidx =!= <||>,
+          SourceVaultTopicEnrichment[combined, sidx, "RefLabel" -> refLabel,
+             "RelationGraph" -> relGraph, "IncludeRelated" -> True]["TopicsFieldText"], ""];
+       <|"ChunkId" -> sess["MailSessionId"], "SourceVaultObjectId" -> sess["MailSessionId"],
+         "SearchFields" -> <|"title" -> subject, "body" -> combined, "author" -> authors, "topics" -> topicsText|>,
+         "Text" -> combined, "NormalizedText" -> SourceVaultNormalizeSearchText[combined],
+         "PrivacyLevel" -> priv, "State" -> state, "Tags" -> tags,
+         "MailRefs" -> sess["MailRefs"], "MailCount" -> sess["MailCount"],
+         "SourceRef" -> <|"Title" -> subject|>|>]]], Lookup[st, "Sessions", {}]], Nothing]];
+
+Options[SourceVaultMailStructBuildSearchIndex] = {"ReleaseContext" -> "mailstruct-local",
+  "IndexId" -> Automatic, "IndexKind" -> "KeywordBM25V1"};
+SourceVaultMailStructBuildSearchIndex[st_Association, OptionsPattern[]] := Module[
+  {chunks, ctx = OptionValue["ReleaseContext"], idx = OptionValue["IndexId"],
+   kind = OptionValue["IndexKind"], res},
+  SourceVaultMailStructEnsureReleaseContexts[];
+  chunks = SourceVaultMailStructSessionChunks[st];
+  idx = idx /. Automatic -> ("mailstruct-bm25-" <> iSVMSShortHash[{ctx, Length[chunks],
+     Lookup[Lookup[st, "Vocabulary", <||>], "VocabularyBuildId", ""]}]);
+  res = SourceVaultBuildProjectionIndex[ctx, "Chunks" -> chunks, "IndexKind" -> kind,
+     "EntityDictionary" -> Lookup[Lookup[st, "Vocabulary", <||>], "Dictionary", <||>],
+     "IndexId" -> idx, "Overwrite" -> True];
+  If[! FailureQ[res] && Lookup[res, "Status", ""] =!= "Failed",
+     Quiet@SourceVaultLoadSearchIndex[idx]];
+  <|"IndexId" -> idx, "Context" -> ctx, "ChunkCount" -> Lookup[res, "ChunkCount", Length[chunks]],
+    "ExcludedCount" -> Lookup[res, "ExcludedCount", 0], "BuildResult" -> res|>];
+
+Options[SourceVaultMailStructSearch] = {"ReleaseContext" -> Automatic, "Limit" -> 10};
+SourceVaultMailStructSearch[query_String, indexInfo_, OptionsPattern[]] := Module[
+  {idx, ctx = OptionValue["ReleaseContext"], lim = OptionValue["Limit"]},
+  idx = If[AssociationQ[indexInfo], Lookup[indexInfo, "IndexId", indexInfo], indexInfo];
+  If[ctx === Automatic, ctx = If[AssociationQ[indexInfo], Lookup[indexInfo, "Context", "mailstruct-local"], "mailstruct-local"]];
+  SourceVaultSearch[query, "ReleaseContext" -> ctx, "Index" -> idx, "Limit" -> lim]];
+
+(* 1 メールの先頭 prose 抜粋 *)
+iSVMSFirstProse[record_Association, chars_Integer] := Module[
+  {body = Lookup[record, "Body", ""], ps},
+  If[! StringQ[body], Return[""]];
+  ps = Select[SourceVaultParseMailParagraphs[body], #["Kind"] === "Prose" &];
+  If[ps === {}, "", StringTake[StringReplace[ps[[1]]["Text"], {"\n" -> " ", "\r" -> ""}], UpTo[chars]]]];
+
+Options[SourceVaultMailStructSessionDigest] = {"ParaChars" -> 120, "MaxMails" -> 8};
+SourceVaultMailStructSessionDigest[session_Association, st_Association, OptionsPattern[]] := Module[
+  {records = Lookup[st, "Records", {}], vocab = Lookup[st, "Vocabulary", <||>],
+   paraChars = OptionValue["ParaChars"], maxMails = OptionValue["MaxMails"],
+   recByRef, sm, subject, topicLabels, timeline, historical},
+  recByRef = Association[(#["MailRef"] -> #) & /@ records];
+  sm = DeleteMissing[Lookup[recByRef, Lookup[session, "MailRefs", {}]]];
+  subject = iSVMSSessionSubject[sm];
+  topicLabels = If[AssociationQ[Lookup[vocab, "SurfaceIndex", <||>]],
+     SourceVaultTopicEnrichment[
+        StringRiffle[Select[Lookup[#, "Body", ""] & /@ sm, StringQ], " "],
+        vocab["SurfaceIndex"], "RefLabel" -> Lookup[vocab, "RefLabel", <||>],
+        "IncludeRelated" -> False]["TopicLabels"], {}];
+  (* current: ThreadContinuation で結ばれた本 session の timeline *)
+  timeline = Map[Function[m,
+     StringReplace[Lookup[m, "From", ""], RegularExpression["\\s*<[^>]*>"] -> ""] <> ": " <>
+        iSVMSFirstProse[m, paraChars]], Take[sm, UpTo[maxMails]]];
+  (* historical: CrossSessionReferences (過去メール参照) を分離 *)
+  historical = Map[Function[cr, With[{toRec = Lookup[recByRef, cr["To"], Missing[]]},
+     <|"Role" -> cr["Role"], "ToMailRef" -> cr["To"],
+       "Subject" -> If[AssociationQ[toRec], Lookup[toRec, "Subject", ""], ""],
+       "Excerpt" -> If[AssociationQ[toRec], iSVMSFirstProse[toRec, paraChars], ""],
+       "ToSession" -> Lookup[cr, "ToSession", Missing[]]|>]],
+     Lookup[session, "CrossSessionReferences", {}]];
+  <|"SessionId" -> Lookup[session, "MailSessionId", Missing[]], "Subject" -> subject,
+    "MailCount" -> Lookup[session, "MailCount", Length[sm]], "Topics" -> topicLabels,
+    "CurrentDigest" -> StringRiffle[Join[
+       {"[スレッド] " <> subject <> " (" <> ToString[Lookup[session, "MailCount", Length[sm]]] <> "通)",
+        If[topicLabels === {}, Nothing, "話題: " <> StringRiffle[topicLabels, ", "]]}, timeline], "\n"],
+    "HistoricalReferences" -> historical|>];
 
 End[]
 

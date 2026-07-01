@@ -62,18 +62,51 @@ edge = `<|"EdgeId", "FromMailRef", "ToMailRef", "EdgeKind", "EvidenceKey", "Rela
 relation graph を session に projection（§6d）。**ThreadContinuation の強 edge（ReplyHeader/ReferenceHeader/direct QuoteExact/strict SubjectFallback, 低 ambiguity・高 confidence）だけで merge**（`ConnectedComponents`）し、`EvidenceCitation`/`AnnualEventReuse`/`TemplateReuse`/`ForwardedContext` は merge せず `CrossSessionReferences` に残す。
 戻り値: `{<|"MailSessionId", "MailRefs", "MailCount", "SessionGraphRef", "CrossSessionReferences"(<|EdgeId, From, To, Role, ToSession|>...)|>...}`。Options: `"MaxAmbiguityForMerge"`(2), `"MergeConfidenceMin"`(0.5)。
 
-## 使用例（degraded header + quote/subject fallback で session 構築）
+## Inc 4: 段落 topic 付与 + topic graph + 統合 (§7-§9)
+
+### SourceVaultStructureMail[mails, opts] → 統合結果
+一般メール構造化の統合パイプライン (§2): **pass A 語彙(mail-level) → relation graph + sessions → pass B(session-aware 語彙 refine) → 段落 topic 付与 → topic graph**。pass A は session 不要・pass B は Inc3 の session を使う 2-pass で、語彙↔session の循環依存を断つ (§4.3)。
+戻り値: `<|"Vocabulary"(ObservedRelationGraph 込み), "RelationGraph", "Sessions", "TopicGraph", "ParagraphTopics", "Records", "Report"|>`。Options: `"Seed"`(dict|None), `"Grow"`(True), `"PassB"`(True), `"QuotePass"`(Full), `"PrivacyScope"`, `"OwnerRef"`, `"MaxTopicsPerMail"`(8)。
+
+### SourceVaultBuildMailTopicGraph[relationGraph, topicsByMail, vocab, opts] → ObservedRelationGraph
+relation graph 駆動で auto topic 間の topic transition を作る (§8)。RelationRole を写像: **ThreadContinuation→QuoteTransition / EvidenceCitation・AnnualEventReuse→HistoricalReferenceTransition / TemplateReuse→TemplateReuseTransition**、同一メール共起→CoParagraph。低 confidence 引用は **bounded boost**(`Min[confidence, cap]`)。各 transition に Weight/EvidenceRefs/PrivacyMax。
+戻り値: `<|fromRef -> {<|"From", "To", "Kind", "Weight", "EvidenceRefs", "PrivacyMax"|>...}|>`。Options: `"MaxTopicsPerMail"`(8), `"BoundedBoostCap"`(0.3)。
+
+## Inc 5: 検索 / primer 接続 (§9)
+
+### SourceVaultMailStructSessionChunks[structResult, opts] → {chunk...}
+StructureMail の結果から session 単位の §7.2 検索 chunk を作る。**privacy は record の PrivacyLevel/Tags を継承**(Inc2 adapter 由来。OOPS list privacy は使わない)、topic は vocab で enrichment。Options: `"MaxBodyChars"`(4000), `"ReleaseState"`(Published)。
+
+### SourceVaultMailStructBuildSearchIndex[structResult, opts] → Association
+session chunk から `SourceVaultBuildProjectionIndex`(KeywordBM25V1, EntityDictionary=vocab) で projection index を作り load する。戻り値: `<|"IndexId", "Context", "ChunkCount", "ExcludedCount"|>`。Options: `"ReleaseContext"`(mailstruct-local), `"IndexId"`, `"IndexKind"`(KeywordBM25V1)。
+
+### SourceVaultMailStructSearch[query, indexInfo, opts] → 検索結果
+BuildSearchIndex の結果(or IndexId 文字列)で release-gate 付き検索(`SourceVaultSearch` ラッパ)。Options: `"ReleaseContext"`, `"Limit"`(10)。
+
+### SourceVaultMailStructSessionDigest[session, structResult, opts] → Association
+**§9 current session の結論と historical reference を分離**した digest。本 session の timeline を `CurrentDigest` に、`CrossSessionReferences`(EvidenceCitation/AnnualEventReuse/TemplateReuse/ForwardedContext) を `HistoricalReferences`(Role/Subject/Excerpt/ToSession) に分ける。過去参照を current の結論本文に混ぜない。
+戻り値: `<|"SessionId", "Subject", "MailCount", "Topics", "CurrentDigest", "HistoricalReferences"|>`。Options: `"ParaChars"`(120), `"MaxMails"`(8)。
+
+## 使用例（統合パイプライン → 検索 / digest）
 
 ```wolfram
+SourceVaultMailEnsureLoaded["univ", "202606"];   (* ← 先に snapshot をロード (必須) *)
 recs = SourceVaultMailRecordsForStructuring["MBox" -> "univ", "Limit" -> 100];
-SourceVaultMailStructHeaderAvailability[SourceVaultMailSnapshotList[]]   (* Degraded 確認 *)
-g    = SourceVaultBuildMailRelationGraph[recs, "QuotePass" -> "Full"];
-sess = SourceVaultMineMailSessions[g];
-Counts[#["RelationRole"] & /@ g["Edges"]]
+st   = SourceVaultStructureMail[recs, "OwnerRef" -> "owner:imai", "QuotePass" -> "Full"];
+st["Report"]
+Counts[#["Kind"] & /@ Flatten[Values[st["TopicGraph"]]]]   (* Quote/Historical/CoParagraph *)
+
+idx = SourceVaultMailStructBuildSearchIndex[st];
+res = SourceVaultMailStructSearch["Zoom", idx, "Limit" -> 5];
+
+h = Select[st["Sessions"], #["CrossSessionReferences"] =!= {} &];
+SourceVaultMailStructSessionDigest[First[h], st]   (* Current / HistoricalReferences 分離 *)
 ```
 
 ## 注意 / 既知の制約
 
 - **header degraded**: 現行 maildb は MessageIDToken のみ保持のため reply header チェーンは張れない。session は quote / subject fallback で形成される。新規 import で raw header から InReplyTo/References token を生成する hook は今後（§6b）。
 - **UnknownReference**: 日本語頻出句が誤マッチした曖昧引用は `UnknownReference` になり session merge に使われない（正しく非マージ）。DF フィルタ・edge 集約でノイズを削減済み。閾値の追い込みは仕様 §13 open issue（実データ較正）。
-- pass B（session-aware 語彙 refine）/ 統合 `SourceVaultStructureMail` / §8 ObservedRelationGraph 配線 / 検索・primer 接続は後続 increment。
+- **snapshot ロード必須**: search/digest は `SourceVaultMailSnapshotList[]` を使うため、先に `SourceVaultMailEnsureLoaded["<mbox>", "<yyyymm>"]` でロードしないと records が空になる。
+- **復号失敗メール**: `Body -> Missing["BodyDecryptFailed"]` の record は段落 topic 抽出/chunk から自動的に除外され、低漏洩 metadata のみ残る。
+- 残（任意 P2）: §9b live SearchView / annotation（親 `SourceVaultSearchView` 接続）、topic 品質 tuning（汎用語 stoplist / IDF、§13 open issue）。
