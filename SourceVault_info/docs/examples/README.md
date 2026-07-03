@@ -14,8 +14,9 @@
 | [**search_foundation_example.md**](search_foundation_example.md) | **OOPS 非依存**の検索基盤。合成データだけで動く、正規化 / BM25 / release gate / entity OR-match / revocation / mining primer / KG。OOPS メールを一切ロードしない状態で使える。**0. 実運用シナリオ**→基本編→中級編→応用編。 |
 | [**oops_example.md**](oops_example.md) | **OOPS を用いた**例。seed 辞書取り込み・表記ゆれ回復・MIME 復号・段落 auto-tag・新トピック育成・seed→検索の接続（本文に無い関連トピックでヒット）・OOPS relation の KG。**0. 実運用シナリオ**→基本編→中級編→応用編。 |
 | [**mail_structuring_example.md**](mail_structuring_example.md) | **メール構造化・検索（§6.5）**。引用グラフ・スレッド（session）・明示トピック（◎/○/・, TopicRole）・topic item graph・**スレッド単位の検索**・スレッド要約 primer（結論探し）・私的リストの gate（§6.5.3 privacy）・**受信者(To/Cc) defense-in-depth**・**cloud-safe 検索/詳細（`CloudSafe`）**・**MCP tool（`sourcevault_oops_*`）**・**◎ Primary 寄せの話題**。基本編→中級編→応用編。 |
+| [**general_mail_example.md**](general_mail_example.md) | **一般メール（maildb / univ 等）の構造化・検索**。OOPS シード無しで動く seed-optional 語彙・**mail relation graph mining**（引用継続 vs 過去参照 = `RelationRole`、1 年前の行事メール引用を過剰マージしない）・スレッド検索（BM25）・**current/historical を分離した session digest**・私的メールの cloud-safe 二重防御・語彙 tuning（`VocabOptions`）・agentic/cascade 接続・**Inc 6**（HTML 本文 / 交渉スレッド判定 / LLM 提案トピック）・**MCP tool（`sourcevault_mail_*`）**。実 univ シャードの実測値つき。 |
 
-この 2 分割は「OOPS メールをロードしなくても使える検索基盤」と「OOPS seed を活かす応用」を分けたものです。前者だけで release gate 付き日本語 BM25 検索・primer・KG が使え、後者で seed オントロジによる精度向上が加わります。
+この分割は「OOPS メールをロードしなくても使える検索基盤」「OOPS seed を活かす応用」「一般メール（maildb）への展開」を分けたものです。最初の 1 つだけで release gate 付き日本語 BM25 検索・primer・KG が使え、OOPS 側で seed オントロジによる精度向上、一般メール側で seed 無しの受信箱構造化が加わります。
 
 各ファイル冒頭の **「0. 実運用シナリオ」** は、これらの関数が実際にどう呼ばれるか（`ClaudeEval[...]` などの自然文プロンプト → MCP ツール `sourcevault_search` → 検索基盤）と、仕様生成・実装ワークフローでの検索利用を、`mining_example.md` の「実運用シナリオ」と同じ体裁で示します。
 

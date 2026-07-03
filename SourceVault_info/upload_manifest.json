@@ -21,7 +21,9 @@
 		"SourceVault_lexical.wl",
 		"SourceVault_oopsseed.wl",
 		"SourceVault_mailstructure.wl",
-		"SourceVault_searchview.wl"
+		"SourceVault_searchview.wl",
+		"SourceVault_contracts.wl",
+		"SourceVault_wiring.wl"
 	],
 	"directories":[
 		"SourceVault_info",

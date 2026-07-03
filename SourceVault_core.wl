@@ -169,6 +169,30 @@ SourceVaultCommitBlob::usage =
 SourceVaultBlobRefs::usage =
   "SourceVaultBlobRefs[hash, opts] は blob hash を参照する snapshot / event を走査して参照元を返す。";
 
+SourceVaultReadBlob::usage =
+  "SourceVaultReadBlob[hashOrRef] は content-addressed blob を読み、hash 検証済み bytes を返す (SourceVaultCommitBlob の読み出し対)。\n" <>
+  "hashOrRef: \"blob:sha256:<hex>\" | \"sha256:<hex>\" | <hex64> | \"sv://hash/sha256/<hex>\"。\n" <>
+  "戻り値 <|\"Status\",\"Hash\",\"Bytes\"->ByteArray,\"Path\",\"Meta\"|>。読み出し時に hash を再計算し不一致は Corruption で fail-closed。\n" <>
+  "main kernel 用 storage primitive であり MCP / 低trust へは公開しない。";
+
+SourceVaultResolveArtifactContent::usage =
+  "SourceVaultResolveArtifactContent[uriOrId, opts] は deposit 済み artifact (sv://artifact/<id> / <id> / sv://hash/sha256/<hex>) の\n" <>
+  "内容を PrivacyLevel 付きで解決する main-kernel sanctioned reader。生データを PrivacyLevel なしで返すことはなく、\n" <>
+  "PrivacyLevel 欠落は fail-closed で既定値になる。サンクションされた表示経路は NBAccess`NBInsertArtifactCell\n" <>
+  "(privacy marking 付きノートブック表示) であり、MCP / 低trust projection へは公開しない。\n" <>
+  "戻り値 <|Status, ArtifactId, Ref, MediaKind(\"Image\"|\"Video\"|\"Text\"|\"Binary\"), MediaType, PrivacyLevel,\n" <>
+  "Bytes|Text, File, Filename|>。opts: \"Materialize\" -> Automatic (Video/Binary のみ vault 内 materialized/ へファイル化) | True | False。";
+
+$SourceVaultRateLimits::usage =
+  "$SourceVaultRateLimits は SourceVaultRateLimit の key 別設定 (<|key -> <|\"Limit\",\"WindowSeconds\"|>|>)。\n" <>
+  "既定: Ingest 120/h, ComfyUISubmit 60/h, Default 600/h。過剰実行 (runaway loop / LLM 生成コードの暴走) 対策。";
+
+SourceVaultRateLimit::usage =
+  "SourceVaultRateLimit[key] は key の sliding-window 実行回数を記録し、上限内なら <|\"Allowed\"->True,...|> を、\n" <>
+  "超過なら <|\"Allowed\"->False, \"Count\", \"Limit\", \"WindowSeconds\"|> を返す (カーネル内 in-memory)。\n" <>
+  "高コスト/副作用のある公開関数 (SourceVaultIngest, SourceVaultComfyUIQueuePrompt 等) が entry で呼ぶ。\n" <>
+  "NBAccess の trusted-package head 免除 (SourceVault* 承認不要) に対する実行時の防波堤。";
+
 (* ---- pointer (§17.12.7) ---- *)
 SourceVaultAtomicUpdatePointer::usage =
   "SourceVaultAtomicUpdatePointer[name, value, opts] は pointer を更新する。\n" <>
@@ -896,6 +920,186 @@ SourceVaultBlobRefs[hash_String, opts___] := Module[{hex, refs = {}, files, str}
     {f, files}];
   <|"Hash" -> hex, "RefCount" -> Length[refs], "Refs" -> refs|>
 ];
+
+(* ============================================================
+   Blob read + artifact content resolve (sanctioned reader)
+   - SourceVaultReadBlob: CommitBlob の読み出し対 (hash 検証付き)。
+   - SourceVaultResolveArtifactContent: sv://artifact/<id> を DerivedArtifact
+     snapshot -> blob と辿り、必ず PrivacyLevel を伴って内容を返す。
+     表示の正準経路は NBAccess`NBInsertArtifactCell (privacy marking と一体)。
+     MCP / 低trust projection へは公開しない。
+   ============================================================ *)
+
+iBlobHexFrom[s_String] := Module[{h = s},
+  h = StringReplace[h,
+    {"sv://hash/sha256/" -> "", "blob:sha256:" -> "", "sha256:" -> ""}];
+  If[StringMatchQ[h, RegularExpression["[0-9a-fA-F]{64}"]], ToLowerCase[h], $Failed]];
+iBlobHexFrom[_] := $Failed;
+
+SourceVaultReadBlob[hashOrRef_String, ___] := Module[{hex, path, bytes, metaPath, meta},
+  hex = iBlobHexFrom[hashOrRef];
+  If[hex === $Failed, Return[<|"Status" -> "Error", "Reason" -> "BadHash"|>]];
+  path = iBlobPath[hex];
+  If[FailureQ[path] || ! FileExistsQ[path],
+    Return[<|"Status" -> "Error", "Reason" -> "BlobNotFound", "Hash" -> hex|>]];
+  bytes = Quiet @ Check[ReadByteArray[path], $Failed];
+  If[Head[bytes] =!= ByteArray,
+    Return[<|"Status" -> "Error", "Reason" -> "BlobReadFailed", "Path" -> path|>]];
+  If[iSHA256Hex[bytes] =!= hex,
+    Return[<|"Status" -> "Error", "Reason" -> "BlobCorruption", "Path" -> path|>]];
+  metaPath = StringReplace[path, ".blob" -> ".meta.json"];
+  meta = If[FileExistsQ[metaPath], iFromJSON[iReadStringUTF8[metaPath]], <||>];
+  <|"Status" -> "OK", "Hash" -> hex, "Bytes" -> bytes, "Path" -> path,
+    "Meta" -> If[AssociationQ[meta], meta, <||>]|>];
+
+(* MediaType -> 表示種別。image/gif はアニメーションとしてファイルリンク側 (Video 扱い)。 *)
+iArtifactMediaKind[mt_String] := Which[
+  mt === "image/gif", "Video",
+  StringStartsQ[mt, "image/"], "Image",
+  StringStartsQ[mt, "video/"], "Video",
+  StringStartsQ[mt, "text/"] || mt === "application/json", "Text",
+  True, "Binary"];
+iArtifactMediaKind[_] := "Binary";
+
+iArtifactExtFor[mt_, fname_] := Module[{e},
+  e = If[StringQ[fname] && FileExtension[fname] =!= "", ToLowerCase @ FileExtension[fname],
+    Switch[mt,
+      "image/png", "png", "image/jpeg", "jpg", "image/webp", "webp", "image/gif", "gif",
+      "video/mp4", "mp4", "video/webm", "webm",
+      "text/plain", "txt", "application/json", "json",
+      _, "bin"]];
+  If[StringQ[e] && e =!= "", e, "bin"]];
+
+iArtifactShouldMaterialize[kind_, Automatic] := MemberQ[{"Video", "Binary"}, kind];
+iArtifactShouldMaterialize[_, m_] := TrueQ[m];
+
+(* bytes を vault 内 materialized/ へ content-addressed にファイル化 (temp や
+   $packageDirectory には置かない。PL 統制下のディレクトリに閉じる)。 *)
+iMaterializeArtifactBytes[hex_String, bytes_ByteArray, mt_, fname_] := Module[{ext, path, strm},
+  ext = iArtifactExtFor[mt, fname];
+  path = iSub["materialized", hex <> "." <> ext];
+  If[FailureQ[path], Return[Missing["MaterializeFailed"]]];
+  If[! FileExistsQ[path],
+    iEnsureDir[DirectoryName[path]];
+    strm = Quiet @ OpenWrite[path, BinaryFormat -> True];
+    If[Head[strm] =!= OutputStream, Return[Missing["MaterializeFailed"]]];
+    BinaryWrite[strm, bytes]; Close[strm]];
+  path];
+
+(* ArtifactId -> DerivedArtifact snapshot record (scan + セッション cache) *)
+If[! AssociationQ[$iArtifactIdRecCache], $iArtifactIdRecCache = <||>];
+
+iFindDerivedArtifactById[artId_String] := Module[{cached, dir, files, rec, found = Missing["NotFound"]},
+  cached = Lookup[$iArtifactIdRecCache, artId, Missing[]];
+  If[AssociationQ[cached], Return[cached]];
+  dir = iSub["snapshots", "DerivedArtifact"];
+  If[FailureQ[dir] || ! DirectoryQ[dir], Return[Missing["NotFound"]]];
+  files = FileNames["*.json", dir, Infinity];
+  Do[
+    rec = iFromJSON[iReadStringUTF8[f]];
+    If[AssociationQ[rec] && Lookup[rec, "ArtifactId", ""] === artId,
+      found = Join[rec, <|"Ref" -> "snapshot:DerivedArtifact:" <> FileBaseName[f]|>];
+      $iArtifactIdRecCache[artId] = found;
+      Break[]],
+    {f, files}];
+  found];
+
+iDefaultObjectPL[] :=
+  If[NumericQ[$SourceVaultDefaultObjectPrivacyLevel],
+    N[$SourceVaultDefaultObjectPrivacyLevel], 0.85];
+
+(* ============================================================
+   Rate limit (過剰実行対策)
+   NBAccess は SourceVault* head を承認不要 (trusted package) として扱う。
+   その代償として、高コスト/副作用のある公開関数は entry でこの sliding
+   window limiter を通し、runaway loop や LLM 生成コードの暴走を止める。
+   ============================================================ *)
+
+If[! AssociationQ[$SourceVaultRateLimits],
+  $SourceVaultRateLimits = <|
+    "Ingest"        -> <|"Limit" -> 120, "WindowSeconds" -> 3600|>,
+    "ComfyUISubmit" -> <|"Limit" -> 60,  "WindowSeconds" -> 3600|>,
+    "Default"       -> <|"Limit" -> 600, "WindowSeconds" -> 3600|>|>];
+If[! AssociationQ[$iSVRateLog], $iSVRateLog = <||>];  (* key -> {absTime..} *)
+
+SourceVaultRateLimit[key_String] := Module[{cfg, lim, win, now, times},
+  cfg = Lookup[$SourceVaultRateLimits, key,
+    Lookup[$SourceVaultRateLimits, "Default", <||>]];
+  If[! AssociationQ[cfg], cfg = <||>];
+  lim = With[{l = Lookup[cfg, "Limit", 600]}, If[IntegerQ[l] && l > 0, l, 600]];
+  win = With[{w = Lookup[cfg, "WindowSeconds", 3600]}, If[NumericQ[w] && w > 0, w, 3600]];
+  now = AbsoluteTime[];
+  times = Select[Lookup[$iSVRateLog, key, {}], # > now - win &];
+  If[Length[times] >= lim,
+    $iSVRateLog[key] = times;
+    <|"Allowed" -> False, "Key" -> key, "Count" -> Length[times],
+      "Limit" -> lim, "WindowSeconds" -> win,
+      "Hint" -> "rate limit 超過。$SourceVaultRateLimits[\"" <> key <>
+        "\"] で調整可。意図的な一括処理は window を待つか limit を上げる。"|>,
+    $iSVRateLog[key] = Append[times, now];
+    <|"Allowed" -> True, "Key" -> key, "Count" -> Length[times] + 1,
+      "Limit" -> lim, "WindowSeconds" -> win|>]];
+SourceVaultRateLimit[___] := <|"Allowed" -> True, "Key" -> "?", "Count" -> 0|>;
+
+Options[SourceVaultResolveArtifactContent] = {"Materialize" -> Automatic};
+SourceVaultResolveArtifactContent[uriOrId_String, OptionsPattern[]] := Module[
+  {matOpt, hex, blob, bytes, mt, pl, fname, kind, file = Missing[],
+   id, rec, prov, blobRef, text},
+  matOpt = OptionValue["Materialize"];
+  If[StringStartsQ[uriOrId, "sv://hash/"] || StringStartsQ[uriOrId, "blob:sha256:"],
+    (* hash 直接参照: DerivedArtifact record を経ないため PL は fail-closed 既定 *)
+    hex = iBlobHexFrom[uriOrId];
+    If[hex === $Failed, Return[<|"Status" -> "Error", "Reason" -> "BadURI"|>]];
+    blob = SourceVaultReadBlob[hex];
+    If[Lookup[blob, "Status", ""] =!= "OK", Return[blob]];
+    bytes = blob["Bytes"];
+    mt = With[{m = Lookup[blob["Meta"], "MediaType", Missing[]]},
+      If[StringQ[m], m, "application/octet-stream"]];
+    fname = With[{f = Lookup[blob["Meta"], "Filename", Missing[]]},
+      If[StringQ[f], f, Missing[]]];
+    pl = iDefaultObjectPL[];
+    kind = iArtifactMediaKind[mt];
+    If[iArtifactShouldMaterialize[kind, matOpt],
+      file = iMaterializeArtifactBytes[hex, bytes, mt, fname]];
+    Return[<|"Status" -> "OK", "ArtifactId" -> Missing[],
+      "Ref" -> "blob:sha256:" <> hex, "MediaKind" -> kind, "MediaType" -> mt,
+      "PrivacyLevel" -> pl, "Bytes" -> bytes, "File" -> file, "Filename" -> fname|>]];
+  (* sv://artifact/<id> または bare id *)
+  id = StringReplace[uriOrId, "sv://artifact/" -> ""];
+  rec = iFindDerivedArtifactById[id];
+  If[! AssociationQ[rec],
+    Return[<|"Status" -> "Error", "Reason" -> "ArtifactNotFound", "ArtifactId" -> id|>]];
+  prov = With[{p = Lookup[rec, "IngestProvenance", <||>]}, If[AssociationQ[p], p, <||>]];
+  pl = With[{p = Quiet @ Check[
+      Lookup[Lookup[prov, "EffectivePolicy", <||>], "PrivacyLevel", Missing[]], Missing[]]},
+    If[NumericQ[p], N[p], Missing[]]];
+  If[! NumericQ[pl],
+    pl = With[{p = Quiet @ Check[
+        SourceVaultSnapshotPrivacyLevel[Lookup[rec, "Ref", ""]], Missing[]]},
+      If[NumericQ[p], N[p], Missing[]]]];
+  If[! NumericQ[pl], pl = iDefaultObjectPL[]];  (* fail-closed *)
+  mt = With[{m = Lookup[prov, "MediaType", Missing[]]}, If[StringQ[m], m, Missing[]]];
+  fname = With[{f = Lookup[prov, "Filename", Missing[]]}, If[StringQ[f], f, Missing[]]];
+  blobRef = Lookup[prov, "BlobRef", Missing[]];
+  If[StringQ[blobRef],
+    (* binary artifact: blob から bytes *)
+    blob = SourceVaultReadBlob[blobRef];
+    If[Lookup[blob, "Status", ""] =!= "OK", Return[blob]];
+    bytes = blob["Bytes"];
+    If[! StringQ[mt],
+      mt = With[{m = Lookup[blob["Meta"], "MediaType", Missing[]]},
+        If[StringQ[m], m, "application/octet-stream"]]];
+    kind = iArtifactMediaKind[mt];
+    If[iArtifactShouldMaterialize[kind, matOpt],
+      file = iMaterializeArtifactBytes[blob["Hash"], bytes, mt, fname]];
+    <|"Status" -> "OK", "ArtifactId" -> id, "Ref" -> Lookup[rec, "Ref", Missing[]],
+      "MediaKind" -> kind, "MediaType" -> mt, "PrivacyLevel" -> pl,
+      "Bytes" -> bytes, "File" -> file, "Filename" -> fname|>,
+    (* text artifact: record 本文 *)
+    text = With[{t = Lookup[rec, "Text", ""]}, If[StringQ[t], t, ""]];
+    <|"Status" -> "OK", "ArtifactId" -> id, "Ref" -> Lookup[rec, "Ref", Missing[]],
+      "MediaKind" -> "Text", "MediaType" -> If[StringQ[mt], mt, "text/plain"],
+      "PrivacyLevel" -> pl, "Text" -> text, "File" -> Missing[], "Filename" -> fname|>]];
 
 (* ============================================================
    §17.12.7  Pointer (event-sourced, no overwrite-rename)

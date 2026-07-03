@@ -76,7 +76,7 @@ URI が指す元 notebook を開く (既に開いていれば前面化)。解決
 ## UI
 
 ### SourceVaultWorkflowPanel[] → Panel
-archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (example.md を実行可能セルとして新規ノートに展開)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)。行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。
+archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (example.md を実行可能セルとして新規ノートに展開)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)、自動起動 ([SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger) ロード時のみ表示; 未ロードは "—")。行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。
 
 ### SourceVaultWorkflowArchivePanel[] → Panel
 archive ステージのワークフローのみを一覧する UI。`SourceVaultWorkflowPanel` と同体裁。切替列は「testingへ戻す」ボタン (`SourceVaultSetWorkflowStatus[slug, "testing"]`)。

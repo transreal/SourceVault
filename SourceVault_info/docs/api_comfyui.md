@@ -7,7 +7,8 @@
 ComfyUI ローカル画像/動画生成アダプタ。thin HTTP クライアント・workflow レジストリ・非ブロック job 管理・artifact deposit を提供する。
 
 ロード順: `SourceVault.wl` → `SourceVault_core.wl` → `SourceVault_comfyui.wl`。
-UTF-8 ファイルなので `Block[{$CharacterEncoding="UTF-8"}, Get["SourceVault_comfyui.wl"]]` で読む。
+人間が手でロードする場合は `Block[{$CharacterEncoding="UTF-8"}, Get["SourceVault_comfyui.wl"]]`。
+**ClaudeEval 生成コードでは `Get` は ForbiddenHead**なので使わない — `SourceVaultComfyUIEnsureLoaded[]` を呼ぶか、自動ロード対応 entry point（`SourceVaultComfyUIGenerateToNotebook` / `SourceVaultComfyUIServerWorkflowsView` / `SourceVaultComfyUIImportServerWorkflow`）を直接呼べば内部でロードされる。
 
 **設計上の不変条件**
 - 公開関数は `$Failed` を返さず常に `Association` を返し、必ず `"Status"` キーを持つ。
@@ -15,17 +16,51 @@ UTF-8 ファイルなので `Block[{$CharacterEncoding="UTF-8"}, Get["SourceVaul
 - HTTP 層は `$SourceVaultComfyUIHTTPHook` で差し替え可能（テスト時 mock）。
 - `SourceVaultComfyUISubmitExternal` は ClaudeOrchestrator External executor backend (Phase 0.5) が前提であり、未整備の場合は `"ExternalBackendDispatchUnavailable"` を返す stub になる。
 
+## ★ 対話ノートブックから画像/動画を生成する（ClaudeEval 推奨レシピ）
+
+「ComfyUI の <workflow名> で〜の画像を生成して」という要求には**この 1 呼び出しをそのまま使う**。
+
+```mathematica
+(* プロンプトは必ず英語へ翻訳して渡す (SDXL 等 CLIP 系は日本語が効きにくい) *)
+SourceVaultComfyUIGenerateToNotebook["sdxl_simple_example2",
+  "a boy sprinting at full speed across a grassland"]
+```
+
+これ 1 つで「adapter の自動ロード → Activate（grant/poll tick）→ workflow 未登録なら server 保存分から自動取り込み → 非ブロック投入 → 完了待ち → 生成画像を privacy marking 付きセルとしてノートブックへ挿入」まで行う。SDXL で数十秒かかる。返り値は `<|"Status"->"OK","URI"->"sv://artifact/...","Displayed"->True,...|>`。
+
+**重要な制約**:
+- **`Get` / `Import` / `Export` は ForbiddenHead**（安全検証で拒否される）。生成コードに書いてはならない。パッケージのロードは上記関数（または `SourceVaultComfyUIEnsureLoaded[]`）が内部で行う。
+- 詳細な vars を渡す場合は第 2 引数を Association に:
+  `SourceVaultComfyUIGenerateToNotebook["sdxl_simple_example2", <|"Prompt" -> "...", "NegativePrompt" -> "...", "Seed" -> 999, "Width" -> 1024, "Height" -> 1024|>]`
+- Options: `"PrivacyLevel" -> 0.0`, `"TimeoutSeconds" -> 600`。
+
+**手動フロー（セルを分けて非ブロックで進めたい場合）**:
+
+```mathematica
+(* セル1: 投入 (即 Queued が返り FE は固まらない) *)
+res = SourceVaultComfyUISubmitExternal["sdxl_simple_example2",
+  <|"Prompt" -> "a boy sprinting across a grassland", "Seed" -> 999|>,
+  "PrivacyLevel" -> 0.0]
+
+(* セル2 (数十秒後): Done を確認し Out トークンの URI を表示 *)
+ClaudeOrchestrator`Workflow`ClaudeWorkflowState[res["WorkflowId"]]   (* Status -> "Done" *)
+NBAccess`NBInsertArtifactCell[EvaluationNotebook[], "sv://artifact/artifact-..."]
+```
+
+- 利用可能な workflow 名は `SourceVaultComfyUIServerWorkflowsView[]`（server 保存分）と `SourceVaultComfyUIWorkflows[]`（取り込み済み）で確認する。これらも自動ロード対応。
+- `Variables` が自動検出されなかった workflow（prompt/sampler の無い upscale 系等）では vars に `"Prompt"` を渡しても効かない。`SourceVaultComfyUIWorkflow[name]` の `Meta→Variables` で受け付ける変数名を確認する。
+
 **主要な利用パターン**
 
-```
-(* 1. 同期 debug 実行 (非 FE / wolframscript) *)
+```mathematica
+(* 1. 対話 1 枚生成 (上の推奨レシピ) *)
 SourceVaultComfyUIRunWorkflow["myWF", <|"Prompt" -> "a cat"|>]
 
-(* 2. in-workflow jobSpec 構築 (ClaudeOrchestrator 遷移内) *)
-SourceVaultComfyUIGenerate[<|"Prompt"->"a dog","ProviderOptions"-><|"Workflow"->"myWF"|>|>]
+(* 2. 非ブロック投入 (動画/バッチ。ClaudeOrchestrator engine ロード済み環境) *)
+SourceVaultComfyUISubmitExternal["myWF", <|"Prompt" -> "a dog"|>, "PrivacyLevel" -> 0.0]
 
-(* 3. 非ブロック投入 (External executor 有効時) *)
-SourceVaultComfyUIGenerate[spec, "Mode" -> "Async"]
+(* 3. in-workflow jobSpec 構築 (ClaudeOrchestrator 遷移内。HTTP を叩かない) *)
+SourceVaultComfyUIGenerate[<|"Prompt"->"a dog","ProviderOptions"-><|"Workflow"->"myWF"|>|>]
 ```
 
 ## 設定変数
@@ -151,10 +186,47 @@ SourceVaultComfyUIRenderWorkflow["sdxl_basic",
   <|"Prompt" -> "a cat", "Seed" -> 42, "Width" -> 1024, "Height" -> 1024|>]
 ```
 
+## Server workflow の一覧・取り込み
+
+ComfyUI frontend の「ワークフロー」ブラウズに見える server 保存 workflow (userdata API) を、Wolfram 側から一覧・取得・registry へ取り込みできる。**手動の API エクスポートは不要**（browser 形式は自動変換される）。
+
+### SourceVaultComfyUIServerWorkflows[opts] → Association
+server 保存 workflow を一覧する。
+→ `<|"Status","Workflows"->{<|"Name","Path","Size","Modified","Registered"|>,...}|>`（`Registered` は registry 取り込み済みか）
+Options: `"Directory" -> "workflows"`
+
+### SourceVaultComfyUIServerWorkflowsView[opts] → Dataset
+上の Dataset 表示版。Options: `"Limit" -> 50`。
+
+### SourceVaultComfyUIFetchServerWorkflow[name] → Association
+server 保存 workflow の JSON を取得し形式を判定する。
+→ `<|"Status","Name","Path","Format"->{"API"|"Browser"},"Workflow"|>`
+`name` は `"upscaled_video"` のように拡張子・ディレクトリ無しでよい（自動補完）。
+
+### SourceVaultComfyUIConvertWorkflow[browserWF, opts] → Association
+frontend 通常保存形式 (nodes/links) を API format へ **best-effort 変換**する。`/object_info` の入力スキーマで widgets_values を input 名へ対応付け、Reroute 追跡・PrimitiveNode 値化・`control_after_generate` スキップを行う。muted/bypassed/group node は警告してスキップ。
+→ `<|"Status","Workflow","Warnings"|>`（`Warnings` を必ず確認し、変換後は検証・テスト実行を推奨）
+
+### SourceVaultComfyUIImportServerWorkflow[name, opts] → Association
+**一発取り込み**: 取得 → (browser 形式なら API へ変換) → Variables/Outputs 自動検出 → registry 登録。
+→ `<|"Status","Name","Format","Warnings","Variables","Outputs","Kind","Registration","Workflow"|>`
+Options:
+- `"Name" -> Automatic`（登録名。既定は拡張子抜きファイル名）
+- `"Variables" -> Automatic`（sampler の seed/noise_seed、positive/negative リンク先 TextEncode の text、latent 先の width/height を自動検出。明示指定も可）
+- `"Outputs" -> Automatic`（object_info の output_node フラグから自動検出。Video 系 class は Videos へ）
+- `"Kind" -> Automatic`（Videos 非空なら `"Video"`）
+- `"Register" -> True`（False で変換結果のみ返し登録しない）
+
+例:
+```mathematica
+SourceVaultComfyUIServerWorkflowsView[]                       (* 一覧 *)
+SourceVaultComfyUIImportServerWorkflow["sdxl_simple_example2"] (* 取り込み *)
+```
+
 ## Job 実行
 
 ### SourceVaultComfyUIQueuePrompt[workflow, opts]
-API format workflow を `/prompt` に POST し prompt_id を返す。
+API format workflow を `/prompt` に POST し prompt_id を返す。過剰実行対策として `SourceVaultRateLimit["ComfyUISubmit"]` をチョークポイントとする。
 → `<|"Status","PromptId","ClientId","NodeErrors"|>`
 Options: `"ClientId" -> Automatic`（Automatic で `"sv-comfy-<random>"` を生成）
 
@@ -198,9 +270,10 @@ SourceVaultComfyUIBuildJobSpec[<|
 ```
 
 ### SourceVaultComfyUISubmitExternal[workflowOrName, vars_Association:<||>, opts]
-ComfyUI job を ClaudeOrchestrator External executor backend（`Backend->"ComfyUI"`）として 1 遷移 WorkflowNet で非ブロック投入する。
-→ `<|"Status"->{"Submitted"|"Error"},"WorkflowId","PromptId"|>`
-ClaudeOrchestrator`Workflow` engine が未ロード/未 activate なら `"ExternalExecutorInactive"`、backend dispatch 未整備なら `"ExternalBackendDispatchUnavailable"` を返す。完了時の deposit/反映は status reader と completion hook が担う。
+ComfyUI job を ClaudeOrchestrator External executor backend（`Backend->"ComfyUI"`）として 1 遷移 WorkflowNet で**非ブロック投入**する（即返り、FE を固めない）。内部で backend 登録・grant 確保・poll tick 起動を自己治癒する（冪等）。
+→ `<|"Status"->"Queued","Provider","WorkflowId","PromptId","JobId","Awaiting"->True|>`
+生成は背景の poll tick が進め、完了時に deposit されて workflow が Done になる。進捗は `SourceVaultComfyUIJobStatus[promptId]`、結果 URI は `ClaudeOrchestrator`Workflow`ClaudeWorkflowState[workflowId]` の Out トークン Payload（`"SourceVaultRef"`）で得られる。表示は `NBAccess`NBInsertArtifactCell[uri]`。
+ClaudeOrchestrator`Workflow` engine が未ロードなら `"ExternalExecutorInactive"`、backend dispatch 未整備なら `"ExternalBackendDispatchUnavailable"` を返す。
 Options:
 - `"PrivacyLevel" -> Automatic`
 - `"NotifyNotebook" -> None`（完了通知先 notebook）
@@ -209,8 +282,8 @@ Options:
 ComfyUI 用の launcher/status reader/killer を `ClaudeOrchestrator`Workflow`ClaudeRegisterExternalBackend` へ登録する（冪等）。orchestrator backend dispatch が未整備なら `"ExternalBackendDispatchUnavailable"` を返す。
 
 ### SourceVaultComfyUIActivate[opts] → Association
-ComfyUI を非ブロック生成 provider として live 稼働させる（冪等）。1 カーネルセッションに 1 回呼ぶ。処理順: (1) backend 登録、(2) auto-commit 用 DepositArtifact grant を発行して `$SourceVaultComfyUIDepositGrant` に設定、(3) `ClaudeRuntime`ClaudeActivateExternalExecutor` で poll tick を共有タスクへ登録。
-→ `<|"Status","BackendRegistered","GrantIssued","ExecutorActivated"|>`
+ComfyUI を非ブロック生成 provider として live 稼働させる（冪等）。1 カーネルセッションに 1 回呼ぶ。処理順: (1) backend 登録、(2) auto-commit 用 DepositArtifact grant を発行して `$SourceVaultComfyUIDepositGrant` に設定、(3) poll tick を共有タスクへ登録（`ClaudeRuntime_externalrunner` ロード済みならフル activate、未ロードでも `ClaudeExternalJobPollTick` を直接登録して背景進行させる `Via->"DirectPollTick"`）。
+→ `<|"Status"->{"OK"|"Partial"},"Backend","Grant","Executor","DepositMode"|>`（`Grant` の Status が OK なら auto-commit 可）
 Options:
 - `"RenewGrant" -> False`（True で grant 再発行）
 - `"GrantTTLSeconds" -> 86400`
@@ -223,11 +296,12 @@ Options:
 - `"PrivacyLevel" -> Automatic`
 - `"Provenance" -> <||>`（artifact provenance に merge される追加メタデータ）
 
-## 同期 debug 実行
+## 同期実行
 
 ### SourceVaultComfyUIRunWorkflow[workflowOrName, vars_Association:<||>, opts]
-同期 debug 経路（submit → poll loop → fetch → deposit）。FrontEnd を持たない wolframscript / subkernel 用であり、main kernel / notebook のデフォルトにしてはならない。
+同期経路（submit → poll loop → fetch → deposit）。生成が終わるまでカーネルをブロックする。**ユーザーが明示要求した対話的な 1 枚生成では使ってよい**（SDXL で数十秒の通常の長い評価）。動画・複数枚・バッチ・orchestrator/背景経路では使わず `SourceVaultComfyUISubmitExternal`（非ブロック）を使う。
 → `<|"Status"->{"OK"|"Error"|"Timeout"},"Provider","PromptId","Artifacts","Outputs","WorkflowHash"|>`
+`Artifacts` の各要素: deposit 成功時は `"URI"->"sv://artifact/..."`（表示は `NBAccess`NBInsertArtifactCell[uri]`）、deposit backend/grant 無し時は `"File"`（ローカルキャッシュパス。`Import[file]` で表示可）。
 Options:
 - `"PollInterval" -> 1.5`（ポーリング間隔秒）
 - `"Deposit" -> Automatic`（False で materialize/deposit を完全 skip）
@@ -241,6 +315,16 @@ SourceVaultComfyUIRunWorkflow["sdxl_basic",
 ```
 
 ## Provider エントリポイント
+
+### SourceVaultComfyUIGenerateToNotebook[workflowName, promptOrVars, opts] → Association
+ClaudeEval 向け一括関数（★冒頭レシピ参照）。adapter 自動ロード → Activate → 未登録なら server から取り込み → `SubmitExternal` 非ブロック投入 → 完了待ち（評価中は背景 tick が回らないため poll tick を手動駆動）→ deposit URI を `NBAccess`NBInsertArtifactCell` で表示。
+→ `<|"Status"->{"OK"|"Timeout"|"Error"},"URI","Displayed","MediaKind","PrivacyLevel","PromptId","WorkflowId"|>`
+Options: `"PrivacyLevel" -> 0.0`, `"TimeoutSeconds" -> 600`, `"PollInterval" -> 3.0`, `"Notebook" -> Automatic`
+`promptOrVars`: 英語プロンプト文字列、または `<|"Prompt"->...,"NegativePrompt"->...,"Seed"->...,"Width"->...,"Height"->...|>`。
+
+### SourceVaultComfyUIEnsureLoaded[] → Association
+`SourceVault_comfyui.wl` を on-demand ロードする（冪等。auto-load される SourceVault.wl 側が提供）。ClaudeEval 生成コードは `Get` の代わりにこれを使う。
+→ `<|"Status"->{"AlreadyLoaded"|"Loaded"|"Error"}|>`
 
 ### SourceVaultComfyUIGenerate[spec_Association, opts]
 provider 専用エントリポイント。`"Mode"` で動作を切り替える。

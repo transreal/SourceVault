@@ -71,6 +71,7 @@ snapshot の暗号化 body を復号して返す (MAC 検証経由)。
 period: `"YYYYMM"` | `{fromYYYYMM, toYYYYMM}` | `"Latest"` / Automatic | 整数n (直近n月) | All
 → Association `<|Status, MBox, Period, Shards, NewlyLoaded, InMemory|>`
 例: `SourceVaultMailEnsureLoaded["imai", 3]` (直近3月ロード)
+**注**: 検索して表示するだけなら EnsureLoaded は不要 — `SourceVaultMailSearchIndexView`（索引 sidecar 検索＋✉/☰ で必要シャードだけ遅延ロード）を使う。`All` の全ロードは全期間の一括処理（サマリー付与・identity backfill 等）専用。
 
 ### SourceVaultMailLoadShard["mbox/yyyymm"]
 1シャードをロードする。
@@ -86,6 +87,10 @@ period: `"YYYYMM"` | `{fromYYYYMM, toYYYYMM}` | `"Latest"` / Automatic | 整数n
 ### SourceVaultMailMigrateToShards[]
 旧単一ファイル snapshots.svmail を mbox×月のシャードに移行し、旧ファイルを .premigration.bak にリネームする。
 → Association `<|Status, Snapshots, Shards, OldFile|>`
+
+### SourceVaultMailInteractionStats[recordId_String]
+メール操作記録 `<|"OpenCount","LastOpened","RepliedCount","RepliedAt"|>` を返す。本文表示で開封回数、返信送信で返信済を記録する。引数なし版 `SourceVaultMailInteractionStats[]` は全件 (RecordId キー) を返す。記録は `<storeRoot>/interaction.json` (Dropbox 共有)。
+→ Association
 
 ## 検索・索引
 
@@ -113,9 +118,19 @@ Options: "From" -> Automatic, "To" -> Automatic, "FromContact" -> Automatic, "MB
 → Dataset
 
 ### SourceVaultMailSearchIndex[query_String:"", opts]
-ディスク上の軽量メタデータ索引 (.svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ。
+ディスク上の軽量メタデータ索引 (.svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担）。
 → List[Association] (SummaryRow 形 + Summary + FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey/AccessTags/IndexSchemaVersion)
 例: `SourceVaultMailSearchIndex["報告", "MBox"->"imai", "Limit"->50]`
+
+### SourceVaultMailSearchIndexView[query_String:"", opts]
+`SourceVaultMailSearchIndex` の **View 版**。索引 sidecar だけで検索し（**SourceVaultMailEnsureLoaded 不要・シャード非ロード＝速い/省メモリ**）、結果を UI つき Dataset で表示する。行ごとに **✉**（本文表示: その行の shard だけを遅延ロードして復号・別窓表示）と **☰**（スレッド窓: `SourceVaultMailThreadNotebook`）。表示件数は `$SourceVaultMailViewMaxRows` で制限。PL≥0.5 を含む結果は機密ラップ。**メール検索のノートブック表示はまずこれを使う**（全シャードロードが不要）。opts は SourceVaultMailSearchIndex と同じ。
+→ Pane[Dataset] (UI)
+例: `SourceVaultMailSearchIndexView["Zoom", "MBox"->"univ", "SortBy"->"Date", "SortOrder"->"Desc"]`
+
+### SourceVaultMailThreadNotebook[recordIdOrRow, opts]
+スレッド全体を **1 つのノートブック窓にアウトライン表示**する (front end)。スレッド＝同一 MBox・正規化件名（Re:/Fwd: 剥がし）一致で、**メンバー特定は索引 sidecar のみ**。本文表示に必要なシャードだけ遅延ロードして復号し、各メールを `Section`（日付＋差出人）＋`Subsection`（件名）＋本文 `Text` のセルグループで並べる＝FE のアウトライン/折りたたみ操作がそのまま効く。全セルはスレッド最大 PrivacyLevel で機密マーク（この窓からの LLM 呼び出しは cloud gate 対象）。開封記録も付く。opts: `"MaxMails"`(50)。
+→ Association `<|Status("Shown"|"NoFrontEnd"), Mails, PrivacyLevel, LoadedShards|>`
+例: 検索行の ☰ ボタン、または `SourceVaultMailThreadNotebook[recordId]`
 
 ### SourceVaultMailIndexGet[recordId_String]
 索引 sidecar から該当 RecordId の低漏洩メタ/サマリー行を1件返す (snapshot 本体はロードしない)。MCP の単一 URI 解決用。
@@ -334,6 +349,10 @@ mail snapshot store のルート。テストで上書き可能。
 ### $SourceVaultDefaultImportedMailPL
 型: Real, 初期値: 0.85
 import 時のメール本文 PL 既定 (fail-safe)。maildb の privacy フィールドは信用しない。
+
+### $SourceVaultMailPersonalPrivacyFloor
+型: Real, 初期値: 0.6
+個人宛メール (オーナーが直接の To/Cc・非 bulk・少数宛 ≤4 名) の派生 PrivacyLevel 下限。LLM 推論が個人メールの PL を下げ過ぎて cloud gate を漏れるのを防ぐ決定的フロア。0.0 で無効化。owner 未設定時は無効。
 
 ### $SourceVaultMailConfigRoot
 型: String, 初期値: PrivateVault/config

@@ -78,6 +78,13 @@ SourceVaultComfyUIWorkflow::usage = "SourceVaultComfyUIWorkflow[name, opts] は�
 SourceVaultComfyUIValidateWorkflow::usage = "SourceVaultComfyUIValidateWorkflow[workflowOrRecord, opts] は API format 整形式・Variables/Outputs の node 実在を検査する。opts: \"Variables\",\"Outputs\",\"ObjectInfo\"(RequiredModels 確認用)。";
 SourceVaultComfyUIRenderWorkflow::usage = "SourceVaultComfyUIRenderWorkflow[workflowOrName, vars_Association, opts] は Variables マッピングに従って vars を API JSON の node/input に inject した workflow を返す。";
 
+(* ---- Server workflow (userdata) 取り込み ---- *)
+SourceVaultComfyUIServerWorkflows::usage = "SourceVaultComfyUIServerWorkflows[opts] は ComfyUI server 側に保存されているユーザー定義 workflow (userdata API, frontend の「ワークフロー」ブラウズに見えるもの) を一覧する。返り <|\"Status\",\"Workflows\"->{<|\"Name\",\"Path\",\"Size\",\"Modified\",\"Registered\"|>..}|>。Registered は同名が SourceVault registry に取り込み済みか。表示は SourceVaultComfyUIServerWorkflowsView。";
+SourceVaultComfyUIServerWorkflowsView::usage = "SourceVaultComfyUIServerWorkflowsView[opts] は SourceVaultComfyUIServerWorkflows の Dataset 表示版。opts: \"Limit\" (既定 50)。";
+SourceVaultComfyUIFetchServerWorkflow::usage = "SourceVaultComfyUIFetchServerWorkflow[name] は server 保存 workflow の JSON を取得し形式を判定する。返り <|\"Status\",\"Name\",\"Format\"->\"API\"|\"Browser\",\"Workflow\"|>。";
+SourceVaultComfyUIConvertWorkflow::usage = "SourceVaultComfyUIConvertWorkflow[browserWF, opts] は frontend 通常保存形式 (nodes/links) を API format へ best-effort 変換する。/object_info の入力スキーマで widgets_values を input 名へ対応付け、link 解決 (Reroute 追跡・PrimitiveNode 値化・control_after_generate スキップ) を行う。muted/bypassed node や group node は警告。返り <|\"Status\",\"Workflow\",\"Warnings\"|>。変換後は SourceVaultComfyUIValidateWorkflow と実機テスト実行での確認を推奨。";
+SourceVaultComfyUIImportServerWorkflow::usage = "SourceVaultComfyUIImportServerWorkflow[name, opts] は server 保存 workflow を取得し (browser 形式なら API へ変換し)、Variables/Outputs を自動検出して SourceVault registry へ登録する。opts: \"Name\"->Automatic (拡張子抜きファイル名), \"Variables\"->Automatic (Seed/Prompt/NegativePrompt/Width/Height を sampler 近傍から自動検出), \"Outputs\"->Automatic (output node 自動検出), \"Kind\"->Automatic, \"Register\"->True (False で登録せず変換結果のみ返す)。返り <|\"Status\",\"Name\",\"Format\",\"Warnings\",\"Variables\",\"Outputs\",\"Registration\"|>。";
+
 (* ---- Job 実行 ---- *)
 SourceVaultComfyUIQueuePrompt::usage = "SourceVaultComfyUIQueuePrompt[workflow, opts] は API format workflow を /prompt に POST し prompt_id を返す。";
 SourceVaultComfyUIPoll::usage = "SourceVaultComfyUIPoll[promptId, opts] は /queue と /history を確認して job 状態 (Running/Completed/Failed/Lost) を返す。transient HTTP 失敗は Running 扱い。opts: \"Seen\"(観測済みフラグ),\"Queue\",\"History\"(注入用 snapshot)。";
@@ -90,6 +97,7 @@ SourceVaultComfyUIActivate::usage = "SourceVaultComfyUIActivate[opts] は ComfyU
 SourceVaultComfyUIDepositOutputs::usage = "SourceVaultComfyUIDepositOutputs[promptIdOrHistory, opts] は出力ファイルを /view で取得し SourceVaultMCPDeposit へ渡して artifact URI を返す。deposit gate/quota 失敗時は job を成功扱いにしつつ \"DepositDenied\"/\"DepositQuotaExceeded\" を残す。";
 SourceVaultComfyUIRunWorkflow::usage = "SourceVaultComfyUIRunWorkflow[workflowOrName, vars:<||>, opts] は同期 debug 経路 (submit -> poll loop -> fetch -> deposit)。FrontEnd を持たない wolframscript / subkernel 用であり、main kernel / notebook 既定にしてはならない。";
 SourceVaultComfyUIGenerate::usage = "SourceVaultComfyUIGenerate[spec_Association, opts] は provider 専用 entry point。opts \"Mode\"->\"BuildJobSpec\"(既定, in-workflow helper)|\"DebugSync\"(非 FE)|\"Async\"(External 投入, 現状 stub)。";
+SourceVaultComfyUIGenerateToNotebook::usage = "SourceVaultComfyUIGenerateToNotebook[workflowName, promptOrVars, opts] は ClaudeEval 向け高水準関数: (1) Activate(冪等) (2) workflow 未登録なら server 保存分から自動取り込み (3) SubmitExternal で非ブロック投入 (4) 完了まで poll tick を手動駆動して待機 (5) deposit URI を NBAccess`NBInsertArtifactCell でノートブックへ表示、まで一括で行う。promptOrVars は英語プロンプト文字列または vars Association。ClaudeEval 生成コードは Get/Import が ForbiddenHead のため、この 1 呼び出しにまとめる。返り <|\"Status\",\"URI\",\"Displayed\",\"PromptId\",\"WorkflowId\",...|>。opts: \"PrivacyLevel\"->0.0, \"TimeoutSeconds\"->600, \"PollInterval\"->3.0, \"Notebook\"->Automatic。";
 
 Begin["`Private`"];
 
@@ -202,7 +210,10 @@ iSVCFHTTPRaw[method_String, endpoint_String, query_List : {}, body_ : None] :=
         bodyOut = Lookup[r, "Body", ""];
         Return[<|"Status" -> If[code === 200, "OK", "Error"],
           "StatusCode" -> code, "Body" -> bodyOut|>]]];
-    url = URLBuild[iSVCFBaseURL[] <> endpoint, query];
+    (* query 無しの endpoint は URLBuild を通さない (path 内の %2F 等の
+       事前エンコードを URLBuild が再解釈するのを避ける。userdata API 用)。 *)
+    url = If[query === {}, iSVCFBaseURL[] <> endpoint,
+      URLBuild[iSVCFBaseURL[] <> endpoint, query]];
     req = Switch[method,
       "GET", HTTPRequest[url, <|"Method" -> "GET"|>],
       "POST", If[body === None,
@@ -515,6 +526,289 @@ SourceVaultComfyUIValidateWorkflow[workflowOrRecord_, OptionsPattern[]] :=
       <|"Status" -> "Error", "Reason" -> "ValidationFailed", "Issues" -> issues|>]];
 
 (* ============================================================
+   Server workflow (userdata) 一覧・取得・取り込み
+   - ComfyUI frontend の「ワークフロー」ブラウズ = server の userdata API
+     (GET /userdata?dir=workflows, GET /userdata/workflows%2F<name>)。
+   - server 保存は通常 browser 形式 (nodes/links)。API format への変換は
+     /object_info の入力スキーマに基づく best-effort (警告付き)。
+   ============================================================ *)
+
+iSVCFBrowserFormatQ[wf_Association] :=
+  KeyExistsQ[wf, "nodes"] && KeyExistsQ[wf, "links"];
+iSVCFBrowserFormatQ[_] := False;
+
+(* /object_info の TTL cache (300s)。変換と Outputs 検出に使う。 *)
+If[! ListQ[$iSVCFObjectInfoCache], $iSVCFObjectInfoCache = {}];
+iSVCFObjectInfoCached[] :=
+  Module[{now = AbsoluteTime[], r},
+    If[Length[$iSVCFObjectInfoCache] === 2 && now - $iSVCFObjectInfoCache[[1]] < 300,
+      Return[$iSVCFObjectInfoCache[[2]]]];
+    r = SourceVaultComfyUIObjectInfo[];
+    If[Lookup[r, "Status", ""] =!= "OK", Return[$Failed]];
+    $iSVCFObjectInfoCache = {now, r["Data"]};
+    r["Data"]];
+
+Options[SourceVaultComfyUIServerWorkflows] = {"Directory" -> "workflows"};
+SourceVaultComfyUIServerWorkflows[OptionsPattern[]] :=
+  Module[{r, entries, reg, regNames},
+    r = iSVCFGetJSON["/userdata",
+      {"dir" -> OptionValue["Directory"], "recurse" -> "true",
+       "split" -> "false", "full_info" -> "true"}];
+    If[Lookup[r, "Status", ""] =!= "OK",
+      Return[<|"Status" -> "Error",
+        "Reason" -> Lookup[r, "Reason", "UserdataUnavailable"],
+        "Hint" -> "userdata API は ComfyUI のバージョンに依存します (/object_info と同様に実機確認)。"|>]];
+    entries = Lookup[r, "Data", {}];
+    If[! ListQ[entries], entries = {}];
+    reg = SourceVaultComfyUIWorkflows[];
+    regNames = Lookup[#, "Name", ""] & /@ Lookup[reg, "Workflows", {}];
+    <|"Status" -> "OK", "Workflows" -> (Function[e,
+        Module[{path, name, size, mod},
+          Which[
+            AssociationQ[e],
+              path = ToString @ Lookup[e, "path", ""];
+              size = Lookup[e, "size", Missing[]];
+              mod = With[{m = Lookup[e, "modified", Missing[]]},
+                If[NumericQ[m], Quiet@Check[FromUnixTime[m], Missing[]], Missing[]]],
+            StringQ[e], path = e; size = Missing[]; mod = Missing[],
+            True, path = ""; size = Missing[]; mod = Missing[]];
+          name = FileBaseName[path];
+          <|"Name" -> name, "Path" -> path, "Size" -> size, "Modified" -> mod,
+            "Registered" -> MemberQ[regNames, name]|>]] /@ entries)|>];
+
+Options[SourceVaultComfyUIServerWorkflowsView] = {"Limit" -> 50, "Directory" -> "workflows"};
+SourceVaultComfyUIServerWorkflowsView[OptionsPattern[]] :=
+  Module[{r = SourceVaultComfyUIServerWorkflows["Directory" -> OptionValue["Directory"]],
+          rows, lim = OptionValue["Limit"]},
+    If[Lookup[r, "Status", ""] =!= "OK", Return[r]];
+    rows = r["Workflows"];
+    If[IntegerQ[lim] && Length[rows] > lim, rows = Take[rows, lim]];
+    Dataset[KeyTake[#, {"Name", "Path", "Size", "Modified", "Registered"}] & /@ rows]];
+
+SourceVaultComfyUIFetchServerWorkflow[name_String, ___] :=
+  Module[{path, r, wf},
+    (* 拡張子・ディレクトリを補完: "upscaled_video" -> "workflows/upscaled_video.json" *)
+    path = name;
+    If[! StringContainsQ[path, "/"], path = "workflows/" <> path];
+    If[! StringEndsQ[ToLowerCase[path], ".json"], path = path <> ".json"];
+    r = iSVCFGetJSON["/userdata/" <> URLEncode[path]];
+    If[Lookup[r, "Status", ""] =!= "OK",
+      Return[<|"Status" -> "Error", "Reason" -> Lookup[r, "Reason", "FetchFailed"],
+        "Path" -> path|>]];
+    wf = Lookup[r, "Data", $Failed];
+    If[! AssociationQ[wf],
+      Return[<|"Status" -> "Error", "Reason" -> "BadJSON", "Path" -> path|>]];
+    <|"Status" -> "OK", "Name" -> FileBaseName[path], "Path" -> path,
+      "Format" -> Which[iSVCFAPIFormatQ[wf], "API",
+        iSVCFBrowserFormatQ[wf], "Browser", True, "Unknown"],
+      "Workflow" -> wf|>];
+
+(* ---- browser -> API 変換 ---- *)
+
+(* links: {id, srcNode, srcSlot, dstNode, dstSlot, type} (list) | assoc 形の両対応 *)
+iSVCFLinkMap[links_List] :=
+  Association @ Map[Function[l, Which[
+      ListQ[l] && Length[l] >= 5, l[[1]] -> {l[[2]], l[[3]]},
+      AssociationQ[l], Lookup[l, "id", Missing[]] ->
+        {Lookup[l, "origin_id", Missing[]], Lookup[l, "origin_slot", 0]},
+      True, Missing[] -> Missing[]]],
+    links];
+iSVCFLinkMap[_] := <||>;
+
+(* spec entry が widget (値をノードに直接持つ) か connection かの判定。
+   {"INT",opts}/{"FLOAT",..}/{"STRING",..}/{"BOOLEAN",..}/combo(list)/"COMBO" は widget、
+   opts に forceInput があれば connection。その他の型文字列は connection。 *)
+iSVCFWidgetInputQ[ispec_List] :=
+  Module[{t = If[Length[ispec] >= 1, ispec[[1]], Missing[]],
+          o = If[Length[ispec] >= 2 && AssociationQ[ispec[[2]]], ispec[[2]], <||>]},
+    If[TrueQ[Lookup[o, "forceInput", False]], Return[False]];
+    ListQ[t] || MemberQ[{"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"}, t]];
+iSVCFWidgetInputQ[_] := False;
+
+iSVCFControlAfterGenQ[ispec_List] :=
+  Length[ispec] >= 2 && AssociationQ[ispec[[2]]] &&
+  KeyExistsQ[ispec[[2]], "control_after_generate"];
+iSVCFControlAfterGenQ[_] := False;
+
+(* origin {nodeId, slot} を Reroute 越しに解決。PrimitiveNode は Missing を返し
+   呼び出し側が widget 値へフォールバックする。 *)
+iSVCFResolveOrigin[{src_, slot_}, nodeById_Association, linkMap_Association, depth_ : 0] :=
+  Module[{n = Lookup[nodeById, src, Missing[]], inLink},
+    If[depth > 20 || ! AssociationQ[n], Return[{src, slot}]];
+    If[Lookup[n, "type", ""] === "Reroute",
+      inLink = FirstCase[Lookup[n, "inputs", {}],
+        i_Association /; Lookup[i, "link", Null] =!= Null :> i["link"], Missing[]];
+      If[MissingQ[inLink] || ! KeyExistsQ[linkMap, inLink], Return[Missing["Dangling"]]];
+      Return[iSVCFResolveOrigin[linkMap[inLink], nodeById, linkMap, depth + 1]]];
+    {src, slot}];
+
+Options[SourceVaultComfyUIConvertWorkflow] = {"ObjectInfo" -> Automatic};
+SourceVaultComfyUIConvertWorkflow[browser_Association, OptionsPattern[]] :=
+  Module[{objInfo, nodes, links, linkMap, nodeById, api = <||>, warnings = {},
+          skipTypes = {"Note", "MarkdownNote", "Reroute", "PrimitiveNode"}},
+    If[! iSVCFBrowserFormatQ[browser],
+      Return[If[iSVCFAPIFormatQ[browser],
+        <|"Status" -> "OK", "Workflow" -> browser, "Warnings" -> {"AlreadyAPIFormat"}|>,
+        <|"Status" -> "Error", "Reason" -> "NotBrowserFormat"|>]]];
+    objInfo = OptionValue["ObjectInfo"];
+    If[objInfo === Automatic, objInfo = iSVCFObjectInfoCached[]];
+    If[! AssociationQ[objInfo],
+      Return[<|"Status" -> "Error", "Reason" -> "ObjectInfoUnavailable",
+        "Hint" -> "変換には /object_info (ComfyUI 到達) が必要です。"|>]];
+    nodes = Lookup[browser, "nodes", {}];
+    links = Lookup[browser, "links", {}];
+    linkMap = iSVCFLinkMap[links];
+    nodeById = Association @ Map[Lookup[#, "id", Missing[]] -> # &, nodes];
+    Scan[Function[node, Module[
+        {id, cls, mode, spec, reqIn, optIn, order, linked, wvals, wvalsAssocQ,
+         wi = 1, inputs = <||>, primVal},
+      id = ToString @ Lookup[node, "id", ""];
+      cls = ToString @ Lookup[node, "type", ""];
+      mode = Lookup[node, "mode", 0];
+      Which[
+        MemberQ[skipTypes, cls], Null,
+        StringStartsQ[cls, "workflow/"] || StringStartsQ[cls, "workflow>"],
+          AppendTo[warnings, "GroupNodeNotSupported: " <> cls],
+        mode === 2 || mode === 4,
+          AppendTo[warnings,
+            "SkippedNode(" <> If[mode === 2, "muted", "bypassed"] <> "): " <> id <> " " <> cls],
+        ! KeyExistsQ[objInfo, cls],
+          AppendTo[warnings, "UnknownClassType: " <> cls <> " (node " <> id <> ")"],
+        True,
+          spec = objInfo[cls];
+          reqIn = Quiet@Check[Lookup[Lookup[spec, "input", <||>], "required", <||>], <||>];
+          optIn = Quiet@Check[Lookup[Lookup[spec, "input", <||>], "optional", <||>], <||>];
+          If[! AssociationQ[reqIn], reqIn = <||>]; If[! AssociationQ[optIn], optIn = <||>];
+          order = Join[Normal[reqIn], Normal[optIn]];  (* {name -> ispec ..} 順序保存 *)
+          linked = Association @ Map[
+            Function[i, If[AssociationQ[i] && Lookup[i, "link", Null] =!= Null,
+              Lookup[i, "name", ""] -> i["link"], Nothing]],
+            Lookup[node, "inputs", {}]];
+          wvals = Lookup[node, "widgets_values", {}];
+          wvalsAssocQ = AssociationQ[wvals];   (* VHS 等は assoc 形 *)
+          Scan[Function[rule, Module[{iname = rule[[1]], ispec = rule[[2]], val = Missing[]},
+            If[iSVCFWidgetInputQ[ispec],
+              (* widget: 値スロットを (converted-to-input でも) 消費する *)
+              If[wvalsAssocQ,
+                val = Lookup[wvals, iname, Missing[]],
+                If[wi <= Length[wvals], val = wvals[[wi]]; wi++];
+                If[iSVCFControlAfterGenQ[ispec] && wi <= Length[wvals], wi++]];
+              If[KeyExistsQ[linked, iname],
+                (* converted widget が接続されている: PrimitiveNode なら値化 *)
+                With[{org = Lookup[linkMap, linked[iname], Missing[]]},
+                  Which[
+                    MissingQ[org], AppendTo[warnings, "DanglingLink: " <> id <> "." <> iname],
+                    Lookup[Lookup[nodeById, org[[1]], <||>], "type", ""] === "PrimitiveNode",
+                      primVal = Quiet@Check[
+                        First[Lookup[Lookup[nodeById, org[[1]], <||>], "widgets_values", {Missing[]}]],
+                        Missing[]];
+                      If[! MissingQ[primVal], inputs[iname] = primVal],
+                    True,
+                      With[{res = iSVCFResolveOrigin[org, nodeById, linkMap]},
+                        If[! MissingQ[res],
+                          inputs[iname] = {ToString[res[[1]]], res[[2]]},
+                          AppendTo[warnings, "DanglingLink: " <> id <> "." <> iname]]]]],
+                If[! MissingQ[val], inputs[iname] = val]],
+              (* connection 型 *)
+              If[KeyExistsQ[linked, iname],
+                With[{org = Lookup[linkMap, linked[iname], Missing[]]},
+                  If[MissingQ[org],
+                    AppendTo[warnings, "DanglingLink: " <> id <> "." <> iname],
+                    With[{res = iSVCFResolveOrigin[org, nodeById, linkMap]},
+                      If[! MissingQ[res],
+                        inputs[iname] = {ToString[res[[1]]], res[[2]]},
+                        AppendTo[warnings, "DanglingLink: " <> id <> "." <> iname]]]]]]]]],
+            order];
+          api[id] = <|"class_type" -> cls, "inputs" -> inputs|>]]],
+      nodes];
+    If[Length[api] === 0,
+      Return[<|"Status" -> "Error", "Reason" -> "NoConvertibleNodes", "Warnings" -> warnings|>]];
+    <|"Status" -> "OK", "Workflow" -> api, "Warnings" -> warnings|>];
+
+(* ---- Variables / Outputs の自動検出 (登録の便宜。best-effort) ---- *)
+
+iSVCFDetectVariables[api_Association] :=
+  Module[{vars = <||>, sampler, seedKey, findText},
+    sampler = SelectFirst[Normal[api],
+      Function[r, With[{ins = Lookup[r[[2]], "inputs", <||>]},
+        NumericQ[Lookup[ins, "seed", Missing[]]] ||
+        NumericQ[Lookup[ins, "noise_seed", Missing[]]]]], Missing[]];
+    If[! MissingQ[sampler],
+      With[{sid = sampler[[1]], ins = Lookup[sampler[[2]], "inputs", <||>]},
+        seedKey = If[KeyExistsQ[ins, "seed"], "seed", "noise_seed"];
+        vars["Seed"] = <|"Node" -> sid, "Input" -> seedKey|>;
+        findText = Function[role,
+          With[{lnk = Lookup[ins, role, Missing[]]},
+            If[ListQ[lnk] && Length[lnk] >= 1,
+              With[{tn = ToString[lnk[[1]]]},
+                If[AssociationQ[Lookup[api, tn, Missing[]]] &&
+                   StringContainsQ[Lookup[api[tn], "class_type", ""], "TextEncode"] &&
+                   StringQ[Quiet@Check[api[tn]["inputs"]["text"], Missing[]]],
+                  <|"Node" -> tn, "Input" -> "text"|>, Missing[]]],
+              Missing[]]]];
+        With[{p = findText["positive"]}, If[! MissingQ[p], vars["Prompt"] = p]];
+        With[{n = findText["negative"]}, If[! MissingQ[n], vars["NegativePrompt"] = n]];
+        With[{lat = Lookup[ins, "latent_image", Lookup[ins, "latent", Missing[]]]},
+          If[ListQ[lat] && Length[lat] >= 1,
+            With[{ln = ToString[lat[[1]]]},
+              If[AssociationQ[Lookup[api, ln, Missing[]]] &&
+                 IntegerQ[Quiet@Check[api[ln]["inputs"]["width"], Missing[]]] &&
+                 IntegerQ[Quiet@Check[api[ln]["inputs"]["height"], Missing[]]],
+                vars["Width"] = <|"Node" -> ln, "Input" -> "width"|>;
+                vars["Height"] = <|"Node" -> ln, "Input" -> "height"|>]]]]]];
+    vars];
+
+iSVCFDetectOutputs[api_Association, objInfo_] :=
+  Module[{imgs = {}, vids = {}, outQ, videoish},
+    videoish = Function[cls, StringContainsQ[cls,
+      "Video" | "Animated" | "AnimateDiff", IgnoreCase -> True]];
+    outQ = Function[cls,
+      If[AssociationQ[objInfo] && KeyExistsQ[objInfo, cls],
+        TrueQ[Lookup[objInfo[cls], "output_node", False]],
+        StringContainsQ[cls, "Save" | "Preview" | "VideoCombine"]]];
+    KeyValueMap[Function[{id, n},
+      With[{cls = Lookup[n, "class_type", ""]},
+        If[outQ[cls],
+          If[videoish[cls], AppendTo[vids, id], AppendTo[imgs, id]]]]],
+      api];
+    <|"Images" -> imgs, "Videos" -> vids|>];
+
+Options[SourceVaultComfyUIImportServerWorkflow] = {
+  "Name" -> Automatic, "Variables" -> Automatic, "Outputs" -> Automatic,
+  "Kind" -> Automatic, "Register" -> True, "Tags" -> {"imported"}};
+SourceVaultComfyUIImportServerWorkflow[serverName_String, OptionsPattern[]] :=
+  Module[{fetch, api, warnings = {}, conv, vars, outs, kind, name, reg = Missing[], objInfo},
+    fetch = SourceVaultComfyUIFetchServerWorkflow[serverName];
+    If[Lookup[fetch, "Status", ""] =!= "OK", Return[fetch]];
+    Switch[Lookup[fetch, "Format", "Unknown"],
+      "API", api = fetch["Workflow"],
+      "Browser",
+        conv = SourceVaultComfyUIConvertWorkflow[fetch["Workflow"]];
+        If[Lookup[conv, "Status", ""] =!= "OK", Return[conv]];
+        api = conv["Workflow"]; warnings = Lookup[conv, "Warnings", {}],
+      _, Return[<|"Status" -> "Error", "Reason" -> "UnknownWorkflowFormat",
+        "Path" -> Lookup[fetch, "Path", Missing[]]|>]];
+    objInfo = iSVCFObjectInfoCached[];
+    vars = OptionValue["Variables"];
+    If[vars === Automatic, vars = iSVCFDetectVariables[api]];
+    outs = OptionValue["Outputs"];
+    If[outs === Automatic, outs = iSVCFDetectOutputs[api, objInfo]];
+    kind = OptionValue["Kind"];
+    If[kind === Automatic,
+      kind = If[Length[Lookup[outs, "Videos", {}]] > 0, "Video", "Image"]];
+    name = OptionValue["Name"];
+    If[! StringQ[name], name = Lookup[fetch, "Name", serverName]];
+    If[TrueQ[OptionValue["Register"]],
+      reg = SourceVaultComfyUIRegisterWorkflow[name, api,
+        "Kind" -> kind, "Variables" -> vars, "Outputs" -> outs,
+        "Tags" -> OptionValue["Tags"]];
+      If[Lookup[reg, "Status", ""] =!= "Registered", Return[reg]]];
+    <|"Status" -> "OK", "Name" -> name,
+      "Format" -> Lookup[fetch, "Format"], "Warnings" -> warnings,
+      "Variables" -> vars, "Outputs" -> outs, "Kind" -> kind,
+      "Registration" -> reg, "Workflow" -> api|>];
+
+(* ============================================================
    seed / privacy / jobSpec
    ============================================================ *)
 
@@ -579,7 +873,12 @@ SourceVaultComfyUIBuildJobSpec[spec_Association, OptionsPattern[]] :=
 (* /prompt POST。workflow(API JSON) を queue へ。返り prompt_id *)
 Options[SourceVaultComfyUIQueuePrompt] = {"ClientId" -> Automatic};
 SourceVaultComfyUIQueuePrompt[workflow_, OptionsPattern[]] :=
-  Module[{wf = workflow, cid, params, r, pid},
+  Module[{wf = workflow, cid, params, r, pid, rl},
+    (* 過剰実行対策: 全 ComfyUI 投入 (RunWorkflow/SubmitExternal/GenerateToNotebook)
+       のチョークポイント。core 未ロードなら fail-open。 *)
+    rl = Quiet @ Check[SourceVault`SourceVaultRateLimit["ComfyUISubmit"], <|"Allowed" -> True|>];
+    If[! TrueQ[Lookup[rl, "Allowed", True]],
+      Return[<|"Status" -> "Error", "Reason" -> "RateLimitExceeded", "RateLimit" -> rl|>]];
     If[AssociationQ[wf] && KeyExistsQ[wf, "Workflow"], wf = wf["Workflow"]];
     If[! iSVCFAPIFormatQ[wf],
       Return[<|"Status" -> "Error", "Reason" -> "NotAPIFormat"|>]];
@@ -1059,6 +1358,79 @@ SourceVaultComfyUIGenerate[spec_Association, OptionsPattern[]] :=
         SourceVaultComfyUIRunWorkflow[wfName, iSVCFSpecVars[spec]],
       _, <|"Status" -> "Error", "Reason" -> "BadMode", "Mode" -> mode|>]];
 
+(* ============================================================
+   SourceVaultComfyUIGenerateToNotebook -- ClaudeEval 向け一括関数
+   非ブロック投入 → 完了待ち → deposit URI をノートブック表示。
+   評価中は共有 ScheduledTask (背景 poll tick) が回らないため、
+   待機ループ内で ClaudeExternalJobPollTick を手動駆動する。
+   ============================================================ *)
+
+Options[SourceVaultComfyUIGenerateToNotebook] = {
+  "PrivacyLevel" -> 0.0, "TimeoutSeconds" -> 600, "PollInterval" -> 3.0,
+  "Notebook" -> Automatic};
+
+SourceVaultComfyUIGenerateToNotebook[wfName_String, prompt_String,
+    opts : OptionsPattern[]] :=
+  SourceVaultComfyUIGenerateToNotebook[wfName, <|"Prompt" -> prompt|>, opts];
+
+SourceVaultComfyUIGenerateToNotebook[wfName_String, vars_Association,
+    OptionsPattern[]] :=
+  Module[{imp, res, deadline, state = <||>, uri = Missing[], nb, tickOK, ins, v = vars},
+    SourceVaultComfyUIActivate[];
+    If[Lookup[SourceVaultComfyUIWorkflow[wfName], "Status", ""] =!= "OK",
+      imp = SourceVaultComfyUIImportServerWorkflow[wfName];
+      If[Lookup[imp, "Status", ""] =!= "OK", Return[imp]]];
+    If[! KeyExistsQ[v, "Seed"], v = Append[v, "Seed" -> iSVCFResolveSeed[Automatic]]];
+    res = SourceVaultComfyUISubmitExternal[wfName, v,
+      "PrivacyLevel" -> OptionValue["PrivacyLevel"]];
+    If[Lookup[res, "Status", ""] =!= "Queued", Return[res]];
+    tickOK = TrueQ[Quiet@Check[
+      Length[DownValues[ClaudeOrchestrator`Workflow`ClaudeExternalJobPollTick]] > 0, False]];
+    deadline = AbsoluteTime[] + OptionValue["TimeoutSeconds"];
+    While[AbsoluteTime[] < deadline,
+      If[tickOK, Quiet@Check[ClaudeOrchestrator`Workflow`ClaudeExternalJobPollTick[], Null]];
+      state = Quiet@Check[
+        ClaudeOrchestrator`Workflow`ClaudeWorkflowState[res["WorkflowId"]], <||>];
+      If[MemberQ[{"Done", "Cancelled"}, Lookup[state, "Status", ""]], Break[]];
+      Pause[OptionValue["PollInterval"]]];
+    If[Lookup[state, "Status", ""] =!= "Done",
+      Return[<|"Status" -> "Timeout", "Reason" -> "GenerationIncomplete",
+        "WorkflowState" -> Lookup[state, "Status", Missing[]],
+        "PromptId" -> Lookup[res, "PromptId", Missing[]],
+        "WorkflowId" -> Lookup[res, "WorkflowId", Missing[]],
+        "Hint" -> "生成は背景で継続しうる。完了後 NBAccess`NBInsertArtifactCell[uri] で表示可。"|>]];
+    (* Out token の deposit URI (SourceVaultRef) を取り出す *)
+    uri = FirstCase[Values[Lookup[state, "Tokens", <||>]],
+      t_Association /; Lookup[t, "Kind", ""] === "Artifact" &&
+          StringQ[Lookup[Lookup[t, "Payload", <||>], "SourceVaultRef", Missing[]]] :>
+        t["Payload"]["SourceVaultRef"],
+      Missing[]];
+    If[! StringQ[uri],
+      Return[<|"Status" -> "Error", "Reason" -> "NoArtifactURI",
+        "Hint" -> "deposit が grant/approval で保留の可能性 (SourceVaultComfyUIActivate[] の Grant を確認)",
+        "PromptId" -> Lookup[res, "PromptId", Missing[]],
+        "WorkflowId" -> Lookup[res, "WorkflowId", Missing[]]|>]];
+    nb = OptionValue["Notebook"];
+    If[nb === Automatic, nb = Quiet@Check[EvaluationNotebook[], $Failed]];
+    Which[
+      TrueQ[Quiet@Check[
+          Length[DownValues[NBAccess`NBInsertArtifactCell]] === 0, True]],
+        <|"Status" -> "OK", "URI" -> uri, "Displayed" -> False,
+          "Reason" -> "NBAccessNotLoaded",
+          "PromptId" -> Lookup[res, "PromptId", Missing[]]|>,
+      ! MatchQ[nb, _NotebookObject],
+        <|"Status" -> "OK", "URI" -> uri, "Displayed" -> False,
+          "Reason" -> "NoNotebook",
+          "PromptId" -> Lookup[res, "PromptId", Missing[]]|>,
+      True,
+        ins = NBAccess`NBInsertArtifactCell[nb, uri];
+        <|"Status" -> "OK", "URI" -> uri,
+          "Displayed" -> (Lookup[ins, "Status", ""] === "OK"),
+          "MediaKind" -> Lookup[ins, "MediaKind", Missing[]],
+          "PrivacyLevel" -> Lookup[ins, "PrivacyLevel", Missing[]],
+          "PromptId" -> Lookup[res, "PromptId", Missing[]],
+          "WorkflowId" -> Lookup[res, "WorkflowId", Missing[]]|>]];
+
 End[];  (* `Private` *)
 
 EndPackage[];
@@ -1070,10 +1442,14 @@ If[AssociationQ[ClaudeCode`$ClaudePackageAuxKeywordMap],
   Module[{auxMap},
     auxMap = Lookup[ClaudeCode`$ClaudePackageAuxKeywordMap, "SourceVault", <||>];
     If[! AssociationQ[auxMap], auxMap = <||>];
+    (* 注: 同じ登録が auto-load される SourceVault.wl 側にもある (本パッケージ
+       未ロードでも api_comfyui.md が注入されるように)。キーワード集合は
+       そちらと揃える。"workflow" のような広すぎる語は登録しない。 *)
     auxMap["comfyui"] = {
-      "ComfyUI", "コンフィ", "SourceVaultComfyUI",
-      "画像生成", "動画生成", "image generation", "video generation",
-      "workflow", "ControlNet", "img2img", "SDXL"};
+      "ComfyUI", "SourceVaultComfyUI",
+      "画像生成", "動画生成", "画像を生成", "動画を生成",
+      "image generation", "video generation", "generate an image",
+      "SDXL", "img2img", "ControlNet", "text-to-image", "text-to-video"};
     ClaudeCode`$ClaudePackageAuxKeywordMap["SourceVault"] = auxMap]];
 
 (* orchestrator backend dispatch が既にロード済みなら ComfyUI backend を登録 (冪等)。
@@ -1087,6 +1463,8 @@ If[!TrueQ[$SourceVaultComfyUIQuietLoad],
   Print[Style["SourceVault_comfyui パッケージがロードされました。", Bold]];
   Print["
   SourceVaultComfyUIStatus[]                       → ComfyUI server 状態 (Offline 時も静か)
+  SourceVaultComfyUIServerWorkflowsView[]           → server 保存 workflow の一覧 (Dataset)
+  SourceVaultComfyUIImportServerWorkflow[name]      → server 保存 workflow を registry へ取り込み (browser→API 変換込み)
   SourceVaultComfyUIRegisterWorkflow[name, apiJson] → API format workflow 登録
   SourceVaultComfyUIRunWorkflow[name, vars]         → 同期 debug 実行 (非 FE 用)
   SourceVaultComfyUIBuildJobSpec[spec]              → jobSpec 構築 (純関数 / in-workflow helper)

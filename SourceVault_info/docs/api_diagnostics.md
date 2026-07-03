@@ -1,10 +1,10 @@
 # SourceVault_diagnostics API リファレンス
 
 ## 概要
-SourceVault のクロスパッケージ診断 / SIEM レイヤ。Phase 0 minimal core 実装。本ファイルは SIEM の *collector / store / doctor* 層であり、ドメイン診断を所有しない。プロデューサ各パッケージ（NBAccess, claudecode, [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator), service manager, auto-trigger）が自身のプローブを所有し、このシンクが存在するときのみ emit する（rule 11: プロデューサは SourceVault への hard dependency を持たない）。
+SourceVault のクロスパッケージ診断 / SIEM レイヤ。Phase 0 minimal core 実装。本ファイルは SIEM の *collector / store / doctor* 層であり、ドメイン診断を所有しない。プロデューサ各パッケージ（[NBAccess](https://github.com/transreal/NBAccess), [claudecode](https://github.com/transreal/claudecode), [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator), [service manager](https://github.com/transreal/SourceVault_servicemanager), [auto-trigger](https://github.com/transreal/SourceVault_autotrigger)）が自身のプローブを所有し、このシンクが存在するときのみ emit する（rule 11: プロデューサは SourceVault への hard dependency を持たない）。
 
 設計上の制約:
-- 独立パッケージではない。[SourceVault](https://github.com/transreal/SourceVault)` コンテキストの拡張であり Get[] でロード可能。単体ロードでも検証可能。
+- 独立パッケージではない。[SourceVault](https://github.com/transreal/SourceVault) コンテキストの拡張であり Get[] でロード可能。単体ロードでも検証可能。
 - `Needs["ClaudeRuntime`"]` / `Needs["ClaudeOrchestrator`"]` を行わない。プロデューサのプローブには public-symbol 名で弱く到達する。
 - プロデューサ / vault root が不在でもロードできる。
 - 冪等。Get[] の再実行はクリーンに再定義する。
@@ -12,9 +12,9 @@ SourceVault のクロスパッケージ診断 / SIEM レイヤ。Phase 0 minimal
 
 Phase 0 スコープ: シンク可用性の弱検出 / 構造化 append-only 診断ログ / Wolfram ライセンス容量プローブ（宣言値でなく実測）/ kernel プロセストポロジ分類（Windows CIM, best-effort）/ 再利用可能容量検出（重複 MCP-server kernel）/ SourceVaultSystemDoctor による集約ヘルス（OK/Degraded/Failing）/ machine-local heartbeat（per-machine path, atomic write）/ minimal status / panel。
 
-延期: プローブレジストリの全プロデューサへの fan-out, escalation / mail チャネル, aggregator rollup / failover, Wolfram Cloud comms, comprehensive-doctor 自動トリガ。
+延期（一部は後続増分で実装済み。下記 Cloud comms 参照）: プローブレジストリの全プロデューサへの fan-out, comprehensive-doctor 自動トリガ。
 
-慣習: 全関数は Read-only を基本とする（Doctor 系は副作用なし）。マルチ PC 集約では Dropbox 書き込み衝突を避けるため per-machine path + atomic write を使う。
+慣習: 全関数は Read-only を基本とする（Doctor 系は副作用なし）。マルチ PC 集約では Dropbox 書き込み衝突を避けるため per-machine path + atomic write を使う。Cloud comms は best-effort で、非接続時は必ず SourceVault polling へ fallback し、協調がクラウドに hard-depend しない。受信メッセージ内容は決して評価せず DATA としてのみ扱う。
 
 ## バージョン変数
 
@@ -72,10 +72,39 @@ machine-registry レコード（spec 3.4.1）を当該マシン自身の per-mac
 active aggregator を選出: 最高 AggregatorPriority を持つ fresh な AggregatorCandidate と standby candidates。
 
 ### SourceVaultDiagnosticsAggregatorRollup[] → Association
-全マシン heartbeat を読み global rollup（worst-of health, per-machine liveness, problem machines, active aggregator）を返す。Read-only。共有 rollup ファイルは owner maintenance task のみが書く。
+全マシン heartbeat を読み global rollup（worst-of health, per-machine liveness, problem machines, active aggregator）を返す。cloud peer liveness を fold-in し、cloud channel 経由で見えた peer は Dropbox-synced file heartbeat が遅延していても live として数える。Read-only。共有 rollup ファイルは owner maintenance task のみが書く。
+
+## Cloud comms（Wolfram Cloud 協調チャネル）
+非接続時は必ず polling fallback。受信メッセージは DATA としてのみ記録し内容を評価しない。
 
 ### SourceVaultDiagnosticsCloudHeartbeat[opts] → Association
-Wolfram Cloud comms ヘルスを弱く報告。$CloudConnected でなければ Channel->Unavailable, Fallback->SourceVaultPolling を返し、協調がクラウドに hard-depend しないようにする。実チャネル send/receive（ChannelListen / CloudExpression）はマルチマシンの follow-up。
+Wolfram Cloud comms ヘルスを弱く報告し、opt "Send"->True で協調チャネル経由に Heartbeat メッセージを送る。$CloudConnected でなければ Channel->Unavailable, Fallback->SourceVaultPolling を返し、協調がクラウドに hard-depend しないようにする。
+Options: "Send" -> False (True で Heartbeat メッセージを送信)
+
+### SourceVaultDiagnosticsCloudChannel[] → Association
+共有 Wolfram Cloud 協調 ChannelObject を ensure して返す（同一 Wolfram アカウントの全マシンが共有）。非接続時は Available->False と polling fallback を返す。
+
+### SourceVaultDiagnosticsCloudSend[message_Association] → Association
+message（this MachineTag / AtUTC / Type を付加）を協調チャネルへ ChannelSend する。inter-machine の heartbeat / wakeup / negotiation 用。offline 時は no-op fallback。
+
+### SourceVaultDiagnosticsCloudListen[] → Association
+協調チャネルへ冪等に ChannelListen を開始する。受信パケットは DATA ONLY として bounded inbox に記録し（メッセージ内容は決して評価しない）、MessageID で dedup する。
+
+### SourceVaultDiagnosticsCloudStopListen[] → 結果
+本セッションのチャネルリスナを解除する。
+
+### SourceVaultDiagnosticsCloudInbox[opts] → List
+受信済みチャネルメッセージ（MessageID / FromWolframID / FromMachineTag / Type / Message / ReceivedAtUTC）を返す。
+Options: "Type" -> All (Type でフィルタ), "MaxItems" -> All (返却件数上限)
+
+### SourceVaultDiagnosticsCloudCommsStatus[] → Association
+cloud-connected 状態, channel 名, 自リスナが生存しているか（watchdog）, inbox 件数を報告する。
+
+### SourceVaultDiagnosticsCloudPeerLiveness[] → Association
+各 machine tag から最後に受信した cloud Heartbeat メッセージから per-peer liveness を導出（$iSVDiagCloudPeerStaleSeconds 内なら OK, それ以外は Stale）。SourceVaultDiagnosticsAggregatorRollup がこれを fold-in する。
+
+### SourceVaultDiagnosticsCloudConsume[] → Association
+SAFE な inbox consumer。peer heartbeats（data）を返し、Wakeup メッセージを受けていれば wakeup flag を立てる。cloud メッセージ内容は決して評価しない。caller は WakeupRequested を見て自前の local tick を走らせ flag を reset してよい。
 
 ## ステータス / パネル
 

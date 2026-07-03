@@ -853,6 +853,9 @@ SourceVaultMailSearchIndex[query_String : "", OptionsPattern[]] :=
          minP === Automatic || iSVMDIxPriority[r] >= minP, maxP === Automatic || iSVMDIxPriority[r] <= maxP,
          minPr === Automatic || iSVMDIxPrivacy[r] >= minPr, maxPr === Automatic || iSVMDIxPrivacy[r] <= maxPr,
          iSVMDIxDateInRange[r, df, dt]]]];
+    (* RecordId は主キー: 同一メールが複数 sidecar 行に重複していても 1 行に
+       (再取込で日付バケツが変わり別 shard の sidecar に旧行が残るケース等) *)
+    hits = DeleteDuplicatesBy[hits, Lookup[#, "RecordId", Missing[]] &];
     by = OptionValue["SortBy"] /. Automatic -> If[TrueQ[OptionValue["Newest"]], "Date", None];
     If[by =!= None,
       ord = OptionValue["SortOrder"];
@@ -1959,6 +1962,8 @@ SourceVaultMailOpenAttachment::usage = "SourceVaultMailOpenAttachment[recordId, 
 SourceVaultMailComposeReply::usage = "SourceVaultMailComposeReply[recordId, opts] は返信ドラフト <|To,Cc,Subject,InReplyToToken,Quoted,Body|> を生成する。\"ReplyAll\"->True で Cc 含む。";
 SourceVaultMailOpenReplyNotebook::usage = "SourceVaultMailOpenReplyNotebook[recordId, opts] は返信用ウインドウ (To/Cc/件名/本文編集・ファイル添付・確認付き送信) を開く (front end)。opts: \"ReplyAll\"->True で全員に返信、\"Translate\"->True で日本語で書いて元メールの言語に翻訳して送る (旧 maildb replyMailTr 踏襲)。";
 SourceVaultMailView::usage = "SourceVaultMailView[query_String:\"\", opts] は検索結果を、行ごとに 本文表示(✉)/添付ポップアップ(📎)/返信(↩) のクリック操作を備えた表 (Dataset) で返す。旧 maildb showMails 踏襲。";
+SourceVaultMailSearchIndexView::usage = "SourceVaultMailSearchIndexView[query_String:\"\", opts] は SourceVaultMailSearchIndex (sidecar 索引検索、シャード非ロード) の View 版。連想リストを Dataset+UI 化し、行ごとに 本文(✉: 必要シャードを遅延ロードして表示)/スレッド(☰: アウトライン窓) ボタンを備える。表示件数は $SourceVaultMailViewMaxRows で制限。SourceVaultMailEnsureLoaded 不要 (索引 sidecar 必須: 無ければ SourceVaultMailRebuildMetadataIndex[] で構築)。opts は SourceVaultMailSearchIndex と同じ。";
+SourceVaultMailThreadNotebook::usage = "SourceVaultMailThreadNotebook[recordIdOrRow, opts] はスレッド全体 (同一正規化件名・同一 MBox) を 1 つのノートブック窓にアウトライン表示する (front end)。各メール = Section セル (日付+差出人) + 本文 Text セルのセルグループ=折りたたみ/アウトライン操作可。索引 sidecar でメンバーを特定し、必要シャードだけ遅延ロードして本文復号。セルは最大 PrivacyLevel で機密マーク。opts: \"MaxMails\"(50)。戻り値 <|Status, Mails, PrivacyLevel, LoadedShards|>。";
 SourceVaultMailRowActions::usage = "SourceVaultMailRowActions[snapshot] は1行分のアクション (Body/Attachments/Reply ボタン) を返す。";
 SourceVaultMailSend::usage = "SourceVaultMailSend[spec] はメールを送信する。spec=<|\"To\",\"Cc\",\"Bcc\",\"Subject\",\"Body\",\"Attachments\"->{パス...}|>。Bcc を省略すると $SourceVaultMailSendBccSelf が True のときオーナーの主アドレス宛に自分の控えを送る。$SourceVaultMailSignature が非空なら本文末尾に署名を付加する。返り値 <|\"Status\"->\"Sent\"|...|> / 失敗時 <|\"Status\"->\"Error\",\"Reason\"->...|>。Mathematica の SendMail 設定 (Preferences > Internet Connectivity > Mail Settings) が必要。";
 SourceVaultMailTranslateBody::usage = "SourceVaultMailTranslateBody[recordId] はメール本文を $Language (表示言語) に翻訳して返す (LLM, headless テスト可)。返り値 <|\"Status\"->\"Ok\",\"Text\"->訳文,\"Translated\"->True,\"Lang\"->...|>。";
@@ -2676,6 +2681,9 @@ SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
     iSVMDWrapConfidential[
       Pane[
         Dataset[rows,
+          (* ⚠️この ItemSize 形式は Dataset 内ボタンの当たり領域を描画とズラす副作用があり、
+             SourceVaultMailSearchIndexView では2列目以降が押せなくなったため撤去した。
+             MailView は現行の列幅で偶然クリック可能なため据え置き (変更時は要クリック確認) *)
           ItemSize -> {2, {3, 4, 3, 4, 4, 15, 3, 3, 5, 12, 28, 14, 40}},
           Alignment -> {Left, Center},
           (* MaxItems -> {最大行数, 最大列数}。第2要素を行数に縛ると
@@ -2683,6 +2691,143 @@ SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
           MaxItems -> {$SourceVaultMailViewMaxRows, All}],
         ImageSize -> Full],
       snaps]];
+
+(* ════════════════════════════════════════════════════════
+   索引行 View + スレッド アウトライン窓 (シャード非ロード検索の表示層)
+   方針 (全 SourceVault 共通): 検索/フィルタの core は連想リストを返す純データ
+   関数 (後段処理で連鎖可)。ノートブック出力は View 関数が Dataset+UI 化し、
+   一度に表示する件数の制限も View 層で行う ($SourceVaultMailViewMaxRows)。
+   索引は .svmailidx sidecar (低漏洩メタ) なので本文シャードを一切ロードせず
+   検索でき、✉/☰ クリック時に必要シャードだけ遅延ロードする。
+   ════════════════════════════════════════════════════════ *)
+
+(* 索引行 (flat) の PL: フェイルセーフで欠落は 1.0 (秘匿) 扱い *)
+iSVMDIxProbePL[row_] := With[{p = Lookup[row, "PrivacyLevel", Missing[]]},
+  If[NumericQ[p], N[p], 1.0]];
+iSVMDIxConfidentialQ[rows_List] := rows =!= {} && TrueQ[Max[iSVMDIxProbePL /@ rows] >= 0.5];
+iSVMDIxWrapConfidential[result_, rows_List] :=
+  Which[
+    ! iSVMDIxConfidentialQ[rows], result,
+    Length[DownValues[ClaudeCode`Confidential]] > 0, ClaudeCode`Confidential[result],
+    True,
+    (Quiet@Check[
+       If[TrueQ[$Notebooks],
+         With[{nb = EvaluationNotebook[]},
+           If[Head[nb] === NotebookObject,
+             SessionSubmit[ScheduledTask[
+               Quiet@Check[SourceVault`SourceVaultMarkConfidentialViewCells[nb], Null], {1.0}]]]]],
+       Null];
+     result)];
+
+(* record の shard を必要時のみ遅延ロードして snapshot を返す (索引行の ShardKey 経由) *)
+iSVMDIxEnsureLoaded[recordId_String, shardKey_] :=
+  Module[{snap = SourceVaultMailSnapshotGet[recordId]},
+    If[! MissingQ[snap], Return[snap]];
+    If[StringQ[shardKey] && ! TrueQ[Lookup[$iSVMDLoadedShards, shardKey, False]],
+      Quiet@Check[SourceVaultMailLoadShard[shardKey], 0]];
+    SourceVaultMailSnapshotGet[recordId]];
+
+iSVMDIxShowBody[recordId_String, shardKey_] :=
+  Module[{snap = iSVMDIxEnsureLoaded[recordId, shardKey]},
+    If[MissingQ[snap],
+      Quiet@Check[CreateDocument[{
+          Cell[iSVL["DecryptFailTitle"], "Subtitle"],
+          Cell["Shard not loadable: " <> ToString[shardKey], "Text"]},
+          StyleDefinitions -> $SourceVaultMailNotebookStyle], $Failed],
+      SourceVaultMailShowBody[recordId]]];
+
+Options[SourceVaultMailSearchIndexView] = Options[SourceVaultMailSearchIndex];
+SourceVaultMailSearchIndexView[query_String : "", opts : OptionsPattern[]] :=
+  Module[{rows, ff = iSVUIFont[], urows},
+    rows = SourceVaultMailSearchIndex[query, opts];
+    If[rows === {}, Return[Style[iSVL["NoMail"], "Text"]]];
+    urows = Function[r,
+       With[{rid = ToString@Lookup[r, "RecordId", ""], sk = Lookup[r, "ShardKey", Missing[]]},
+         <|"" -> Button["\:2709", iSVMDIxShowBody[rid, sk],
+              Appearance -> "Frameless", Method -> "Queued"],
+           (* action には小さいリテラルだけを埋め込む (行の連想を埋め込むと
+              Dataset がセルを大きすぎる式として "..." に省略しボタンが押せない)。
+              コントロールは MailView の ✉/↩ と同じ「素の Frameless + 文字列ラベル」。
+              ※2列目以降が押せない場合の真因は Dataset の不正 ItemSize (下記) *)
+           "\:30b9\:30ec" -> Button["\:30b9\:30ec", SourceVaultMailThreadNotebook[rid],
+              Appearance -> "Frameless", Method -> "Queued"],
+           iSVL["Date"] -> Style[iSVUIFormatDateJST[Lookup[r, "Date", Missing[]]], FontFamily -> ff],
+           iSVL["Pri"] -> Style[iSVUINumCell[Lookup[r, "Priority", Missing[]]], FontFamily -> ff],
+           iSVL["Sec"] -> Style[iSVUINumCell[Lookup[r, "PrivacyLevel", Missing[]]], FontFamily -> ff],
+           iSVL["Cat"] -> iSVUICategoryCell[Lookup[r, "Category", Missing[]], ff],
+           iSVL["Deadline"] -> Style[iSVUIFormatDeadline[Lookup[r, "Deadline", Missing[]]],
+              FontFamily -> ff],
+           iSVL["Subject"] -> iSVUITextCell[ToString@Lookup[r, "Subject", ""]],
+           iSVL["From"] -> iSVUITextCell[ToString@Lookup[r, "From", Lookup[r, "FromRaw", ""]]],
+           iSVL["Summary"] -> iSVUITextCell[With[{sm = Lookup[r, "Summary", ""]},
+              If[StringQ[sm], sm, ""]]]|>]] /@ rows;
+    (* ⚠️実測確定: ItemSize -> {2, {w1,...}} 形式 (MailView 由来) を指定すると
+       2列目以降の埋め込みボタンが FE でクリック不能になる (当たり領域が描画とズレる。
+       1列目だけ原点一致で押せる・列単独ドリルダウンでは再レイアウトされ押せる、が指紋)。
+       ItemSize は指定しない (自動幅)。幅調整が要る場合も この形式は使わないこと。
+       MailView 側は現行の列幅で偶然クリック可能なため据え置き *)
+    iSVMDIxWrapConfidential[
+      Pane[
+        Dataset[urows,
+          Alignment -> {Left, Center},
+          MaxItems -> {$SourceVaultMailViewMaxRows, All}],
+        ImageSize -> Full],
+      rows]];
+
+(* Re:/Fwd: 等を剥がした正規化件名 = スレッド key (索引行だけで判定できる) *)
+iSVMDIxNormSubject[s_] := If[! StringQ[s], "",
+  Module[{t = ToLowerCase@StringTrim[s]},
+    t = FixedPoint[StringTrim@StringReplace[#,
+       StartOfString ~~ RegularExpression["(re|fwd|fw)\\s*[:\:ff1a]\\s*"] -> ""] &, t];
+    StringReplace[t, RegularExpression["\\s+"] -> " "]]];
+
+Options[SourceVaultMailThreadNotebook] = {"MaxMails" -> 50};
+SourceVaultMailThreadNotebook[record_, OptionsPattern[]] :=
+  Module[{seed, mbox, subjN, rows, thread, shardKeys, cells, maxPL, nb,
+      maxMails = OptionValue["MaxMails"]},
+    seed = Which[
+      AssociationQ[record], record,
+      StringQ[record], SourceVaultMailIndexGet[record],
+      True, Missing["BadArg"]];
+    If[! AssociationQ[seed],
+      Return[<|"Status" -> "Error", "Reason" -> "RecordNotFoundInIndex"|>]];
+    mbox = Lookup[seed, "MBox", Automatic];
+    subjN = iSVMDIxNormSubject[Lookup[seed, "Subject", ""]];
+    (* メンバー特定は索引 sidecar のみ (シャード非ロード)。空件名は単独スレッド扱い *)
+    thread = If[subjN === "", {seed},
+      Select[SourceVaultMailSearchIndex["", "MBox" -> If[StringQ[mbox], mbox, Automatic]],
+        iSVMDIxNormSubject[Lookup[#, "Subject", ""]] === subjN &]];
+    If[thread === {}, thread = {seed}];
+    thread = Take[SortBy[thread, Lookup[#, "Date", ""] &], UpTo[maxMails]];
+    (* 本文表示に必要なシャードだけ遅延ロード *)
+    shardKeys = DeleteDuplicates@Select[Lookup[#, "ShardKey", Missing[]] & /@ thread, StringQ];
+    Scan[If[! TrueQ[Lookup[$iSVMDLoadedShards, #, False]],
+        Quiet@Check[SourceVaultMailLoadShard[#], 0]] &, shardKeys];
+    maxPL = Max[iSVMDIxProbePL /@ thread];
+    (* アウトライン: Title=件名、各メール = Section(日付+差出人)+本文 Text。
+       Section セルは後続セルを自動グループ化するので折りたたみ/アウトラインが効く *)
+    cells = Join[
+      {Cell[ToString@Lookup[seed, "Subject", If[subjN === "", "(no subject)", subjN]], "Title"],
+       Cell[ToString[Length[thread]] <> " mails / " <> ToString[mbox], "Subtitle"]},
+      Flatten@Map[Function[r, Module[{rid = ToString@Lookup[r, "RecordId", ""], snap, bodyR, body},
+         snap = SourceVaultMailSnapshotGet[rid];
+         bodyR = If[AssociationQ[snap], SourceVaultMailGetBody[snap],
+            <|"Status" -> "Error", "Reason" -> "SnapshotNotLoaded"|>];
+         body = If[Lookup[bodyR, "Status", ""] === "Ok", iSVUIReadableBody[bodyR["Body"]],
+            "[" <> ToString@Lookup[bodyR, "Reason", Lookup[bodyR, "Status", "Unknown"]] <> "]"];
+         {Cell[ToString@iSVUIFormatDateJST[Lookup[r, "Date", Missing[]]] <> "   " <>
+             ToString@Lookup[r, "From", Lookup[r, "FromRaw", ""]], "Section"],
+          Cell[ToString@Lookup[r, "Subject", ""], "Subsection"],
+          Cell[body, "Text"]}]], thread]];
+    nb = Quiet@Check[
+      CreateDocument[cells,
+        WindowTitle -> "Thread: " <> ToString@Lookup[seed, "Subject", subjN],
+        StyleDefinitions -> $SourceVaultMailNotebookStyle], $Failed];
+    (* 全セルにスレッド最大 PL を付与 (この窓からの LLM 呼び出しで cloud gate が効く) *)
+    iSVUIMarkCellsConfidential[nb, maxPL];
+    Scan[Quiet@Check[iSVMDRecordOpen[ToString@Lookup[#, "RecordId", ""]], Null] &, thread];
+    <|"Status" -> If[Head[nb] === NotebookObject, "Shown", "NoFrontEnd"],
+      "Mails" -> Length[thread], "PrivacyLevel" -> maxPL, "LoadedShards" -> shardKeys|>];
 
 (* From 表示 (AddressBook 解決) -- maildb の SummaryRow と同じ規則 *)
 iSVUIFromDisplayUI[s_] :=
@@ -2875,7 +3020,7 @@ SourceVaultEntityEditUI[idOrUid_] :=
 (* 入力テキストがメール View 系呼び出しを含むか *)
 iSVMailViewInputQ[text_String] :=
   StringContainsQ[text,
-    RegularExpression["SourceVaultMail(View|Dataset|SearchSummary)\\s*\\["]];
+    RegularExpression["SourceVaultMail(View|Dataset|SearchSummary|SearchIndexView)\\s*\\["]];
 iSVMailViewInputQ[_] := False;
 
 (* 機密判定用 PL アクセサ: フェイルセーフで PrivacyLevel 欠落は 1.0 (秘匿) 扱い。
@@ -2892,6 +3037,13 @@ iSVMailPLProbe[query_String : "", opts : OptionsPattern[SourceVaultSearchMailSna
     If[ListQ[snaps] && Length[snaps] > 0, Max[iSVMailProbePL /@ snaps], 0.0]];
 iSVMailPLProbe[___] := 1.0;
 
+(* SearchIndexView 用 probe: sidecar 索引だけ再検索して最大 PL (シャード非ロード) *)
+iSVMailIxPLProbe[query_String : "", opts : OptionsPattern[SourceVaultMailSearchIndex]] :=
+  Module[{rows},
+    rows = Quiet@Check[SourceVaultMailSearchIndex[query, opts], {}];
+    If[ListQ[rows] && Length[rows] > 0, Max[iSVMDIxProbePL /@ rows], 0.0]];
+iSVMailIxPLProbe[___] := 1.0;
+
 (* 入力テキストから View 呼び出しだけを抜き出してプローブ評価し、最大 PL を得る。
    入力全体は再評価しない (EnsureLoaded 等の副作用を再実行しない)。失敗時は安全側 1.0。 *)
 iSVMailCellMaxPLFromText[text_String] :=
@@ -2900,8 +3052,9 @@ iSVMailCellMaxPLFromText[text_String] :=
     If[held === $Failed, Return[1.0]];
     vals = Quiet@Check[
       Cases[held,
-        HoldPattern[(SourceVaultMailView | SourceVaultMailDataset |
-            SourceVaultMailSearchSummary)[a___]] :> iSVMailPLProbe[a],
+        {HoldPattern[(SourceVaultMailView | SourceVaultMailDataset |
+             SourceVaultMailSearchSummary)[a___]] :> iSVMailPLProbe[a],
+         HoldPattern[SourceVaultMailSearchIndexView[a___]] :> iSVMailIxPLProbe[a]},
         {0, Infinity}], {}];
     If[ListQ[vals] && Length[vals] > 0 && AllTrue[vals, NumericQ], Max[vals], 1.0]];
 iSVMailCellMaxPLFromText[_] := 1.0;

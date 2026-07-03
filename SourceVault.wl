@@ -154,7 +154,8 @@ SourceVaultInitialize::usage =
   "\:6307\:5b9a oder: PrivateVault, Tmp \:306f\:5fc5\:9808\:3002\:4f5c\:6210\:6e08\:307f\:3067\:3042\:308c\:3070 noop\:3002\n" <>
   "Options:\n" <>
   "  \"Roots\" -> $SourceVaultRoots \:3092 override\n" <>
-  "  \"Force\" -> True \:3067\:518d\:521d\:671f\:5316";
+  "  \"Force\" -> True \:3067\:518d\:521d\:671f\:5316\n" <>
+  "  \"InitMode\" -> \"Force\" (\:65e2\:5b9a\:3001\:672c\:6765\:306e\:521d\:671f\:5316) | \"Ensure\" (\:521d\:671f\:5316\:6e08\:307f\:306a\:3089\:526f\:4f5c\:7528\:30bc\:30ed\:3067 AlreadyInitialized)";
 
 SourceVaultStatus::usage =
   "SourceVaultStatus[sourceRef] \:306f\:6307\:5b9a source / snapshot / \:30d5\:30a1\:30a4\:30eb\:306e\:6982\:8981\:3092\:8fd4\:3059\:3002\n" <>
@@ -1442,12 +1443,35 @@ iEnsureRoots[] :=
     True
   ];
 
-Options[SourceVaultInitialize] = {"Roots" -> Automatic, "Force" -> False};
+(* 初期化済み述語 (contract spec v0.3 §4.2 InitializedQRef)。副作用ゼロ。
+   iEnsureRoots が作る必須ディレクトリ群の存在で判定する。 *)
+iSVRootsReadyQ[] :=
+  Quiet @ Check[
+    AssociationQ[SourceVault`$SourceVaultRoots] &&
+      AllTrue[{
+        SourceVault`$SourceVaultRoots["PrivateVault"],
+        SourceVault`$SourceVaultRoots["Tmp"],
+        iRawDir[], iMetaDir[],
+        FileNameJoin[{SourceVault`$SourceVaultRoots["PrivateVault"], "logs"}],
+        FileNameJoin[{SourceVault`$SourceVaultRoots["PrivateVault"], "locks"}],
+        FileNameJoin[{SourceVault`$SourceVaultRoots["PrivateVault"], "seeds"}],
+        iCompiledDir[], iAttachmentsDir[], iParsedDir[]},
+        StringQ[#] && DirectoryQ[#] &],
+    False];
+
+Options[SourceVaultInitialize] =
+  {"Roots" -> Automatic, "Force" -> False, "InitMode" -> "Force"};
 
 SourceVaultInitialize[OptionsPattern[]] :=
-  Module[{newRoots, force},
+  Module[{newRoots, force, initMode},
     newRoots = OptionValue["Roots"];
     force    = TrueQ[OptionValue["Force"]];
+    initMode = OptionValue["InitMode"];
+    (* "InitMode"->"Ensure": 初期化済みなら副作用ゼロで即 return (spec v0.3 §5.1)。
+       明示 "Roots" 上書きがある場合は状態変更が要求されているので通常初期化へ。 *)
+    If[initMode === "Ensure" && !AssociationQ[newRoots] && iSVRootsReadyQ[],
+      Return[<|"Status" -> "AlreadyInitialized",
+               "Roots" -> SourceVault`$SourceVaultRoots|>]];
     If[AssociationQ[newRoots],
       SourceVault`$SourceVaultRoots = Join[SourceVault`$SourceVaultRoots, newRoots]];
     If[!iEnsureRoots[],
@@ -2042,7 +2066,11 @@ iSVIngestAttachURI[res_Association] :=
 iSVIngestAttachURI[x_] := x;
 
 SourceVaultIngest[source_String, opts:OptionsPattern[]] :=
-  Module[{tp, parsed},
+  Module[{tp, parsed, rl},
+    (* 過剰実行対策 (runaway loop / 生成コード暴走)。core 未ロードなら fail-open。 *)
+    rl = Quiet @ Check[SourceVault`SourceVaultRateLimit["Ingest"], <|"Allowed" -> True|>];
+    If[! TrueQ[Lookup[rl, "Allowed", True]],
+      Return[<|"Status" -> "Error", "Reason" -> "RateLimitExceeded", "RateLimit" -> rl|>]];
     iEnsureRoots[];
     parsed = iParseSourceRef[source];
     tp = parsed["Type"];
@@ -14672,7 +14700,90 @@ If[AssociationQ[ClaudeCode`$ClaudePackageAuxKeywordMap],
       "\:8fd4\:4fe1", "reply", "\:5dee\:51fa\:4eba", "\:5b9b\:5148", "\:4ef6\:540d",
       "SourceVaultMail",   (* \:5168 Mail \:95a2\:6570\:540d\:3092\:90e8\:5206\:4e00\:81f4\:3067\:30ab\:30d0\:30fc *)
       "SourceVaultSearchMailSnapshots", "SourceVaultInferMailDerivedBatch"};
+    (* api_comfyui.md: injected for ComfyUI image/video generation tasks.
+       SourceVault_comfyui.wl itself is NOT auto-loaded, so the keyword
+       registration lives here (auto-loaded SourceVault.wl): the doc is
+       injected even before the package is loaded, and its recipe tells
+       ClaudeEval to Get the package first. Do not register overly broad
+       words like "workflow" (avoids ~17KB injection into unrelated tasks).
+       Keyword strings use \:XXXX escapes per this file's convention
+       (gazou-seisei / douga-seisei / gazou-o-seisei / douga-o-seisei). *)
+    auxMap["comfyui"] = {
+      "ComfyUI", "SourceVaultComfyUI",
+      "\:753b\:50cf\:751f\:6210", "\:52d5\:753b\:751f\:6210",
+      "\:753b\:50cf\:3092\:751f\:6210", "\:52d5\:753b\:3092\:751f\:6210",
+      "image generation", "video generation", "generate an image",
+      "SDXL", "img2img", "ControlNet", "text-to-image", "text-to-video"};
+    (* api_contracts.md / api_wiring.md (function_contract_wiring spec v0.3):
+       \:5951\:7d04/\:51aa\:7b49\:521d\:671f\:5316/\:5f0f\:691c\:8a3c\:3068 typed binding/\:5408\:6210/WorkflowInputBlock\:3002
+       \:6c4e\:7528\:8a9e ("workflow" \:5358\:4f53\:7b49) \:306f\:767b\:9332\:3057\:306a\:3044 (\:7121\:95a2\:4fc2\:6ce8\:5165\:56de\:907f)\:3002 *)
+    auxMap["contracts"] = {
+      "FunctionContract", "SourceVaultEnsureInitialized",
+      "SourceVaultInitPlan", "InitMode",
+      "SourceVaultValidateCallExpression", "SourceVaultRepairCallExpression",
+      "SourceVaultExplainCallContract", "SourceVaultAuditFunctionContracts",
+      "CallForms", "OptionContracts", "\:95a2\:6570\:5951\:7d04",
+      "\:51aa\:7b49\:521d\:671f\:5316"};
+    auxMap["wiring"] = {
+      "SourceVaultRunWorkflow", "SourceVaultSubmitWorkflowInput",
+      "WorkflowInputBlock", "InputBundle", "PortBindingRef",
+      "SourceVaultCoerceToURI", "SourceVaultCoerceFromURI",
+      "SourceVaultBindingFrom", "SourceVaultCellInput", "SourceVaultCellOutput",
+      "SourceVaultProposeWiringPlan", "SourceVaultExecuteWiringPlan",
+      "SourceVaultSelectFunctionsForTask", "WiringPlan",
+      "URI envelope", "ValueEnvelope", "ConfidentialContextQ"};
     ClaudeCode`$ClaudePackageAuxKeywordMap["SourceVault"] = auxMap]];
+
+(* ============================================================
+   ComfyUI adapter on-demand load (ForbiddenHead-safe bootstrap).
+   ClaudeEval-generated code cannot contain Get/Import ($NBDenyHeads),
+   so the Get lives inside these auto-loaded wrappers. The stub
+   definitions below fire only while SourceVault_comfyui.wl is not
+   loaded (condition on SourceVaultComfyUIStatus DownValues); after
+   loading, the package's own definitions take over and the stubs
+   become inert. Defining the symbols here (at auto-load time) also
+   prevents Global` shadowing when generated code is parsed before
+   the adapter is loaded.
+   ============================================================ *)
+
+SourceVault`SourceVaultComfyUIEnsureLoaded::usage =
+  "SourceVaultComfyUIEnsureLoaded[] loads SourceVault_comfyui.wl on demand (idempotent). ClaudeEval-generated code must call this (or any auto-loading SourceVaultComfyUI* entry point) instead of Get, which is a forbidden head.";
+
+SourceVault`SourceVaultComfyUIEnsureLoaded[] :=
+  If[Length[DownValues[SourceVault`SourceVaultComfyUIStatus]] > 0,
+    <|"Status" -> "AlreadyLoaded"|>,
+    Module[{f},
+      f = Quiet @ Check[
+        FileNameJoin[{Global`$packageDirectory, "SourceVault_comfyui.wl"}], $Failed];
+      If[! StringQ[f] || ! FileExistsQ[f],
+        <|"Status" -> "Error", "Reason" -> "PackageFileNotFound", "Path" -> f|>,
+        (Block[{$CharacterEncoding = "UTF-8"}, Get[f]];
+         If[Length[DownValues[SourceVault`SourceVaultComfyUIStatus]] > 0,
+           <|"Status" -> "Loaded"|>,
+           <|"Status" -> "Error", "Reason" -> "LoadFailed"|>])]]];
+
+(* auto-load stubs: fire only while the adapter is unloaded, load it,
+   then re-dispatch to the real definition. *)
+SourceVault`SourceVaultComfyUIGenerateToNotebook[args___] /;
+    Length[DownValues[SourceVault`SourceVaultComfyUIStatus]] === 0 :=
+  Module[{r = SourceVault`SourceVaultComfyUIEnsureLoaded[]},
+    If[Length[DownValues[SourceVault`SourceVaultComfyUIStatus]] > 0,
+      SourceVault`SourceVaultComfyUIGenerateToNotebook[args],
+      <|"Status" -> "Error", "Reason" -> "ComfyUIAdapterLoadFailed", "Load" -> r|>]];
+
+SourceVault`SourceVaultComfyUIServerWorkflowsView[args___] /;
+    Length[DownValues[SourceVault`SourceVaultComfyUIStatus]] === 0 :=
+  Module[{r = SourceVault`SourceVaultComfyUIEnsureLoaded[]},
+    If[Length[DownValues[SourceVault`SourceVaultComfyUIStatus]] > 0,
+      SourceVault`SourceVaultComfyUIServerWorkflowsView[args],
+      <|"Status" -> "Error", "Reason" -> "ComfyUIAdapterLoadFailed", "Load" -> r|>]];
+
+SourceVault`SourceVaultComfyUIImportServerWorkflow[args___] /;
+    Length[DownValues[SourceVault`SourceVaultComfyUIStatus]] === 0 :=
+  Module[{r = SourceVault`SourceVaultComfyUIEnsureLoaded[]},
+    If[Length[DownValues[SourceVault`SourceVaultComfyUIStatus]] > 0,
+      SourceVault`SourceVaultComfyUIImportServerWorkflow[args],
+      <|"Status" -> "Error", "Reason" -> "ComfyUIAdapterLoadFailed", "Load" -> r|>]];
 
 
 (* ============================================================
@@ -14813,7 +14924,8 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
     Scan[
       Function[f, Module[{p = FileNameJoin[{svDir, f}]},
         Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
-      {"SourceVault_core.wl", "SourceVault_mining.wl",
+      {"SourceVault_core.wl", "SourceVault_contracts.wl", "SourceVault_wiring.wl",
+       "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
        "SourceVault_mailstructure.wl", "SourceVault_searchview.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
