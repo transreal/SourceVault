@@ -12074,13 +12074,18 @@ iSVAssignIntentsToFetched[fetched_List] :=
     base];
 iSVAssignIntentsToFetched[_] := {};
 
-(* SortBy \:7528\:306e\:6570\:5024\:30ad\:30fc: \:30d0\:30fc\:30b8\:30e7\:30f3 {4,8} \:3092 4*1000+8 \:306e\:3088\:3046\:306a\:5358\:8abf\:5024\:306b\:3002
-   \:5404\:6841\:3092 1000 \:9032\:3067\:91cd\:307f\:4ed8\:3051 (\:5341\:5206\:5927\:304d\:3044\:57fa\:6570)\:3002 *)
+(* SortBy \:7528\:306e\:6570\:5024\:30ad\:30fc: \:30d0\:30fc\:30b8\:30e7\:30f3 {4,8} \:3092\:5358\:8abf\:5024\:306b\:3057\:3001\:5148\:982d (major)
+   \:6841\:307b\:3069\:5927\:304d\:306a\:91cd\:307f\:306b\:306a\:308b\:3088\:3046\:56fa\:5b9a\:5e45 width \:307e\:3067\:53f3\:30d1\:30c7\:30a3\:30f3\:30b0\:3057\:3066\:304b\:3089\:91cd\:307f\:4ed8\:3051\:308b\:3002
+   \:65e7\:5b9f\:88c5\:306f\:6307\:6570\:306b Length[v] \:3092\:4f7f\:3063\:3066\:3044\:305f\:305f\:3081\:3001\:6841\:6570\:306e\:7570\:306a\:308b\:30d0\:30fc\:30b8\:30e7\:30f3\:9593\:3067
+   \:9006\:8ee2\:3057\:305f: {4,6} -> 4006 \:304c {5} -> 5 \:3092\:4e0a\:56de\:308a\:3001claude-sonnet-4-6 \:304c
+   claude-sonnet-5 \:306b\:52dd\:3063\:3066\:3057\:307e\:3044\:3001\:6841\:6570\:306e\:5c11\:306a\:3044\:65b0\:30e1\:30b8\:30e3\:30fc\:7248\:304c
+   \:6c7a\:3057\:3066\:6607\:683c (max-version) \:3055\:308c\:306a\:304b\:3063\:305f\:3002base \:306f\:5b9f\:5728\:306e\:30b5\:30d6\:30d0\:30fc\:30b8\:30e7\:30f3
+   (\:65e5\:4ed8\:306f iSVParseModelVersion \:3067\:9664\:5916\:6e08\:307f\:3001<10000) \:3088\:308a\:5927\:304d\:3044\:306e\:3067\:6841\:4e0a\:304c\:308a\:3057\:306a\:3044\:3002 *)
 iSVVersionSortKey[version_List] :=
-  Module[{v = Select[version, IntegerQ]},
+  Module[{v = Select[version, IntegerQ], width = 6, base = 100000},
     If[v === {}, 0,
-      Total @ MapIndexed[
-        #1 * 1000^(Length[v] - First[#2]) &, v]]];
+      v = PadRight[Take[v, UpTo[width]], width];
+      Total @ MapIndexed[#1 * base^(width - First[#2]) &, v]]];
 iSVVersionSortKey[_] := 0;
 
 (* anthropic provider \:306e auto-fetch \:30a8\:30f3\:30c8\:30ea\:3092 claudecode provider \:306b
@@ -14732,6 +14737,10 @@ If[AssociationQ[ClaudeCode`$ClaudePackageAuxKeywordMap],
       "SourceVaultProposeWiringPlan", "SourceVaultExecuteWiringPlan",
       "SourceVaultSelectFunctionsForTask", "WiringPlan",
       "URI envelope", "ValueEnvelope", "ConfidentialContextQ"};
+    auxMap["packageapi"] = {
+      "SourceVaultPackageApi", "packageapi",
+      "API\:691c\:7d22", "API \:7d22\:5f15", "api.md \:7d22\:5f15",
+      "chunk \:7d22\:5f15", "sv://packageapi"};
     ClaudeCode`$ClaudePackageAuxKeywordMap["SourceVault"] = auxMap]];
 
 (* ============================================================
@@ -14925,9 +14934,10 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
       Function[f, Module[{p = FileNameJoin[{svDir, f}]},
         Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
       {"SourceVault_core.wl", "SourceVault_contracts.wl", "SourceVault_wiring.wl",
-       "SourceVault_mining.wl",
+       "SourceVault_packageapi.wl", "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
-       "SourceVault_mailstructure.wl", "SourceVault_searchview.wl",
+       "SourceVault_mailstructure.wl", "SourceVault_mailsuggest.wl",
+       "SourceVault_searchview.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_workflowregistry.wl",
        "SourceVault_workflowcatalog.wl"}]]];

@@ -1,301 +1,316 @@
 # SourceVault_searchindex API リファレンス
 
-パッケージ: `SourceVault`searchindex`
-リポジトリ: https://github.com/transreal/SourceVault_searchindex
-依存: [SourceVault_core](https://github.com/transreal/SourceVault_core) (digest / event log / snapshot store)
-ロード順: SourceVault.wl → SourceVault_core.wl → SourceVault_searchindex.wl → [SourceVault_servicemanager](https://github.com/transreal/SourceVault_servicemanager)
-ロード方法: `Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault_searchindex.wl"]]`
+## 概要
+SourceVault の検索拡張 (data plane)。SourceVault_core の digest / event log / snapshot store に依存する。担当範囲は fail-closed (§5.4) を原則とする検索系ローカルプロファイルの登録・検証・解決、release context policy 評価 (§6.1-6.3)、個別 object revocation / tombstone (§6.3.1)、versioned snapshot (§8)、PDFIndex legacy adapter (§7.4)、native projection index (§6.3, §7.6)、mining primer index (§6.1/6.2)、TPO 制約と目的別 index (§16)、マルチモーダル event / media index (§17)、dense / hybrid retrieval と検索評価ハーネス。context は `SourceVault``。private helper は `SourceVault`SearchIndexPrivate`` 文脈に置き公開シンボルと非衝突。
 
-担当範囲: 検索系 local profile registry (§5.3, §7.3) / release context policy 評価 (§6.1-6.3) / 個別 object revocation・tombstone (§6.3.1) / versioned snapshot (§8.3-8.5, §8.10) / PDFIndex legacy adapter (§7.4, §7.4.1) / native projection index (§6.3, §7.6) / TPO 制約・目的別 index・低遅延 interaction (§16) / マルチモーダル event 正規化・media index (§17.4, §17.10, §17.14) / SurveyCorpus・SurveyIngestPlan (§16.3, §16.7)
+ロード順 (§2.4): `SourceVault.wl` → `SourceVault_core.wl` → `SourceVault_searchindex.wl` → `SourceVault_servicemanager.wl`。UTF-8 エンコード。読み込みは `Block[{$CharacterEncoding = "UTF-8"}, Get[...]]`。
+
+設計要点:
+- fail-closed: 未登録 profile の解決は `Failure["UnregisteredProfile", ...]` を返す。migration rule 未登録なら projection は空。gate 判定不能は Deny 側に倒す。
+- release gate は build 時 (収録判定) と request 時 (再評価) の二段。検索結果は Permit のみ返し raw local path は含めない。
+- boolean 系 spec の既定は安全側 (False)。ReleaseContext は RequireCitation のみ既定 True。
+- 依存パッケージ: [SourceVault_core](https://github.com/transreal/SourceVault_core)、[SourceVault_lexical](https://github.com/transreal/SourceVault_lexical) (BM25 LexicalStats)、[PDFIndex](https://github.com/transreal/PDFIndex) (legacy adapter、任意)。
+
+## プロファイル永続化
+DB プロファイル (ReleaseContext / PDFIndexProfile / SearchIndexProfile + PDFIndex migration rule) のみ `PrivateVault/config/searchindex-profiles.wxf` へ自動永続化・自動復元する。SearchBackend / OCRBackend / web service endpoint は永続化せず明示登録のまま。
+
+### $SourceVaultPersistSearchProfiles
+型: Boolean, 初期値: True
+True のとき DB プロファイル登録を自動永続化し、パッケージロード時に復元する。
+
+### SourceVaultSaveSearchProfiles[] → path | $Failed
+DB プロファイルを searchindex-profiles.wxf に保存する。
+
+### SourceVaultLoadSearchProfiles[] → Association
+永続化された DB プロファイルを読み込み registry へ復元する。session で登録済みの同名は上書きしない。戻り値は読み込み件数の Association (Status / ReleaseContexts / PDFIndexProfiles / SearchIndexProfiles / MigrationRules)。
 
 ## プロファイル registry (§5.3, §7.3)
+kind は "ReleaseContext" / "SearchIndexProfile" / "PDFIndexProfile" / "SearchBackend" / "OCRBackend"。
 
-### SourceVaultRegisterReleaseContext[name, spec] → Association|Failure
-release context を登録する。spec 必須: `"MaxPrivacyLevel"` (_Real)。省略した boolean フィールドは安全側 False で補完する。登録時に自動補完されるデフォルト: `"RequiredTags"->{}`, `"DenyTags"->{}`, `"RequireCitation"->True`, `"AllowAnswerGeneration"->False`, `"AllowRawPageImage"->False`, `"AllowDownloadOriginal"->False`。任意 spec キー: `"ReleaseContextTag"`, `"Sink"`, `"DisplayName"`, `"DefaultLatencyProfile"`。
-→ `<|"Status"->"OK", "Kind"->"ReleaseContext", "Name"->name|>`
+### SourceVaultRegisterReleaseContext[name, spec] → Association
+release context を登録する。spec 必須 "MaxPrivacyLevel" (_Real)。安全側 default を補う (RequiredTags->{}, DenyTags->{}, RequireCitation->True, AllowAnswerGeneration->False, AllowRawPageImage->False, AllowDownloadOriginal->False)。任意: ReleaseContextTag / Sink / DisplayName / DefaultLatencyProfile。戻り値 <|"Status"->"OK","Kind","Name"|>。必須欠落時 Failure["InvalidSpec",...]。
+例: SourceVaultRegisterReleaseContext["public", <|"MaxPrivacyLevel"->0.3, "RequiredTags"->{"published"}, "DenyTags"->{"secret"}|>]
 
-### SourceVaultReleaseContextSpec[name] → Association|Failure
-登録済み release context spec を返す。未登録なら `Failure["UnregisteredProfile", ...]`。
+### SourceVaultReleaseContextSpec[name] → Association | Failure
+登録済み release context spec を返す。未登録なら fail-closed Failure。
 
-### SourceVaultListReleaseContexts[] → {String...}
-登録済み release context 名のリストを返す。
+### SourceVaultListReleaseContexts[] → {name..}
+登録済み release context 名のリスト。
 
 ### SourceVaultRegisterSearchIndexProfile[name, spec] → Association
-search index profile を登録する。spec の内容は任意。
+search index profile を登録する。
+
+### SourceVaultResolveSearchIndexProfile[name] → Association | Failure
+search index profile を解決する。未登録なら fail-closed。
 
 ### SourceVaultRegisterPDFIndexProfile[name, spec] → Association
-PDFIndex profile を登録する。`"CollectionRoot"` を持たせると `SourceVaultSearch` が collection を自動解決する。
+PDFIndex profile を登録する。CollectionRoot を持たせると SourceVaultSearch が collection を解決する。
 
-### SourceVaultRegisterSearchBackend[name, spec] → Association|Failure
-embedding / keyword backend を登録する。spec 必須: `"Kind"` (String)。
-
-### SourceVaultRegisterOCRBackend[name, spec] → Association
-OCR backend を登録する。spec の内容は任意。
-
-### SourceVaultResolveSearchIndexProfile[name] → Association|Failure
-search index profile を解決する。未登録なら fail-closed (Failure)。
-
-### SourceVaultResolvePDFIndexProfile[name] → Association|Failure
+### SourceVaultResolvePDFIndexProfile[name] → Association | Failure
 PDFIndex profile を解決する。未登録なら fail-closed。
 
-### SourceVaultResolveSearchBackend[name] → Association|Failure
+### SourceVaultRegisterSearchBackend[name, spec] → Association
+embedding / keyword backend を登録する。spec 必須 "Kind" (_String)。永続化されない。
+
+### SourceVaultResolveSearchBackend[name] → Association | Failure
 search backend を解決する。未登録なら fail-closed。
 
-### SourceVaultResolveOCRBackend[name] → Association|Failure
+### SourceVaultRegisterOCRBackend[name, spec] → Association
+OCR backend を登録する。永続化されない。
+
+### SourceVaultResolveOCRBackend[name] → Association | Failure
 OCR backend を解決する。未登録なら fail-closed。
 
-### SourceVaultListProfiles[kind] → {String...}
-指定 kind の登録名を返す。kind: `"ReleaseContext"` / `"SearchIndexProfile"` / `"PDFIndexProfile"` / `"SearchBackend"` / `"OCRBackend"`。
+### SourceVaultListProfiles[kind] → {name..}
+指定 kind の登録名を返す。
 
 ### SourceVaultListProfiles[] → Association
-全 kind の登録名 summary `<|kind -> {names...}, ...|>` を返す。
+全 kind の登録名 summary (kind -> {name..})。
 
 ### SourceVaultClearRegistry[kind] → Association
-指定 kind の registry を消去する (test / 再 init 用)。→ `<|"Status"->"OK", "Kind"->kind|>`
+指定 kind の registry を消去する (test / 再 init 用)。
 
 ### SourceVaultClearRegistry[] → Association
-全 registry を消去する。→ `<|"Status"->"OK", "Cleared"->"All"|>`
+全 registry を消去する。
 
 ## release policy 評価 (§6.1-6.3)
 
-### SourceVaultEvaluateReleasePolicy[source, contextName] → Association|Failure
-source (object/chunk の Association) が release context で公開可能か評価する。判定条件: PrivacyLevel <= MaxPrivacyLevel かつ RequiredTags ⊆ Tags かつ Tags ∩ DenyTags = {} かつ State ∈ {Approved, Published, Released} かつ NotExpired (ValidFrom/ValidUntil を Now と比較)。contextName 未登録なら fail-closed (Failure)。
-→ `<|"Decision"->"Permit"|"Deny"|"NeedsReview", "Why"->{String...}, "PolicyDigest"->..., "Context"->contextName|>`
-例: `SourceVaultEvaluateReleasePolicy[<|"PrivacyLevel"->0.3, "Tags"->{"public"}, "State"->"Published"|>, "MyRC"]`
+### SourceVaultEvaluateReleasePolicy[source, context] → Association
+source (object/chunk 連想) が release context で公開可能か評価する。判定条件: PrivacyLevel <= MaxPrivacyLevel かつ RequiredTags ⊆ Tags かつ Tags ∩ DenyTags = {} かつ State ∈ {Approved,Published,Released} かつ NotExpired (ValidFrom/ValidUntil)。すべて満たせば Permit、いずれか違反で Deny。
+→ <|"Decision"->"Permit"|"Deny", "Why"->{理由文字列..}, "PolicyDigest", "Context"|>。context 未登録なら Failure。
+source が参照するキー: Tags / PrivacyLevel / State / ValidFrom / ValidUntil。
 
 ## 個別 object revocation / tombstone (§6.3.1)
+revocation 系 event class は ObjectRevoked / ObjectStateChanged / RevocationTombstoneCompacted。append-only event log に記録し replay で HotRevocationSet を構築する。
 
 ### SourceVaultRevokeObject[objectId, opts]
 ObjectRevoked event を append-only event log に記録する。
-→ event log append 結果
-Options: `"Reason"->""`, `"ObjectSnapshotRef"->All` (All で全 snapshot 対象), `"EffectiveAtUTC"->Automatic` (Automatic なら CreatedAtUTC に委ねる), `"State"->"Revoked"` ("Revoked"|"Archived"|"Deleted")
+→ AppendEvent の戻り値
+Options: "Reason" -> "" (理由文字列), "ObjectSnapshotRef" -> All (All は "AllSnapshots" として記録), "EffectiveAtUTC" -> Automatic (Automatic は CreatedAtUTC に委譲), "State" -> "Revoked" ("Revoked"|"Archived"|"Deleted")
 
 ### SourceVaultObjectRevocationStatus[objectId] → Association
-object の revocation 状態を返す。内部で `SourceVaultBuildRevocationSet` を呼ぶ。
-→ revoked 時: `<|"Revoked"->True, "State"->..., "Reason"->..., "EffectiveAtUTC"->..., "Epoch"->_Integer|>`
-→ 非 revoked 時: `<|"Revoked"->False, "State"->Missing["NotRevoked"], "Epoch"->_Integer|>`
+object の revocation 状態を返す。
+→ Revoked なら <|"Revoked"->True,"State","Reason","EffectiveAtUTC","Epoch"|>、非 revoked なら <|"Revoked"->False,"State"->Missing["NotRevoked"],"Epoch"|>
 
-### SourceVaultBuildRevocationSet[] → Association
-revocation 系 event (ObjectRevoked / ObjectStateChanged / RevocationTombstoneCompacted) を CreatedAtUTC 昇順で replay して HotRevocationSet を構築する。Epoch は revocation 系 event 数 (high-water mark, 単調増加, §6.3.1-4)。
-→ `<|"HotRevocationSet"-><|objectId-><|"State"->..., "Reason"->..., "EffectiveAtUTC"->..., "ObjectSnapshotRef"->...|>...|>, "Epoch"->_Integer, "BuiltAtUTC"->...|>`
+### SourceVaultBuildRevocationSet[opts] → Association
+revocation 系 event を CreatedAtUTC 順に replay し HotRevocationSet と Epoch を作る。event 数 (freshness token) をキーにキャッシュし、追加が無ければ再構築しない。
+→ <|"HotRevocationSet"-><|objectId->info..|>, "Epoch"->_Integer, "BuiltAtUTC"|>。Epoch は revocation 系 event の high-water mark (単調増加)。
+Options: "NoCache" -> False (True で強制再構築)
 
 ### SourceVaultRevocationEpoch[] → Integer
-現在の revocation epoch (high-water mark) を返す。
+現在の revocation epoch (revocation 系 event 数) を返す。
 
 ### SourceVaultCompactRevocationTombstone[objectId, opts]
-tombstone を圧縮する (§6.3.1-9)。RevocationTombstoneCompacted event を記録する。呼び出し側は全 active projection からの除外を事前に保証すること。
-→ event log append 結果
-Options: `"Reason"->"compacted"`
+object の tombstone を圧縮し RevocationTombstoneCompacted event を記録する (§6.3.1-9)。HotRevocationSet から当該 objectId を除外する。呼び出し側は全 active projection からの除外を保証すること。
+→ AppendEvent の戻り値
+Options: "Reason" -> "compacted"
 
-## versioned snapshot (§8.3-8.5)
+## versioned snapshot (§8.3-8.5, §8.10, Phase 4)
+core の immutable snapshot store (SourceVaultSaveImmutableSnapshot) 上に構築する。
 
 ### SourceVaultRegisterRetrievalWorkflowKind[kind, spec] → Association
-retrieval workflow kind を登録する。組み込み kind: `DirectIndexAnswer`, `KeywordFTS`, `VectorRAG`, `HybridRAG`, `AgenticKeywordSearch`, `DirectCorpusInteraction`, `Cascade`, `ManualReviewDraft`。
-→ `<|"Status"->"OK", "Kind"->kind|>`
+retrieval workflow kind を登録する。builtin: DirectIndexAnswer / KeywordFTS / VectorRAG / HybridRAG / AgenticKeywordSearch / DirectCorpusInteraction / Cascade / ManualReviewDraft。
 
-### SourceVaultListRetrievalWorkflowKinds[] → {String...}
-登録済み (組み込み + カスタム) workflow kind の Union を返す。
+### SourceVaultListRetrievalWorkflowKinds[] → {kind..}
+builtin と登録済み workflow kind の和を返す。
 
-### SourceVaultSaveRetrievalWorkflowSnapshot[name, spec, opts]
-WorkflowSnapshot を immutable 保存する (§8.3)。spec 必須: `"WorkflowKind"` (String、登録済み kind でなければ Failure)。credential / 実 path / IP は含めず profile ref のみ。
-→ `<|"Status"->..., "Ref"->..., "Digest"->..., ...|>` または Failure
-Options: `"Alias"->None`
+### SourceVaultSaveRetrievalWorkflowSnapshot[name, spec, opts] → Association
+WorkflowSnapshot を immutable 保存する (§8.3)。spec に "WorkflowKind" が必須で既知 kind でなければ Failure。credential / 実 path / IP を含めてはならない (profile ref のみ)。
+→ <|"Status","Ref","Digest",...|>
+Options: "Alias" -> None
 
-### SourceVaultLoadRetrievalWorkflowSnapshot[ref] → Association|Failure
+### SourceVaultLoadRetrievalWorkflowSnapshot[ref] → Association | Failure
 WorkflowSnapshot を読む。
 
-### SourceVaultFreezeCorpusSnapshot[corpusId, opts]
+### SourceVaultSavePromptSnapshot[name, prompt, metadata:<||>] → Association
+prompt を code に埋め込まず PromptSnapshot として immutable 保存する (§8.10)。metadata の "Alias" キーで alias を指定できる。
+
+### SourceVaultLoadPromptSnapshot[ref] → Association | Failure
+PromptSnapshot を読む。
+
+### SourceVaultFreezeCorpusSnapshot[corpusId, opts] → Association | Failure
 検索対象集合を immutable CorpusSnapshot に固定する (§8.4)。
-→ `<|"Status"->..., "Ref"->..., "Digest"->..., ...|>` または Failure
-Options: `"Items"->None` (必須、`{<|"SourceVaultObjectId"->..., "ContentHash"->..., ...|>...}`), `"ReleaseContextRef"->None`, `"Version"->Automatic` (Automatic→"auto"), `"Alias"->None`
+→ SaveImmutableSnapshot の戻り値
+Options: "Items" -> None ({<|"SourceVaultObjectId","ContentHash",...|>..} 必須。非リストで Failure), "ReleaseContextRef" -> None, "Version" -> Automatic (Automatic は "auto"), "Alias" -> None
 
-### SourceVaultCorpusSnapshotInfo[ref] → Association|Failure
-CorpusSnapshot の概要を返す。
-→ `<|"CorpusId"->..., "ItemCount"->_Integer, "ReleaseContextRef"->..., "Digest"->...|>`
+### SourceVaultCorpusSnapshotInfo[ref] → Association | Failure
+CorpusSnapshot の概要を返す。→ <|"CorpusId","ItemCount","ReleaseContextRef","Digest"|>
 
-### SourceVaultDiffCorpusSnapshots[aRef, bRef] → Association|Failure
-二つの CorpusSnapshot の item 差分を返す。item の同一性は `"SourceVaultObjectId"` → `"ContentHash"` の順で判定。
-→ `<|"Added"->{...}, "Removed"->{...}, "Common"->_Integer|>`
+### SourceVaultDiffCorpusSnapshots[a, b] → Association | Failure
+二つの CorpusSnapshot の item 差分を返す。item key は SourceVaultObjectId (無ければ ContentHash)。→ <|"Added"->{key..},"Removed"->{key..},"Common"->_Integer|>
 
-### SourceVaultBuildIndexSnapshot[indexId, corpusRef, workflowRef, opts]
-IndexSnapshot を作る (§8.5)。corpusRef / workflowRef が実在しなければ fail-closed。
-→ `<|"Status"->..., "Ref"->..., "Digest"->..., ...|>` または Failure
-Options: `"Artifacts"-><||>`, `"IndexKinds"->{"KeywordFTS"}`, `"Version"->Automatic`, `"Alias"->None`
+### SourceVaultBuildIndexSnapshot[indexId, corpusRef, workflowRef, opts] → Association | Failure
+IndexSnapshot を作る (§8.5)。corpusRef / workflowRef が実在しなければ fail-closed (Failure["CorpusRefUnresolved"|"WorkflowRefUnresolved"])。
+Options: "Artifacts" -> <||>, "IndexKinds" -> {"KeywordFTS"}, "Version" -> Automatic, "Alias" -> None
 
-### SourceVaultIndexSnapshotInfo[ref] → Association|Failure
-IndexSnapshot の概要を返す。
-→ `<|"IndexId"->..., "IndexKinds"->..., "CorpusSnapshotRef"->..., "WorkflowSnapshotRef"->..., "Digest"->...|>`
+### SourceVaultIndexSnapshotInfo[ref] → Association | Failure
+IndexSnapshot の概要を返す。→ <|"IndexId","IndexKinds","CorpusSnapshotRef","WorkflowSnapshotRef","Digest"|>
 
-### SourceVaultValidateIndexSnapshot[ref] → Association|Failure
-IndexSnapshot の digest と corpus/workflow ref の解決可能性を検証する。
-→ `<|"Status"->"Valid"|"Invalid", "DigestValid"->_, "CorpusResolvable"->_, "WorkflowResolvable"->_, "Ref"->ref|>`
+### SourceVaultValidateIndexSnapshot[ref] → Association | Failure
+IndexSnapshot の digest と corpus/workflow ref の解決可能性を検証する。→ <|"Status"->"Valid"|"Invalid","DigestValid","CorpusResolvable","WorkflowResolvable","Ref"|>
 
-## PDFIndex legacy adapter (§7.4, §7.4.1)
+## PDFIndex legacy adapter (§7.4, §7.4.1, Phase 3)
+legacy PDFIndex を release context gate 越しに使う。検索結果は必ず gate を通し raw local path を返さない。
 
 ### $SourceVaultPDFLegacySearchFunction
-型: Function|Symbol, 初期値: Automatic
-legacy 検索関数の override。Automatic で `PDFIndex`pdfSearch` を使う。差し替える場合 fn[query, n, collection] が pdfSearch 互換の Dataset または Association リストを返すこと。test 差し替え・PDFIndex 非依存環境用。
+型: Function | Automatic, 初期値: Automatic
+legacy 検索関数の override。Automatic で `PDFIndex`pdfSearch` を使う。fn[query, n, collection] が pdfSearch 互換の Dataset / 連想リストを返すこと。test 差し替え用。
 
-### SourceVaultPDFIndexLegacySearch[query, opts]
-legacy PDFIndex を呼び正規化前の生結果リスト (Association のリスト) を返す。pdfAskLLM は呼ばず Notebook も書かない。`$SourceVaultPDFLegacySearchFunction` が Automatic かつ `PDFIndex`pdfSearch` が未定義なら Failure["PDFIndexUnavailable", ...]。
-→ {Association...} または Failure
-Options: `"Collection"->Automatic`, `"Limit"->20`
+### SourceVaultSearch[query, opts] → {SearchResult..} | Failure
+release context gate 付きで検索し SearchResult のリストを返す (§7.4)。各結果に request-time release gate を再評価し Permit のみ返す。"Index" 指定時は native projection index (iNativeSearch) を使う (PDFIndex 非依存)。それ以外は legacy → 正規化 → migration rule → gate。
+Options: "ReleaseContext" -> None (必須。非文字列で Failure["ReleaseContextRequired"]), "PDFIndexProfile" -> None (指定時 CollectionRoot を解決), "Collection" -> Automatic, "Limit" -> 20, "Index" -> None (native projection index id)
+例: SourceVaultSearch["query", "ReleaseContext"->"public", "Index"->"public-proj", "Limit"->10]
 
-### SourceVaultPDFIndexLegacyResultToSearchResult[row, opts] → Association
-legacy 1 行 (Association) を SearchResult schema に正規化する。raw local path は含まない。
-→ `<|"ResultId"->"res:"<>uuid, "ChunkId"->..., "Score"->_Real, "ScoreBreakdown"-><|"Embedding"->Missing[...], "Keyword"->Missing[...]|>, "Snippet"->..., "EvidenceRef"->"evid:"<>..., "Citation"-><|"Title"->..., "Page"->..., "DocId"->...|>, "LegacyTags"->{...}|>`
+### SourceVaultPDFIndexLegacySearch[query, opts] → {row..} | Failure
+legacy PDFIndex を呼び正規化前の生結果リスト (連想リスト) を返す。pdfAskLLM は呼ばず Notebook も書かない。pdfSearch も override も無ければ Failure["PDFIndexUnavailable"]。
+Options: "Collection" -> Automatic, "Limit" -> 20
+
+### SourceVaultPDFIndexLegacyResultToSearchResult[row] → Association
+legacy 1 行を SearchResult schema に正規化する (raw path 非含)。→ <|"ResultId","ChunkId","Score","ScoreBreakdown","Snippet","EvidenceRef","Citation","LegacyTags"|>
 
 ### SourceVaultRegisterPDFIndexMigrationRule[profile, rule] → Association
-legacy privacy flag から release context への移行 rule を登録する (§7.4.1)。rule 未登録なら projection は空になる (fail-closed §7.4.1-4)。
-rule キー: `"AssignReleaseContexts"->{...}`, `"AssignTags"->{...}`, `"AssignPrivacyLevel"->_Real`, `"AssignState"->"Published"`, `"RequireHumanReviewed"->True`, `"AssignValidFrom"->...`, `"AssignValidUntil"->...`
-→ `<|"Status"->"OK", "Profile"->profile|>`
+legacy privacy flag から release context への移行 rule を登録する (§7.4.1)。永続化対象。rule 未登録なら projection は空 (fail-closed の期待挙動)。
+rule 例: <|"AssignReleaseContexts"->{..}, "AssignTags"->{..}, "AssignPrivacyLevel"->0.3, "AssignState"->"Published", "AssignValidFrom"->_, "AssignValidUntil"->_, "RequireHumanReviewed"->True, "DefaultReleaseContextRef"->_|>
 
-### SourceVaultPreviewPDFIndexMigration[profile, opts]
-sample 行に rule を適用し付与 release メタと gate 判定を返す (副作用なし)。
-→ `{<|"Title"->..., "AssignedSource"->..., "Decision"->..., "Why"->{...}|>...}`
-Options: `"SampleResults"->{}`、`"ReleaseContext"->None` (None なら rule の `"DefaultReleaseContextRef"` を使う)
+### SourceVaultPreviewPDFIndexMigration[profile, opts] → {Association..}
+sample 行に rule を適用し、付与 release メタと gate 判定を返す (副作用なし)。ReleaseContext 未指定時は rule の DefaultReleaseContextRef を使う。
+→ 各行 <|"Title","AssignedSource","Decision","Why"|>
+Options: "SampleResults" -> {} ({row..}), "ReleaseContext" -> None
 
 ### SourceVaultPDFIndexMigrationReport[profile] → Association
-登録済み migration rule と human-review 要否を返す。rule 未登録時: `<|"Status"->"NoRule", "Profile"->profile, "Note"->...|>`。登録時: `<|"Status"->"OK", "Profile"->profile, "Rule"->..., "RequireHumanReviewed"->_|>`
+登録済み migration rule と human-review 要否を返す。rule 未登録なら <|"Status"->"NoRule",...|>、登録済みなら <|"Status"->"OK","Rule","RequireHumanReviewed"|>。
 
-### SourceVaultSearch[query, opts]
-release context gate 付きで検索し SearchResult のリストを返す (§7.4)。`"ReleaseContext"` 未指定は fail-closed。各結果に request-time release gate を再評価し Permit のみ返す。raw local path は返さない。`"Index"` 指定時は native projection index を使い PDFIndex を呼ばない。
-→ {Association...} または Failure
-Options: `"ReleaseContext"->None` (必須), `"PDFIndexProfile"->None` (指定時に CollectionRoot を自動解決), `"Collection"->Automatic`, `"Limit"->20`, `"Index"->None` (indexId 指定で native 検索)
-例: `SourceVaultSearch["機械学習", "ReleaseContext"->"PublicRC", "Index"->"corpus-proj"]`
+## native projection index (PDFIndex 非依存。§6.3, §7.6, Phase 5)
+build 時に release gate を適用し Permit のみ収録。検索時は request-time gate 再評価 + revocation 照合。IndexKind は "KeywordBigram" (既定, keyword+日本語 bigram)、"KeywordBM25V1" (BM25 LexicalStats)、"DenseV1" (embedding, mean-centering)。
 
-## native projection index (§6.3, §7.6)
+### SourceVaultBuildProjectionIndex[context, opts] → Association | Failure
+chunk 群に build-time release gate を適用し Permit のみの endpoint-specific projection index を immutable 保存する (§6.3)。
+→ <|"Status","IndexId","Ref","ChunkCount","ExcludedCount","IndexKind"|>
+Options: "Chunks" -> None (§7.2 chunk のリスト必須。非リストで Failure["ChunksRequired"]), "IndexId" -> Automatic (既定 context<>"-proj"), "IndexKind" -> "KeywordBigram" ("KeywordBM25V1"/"DenseV1" も可), "EntityDictionary" -> None (BM25 時の entity dict, §4.1.1), "Overwrite" -> False
+chunk が参照するキー: ChunkId / NormalizedText | Text / SearchFields / SourceVaultObjectId / SourceRef / Page + gate 用の Tags/PrivacyLevel/State。
 
-### SourceVaultBuildProjectionIndex[contextName, opts]
-chunk 群に build-time release gate を適用し Permit のみの KeywordBigram projection index を作る (§6.3)。embedding backend 非依存。除外 chunk は Permit でない chunk の数。
-→ `<|"Status"->"OK", "IndexId"->..., "Ref"->..., "ChunkCount"->_Integer, "ExcludedCount"->_Integer|>` または Failure
-Options: `"Chunks"->None` (必須、§7.2 chunk Association のリスト), `"IndexId"->Automatic` (既定: contextName<>"-proj")
-
-chunk Association の必須/推奨 key: `"ChunkId"` (String), `"Text"` または `"NormalizedText"` (String), `"PrivacyLevel"` (_Real), `"Tags"` ({String...}), `"State"` (String), `"SourceVaultObjectId"` (revocation 照合用), `"SourceRef"-><|"Title"->...|>`, `"Page"->...`, `"ValidFrom"` / `"ValidUntil"` (DateObject|String、省略時は期限なし扱い)
-
-### SourceVaultLoadSearchIndex[indexIdOrRef, opts] → Association|Failure
-projection index を memory に読み込む。`"snapshot:..."` 形式の ref または indexId を受け付ける。
-→ `<|"Status"->"Loaded", "IndexId"->..., "ChunkCount"->_Integer, "ReleaseContextRef"->...|>`
+### SourceVaultLoadSearchIndex[indexIdOrRef, opts] → Association | Failure
+projection index を memory に読み込む。ref が "snapshot:" 始まりならそのまま、それ以外は "SourceVaultProjectionIndex/"<>id で解決。→ <|"Status"->"Loaded","IndexId","ChunkCount","ReleaseContextRef"|>
 
 ### SourceVaultUnloadSearchIndex[indexId] → Association
-読み込んだ index を memory から解放する。→ `<|"Status"->"Unloaded", "IndexId"->indexId|>`
+読み込んだ index を memory から解放する。
 
-### SourceVaultReloadSearchIndex[indexId, opts] → Association|Failure
-index を読み直す (Unload → Load)。
+### SourceVaultReloadSearchIndex[indexId, opts] → Association
+index を unload → load し直す。
 
-### SourceVaultSearchIndexStatus[indexId] → Association
-index の読込状態を返す。
-→ loaded: `<|"IndexId"->..., "Loaded"->True, "ChunkCount"->_Integer, "ReleaseContextRef"->..., "IndexKind"->...|>`
-→ not loaded: `<|"IndexId"->..., "Loaded"->False|>`
-
-### SourceVaultListSearchIndexes[] → {String...}
+### SourceVaultListSearchIndexes[] → {indexId..}
 memory に読み込み済みの index id を返す。
 
-## TPO 制約 / 目的別 index / 低遅延 interaction (§16)
+### SourceVaultSearchIndexStatus[indexId] → Association
+index の読込状態を返す。未読込なら <|"IndexId","Loaded"->False|>、読込済なら <|"IndexId","Loaded"->True,"ChunkCount","ReleaseContextRef","IndexKind"|>。
 
-### SourceVaultRegisterTPOProfile[tpoId, spec] → Association|Failure
-TPOProfile (場所/イベント/役割/許可話題/回答長/遅延) を登録する (§16.2)。spec 必須: `"AllowedScope"` (Association、`"TopicTags"` キー必須)。
-省略時の既定: `"TopicKeywords"-><||>` (topic名→キーワードリストの Association), `"OutOfScopeKeywords"->{}`, `"ChannelProfile"-><|"MaxAnswerCharacters"->120, "MaxAnswerSentences"->2|>`, `"OutOfScopePolicy"-><||>`
-任意 spec キー: `"AllowedScope"-><|"TopicTags"->{...}, "ReleaseContextRefs"->{...}|>`, `"ReleaseContextRefs"` (AllowedScope 外にも置ける), `"TopicKeywords"`, `"OutOfScopeKeywords"`, `"ChannelProfile"`, `"OutOfScopePolicy"`
+## Mining primer index (§6.1/6.2)
+mining サマリー由来の低コスト探索。item は summary レベル。結果は EvidenceKind="SummaryPrimer" で回答根拠にしない。
 
-### SourceVaultTPOProfile[tpoId] → Association|Failure
-登録済み TPOProfile を返す。未登録なら `Failure["UnregisteredTPOProfile", <|"TPOId"->tpoId|>]`。
+### SourceVaultBuildPrimerIndex[context, opts] → Association | Failure
+mining サマリー由来の primer item に build-time release gate を適用し Permit のみの SourceVaultPrimerIndex を immutable 保存する (§6.1)。summary fields を lexical chunk (title/summary/tags/author) に写像し BM25 LexicalStats を build。
+→ <|"Status","PrimerId","Ref","ItemCount","ExcludedCount"|>
+Options: "Items" -> None (必須。非リストで Failure["ItemsRequired"]), "PrimerId" -> Automatic (既定 context<>"-primer"), "Overwrite" -> False
+item のキー: "ObjectURI","SourceVaultObjectId","Title","Summary","Tags","Authors","Signals"(<|"EffectiveImportance"->_|>),"Freshness"("Fresh"|"StalePrimer"),"PrivacyLevel","State"。
 
-### SourceVaultListTPOProfiles[] → {String...}
+### SourceVaultLoadPrimerIndex[primerIdOrRef] → Association | Failure
+primer index を memory に読み込む。→ <|"Status"->"Loaded","PrimerId","ItemCount"|>
+
+### SourceVaultPrimerSearch[query, opts] → {Association..} | Failure
+primer を BM25(summary/title/tags/authors) + bounded MiningBoost + EffectiveImportance*ImportanceWeight - StalePrimerPenalty で採点し、request-time gate/revocation 後 Permit のみ Score 降順で返す (§6.2)。未ロードなら自動ロード。
+→ 各結果 <|"ResultId","SourceVaultObjectId","ObjectURI","Title","Summary","Score","BM25","MiningBoost","ImportanceTerm","FreshnessPenalty","Freshness","EvidenceKind"->"SummaryPrimer","ReleaseDecision","Revoked","RequestTimeGateReevaluated","Why"|>
+Options: "ReleaseContext" -> None (必須。非文字列で Failure), "PrimerIndex" -> Automatic (既定 <rc>-primer), "Limit" -> 20, "UseSummaries" -> True (False で Summary を Missing["Hidden"]), "UseMining" -> True, "MaxBoost" -> 0.2 (MiningBoost 上限), "ImportanceWeight" -> 0.1, "StalePrimerPenalty" -> 0.15
+
+## TPO 制約 / 目的別 index / 低遅延 interaction (§16, Phase 7)
+TPO = Time/Place/Occasion。場所・イベント・役割・許可話題・回答長・遅延を束ねた制約。
+
+### SourceVaultRegisterTPOProfile[tpoId, spec] → Association
+TPOProfile を登録する (§16.2)。spec 必須 "AllowedScope" (TopicTags を含む)。任意 "TopicKeywords","OutOfScopeKeywords","ChannelProfile"(MaxAnswerCharacters 等),"OutOfScopePolicy","ReleaseContextRefs"。
+
+### SourceVaultTPOProfile[tpoId] → Association | Failure
+登録済み TPOProfile を返す (未登録 fail-closed)。
+
+### SourceVaultListTPOProfiles[] → {tpoId..}
 登録済み TPO id を返す。
 
 ### SourceVaultValidateTPOProfile[spec] → Association
-TPOProfile spec の必須項目 (`"AllowedScope"` と `"AllowedScope"."TopicTags"`) を検査する。
-→ `<|"Status"->"OK"|"Invalid", "Issues"->{String...}|>`
+TPOProfile spec の必須項目を検査する。
 
-### SourceVaultClassifyQuestionTPO[question, tpoId] → Association|Failure
-質問が TPO に即すか分類し QueryScopeDecision を返す (§16.5)。rule + keyword ベース (LLM 非依存)。OutOfScopeKeywords に一致→OutOfScope、TopicKeywords に一致→InScope、いずれも不一致→NeedsClarification。
-→ `<|"ObjectClass"->"SourceVaultQueryScopeDecision", "Decision"->"InScope"|"OutOfScope"|"NeedsClarification"|"Blocked", "TPOProfileRef"->tpoId, "MatchedTopicTags"->{...}, "ReleaseContextRefs"->{...}, "Reason"->..., "Confidence"->_Real|>`
+### SourceVaultClassifyQuestionTPO[question, tpoId] → Association
+質問が TPO に即すか rule + keyword (LLM 非依存) で分類し QueryScopeDecision を返す (§16.5)。→ Decision: InScope | OutOfScope | NeedsClarification | Blocked。
 
-### SourceVaultEvaluateTPOGate[question, tpoId] → Association|Failure
-`SourceVaultClassifyQuestionTPO` の別名。
+### SourceVaultEvaluateTPOGate[question, tpoId] → Association
+SourceVaultClassifyQuestionTPO の別名。
 
-### SourceVaultBuildPurposeIndex[indexId, tpoId, opts]
-TPO 制約 (AllowedScope.TopicTags と Tags の交差) で chunk を絞り `SourceVaultBuildProjectionIndex` を呼ぶ (§16.4)。release context は TPO の `AllowedScope.ReleaseContextRefs` (または `ReleaseContextRefs`) の先頭要素を自動解決。
-→ `SourceVaultBuildProjectionIndex` と同形の結果 または Failure
-Options: `"Chunks"->None` (必須), `"ReleaseContext"->Automatic` (Automatic で TPO から解決)
+### SourceVaultBuildPurposeIndex[indexId, tpoId, opts] → Association | Failure
+TPO 制約 (許可 topic tags + release context) で chunk を絞り projection index を作る (§16.4)。
+Options: "Chunks" (必須) ほか BuildProjectionIndex 系。
 
-### SourceVaultAnswerForInteraction[question, tpoId, opts]
-低遅延 cascade で対話応答を作る (§16.10)。TPOGate → PurposeIndex 検索 → 短答 / fallback。回答長は TPO の `ChannelProfile.MaxAnswerCharacters` で切り詰める。Decision: `Speak` (結果あり) / `Clarify` (NeedsClarification) / `Refuse` (OutOfScope|Blocked) / `NoAnswer` (結果なし or 超過)。
-→ `<|"Decision"->"Speak"|"Clarify"|"Refuse"|"NoAnswer"|"RouteToHuman", "AnswerText"->..., "EvidenceRefs"->{...}, "WorkflowUsed"->..., "ElapsedMs"->_Integer, "DeadlineMet"->True|False, "TPOGateDecision"->...|>`
-Options: `"Index"->None` (必須、事前 build した indexId), `"ReleaseContext"->Automatic`, `"DeadlineMs"->3000`
-例: `SourceVaultAnswerForInteraction["量子コンピュータとは", "venue-TPO", "Index"->"venue-proj", "DeadlineMs"->2000]`
+### SourceVaultAnswerForInteraction[question, tpoId, opts] → Association
+低遅延 cascade で対話応答を作る (§16.10)。TPOGate → PurposeIndex 検索 → 短答 / fallback。回答長は TPO の ChannelProfile に従う。
+→ <|"Decision"->Speak|Clarify|Refuse|NoAnswer|RouteToHuman, "AnswerText","EvidenceRefs","WorkflowUsed","ElapsedMs","DeadlineMet","TPOGateDecision"|>
+Options: "Index" (必須), "ReleaseContext", "DeadlineMs"
 
-## マルチモーダル event 正規化 / media index (§17.4, §17.10, §17.14)
+## マルチモーダル event 正規化 / media index (§17.4, §17.10, §17.14, Phase 7b)
 
 ### SourceVaultMediaPrivacyDefault[kind] → Real
-media kind ごとの既定 PrivacyLevel を返す (§17.13)。AudioSegment/CameraFrame/ScreenSnapshot→1.0、ASRTranscript→0.8、UserQuestion→0.7、SystemSummary/ResponseDraft/VisualCaption/OCR/FAQCandidate/RedactedTranscript→0.5、その他→1.0。
+media kind ごとの既定 PrivacyLevel を返す (§17.13)。raw media は >=1.0。
 
-### SourceVaultAppendMultimodalEvent[event] → Association|Failure
-MultimodalEvent を正規化し event log に記録する (§17.4)。event 必須: `"SessionID"` (String), `"Kind"` (String)。PrivacyLevel 未指定なら kind 既定を自動設定。
-→ event log append 結果 または `Failure["BadMultimodalEvent", ...]`
+### SourceVaultAppendMultimodalEvent[event] → Association
+MultimodalEvent を正規化し append-only event log に記録する (§17.4)。必須 "SessionID","Kind"。PrivacyLevel 未指定なら kind 既定 (raw media は 1.0)。
 
-### SourceVaultSessionEvents[sessionId, opts]
-session の MultimodalEvent を CreatedAtUTC 昇順で返す。
-→ {Association...}
-Options: `"Kind"->All` (All で全 kind、String 指定で Kind 絞り込み)
+### SourceVaultSessionEvents[sessionId, opts] → {event..}
+session の MultimodalEvent を時刻順に返す。
+Options: "Kind" (kind で絞り込み)
 
-### SourceVaultBuildRealtimeContext[sessionId, opts]
-直近 transcript + visual を ObservationEnvelope にまとめる (§17.10)。ASRTranscript を最大 8 件、VisualCaption/OCR/CameraFrame/ScreenSnapshot を MaxFrames 件取る。
-→ `<|"ObjectClass"->"SourceVaultObservationEnvelope", "EnvelopeID"->"obs:"<>uuid, "SessionID"->..., "TranscriptText"->..., "TranscriptEvents"->{...}, "VisualEvents"->{...}, "UserQuestion"->..., "CreatedAtUTC"->...|>`
-Options: `"TranscriptWindowSeconds"->20`, `"VisualWindowSeconds"->5`, `"MaxFrames"->3`
+### SourceVaultBuildRealtimeContext[sessionId, opts] → Association
+直近 transcript + visual を ObservationEnvelope にまとめる (§17.10)。
+Options: "TranscriptWindowSeconds" -> 20, "VisualWindowSeconds" -> 5, "MaxFrames" -> 3
 
-### SourceVaultBuildMediaIndex[sessionId, opts]
-media 由来 (transcript/caption/OCR/summary) を release gate して projection index 化する (§17.14)。raw audio/frame は入れない (`$derivedMediaKinds`: ASRTranscript/VisualCaption/OCR/SystemSummary/FAQCandidate/RedactedTranscript)。内部で `SourceVaultBuildProjectionIndex` を呼ぶ。
-→ `SourceVaultBuildProjectionIndex` と同形の結果 または Failure
-Options: `"ReleaseContext"->None` (必須), `"IndexId"->Automatic` (既定: sessionId<>"-media"), `"Modalities"->{"ASRTranscript","VisualCaption","OCR","SystemSummary"}` (raw kind は `$derivedMediaKinds` との交差で自動除外)
+### SourceVaultBuildMediaIndex[sessionId, opts] → Association | Failure
+media 由来 (transcript/caption/OCR/summary) を release gate して projection index 化する (§17.14)。raw audio/frame は入れない。
+Options: "ReleaseContext" (必須), "IndexId", "Modalities"
 
-## SurveyCorpus / SurveyIngestPlan (§16.3, §16.7)
+## Dense / hybrid retrieval (embedding arm)
+lexical(BM25) を精度の主軸、dense を意味的 recall として RRF で融合する。embedder は injectable (既定=決定的 hashing n-gram、実測は NetModel/LM Studio 等を register)。
 
-これらは `SourceVault`` コンテキストで定義される。フル修飾名は `SourceVault`SourceVaultXxx`。
+### $SourceVaultEmbeddingDim
+型: Integer, 初期値: 256
+既定 (hashing) embedder の次元。実 provider は自身の次元を返してよい。
 
-### SourceVault`SourceVaultCreateSurveyIngestPlan[surveyId, spec, opts]
-SurveyIngestPlan を immutable snapshot として保存する。spec 必須: `"SourceQueries"` (List), `"IngestPolicy"` (Association)。
-→ `<|"Status"->"OK", "ObjectRef"->..., "SnapshotRef"->..., "Digest"->..., "SurveyId"->..., "SurveyVersion"->..., "Warnings"->{}|>` または Failure
-Options: `"SurveyVersion"->Automatic`
+### SourceVaultRegisterEmbeddingProvider[name, fn] → Association
+embedding provider を登録する。fn[{text..}] は数値ベクトルのリストを返す (L2 正規化推奨、次元は全 text で一定)。
 
-### SourceVault`SourceVaultIngestSurveyResult[planRef, source] → Association|Failure
-planRef の IngestPolicy に従い source item を検証してイベント記録する (fail-closed)。RequireProvenance / RequireReleaseContext / MaxPrivacyLevel 超過で Failure。Content (String|ByteArray) が BlobRef なしの場合 `SourceVaultCommitBlob` を自動呼び出し。
-source キー: `"Content"` (String/ByteArray) または `"BlobRef"`, `"ReleaseContextRefs"`, `"PrivacyLevel"` (_Real), `"ProvenanceRef"`, `"TopicTags"`, `"Title"`, `"StalenessClass"`, `"ValidFrom"`, `"ValidUntil"`, `"ReviewState"` (省略時は `IngestPolicy.DefaultReviewState`、既定 `"NeedsHumanReview"`)
-→ `<|"Status"->"OK", "ItemRef"->"svitem:"<>uuid, "BlobRef"->..., "ReviewState"->..., "Warnings"->{}|>`
+### SourceVaultListEmbeddingProviders[] → {name..}
+登録済み embedding provider 名のリスト。
 
-### SourceVault`SourceVaultReviewSurveyItem[itemRef, decision] → Association
-survey item にレビュー判定を記録する (SurveyItemReviewed event)。decision 例: `"HumanReviewed"`, `"Rejected"`。
-→ `<|"Status"->"OK", "ItemRef"->..., "ReviewState"->decision|>`
+### SourceVaultSetEmbeddingProvider[name] → Association | Failure
+既定 embedding provider を切り替える。未登録なら Failure["UnknownEmbeddingProvider"]。
 
-### SourceVault`SourceVaultMarkSurveyItemStale[itemRef, reason] → Association
-survey item に stale フラグを立てる (SurveyItemStale event)。
-→ `<|"Status"->"OK", "ItemRef"->..., "Stale"->True|>`
+### SourceVaultEmbeddingProvider[] → String
+現在の既定 embedding provider 名を返す (初期 "HashingNGramV1")。
 
-### SourceVault`SourceVaultBuildSurveyCorpus[surveyId] → Association
-event replay から survey item の現在状態を再構築する (副作用なし、snapshot 化しない)。ReviewState は最新の SurveyItemReviewed event で上書き。Stale フラグは SurveyItemStale event の存在で判定。
-→ `<|"Status"->"OK", "ObjectClass"->"SourceVaultSurveyCorpus", "SurveyId"->..., "Items"->{...}, "ItemCount"->_Integer, "Reviewed"->_Integer, "Stale"->_Integer|>`
+### SourceVaultEmbedTexts[{text..}] → {vector..}
+既定 provider で埋め込みベクトルのリストを返す。
 
-### SourceVault`SourceVaultFreezeSurveyCorpus[corpusId, opts]
-SurveyCorpus を immutable snapshot として固定する。Items 省略時は SurveyId から event replay で自動取得。
-→ `<|"Status"->"OK", "ObjectRef"->..., "SnapshotRef"->..., "Digest"->..., "ItemCount"->_Integer, "Warnings"->{}|>` または Failure
-Options: `"SurveyId"->Automatic` (Items 省略時に必須), `"Items"->Automatic` (明示指定で replay 省略可), `"Version"->Automatic`, `"PlanRef"->None`
+### SourceVaultRegisterHTTPEmbeddingProvider[name, opts] → Association
+OpenAI 互換 /v1/embeddings HTTP エンドポイント (LM Studio 等) を叩く embedding provider を登録する。body は ExportByteArray で UTF-8 バイト化し日本語の二重エンコード文字化けを防ぐ・応答は index でソート。手書き provider の encoding/認証 URL ミスを回避する正準ヘルパ。
+Options: "URL" -> Automatic (=Global`$embeddingEndpoint), "Model" -> Automatic (=Global`$embeddingModel), "AuthToken" -> Automatic (エンドポイントのベース URL で LM Studio トークンを NBGetLocalLLMAPIKey 自動解決 (FE のみ)｜None｜文字列｜token を返す関数), "Normalize" -> False, "SetActive" -> True, "TimeoutSeconds" -> 60
 
-### SourceVault`SourceVaultSurveyCorpusStatus[corpusId] → Association|Failure
-SurveyCorpus の概要を snapshot store から読んで返す。
+### SourceVaultHybridSearch[query, opts] → {SearchResult..} | Failure
+BM25 index と Dense index を検索し RRF (Reciprocal Rank Fusion) で融合、両 arm とも Permit の結果を FusedScore 降順で返す。dense/hybrid go/no-go の評価入口。
+Options: "ReleaseContext" (必須), "BM25Index", "DenseIndex", "Limit" -> 20, "RetrievalDepth" -> 50 (各 arm の取得深さ), "RRFConstant" -> 60
 
-## PromptSnapshot (§8.10)
+## 検索評価 (held-out eval harness)
 
-### SourceVault`SourceVaultSavePromptSnapshot[name, prompt, metadata]
-prompt を code に埋め込まず immutable snapshot 化する (§8.10)。ObjectClass: `"PromptSnapshot"`、InterfaceVersion: `"SVPrompt/1"`。
-metadata 任意キー: `"Alias"->None` など。
-→ `SourceVaultSaveImmutableSnapshot` と同形の結果
+### SourceVaultEvaluateSearch[queries, searchFn, opts] → Association
+gold query 群で検索品質 (recall@k, MRR) を測る再利用可能ハーネス。queries は {<|"Query","RelevantIds"->{chunkId..}|>..} または {q -> {relIds}..}。searchFn[query] は結果 assoc (ChunkId 付き) または ChunkId 文字列のランク付きリストを返す。
+→ <|"NumQueries","RecallAtK"->(k->平均),"MRR","PerQuery"|>
+Options: "K" -> {1,3,5,10}, "Limit" -> 10
 
-### SourceVault`SourceVaultLoadPromptSnapshot[ref] → Association|Failure
-PromptSnapshot を読む。
+### SourceVaultIndexSearcher[releaseContext, indexId, opts] → Function
+SourceVaultEvaluateSearch 用の searchFn (query を index で引く closure) を返す。
+Options: "Limit" -> 20
 
-## 依存・関連パッケージ
-
-- [SourceVault_core](https://github.com/transreal/SourceVault_core): `SourceVaultAppendEvent`, `SourceVaultTransactionLog`, `SourceVaultSaveImmutableSnapshot`, `SourceVaultLoadImmutableSnapshot`, `SourceVaultVerifyImmutableSnapshot`, `SourceVaultSnapshotDigest`, `SourceVaultCommitBlob`
-- [PDFIndex](https://github.com/transreal/PDFIndex): legacy adapter のバックエンド (optional、`$SourceVaultPDFLegacySearchFunction` で差し替え可)
-- 後続ロード: [SourceVault_servicemanager](https://github.com/transreal/SourceVault_servicemanager)
+## SearchResult schema (共通)
+native/legacy 検索結果の主なキー: ResultId / ChunkId / Score / RetrievalKind ("KeywordBigram"|"KeywordBM25"|"DenseEmbedding") / ScoreBreakdown / Snippet / EvidenceRef / Citation(<|"Title","Page"|>) / SourceVaultObjectId / ReleaseDecision / Revoked / RequestTimeGateReevaluated / PolicyDigestAtRequest / Why。raw local path は含まない。追加キーは後方互換 (§1.3)。

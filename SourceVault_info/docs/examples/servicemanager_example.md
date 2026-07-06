@@ -360,6 +360,7 @@ SourceVaultStopService["handbook-web-svc"];      (* service 停止 (task 削除 
 | 検索が keyword のみ / 意味検索が効かない | LM Studio に埋め込みモデルが未ロード、または token 未設定（401）。§3 を確認。 |
 | 既存 index の embedding が壊れている | 索引時にエンコード不整合があった場合、`PDFIndex\`pdfReembed["default"]` で保存済みテキストから embedding のみ再生成（PDF 再抽出・LLM 再要約なしの軽量処理）。 |
 | `/pdfask` と `/pdfsearch` が同じ結果 | `ChatModel` 未解決で LLM が呼べず degrade している。loaded な chat モデルを確認。 |
+| `ChatModel` が古いメジャー版に解決される（例: `claude-sonnet-5` があるのに `claude-sonnet-4-6` が選ばれる） | 旧版のモデルバージョン比較バグ。バージョン `{4,6}` を base-1000 で `4006` に変換していたため、桁数の少ない新メジャー版 `{5}`（=5）を上回り、新版が昇格しなかった。現行版は各バージョンを固定幅（width 6・base 100000）で右パディングしてから重み付けするため、`claude-sonnet-5` が正しく `claude-sonnet-4-6` に勝つ。古い挙動が残る場合は `Quit[]`→`Get["SourceVault.wl"]` 再ロードで解消。 |
 | 必修/選択が断定されず候補列挙だけになる | 凡例 (LegendMap) が未登録。§6b で `ProvidesLegend->True` の凡例 curated を該当 release context・年度で登録すれば分類が解禁される。`SourceVaultListEvidenceGaps[]` で「凡例が要る質問」を確認できる。 |
 | 崩れた表が検索に出ない / 内容が拾えない | bge-m3＋窓拡大で `PDFIndex\`pdfReembed["default"]`。それでも不足なら §6b の `SourceVaultDraftCuratedTranscription` で転記→確認→ curated 登録（clean text は検索で上位に来る）。 |
 | arXiv ソースが一覧に出ない / 機密扱いになる | 旧版の PrivacyLevel 誤設定バグ（OfficialDocs が 0.6 になっていた）。`SourceVaultReclassifyPublicPrivacy[]` で一括修正し、その後 `SourceVaultArXiv[]` で確認する。 |
@@ -395,6 +396,7 @@ Import["http://127.0.0.1:1234/api/v0/models", "Text"]   (* state=loaded, type=ll
 | 設定登録 | `SourceVaultRegisterReleaseContext` / `RegisterPDFIndexProfile` / `RegisterPDFIndexMigrationRule` / `RegisterWebServiceEndpoint` / `RegisterLLMBackend`（`"Class"->"Light-Cloud"` / `"Capabilities"->{"Reasoning"}` 等のフィールドをサポート。バッテリー節約・LM Studio 未起動時の代替 LLM をデータとして登録できる） |
 | サービス | `SourceVaultStartService` / `StopService` / `ServiceStatus` / `SendServiceCommand` |
 | プロキシ | `SourceVaultStartHTTPProxy`（`PDFGroupProfile`/`EndpointProfile`/`AppTitle`/`AskPrompt`/`ChatModel`/`ReleaseContext`/`PDFIndexProfile`/`SearchTimeoutMs`） / `StopHTTPProxy` / `HTTPProxyStatus` |
+| モデル解決 | `SourceVaultResolve`（`"Model"` の intent 単位最適 1 件。バージョン比較は固定幅パディングで新メジャー版を正しく優先） / `ClaudeResolveModel`（互換 wrapper） / `SourceVaultListModels`（provider の catalog 列挙） |
 | ソース一覧・閲覧 | `SourceVaultSources`（`"Kind"`/`"Author"`/`"Since"`/`"Until"`/`"On"` で絞り込み） / `SourceVaultArXiv`（arXiv 専用ビュー・`SourceVaultSources["", "Kind"->"arxiv", ...]` の薄ラッパ） / `SourceVaultSummaries`（横断検索） / `SourceVaultBackfillArXivSummaries`（既存 arXiv ソースにアブストラクト翻訳を Summary としてバックフィル） / `SourceVaultShowSourceSummary`（タイトル/サマリークリックで編集可能ノートを開く） / `SourceVaultOpenSourceFile`（raw ファイルを現 PC で解決して開く） / `SourceVaultSourceRow`（共通スキーマ行取得・`"URI"` フィールド `sv://snapshot/sha256/<hex>` を含む） |
 | 補足知識 | `SourceVaultRegisterCuratedKnowledge` / `ListCuratedKnowledge` / `DraftCuratedTranscription`（崩れ表の LLM 転記ドラフト） |
 | Evidence Gap | `SourceVaultListEvidenceGaps` / `CloseEvidenceGap` |
@@ -402,6 +404,15 @@ Import["http://127.0.0.1:1234/api/v0/models", "Text"]   (* state=loaded, type=ll
 | 索引（PDFIndex） | `PDFIndex\`pdfLoadIndex` / `pdfReembed`（モデル変更時の再 embed） / `pdfGetChunk` |
 | 不変スナップショット | `SourceVaultImmutableSnapshotExistsQ[snapshotId]`（存在確認）/ `SourceVaultSetImmutableSnapshotPrivacyLevel[snapshotId, lv]`（プライバシーレベル変更。本体不変・サイドレコードへ委譲） |
 | 修復ユーティリティ | `SourceVaultReclassifyPublicPrivacy`（公開ソースの PrivacyLevel 誤設定を一括修正。`OfficialDocs`/`OfficialAPI` = 0.0、`PublicWeb` = 0.4 に是正） |
+
+### モデルバージョン比較の修正（`SourceVaultResolve` / `ChatModel` 解決）
+
+`ChatModel` にモデル名のパターン（例: 同一プロバイダの複数バージョン）を渡すと、`SourceVaultResolve[\"Model\", ...]` が最新版を選びます。この「最新版」の判定に使うバージョン数値キーの生成方法が修正されました。
+
+- **旧実装**: バージョンリスト `{4,8}` を各桁 1000 進の重み（`1000^(Length[v]-i)`）で単調値に変換していました。この方式では桁数（要素数）が重みに影響するため、**桁数の異なるバージョン間で正しく比較できず**、`{4,6} -> 4006` が `{5} -> 5` を上回るなど、**桁数の少ない新メジャー版が昇格されない**不具合がありました（例: `claude-sonnet-5` があるのに `claude-sonnet-4-6` が優先される）。
+- **現行実装**: 各バージョンを固定幅（`width = 6`）まで右パディングしてから、`base = 100000` で先頭（major）ほど大きな重みを付けて単調値に変換します。これにより桁数に依らずメジャー版が正しく優先され、`claude-sonnet-5` が `claude-sonnet-4-6` に勝ちます。
+
+この変更は内部ヘルパー（`iSVParseModelVersion`）のみで、公開 API のシグネチャは変わりません。古い挙動が残る場合は `Quit[]` → `Get[\"SourceVault.wl\"]` で再ロードしてください。
 
 ### LLM バックエンド登録例（バッテリー節約・LM Studio 未起動時の代替）
 
@@ -444,5 +455,6 @@ SourceVaultSetImmutableSnapshotPrivacyLevel["snapshot:pdf:a1b2c3...", 0.5]
 - 崩れた表・凡例は **補足知識 (curated)** で補い（§6b）、凡例があれば必修/選択を**分類**、無ければ**列挙のみ＋Evidence Gap 記録**（§6c）。
 - 別 PDF グループは **`PDFGroupSearchProfile` を clone+override** するだけで横展開できます（§6d）。コード変更は不要です。
 - LLM バックエンドは `SourceVaultRegisterLLMBackend` でデータとして登録でき、`"Class"->"Light-Cloud"` / `"Capabilities"->{"Reasoning"}` によりバッテリー節約・LM Studio 未起動時の代替を設定として管理できます（§10）。
+- `ChatModel` のモデルバージョン解決は固定幅パディングで比較するよう修正され、**桁数の少ない新メジャー版**（例: `claude-sonnet-5`）が旧版（例: `claude-sonnet-4-6`）に正しく優先されるようになりました（§8・§10）。
 - **content-addressed 不変スナップショット**（`snapshot:class:hex` / `sv://snapshot/...` 形式）は本体不変。存在確認は `SourceVaultImmutableSnapshotExistsQ`、プライバシーレベル変更は `SourceVaultSetImmutableSnapshotPrivacyLevel`（サイドレコードへ委譲）で行います（§9・§10）。`SourceVaultSourceRow` の `"URI"` フィールドがこの正準 URI を提供します。
 - 埋め込みは **bge-m3（8192）**、回答合成は **ローカル instruct or `ChatModel->"cloud"`**。`/pdfask` は**非同期**で遅いモデルでも timeout しません。JSON の読み書きは `ExportByteArray`/`ImportByteArray` 経路で文字化けを防いでいます。

@@ -23,7 +23,9 @@
 		"SourceVault_mailstructure.wl",
 		"SourceVault_searchview.wl",
 		"SourceVault_contracts.wl",
-		"SourceVault_wiring.wl"
+		"SourceVault_wiring.wl",
+		"SourceVault_mailsuggest.wl",
+		"SourceVault_packageapi.wl"
 	],
 	"directories":[
 		"SourceVault_info",

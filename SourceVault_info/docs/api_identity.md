@@ -65,7 +65,7 @@ Options: "Persist" -> True
 → Association(<|"Status"->"Created", "EntityId", "EntityUid", "DisplayName"|> / "Error"+"Reason")
 Options: "Kind" -> "Person", "DisplayName" -> Automatic (Automatic は観測名→Value), "Names" -> Automatic (Automatic は <||>), "Persist" -> True
 
-実体レコード構造: <|"Type"->"SourceVaultEntity", "SchemaVersion"->1, "EntityUid"(Int), "EntityId", "Kind"(既定"Person"), "Identifiers"(List), "MemberOf", "Categories"(List), "Group", "PriorityWeight", "ContactAccessProfile"(Assoc), "DisplayName", "Names"(<|"Kanji","Romaji",…|>), ["OwnerKind", "LLMProfile", "PrimaryEmail"]|>
+実体レコード構造: <|"Type"->"SourceVaultEntity", "SchemaVersion"->1, "EntityUid"(Int), "EntityId", "Kind"(既定"Person"), "Identifiers"(List), "MemberOf", "Categories"(List), "Group", "PriorityWeight", "ContactAccessProfile"(Assoc), "DisplayName", "Names"(<|"Kanji","Romaji",…|>), ["OwnerKind", "LLMProfile", "PrimaryEmail", "SuggestedIdentifierRefs", "RejectedIdentifierRefs", "EvidenceSummary"]|>
 
 ContactAccessProfile(fail-closed 既定): <|"EstimatedAccessPL"->0.0, "MaxPlaintextPL"->0.0, "AccessTags"->{}, "DenyTags"->{"NoEmailUnlessDeclassified"}, "TrustStatus"->"Observed", "Confidence"->0.0|>
 
@@ -121,6 +121,19 @@ Options: "Email" -> Automatic, "Persist" -> True
 型: String, 初期値: 未設定(PrivateVault/identity)
 identity の保存ルート。テストで上書き可。
 
+## 所有関係リンク整合性 (identity-tag spec §1.2/§9.1)
+forward(Identifier.EntityRef)と reverse(Entity.Identifiers)は通常 SourceVaultLinkIdentifierToEntity/PutEntity が同時更新するが、部分ロード・手動編集・migration・クラッシュで乖離しうる。衝突時は Identifier.EntityRef を正とする。
+
+### SourceVaultRecomputeOwnershipLinks[opts] → Association
+Identifier.EntityRef ⇄ Entity.Identifiers の双方向リンクを全走査で整合再計算する。dangling 参照は除去、欠落した逆/順リンクは補完、両側の食い違いは Identifier.EntityRef を正として解決する。UpdateEntitySummary->True(既定)なら event log の EntityLinkProposal から各 Entity の SuggestedIdentifierRefs/RejectedIdentifierRefs/EvidenceSummary(再生成可能な projection)も再生成する(mining/core 未ロード時は skip)。
+→ <|"Status"->"OK", "IdentifierCount", "EntityCount", "RepairCount", "RepairKinds"(Association; "DanglingEntityRef"|"MissingReverseLink"|"DanglingIdentifierRef"|"ConflictResolvedByIdentifier"|"MissingForwardLink" 別カウント), "Repairs"(List、先頭50件), "EntitySummaryUpdated"(Int), "Persisted"(Bool)|>
+Options: "Persist" -> False (修復または summary 更新があった場合のみ save), "UpdateEntitySummary" -> True, "EventLimit" -> 5000
+
+### SourceVaultScheduleOwnershipRefresh[opts] → Association
+SourceVaultRecomputeOwnershipLinks["Persist"->True] を ScheduledTask(SessionSubmit)でカーネル内定期実行する。冪等: 再呼出は既存タスクを TaskRemove して差し替える。
+→ <|"Status"->"Scheduled", "IntervalSeconds", "Task"|> | <|"Status"->"Removed"|>
+Options: "IntervalSeconds" -> 21600 (6時間), "Remove" -> False (True で解除のみ、再登録しない)
+
 ## 送信者認証 (senderauth, spec v18 §24)
 From は認証なしには信用できない。信頼する authserv-id が付けた Authentication-Results のみ採用(authserv-id pinning)。Tightening(PL 上げ/DenyTag 追加)は認証なしでも可。Loosening(PL 下げ/平文化/cloud summary/DenyTag 除去)は認証 pass 時のみ。
 
@@ -165,4 +178,4 @@ spec 構造: <|"Recipients"(email/profile List), "Purpose"(既定"Reply"), "Tran
 外部送信を既定で禁止するシステム deny tag。
 
 ## 依存
-[NBAccess](https://github.com/transreal/NBAccess)(MAC 鍵/HMAC、crypto)。AddressBook 機能(SourceVaultAddressBookFindByEmail/ListContacts、$SourceVaultDefaultAddressBookMACKeyRef)、SourceVaultMailParseEmails、$SourceVaultRoots["PrivateVault"] に依存。
+[NBAccess](https://github.com/transreal/NBAccess)(MAC 鍵/HMAC、crypto)。AddressBook 機能(SourceVaultAddressBookFindByEmail/ListContacts、$SourceVaultDefaultAddressBookMACKeyRef)、SourceVaultMailParseEmails、$SourceVaultRoots["PrivateVault"] に依存。SourceVaultRecomputeOwnershipLinks の Entity summary 再生成は SourceVault_mining(SourceVaultReplayEntityLinkProposals)、SourceVault_core(SourceVaultTransactionLog) と弱結合(未ロード時は skip)。

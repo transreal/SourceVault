@@ -23,9 +23,16 @@
      - WXF round-trips WL values the spec uses (Missing[...], Automatic,
        All, Quantity[...]) losslessly, which JSON cannot.
 
-   Deferred to later increments: scheduler tick, condition / schedule
-   matching, dispatch, job claim, diagnostics gate, executor adapters,
-   UI, prompt-to-spec parsing, update / delete / enable flows.
+   Later increments added: schedule / condition matching, diagnostics
+   gate, tick, dispatch (sync / async subkernel / workflow), scheduler
+   registration, UI layer, SpecificMachine placement enforcement
+   (validation + job RequiredMachineTags + per-machine dispatch gate),
+   and prompt-to-spec parsing (SourceVaultParseAutoTriggerPrompt:
+   deterministic patterns first, optional LLM hook fill).
+
+   Still deferred: WorkerPool load balance / failover, machine-health-
+   aware eligible-set (liveness of the required machine), cloud comms,
+   update / delete / enable flows.
 
    Design constraints (rule 11 / rule 30 / spec 2.3):
      - Extension of the SourceVault` context, Get[]-loadable, loads
@@ -67,10 +74,12 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultAutoTriggerSourceIdResolver",
   "SourceVault`SourceVaultAutoTriggerForTarget",
   "SourceVault`SourceVaultAutoTriggerStatusCell",
-  "SourceVault`SourceVaultAutoTriggerSourcesURIResolver"
+  "SourceVault`SourceVaultAutoTriggerSourcesURIResolver",
+  "SourceVault`SourceVaultAutoTriggerKnownMachineTags",
+  "SourceVault`SourceVaultParseAutoTriggerPrompt"
 ]];
 
-$SourceVaultAutoTriggerVersion = "0.1-phase1.1";
+$SourceVaultAutoTriggerVersion = "0.1-phase1.2";
 
 SourceVaultAutoTriggerStatus::usage =
   "SourceVaultAutoTriggerStatus[] returns the auto-trigger subsystem status \
@@ -84,7 +93,10 @@ SourceVaultNewAutoTriggerId::usage =
 SourceVaultValidateAutoTrigger::usage =
   "SourceVaultValidateAutoTrigger[spec_Association] structurally validates a \
 TriggerSpec (required keys, Type, TargetType / Owner.Mode / Schedule.Kind / \
-ExecutionPlacement.Mode enums, Enabled boolean). Returns <|\"Valid\" -> Bool, \
+ExecutionPlacement.Mode enums, Enabled boolean). ExecutionPlacement Mode \
+\"SpecificMachine\" additionally REQUIRES a non-empty RequiredMachineTags list \
+(spec 3.1); tags not found among the known machines (this machine + the \
+diagnostics machine registry) are a warning only. Returns <|\"Valid\" -> Bool, \
 \"Issues\" -> {...}, \"Warnings\" -> {...}, \"TriggerId\" -> _|>. Does NOT check \
 live target existence / URI resolution (deferred to dispatch-time layers).";
 
@@ -185,8 +197,13 @@ only really executes the harmless self-test target TargetType \"PureComputation\
 (a bounded pure computation in a subkernel, returning its subprocess id to prove \
 out-of-process execution); real PromptRoute / Workflow executors are NOT wired \
 yet and are recorded as \"ExecutorNotWired\". No LLM / Front End / network / \
-dangerous side effects. Options: \"DryRun\" -> False, \"MaxJobs\" -> 1 (cap per \
-call), \"TimeConstraintSeconds\" -> 30. Returns a dispatch summary.";
+dangerous side effects. Placement gate: a job whose ExecutionPlacement is \
+\"SpecificMachine\" is executed only on a machine whose tag is in the job's \
+RequiredMachineTags (case-insensitive); other machines skip it \
+(NotEligibleMachine), leaving it Built for the required machine's dispatcher \
+(jobs.jsonl is shared via the vault root). Options: \"DryRun\" -> False, \
+\"MaxJobs\" -> 1 (cap per call), \"TimeConstraintSeconds\" -> 30. Returns a \
+dispatch summary.";
 
 SourceVaultAutoTriggerRunHistory::usage =
   "SourceVaultAutoTriggerRunHistory[opts] returns the run records from \
@@ -198,9 +215,10 @@ WITHOUT blocking the main kernel: each is submitted to a persistent clean subker
 (ParallelSubmit; subprocess pool, NOT the process pool, and NOT a wolframscript \
 process whose heavy init hangs headless) which runs it in the background and writes \
 a result file. The call returns immediately. Only TargetType \"PureComputation\" is \
-async-eligible here; PromptRoute is main-kernel-gated (manual only). Use \
-SourceVaultAutoTriggerPoll to finalize. Options: \"MaxConcurrent\" -> 1, \
-\"TimeConstraintSeconds\" -> 120.";
+async-eligible here; PromptRoute is main-kernel-gated (manual only). \
+SpecificMachine jobs whose RequiredMachineTags exclude this machine are not \
+picked up. Use SourceVaultAutoTriggerPoll to finalize. Options: \
+\"MaxConcurrent\" -> 1, \"TimeConstraintSeconds\" -> 120.";
 
 SourceVaultAutoTriggerPoll::usage =
   "SourceVaultAutoTriggerPoll[] advances the subkernel queue and finalizes async \
@@ -246,7 +264,8 @@ SourceVaultAutoTriggerDispatchWorkflows::usage =
   "SourceVaultAutoTriggerDispatchWorkflows[opts] kicks off Built WorkflowRoute / \
 WorkflowTemplate jobs non-blocking via ClaudeRunWorkflow Async (main kernel, gated \
 on LicensePool). FE-required targets are deferred (not auto-run from the tick). \
-Options: \"MaxConcurrent\"->1, \"TimeConstraintSeconds\"->600.";
+SpecificMachine jobs whose RequiredMachineTags exclude this machine are not \
+picked up. Options: \"MaxConcurrent\"->1, \"TimeConstraintSeconds\"->600.";
 
 SourceVaultAutoTriggerRunningWorkflows::usage =
   "SourceVaultAutoTriggerRunningWorkflows[] returns the workflow runs kicked off by \
@@ -261,7 +280,8 @@ FE-bound workflows; Unknown otherwise.";
 
 SourceVaultAutoTriggerListData::usage =
   "SourceVaultAutoTriggerListData[] returns one row Association per registered \
-trigger for the UI: TriggerId / Name / Enabled / ExecutionMode / AutoRunCapability \
+trigger for the UI: TriggerId / Name / Enabled / ExecutionMode / Placement \
+(\:5b9f\:884cPC label: \:74b0\:5883\:975e\:4f9d\:5b58 | pool: <name> | \:56fa\:5b9a: <tags>) / AutoRunCapability \
 / AutoToggle (ON|OFF|\:4e0d\:53ef) / Priority / NextFire / LastRunStatus / HasError / \
 ErrorSummary (cloud-safe metadata only). Pure read; no dispatch.";
 
@@ -297,6 +317,44 @@ SourceVaultAutoTriggerSourceIdResolver to let SourceVaultEvent conditions match 
 URI). Returns Missing when the URI is not found or the sources listing is \
 unavailable.";
 
+SourceVaultAutoTriggerKnownMachineTags::usage =
+  "SourceVaultAutoTriggerKnownMachineTags[] returns the machine tags known to \
+this vault: this machine's tag plus every MachineTag in the diagnostics \
+machine registry (weakly; no registry -> just this machine). Used by the \
+SpecificMachine placement validation (unknown-tag warning) and by \
+SourceVaultParseAutoTriggerPrompt (machine-name detection in prompts).";
+
+SourceVaultParseAutoTriggerPrompt::usage =
+  "SourceVaultParseAutoTriggerPrompt[prompt_String, target_Association, opts] \
+converts a natural-language trigger request (Japanese / English) into a \
+TriggerSpec (spec 10). Deterministic-first, NO LLM needed for the common \
+forms: schedule (\:6bce\:9031/\:9694\:9031/\:6bce\:65e5/\:6bce\:6708/N\:6642\:9593\:3054\:3068/ISO alarm/N\:6642\:9593\:5f8c timer, \
+weekly/daily/every N hours), sv:// URIs + \:66f4\:65b0 -> SourceVaultEvent Updated \
+condition, machine placement (\"<tag>\:3067\:5b9f\:884c\" / \"run on <tag>\" / any known \
+machine tag in the prompt -> ExecutionPlacement SpecificMachine + \
+RequiredMachineTags), priority words, and \"1\:56de\:3060\:3051\" -> MaxRunsPerWindow \
+1/day. When the SCHEDULE cannot be parsed and an LLM hook is available \
+(option \"LLMFunction\" -> fn, or the settable hook \
+SourceVaultAutoTriggerPromptLLM), the LLM fills only the missing slots: it \
+receives one instruction+prompt String, must return a JSON object (spec \
+10.2), which is RawJSON-parsed (NEVER ToExpression) and key-whitelisted. The \
+original prompt is stored HashOnly (privacy default). Returns \
+<|\"Status\" -> \"OK\"|\"NeedsClarification\"|\"Failed\", \"TriggerSpec\" -> spec \
+(always Enabled -> False; review then SourceVaultRegisterAutoTrigger), \
+\"Explanation\", \"Questions\", \"Warnings\", \"Validation\", \
+\"NextFirePreview\"|>. Options: \"TimeZone\" -> \"Asia/Tokyo\", \
+\"KnownMachineTags\" -> Automatic, \"LLMFunction\" -> Automatic, \"Now\" -> \
+Automatic (ISO string for reproducible tests).";
+
+(* settable hook, deliberately NOT ClearAll'd (idempotent reload keeps it) *)
+SourceVaultAutoTriggerPromptLLM::usage =
+  "SourceVaultAutoTriggerPromptLLM is a settable hook: a function \
+fullPrompt_String -> jsonString used by SourceVaultParseAutoTriggerPrompt when \
+the deterministic layer cannot parse the schedule. Default Automatic (no LLM; \
+deterministic parsing only). Privacy: prompts may contain private sv:// URIs, \
+so route this to a LOCAL model unless the prompt is known cloud-safe (spec \
+10.2).";
+
 (* pluggable resolver: slug (String) -> a workflow net wid (String) or a
    ClaudeCreateWorkflowNet spec (Association), or $Failed/Missing when the
    template cannot be resolved without the FE. Default: try the SourceVault
@@ -319,6 +377,23 @@ iSVATUTCNow[] :=
 iSVATMachineTag[] :=
   StringReplace[ToString[$MachineName],
     Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"];
+
+(* known machine tags = self + diagnostics machine registry (weak; the
+   registry is optional). Comparisons elsewhere are case-insensitive:
+   $MachineName is lowercase on Windows while specs / prompts typically
+   carry display casing like "ProArtPX13". *)
+iSVATKnownMachineTags[] :=
+  Module[{reg = {}},
+    If[Length[Names["SourceVault`SourceVaultDiagnosticsMachineRegistry"]] > 0,
+      reg = Quiet @ Check[
+        ToExpression["SourceVault`SourceVaultDiagnosticsMachineRegistry"][], {}]];
+    If[!ListQ[reg], reg = {}];
+    DeleteDuplicates @ Prepend[
+      Select[(Lookup[#, "MachineTag", Missing[]] &) /@ Select[reg, AssociationQ],
+        StringQ],
+      iSVATMachineTag[]]];
+
+SourceVaultAutoTriggerKnownMachineTags[] := iSVATKnownMachineTags[];
 
 iSVATRoot[] :=
   Module[{r = Quiet @ Check[SourceVault`SourceVaultCoreRoot[], $Failed]},
@@ -398,11 +473,26 @@ SourceVaultValidateAutoTrigger[spec_Association] :=
     If[!AssociationQ[sched], AppendTo[issues, "ScheduleNotAssociation"],
       If[!MemberQ[$iSVATScheduleKinds, Lookup[sched, "Kind", Null]],
         AppendTo[issues, "ScheduleKindInvalid"]]];
-    (* ExecutionPlacement (optional) *)
+    (* ExecutionPlacement (optional). "SpecificMachine" REQUIRES a non-empty
+       RequiredMachineTags list (spec 3.1). Tags not among the known machines
+       are a warning only: the machine registry is optional and the target PC
+       may register later. *)
     place = Lookup[spec, "ExecutionPlacement", Missing[]];
-    If[AssociationQ[place] &&
-       !MemberQ[$iSVATPlacementModes, Lookup[place, "Mode", Null]],
-      AppendTo[issues, "ExecutionPlacementModeInvalid"]];
+    If[AssociationQ[place],
+      Module[{pm = Lookup[place, "Mode", Null], rt, known},
+        If[!MemberQ[$iSVATPlacementModes, pm],
+          AppendTo[issues, "ExecutionPlacementModeInvalid"]];
+        If[pm === "SpecificMachine",
+          rt = Lookup[place, "RequiredMachineTags", {}];
+          If[!ListQ[rt], rt = {}];
+          rt = Select[rt, StringQ];
+          If[rt === {},
+            AppendTo[issues, "SpecificMachineRequiresMachineTags"],
+            known = ToLowerCase /@ iSVATKnownMachineTags[];
+            Scan[
+              If[!MemberQ[known, ToLowerCase[#]],
+                AppendTo[warns, "RequiredMachineTagUnknown:" <> #]] &,
+              rt]]]]];
     (* enabling guidance *)
     If[TrueQ[en],
       AppendTo[warns,
@@ -865,7 +955,7 @@ iSVATDispatchSlotKey[spec_, fireTimes_] :=
 
 SourceVaultAutoTriggerEvaluateTrigger[spec_Association, context_Association : <||>] :=
   Module[{machineTag, owner, now, lastCheck, sched, schedM, cond, condM,
-          gate, placement, fireTimes, job},
+          gate, placement, placeMode, reqTags, fireTimes, job},
     (* 1. Enabled *)
     If[!TrueQ[Lookup[spec, "Enabled", False]],
       Return[<|"WouldFire" -> False, "Stage" -> "Enabled", "Reason" -> "NotEnabled"|>]];
@@ -896,9 +986,23 @@ SourceVaultAutoTriggerEvaluateTrigger[spec_Association, context_Association : <|
     If[!TrueQ[gate["Allowed"]],
       Return[<|"WouldFire" -> False, "Stage" -> "DiagnosticsGate",
         "Reason" -> gate["Reason"], "Gate" -> gate|>]];
-    (* 6. Placement (mode recorded; full eligible-machine-set deferred) *)
+    (* 6. Placement (spec 7.2.1, dispatch-side subset): SpecificMachine must
+       carry RequiredMachineTags; the tags are RECORDED ON THE JOB so any
+       machine's dispatcher (jobs.jsonl is shared via the vault root) can
+       decide locally whether it may execute. Building is deliberately NOT
+       restricted to the executing machine: the owner machine builds the job
+       even when the executor is another PC. *)
     placement = Lookup[spec, "ExecutionPlacement",
       <|"Mode" -> "EnvironmentIndependent"|>];
+    If[!AssociationQ[placement],
+      placement = <|"Mode" -> "EnvironmentIndependent"|>];
+    placeMode = Lookup[placement, "Mode", "EnvironmentIndependent"];
+    reqTags = Lookup[placement, "RequiredMachineTags", {}];
+    If[!ListQ[reqTags], reqTags = {}];
+    reqTags = Select[reqTags, StringQ];
+    If[placeMode === "SpecificMachine" && reqTags === {},
+      Return[<|"WouldFire" -> False, "Stage" -> "Placement",
+        "Reason" -> "SpecificMachineRequiresMachineTags"|>]];
     (* 7. Build job (NOT dispatched) *)
     fireTimes = schedM["FireTimes"];
     job = <|
@@ -908,7 +1012,10 @@ SourceVaultAutoTriggerEvaluateTrigger[spec_Association, context_Association : <|
       "FireTimes" -> fireTimes,
       "DispatchSlotKey" -> iSVATDispatchSlotKey[spec, fireTimes],
       "MachineTag" -> machineTag,
-      "PlacementMode" -> Lookup[placement, "Mode", "EnvironmentIndependent"],
+      "PlacementMode" -> placeMode,
+      "RequiredMachineTags" -> reqTags,
+      "EligibleHere" -> (placeMode =!= "SpecificMachine" ||
+        MemberQ[ToLowerCase /@ reqTags, ToLowerCase[machineTag]]),
       "Priority" -> Lookup[Lookup[spec, "RunPolicy", <||>], "Priority", "Normal"],
       "Status" -> "Built",
       "BuiltAtUTC" -> iSVATUTCNow[],
@@ -1083,6 +1190,28 @@ iSVATCompletedSlots[] :=
            Lookup[#, "Status", ""]],
          Lookup[#, "DispatchSlotKey", Null], Null] &) /@ runs, Null]];
 
+(* placement gate (spec 7.2.1): may THIS machine execute the job? jobs.jsonl
+   lives in the shared vault root, so every machine's dispatcher sees every
+   built job; a SpecificMachine job is executed only by a machine whose tag is
+   in RequiredMachineTags (case-insensitive). SpecificMachine with NO tags is
+   eligible NOWHERE (fail-safe; validation rejects such specs). Job records
+   from older versions lack the tags field -> fall back to the trigger spec. *)
+iSVATJobEligibleHereQ[job_Association] :=
+  Module[{mode, tags, tid, spec, place},
+    mode = Lookup[job, "PlacementMode", Missing[]];
+    tags = Lookup[job, "RequiredMachineTags", Missing[]];
+    If[mode === "SpecificMachine" && !ListQ[tags],
+      tid = Lookup[job, "TriggerId", Missing[]];
+      spec = If[StringQ[tid], SourceVaultGetAutoTrigger[tid], Missing[]];
+      place = If[AssociationQ[spec],
+        Lookup[spec, "ExecutionPlacement", <||>], <||>];
+      If[!AssociationQ[place], place = <||>];
+      tags = Lookup[place, "RequiredMachineTags", {}]];
+    If[mode =!= "SpecificMachine", Return[True]];
+    If[!ListQ[tags], tags = {}];
+    MemberQ[ToLowerCase /@ Select[tags, StringQ],
+      ToLowerCase[iSVATMachineTag[]]]];
+
 (* best-effort free subprocess slots = max subprocesses - current subkernels *)
 iSVATSubprocessSlotsFree[] :=
   Module[{p, max},
@@ -1255,6 +1384,9 @@ SourceVaultAutoTriggerDispatchJobs[opts : OptionsPattern[]] :=
           If[!AssociationQ[spec],
             AppendTo[results, <|"Slot" -> slot, "Status" -> "Skipped",
               "Reason" -> "TriggerMissing"|>]; Return[Null]];
+          If[!iSVATJobEligibleHereQ[job],
+            AppendTo[results, <|"Slot" -> slot, "Status" -> "Skipped",
+              "Reason" -> "NotEligibleMachine:SpecificMachine"|>]; Return[Null]];
           gate = SourceVaultAutoTriggerDiagnosticsGate[spec, <||>];
           If[!TrueQ[gate["Allowed"]],
             AppendTo[results, <|"Slot" -> slot, "Status" -> "Skipped",
@@ -1402,7 +1534,7 @@ SourceVaultAutoTriggerDispatchAsync[opts : OptionsPattern[]] :=
     completed = iSVATCompletedSlots[];
     builtJobs = Select[iSVATReadJobs[], Lookup[#, "Status", ""] === "Built" &];
     eligible = Select[builtJobs,
-      iSVATAsyncEligibleQ[#] &&
+      iSVATAsyncEligibleQ[#] && iSVATJobEligibleHereQ[#] &&
         !MemberQ[completed, Lookup[#, "DispatchSlotKey", Null]] &&
         !KeyExistsQ[$iSVATRunningJobs, Lookup[#, "DispatchSlotKey", Null]] &];
     Scan[
@@ -1639,7 +1771,7 @@ SourceVaultAutoTriggerDispatchWorkflows[opts : OptionsPattern[]] :=
     completed = iSVATCompletedSlots[];
     builtJobs = Select[iSVATReadJobs[], Lookup[#, "Status", ""] === "Built" &];
     eligible = Select[builtJobs,
-      iSVATWorkflowTargetQ[#] &&
+      iSVATWorkflowTargetQ[#] && iSVATJobEligibleHereQ[#] &&
         !MemberQ[completed, Lookup[#, "DispatchSlotKey", Null]] &];
     Scan[
       Function[job,
@@ -1763,6 +1895,481 @@ SourceVaultAutoTriggerSchedulerStatus[] :=
       "RunningJobs" -> SourceVaultAutoTriggerRunningJobs[]|>];
 
 (* ============================================================
+   Prompt -> TriggerSpec (spec 10). Deterministic-first: a small
+   pattern layer covers the common Japanese / English forms with
+   NO LLM (auditable, testable headless, privacy-neutral):
+     schedule   \:6bce\:9031<\:66dc\:65e5>HH:MM / \:9694\:9031 / \:6bce\:65e5 / \:6bce\:671d / \:6bce\:6708D\:65e5 /
+                N\:6642\:9593\:3054\:3068 / N\:5206\:3054\:3068 / ISO datetime / YYYY\:5e74M\:6708D\:65e5 /
+                N\:6642\:9593\:5f8c (timer) / weekly / daily / every N hours
+     condition  sv:// URIs (+ \:66f4\:65b0 / updated) -> SourceVaultEvent
+     placement  "<tag>\:3067\:5b9f\:884c" / "run on <tag>" / any known machine
+                tag mentioned -> SpecificMachine + RequiredMachineTags
+     runPolicy  priority words, "1\:56de\:3060\:3051" -> MaxRunsPerWindow 1/day
+   An optional LLM hook (SourceVaultAutoTriggerPromptLLM or option
+   "LLMFunction") fills ONLY the slots the deterministic layer left
+   open (currently invoked when the schedule is unparsed). Its
+   output is JSON: RawJSON-parsed, key-whitelisted, and validated
+   through SourceVaultValidateAutoTrigger - never ToExpression
+   (spec 10.2 / this file's WXF rationale). The original prompt is
+   stored HashOnly (privacy default). The returned spec always has
+   Enabled -> False: parse -> user review -> register -> enable.
+   ============================================================ *)
+
+$iSVATAsciiWordChar = Alternatives @@ Join[
+  CharacterRange["a", "z"], CharacterRange["A", "Z"],
+  CharacterRange["0", "9"], {"-", "_"}];
+
+$iSVATWeekdayJP = <|"\:6708" -> "Monday", "\:706b" -> "Tuesday",
+  "\:6c34" -> "Wednesday", "\:6728" -> "Thursday", "\:91d1" -> "Friday",
+  "\:571f" -> "Saturday", "\:65e5" -> "Sunday"|>;
+
+$iSVATWeekdayEN = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+  "Saturday", "Sunday"};
+
+(* first explicit time of day: HH:MM / H\:6642M\:5206 / H\:6642\:534a / H\:6642.
+   "N\:6642\:9593" (duration) is stripped first so "3\:6642\:9593\:3054\:3068" is not 3:00. *)
+iSVATPromptTime[s_String] :=
+  Module[{s2, t},
+    s2 = StringReplace[s, DigitCharacter .. ~~ "\:6642\:9593" -> ""];
+    t = StringCases[s2, h : Repeated[DigitCharacter, {1, 2}] ~~ ":" ~~
+        m : Repeated[DigitCharacter, {2}] :> {FromDigits[h], FromDigits[m]}, 1];
+    If[t === {},
+      t = StringCases[s2, h : Repeated[DigitCharacter, {1, 2}] ~~ "\:6642" ~~
+          m : Repeated[DigitCharacter, {1, 2}] ~~ "\:5206" :>
+          {FromDigits[h], FromDigits[m]}, 1]];
+    If[t === {},
+      t = StringCases[s2, h : Repeated[DigitCharacter, {1, 2}] ~~
+          "\:6642\:534a" :> {FromDigits[h], 30}, 1]];
+    If[t === {},
+      t = StringCases[s2, h : Repeated[DigitCharacter, {1, 2}] ~~ "\:6642" :>
+          {FromDigits[h], 0}, 1]];
+    If[t === {}, Missing["NoTime"], First[t]]];
+
+iSVATPromptWeekday[s_String] :=
+  Module[{jp, en},
+    jp = StringCases[s,
+      (d : (Alternatives @@ Keys[$iSVATWeekdayJP])) ~~ "\:66dc" :> d, 1];
+    If[jp =!= {}, Return[$iSVATWeekdayJP[First[jp]]]];
+    en = StringCases[s, Alternatives @@ $iSVATWeekdayEN, 1, IgnoreCase -> True];
+    If[en =!= {}, Capitalize[ToLowerCase[First[en]]], Missing["NoWeekday"]]];
+
+iSVATPromptISODateTime[s_String] :=
+  StringCases[s,
+    y : Repeated[DigitCharacter, {4}] ~~ "-" ~~
+      mo : Repeated[DigitCharacter, {2}] ~~ "-" ~~
+      d : Repeated[DigitCharacter, {2}] ~~ "T" ~~
+      h : Repeated[DigitCharacter, {2}] ~~ ":" ~~
+      mi : Repeated[DigitCharacter, {2}] :>
+      {FromDigits[y], FromDigits[mo], FromDigits[d], FromDigits[h],
+       FromDigits[mi]}, 1];
+
+iSVATPromptISODate[s_String] :=
+  StringCases[s,
+    y : Repeated[DigitCharacter, {4}] ~~ "-" ~~
+      mo : Repeated[DigitCharacter, {2}] ~~ "-" ~~
+      d : Repeated[DigitCharacter, {2}] :>
+      {FromDigits[y], FromDigits[mo], FromDigits[d]}, 1];
+
+iSVATPromptJPDate[s_String] :=
+  StringCases[s,
+    y : Repeated[DigitCharacter, {4}] ~~ "\:5e74" ~~
+      mo : Repeated[DigitCharacter, {1, 2}] ~~ "\:6708" ~~
+      d : Repeated[DigitCharacter, {1, 2}] ~~ "\:65e5" :>
+      {FromDigits[y], FromDigits[mo], FromDigits[d]}, 1];
+
+(* -> <|"Schedule" -> assoc | Missing, "Questions" -> {...}, "Notes" -> {...}|> *)
+iSVATPromptSchedule[s_String, tz_String, nowD_] :=
+  Module[{time = iSVATPromptTime[s], questions = {}, notes = {}, everyN, wd,
+          fields, interval, isoDT, isoD, jpD, rel, monthly, hour, minute, sched},
+    hour = If[ListQ[time], time[[1]], 0];
+    minute = If[ListQ[time], time[[2]], 0];
+    (* every N hours / minutes *)
+    everyN = StringCases[s, n : DigitCharacter .. ~~ "\:6642\:9593" ~~
+        ("\:3054\:3068" | "\:304a\:304d") :> FromDigits[n], 1];
+    If[everyN =!= {},
+      Return[<|"Schedule" -> <|"Kind" -> "CalendarPattern", "TimeZone" -> tz,
+          "Fields" -> <|"Hour" -> <|"Every" -> First[everyN]|>, "Minute" -> 0|>|>,
+        "Questions" -> {}, "Notes" -> {"EveryNHours"}|>]];
+    everyN = StringCases[s, n : DigitCharacter .. ~~ "\:5206" ~~
+        ("\:3054\:3068" | "\:304a\:304d") :> FromDigits[n], 1];
+    If[everyN =!= {},
+      (* Hour -> All is REQUIRED: iSVATResolveFields defaults an absent Hour to
+         0, which would restrict "every N minutes" to the midnight hour only.
+         "N minutes" means every hour. *)
+      Return[<|"Schedule" -> <|"Kind" -> "CalendarPattern", "TimeZone" -> tz,
+          "Fields" -> <|"Hour" -> All, "Minute" -> <|"Every" -> First[everyN]|>|>|>,
+        "Questions" -> {}, "Notes" -> {"EveryNMinutes"}|>]];
+    (* weekly / biweekly *)
+    If[StringContainsQ[s, "\:6bce\:9031"] || StringContainsQ[s, "\:9694\:9031"] ||
+       StringContainsQ[s, ("2" | "\:4e8c") ~~ "\:9031\:9593\:304a\:304d"] ||
+       StringContainsQ[s, "every week", IgnoreCase -> True] ||
+       StringContainsQ[s, "weekly", IgnoreCase -> True],
+      wd = iSVATPromptWeekday[s];
+      If[!StringQ[wd],
+        AppendTo[questions,
+          "WeekdayMissing: which weekday should the weekly schedule fire on?"]];
+      If[!ListQ[time],
+        AppendTo[questions,
+          "TimeMissing: what time of day should it fire? (assumed 00:00)"]];
+      fields = <|"Hour" -> hour, "Minute" -> minute|>;
+      If[StringQ[wd], fields = Prepend[fields, "Weekday" -> wd]];
+      interval = Missing[];
+      If[StringContainsQ[s, "\:9694\:9031"] ||
+         StringContainsQ[s, ("2" | "\:4e8c") ~~ "\:9031\:9593\:304a\:304d"],
+        isoD = iSVATPromptISODate[s];
+        If[isoD === {},
+          AppendTo[questions,
+            "BiweeklyAnchorMissing: an every-2-weeks schedule needs an anchor date (e.g. 2026-07-04); which week is the first?"];
+          interval = <|"Unit" -> "Weeks", "Every" -> 2|>,
+          interval = <|"Unit" -> "Weeks", "Every" -> 2,
+            "AnchorDate" -> DateObject[First[isoD], TimeZone -> tz]|>]];
+      sched = <|"Kind" -> "CalendarPattern", "TimeZone" -> tz,
+        "Fields" -> fields|>;
+      If[AssociationQ[interval], sched = Append[sched, "Interval" -> interval]];
+      Return[<|"Schedule" -> sched, "Questions" -> questions,
+        "Notes" -> notes|>]];
+    (* monthly: \:6bce\:6708D\:65e5 *)
+    monthly = StringCases[s, "\:6bce\:6708" ~~ d : DigitCharacter .. ~~
+        "\:65e5" :> FromDigits[d], 1];
+    If[monthly =!= {},
+      If[!ListQ[time],
+        AppendTo[questions,
+          "TimeMissing: what time of day should it fire? (assumed 00:00)"]];
+      Return[<|"Schedule" -> <|"Kind" -> "CalendarPattern", "TimeZone" -> tz,
+          "Fields" -> <|"Day" -> First[monthly], "Hour" -> hour,
+            "Minute" -> minute|>|>,
+        "Questions" -> questions, "Notes" -> notes|>]];
+    (* daily *)
+    If[StringContainsQ[s, "\:6bce\:65e5"] || StringContainsQ[s, "\:6bce\:671d"] ||
+       StringContainsQ[s, "every day", IgnoreCase -> True] ||
+       StringContainsQ[s, "daily", IgnoreCase -> True],
+      If[!ListQ[time],
+        If[StringContainsQ[s, "\:6bce\:671d"],
+          hour = 7; minute = 0;
+          AppendTo[questions,
+            "TimeAssumed: 'every morning' interpreted as 07:00; confirm the time"],
+          AppendTo[questions,
+            "TimeMissing: what time of day should it fire? (assumed 00:00)"]]];
+      Return[<|"Schedule" -> <|"Kind" -> "CalendarPattern", "TimeZone" -> tz,
+          "Fields" -> <|"Hour" -> hour, "Minute" -> minute|>|>,
+        "Questions" -> questions, "Notes" -> notes|>]];
+    (* absolute alarm: ISO datetime / ISO date / YYYY\:5e74M\:6708D\:65e5 *)
+    isoDT = iSVATPromptISODateTime[s];
+    If[isoDT =!= {},
+      Return[<|"Schedule" -> <|"Kind" -> "Alarm",
+          "DateTime" -> DateObject[Join[First[isoDT], {0}], TimeZone -> tz],
+          "TimeZone" -> tz|>,
+        "Questions" -> {}, "Notes" -> {}|>]];
+    jpD = iSVATPromptJPDate[s];
+    If[jpD === {}, jpD = iSVATPromptISODate[s]];
+    If[jpD =!= {},
+      If[!ListQ[time],
+        AppendTo[questions,
+          "TimeMissing: what time of day should it fire? (assumed 00:00)"]];
+      Return[<|"Schedule" -> <|"Kind" -> "Alarm",
+          "DateTime" -> DateObject[Join[First[jpD], {hour, minute, 0}],
+            TimeZone -> tz],
+          "TimeZone" -> tz|>,
+        "Questions" -> questions, "Notes" -> {}|>]];
+    (* relative timer: N\:6642\:9593\:5f8c / N\:5206\:5f8c / N\:65e5\:5f8c. Timer needs a concrete
+       anchor (iSVATScheduleMatchImpl); "when enabled" is not knowable at
+       parse time, so anchor = parse time, flagged in Notes. *)
+    rel = StringCases[s, n : DigitCharacter .. ~~
+        (u : ("\:6642\:9593" | "\:5206" | "\:65e5")) ~~ "\:5f8c" :>
+        {FromDigits[n], u}, 1];
+    If[rel =!= {},
+      Return[<|"Schedule" -> <|"Kind" -> "Timer",
+          "After" -> <|"Quantity" -> rel[[1, 1]],
+            "Unit" -> Switch[rel[[1, 2]],
+              "\:6642\:9593", "Hours", "\:5206", "Minutes", _, "Days"]|>,
+          "Anchor" -> nowD|>,
+        "Questions" -> {}, "Notes" -> {"TimerAnchorSetToParseTime"}|>]];
+    <|"Schedule" -> Missing["Unparsed"],
+      "Questions" -> {
+        "ScheduleMissing: when should this trigger fire? (e.g. '\:6bce\:9031\:91d1\:66dc 03:00', an ISO datetime, or '3\:6642\:9593\:3054\:3068')"},
+      "Notes" -> {}|>];
+
+(* machine placement: known tags mentioned anywhere, or an ASCII word right
+   before a placement cue ("\:3067\:5b9f\:884c" | "\:3067\:8d70\:3089" | "\:4e0a\:3067" | "\:306b\:56fa\:5b9a") /
+   after "run on". Tokens that are part of an sv:// URI are excluded. *)
+iSVATPromptPlacement[s_String, knownTags_List] :=
+  Module[{known = Select[knownTags, StringQ], uris, byName, cueJP, cueEN,
+          cueTags, found, unknown},
+    uris = StringCases[s, "sv://" ~~ ($iSVATAsciiWordChar | "/" | ".") ..];
+    byName = Select[known, StringContainsQ[s, #, IgnoreCase -> True] &];
+    cueJP = StringCases[s,
+      (w : ($iSVATAsciiWordChar ..)) ~~ Repeated[WhitespaceCharacter, {0, 2}] ~~
+        ("\:3067\:5b9f\:884c" | "\:3067\:8d70\:3089" | "\:4e0a\:3067" |
+         "\:306b\:56fa\:5b9a") :> w];
+    cueEN = StringCases[s,
+      ("run on " | "execute on " | "only on " | "runs on ") ~~
+        (w : ($iSVATAsciiWordChar ..)) :> w, IgnoreCase -> True];
+    cueTags = Select[Join[cueJP, cueEN],
+      StringLength[#] >= 3 &&
+        StringMatchQ[#, ___ ~~ LetterCharacter ~~ ___] &];
+    (* a token that is merely the tail of an sv:// URI is not a machine tag *)
+    cueTags = Select[cueTags,
+      Function[w, !AnyTrue[uris, StringContainsQ[#, w] &]]];
+    found = DeleteDuplicatesBy[Join[byName, cueTags], ToLowerCase];
+    If[found === {},
+      Return[<|"Placement" -> Missing["None"], "Warnings" -> {}|>]];
+    unknown = Select[found,
+      !MemberQ[ToLowerCase /@ known, ToLowerCase[#]] &];
+    <|"Placement" -> <|"Mode" -> "SpecificMachine",
+        "RequiredMachineTags" -> found, "Failover" -> False|>,
+      "Warnings" -> ("MachineTagNotRegistered:" <> # & /@ unknown)|>];
+
+iSVATPromptCondition[s_String] :=
+  Module[{uris, upd, atoms},
+    uris = DeleteDuplicates @ StringCases[s,
+      u : ("sv://" ~~ ($iSVATAsciiWordChar | "/" | ".") ..) :> u];
+    If[uris === {},
+      Return[<|"Condition" -> Missing["None"], "Warnings" -> {}|>]];
+    upd = StringContainsQ[s, "\:66f4\:65b0"] ||
+      StringContainsQ[s, "updat", IgnoreCase -> True];
+    atoms = (<|"Atom" -> "SourceVaultEvent", "URI" -> #,
+        "EventType" -> "Updated", "Since" -> "LastSuccessfulFire"|> &) /@ uris;
+    <|"Condition" -> If[Length[atoms] === 1, First[atoms],
+        <|"AnyOf" -> atoms|>],
+      "Warnings" -> If[upd, {},
+        {"URIFoundWithoutUpdateKeyword:AssumedUpdated"}]|>];
+
+iSVATPromptRunPolicy[s_String] :=
+  Module[{p = <||>, prio},
+    prio = Which[
+      StringContainsQ[s, "critical", IgnoreCase -> True] ||
+        StringContainsQ[s, "\:6700\:512a\:5148"], "Critical",
+      StringContainsQ[s, "\:9ad8\:512a\:5148"] ||
+        StringContainsQ[s, "\:512a\:5148\:5ea6\:9ad8"] ||
+        StringContainsQ[s, "\:91cd\:8981"], "High",
+      StringContainsQ[s, "\:4f4e\:512a\:5148"], "Low",
+      True, Missing[]];
+    If[StringQ[prio], p = Append[p, "Priority" -> prio]];
+    If[StringContainsQ[s, ("1" | "\:4e00") ~~ "\:56de\:3060\:3051"] ||
+       StringContainsQ[s, "only once", IgnoreCase -> True] ||
+       StringContainsQ[s, "once per day", IgnoreCase -> True],
+      p = Append[p, "MaxRunsPerWindow" -> <|"Count" -> 1, "Window" -> "Day"|>]];
+    p];
+
+(* ---- optional LLM fill (spec 10.2 contract) ---- *)
+
+If[!ValueQ[SourceVaultAutoTriggerPromptLLM],
+  SourceVaultAutoTriggerPromptLLM = Automatic];
+
+$iSVATPromptLLMInstruction =
+  "Convert the user's natural-language auto-trigger request into ONE JSON \
+object and return ONLY that JSON (no prose, no code fences). Keys (use null \
+when the prompt does not specify): \"schedule\", \"condition\", \"runPolicy\", \
+\"executionPlacement\", \"explanation\", \"warnings\", \"questions\". \
+\"schedule\" examples: {\"Kind\":\"CalendarPattern\",\"TimeZone\":\"Asia/Tokyo\",\
+\"Fields\":{\"Weekday\":\"Friday\",\"Hour\":3,\"Minute\":0}} or \
+{\"Kind\":\"Alarm\",\"DateTime\":\"2026-07-01T03:00:00\"}. \"condition\": \
+{\"Atom\":\"SourceVaultEvent\",\"URI\":\"sv://...\",\"EventType\":\"Updated\",\
+\"Since\":\"LastSuccessfulFire\"} or {\"AnyOf\":[...]} / {\"AllOf\":[...]}. \
+\"executionPlacement\": {\"Mode\":\"SpecificMachine\",\
+\"RequiredMachineTags\":[\"...\"]} ONLY when a specific machine/PC is named. \
+\"runPolicy\": {\"Priority\":\"Normal\",\"MaxRunsPerWindow\":{\"Count\":1,\
+\"Window\":\"Day\"}}. \"questions\": clarification questions when ambiguous.";
+
+(* take the outermost {...} span (tolerates prose / code fences around it) *)
+iSVATExtractJSONObject[t_String] :=
+  Module[{i = StringPosition[t, "{", 1], j = StringPosition[t, "}"]},
+    If[i === {} || j === {} || j[[-1, 2]] < i[[1, 1]], t,
+      StringTake[t, {i[[1, 1]], j[[-1, 2]]}]]];
+
+(* trap #28 (promptrouter): prefer Developer`ReadRawJSONString, fall back to
+   ImportString RawJSON. Data only - never ToExpression. *)
+iSVATParseJSONish[t_String] :=
+  Module[{txt = iSVATExtractJSONObject[t], p},
+    p = Quiet @ Check[Developer`ReadRawJSONString[txt], $Failed];
+    If[!AssociationQ[p],
+      p = Quiet @ Check[ImportString[txt, "RawJSON"], $Failed]];
+    If[AssociationQ[p], p, $Failed]];
+
+iSVATPromptLLMFill[llmFn_, prompt_String, tz_String] :=
+  Module[{raw, parsed, out = <||>},
+    raw = Quiet @ Check[
+      llmFn[$iSVATPromptLLMInstruction <> "\nDefault TimeZone: " <> tz <>
+        "\nUser request:\n" <> prompt], $Failed];
+    If[!StringQ[raw], Return[<|"Status" -> "LLMFailed"|>]];
+    parsed = iSVATParseJSONish[raw];
+    If[parsed === $Failed, Return[<|"Status" -> "LLMJSONParseFailed"|>]];
+    Scan[
+      Function[kv,
+        With[{v = Lookup[parsed, First[kv], Null]},
+          If[AssociationQ[v] && v =!= <||>, out[Last[kv]] = v]]],
+      {"schedule" -> "Schedule", "condition" -> "Condition",
+       "runPolicy" -> "RunPolicy",
+       "executionPlacement" -> "ExecutionPlacement"}];
+    If[StringQ[Lookup[parsed, "explanation", Null]],
+      out["Explanation"] = parsed["explanation"]];
+    Scan[
+      Function[k,
+        With[{v = Lookup[parsed, k, Null]},
+          If[ListQ[v], out[Capitalize[k]] = Select[v, StringQ]]]],
+      {"warnings", "questions"}];
+    Append[out, "Status" -> "OK"]];
+
+(* ---- human-readable summaries (ASCII; the UI can localize) ---- *)
+
+iSVATDescribeSchedule[s_Association] :=
+  Module[{k = Lookup[s, "Kind", "?"], f, iv},
+    Switch[k,
+      "CalendarPattern",
+        f = Lookup[s, "Fields", <||>];
+        iv = Lookup[s, "Interval", Missing[]];
+        StringRiffle[{
+          "CalendarPattern",
+          If[KeyExistsQ[f, "Weekday"],
+            "Weekday=" <> ToString[f["Weekday"]], Nothing],
+          If[KeyExistsQ[f, "Day"],
+            "Day=" <> ToString[f["Day"], InputForm], Nothing],
+          "Time=" <> ToString[Lookup[f, "Hour", 0], InputForm] <> ":" <>
+            ToString[Lookup[f, "Minute", 0], InputForm],
+          If[AssociationQ[iv],
+            "Every" <> ToString[Lookup[iv, "Every", 1]] <> "Weeks(anchor=" <>
+              ToString[Lookup[iv, "AnchorDate", "?"]] <> ")", Nothing],
+          "TZ=" <> ToString[Lookup[s, "TimeZone", "?"]]}, " "],
+      "Alarm", "Alarm " <> ToString[Lookup[s, "DateTime", "?"]],
+      "Timer", "Timer after " <> ToString[Lookup[s, "After", <||>], InputForm] <>
+        " (anchor=" <> ToString[Lookup[s, "Anchor", "?"]] <> ")",
+      _, ToString[k]]];
+
+iSVATDescribeCondition[c_Association] :=
+  Which[
+    KeyExistsQ[c, "Atom"],
+      ToString[Lookup[c, "Atom", "?"]] <> " " <>
+        ToString[Lookup[c, "URI", Lookup[c, "SourceId", ""]]] <> " " <>
+        ToString[Lookup[c, "EventType", ""]],
+    KeyExistsQ[c, "AnyOf"],
+      "AnyOf[" <> StringRiffle[
+        iSVATDescribeCondition /@ Select[Lookup[c, "AnyOf", {}], AssociationQ],
+        "; "] <> "]",
+    KeyExistsQ[c, "AllOf"],
+      "AllOf[" <> StringRiffle[
+        iSVATDescribeCondition /@ Select[Lookup[c, "AllOf", {}], AssociationQ],
+        "; "] <> "]",
+    True, ToString[c, InputForm]];
+
+(* ---- public entry ---- *)
+
+Options[SourceVaultParseAutoTriggerPrompt] = {
+  "TimeZone" -> "Asia/Tokyo",
+  "KnownMachineTags" -> Automatic,
+  "LLMFunction" -> Automatic,
+  "Now" -> Automatic};
+
+SourceVaultParseAutoTriggerPrompt[prompt_String,
+    target_Association : <||>, opts : OptionsPattern[]] :=
+  Module[{tz, known, llmFn, nowD, schedR, sched, questions, warns, notes,
+          placeR, place, condR, cond, runPol, llmFill, parsedBy, tid, spec,
+          v, status, expl, tt, targId, nextFire},
+    tz = OptionValue["TimeZone"];
+    If[!StringQ[tz], tz = "Asia/Tokyo"];
+    known = OptionValue["KnownMachineTags"];
+    If[!ListQ[known], known = iSVATKnownMachineTags[]];
+    llmFn = OptionValue["LLMFunction"];
+    If[llmFn === Automatic, llmFn = SourceVaultAutoTriggerPromptLLM];
+    nowD = With[{n = OptionValue["Now"]},
+      If[n === Automatic, TimeZoneConvert[Now, tz],
+        With[{d = iSVATToDate[n]},
+          If[d === $Failed, TimeZoneConvert[Now, tz], d]]]];
+    (* deterministic layer *)
+    schedR = iSVATPromptSchedule[prompt, tz, nowD];
+    sched = schedR["Schedule"];
+    questions = schedR["Questions"];
+    notes = schedR["Notes"];
+    placeR = iSVATPromptPlacement[prompt, known];
+    condR = iSVATPromptCondition[prompt];
+    runPol = iSVATPromptRunPolicy[prompt];
+    warns = Join[Lookup[placeR, "Warnings", {}], Lookup[condR, "Warnings", {}]];
+    place = Lookup[placeR, "Placement", Missing[]];
+    cond = Lookup[condR, "Condition", Missing[]];
+    parsedBy = <|"Provider" -> "Deterministic", "Model" -> Missing["None"]|>;
+    (* optional LLM fill for the slots the deterministic layer left open *)
+    If[!AssociationQ[sched] && llmFn =!= Automatic && llmFn =!= None,
+      llmFill = iSVATPromptLLMFill[llmFn, prompt, tz];
+      If[Lookup[llmFill, "Status", ""] === "OK",
+        parsedBy = <|"Provider" -> "LLMHook", "Model" -> Missing["Unknown"]|>;
+        If[!AssociationQ[sched] &&
+           AssociationQ[Lookup[llmFill, "Schedule", Null]],
+          sched = llmFill["Schedule"];
+          questions = Select[questions,
+            !StringStartsQ[#, "ScheduleMissing"] &]];
+        If[!AssociationQ[cond] &&
+           AssociationQ[Lookup[llmFill, "Condition", Null]],
+          cond = llmFill["Condition"]];
+        If[!AssociationQ[place] &&
+           AssociationQ[Lookup[llmFill, "ExecutionPlacement", Null]],
+          place = llmFill["ExecutionPlacement"]];
+        If[runPol === <||> &&
+           AssociationQ[Lookup[llmFill, "RunPolicy", Null]],
+          runPol = llmFill["RunPolicy"]];
+        questions = Join[questions, Lookup[llmFill, "Questions", {}]];
+        warns = Join[warns, Lookup[llmFill, "Warnings", {}]],
+        AppendTo[warns,
+          "LLMFillFailed:" <> ToString[Lookup[llmFill, "Status", "?"]]]]];
+    tt = Lookup[target, "TargetType", Missing[]];
+    targId = Lookup[target, "TargetId", Missing[]];
+    If[!StringQ[tt] || !StringQ[targId],
+      AppendTo[questions,
+        "TargetMissing: TargetType/TargetId must be supplied by the caller (UI row)"]];
+    tid = SourceVaultNewAutoTriggerId[];
+    spec = <|
+      "Type" -> "AutoTrigger",
+      "SchemaVersion" -> "0.1",
+      "TriggerId" -> tid,
+      "Name" -> Lookup[target, "DisplayName",
+        If[StringQ[targId], targId, "auto-trigger"]],
+      "Target" -> target,
+      "Enabled" -> False,
+      "Owner" -> <|"Mode" -> "OwnerMachine", "OwnerMachineTag" -> Automatic|>,
+      "Schedule" -> If[AssociationQ[sched], sched, <||>],
+      "PromptSource" -> <|
+        "OriginalPromptStorage" -> "HashOnly",
+        "OriginalPromptHash" -> Quiet @ Check[
+          Hash[prompt, "SHA256", "HexString"], Missing["HashFailed"]],
+        "ParsedBy" -> parsedBy|>,
+      "CreatedBy" -> "User"|>;
+    If[AssociationQ[cond], spec = Append[spec, "Condition" -> cond]];
+    If[AssociationQ[place], spec = Append[spec, "ExecutionPlacement" -> place]];
+    If[AssociationQ[runPol] && runPol =!= <||>,
+      spec = Append[spec, "RunPolicy" -> runPol]];
+    v = SourceVaultValidateAutoTrigger[spec];
+    warns = Join[warns, Lookup[v, "Warnings", {}]];
+    nextFire = If[AssociationQ[sched] && sched =!= <||>,
+      Quiet @ Check[
+        SourceVaultAutoTriggerNextFire[sched, nowD, "HorizonDays" -> 62],
+        Missing["PreviewFailed"]],
+      Missing["NoSchedule"]];
+    expl = StringRiffle[{
+      "Target: " <> ToString[tt] <> ":" <> ToString[targId],
+      "Schedule: " <> If[AssociationQ[sched] && sched =!= <||>,
+        iSVATDescribeSchedule[sched], "UNPARSED"],
+      "Condition: " <> If[AssociationQ[cond], iSVATDescribeCondition[cond],
+        "none (fires on schedule alone)"],
+      "Placement: " <> If[AssociationQ[place],
+        ToString[Lookup[place, "Mode", "?"]] <> " " <>
+          ToString[Lookup[place, "RequiredMachineTags", {}]],
+        "EnvironmentIndependent (default)"],
+      If[AssociationQ[runPol] && runPol =!= <||>,
+        "RunPolicy: " <> ToString[Normal[runPol], InputForm], Nothing],
+      "NextFire: " <> ToString[nextFire],
+      "Enabled: False (review, register, then enable)"}, "\n"];
+    <|"Status" -> Which[
+        !TrueQ[v["Valid"]] || !AssociationQ[sched],
+          If[questions =!= {}, "NeedsClarification", "Failed"],
+        questions =!= {}, "NeedsClarification",
+        True, "OK"],
+      "TriggerSpec" -> spec,
+      "Explanation" -> expl,
+      "Questions" -> questions,
+      "Warnings" -> DeleteDuplicates[warns],
+      "Notes" -> notes,
+      "Validation" -> v,
+      "NextFirePreview" -> nextFire|>];
+
+(* ============================================================
    UI layer (spec section 8 / 9): list-display classification,
    per-trigger row data, and a standalone panel with execution
    mode / auto-run capability / auto toggle / priority badge and
@@ -1771,6 +2378,22 @@ SourceVaultAutoTriggerSchedulerStatus[] :=
    ============================================================ *)
 
 $iSVATErrorStatuses = {"Failed", "TimedOut", "WorkflowFailed", "WorkflowTimedOut"};
+
+(* spec 9.1 \:5b9f\:884cPC column label *)
+iSVATPlacementLabel[spec_Association] :=
+  Module[{place = Lookup[spec, "ExecutionPlacement", Missing[]], mode, tags},
+    If[!AssociationQ[place],
+      Return["\:74b0\:5883\:975e\:4f9d\:5b58"]];
+    mode = Lookup[place, "Mode", "EnvironmentIndependent"];
+    Switch[mode,
+      "SpecificMachine",
+        tags = Lookup[place, "RequiredMachineTags", {}];
+        If[!ListQ[tags], tags = {}];
+        "\:56fa\:5b9a: " <> StringRiffle[Select[tags, StringQ], ","],
+      "WorkerPool",
+        "pool: " <> ToString[Lookup[place, "WorkerPool", "?"]],
+      "EnvironmentIndependent", "\:74b0\:5883\:975e\:4f9d\:5b58",
+      _, "\:672a\:5224\:5b9a"]];
 
 SourceVaultAutoTriggerCapability[spec_Association] :=
   Module[{tt = Lookup[Lookup[spec, "Target", <||>], "TargetType", ""],
@@ -1827,6 +2450,7 @@ SourceVaultAutoTriggerListData[] :=
           "TargetId" -> Lookup[Lookup[spec, "Target", <||>], "TargetId", Missing[]],
           "Enabled" -> TrueQ[Lookup[spec, "Enabled", False]],
           "ExecutionMode" -> cap["ExecutionMode"],
+          "Placement" -> iSVATPlacementLabel[spec],
           "AutoRunCapability" -> cap["AutoRunCapability"],
           "AutoToggle" -> Which[!cap["AutoEligible"], "\:4e0d\:53ef",
             TrueQ[Lookup[spec, "Enabled", False]], "ON", True, "OFF"],
@@ -1868,11 +2492,13 @@ iSVATErrorIcon[row_] :=
 SourceVaultAutoTriggerPanel[] :=
   Module[{data = SourceVaultAutoTriggerListData[], header, rows, band},
     header = Style[#, Bold] & /@
-      {"\:540d\:524d", "\:5b9f\:884c\:30e2\:30fc\:30c9", "\:81ea\:52d5\:53ef\:5426",
+      {"\:540d\:524d", "\:5b9f\:884c\:30e2\:30fc\:30c9", "\:5b9f\:884cPC",
+       "\:81ea\:52d5\:53ef\:5426",
        "\:81ea\:52d5", "\:512a\:5148\:5ea6", "\:6b21\:56de", "\:524d\:56de", ""};
     rows = Map[
       Function[r,
         {Lookup[r, "Name", ""], Lookup[r, "ExecutionMode", ""],
+         Lookup[r, "Placement", ""],
          Lookup[r, "AutoRunCapability", ""],
          iSVATAutoToggleBadge[Lookup[r, "AutoToggle", ""]],
          iSVATPriorityBadge[Lookup[r, "Priority", "Normal"]],
@@ -1920,6 +2546,7 @@ SourceVaultAutoTriggerForTarget[targetType_String, targetId_String] :=
       "TargetId" -> Lookup[Lookup[spec, "Target", <||>], "TargetId", Missing[]],
       "Enabled" -> TrueQ[Lookup[spec, "Enabled", False]],
       "ExecutionMode" -> cap["ExecutionMode"],
+      "Placement" -> iSVATPlacementLabel[spec],
       "AutoRunCapability" -> cap["AutoRunCapability"],
       "AutoToggle" -> Which[! cap["AutoEligible"], "\:4e0d\:53ef",
         TrueQ[Lookup[spec, "Enabled", False]], "ON", True, "OFF"],

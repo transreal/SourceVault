@@ -269,8 +269,18 @@ iSVWFQueryCloudOrLocal[prompt_String, timeout_] := Module[{r},
   iSVWFQueryLocal[prompt, {"lmstudio", "", "http://127.0.0.1:1234"}, timeout]];
 
 (* LLM がエラー/利用制限本文を「正常応答」として返したのを検出 (要約として保存しない)。
-   SourceVault_eagle.wl iSVEGLooksLikeLLMError と同じゲート。 *)
-iSVWFLooksLikeLLMError[s_String] := Module[{head},
+   検出パターンは本家 SourceVault`Private`iSVLooksLikeLLMError に一元化してあるので
+   委譲する (本家にパターンを追加すればここにも自動反映され、コピー間ドリフト
+   -- 529/API Error 等の取りこぼし -- が起きない)。本家 (SourceVault.wl) は
+   ロード順で先行するが、背景カーネル等で未ロードの場合のみローカル parity へ退避。 *)
+iSVWFLooksLikeLLMError[s_String] :=
+  If[Length[DownValues[SourceVault`Private`iSVLooksLikeLLMError]] > 0,
+    TrueQ @ Quiet @ SourceVault`Private`iSVLooksLikeLLMError[s],
+    iSVWFLooksLikeLLMErrorFallback[s]];
+iSVWFLooksLikeLLMError[_] := False;
+
+(* 本家未ロード時のフォールバック。本家 iSVLooksLikeLLMError と同一パターン (parity)。 *)
+iSVWFLooksLikeLLMErrorFallback[s_String] := Module[{head},
   head = StringTake[s, UpTo[200]];
   Or[
     StringStartsQ[StringTrim[head], "Error:"],
@@ -281,8 +291,15 @@ iSVWFLooksLikeLLMError[s_String] := Module[{head},
     StringContainsQ[head, "internal_error"],
     StringContainsQ[head, "hit your" ~~ Shortest[___] ~~ "limit", IgnoreCase -> True],
     StringContainsQ[head, "session limit", IgnoreCase -> True],
-    StringContainsQ[head, "usage limit", IgnoreCase -> True]]];
-iSVWFLooksLikeLLMError[_] := False;
+    StringContainsQ[head, "usage limit", IgnoreCase -> True],
+    StringStartsQ[StringTrim[head], "API Error", IgnoreCase -> True],
+    StringContainsQ[head, "overloaded", IgnoreCase -> True],
+    StringContainsQ[head, "server-side issue", IgnoreCase -> True],
+    StringContainsQ[head, "rate_limit", IgnoreCase -> True],
+    StringContainsQ[head,
+      RegularExpression[
+        "(?i)\\b(429|500|502|503|504|529)\\b[^0-9]{0,30}(error|overload|unavailable|too many|server)"]]]];
+iSVWFLooksLikeLLMErrorFallback[_] := False;
 
 (* ============================================================
    要約生成 (純関数)
@@ -787,14 +804,27 @@ iSVWFMakePanel[archiveQ_] := With[{initRows = iSVWFPanelRows["", archiveQ]},
               With[{slug = Lookup[c, "Slug", ""], stage = Lookup[c, "Stage", "testing"]},
                 {iSVWFStageBadge[stage],
                  iSVWFNameCell[c],
-                 Tooltip[
-                   Button["起動",
-                     (iSVWFLaunchAndCount[slug]; rows = iSVWFPanelRows[query, archiveQ]),
-                     Method -> "Queued"],
-                   "使用例 (example.md) を実行可能セルとして新規ノートに展開します。" <>
-                   "引数なし launch は副作用なしの報告のみなので、実走は展開された引数付き" <>
-                   "フォーム (\"Execute\"->True / セル・変数指定 等) を評価してください。" <>
-                   "クリックごとに起動回数を加算します。"],
+                 (* 既定 = 非同期実行 (FE 非ブロック)。使用例展開は副次ボタン。 *)
+                 Column[{
+                   Tooltip[
+                     Button["▶ 実行",
+                       Module[{r = SourceVault`SourceVaultRunWorkflowAsync[slug, "run"]},
+                         iSVWFStatsBump[slug,
+                           ! (AssociationQ[r] && Lookup[r, "Status", ""] === "Submitted")];
+                         rows = iSVWFPanelRows[query, archiveQ]],
+                       Method -> "Queued",
+                       Background -> RGBColor[0.2, 0.55, 0.35],
+                       BaseStyle -> {White, FontWeight -> Bold}],
+                     "ワークフローを非同期実行する (FRONT END を止めない)。" <>
+                     "既存の External executor 経由で子プロセスが走り、完了時に呼出元ノートへ" <>
+                     "summary を書く。実行結果 (View) は SourceVaultRunWorkflowResult で取得。" <>
+                     "前提: ClaudeRuntime / ClaudeOrchestrator ロード済み・launch に \"run\" 形あり。"],
+                   Tooltip[
+                     Button["使用例",
+                       (iSVWFLaunchAndCount[slug]; rows = iSVWFPanelRows[query, archiveQ]),
+                       Method -> "Queued"],
+                     "使用例 (example.md) を実行可能セルとして新規ノートに展開します。"]
+                 }, Spacings -> 0.15],
                  If[TrueQ[archiveQ],
                    (* アーカイブ一覧: testing へ戻す *)
                    Tooltip[

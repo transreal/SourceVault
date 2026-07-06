@@ -1989,11 +1989,25 @@ iSVEGQueryClaude[parts_List, timeout_] :=
 (* LLM が要約本文の代わりに返したエラー/利用制限メッセージを検出する。
    ClaudeQueryBg / LM Studio は HTTP 500 や利用制限の本文を「正常な文字列応答」
    として返すことがあり (例: "Error: LM Studio /api/... StatusCode=500 ...",
-   "You've hit your session limit \[CenterDot] resets 8:30pm (Asia/Tokyo)")、
+   "You've hit your session limit \[CenterDot] resets 8:30pm (Asia/Tokyo)",
+   "API Error: 529 Overloaded. This is a server-side issue ...")、
    "Error:" 前置も StatusCode も無いプレーン文も含まれる。これらをそのまま
-   サマリーとして保存しないよう、応答先頭 200 文字を検査する。
-   要約本文は通常もっと長く、これらの語が冒頭付近に来ることはまずない。 *)
+   サマリーとして保存しないよう検査する。
+
+   検出パターンは本家 iSVLooksLikeLLMError (同一 SourceVault`Private` 文脈・
+   ロード順で先行) に一元化してあるので、ここでは委譲する。こうすることで
+   本家にパターンを追加すれば Eagle 経路にも自動反映され、コピー間ドリフト
+   (529/API Error 等の取りこぼし) が起きない。本家未ロードの degenerate 時のみ
+   ローカル parity フォールバックで判定する。 *)
 iSVEGLooksLikeLLMError[s_String] :=
+  If[Length[DownValues[iSVLooksLikeLLMError]] > 0,
+    TrueQ @ Quiet @ iSVLooksLikeLLMError[s],
+    iSVEGLooksLikeLLMErrorFallback[s]];
+iSVEGLooksLikeLLMError[_] := False;
+
+(* 本家 iSVLooksLikeLLMError 未ロード時のフォールバック。本家 (SourceVault.wl) と
+   同一パターンに保つ (parity)。通常は上の委譲経路が使われる。 *)
+iSVEGLooksLikeLLMErrorFallback[s_String] :=
   Module[{head},
     head = StringTake[s, UpTo[200]];
     Or[
@@ -2006,9 +2020,19 @@ iSVEGLooksLikeLLMError[s_String] :=
       (* Claude CLI 利用制限バナー: "...hit your session/usage limit..." *)
       StringContainsQ[head, "hit your" ~~ Shortest[___] ~~ "limit", IgnoreCase -> True],
       StringContainsQ[head, "session limit", IgnoreCase -> True],
-      StringContainsQ[head, "usage limit", IgnoreCase -> True]
+      StringContainsQ[head, "usage limit", IgnoreCase -> True],
+      (* HTTP 過負荷/レート制限/サーバエラー本文 (例: "API Error: 529 Overloaded.
+         This is a server-side issue ...")。翻訳/要約 LLM がエラー本文を正常応答
+         として返すのを弾く。 *)
+      StringStartsQ[StringTrim[head], "API Error", IgnoreCase -> True],
+      StringContainsQ[head, "overloaded", IgnoreCase -> True],
+      StringContainsQ[head, "server-side issue", IgnoreCase -> True],
+      StringContainsQ[head, "rate_limit", IgnoreCase -> True],
+      StringContainsQ[head,
+        RegularExpression[
+          "(?i)\\b(429|500|502|503|504|529)\\b[^0-9]{0,30}(error|overload|unavailable|too many|server)"]]
     ]];
-iSVEGLooksLikeLLMError[_] := False;
+iSVEGLooksLikeLLMErrorFallback[_] := False;
 
 (* ============================================================
    サマリー生成・保存
@@ -2293,7 +2317,9 @@ iSVEGDescribeFrame[item_, method_, timeout_, maxLen_, lang_, frame_Association] 
       "Local", iSVEGQueryLocalLLMVision[prompt, {img}, timeout],
       "Claude", iSVEGQueryClaude[{prompt, img}, timeout],
       _, ""];
-    If[StringQ[raw] && ! StringStartsQ[StringTrim[raw], "Error:"], StringTrim[raw], ""]];
+    (* エラー/利用制限本文はフレーム説明として残さない (Frames[*].Text は検索対象)。
+       "Error:" 前置だけでなく session limit / API Error 529 等も弾くため full gate。 *)
+    If[StringQ[raw] && ! iSVEGLooksLikeLLMError[raw], StringTrim[raw], ""]];
 
 (* Stage 1: フレーム画像群 -> 説明つき frame record (空記述は捨てる)。 *)
 iSVEGDescribeVideoFrames[item_, method_, timeout_, maxLen_, lang_, frameImgs_List] :=

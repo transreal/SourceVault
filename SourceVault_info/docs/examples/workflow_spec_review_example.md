@@ -215,6 +215,8 @@ SourceVaultWorkflow`SpecReview`RunSpecReview["RealProject",
 
 ノートブックから使う場合は、**パレットの「仕様生成」ボタン**が同じループをバックグラウンドで実行します（SourceVault と ClaudeOrchestrator が両方ロードされている場合）。FE カーネルは重いループを直接実行せず、`SourceVault_workflows/spec-review/palette_driver.wls` を別 wolframscript プロセスで起動し、`SourceVaultLoadWorkflow["spec-review"]` でオンデマンドロードして走らせ、完了後に合意 spec と `sv://` 鎖をノートブックへ追記します。状態は `ClaudeSpecStatus[]` で確認できます。
 
+> **補足（モデル解決の版比較について）**: 実 LLM 実行で使われる Codex/Claude 役のモデルは `SourceVaultResolve["Model", ...]` を通じて選択されます。内部の版比較キー算出は、バージョン各桁を固定幅（右パディング後に一定の基数で重み付け）で単調値化する方式に更新されており、桁数の異なるバージョン間（例: `claude-sonnet-4-6` と `claude-sonnet-5`）でも意図どおりに新しい版が優先されます。この挙動はワークフロー利用側から明示的に触れる API ではなく、モデル解決の結果が正しく最新版を返すことを保証する内部改善です。
+
 ---
 
 ## クリーンアップ

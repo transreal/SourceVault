@@ -157,6 +157,7 @@ iAuxRound[b_Association] := Lookup[iPayload[b], "AuxRound", 0];
 iMaxAuxRounds[b_Association] := Lookup[iPayload[b], "MaxAuxRounds", $DefaultMaxAuxRounds];
 iStageIndex[b_Association] := Lookup[iPayload[b], "StageIndex", 1];
 iNumStages[b_Association] := Max[1, Length[Lookup[iPayload[b], "Stages", {"(single)"}]]];
+iImplBlocked[b_Association] := TrueQ[Lookup[iPayload[b], "ImplBlocked", False]];
 
 (* ---- small IO / JSON helpers (message-quiet) ---- *)
 iWriteUTF8[p_, s_] := Module[{strm},
@@ -373,11 +374,11 @@ iConventions[name_, canon_] :=
   "- Main file: SVWorkflow_" <> canon <> ".wl beginning with BeginPackage[\"SourceVaultWorkflow`" <> canon <> "`\"] (NO second argument when there are no needed contexts). NEVER write BeginPackage[ctx, {}] with an empty list -- it is invalid and the package fails to load. If other contexts are needed, pass a NONEMPTY list, e.g. BeginPackage[\"...`\", {\"SourceVault`\"}].\n" <>
   "- The main file must self-bootstrap its dependencies with Get[FileNameJoin[{<pkgRoot>, ...}]] guarded by DownValues/Names checks. Compute pkgRoot DEPTH-INDEPENDENTLY by walking up from the file's directory until the directory that contains SourceVault.wl is found (do NOT hardcode a DirectoryName depth -- the workflow may live under SourceVault_workflows/testing/<slug>/ or /production/<slug>/): pkgRoot = Module[{d = DirectoryName[$InputFileName]}, While[d =!= DirectoryName[d] && ! FileExistsQ[FileNameJoin[{d, \"SourceVault.wl\"}]], d = DirectoryName[d]]; d].\n" <>
   "- It must expose WorkflowInfo[] returning <|\"Slug\"->\"" <> name <> "\",\"Name\"->...,\"Version\"->...,\"Context\"->\"SourceVaultWorkflow`" <> canon <> "`\",\"Launch\"->\"<entry>\",\"Description\"->...,\"Routes\"->{}|>.\n" <>
-  "- It must define the public launch entry named in WorkflowInfo[\"Launch\"]. If the no-argument launch form is a safe report (no side effects), provide an explicit form that actually performs the work and document both in the example.\n" <>
+  "- It must define the public launch entry named in WorkflowInfo[\"Launch\"]. If the no-argument launch form is a safe report (no side effects), provide an explicit form that actually performs the work and document both in the example. STANDARDIZE the end-to-end work-performing form as <Launch>[\"run\"] (a string first argument \"run\") so it can be launched ASYNCHRONOUSLY off the FRONT END by the generic runner SourceVault`SourceVaultRunWorkflowAsync[slug, \"run\"] -- keep <Launch>[\"run\"] self-contained (it reads its own inputs / does its own fetch) and RETURNING the deliverable (a View / report / result), never requiring interactive args.\n" <>
   "- Docs file: SVWorkflow_" <> canon <> "_info/docs/examples/example.md (a short usage example).\n" <>
   "  In example.md, load the workflow with the on-demand registry loader exactly as:\n" <>
   "    Needs[\"SourceVault`\"]; SourceVault`SourceVaultLoadWorkflow[\"" <> name <> "\"]\n" <>
-  "  Do NOT use a manual Get with a hardcoded path or any placeholder symbol. Then call WorkflowInfo[] and the launch entry, showing the real invocation (with arguments if the launch needs them to do its work).\n" <>
+  "  Do NOT use a manual Get with a hardcoded path or any placeholder symbol. Then call WorkflowInfo[] and the launch entry, showing the real invocation (with arguments if the launch needs them to do its work). For a LONG-RUNNING end-to-end run (network / LLM), show SourceVault`SourceVaultRunWorkflowAsync[\"" <> name <> "\", \"run\"] as the DEFAULT way to run it (it runs off the FRONT END so the notebook does not freeze; the synchronous <Launch>[\"run\"] is only for quick/offline cases). The completion writes a summary to the notebook; the result View is retrieved via SourceVault`SourceVaultRunWorkflowResult.\n" <>
   "- Extra subfiles, if any, are SVWorkflow_" <> canon <> "_<sub>.wl .\n" <>
   "- Encode in UTF-8; use only \\:XXXX style Unicode escapes inside .wl strings; do not Clear/Remove the Global` context.\n";
 
@@ -503,6 +504,20 @@ iRealImplement[model_, payload_] := Module[
     "pairs -- accept a TimeSeries (e.g. via ts[\"Path\"]) or both forms, and never gate fetched data with " <>
     "ListQ alone (a TimeSeries fails ListQ, silently dropping every series). Apply the same doc-checked " <>
     "care to any data / import / plot / external built-in whose output shape you are unsure of.\n" <>
+    "GROUND EVERY PROJECT / NON-BUILT-IN API AGAINST ITS REAL DEFINITION -- NEVER INVENT ONE. Any symbol " <>
+    "you did not define yourself and that is NOT a Wolfram System built-in (in particular ANYTHING in a " <>
+    "package context such as SourceVault`, NBAccess`, ClaudeCode`, ClaudeOrchestrator`) MUST have its exact " <>
+    "name, positional arguments, OPTION names and RETURN shape confirmed against GROUND TRUTH before you " <>
+    "call it. Resolve it in ONE of these ways: (1) PREFERRED -- the SourceVault MCP package-API index: call " <>
+    "the sourcevault_search tool with kinds:[\"packageapi\"] for the function, then sourcevault_get with " <>
+    "view:\"contract\" for its exact signature / options / return type; (2) read the REAL source with " <>
+    "Grep/Read under the package root. Do NOT assume an option exists, a positional-argument order, or that " <>
+    "a function returns a List when it actually returns an Association -- e.g. SourceVault`SourceVaultMailFetchNew " <>
+    "is SourceVaultMailFetchNew[mbox_String, opts] (a mailbox STRING first, options \"Period\"/\"Process\"/... " <>
+    "-- there is NO \"Account\" option) and it RETURNS an Association (status/counts) storing to the vault, " <>
+    "NOT a list of mails. If you CANNOT resolve a REQUIRED API by either route, DO NOT fabricate a " <>
+    "plausible-looking call: STOP and declare it via the UNRESOLVED-API protocol below, and emit NO file " <>
+    "that calls the unverified API.\n" <>
     "BEFORE approval your package is REALLY EXECUTED in a fresh wolframscript kernel: it is loaded via " <>
     "SourceVault`SourceVaultLoadWorkflow, its no-arg launch entry is CALLED, and your test file is RUN. So " <>
     "(a) the package must load with NO error messages; (b) the no-arg launch must be a network-free safe " <>
@@ -532,6 +547,13 @@ iRealImplement[model_, payload_] := Module[
     "RUN: <PASS|FAIL|NOT-RUN> - <how you ran them / key result>\n" <>
     "VERIFY: <your conclusion>\n" <>
     "<<<ENDSTEPS>>>\n" <>
+    "(C) FAIL-CLOSED -- emit this block IF AND ONLY IF you could not ground a REQUIRED project/external " <>
+    "API against its real definition (neither the SourceVault MCP packageapi index nor the real source " <>
+    "resolved it). When present, the run STOPS with a warning and your files are NOT shipped, so include " <>
+    "it ONLY when genuinely blocked (never as a routine note):\n" <>
+    "<<<UNRESOLVED-API>>>\n" <>
+    "<one line per unresolved API: fully-qualified name | what you tried (MCP packageapi / source grep) | why it stayed unresolved>\n" <>
+    "<<<ENDUNRESOLVED>>>\n" <>
     "Use RELATIVE paths under the package folder and emit content VERBATIM (no escaping). " <>
     "Always include \"SVWorkflow_" <> canon <> ".wl\", \"SVWorkflow_" <> canon <>
       "_info/docs/examples/example.md\", and the test file.\n" <>
@@ -542,13 +564,24 @@ iRealImplement[model_, payload_] := Module[
   files = iParseFileManifest[out];
   steps = iParseSteps[out];
   testFiles = Select[Keys[files], StringContainsQ[#, "test", IgnoreCase -> True] &];
-  <|"Files" -> files, "Steps" -> steps, "TestFiles" -> testFiles, "Raw" -> out|>];
+  <|"Files" -> files, "Steps" -> steps, "TestFiles" -> testFiles,
+    "Unresolved" -> iParseUnresolved[out], "Raw" -> out|>];
 
 (* extract the <<<STEPS>>> ... <<<ENDSTEPS>>> sub-step log (free-form lines) *)
 iParseSteps[out_String] := Module[{m},
   m = StringCases[out, "<<<STEPS>>>" ~~ Shortest[s___] ~~ "<<<ENDSTEPS>>>" :> s, 1];
   If[m =!= {}, StringTrim[First[m]], ""]];
 iParseSteps[_] := "";
+
+(* L2 fail-closed: extract the <<<UNRESOLVED-API>>> ... <<<ENDUNRESOLVED>>> block.
+   Its presence means the implementer could not ground a required project/external
+   API and is REFUSING to guess -> the run stops with a warning (never ships code
+   built on an invented API). Returns the reason text, or "" when not blocked. *)
+iParseUnresolved[out_String] := Module[{m},
+  m = StringCases[out,
+    "<<<UNRESOLVED-API>>>" ~~ Shortest[s___] ~~ "<<<ENDUNRESOLVED>>>" :> s, 1];
+  If[m =!= {}, StringTrim[First[m]], ""]];
+iParseUnresolved[_] := "";
 
 (* a compact RUN status (PASS/FAIL/NOT-RUN/-) parsed from a step log *)
 iStepsRunStatus[steps_String] := Module[{m},
@@ -693,7 +726,7 @@ iSmokeTestPackage[targetDir_, pkgRoot_, ctx_] := Module[
    means wolframscript was unavailable (inconclusive -> do NOT block). ---- *)
 $iDynHarnessScript = StringJoin[
   "Block[{$CharacterEncoding=\"UTF-8\"},\n",
-  "Module[{cfg,res,lr,ctx,info,launch,sym,out},\n",
+  "Module[{cfg,res,lr,ctx,info,launch,sym,out,wfDir,pkgSrc,projTok,apiUndef},\n",
   " cfg=Get[$ScriptCommandLine[[2]]];\n",
   " res=<|\"OK\"->False,\"Phase\"->\"start\",\"Status\"->\"\",\"Output\"->\"\"|>;\n",
   " Quiet@Check[Get[cfg[\"SvPath\"]],$Failed];\n",
@@ -702,6 +735,19 @@ $iDynHarnessScript = StringJoin[
   " res[\"Status\"]=If[AssociationQ[lr],ToString@Lookup[lr,\"Status\",\"?\"],ToString[lr]];\n",
   " If[!(AssociationQ[lr]&&MemberQ[{\"Loaded\",\"AlreadyLoaded\"},Lookup[lr,\"Status\",\"\"]]),\n",
   "   res[\"Phase\"]=\"load\";res[\"Output\"]=\"package did not load via SourceVaultLoadWorkflow (Status \"<>res[\"Status\"]<>\")\";\n",
+  "   Put[res,cfg[\"ResultFile\"]];Exit[]];\n",
+  (* L3 deterministic API-grounding gate: every project-context symbol the package
+     references MUST resolve to a real, loaded symbol. SourceVault.wl auto-loads its
+     subsystems (maildb/crypto/identity/...), so a name absent from Names[] here is a
+     hallucinated / misspelled API -> HARD block. (Catches invented FUNCTION names;
+     wrong options / return-shape on a REAL function are handled by the grounding
+     prompt + the LLM verifier, not this static existence check.) *)
+  " wfDir=If[AssociationQ[lr]&&StringQ[Lookup[lr,\"Path\",\"\"]],DirectoryName[lr[\"Path\"]],\"\"];\n",
+  " pkgSrc=If[wfDir=!=\"\",StringJoin[(Quiet@Check[ByteArrayToString[ReadByteArray[#],\"UTF-8\"],\"\"])&/@FileNames[\"*.wl\",wfDir,Infinity]],\"\"];\n",
+  " projTok=DeleteDuplicates@Flatten@Table[StringCases[pkgSrc,pfx~~n:((LetterCharacter|\"$\")~~(WordCharacter|\"$\")...):>pfx<>n],{pfx,{\"SourceVault`\",\"NBAccess`\",\"ClaudeCode`\",\"ClaudeOrchestrator`\"}}];\n",
+  " apiUndef=Select[projTok,Names[#]==={}&];\n",
+  " If[apiUndef=!={},res[\"Phase\"]=\"api-grounding\";res[\"OK\"]=False;\n",
+  "   res[\"Output\"]=\"the package calls project APIs that DO NOT EXIST after loading (invented / misspelled): \"<>StringRiffle[apiUndef,\", \"]<>\". Ground every SourceVault`/NBAccess`/ClaudeCode` call against its real definition (SourceVault MCP packageapi or the real source) before calling it.\";\n",
   "   Put[res,cfg[\"ResultFile\"]];Exit[]];\n",
   " ctx=Quiet@SourceVault`SourceVaultWorkflowContext[cfg[\"Slug\"]];\n",
   " info=Quiet@Check[Symbol[ctx<>\"WorkflowInfo\"][],$Failed];\n",
@@ -821,7 +867,7 @@ iToImplHandler[progressFile_] := Function[binding,
     <|"Payload" -> Join[pl, <|"StageIndex" -> 1, "Round" -> 1|>]|>]];
 
 iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[binding,
-  Quiet @ Module[{pl, res, files, steps, testFiles, written, allFiles, manifestText, artifactText, ref, idx, emptyImpl},
+  Quiet @ Module[{pl, res, files, steps, testFiles, written, allFiles, manifestText, artifactText, ref, idx, emptyImpl, unresolved, implBlocked},
     pl = iPayload[binding];
     idx = Lookup[pl, "StageIndex", 1];
     iProg[progressFile, pl, "Implement", "implementer", model,
@@ -832,6 +878,18 @@ iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[bindin
     steps = Lookup[res, "Steps", ""];
     testFiles = Lookup[res, "TestFiles", {}];
     written = If[AssociationQ[files] && Length[files] > 0, iWriteFiles[targetDir, files], {}];
+    (* L2 fail-closed: the implementer emitted an <<<UNRESOLVED-API>>> block -- it
+       could not ground a required project/external API and refused to guess. STOP
+       with a warning (route to Blocked in the net) instead of shipping/looping. *)
+    unresolved = Lookup[res, "Unresolved", ""];
+    implBlocked = StringQ[unresolved] && StringTrim[unresolved] =!= "";
+    If[implBlocked,
+      steps = "IMPL BLOCKED: the implementer (" <> iModelLabel[model] <> ") could not verify a required " <>
+        "project/external API against ground truth (SourceVault MCP packageapi / real source) and refused " <>
+        "to invent one, so no runnable implementation was produced. Resolve the API contract (or amend the " <>
+        "spec to pin the exact integration API) and re-run.\n--- UNRESOLVED APIs ---\n" <> unresolved <>
+        If[StringQ[Lookup[res, "Steps", ""]] && StringTrim[Lookup[res, "Steps", ""]] =!= "",
+          "\n--- implementer step log ---\n" <> Lookup[res, "Steps", ""], ""]];
     (* empty-LLM-response guard: when the implementer returns nothing (no files AND
        no raw text) it is almost always a transient provider failure -- a Claude
        usage/rate limit or an HTTP 529 overload -- NOT a fixable code defect. Record
@@ -851,14 +909,21 @@ iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[bindin
     artifactText = If[StringQ[steps] && steps =!= "",
       "=== IMPLEMENTATION STEPS (code / tests / run / verify) ===\n" <> steps <> "\n\n", ""] <> manifestText;
     iProg[progressFile, pl, "Implement", "implementer", model,
-      If[emptyImpl,
-        "stage " <> ToString[idx] <> ": EMPTY model response (likely usage limit / overload) -- giving up",
-        "stage " <> ToString[idx] <> " run: " <> iStepsRunStatus[steps] <>
+      Which[
+        implBlocked,
+          "stage " <> ToString[idx] <> ": BLOCKED -- a required API could not be verified (see warning); stopping",
+        emptyImpl,
+          "stage " <> ToString[idx] <> ": EMPTY model response (likely usage limit / overload) -- giving up",
+        True,
+          "stage " <> ToString[idx] <> " run: " <> iStepsRunStatus[steps] <>
           " (" <> ToString[Length[written]] <> " files, " <> ToString[Length[testFiles]] <> " test)"]];
     ref = iSaveArtifact[Lookup[pl, "Name", "wf"], idx, Lookup[pl, "Round", 1],
       written, testFiles, steps, artifactText];
     <|"Payload" -> Join[pl, <|"GeneratedFiles" -> allFiles, "StageFiles" -> written,
         "TestFiles" -> testFiles, "LastSteps" -> steps, "ImplEmpty" -> emptyImpl,
+        (* L2: carry the fail-closed flag + reason so the net routes to Blocked *)
+        "ImplBlocked" -> implBlocked,
+        "BlockReason" -> If[implBlocked, unresolved, Lookup[pl, "BlockReason", ""]],
         (* on an empty response, jump Round to MaxRounds so the post-verify routing
            gives up immediately instead of retrying into the same empty result *)
         "Round" -> If[emptyImpl, Lookup[pl, "MaxRounds", $DefaultMaxRounds], Lookup[pl, "Round", 1]],
@@ -896,11 +961,20 @@ iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True] := Fu
         <|"Ran" -> False, "OK" -> True|>];
       If[TrueQ[dyn["Ran"]] && ! TrueQ[dyn["OK"]],
         verdict = "NeedsRevision";
-        findings = "[{\"id\":\"dyn-load\",\"severity\":\"blocker\",\"title\":\"package fails to load / run in a fresh kernel\"}]";
-        rtext = "DYNAMIC LOAD TEST FAILED -- the package was ACTUALLY loaded in a fresh wolframscript kernel " <>
-          "via SourceVault`SourceVaultLoadWorkflow and its no-arg launch entry was called. " <>
-          "Result: " <> Lookup[dyn, "Output", ""] <> " " <>
-          "Fix so the package loads with no error messages and the no-arg launch returns cleanly (no Missing/$Failed).",
+        If[Lookup[dyn, "Phase", ""] === "api-grounding",
+          (* L3: the package calls a project API that does not exist -> a hallucinated
+             / misspelled function name, caught deterministically before the LLM. *)
+          findings = "[{\"id\":\"api-grounding\",\"severity\":\"blocker\",\"title\":\"calls a project API that does not exist (invented/misspelled)\"}]";
+          rtext = "API-GROUNDING CHECK FAILED -- after loading SourceVault (which auto-loads its subsystems) in a fresh kernel, " <>
+            "the generated package references project symbols that DO NOT EXIST. " <> Lookup[dyn, "Output", ""] <> " " <>
+            "For EACH such call, confirm the real name/signature via the SourceVault MCP packageapi index " <>
+            "(sourcevault_search kinds:[\"packageapi\"] then sourcevault_get view:\"contract\") or the real source, " <>
+            "and NEVER invent an API. If a required API genuinely cannot be resolved, emit the UNRESOLVED-API block.",
+          findings = "[{\"id\":\"dyn-load\",\"severity\":\"blocker\",\"title\":\"package fails to load / run in a fresh kernel\"}]";
+          rtext = "DYNAMIC LOAD TEST FAILED -- the package was ACTUALLY loaded in a fresh wolframscript kernel " <>
+            "via SourceVault`SourceVaultLoadWorkflow and its no-arg launch entry was called. " <>
+            "Result: " <> Lookup[dyn, "Output", ""] <> " " <>
+            "Fix so the package loads with no error messages and the no-arg launch returns cleanly (no Missing/$Failed)."],
         (* load gate OK (or inconclusive) -> run the generated test (ADVISORY) and
            feed its real output to the LLM verifier, then verify against the spec *)
         gentest = If[TrueQ[$iDynTest] && TrueQ[dyn["Ran"]],
@@ -942,6 +1016,15 @@ iGiveUpHandler[progressFile_] := Function[binding,
     iProg[progressFile, pl, "Failed", "", "", "gave up after max rounds"];
     <|"Payload" -> Join[pl, <|"Status" -> "GaveUp"|>]|>]];
 
+(* L2 fail-closed terminal: reached when the implementer declared a required API
+   unresolved (ImplBlocked). Stops the run with Status "Blocked" and a warning; the
+   FE surfaces BlockReason so the user knows exactly which API could not be verified. *)
+iBlockHandler[progressFile_] := Function[binding,
+  Quiet @ Module[{pl}, pl = iPayload[binding];
+    iProg[progressFile, pl, "Blocked", "", "",
+      "stopped: a required API could not be verified against ground truth (fail-closed)"];
+    <|"Payload" -> Join[pl, <|"Status" -> "Blocked"|>]|>]];
+
 (* ============================================================
    Net builder
    ============================================================ *)
@@ -977,7 +1060,7 @@ BuildNet[name_String, opts:OptionsPattern[]] := Module[
 
   spec = <|
     "SourcePlace" -> "NeedPlan",
-    "FinalPlaces" -> {"Approved", "Failed"},
+    "FinalPlaces" -> {"Approved", "Failed", "Blocked"},
     "Description" -> "Implement spec as codified workflow: " <> name,
     "Places" -> <|
       "NeedPlan"    -> WorkflowPlace["NeedPlan"],
@@ -986,7 +1069,8 @@ BuildNet[name_String, opts:OptionsPattern[]] := Module[
       "Implemented" -> WorkflowPlace["Implemented"],
       "Verified"    -> WorkflowPlace["Verified"],
       "Approved"    -> WorkflowPlace["Approved"],
-      "Failed"      -> WorkflowPlace["Failed"]|>,
+      "Failed"      -> WorkflowPlace["Failed"],
+      "Blocked"     -> WorkflowPlace["Blocked"]|>,
     "Transitions" -> <|
       "Plan" -> WorkflowTransition["Plan",
         "InputArcs" -> {<|"Place" -> "NeedPlan"|>},
@@ -1012,9 +1096,20 @@ BuildNet[name_String, opts:OptionsPattern[]] := Module[
         "OutputArcs" -> {<|"Place" -> "Implemented", "TokenKind" -> "Artifact"|>},
         "Executor" -> "PureFunction",
         "RuntimeSpec" -> <|"Handler" -> iImplementHandler[claude, implFn, progressFile, targetDir]|>],
+      (* L2 fail-closed: an implement that declared a required API unresolved goes
+         straight to the terminal Blocked place (higher priority than Verify). *)
+      "Block" -> WorkflowTransition["Block",
+        "InputArcs" -> {<|"Place" -> "Implemented"|>},
+        "OutputArcs" -> {<|"Place" -> "Blocked", "TokenKind" -> "Artifact"|>},
+        "Guard" -> Function[b, iImplBlocked[b]],
+        "Priority" -> 20,
+        "Executor" -> "PureFunction",
+        "RuntimeSpec" -> <|"Handler" -> iBlockHandler[progressFile]|>],
       "Verify" -> WorkflowTransition["Verify",
         "InputArcs" -> {<|"Place" -> "Implemented"|>},
         "OutputArcs" -> {<|"Place" -> "Verified", "TokenKind" -> "Artifact"|>},
+        "Guard" -> Function[b, ! iImplBlocked[b]],
+        "Priority" -> 1,
         "Executor" -> "PureFunction",
         "RuntimeSpec" -> <|"Handler" -> iVerifyHandler[advisary, verifyFn, progressFile, targetDir, smokeQ]|>],
       "Approve" -> WorkflowTransition["Approve",
@@ -1136,6 +1231,7 @@ RunSpecImpl[name_String, opts:OptionsPattern[]] := Module[
     "Stages" -> Lookup[finalPayload, "Stages", {"(single)"}],
     "Rounds" -> Lookup[finalPayload, "Round", Missing[]],
     "FinalVerdict" -> Lookup[finalPayload, "Verdict", Missing[]],
+    "BlockReason" -> Lookup[finalPayload, "BlockReason", ""],
     "GeneratedFiles" -> Lookup[finalPayload, "GeneratedFiles", {}],
     "ImplModel" -> Lookup[finalPayload, "ImplModel", Missing[]],
     "VerifyModel" -> Lookup[finalPayload, "VerifyModel", Missing[]],
@@ -1154,7 +1250,7 @@ markingPlaces[st_] := Lookup[st, "Marking", <||>];
 iFinalToken[st_] := Module[{mk, tokens, ids},
   mk = Lookup[st, "Marking", <||>];
   tokens = Lookup[st, "Tokens", <||>];
-  ids = Join[Lookup[mk, "Approved", {}], Lookup[mk, "Failed", {}]];
+  ids = Join[Lookup[mk, "Approved", {}], Lookup[mk, "Failed", {}], Lookup[mk, "Blocked", {}]];
   If[ids === {}, Missing["NoFinalToken"], Lookup[tokens, First[ids], Missing[]]]];
 
 End[]

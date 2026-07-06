@@ -93,7 +93,7 @@ BuildSearchIndex の結果(or IndexId 文字列)で release-gate 付き検索(`S
 ## Inc 6（任意）: HTML DOM / Negotiation / LLMProposed
 
 ### SourceVaultParseHTMLMailParagraphs[html] → {paragraph...}
-`BodyWasHTML` の本文を block 要素（p/div/li/h*/td/tr/blockquote/br）で段落分割し、タグ除去・HTML entity 復号（`&amp;`/`&nbsp;`/`&#165;`/`&#x3002;` 等）した段落列 `<|Index, Kind(Prose|Quote), Text, RawText|>` を返す（FlattenedHTML より構造的）。`blockquote` は `Kind=Quote`。`ParseMailParagraphs` 互換なので topic パイプラインにそのまま流せる。
+`BodyWasHTML` の本文を block 要素の閉じタグ（`p`/`div`/`li`/`h1`–`h6`/`tr`/`table`/`ul`/`ol`/`section`/`article`/`header`/`footer`/`pre`/`blockquote`）で段落分割し（`td` 単体は分割対象外）、`<br>` は改行に変換、タグ除去・HTML entity 復号（`&amp;`/`&nbsp;`/`&#165;`/`&#x3002;` 等）した段落列 `<|Index, Kind(Prose|Quote), Text, RawText|>` を返す（FlattenedHTML より構造的）。`blockquote` 区間は `Kind=Quote`。`ParseMailParagraphs` 互換なので topic パイプラインにそのまま流せる。
 
 ### SourceVaultClassifyMailSessionKind[session, records] → Association
 session の speech-act を rule で判定し `SessionKind`（Negotiation|Announcement|Discussion|Reply）と Negotiation の resolution を返す。**Negotiation = Proposal（提案/候補/いかがでしょう…）＋（Acceptance（承知/確定/でお願い…）∨ Rejection（難しい/再調整…））** を含む日程調整/交渉スレッド。`ResolutionMailRef`/`ResolutionDate` = 最後に Acceptance を含むメール（§6.6 の `FindNegotiationOutcome` / `MailSessionResolutionDate` に対応）。戻り値 `<|SessionKind, IsNegotiation, ResolutionMailRef, ResolutionDate, ActBreakdown|>`。

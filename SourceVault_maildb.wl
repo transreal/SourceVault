@@ -7,57 +7,57 @@
    Load order: ... -> SourceVault_encryptedstore.wl -> SourceVault_keys.wl
                -> SourceVault_addressbook.wl -> SourceVault_maildb.wl
 
-   旧 maildb (maildb_legacy.wl) の月次 .wl record を SourceVaultMailSnapshot に正規化する。
-   第一スライス:
-     - RecordId / MessageIDToken は SourceVault:mailid:mac:v1 の keyed HMAC
-     - body は SourceVaultEncryptedPut で暗号化 (inline)。PL は fail-safe (既定 0.85)
-     - maildb privacy(0/1) は provenance のみ。release/cloud 判定の真実源にしない
-     - From/To/Cc を AddressBook に照合 (AddressBookRefs)
-     - header (subject/from/to) は既定で平文 + token (Dropbox 前提)。EncryptHeaders->True で暗号化
-     - 添付は件数のみ。embedding は未取り込み (provenance に cloud 由来フラグ)
+   \:65e7 maildb (maildb_legacy.wl) \:306e\:6708\:6b21 .wl record \:3092 SourceVaultMailSnapshot \:306b\:6b63\:898f\:5316\:3059\:308b\:3002
+   \:7b2c\:4e00\:30b9\:30e9\:30a4\:30b9:
+     - RecordId / MessageIDToken \:306f SourceVault:mailid:mac:v1 \:306e keyed HMAC
+     - body \:306f SourceVaultEncryptedPut \:3067\:6697\:53f7\:5316 (inline)\:3002PL \:306f fail-safe (\:65e2\:5b9a 0.85)
+     - maildb privacy(0/1) \:306f provenance \:306e\:307f\:3002release/cloud \:5224\:5b9a\:306e\:771f\:5b9f\:6e90\:306b\:3057\:306a\:3044
+     - From/To/Cc \:3092 AddressBook \:306b\:7167\:5408 (AddressBookRefs)
+     - header (subject/from/to) \:306f\:65e2\:5b9a\:3067\:5e73\:6587 + token (Dropbox \:524d\:63d0)\:3002EncryptHeaders->True \:3067\:6697\:53f7\:5316
+     - \:6dfb\:4ed8\:306f\:4ef6\:6570\:306e\:307f\:3002embedding \:306f\:672a\:53d6\:308a\:8fbc\:307f (provenance \:306b cloud \:7531\:6765\:30d5\:30e9\:30b0)
    ============================================================ *)
 
 BeginPackage["SourceVault`", {"NBAccess`"}];
 
-SourceVaultMailSnapshotFromMaildb::usage = "SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, opts] は旧 maildb record を SourceVaultMailSnapshot に変換する。body は暗号化、PL は fail-safe。";
-SourceVaultImportMaildbFile::usage = "SourceVaultImportMaildbFile[file_String, mbox_String, opts] は旧 maildb 月次 .wl を読み、各 record を MailSnapshot に変換する。Persist->True で snapshot store に保存。";
-SourceVaultMailSnapshotPut::usage = "SourceVaultMailSnapshotPut[snapshot, opts] は snapshot を RecordId をキーに store へ保存 (冪等)。";
-SourceVaultBackfillMailBodies::usage = "SourceVaultBackfillMailBodies[opts] はロード済み snapshot のうち本文が HTML の旧 record を、読める平文へ変換して再格納する (原文は BodyRaw に温存、MailMetadataPublic[\"BodyWasHTML\"]->True)。ingest 時 HTML テキスト化を導入する前のメール用 backfill。opts: \"Limit\"(既定 Infinity), \"DryRun\"->True(件数だけ数え書込まない), \"Persist\"(既定 True), \"CheckpointEvery\"(既定 20)。要約も作り直すには別途 SourceVaultInferMailDerivedBatch[\"Refresh\"->...] を実行する。";
-SourceVaultMailSnapshotGet::usage = "SourceVaultMailSnapshotGet[recordId] は保存済み snapshot を返す。";
-SourceVaultMailSnapshotList::usage = "SourceVaultMailSnapshotList[] は保存済み snapshot を返す。";
-SourceVaultIdentityBackfillFromMail::usage = "SourceVaultIdentityBackfillFromMail[] は現在ロード済みの snapshot の平文 From/To/Cc を走査して識別子(2層アドレス帳)を一括生成する。再取込不要。スコープは先に SourceVaultMailEnsureLoaded で決める。";
-SourceVaultSearchMailSnapshots::usage = "SourceVaultSearchMailSnapshots[query_String:\"\", opts] は subject/summary 部分一致 + From / To / FromContact / MBox / DateFrom / DateTo / HasAttachment / Category / HasDeadline / DeadlineFrom / DeadlineTo で検索し、Newest(既定 True)で日付降順、Limit で件数制限する。Category は $SourceVaultMailCategories のトークン(日本語名 \"作業依頼\" 等でも可)。DeadlineFrom/DeadlineTo は〆切日を日単位包含で範囲指定(例: 今週〆切の作業依頼 = \"Category\"->\"TaskRequest\", \"DeadlineFrom\"->今日, \"DeadlineTo\"->週末)。SortBy は \"Date\"|\"Priority\"|\"PrivacyLevel\"|\"Deadline\"。";
-SourceVaultMailSummaryRow::usage = "SourceVaultMailSummaryRow[snapshot] は一覧表示用の低漏洩行 <|Date, From, Subject, Category, Deadline, Attach, MBox, RecordId, BodyEncrypted|> を返す。From は AddressBook 解決時は表示名。Category は依頼カテゴリトークン、Deadline は〆切の ISO 文字列 (無ければ Missing)。";
-$SourceVaultMailCategories::usage = "メール派生カテゴリの語彙: InfoProvision=情報提供, AttendanceRequest=(会議等への)出席依頼, TaskRequest=作業・仕事の依頼, Confirmation=確認・承認依頼, Report=報告, Notice=通知・一斉配信, Other=その他。Derived.Category と検索オプション \"Category\" で使う。";
-SourceVaultMailSearchSummary::usage = "SourceVaultMailSearchSummary[query_String:\"\", opts] は検索結果を SummaryRow のリスト(新着順・Limit 適用)で返す。";
-SourceVaultMailDataset::usage = "SourceVaultMailDataset[query_String:\"\", opts] は検索結果を素の Dataset で返す(列ソート用、ボタン無し)。";
-SourceVaultMailStoreSave::usage = "SourceVaultMailStoreSave[\"All\"->False] は変更のあった月次シャードのみ (All->True で全シャード) を byte-exact 保存する。";
-SourceVaultMailStoreLoad::usage = "SourceVaultMailStoreLoad[] は全シャードを読み込む(重い)。通常は SourceVaultMailEnsureLoaded で必要分だけ遅延ロードする。";
-SourceVaultMailAvailableShards::usage = "SourceVaultMailAvailableShards[mbox_:All] はディスク上のシャード {mbox, yyyymm} の一覧をロードせずに返す。";
-SourceVaultMailEnsureLoaded::usage = "SourceVaultMailEnsureLoaded[mbox_String, period_:Automatic] は指定 mbox の期間分シャードだけをメモリへ遅延ロードする。period: \"YYYYMM\" | {from,to} | \"Latest\"/Automatic | n(直近n月) | All。既ロードは再読込しない。";
-SourceVaultMailLoadShard::usage = "SourceVaultMailLoadShard[\"mbox/yyyymm\"] は1シャードをロードする。";
-SourceVaultMailUnloadAll::usage = "SourceVaultMailUnloadAll[] はメモリ上の snapshot を解放する。";
-SourceVaultMailLoadedCount::usage = "SourceVaultMailLoadedCount[] は現在メモリにある snapshot 数を返す。";
-SourceVaultMailStoreRoot::usage = "SourceVaultMailStoreRoot[] は snapshot store のルートを返す。";
-SourceVaultMailShardPath::usage = "SourceVaultMailShardPath[\"mbox/yyyymm\"] は月次シャードのパスを返す。";
-SourceVaultMailMigrateToShards::usage = "SourceVaultMailMigrateToShards[] は旧単一ファイル snapshots.svmail を mbox×月のシャードに移行し、旧ファイルを .bak にする。";
-SourceVaultMailStorePath::usage = "SourceVaultMailStorePath[] は旧単一ファイル (移行用) のパスを返す。";
-$SourceVaultMailStoreRoot::usage = "mail snapshot store のルート (既定 PrivateVault/mail/snapshots)。テストで上書き可。";
-SourceVaultMailInteractionStats::usage = "SourceVaultMailInteractionStats[recordId] はそのメールの操作記録 <|\"OpenCount\",\"LastOpened\",\"RepliedCount\",\"RepliedAt\"|> を返す (本文表示で開封回数、返信送信で返信済を記録)。SourceVaultMailInteractionStats[] は全件 (RecordId キー) を返す。記録は <storeRoot>/interaction.json (Dropbox 共有)。";
-SourceVaultMailSearchIndex::usage = "SourceVaultMailSearchIndex[query_String:\"\", opts] はディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) だけを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行 (SummaryRow 形 + Summary) を返す。opts は SourceVaultSearchMailSnapshots と同じ (To/Cc/FromContact 等 index 非保持の項目は無視)。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。";
-SourceVaultMailRebuildMetadataIndex::usage = "SourceVaultMailRebuildMetadataIndex[mbox_:All] はディスク上の各 shard を一時的に読み、低漏洩メタデータ索引 sidecar (.svmailidx) を再生成する ($iSVMDStore は変更しない)。既存 .svmail から索引を初回構築/再構築するのに使う。";
-SourceVaultMailIndexedCount::usage = "SourceVaultMailIndexedCount[mbox_:All] はディスク上の索引 sidecar に含まれる行数 (索引済みメール数) を返す。";
-SourceVaultMailIndexGet::usage = "SourceVaultMailIndexGet[recordId_String] は索引 sidecar から該当 RecordId の低漏洩メタ/サマリー行を1件返す (snapshot 本体はロードしない)。無ければ Missing[\"NotFound\"]。MCP の単一 URI 解決 (sourcevault_get) 用。";
-SourceVaultMailSnapshotDecryptBody::usage = "SourceVaultMailSnapshotDecryptBody[snapshot] は snapshot の暗号化 body を復号して返す (MAC 検証経由)。";
-SourceVaultMailParseEmails::usage = "SourceVaultMailParseEmails[headerValue_String] はヘッダ文字列からメールアドレスを抽出する。";
-$SourceVaultDefaultImportedMailPL::usage = "import 時のメール本文 PL 既定 (fail-safe, 既定 0.85)。maildb privacy は信用しない。";
-$SourceVaultMailPersonalPrivacyFloor::usage = "個人宛メール(オーナーが直接の To/Cc・非 bulk・少数宛)の派生 PrivacyLevel 下限 (既定 0.6)。LLM 推論が個人メールの privacy を下げ過ぎるのを防ぐ決定的 defense-in-depth。0.0 で無効化。";
+SourceVaultMailSnapshotFromMaildb::usage = "SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, opts] \:306f\:65e7 maildb record \:3092 SourceVaultMailSnapshot \:306b\:5909\:63db\:3059\:308b\:3002body \:306f\:6697\:53f7\:5316\:3001PL \:306f fail-safe\:3002";
+SourceVaultImportMaildbFile::usage = "SourceVaultImportMaildbFile[file_String, mbox_String, opts] \:306f\:65e7 maildb \:6708\:6b21 .wl \:3092\:8aad\:307f\:3001\:5404 record \:3092 MailSnapshot \:306b\:5909\:63db\:3059\:308b\:3002Persist->True \:3067 snapshot store \:306b\:4fdd\:5b58\:3002";
+SourceVaultMailSnapshotPut::usage = "SourceVaultMailSnapshotPut[snapshot, opts] \:306f snapshot \:3092 RecordId \:3092\:30ad\:30fc\:306b store \:3078\:4fdd\:5b58 (\:51aa\:7b49)\:3002";
+SourceVaultBackfillMailBodies::usage = "SourceVaultBackfillMailBodies[opts] \:306f\:30ed\:30fc\:30c9\:6e08\:307f snapshot \:306e\:3046\:3061\:672c\:6587\:304c HTML \:306e\:65e7 record \:3092\:3001\:8aad\:3081\:308b\:5e73\:6587\:3078\:5909\:63db\:3057\:3066\:518d\:683c\:7d0d\:3059\:308b (\:539f\:6587\:306f BodyRaw \:306b\:6e29\:5b58\:3001MailMetadataPublic[\"BodyWasHTML\"]->True)\:3002ingest \:6642 HTML \:30c6\:30ad\:30b9\:30c8\:5316\:3092\:5c0e\:5165\:3059\:308b\:524d\:306e\:30e1\:30fc\:30eb\:7528 backfill\:3002opts: \"Limit\"(\:65e2\:5b9a Infinity), \"DryRun\"->True(\:4ef6\:6570\:3060\:3051\:6570\:3048\:66f8\:8fbc\:307e\:306a\:3044), \"Persist\"(\:65e2\:5b9a True), \"CheckpointEvery\"(\:65e2\:5b9a 20)\:3002\:8981\:7d04\:3082\:4f5c\:308a\:76f4\:3059\:306b\:306f\:5225\:9014 SourceVaultInferMailDerivedBatch[\"Refresh\"->...] \:3092\:5b9f\:884c\:3059\:308b\:3002";
+SourceVaultMailSnapshotGet::usage = "SourceVaultMailSnapshotGet[recordId] \:306f\:4fdd\:5b58\:6e08\:307f snapshot \:3092\:8fd4\:3059\:3002";
+SourceVaultMailSnapshotList::usage = "SourceVaultMailSnapshotList[] \:306f\:4fdd\:5b58\:6e08\:307f snapshot \:3092\:8fd4\:3059\:3002";
+SourceVaultIdentityBackfillFromMail::usage = "SourceVaultIdentityBackfillFromMail[] \:306f\:73fe\:5728\:30ed\:30fc\:30c9\:6e08\:307f\:306e snapshot \:306e\:5e73\:6587 From/To/Cc \:3092\:8d70\:67fb\:3057\:3066\:8b58\:5225\:5b50(2\:5c64\:30a2\:30c9\:30ec\:30b9\:5e33)\:3092\:4e00\:62ec\:751f\:6210\:3059\:308b\:3002\:518d\:53d6\:8fbc\:4e0d\:8981\:3002\:30b9\:30b3\:30fc\:30d7\:306f\:5148\:306b SourceVaultMailEnsureLoaded \:3067\:6c7a\:3081\:308b\:3002";
+SourceVaultSearchMailSnapshots::usage = "SourceVaultSearchMailSnapshots[query_String:\"\", opts] \:306f subject/summary \:90e8\:5206\:4e00\:81f4 + From / To / FromContact / MBox / DateFrom / DateTo / HasAttachment / Category / HasDeadline / DeadlineFrom / DeadlineTo \:3067\:691c\:7d22\:3057\:3001Newest(\:65e2\:5b9a True)\:3067\:65e5\:4ed8\:964d\:9806\:3001Limit \:3067\:4ef6\:6570\:5236\:9650\:3059\:308b\:3002Category \:306f $SourceVaultMailCategories \:306e\:30c8\:30fc\:30af\:30f3(\:65e5\:672c\:8a9e\:540d \"\:4f5c\:696d\:4f9d\:983c\" \:7b49\:3067\:3082\:53ef)\:3002DeadlineFrom/DeadlineTo \:306f\:3006\:5207\:65e5\:3092\:65e5\:5358\:4f4d\:5305\:542b\:3067\:7bc4\:56f2\:6307\:5b9a(\:4f8b: \:4eca\:9031\:3006\:5207\:306e\:4f5c\:696d\:4f9d\:983c = \"Category\"->\"TaskRequest\", \"DeadlineFrom\"->\:4eca\:65e5, \"DeadlineTo\"->\:9031\:672b)\:3002SortBy \:306f \"Date\"|\"Priority\"|\"PrivacyLevel\"|\"Deadline\"\:3002";
+SourceVaultMailSummaryRow::usage = "SourceVaultMailSummaryRow[snapshot] \:306f\:4e00\:89a7\:8868\:793a\:7528\:306e\:4f4e\:6f0f\:6d29\:884c <|Date, From, Subject, Category, Deadline, Attach, MBox, RecordId, BodyEncrypted|> \:3092\:8fd4\:3059\:3002From \:306f AddressBook \:89e3\:6c7a\:6642\:306f\:8868\:793a\:540d\:3002Category \:306f\:4f9d\:983c\:30ab\:30c6\:30b4\:30ea\:30c8\:30fc\:30af\:30f3\:3001Deadline \:306f\:3006\:5207\:306e ISO \:6587\:5b57\:5217 (\:7121\:3051\:308c\:3070 Missing)\:3002";
+$SourceVaultMailCategories::usage = "\:30e1\:30fc\:30eb\:6d3e\:751f\:30ab\:30c6\:30b4\:30ea\:306e\:8a9e\:5f59: InfoProvision=\:60c5\:5831\:63d0\:4f9b, AttendanceRequest=(\:4f1a\:8b70\:7b49\:3078\:306e)\:51fa\:5e2d\:4f9d\:983c, TaskRequest=\:4f5c\:696d\:30fb\:4ed5\:4e8b\:306e\:4f9d\:983c, Confirmation=\:78ba\:8a8d\:30fb\:627f\:8a8d\:4f9d\:983c, Report=\:5831\:544a, Notice=\:901a\:77e5\:30fb\:4e00\:6589\:914d\:4fe1, Other=\:305d\:306e\:4ed6\:3002Derived.Category \:3068\:691c\:7d22\:30aa\:30d7\:30b7\:30e7\:30f3 \"Category\" \:3067\:4f7f\:3046\:3002";
+SourceVaultMailSearchSummary::usage = "SourceVaultMailSearchSummary[query_String:\"\", opts] \:306f\:691c\:7d22\:7d50\:679c\:3092 SummaryRow \:306e\:30ea\:30b9\:30c8(\:65b0\:7740\:9806\:30fbLimit \:9069\:7528)\:3067\:8fd4\:3059\:3002";
+SourceVaultMailDataset::usage = "SourceVaultMailDataset[query_String:\"\", opts] \:306f\:691c\:7d22\:7d50\:679c\:3092\:7d20\:306e Dataset \:3067\:8fd4\:3059(\:5217\:30bd\:30fc\:30c8\:7528\:3001\:30dc\:30bf\:30f3\:7121\:3057)\:3002";
+SourceVaultMailStoreSave::usage = "SourceVaultMailStoreSave[\"All\"->False] \:306f\:5909\:66f4\:306e\:3042\:3063\:305f\:6708\:6b21\:30b7\:30e3\:30fc\:30c9\:306e\:307f (All->True \:3067\:5168\:30b7\:30e3\:30fc\:30c9) \:3092 byte-exact \:4fdd\:5b58\:3059\:308b\:3002";
+SourceVaultMailStoreLoad::usage = "SourceVaultMailStoreLoad[] \:306f\:5168\:30b7\:30e3\:30fc\:30c9\:3092\:8aad\:307f\:8fbc\:3080(\:91cd\:3044)\:3002\:901a\:5e38\:306f SourceVaultMailEnsureLoaded \:3067\:5fc5\:8981\:5206\:3060\:3051\:9045\:5ef6\:30ed\:30fc\:30c9\:3059\:308b\:3002";
+SourceVaultMailAvailableShards::usage = "SourceVaultMailAvailableShards[mbox_:All] \:306f\:30c7\:30a3\:30b9\:30af\:4e0a\:306e\:30b7\:30e3\:30fc\:30c9 {mbox, yyyymm} \:306e\:4e00\:89a7\:3092\:30ed\:30fc\:30c9\:305b\:305a\:306b\:8fd4\:3059\:3002";
+SourceVaultMailEnsureLoaded::usage = "SourceVaultMailEnsureLoaded[mbox_String, period_:Automatic] \:306f\:6307\:5b9a mbox \:306e\:671f\:9593\:5206\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:3092\:30e1\:30e2\:30ea\:3078\:9045\:5ef6\:30ed\:30fc\:30c9\:3059\:308b\:3002period: \"YYYYMM\" | {from,to} | \"Latest\"/Automatic | n(\:76f4\:8fd1n\:6708) | All\:3002\:65e2\:30ed\:30fc\:30c9\:306f\:518d\:8aad\:8fbc\:3057\:306a\:3044\:3002";
+SourceVaultMailLoadShard::usage = "SourceVaultMailLoadShard[\"mbox/yyyymm\"] \:306f1\:30b7\:30e3\:30fc\:30c9\:3092\:30ed\:30fc\:30c9\:3059\:308b\:3002";
+SourceVaultMailUnloadAll::usage = "SourceVaultMailUnloadAll[] \:306f\:30e1\:30e2\:30ea\:4e0a\:306e snapshot \:3092\:89e3\:653e\:3059\:308b\:3002";
+SourceVaultMailLoadedCount::usage = "SourceVaultMailLoadedCount[] \:306f\:73fe\:5728\:30e1\:30e2\:30ea\:306b\:3042\:308b snapshot \:6570\:3092\:8fd4\:3059\:3002";
+SourceVaultMailStoreRoot::usage = "SourceVaultMailStoreRoot[] \:306f snapshot store \:306e\:30eb\:30fc\:30c8\:3092\:8fd4\:3059\:3002";
+SourceVaultMailShardPath::usage = "SourceVaultMailShardPath[\"mbox/yyyymm\"] \:306f\:6708\:6b21\:30b7\:30e3\:30fc\:30c9\:306e\:30d1\:30b9\:3092\:8fd4\:3059\:3002";
+SourceVaultMailMigrateToShards::usage = "SourceVaultMailMigrateToShards[] \:306f\:65e7\:5358\:4e00\:30d5\:30a1\:30a4\:30eb snapshots.svmail \:3092 mbox\[Times]\:6708\:306e\:30b7\:30e3\:30fc\:30c9\:306b\:79fb\:884c\:3057\:3001\:65e7\:30d5\:30a1\:30a4\:30eb\:3092 .bak \:306b\:3059\:308b\:3002";
+SourceVaultMailStorePath::usage = "SourceVaultMailStorePath[] \:306f\:65e7\:5358\:4e00\:30d5\:30a1\:30a4\:30eb (\:79fb\:884c\:7528) \:306e\:30d1\:30b9\:3092\:8fd4\:3059\:3002";
+$SourceVaultMailStoreRoot::usage = "mail snapshot store \:306e\:30eb\:30fc\:30c8 (\:65e2\:5b9a PrivateVault/mail/snapshots)\:3002\:30c6\:30b9\:30c8\:3067\:4e0a\:66f8\:304d\:53ef\:3002";
+SourceVaultMailInteractionStats::usage = "SourceVaultMailInteractionStats[recordId] \:306f\:305d\:306e\:30e1\:30fc\:30eb\:306e\:64cd\:4f5c\:8a18\:9332 <|\"OpenCount\",\"LastOpened\",\"RepliedCount\",\"RepliedAt\"|> \:3092\:8fd4\:3059 (\:672c\:6587\:8868\:793a\:3067\:958b\:5c01\:56de\:6570\:3001\:8fd4\:4fe1\:9001\:4fe1\:3067\:8fd4\:4fe1\:6e08\:3092\:8a18\:9332)\:3002SourceVaultMailInteractionStats[] \:306f\:5168\:4ef6 (RecordId \:30ad\:30fc) \:3092\:8fd4\:3059\:3002\:8a18\:9332\:306f <storeRoot>/interaction.json (Dropbox \:5171\:6709)\:3002";
+SourceVaultMailSearchIndex::usage = "SourceVaultMailSearchIndex[query_String:\"\", opts] \:306f\:30c7\:30a3\:30b9\:30af\:4e0a\:306e\:8efd\:91cf\:30e1\:30bf\:30c7\:30fc\:30bf\:7d22\:5f15 (\:5404 shard \:306e .svmailidx sidecar) \:3060\:3051\:3092\:8d70\:67fb\:3057\:3001snapshot \:672c\:4f53 (\:672c\:6587\:6697\:53f7\:6587) \:3092\:30e1\:30e2\:30ea\:3078\:30ed\:30fc\:30c9\:305b\:305a\:306b\:4f4e\:6f0f\:6d29\:30e1\:30bf/\:30b5\:30de\:30ea\:30fc\:884c (SummaryRow \:5f62 + Summary) \:3092\:8fd4\:3059\:3002opts \:306f SourceVaultSearchMailSnapshots \:3068\:540c\:3058 (To/Cc/FromContact \:7b49 index \:975e\:4fdd\:6301\:306e\:9805\:76ee\:306f\:7121\:8996)\:3002\:5e74\:5358\:4f4d\:306e\:5168\:30e1\:30fc\:30eb\:3092\:30ed\:30fc\:30c9\:3057\:7d9a\:3051\:306a\:304f\:3066\:3082\:691c\:7d22\:3067\:304d\:308b\:3002\:7d22\:5f15\:306f SourceVaultMailStoreSave \:6642\:306b\:81ea\:52d5\:66f4\:65b0\:3055\:308c\:3001\:65e2\:5b58\:30c7\:30fc\:30bf\:306b\:306f SourceVaultMailRebuildMetadataIndex \:3067\:4e00\:62ec\:751f\:6210\:3059\:308b\:3002";
+SourceVaultMailRebuildMetadataIndex::usage = "SourceVaultMailRebuildMetadataIndex[mbox_:All] \:306f\:30c7\:30a3\:30b9\:30af\:4e0a\:306e\:5404 shard \:3092\:4e00\:6642\:7684\:306b\:8aad\:307f\:3001\:4f4e\:6f0f\:6d29\:30e1\:30bf\:30c7\:30fc\:30bf\:7d22\:5f15 sidecar (.svmailidx) \:3092\:518d\:751f\:6210\:3059\:308b ($iSVMDStore \:306f\:5909\:66f4\:3057\:306a\:3044)\:3002\:65e2\:5b58 .svmail \:304b\:3089\:7d22\:5f15\:3092\:521d\:56de\:69cb\:7bc9/\:518d\:69cb\:7bc9\:3059\:308b\:306e\:306b\:4f7f\:3046\:3002";
+SourceVaultMailIndexedCount::usage = "SourceVaultMailIndexedCount[mbox_:All] \:306f\:30c7\:30a3\:30b9\:30af\:4e0a\:306e\:7d22\:5f15 sidecar \:306b\:542b\:307e\:308c\:308b\:884c\:6570 (\:7d22\:5f15\:6e08\:307f\:30e1\:30fc\:30eb\:6570) \:3092\:8fd4\:3059\:3002";
+SourceVaultMailIndexGet::usage = "SourceVaultMailIndexGet[recordId_String] \:306f\:7d22\:5f15 sidecar \:304b\:3089\:8a72\:5f53 RecordId \:306e\:4f4e\:6f0f\:6d29\:30e1\:30bf/\:30b5\:30de\:30ea\:30fc\:884c\:30921\:4ef6\:8fd4\:3059 (snapshot \:672c\:4f53\:306f\:30ed\:30fc\:30c9\:3057\:306a\:3044)\:3002\:7121\:3051\:308c\:3070 Missing[\"NotFound\"]\:3002MCP \:306e\:5358\:4e00 URI \:89e3\:6c7a (sourcevault_get) \:7528\:3002";
+SourceVaultMailSnapshotDecryptBody::usage = "SourceVaultMailSnapshotDecryptBody[snapshot] \:306f snapshot \:306e\:6697\:53f7\:5316 body \:3092\:5fa9\:53f7\:3057\:3066\:8fd4\:3059 (MAC \:691c\:8a3c\:7d4c\:7531)\:3002";
+SourceVaultMailParseEmails::usage = "SourceVaultMailParseEmails[headerValue_String] \:306f\:30d8\:30c3\:30c0\:6587\:5b57\:5217\:304b\:3089\:30e1\:30fc\:30eb\:30a2\:30c9\:30ec\:30b9\:3092\:62bd\:51fa\:3059\:308b\:3002";
+$SourceVaultDefaultImportedMailPL::usage = "import \:6642\:306e\:30e1\:30fc\:30eb\:672c\:6587 PL \:65e2\:5b9a (fail-safe, \:65e2\:5b9a 0.85)\:3002maildb privacy \:306f\:4fe1\:7528\:3057\:306a\:3044\:3002";
+$SourceVaultMailPersonalPrivacyFloor::usage = "\:500b\:4eba\:5b9b\:30e1\:30fc\:30eb(\:30aa\:30fc\:30ca\:30fc\:304c\:76f4\:63a5\:306e To/Cc\:30fb\:975e bulk\:30fb\:5c11\:6570\:5b9b)\:306e\:6d3e\:751f PrivacyLevel \:4e0b\:9650 (\:65e2\:5b9a 0.6)\:3002LLM \:63a8\:8ad6\:304c\:500b\:4eba\:30e1\:30fc\:30eb\:306e privacy \:3092\:4e0b\:3052\:904e\:304e\:308b\:306e\:3092\:9632\:3050\:6c7a\:5b9a\:7684 defense-in-depth\:30020.0 \:3067\:7121\:52b9\:5316\:3002";
 
 Begin["`Private`"];
 
 If[! ValueQ[$SourceVaultDefaultImportedMailPL], $SourceVaultDefaultImportedMailPL = 0.85];
 If[! ValueQ[$SourceVaultMailPersonalPrivacyFloor], $SourceVaultMailPersonalPrivacyFloor = 0.6];
-$iSVMDPersonalRecipientMax = 4;  (* この数以下の受信者=個人/小グループ通信とみなす *)
+$iSVMDPersonalRecipientMax = 4;  (* \:3053\:306e\:6570\:4ee5\:4e0b\:306e\:53d7\:4fe1\:8005=\:500b\:4eba/\:5c0f\:30b0\:30eb\:30fc\:30d7\:901a\:4fe1\:3068\:307f\:306a\:3059 *)
 
 $iSVMDEmailPattern = RegularExpression["[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}"];
 
@@ -67,7 +67,7 @@ SourceVaultMailParseEmails[_] := {};
 
 iSVMDFirstEmail[s_] := With[{es = SourceVaultMailParseEmails[s]}, If[es === {}, Missing["NoEmail"], First[es]]];
 
-(* keyed HMAC token (mailid 鍵)。鍵が無ければ Missing。 *)
+(* keyed HMAC token (mailid \:9375)\:3002\:9375\:304c\:7121\:3051\:308c\:3070 Missing\:3002 *)
 iSVMDMailToken[str_String] :=
   Module[{k},
     k = Quiet@Check[NBAccess`NBKeyStatus[SourceVault`$SourceVaultDefaultMailIdentityHMACKeyRef], Missing[]];
@@ -76,9 +76,9 @@ iSVMDMailToken[str_String] :=
       NBAccess`NBMacWithKeyRef[SourceVault`$SourceVaultDefaultMailIdentityHMACKeyRef,
         StringToByteArray[str, "UTF-8"], "MailIdentityToken"], Missing["TokenFailed"]]];
 
-(* RecordId = SHA256(canonical {mbox, MessageID})[:24]。鍵に依存しない決定的 ID。
-   再 import / IMAP 増分で恒久的に冪等 (鍵の有無・ローテーションで値が変わらない)。
-   連結防止が要る箇所は別途キー付き MessageIDToken/FromToken/SubjectToken を使う。 *)
+(* RecordId = SHA256(canonical {mbox, MessageID})[:24]\:3002\:9375\:306b\:4f9d\:5b58\:3057\:306a\:3044\:6c7a\:5b9a\:7684 ID\:3002
+   \:518d import / IMAP \:5897\:5206\:3067\:6052\:4e45\:7684\:306b\:51aa\:7b49 (\:9375\:306e\:6709\:7121\:30fb\:30ed\:30fc\:30c6\:30fc\:30b7\:30e7\:30f3\:3067\:5024\:304c\:5909\:308f\:3089\:306a\:3044)\:3002
+   \:9023\:7d50\:9632\:6b62\:304c\:8981\:308b\:7b87\:6240\:306f\:5225\:9014\:30ad\:30fc\:4ed8\:304d MessageIDToken/FromToken/SubjectToken \:3092\:4f7f\:3046\:3002 *)
 iSVMDRecordId[mbox_, msgId_] :=
   Module[{canon},
     canon = SourceVault`SourceVaultCanonicalJSONBytes[<|"MBox" -> mbox, "MessageID" -> msgId|>];
@@ -111,7 +111,7 @@ iSVMDContactRefsFor[emailHeader_] :=
     (Module[{c = Quiet@Check[SourceVault`SourceVaultAddressBookFindByEmail[#], Missing[]]},
         If[AssociationQ[c], c["ContactId"], Missing["NotInAddressBook"]]] &) /@ ems];
 
-(* 取込時に From/To/Cc を識別子(2層アドレス帳)へ自動登録。identity 未ロードでも安全。 *)
+(* \:53d6\:8fbc\:6642\:306b From/To/Cc \:3092\:8b58\:5225\:5b50(2\:5c64\:30a2\:30c9\:30ec\:30b9\:5e33)\:3078\:81ea\:52d5\:767b\:9332\:3002identity \:672a\:30ed\:30fc\:30c9\:3067\:3082\:5b89\:5168\:3002 *)
 iSVMDIngestIds[header_, mbox_] :=
   Quiet@Check[
     If[StringQ[header] && Length[DownValues[SourceVault`SourceVaultIngestAddressHeader]] > 0,
@@ -125,11 +125,11 @@ iSVMDIdentitySaveSafe[] :=
      SourceVault`SourceVaultIdentitySave[], Null], Null];
 
 (* ============================================================ *)
-(* 本文を「読める平文」に正規化するコアヘルパ (ingest / 派生 / 表示 / 引用 / 翻訳で共用)
-   (1) 改行コードを LF に統一 (\r\n / \r 由来の二重改行を防ぐ。SMTP 再正規化で
-       \r が残ると \r\r\n になり受信側で空行が入る ── 旧 maildb replyMail 踏襲)。
-   (2) 本文が HTML ならプレーンテキストへ変換 (HTML メールを読めるように)。
-   FE 非依存なので headless でも動く。 *)
+(* \:672c\:6587\:3092\:300c\:8aad\:3081\:308b\:5e73\:6587\:300d\:306b\:6b63\:898f\:5316\:3059\:308b\:30b3\:30a2\:30d8\:30eb\:30d1 (ingest / \:6d3e\:751f / \:8868\:793a / \:5f15\:7528 / \:7ffb\:8a33\:3067\:5171\:7528)
+   (1) \:6539\:884c\:30b3\:30fc\:30c9\:3092 LF \:306b\:7d71\:4e00 (\r\n / \r \:7531\:6765\:306e\:4e8c\:91cd\:6539\:884c\:3092\:9632\:3050\:3002SMTP \:518d\:6b63\:898f\:5316\:3067
+       \r \:304c\:6b8b\:308b\:3068 \r\r\n \:306b\:306a\:308a\:53d7\:4fe1\:5074\:3067\:7a7a\:884c\:304c\:5165\:308b \[HorizontalLine]\[HorizontalLine] \:65e7 maildb replyMail \:8e0f\:8972)\:3002
+   (2) \:672c\:6587\:304c HTML \:306a\:3089\:30d7\:30ec\:30fc\:30f3\:30c6\:30ad\:30b9\:30c8\:3078\:5909\:63db (HTML \:30e1\:30fc\:30eb\:3092\:8aad\:3081\:308b\:3088\:3046\:306b)\:3002
+   FE \:975e\:4f9d\:5b58\:306a\:306e\:3067 headless \:3067\:3082\:52d5\:304f\:3002 *)
 (* ============================================================ *)
 iSVUINormalizeNewlines[s_String] := StringReplace[s, {"\r\n" -> "\n", "\r" -> "\n"}];
 iSVUINormalizeNewlines[_] := "";
@@ -140,23 +140,23 @@ iSVUILooksLikeHTML[s_String] :=
     IgnoreCase -> True];
 iSVUILooksLikeHTML[_] := False;
 
-(* HTML -> プレーンテキスト。FE 非依存の ImportString を優先し、失敗時はタグ除去で代替。 *)
+(* HTML -> \:30d7\:30ec\:30fc\:30f3\:30c6\:30ad\:30b9\:30c8\:3002FE \:975e\:4f9d\:5b58\:306e ImportString \:3092\:512a\:5148\:3057\:3001\:5931\:6557\:6642\:306f\:30bf\:30b0\:9664\:53bb\:3067\:4ee3\:66ff\:3002 *)
 iSVUIHtmlToText[s_String] :=
   Module[{t},
     t = TimeConstrained[
       Quiet@Check[ImportString[s, {"HTML", "Plaintext"}], $Failed], 15, $Failed];
     If[! StringQ[t] || StringTrim[t] === "",
-      (* フォールバック: script/style 除去 -> タグ除去 -> 主要エンティティ復元 *)
+      (* \:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af: script/style \:9664\:53bb -> \:30bf\:30b0\:9664\:53bb -> \:4e3b\:8981\:30a8\:30f3\:30c6\:30a3\:30c6\:30a3\:5fa9\:5143 *)
       t = StringReplace[s, {
         RegularExpression["(?is)<(script|style)[^>]*>.*?</\\1>"] -> " ",
         RegularExpression["(?s)<[^>]+>"] -> ""}];
       t = StringReplace[t, {
         "&nbsp;" -> " ", "&amp;" -> "&", "&lt;" -> "<", "&gt;" -> ">",
         "&quot;" -> "\"", "&#39;" -> "'", "&apos;" -> "'"}]];
-    (* 連続する空行を最大1つに圧縮 (HTML 変換は空行を量産しがち) *)
+    (* \:9023\:7d9a\:3059\:308b\:7a7a\:884c\:3092\:6700\:59271\:3064\:306b\:5727\:7e2e (HTML \:5909\:63db\:306f\:7a7a\:884c\:3092\:91cf\:7523\:3057\:304c\:3061) *)
     StringTrim@StringReplace[iSVUINormalizeNewlines[t], RegularExpression["\\n{3,}"] -> "\n\n"]];
 
-(* 表示・引用・翻訳・派生に使う読める本文 *)
+(* \:8868\:793a\:30fb\:5f15\:7528\:30fb\:7ffb\:8a33\:30fb\:6d3e\:751f\:306b\:4f7f\:3046\:8aad\:3081\:308b\:672c\:6587 *)
 iSVUIReadableBody[s_String] :=
   With[{t = iSVUINormalizeNewlines[s]},
     If[iSVUILooksLikeHTML[t], iSVUIHtmlToText[t], t]];
@@ -179,17 +179,17 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
     body = Lookup[record, "body", Missing["NoBody"]];
     mdPrivacy = Lookup[record, "privacy", Missing["Unknown"]];
 
-    (* 本文を ingest 時に「読める平文」へ。HTML メールはここでテキスト化して格納し、
-       表示・検索・要約をクリーンにする。HTML だった場合のみ原文を BodyRaw として温存
-       (URL 等の欠落に備える)。平文は LF 正規化のみ。ヘルパ未ロード時は素通り。 *)
+    (* \:672c\:6587\:3092 ingest \:6642\:306b\:300c\:8aad\:3081\:308b\:5e73\:6587\:300d\:3078\:3002HTML \:30e1\:30fc\:30eb\:306f\:3053\:3053\:3067\:30c6\:30ad\:30b9\:30c8\:5316\:3057\:3066\:683c\:7d0d\:3057\:3001
+       \:8868\:793a\:30fb\:691c\:7d22\:30fb\:8981\:7d04\:3092\:30af\:30ea\:30fc\:30f3\:306b\:3059\:308b\:3002HTML \:3060\:3063\:305f\:5834\:5408\:306e\:307f\:539f\:6587\:3092 BodyRaw \:3068\:3057\:3066\:6e29\:5b58
+       (URL \:7b49\:306e\:6b20\:843d\:306b\:5099\:3048\:308b)\:3002\:5e73\:6587\:306f LF \:6b63\:898f\:5316\:306e\:307f\:3002\:30d8\:30eb\:30d1\:672a\:30ed\:30fc\:30c9\:6642\:306f\:7d20\:901a\:308a\:3002 *)
     {bodyStored, bodyWasHTML} = If[
        StringQ[body] && Length[DownValues[iSVUIHtmlToText]] > 0,
        With[{norm = iSVUINormalizeNewlines[body]},
          If[iSVUILooksLikeHTML[norm], {iSVUIHtmlToText[body], True}, {norm, False}]],
        {body, False}];
 
-    (* 配送 feature (§8.1.1, 配線(b)): raw header を fetch 時に parse し coarse feature だけ保存。
-       raw header 本体は snapshot に載せない (privacy)。mining 未ロード/raw header 無しは Missing。 *)
+    (* \:914d\:9001 feature (\[Section]8.1.1, \:914d\:7dda(b)): raw header \:3092 fetch \:6642\:306b parse \:3057 coarse feature \:3060\:3051\:4fdd\:5b58\:3002
+       raw header \:672c\:4f53\:306f snapshot \:306b\:8f09\:305b\:306a\:3044 (privacy)\:3002mining \:672a\:30ed\:30fc\:30c9/raw header \:7121\:3057\:306f Missing\:3002 *)
     mailDelivery = With[{rh = Lookup[record, "rawheader", Missing[]]},
       If[StringQ[rh] && rh =!= "" &&
          Length[Names["SourceVault`SourceVaultMiningMailHeaderObservation"]] > 0 &&
@@ -199,8 +199,8 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
             "SnapshotFeatures", Missing["NoFeatures"]], Missing["DeliveryParseFailed"]],
         Missing["NoRawHeader"]]];
 
-    (* body: 既定で暗号化 (PL fail-safe)。inline EncryptedPayload record。
-       Body=読める平文。HTML だった場合は原文を BodyRaw として併せて暗号化温存。 *)
+    (* body: \:65e2\:5b9a\:3067\:6697\:53f7\:5316 (PL fail-safe)\:3002inline EncryptedPayload record\:3002
+       Body=\:8aad\:3081\:308b\:5e73\:6587\:3002HTML \:3060\:3063\:305f\:5834\:5408\:306f\:539f\:6587\:3092 BodyRaw \:3068\:3057\:3066\:4f75\:305b\:3066\:6697\:53f7\:5316\:6e29\:5b58\:3002 *)
     bodyRef = If[StringQ[body] && OptionValue["StoreBody"] === "Encrypted",
        With[{put = SourceVault`SourceVaultEncryptedPut[
             If[TrueQ[bodyWasHTML],
@@ -211,7 +211,7 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
          If[Lookup[put, "Status", ""] === "Stored", put["Record"], Missing["EncryptFailed"]]],
        If[StringQ[body], Missing["NotStored"], Missing["NoBody"]]];
 
-    (* header: 既定平文 + token。EncryptHeaders->True で暗号化 record に移す。 *)
+    (* header: \:65e2\:5b9a\:5e73\:6587 + token\:3002EncryptHeaders->True \:3067\:6697\:53f7\:5316 record \:306b\:79fb\:3059\:3002 *)
     headerEnc = If[encHeaders && (StringQ[subject] || StringQ[from]),
        With[{put = SourceVault`SourceVaultEncryptedPut[
             <|"Subject" -> subject, "From" -> from, "To" -> to, "Cc" -> cc|>,
@@ -223,10 +223,10 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
     snapshot = <|
       "Type" -> "SourceVaultMailSnapshot", "SchemaVersion" -> 1,
       "RecordId" -> recId,
-      (* 送信者認証 (信頼 authserv-id の A-R のみ採用)。legacy maildb は A-R 無し
-         -> Source "Missing" -> sender-based loosening 不可。 *)
+      (* \:9001\:4fe1\:8005\:8a8d\:8a3c (\:4fe1\:983c authserv-id \:306e A-R \:306e\:307f\:63a1\:7528)\:3002legacy maildb \:306f A-R \:7121\:3057
+         -> Source "Missing" -> sender-based loosening \:4e0d\:53ef\:3002 *)
       "SenderAuthentication" -> SourceVault`SourceVaultSenderAuthentication[record],
-      (* 配送 coarse feature (raw header は載せない、§8.1.1)。delivery anomaly→metacog conflict 入力。 *)
+      (* \:914d\:9001 coarse feature (raw header \:306f\:8f09\:305b\:306a\:3044\:3001\[Section]8.1.1)\:3002delivery anomaly\[RightArrow]metacog conflict \:5165\:529b\:3002 *)
       "MailDelivery" -> mailDelivery,
       "MailSource" -> <|
          "Kind" -> "MaildbMonthlyFile", "MBox" -> mbox,
@@ -246,8 +246,8 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
          "AttachmentCount" -> iSVMDAttachmentCount[Lookup[record, "attachment", ""]],
          "Attachments" -> iSVMDAttachmentNames[Lookup[record, "attachment", ""]],
          "HasBody" -> StringQ[body],
-         (* 本文が HTML 由来か (ingest 時にテキスト化した)。原文は PayloadRefs.Body の
-            BodyRaw に暗号化温存。format フラグなので非機密 (公開メタ)。 *)
+         (* \:672c\:6587\:304c HTML \:7531\:6765\:304b (ingest \:6642\:306b\:30c6\:30ad\:30b9\:30c8\:5316\:3057\:305f)\:3002\:539f\:6587\:306f PayloadRefs.Body \:306e
+            BodyRaw \:306b\:6697\:53f7\:5316\:6e29\:5b58\:3002format \:30d5\:30e9\:30b0\:306a\:306e\:3067\:975e\:6a5f\:5bc6 (\:516c\:958b\:30e1\:30bf)\:3002 *)
          "BodyWasHTML" -> TrueQ[bodyWasHTML]|>,
       "AddressBookRefs" -> With[{
           fromIds = iSVMDIngestIds[from, mbox],
@@ -263,13 +263,13 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
          "PrivacyLevel" -> pl,
          "AccessTags" -> {}, "DenyTags" -> {},
          "Summary" -> Lookup[record, "summary", Missing["NotGenerated"]],
-         (* カテゴリ ($SourceVaultMailCategories トークン) と 〆切 (ISO 文字列、ローカル時刻意図)。
-            旧 maildb record には無いので LLM 派生 (iSVApplyDerived) で埋まる。 *)
+         (* \:30ab\:30c6\:30b4\:30ea ($SourceVaultMailCategories \:30c8\:30fc\:30af\:30f3) \:3068 \:3006\:5207 (ISO \:6587\:5b57\:5217\:3001\:30ed\:30fc\:30ab\:30eb\:6642\:523b\:610f\:56f3)\:3002
+            \:65e7 maildb record \:306b\:306f\:7121\:3044\:306e\:3067 LLM \:6d3e\:751f (iSVApplyDerived) \:3067\:57cb\:307e\:308b\:3002 *)
          "Category" -> Missing["NotGenerated"],
          "Deadline" -> Missing["NotGenerated"],
          "Priority" -> Lookup[record, "priority", Missing["NotGenerated"]],
-         (* 派生フィールド (PL/Priority/Summary) が LLM 等で確定済みか。
-            未確定 (新規 IMAP 取込で未処理) は "Pending" -> 後から増分バッチで処理。 *)
+         (* \:6d3e\:751f\:30d5\:30a3\:30fc\:30eb\:30c9 (PL/Priority/Summary) \:304c LLM \:7b49\:3067\:78ba\:5b9a\:6e08\:307f\:304b\:3002
+            \:672a\:78ba\:5b9a (\:65b0\:898f IMAP \:53d6\:8fbc\:3067\:672a\:51e6\:7406) \:306f "Pending" -> \:5f8c\:304b\:3089\:5897\:5206\:30d0\:30c3\:30c1\:3067\:51e6\:7406\:3002 *)
          "DerivedStatus" -> With[{sm = Lookup[record, "summary", Missing[]],
               pr = Lookup[record, "priority", Missing[]]},
             If[StringQ[sm] && StringTrim[sm] =!= "" && NumericQ[pr] && TrueQ[pr >= 0],
@@ -303,14 +303,14 @@ SourceVaultMailSnapshotDecryptBody[snapshot_Association] :=
         d]]];
 
 (* ---- snapshot store + search + persistence ----
-   永続化は mbox x 月でシャード分割: <root>/<mbox>/<yyyymm>.svmail
-   新着メール追加はその月のシャード(小)だけ書き換え -> Dropbox は変更分のみ同期。
-   単一ファイルだと 1 通追加で全体(数百MB)再同期になり破綻する。 *)
+   \:6c38\:7d9a\:5316\:306f mbox x \:6708\:3067\:30b7\:30e3\:30fc\:30c9\:5206\:5272: <root>/<mbox>/<yyyymm>.svmail
+   \:65b0\:7740\:30e1\:30fc\:30eb\:8ffd\:52a0\:306f\:305d\:306e\:6708\:306e\:30b7\:30e3\:30fc\:30c9(\:5c0f)\:3060\:3051\:66f8\:304d\:63db\:3048 -> Dropbox \:306f\:5909\:66f4\:5206\:306e\:307f\:540c\:671f\:3002
+   \:5358\:4e00\:30d5\:30a1\:30a4\:30eb\:3060\:3068 1 \:901a\:8ffd\:52a0\:3067\:5168\:4f53(\:6570\:767eMB)\:518d\:540c\:671f\:306b\:306a\:308a\:7834\:7dbb\:3059\:308b\:3002 *)
 If[! AssociationQ[$iSVMDStore], $iSVMDStore = <||>];          (* RecordId -> snapshot *)
 If[! AssociationQ[$iSVMDShardMembers], $iSVMDShardMembers = <||>]; (* "mbox/yyyymm" -> {RecordId..} *)
 If[! AssociationQ[$iSVMDDirtyShards], $iSVMDDirtyShards = <||>];   (* "mbox/yyyymm" -> True *)
 
-(* shard key = mbox + 年月 (mail Date の UTC ISO から)。Date 不明は "unknown"。 *)
+(* shard key = mbox + \:5e74\:6708 (mail Date \:306e UTC ISO \:304b\:3089)\:3002Date \:4e0d\:660e\:306f "unknown"\:3002 *)
 iSVMDShardKey[snapshot_] :=
   Module[{mbox, d, ym},
     mbox = Quiet@Check[snapshot["MailSource", "MBox"], "unknown"];
@@ -320,9 +320,9 @@ iSVMDShardKey[snapshot_] :=
        StringTake[d, 4] <> StringTake[d, {6, 7}], "unknown"];
     mbox <> "/" <> ym];
 
-(* IMAP の生メッセージ (キー "date") から、それが格納される shard key を、
-   実際の snapshot ([[iSVMDShardKey]]) と同一ロジックで算出する。
-   fetch 前に対象月シャードを先読みするために使う (Date 正規化は iSVMDToUTC で一致)。 *)
+(* IMAP \:306e\:751f\:30e1\:30c3\:30bb\:30fc\:30b8 (\:30ad\:30fc "date") \:304b\:3089\:3001\:305d\:308c\:304c\:683c\:7d0d\:3055\:308c\:308b shard key \:3092\:3001
+   \:5b9f\:969b\:306e snapshot ([[iSVMDShardKey]]) \:3068\:540c\:4e00\:30ed\:30b8\:30c3\:30af\:3067\:7b97\:51fa\:3059\:308b\:3002
+   fetch \:524d\:306b\:5bfe\:8c61\:6708\:30b7\:30e3\:30fc\:30c9\:3092\:5148\:8aad\:307f\:3059\:308b\:305f\:3081\:306b\:4f7f\:3046 (Date \:6b63\:898f\:5316\:306f iSVMDToUTC \:3067\:4e00\:81f4)\:3002 *)
 iSVMDShardKeyForMsg[mbox_String, m_Association] :=
   iSVMDShardKey[<|
      "MailSource" -> <|"MBox" -> mbox|>,
@@ -344,14 +344,14 @@ SourceVaultMailSnapshotPut[snapshot_Association, OptionsPattern[]] :=
 SourceVaultMailSnapshotGet[recordId_String] := Lookup[$iSVMDStore, recordId, Missing["NotFound"]];
 SourceVaultMailSnapshotList[] := Values[$iSVMDStore];
 
-(* DateObject / 日付文字列 / {y,m,d} / Automatic を {年,月,日} 整数リストに正規化する。
-   フィルタ境界 (ユーザ指定。ローカル意図) 用。失敗時は $Failed、Automatic はそのまま返す。 *)
+(* DateObject / \:65e5\:4ed8\:6587\:5b57\:5217 / {y,m,d} / Automatic \:3092 {\:5e74,\:6708,\:65e5} \:6574\:6570\:30ea\:30b9\:30c8\:306b\:6b63\:898f\:5316\:3059\:308b\:3002
+   \:30d5\:30a3\:30eb\:30bf\:5883\:754c (\:30e6\:30fc\:30b6\:6307\:5b9a\:3002\:30ed\:30fc\:30ab\:30eb\:610f\:56f3) \:7528\:3002\:5931\:6557\:6642\:306f $Failed\:3001Automatic \:306f\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002 *)
 iSVMDDayListOf[Automatic] := Automatic;
 iSVMDDayListOf[x_] := Quiet@Check[DateValue[x, {"Year", "Month", "Day"}], $Failed];
 
-(* メール保存日時 (UTC ISO8601 文字列) をローカル TZ ($TimeZone) の {年,月,日} に変換する。
-   保存は UTC だが表示・ユーザのフィルタはローカルなので、早朝メールが UTC では前日扱いに
-   なって取りこぼされるのを防ぐ。失敗時は素の DateValue にフォールバック。 *)
+(* \:30e1\:30fc\:30eb\:4fdd\:5b58\:65e5\:6642 (UTC ISO8601 \:6587\:5b57\:5217) \:3092\:30ed\:30fc\:30ab\:30eb TZ ($TimeZone) \:306e {\:5e74,\:6708,\:65e5} \:306b\:5909\:63db\:3059\:308b\:3002
+   \:4fdd\:5b58\:306f UTC \:3060\:304c\:8868\:793a\:30fb\:30e6\:30fc\:30b6\:306e\:30d5\:30a3\:30eb\:30bf\:306f\:30ed\:30fc\:30ab\:30eb\:306a\:306e\:3067\:3001\:65e9\:671d\:30e1\:30fc\:30eb\:304c UTC \:3067\:306f\:524d\:65e5\:6271\:3044\:306b
+   \:306a\:3063\:3066\:53d6\:308a\:3053\:307c\:3055\:308c\:308b\:306e\:3092\:9632\:3050\:3002\:5931\:6557\:6642\:306f\:7d20\:306e DateValue \:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3002 *)
 iSVMDMailDay[d_] :=
   Module[{do, r},
     do = Quiet@Check[DateObject[d], $Failed];
@@ -361,10 +361,10 @@ iSVMDMailDay[d_] :=
       $Failed];
     If[MatchQ[r, {_Integer, _Integer, _Integer}], r, iSVMDDayListOf[d]]];
 
-(* 日付フィルタ。fromDay/toDay は iSVMDDayListOf で正規化済みの {y,m,d} または Automatic。
-   日単位の包含比較なので DateFrom=DateTo=DateObject[{2026,1,10}] でも当日のメールが一致する。
-   旧実装は DateObject と ISO 文字列を OrderedQ で直接比較し、型不一致で常に空になっていた
-   (さらに DateTo を日付のみ指定すると当日の時刻付きメールが除外される包含バグもあった)。 *)
+(* \:65e5\:4ed8\:30d5\:30a3\:30eb\:30bf\:3002fromDay/toDay \:306f iSVMDDayListOf \:3067\:6b63\:898f\:5316\:6e08\:307f\:306e {y,m,d} \:307e\:305f\:306f Automatic\:3002
+   \:65e5\:5358\:4f4d\:306e\:5305\:542b\:6bd4\:8f03\:306a\:306e\:3067 DateFrom=DateTo=DateObject[{2026,1,10}] \:3067\:3082\:5f53\:65e5\:306e\:30e1\:30fc\:30eb\:304c\:4e00\:81f4\:3059\:308b\:3002
+   \:65e7\:5b9f\:88c5\:306f DateObject \:3068 ISO \:6587\:5b57\:5217\:3092 OrderedQ \:3067\:76f4\:63a5\:6bd4\:8f03\:3057\:3001\:578b\:4e0d\:4e00\:81f4\:3067\:5e38\:306b\:7a7a\:306b\:306a\:3063\:3066\:3044\:305f
+   (\:3055\:3089\:306b DateTo \:3092\:65e5\:4ed8\:306e\:307f\:6307\:5b9a\:3059\:308b\:3068\:5f53\:65e5\:306e\:6642\:523b\:4ed8\:304d\:30e1\:30fc\:30eb\:304c\:9664\:5916\:3055\:308c\:308b\:5305\:542b\:30d0\:30b0\:3082\:3042\:3063\:305f)\:3002 *)
 iSVMDDateInRange[snap_, fromDay_, toDay_] :=
   Module[{d, dDay},
     If[fromDay === Automatic && toDay === Automatic, Return[True]];
@@ -377,21 +377,21 @@ iSVMDDateInRange[snap_, fromDay_, toDay_] :=
       toDay === Automatic || ! MatchQ[toDay, {_Integer, _Integer, _Integer}] ||
         OrderedQ[{dDay, toDay}]]];
 
-(* ---- 派生カテゴリ語彙 (schema キーは英語固定、日本語は表示・入力同義語) ---- *)
+(* ---- \:6d3e\:751f\:30ab\:30c6\:30b4\:30ea\:8a9e\:5f59 (schema \:30ad\:30fc\:306f\:82f1\:8a9e\:56fa\:5b9a\:3001\:65e5\:672c\:8a9e\:306f\:8868\:793a\:30fb\:5165\:529b\:540c\:7fa9\:8a9e) ---- *)
 $SourceVaultMailCategories = {"InfoProvision", "AttendanceRequest", "TaskRequest",
    "Confirmation", "Report", "Notice", "Other"};
 
-(* 入力 (LLM 出力や検索オプション) をトークンへ正規化する。日本語同義語も受ける。
-   未知の値は Missing["UnknownCategory"]。 *)
+(* \:5165\:529b (LLM \:51fa\:529b\:3084\:691c\:7d22\:30aa\:30d7\:30b7\:30e7\:30f3) \:3092\:30c8\:30fc\:30af\:30f3\:3078\:6b63\:898f\:5316\:3059\:308b\:3002\:65e5\:672c\:8a9e\:540c\:7fa9\:8a9e\:3082\:53d7\:3051\:308b\:3002
+   \:672a\:77e5\:306e\:5024\:306f Missing["UnknownCategory"]\:3002 *)
 $iSVMDCategorySynonyms = <|
-   "情報提供" -> "InfoProvision", "情報" -> "InfoProvision", "案内" -> "InfoProvision",
-   "出席依頼" -> "AttendanceRequest", "会議出席依頼" -> "AttendanceRequest",
-   "出席" -> "AttendanceRequest", "日程調整" -> "AttendanceRequest",
-   "作業依頼" -> "TaskRequest", "仕事依頼" -> "TaskRequest", "仕事の依頼" -> "TaskRequest",
-   "作業の依頼" -> "TaskRequest", "依頼" -> "TaskRequest", "作業" -> "TaskRequest",
-   "確認" -> "Confirmation", "承認" -> "Confirmation", "確認依頼" -> "Confirmation",
-   "報告" -> "Report", "通知" -> "Notice", "一斉配信" -> "Notice", "広告" -> "Notice",
-   "その他" -> "Other"|>;
+   "\:60c5\:5831\:63d0\:4f9b" -> "InfoProvision", "\:60c5\:5831" -> "InfoProvision", "\:6848\:5185" -> "InfoProvision",
+   "\:51fa\:5e2d\:4f9d\:983c" -> "AttendanceRequest", "\:4f1a\:8b70\:51fa\:5e2d\:4f9d\:983c" -> "AttendanceRequest",
+   "\:51fa\:5e2d" -> "AttendanceRequest", "\:65e5\:7a0b\:8abf\:6574" -> "AttendanceRequest",
+   "\:4f5c\:696d\:4f9d\:983c" -> "TaskRequest", "\:4ed5\:4e8b\:4f9d\:983c" -> "TaskRequest", "\:4ed5\:4e8b\:306e\:4f9d\:983c" -> "TaskRequest",
+   "\:4f5c\:696d\:306e\:4f9d\:983c" -> "TaskRequest", "\:4f9d\:983c" -> "TaskRequest", "\:4f5c\:696d" -> "TaskRequest",
+   "\:78ba\:8a8d" -> "Confirmation", "\:627f\:8a8d" -> "Confirmation", "\:78ba\:8a8d\:4f9d\:983c" -> "Confirmation",
+   "\:5831\:544a" -> "Report", "\:901a\:77e5" -> "Notice", "\:4e00\:6589\:914d\:4fe1" -> "Notice", "\:5e83\:544a" -> "Notice",
+   "\:305d\:306e\:4ed6" -> "Other"|>;
 
 iSVMDNormalizeCategory[s_String] :=
   Module[{t = StringTrim[s], hit},
@@ -402,20 +402,20 @@ iSVMDNormalizeCategory[s_String] :=
     Lookup[$iSVMDCategorySynonyms, t, Missing["UnknownCategory"]]];
 iSVMDNormalizeCategory[_] := Missing["UnknownCategory"];
 
-(* 〆切文字列の正規化: "2026-06-19" / "2026-06-19 17:00" / "2026年6月19日 17時" 等を
-   ISO 風 "YYYY-MM-DD" または "YYYY-MM-DDTHH:MM:00" (ローカル時刻意図, TZ なし) に。
-   なし/解釈不能は Missing。 *)
+(* \:3006\:5207\:6587\:5b57\:5217\:306e\:6b63\:898f\:5316: "2026-06-19" / "2026-06-19 17:00" / "2026\:5e746\:670819\:65e5 17\:6642" \:7b49\:3092
+   ISO \:98a8 "YYYY-MM-DD" \:307e\:305f\:306f "YYYY-MM-DDTHH:MM:00" (\:30ed\:30fc\:30ab\:30eb\:6642\:523b\:610f\:56f3, TZ \:306a\:3057) \:306b\:3002
+   \:306a\:3057/\:89e3\:91c8\:4e0d\:80fd\:306f Missing\:3002 *)
 iSVMDNormalizeDeadline[s_String] :=
   Module[{t = StringTrim[s], m, y, mo, d, h, mi, pad},
     If[t === "" || StringMatchQ[t, "none" | "null" | "n/a" | "-", IgnoreCase -> True] ||
-       StringContainsQ[t, "なし"] || StringContainsQ[t, "無し"],
+       StringContainsQ[t, "\:306a\:3057"] || StringContainsQ[t, "\:7121\:3057"],
       Return[Missing["None"]]];
     m = StringCases[t,
        RegularExpression["(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})(?:[T\\s]+(\\d{1,2}):(\\d{2}))?"] :>
          {"$1", "$2", "$3", "$4", "$5"}];
     If[m === {},
       m = StringCases[t,
-         RegularExpression["(\\d{4})年\\s*(\\d{1,2})月\\s*(\\d{1,2})日(?:\\s*(\\d{1,2})[:時](\\d{1,2})?分?)?"] :>
+         RegularExpression["(\\d{4})\:5e74\\s*(\\d{1,2})\:6708\\s*(\\d{1,2})\:65e5(?:\\s*(\\d{1,2})[:\:6642](\\d{1,2})?\:5206?)?"] :>
            {"$1", "$2", "$3", "$4", "$5"}]];
     If[m === {}, Return[Missing["Unparsed"]]];
     {y, mo, d, h, mi} = First[m];
@@ -451,8 +451,8 @@ iSVMDCategoryOf[s_] := With[{c = Lookup[Lookup[s, "Derived", <||>], "Category", 
 iSVMDDeadlineOf[s_] := With[{dl = Lookup[Lookup[s, "Derived", <||>], "Deadline", Missing[]]},
    If[StringQ[dl], dl, Missing["NoDeadline"]]];
 
-(* 〆切の日付範囲 (日単位包含)。〆切はローカル時刻意図の素の ISO 文字列なので
-   メール Date と違い TZ 変換しない。〆切なしは範囲指定時に不一致。 *)
+(* \:3006\:5207\:306e\:65e5\:4ed8\:7bc4\:56f2 (\:65e5\:5358\:4f4d\:5305\:542b)\:3002\:3006\:5207\:306f\:30ed\:30fc\:30ab\:30eb\:6642\:523b\:610f\:56f3\:306e\:7d20\:306e ISO \:6587\:5b57\:5217\:306a\:306e\:3067
+   \:30e1\:30fc\:30eb Date \:3068\:9055\:3044 TZ \:5909\:63db\:3057\:306a\:3044\:3002\:3006\:5207\:306a\:3057\:306f\:7bc4\:56f2\:6307\:5b9a\:6642\:306b\:4e0d\:4e00\:81f4\:3002 *)
 iSVMDDeadlineInRange[s_, Automatic, Automatic] := True;
 iSVMDDeadlineInRange[s_, fromDay_, toDay_] :=
   Module[{dl = iSVMDDeadlineOf[s], dDay},
@@ -467,7 +467,7 @@ iSVMDDeadlineInRange[s_, fromDay_, toDay_] :=
 
 iSVMDSortKey[by_][s_] := Switch[by,
   "Priority", iSVMDPriority[s], "PrivacyLevel" | "Privacy", iSVMDPrivacy[s],
-  (* 〆切なしは昇順で末尾に来るよう番兵値 *)
+  (* \:3006\:5207\:306a\:3057\:306f\:6607\:9806\:3067\:672b\:5c3e\:306b\:6765\:308b\:3088\:3046\:756a\:5175\:5024 *)
   "Deadline", With[{dl = iSVMDDeadlineOf[s]}, If[StringQ[dl], dl, "9999-12-31T23:59:59"]],
   _, iSVMDSnapDate[s]];
 
@@ -478,7 +478,7 @@ SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
     toQ = OptionValue["To"]; mb = OptionValue["MBox"];
     df = iSVMDDayListOf[OptionValue["DateFrom"]]; dt = iSVMDDayListOf[OptionValue["DateTo"]];
     ha = OptionValue["HasAttachment"];
-    (* Category は日本語名でも受け、保存トークンへ正規化してから比較 *)
+    (* Category \:306f\:65e5\:672c\:8a9e\:540d\:3067\:3082\:53d7\:3051\:3001\:4fdd\:5b58\:30c8\:30fc\:30af\:30f3\:3078\:6b63\:898f\:5316\:3057\:3066\:304b\:3089\:6bd4\:8f03 *)
     cat = With[{c = OptionValue["Category"]},
        If[c === Automatic || c === All, Automatic,
          With[{n = iSVMDNormalizeCategory[ToString[c]]}, If[StringQ[n], n, ToString[c]]]]];
@@ -495,7 +495,7 @@ SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
              StringQ[#] && StringContainsQ[#, q, IgnoreCase -> True] &],
          fr === Automatic || (StringQ[Lookup[s["MailMetadataPublic"], "From", ""]] &&
             StringContainsQ[s["MailMetadataPublic"]["From"], fr, IgnoreCase -> True]),
-         (* 宛先フィルタ: To ヘッダ部分一致 (オーナー以外の特定個人宛の依頼を選べるように) *)
+         (* \:5b9b\:5148\:30d5\:30a3\:30eb\:30bf: To \:30d8\:30c3\:30c0\:90e8\:5206\:4e00\:81f4 (\:30aa\:30fc\:30ca\:30fc\:4ee5\:5916\:306e\:7279\:5b9a\:500b\:4eba\:5b9b\:306e\:4f9d\:983c\:3092\:9078\:3079\:308b\:3088\:3046\:306b) *)
          toQ === Automatic || (StringQ[Lookup[s["MailMetadataPublic"], "To", ""]] &&
             StringContainsQ[s["MailMetadataPublic"]["To"], toQ, IgnoreCase -> True]),
          fc === Automatic || Lookup[s["AddressBookRefs"], "FromContact", Null] === fc,
@@ -516,7 +516,7 @@ SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
     If[IntegerQ[lim] && lim >= 0, hits = Take[hits, UpTo[lim]]];
     hits];
 
-(* 一覧行 (低漏洩)。From は AddressBook 解決時は表示名 *)
+(* \:4e00\:89a7\:884c (\:4f4e\:6f0f\:6d29)\:3002From \:306f AddressBook \:89e3\:6c7a\:6642\:306f\:8868\:793a\:540d *)
 iSVMDFromDisplay[s_] :=
   Module[{fc, c, raw},
     fc = Lookup[s["AddressBookRefs"], "FromContact", Missing[]];
@@ -541,16 +541,16 @@ SourceVaultMailSummaryRow[s_Association] :=
     "BodyEncrypted" ->
       SourceVault`SourceVaultEncryptedRecordQ[Lookup[s["PayloadRefs"], "Body", <||>]]|>;
 
-(* View 結果が機密扱いか: PL >= 0.5 のメールを 1 通でも含めば機密
-   (フェイルセーフ: PL 欠落は 1.0 扱い)。全件 PL < 0.5 なら平文扱い。 *)
+(* View \:7d50\:679c\:304c\:6a5f\:5bc6\:6271\:3044\:304b: PL >= 0.5 \:306e\:30e1\:30fc\:30eb\:3092 1 \:901a\:3067\:3082\:542b\:3081\:3070\:6a5f\:5bc6
+   (\:30d5\:30a7\:30a4\:30eb\:30bb\:30fc\:30d5: PL \:6b20\:843d\:306f 1.0 \:6271\:3044)\:3002\:5168\:4ef6 PL < 0.5 \:306a\:3089\:5e73\:6587\:6271\:3044\:3002 *)
 iSVMDConfidentialQ[snaps_List] :=
   snaps =!= {} && TrueQ[Max[iSVMailProbePL /@ snaps] >= 0.5];
 
-(* 表示時の即時機密マーク (ClaudeCode 不在時のフォールバック):
-   View 評価の出力セルは評価中はまだ存在しないため、ワンショットの
-   スケジュールタスク (kernel idle 後に実行) で評価完了直後に
-   SourceVaultMarkConfidentialViewCells を走らせる (FE がある時のみ)。
-   ClaudeEval 直前の NBMakeContextPacket フックは最終防衛線として残る。 *)
+(* \:8868\:793a\:6642\:306e\:5373\:6642\:6a5f\:5bc6\:30de\:30fc\:30af (ClaudeCode \:4e0d\:5728\:6642\:306e\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af):
+   View \:8a55\:4fa1\:306e\:51fa\:529b\:30bb\:30eb\:306f\:8a55\:4fa1\:4e2d\:306f\:307e\:3060\:5b58\:5728\:3057\:306a\:3044\:305f\:3081\:3001\:30ef\:30f3\:30b7\:30e7\:30c3\:30c8\:306e
+   \:30b9\:30b1\:30b8\:30e5\:30fc\:30eb\:30bf\:30b9\:30af (kernel idle \:5f8c\:306b\:5b9f\:884c) \:3067\:8a55\:4fa1\:5b8c\:4e86\:76f4\:5f8c\:306b
+   SourceVaultMarkConfidentialViewCells \:3092\:8d70\:3089\:305b\:308b (FE \:304c\:3042\:308b\:6642\:306e\:307f)\:3002
+   ClaudeEval \:76f4\:524d\:306e NBMakeContextPacket \:30d5\:30c3\:30af\:306f\:6700\:7d42\:9632\:885b\:7dda\:3068\:3057\:3066\:6b8b\:308b\:3002 *)
 iSVMDScheduleConfidentialMark[snaps_List] :=
   Quiet@Check[
     If[TrueQ[$Notebooks] && iSVMDConfidentialQ[snaps],
@@ -562,13 +562,13 @@ iSVMDScheduleConfidentialMark[snaps_List] :=
     Null,
     Null];
 
-(* View 値の機密化 (ユーザー方針: View は機密値を返す関数として振る舞う)。
-   PL >= 0.5 のメールを含む結果は ClaudeCode`Confidential を通して返す:
-   入力セルの機密マーク + 出力セルの遅延マーク + 代入先変数 (mails 等) の
-   秘密変数登録 + CellEpilog 装着までやってくれるので、mails[[1]][[1]] の
-   ような派生値のセルも評価時に依存秘密として自動マークされる。
-   ClaudeCode 未ロード時はセルマークのみのフォールバック。
-   (将来的には値自体が Confidential プロパティを運ぶ多値化が筋だが当座はこれ) *)
+(* View \:5024\:306e\:6a5f\:5bc6\:5316 (\:30e6\:30fc\:30b6\:30fc\:65b9\:91dd: View \:306f\:6a5f\:5bc6\:5024\:3092\:8fd4\:3059\:95a2\:6570\:3068\:3057\:3066\:632f\:308b\:821e\:3046)\:3002
+   PL >= 0.5 \:306e\:30e1\:30fc\:30eb\:3092\:542b\:3080\:7d50\:679c\:306f ClaudeCode`Confidential \:3092\:901a\:3057\:3066\:8fd4\:3059:
+   \:5165\:529b\:30bb\:30eb\:306e\:6a5f\:5bc6\:30de\:30fc\:30af + \:51fa\:529b\:30bb\:30eb\:306e\:9045\:5ef6\:30de\:30fc\:30af + \:4ee3\:5165\:5148\:5909\:6570 (mails \:7b49) \:306e
+   \:79d8\:5bc6\:5909\:6570\:767b\:9332 + CellEpilog \:88c5\:7740\:307e\:3067\:3084\:3063\:3066\:304f\:308c\:308b\:306e\:3067\:3001mails[[1]][[1]] \:306e
+   \:3088\:3046\:306a\:6d3e\:751f\:5024\:306e\:30bb\:30eb\:3082\:8a55\:4fa1\:6642\:306b\:4f9d\:5b58\:79d8\:5bc6\:3068\:3057\:3066\:81ea\:52d5\:30de\:30fc\:30af\:3055\:308c\:308b\:3002
+   ClaudeCode \:672a\:30ed\:30fc\:30c9\:6642\:306f\:30bb\:30eb\:30de\:30fc\:30af\:306e\:307f\:306e\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3002
+   (\:5c06\:6765\:7684\:306b\:306f\:5024\:81ea\:4f53\:304c Confidential \:30d7\:30ed\:30d1\:30c6\:30a3\:3092\:904b\:3076\:591a\:5024\:5316\:304c\:7b4b\:3060\:304c\:5f53\:5ea7\:306f\:3053\:308c) *)
 iSVMDWrapConfidential[result_, snaps_List] :=
   Which[
     ! iSVMDConfidentialQ[snaps], result,
@@ -585,8 +585,8 @@ Options[SourceVaultMailDataset] = Options[SourceVaultSearchMailSnapshots];
 SourceVaultMailDataset[query_String : "", opts : OptionsPattern[]] :=
   Dataset[SourceVaultMailSearchSummary[query, opts]];
 
-(* byte-exact 永続化: snapshot は暗号 body record を含むので、復号 round-trip 保証のため
-   BinarySerialize+Base64 の 1 行/snapshot。シャード = <root>/<mbox>/<yyyymm>.svmail。 *)
+(* byte-exact \:6c38\:7d9a\:5316: snapshot \:306f\:6697\:53f7 body record \:3092\:542b\:3080\:306e\:3067\:3001\:5fa9\:53f7 round-trip \:4fdd\:8a3c\:306e\:305f\:3081
+   BinarySerialize+Base64 \:306e 1 \:884c/snapshot\:3002\:30b7\:30e3\:30fc\:30c9 = <root>/<mbox>/<yyyymm>.svmail\:3002 *)
 SourceVaultMailStoreRoot[] :=
   If[StringQ[$SourceVaultMailStoreRoot], $SourceVaultMailStoreRoot,
      FileNameJoin[{Quiet@Check[SourceVault`$SourceVaultRoots["PrivateVault"], $TemporaryDirectory],
@@ -597,7 +597,7 @@ SourceVaultMailShardPath[shardKey_String] :=
   FileNameJoin[{SourceVaultMailStoreRoot[],
      Sequence @@ (StringSplit[shardKey, "/"] /. {m_, y_} :> {m, y <> ".svmail"})}];
 
-(* 旧単一ファイル (移行用に検出) *)
+(* \:65e7\:5358\:4e00\:30d5\:30a1\:30a4\:30eb (\:79fb\:884c\:7528\:306b\:691c\:51fa) *)
 SourceVaultMailStorePath[] := FileNameJoin[{SourceVaultMailStoreRoot[], "snapshots.svmail"}];
 
 iSVMDWriteShard[shardKey_String, rids_List] :=
@@ -616,7 +616,7 @@ iSVMDWriteShard[shardKey_String, rids_List] :=
         Scan[BinaryWrite[strm, StringToByteArray[# <> "\n", "ASCII"]] &, lines];
         Close[strm]; Length[lines]],
       $Failed];
-    (* 軽量メタデータ索引 sidecar も同時更新 (本文をロードせず検索するため) *)
+    (* \:8efd\:91cf\:30e1\:30bf\:30c7\:30fc\:30bf\:7d22\:5f15 sidecar \:3082\:540c\:6642\:66f4\:65b0 (\:672c\:6587\:3092\:30ed\:30fc\:30c9\:305b\:305a\:691c\:7d22\:3059\:308b\:305f\:3081) *)
     iSVMDWriteIndexFile[ipath, (iSVMDIndexRow[$iSVMDStore[#]] &) /@ keep];
     res];
 
@@ -636,10 +636,10 @@ iSVMDReadShardFile[path_String] :=
     Select[snaps, AssociationQ]];
 
 (* ============================================================
-   メール操作の記録 (開封回数 / 返信済) ── RecordId キーのサイドカー JSON。
-   暗号シャードを毎回書き換えない (開封は高頻度)。<root>/interaction.json。
-   Dropbox 共有なので複数 PC でも累積する (書込前に再読込してマージ)。
-   本文・ヘッダは一切含めない (RecordId と回数・日時のみ)。
+   \:30e1\:30fc\:30eb\:64cd\:4f5c\:306e\:8a18\:9332 (\:958b\:5c01\:56de\:6570 / \:8fd4\:4fe1\:6e08) \[HorizontalLine]\[HorizontalLine] RecordId \:30ad\:30fc\:306e\:30b5\:30a4\:30c9\:30ab\:30fc JSON\:3002
+   \:6697\:53f7\:30b7\:30e3\:30fc\:30c9\:3092\:6bce\:56de\:66f8\:304d\:63db\:3048\:306a\:3044 (\:958b\:5c01\:306f\:9ad8\:983b\:5ea6)\:3002<root>/interaction.json\:3002
+   Dropbox \:5171\:6709\:306a\:306e\:3067\:8907\:6570 PC \:3067\:3082\:7d2f\:7a4d\:3059\:308b (\:66f8\:8fbc\:524d\:306b\:518d\:8aad\:8fbc\:3057\:3066\:30de\:30fc\:30b8)\:3002
+   \:672c\:6587\:30fb\:30d8\:30c3\:30c0\:306f\:4e00\:5207\:542b\:3081\:306a\:3044 (RecordId \:3068\:56de\:6570\:30fb\:65e5\:6642\:306e\:307f)\:3002
    ============================================================ *)
 If[! ValueQ[$iSVMDInteraction], $iSVMDInteraction = <||>];
 If[! ValueQ[$iSVMDInteractionLoaded], $iSVMDInteractionLoaded = False];
@@ -682,7 +682,7 @@ iSVMDRepliedCountOf[_] := 0;
 iSVMDRepliedAtOf[rid_String] :=
   With[{a = Lookup[iSVMDInteractionGet[rid], "RepliedAt", ""]}, If[StringQ[a], a, ""]];
 
-(* 開封を記録 (書込前に再読込して他セッションの値とマージ)。返り値: 更新後の回数 *)
+(* \:958b\:5c01\:3092\:8a18\:9332 (\:66f8\:8fbc\:524d\:306b\:518d\:8aad\:8fbc\:3057\:3066\:4ed6\:30bb\:30c3\:30b7\:30e7\:30f3\:306e\:5024\:3068\:30de\:30fc\:30b8)\:3002\:8fd4\:308a\:5024: \:66f4\:65b0\:5f8c\:306e\:56de\:6570 *)
 iSVMDRecordOpen[rid_String] /; rid =!= "" :=
   (iSVMDInteractionLoad[];
    Module[{e = iSVMDInteractionGet[rid], n},
@@ -692,7 +692,7 @@ iSVMDRecordOpen[rid_String] /; rid =!= "" :=
      iSVMDInteractionSave[]; n]);
 iSVMDRecordOpen[_] := 0;
 
-(* 返信送信を記録。返り値: 更新後の返信回数 *)
+(* \:8fd4\:4fe1\:9001\:4fe1\:3092\:8a18\:9332\:3002\:8fd4\:308a\:5024: \:66f4\:65b0\:5f8c\:306e\:8fd4\:4fe1\:56de\:6570 *)
 iSVMDRecordReplied[rid_String] /; rid =!= "" :=
   (iSVMDInteractionLoad[];
    Module[{e = iSVMDInteractionGet[rid], n},
@@ -706,14 +706,14 @@ SourceVaultMailInteractionStats[rid_String] := iSVMDInteractionGet[rid];
 SourceVaultMailInteractionStats[] := (iSVMDInteractionLoad[]; $iSVMDInteraction);
 
 (* ============================================================
-   軽量メタデータ索引 (sidecar/shard) ── 本文暗号文をロードせず検索する。
-   各 shard <root>/<mbox>/<yyyymm>.svmail と並べて
-   <root>/<mbox>/<yyyymm>.svmailidx を持つ。1 行 = BinarySerialize した索引行
-   (SummaryRow 形 + Summary + FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey)。
-   PayloadRefs (本文・ヘッダ暗号文) は一切含めない ── 索引に入るのは既に shard 内で
-   at-rest 平文のメタ/サマリーのみなので新たな露出区分は増えない。release gate は
-   各行の PrivacyLevel により MCP 層 (B3) が従来どおり cloud 宛を gate する。
-   shard 単位なので Dropbox 同期も新着のあった月の sidecar だけで済む。
+   \:8efd\:91cf\:30e1\:30bf\:30c7\:30fc\:30bf\:7d22\:5f15 (sidecar/shard) \[HorizontalLine]\[HorizontalLine] \:672c\:6587\:6697\:53f7\:6587\:3092\:30ed\:30fc\:30c9\:305b\:305a\:691c\:7d22\:3059\:308b\:3002
+   \:5404 shard <root>/<mbox>/<yyyymm>.svmail \:3068\:4e26\:3079\:3066
+   <root>/<mbox>/<yyyymm>.svmailidx \:3092\:6301\:3064\:30021 \:884c = BinarySerialize \:3057\:305f\:7d22\:5f15\:884c
+   (SummaryRow \:5f62 + Summary + FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey)\:3002
+   PayloadRefs (\:672c\:6587\:30fb\:30d8\:30c3\:30c0\:6697\:53f7\:6587) \:306f\:4e00\:5207\:542b\:3081\:306a\:3044 \[HorizontalLine]\[HorizontalLine] \:7d22\:5f15\:306b\:5165\:308b\:306e\:306f\:65e2\:306b shard \:5185\:3067
+   at-rest \:5e73\:6587\:306e\:30e1\:30bf/\:30b5\:30de\:30ea\:30fc\:306e\:307f\:306a\:306e\:3067\:65b0\:305f\:306a\:9732\:51fa\:533a\:5206\:306f\:5897\:3048\:306a\:3044\:3002release gate \:306f
+   \:5404\:884c\:306e PrivacyLevel \:306b\:3088\:308a MCP \:5c64 (B3) \:304c\:5f93\:6765\:3069\:304a\:308a cloud \:5b9b\:3092 gate \:3059\:308b\:3002
+   shard \:5358\:4f4d\:306a\:306e\:3067 Dropbox \:540c\:671f\:3082\:65b0\:7740\:306e\:3042\:3063\:305f\:6708\:306e sidecar \:3060\:3051\:3067\:6e08\:3080\:3002
    ============================================================ *)
 
 iSVMDIndexExt = ".svmailidx";
@@ -727,13 +727,13 @@ iSVMDIndexFiles[mbox_ : All] :=
     files = If[DirectoryQ[root], FileNames["*" <> iSVMDIndexExt, root, 2], {}];
     If[mbox === All, files, Select[files, FileNameTake[DirectoryName[#]] === mbox &]]];
 
-(* 索引行: snapshot から低漏洩投影。本文/暗号文 (PayloadRefs) は含めない。 *)
+(* \:7d22\:5f15\:884c: snapshot \:304b\:3089\:4f4e\:6f0f\:6d29\:6295\:5f71\:3002\:672c\:6587/\:6697\:53f7\:6587 (PayloadRefs) \:306f\:542b\:3081\:306a\:3044\:3002 *)
 iSVMDIndexRow[snap_Association] :=
   Module[{md = Lookup[snap, "MailMetadataPublic", <||>], dv = Lookup[snap, "Derived", <||>]},
     Join[SourceVaultMailSummaryRow[snap], <|
       "Summary" -> Lookup[dv, "Summary", Missing["NotGenerated"]],
-      (* 認証済み (SourceVault 管理 Derived) AccessTags を索引へ surface し MCP scope gate に使う。
-         本文を読まずに索引だけで scope filter できる。既定 {} (= untagged)。 *)
+      (* \:8a8d\:8a3c\:6e08\:307f (SourceVault \:7ba1\:7406 Derived) AccessTags \:3092\:7d22\:5f15\:3078 surface \:3057 MCP scope gate \:306b\:4f7f\:3046\:3002
+         \:672c\:6587\:3092\:8aad\:307e\:305a\:306b\:7d22\:5f15\:3060\:3051\:3067 scope filter \:3067\:304d\:308b\:3002\:65e2\:5b9a {} (= untagged)\:3002 *)
       "AccessTags" -> With[{at = Lookup[dv, "AccessTags", {}]}, If[ListQ[at], at, {}]],
       "FromRaw" -> Lookup[md, "From", Missing[]],
       "ToRaw" -> Lookup[md, "To", Missing[]],
@@ -764,7 +764,7 @@ iSVMDReadIndexFile[path_String] :=
 SourceVaultMailIndexedCount[mbox_ : All] :=
   Total[(Length[iSVMDReadIndexFile[#]]) & /@ iSVMDIndexFiles[mbox]];
 
-(* RecordId 1 件を索引から引く (本体ロードなし)。索引ファイルを順次走査。 *)
+(* RecordId 1 \:4ef6\:3092\:7d22\:5f15\:304b\:3089\:5f15\:304f (\:672c\:4f53\:30ed\:30fc\:30c9\:306a\:3057)\:3002\:7d22\:5f15\:30d5\:30a1\:30a4\:30eb\:3092\:9806\:6b21\:8d70\:67fb\:3002 *)
 SourceVaultMailIndexGet[recordId_String] :=
   Module[{files = iSVMDIndexFiles[], hit = Missing["NotFound"], i = 1, r},
     While[i <= Length[files] && MissingQ[hit],
@@ -774,8 +774,8 @@ SourceVaultMailIndexGet[recordId_String] :=
       i++];
     hit];
 
-(* 索引再生成: 各 shard を一時的に読み込んで索引 sidecar を書く ($iSVMDStore は不変)。
-   既存 .svmail からの初回構築・再構築に使う。 *)
+(* \:7d22\:5f15\:518d\:751f\:6210: \:5404 shard \:3092\:4e00\:6642\:7684\:306b\:8aad\:307f\:8fbc\:3093\:3067\:7d22\:5f15 sidecar \:3092\:66f8\:304f ($iSVMDStore \:306f\:4e0d\:5909)\:3002
+   \:65e2\:5b58 .svmail \:304b\:3089\:306e\:521d\:56de\:69cb\:7bc9\:30fb\:518d\:69cb\:7bc9\:306b\:4f7f\:3046\:3002 *)
 SourceVaultMailRebuildMetadataIndex[mbox_ : All] :=
   Module[{shards, nShards = 0, total = 0},
     shards = SourceVaultMailAvailableShards[mbox];
@@ -789,7 +789,7 @@ SourceVaultMailRebuildMetadataIndex[mbox_ : All] :=
     <|"Status" -> "Rebuilt", "Shards" -> nShards, "Rows" -> total,
       "Root" -> SourceVaultMailStoreRoot[]|>];
 
-(* ---- 索引行ベース (flat row) の述語/ソート: snapshot 述語の index 版 ---- *)
+(* ---- \:7d22\:5f15\:884c\:30d9\:30fc\:30b9 (flat row) \:306e\:8ff0\:8a9e/\:30bd\:30fc\:30c8: snapshot \:8ff0\:8a9e\:306e index \:7248 ---- *)
 iSVMDIxPriority[row_] := iSVMDNum[Lookup[row, "Priority", Missing[]], -Infinity];
 iSVMDIxPrivacy[row_] := iSVMDNum[Lookup[row, "PrivacyLevel", Missing[]], 0];
 iSVMDIxDeadlineOf[row_] := With[{dl = Lookup[row, "Deadline", Missing[]]},
@@ -853,8 +853,8 @@ SourceVaultMailSearchIndex[query_String : "", OptionsPattern[]] :=
          minP === Automatic || iSVMDIxPriority[r] >= minP, maxP === Automatic || iSVMDIxPriority[r] <= maxP,
          minPr === Automatic || iSVMDIxPrivacy[r] >= minPr, maxPr === Automatic || iSVMDIxPrivacy[r] <= maxPr,
          iSVMDIxDateInRange[r, df, dt]]]];
-    (* RecordId は主キー: 同一メールが複数 sidecar 行に重複していても 1 行に
-       (再取込で日付バケツが変わり別 shard の sidecar に旧行が残るケース等) *)
+    (* RecordId \:306f\:4e3b\:30ad\:30fc: \:540c\:4e00\:30e1\:30fc\:30eb\:304c\:8907\:6570 sidecar \:884c\:306b\:91cd\:8907\:3057\:3066\:3044\:3066\:3082 1 \:884c\:306b
+       (\:518d\:53d6\:8fbc\:3067\:65e5\:4ed8\:30d0\:30b1\:30c4\:304c\:5909\:308f\:308a\:5225 shard \:306e sidecar \:306b\:65e7\:884c\:304c\:6b8b\:308b\:30b1\:30fc\:30b9\:7b49) *)
     hits = DeleteDuplicatesBy[hits, Lookup[#, "RecordId", Missing[]] &];
     by = OptionValue["SortBy"] /. Automatic -> If[TrueQ[OptionValue["Newest"]], "Date", None];
     If[by =!= None,
@@ -883,7 +883,7 @@ SourceVaultMailStoreLoad[] :=
     root = SourceVaultMailStoreRoot[];
     $iSVMDStore = <||>; $iSVMDShardMembers = <||>; $iSVMDDirtyShards = <||>; $iSVMDLoadedShards = <||>;
     files = If[DirectoryQ[root], FileNames["*.svmail", root, 2], {}];
-    (* シャードは root/mbox/<yyyymm>.svmail。旧単一ファイル snapshots.svmail は除外 (移行対象)。 *)
+    (* \:30b7\:30e3\:30fc\:30c9\:306f root/mbox/<yyyymm>.svmail\:3002\:65e7\:5358\:4e00\:30d5\:30a1\:30a4\:30eb snapshots.svmail \:306f\:9664\:5916 (\:79fb\:884c\:5bfe\:8c61)\:3002 *)
     files = Select[files, FileNameTake[#] =!= "snapshots.svmail" &];
     all = Join @@ (iSVMDReadShardFile /@ files);
     Scan[iSVMDIndexSnapshot, all];
@@ -891,7 +891,7 @@ SourceVaultMailStoreLoad[] :=
     <|"Status" -> "Loaded", "Root" -> root, "Shards" -> Length[files],
       "Count" -> Length[$iSVMDStore]|>];
 
-(* ---- インクリメンタル(遅延)ロード ---- *)
+(* ---- \:30a4\:30f3\:30af\:30ea\:30e1\:30f3\:30bf\:30eb(\:9045\:5ef6)\:30ed\:30fc\:30c9 ---- *)
 SourceVaultMailLoadedCount[] := Length[$iSVMDStore];
 
 SourceVaultMailUnloadAll[] := (
@@ -938,7 +938,7 @@ SourceVaultMailEnsureLoaded[mbox_String, period_ : Automatic] :=
     <|"Status" -> "Ensured", "MBox" -> mbox, "Period" -> period,
       "Shards" -> Length[keys], "NewlyLoaded" -> newly, "InMemory" -> Length[$iSVMDStore]|>];
 
-(* 旧単一ファイル -> 月次シャードへ移行。完了後は旧ファイルを .bak にリネーム。 *)
+(* \:65e7\:5358\:4e00\:30d5\:30a1\:30a4\:30eb -> \:6708\:6b21\:30b7\:30e3\:30fc\:30c9\:3078\:79fb\:884c\:3002\:5b8c\:4e86\:5f8c\:306f\:65e7\:30d5\:30a1\:30a4\:30eb\:3092 .bak \:306b\:30ea\:30cd\:30fc\:30e0\:3002 *)
 SourceVaultMailMigrateToShards[] :=
   Module[{old, snaps, sv},
     old = SourceVaultMailStorePath[];
@@ -963,16 +963,16 @@ SourceVaultImportMaildbFile[file_String, mbox_String, opts : OptionsPattern[]] :
        ListQ[db], db, AssociationQ[db], {db}, True, {}];
     records = Select[records, AssociationQ];
     fromOpts = FilterRules[{opts}, Options[SourceVaultMailSnapshotFromMaildb]];
-    iSVMDIdentityEnsureLoaded[];  (* 識別子の既存を上書きしないよう先に load *)
+    iSVMDIdentityEnsureLoaded[];  (* \:8b58\:5225\:5b50\:306e\:65e2\:5b58\:3092\:4e0a\:66f8\:304d\:3057\:306a\:3044\:3088\:3046\:5148\:306b load *)
     snaps = SourceVaultMailSnapshotFromMaildb[#, mbox, Sequence @@ fromOpts] & /@ records;
-    (* 常に in-kernel store へ put (冪等)。Persist はディスク保存のみ制御。 *)
+    (* \:5e38\:306b in-kernel store \:3078 put (\:51aa\:7b49)\:3002Persist \:306f\:30c7\:30a3\:30b9\:30af\:4fdd\:5b58\:306e\:307f\:5236\:5fa1\:3002 *)
     (SourceVaultMailSnapshotPut[#, "Persist" -> False] &) /@ snaps;
     If[TrueQ[OptionValue["Persist"]], SourceVaultMailStoreSave[]; iSVMDIdentitySaveSafe[]];
     <|"Status" -> "Ok", "MBox" -> mbox, "Count" -> Length[snaps],
       "Stored" -> Length[$iSVMDStore],
       "Persisted" -> TrueQ[OptionValue["Persist"]], "Snapshots" -> snaps|>];
 
-(* 既存 snapshot の平文 From/To/Cc から識別子を一括生成 (再取込不要)。 *)
+(* \:65e2\:5b58 snapshot \:306e\:5e73\:6587 From/To/Cc \:304b\:3089\:8b58\:5225\:5b50\:3092\:4e00\:62ec\:751f\:6210 (\:518d\:53d6\:8fbc\:4e0d\:8981)\:3002 *)
 Options[SourceVaultIdentityBackfillFromMail] = {"Persist" -> True};
 SourceVaultIdentityBackfillFromMail[OptionsPattern[]] :=
   Module[{snaps, before, n = 0},
@@ -994,18 +994,18 @@ SourceVaultIdentityBackfillFromMail[OptionsPattern[]] :=
       "Persisted" -> TrueQ[OptionValue["Persist"]]|>];
 
 (* ============================================================
-   SourceVaultSummaries 横断検索 provider (mail)
-   ディスク索引 (.svmailidx) のみを走査し本文暗号文をロードせず共通スキーマ行を返す。
-   eagle/sources と同じ共通スキーマ <|Kind,Id,URI,Title,Authors,Published,Summary,
-   URL,File,Date,PrivacyLevel|> に揃え、JoinAcross / 総検索で混在検索できるようにする。
-   類似項目は同名 (Title=件名, Summary=要約, Date, PrivacyLevel, URI)、メール固有値は
-   別 API に残す。行ごとに PrivacyLevel を出すので SourceVaultSummaries の出力セルは
-   iSVCatalogCellMaxPLFromText により最大 PL でマークされ、高 PL メールを含む結果は
-   cloud へ出ない (fail-safe: PL 欠落 = 1.0)。
+   SourceVaultSummaries \:6a2a\:65ad\:691c\:7d22 provider (mail)
+   \:30c7\:30a3\:30b9\:30af\:7d22\:5f15 (.svmailidx) \:306e\:307f\:3092\:8d70\:67fb\:3057\:672c\:6587\:6697\:53f7\:6587\:3092\:30ed\:30fc\:30c9\:305b\:305a\:5171\:901a\:30b9\:30ad\:30fc\:30de\:884c\:3092\:8fd4\:3059\:3002
+   eagle/sources \:3068\:540c\:3058\:5171\:901a\:30b9\:30ad\:30fc\:30de <|Kind,Id,URI,Title,Authors,Published,Summary,
+   URL,File,Date,PrivacyLevel|> \:306b\:63c3\:3048\:3001JoinAcross / \:7dcf\:691c\:7d22\:3067\:6df7\:5728\:691c\:7d22\:3067\:304d\:308b\:3088\:3046\:306b\:3059\:308b\:3002
+   \:985e\:4f3c\:9805\:76ee\:306f\:540c\:540d (Title=\:4ef6\:540d, Summary=\:8981\:7d04, Date, PrivacyLevel, URI)\:3001\:30e1\:30fc\:30eb\:56fa\:6709\:5024\:306f
+   \:5225 API \:306b\:6b8b\:3059\:3002\:884c\:3054\:3068\:306b PrivacyLevel \:3092\:51fa\:3059\:306e\:3067 SourceVaultSummaries \:306e\:51fa\:529b\:30bb\:30eb\:306f
+   iSVCatalogCellMaxPLFromText \:306b\:3088\:308a\:6700\:5927 PL \:3067\:30de\:30fc\:30af\:3055\:308c\:3001\:9ad8 PL \:30e1\:30fc\:30eb\:3092\:542b\:3080\:7d50\:679c\:306f
+   cloud \:3078\:51fa\:306a\:3044 (fail-safe: PL \:6b20\:843d = 1.0)\:3002
    ============================================================ *)
 
-(* mail の正準 SourceVault URI (sv://record/svmail-<id>。mcp の iSVMailOwnsURIQ /
-   iSVMailAdapterResolve が解決する形)。RecordId は既に "svmail-" 接頭辞付き。 *)
+(* mail \:306e\:6b63\:6e96 SourceVault URI (sv://record/svmail-<id>\:3002mcp \:306e iSVMailOwnsURIQ /
+   iSVMailAdapterResolve \:304c\:89e3\:6c7a\:3059\:308b\:5f62)\:3002RecordId \:306f\:65e2\:306b "svmail-" \:63a5\:982d\:8f9e\:4ed8\:304d\:3002 *)
 iSVMDMailURI[recordId_String] := "sv://record/" <> recordId;
 iSVMDMailURI[_] := Missing["NoURI"];
 
@@ -1034,13 +1034,13 @@ iSVMDCommonRows[query_String, opts_Association] :=
             "URL" -> "",
             "File" -> "",
             "Date" -> If[StringQ[date], date, ToString[date]],
-            (* fail-safe: PL 欠落は 1.0 (cloud 非送信側に倒す) *)
+            (* fail-safe: PL \:6b20\:843d\:306f 1.0 (cloud \:975e\:9001\:4fe1\:5074\:306b\:5012\:3059) *)
             "PrivacyLevel" -> If[NumericQ[pl], N[pl], 1.0]|>]],
       Select[rows, AssociationQ]]];
 iSVMDCommonRows[query_String] := iSVMDCommonRows[query, <||>];
 
-(* 横断検索 Grid の mail 行タイトルクリック: 低漏洩ヘッダ + URI をウインドウ表示
-   (本文・暗号文は読まない)。全文/サマリーは mail 専用 API (機密ラップ付き) を使う。 *)
+(* \:6a2a\:65ad\:691c\:7d22 Grid \:306e mail \:884c\:30bf\:30a4\:30c8\:30eb\:30af\:30ea\:30c3\:30af: \:4f4e\:6f0f\:6d29\:30d8\:30c3\:30c0 + URI \:3092\:30a6\:30a4\:30f3\:30c9\:30a6\:8868\:793a
+   (\:672c\:6587\:30fb\:6697\:53f7\:6587\:306f\:8aad\:307e\:306a\:3044)\:3002\:5168\:6587/\:30b5\:30de\:30ea\:30fc\:306f mail \:5c02\:7528 API (\:6a5f\:5bc6\:30e9\:30c3\:30d7\:4ed8\:304d) \:3092\:4f7f\:3046\:3002 *)
 iSVMDShowMailInfo[recordId_String] :=
   Module[{r = SourceVaultMailIndexGet[recordId]},
     If[! AssociationQ[r],
@@ -1057,8 +1057,8 @@ iSVMDShowMailInfo[recordId_String] :=
       Null];
     <|"Status" -> "Opened", "RecordId" -> recordId|>];
 
-(* provider / 行アクション登録 (eagle と同じ枠組み・Association ガード付き。
-   SourceVault.wl 未ロードの maildb 単体ロードでも落ちない)。 *)
+(* provider / \:884c\:30a2\:30af\:30b7\:30e7\:30f3\:767b\:9332 (eagle \:3068\:540c\:3058\:67a0\:7d44\:307f\:30fbAssociation \:30ac\:30fc\:30c9\:4ed8\:304d\:3002
+   SourceVault.wl \:672a\:30ed\:30fc\:30c9\:306e maildb \:5358\:4f53\:30ed\:30fc\:30c9\:3067\:3082\:843d\:3061\:306a\:3044)\:3002 *)
 If[! AssociationQ[$SourceVaultSummaryProviders], $SourceVaultSummaryProviders = <||>];
 $SourceVaultSummaryProviders["mail"] = iSVMDCommonRows;
 If[! AssociationQ[$iSVRowTitleActions], $iSVRowTitleActions = <||>];
@@ -1069,70 +1069,72 @@ EndPackage[];
 
 
 (* ::Package:: *)
+(**)
+
 
 (* ============================================================
-   SourceVault_imap.wl -- IMAP 新着取得 + 派生 (PL/優先度/概要) の後処理
+   SourceVault_imap.wl -- IMAP \:65b0\:7740\:53d6\:5f97 + \:6d3e\:751f (PL/\:512a\:5148\:5ea6/\:6982\:8981) \:306e\:5f8c\:51e6\:7406
    This file is encoded in UTF-8.
 
-   設計の柱 (ユーザー要望):
-   - 取り込み (IMAP) と 派生処理 (ローカル LLM) を完全分離。
-     既定では取り込み時に LLM を回さず高速に保存し、派生は後から増分バッチ。
-   - 中断耐性: バッチは CheckpointEvery 件ごとに dirty シャードを保存。
-     強制終了しても "Processed" 済みは pending に戻らず再処理されない。
-   - 外部依存 (IMAP / LLM) は注入可能 ("MessageSource" / "Inferencer")。
-     既定は実 Python imaplib / 実 LM Studio。テストは fake を注入して headless 検証。
+   \:8a2d\:8a08\:306e\:67f1 (\:30e6\:30fc\:30b6\:30fc\:8981\:671b):
+   - \:53d6\:308a\:8fbc\:307f (IMAP) \:3068 \:6d3e\:751f\:51e6\:7406 (\:30ed\:30fc\:30ab\:30eb LLM) \:3092\:5b8c\:5168\:5206\:96e2\:3002
+     \:65e2\:5b9a\:3067\:306f\:53d6\:308a\:8fbc\:307f\:6642\:306b LLM \:3092\:56de\:3055\:305a\:9ad8\:901f\:306b\:4fdd\:5b58\:3057\:3001\:6d3e\:751f\:306f\:5f8c\:304b\:3089\:5897\:5206\:30d0\:30c3\:30c1\:3002
+   - \:4e2d\:65ad\:8010\:6027: \:30d0\:30c3\:30c1\:306f CheckpointEvery \:4ef6\:3054\:3068\:306b dirty \:30b7\:30e3\:30fc\:30c9\:3092\:4fdd\:5b58\:3002
+     \:5f37\:5236\:7d42\:4e86\:3057\:3066\:3082 "Processed" \:6e08\:307f\:306f pending \:306b\:623b\:3089\:305a\:518d\:51e6\:7406\:3055\:308c\:306a\:3044\:3002
+   - \:5916\:90e8\:4f9d\:5b58 (IMAP / LLM) \:306f\:6ce8\:5165\:53ef\:80fd ("MessageSource" / "Inferencer")\:3002
+     \:65e2\:5b9a\:306f\:5b9f Python imaplib / \:5b9f LM Studio\:3002\:30c6\:30b9\:30c8\:306f fake \:3092\:6ce8\:5165\:3057\:3066 headless \:691c\:8a3c\:3002
    ============================================================ *)
 
 BeginPackage["SourceVault`", {"NBAccess`"}];
 
 SourceVaultMailFetchNew::usage =
-  "SourceVaultMailFetchNew[mbox, opts] は IMAP から新着のみ取得し snapshot 化して store に保存する。既定は LLM 処理なし。opts: \"Period\"(\"Latest\"|n日|{from,to}|\"YYYYMM\"), \"Process\"(既定False), \"MessageSource\"(既定=実IMAP, 注入可), \"Inferencer\", \"Persist\"(既定True), \"MaxEmails\"。RecordId で既存と重複排除。";
+  "SourceVaultMailFetchNew[mbox, opts] \:306f IMAP \:304b\:3089\:65b0\:7740\:306e\:307f\:53d6\:5f97\:3057 snapshot \:5316\:3057\:3066 store \:306b\:4fdd\:5b58\:3059\:308b\:3002\:65e2\:5b9a\:306f LLM \:51e6\:7406\:306a\:3057\:3002opts: \"Period\"(\"Latest\"|n\:65e5|{from,to}|\"YYYYMM\"), \"Process\"(\:65e2\:5b9aFalse), \"MessageSource\"(\:65e2\:5b9a=\:5b9fIMAP, \:6ce8\:5165\:53ef), \"Inferencer\", \"Persist\"(\:65e2\:5b9aTrue), \"MaxEmails\"\:3002RecordId \:3067\:65e2\:5b58\:3068\:91cd\:8907\:6392\:9664\:3002";
 SourceVaultMailDerivedPending::usage =
-  "SourceVaultMailDerivedPending[opts] はロード済み store の中で派生 (PL/優先度/概要) 未処理の snapshot を返す。opts: \"MBox\"(既定 Automatic。文字列でその mbox に限定), \"DateFrom\"/\"DateTo\"(既定 Automatic。DateObject/文字列/{y,m,d} で日付範囲に限定、日単位包含)。";
+  "SourceVaultMailDerivedPending[opts] \:306f\:30ed\:30fc\:30c9\:6e08\:307f store \:306e\:4e2d\:3067\:6d3e\:751f (PL/\:512a\:5148\:5ea6/\:6982\:8981) \:672a\:51e6\:7406\:306e snapshot \:3092\:8fd4\:3059\:3002opts: \"MBox\"(\:65e2\:5b9a Automatic\:3002\:6587\:5b57\:5217\:3067\:305d\:306e mbox \:306b\:9650\:5b9a), \"DateFrom\"/\"DateTo\"(\:65e2\:5b9a Automatic\:3002DateObject/\:6587\:5b57\:5217/{y,m,d} \:3067\:65e5\:4ed8\:7bc4\:56f2\:306b\:9650\:5b9a\:3001\:65e5\:5358\:4f4d\:5305\:542b)\:3002";
 SourceVaultMailDerivedPendingQ::usage =
-  "SourceVaultMailDerivedPendingQ[snapshot] は派生が未処理 (\"Pending\") なら True。";
+  "SourceVaultMailDerivedPendingQ[snapshot] \:306f\:6d3e\:751f\:304c\:672a\:51e6\:7406 (\"Pending\") \:306a\:3089 True\:3002";
 SourceVaultInferMailDerivedBatch::usage =
-  "SourceVaultInferMailDerivedBatch[opts] は未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。中断耐性 (CheckpointEvery 件ごとに保存)。特定 mbox の指定期間メールにサマリーを付ける用途は SourceVaultMailAddSummaries[mbox, period] が正準 (EnsureLoaded を内包し外部ジョブでも自己完結)。opts: \"MBox\"(既定 Automatic。文字列を与えると対象 snapshot をその mbox に限定。Automatic=ロード済み全 mbox), \"Limit\"(既定50、フィルタ後の件数上限。範囲内すべてなら Infinity), \"DateFrom\"/\"DateTo\"(既定 Automatic。DateObject/文字列/{y,m,d} で対象メールを日付範囲に限定、日単位包含), \"Refresh\"(既定 None=Pending のみ。\"MissingCategory\"=Category 未生成の処理済み旧 snapshot も再処理, All=全件再処理, Function=述語に一致する snapshot を再処理。例: \"Refresh\"->Function[s, StringContainsQ[ToString@s[\"MailMetadataPublic\"][\"Subject\"], \"Cerezo\"]]), \"Inferencer\"(既定=実LLM, 注入可), \"CheckpointEvery\"(既定20), \"Persist\"(既定True)。";
+  "SourceVaultInferMailDerivedBatch[opts] \:306f\:672a\:51e6\:7406 snapshot \:306e\:6d3e\:751f\:3092\:30ed\:30fc\:30ab\:30eb LLM \:3067\:5897\:5206\:751f\:6210\:3057 in-place \:66f4\:65b0\:3059\:308b\:3002\:4e2d\:65ad\:8010\:6027 (CheckpointEvery \:4ef6\:3054\:3068\:306b\:4fdd\:5b58)\:3002\:7279\:5b9a mbox \:306e\:6307\:5b9a\:671f\:9593\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:4ed8\:3051\:308b\:7528\:9014\:306f SourceVaultMailAddSummaries[mbox, period] \:304c\:6b63\:6e96 (EnsureLoaded \:3092\:5185\:5305\:3057\:5916\:90e8\:30b8\:30e7\:30d6\:3067\:3082\:81ea\:5df1\:5b8c\:7d50)\:3002opts: \"MBox\"(\:65e2\:5b9a Automatic\:3002\:6587\:5b57\:5217\:3092\:4e0e\:3048\:308b\:3068\:5bfe\:8c61 snapshot \:3092\:305d\:306e mbox \:306b\:9650\:5b9a\:3002Automatic=\:30ed\:30fc\:30c9\:6e08\:307f\:5168 mbox), \"Limit\"(\:65e2\:5b9a50\:3001\:30d5\:30a3\:30eb\:30bf\:5f8c\:306e\:4ef6\:6570\:4e0a\:9650\:3002\:7bc4\:56f2\:5185\:3059\:3079\:3066\:306a\:3089 Infinity), \"DateFrom\"/\"DateTo\"(\:65e2\:5b9a Automatic\:3002DateObject/\:6587\:5b57\:5217/{y,m,d} \:3067\:5bfe\:8c61\:30e1\:30fc\:30eb\:3092\:65e5\:4ed8\:7bc4\:56f2\:306b\:9650\:5b9a\:3001\:65e5\:5358\:4f4d\:5305\:542b), \"Refresh\"(\:65e2\:5b9a None=Pending \:306e\:307f\:3002\"MissingCategory\"=Category \:672a\:751f\:6210\:306e\:51e6\:7406\:6e08\:307f\:65e7 snapshot \:3082\:518d\:51e6\:7406, All=\:5168\:4ef6\:518d\:51e6\:7406, Function=\:8ff0\:8a9e\:306b\:4e00\:81f4\:3059\:308b snapshot \:3092\:518d\:51e6\:7406\:3002\:4f8b: \"Refresh\"->Function[s, StringContainsQ[ToString@s[\"MailMetadataPublic\"][\"Subject\"], \"Cerezo\"]]), \"Inferencer\"(\:65e2\:5b9a=\:5b9fLLM, \:6ce8\:5165\:53ef), \"CheckpointEvery\"(\:65e2\:5b9a20), \"Persist\"(\:65e2\:5b9aTrue)\:3002";
 SourceVaultMailInferDerived::usage =
-  "SourceVaultMailInferDerived[mailspec] は mailspec(date/subject/from/to/cc/body)からローカル LLM で <|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|> を返す(優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン、Deadline は ISO 文字列または Missing[\"None\"]。";
+  "SourceVaultMailInferDerived[mailspec] \:306f mailspec(date/subject/from/to/cc/body)\:304b\:3089\:30ed\:30fc\:30ab\:30eb LLM \:3067 <|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|> \:3092\:8fd4\:3059(\:512a\:5148\:5ea6\:306f\:69cb\:9020\:7684\:306b\:5225\:8a08\:7b97)\:3002Category \:306f $SourceVaultMailCategories \:306e\:30c8\:30fc\:30af\:30f3\:3001Deadline \:306f ISO \:6587\:5b57\:5217\:307e\:305f\:306f Missing[\"None\"]\:3002";
 SourceVaultMailAddSummaries::usage =
-  "SourceVaultMailAddSummaries[mbox_String, period_:\"Latest\", opts] は mbox の指定期間のメールを SourceVaultMailEnsureLoaded でロードしてから、その mbox の未処理 snapshot の派生(概要/カテゴリ/優先度/〆切)を SourceVaultInferMailDerivedBatch で一括生成・保存する。「<mbox>の新着メールにサマリーを追加」の正準エントリポイント(EnsureLoaded とバッチを1関数に内包するので、外部 WolframScript ジョブへ退避されてもロードから自己完結し、空ストアで0件処理になる失敗を防ぐ)。opts: \"Limit\"(既定 Infinity=新着全件), \"Persist\"(既定 True)。返り値 <|Status, MBox, Period, Loaded, Batch|>。";
+  "SourceVaultMailAddSummaries[mbox_String, period_:\"Latest\", opts] \:306f mbox \:306e\:6307\:5b9a\:671f\:9593\:306e\:30e1\:30fc\:30eb\:3092 SourceVaultMailEnsureLoaded \:3067\:30ed\:30fc\:30c9\:3057\:3066\:304b\:3089\:3001\:305d\:306e mbox \:306e\:672a\:51e6\:7406 snapshot \:306e\:6d3e\:751f(\:6982\:8981/\:30ab\:30c6\:30b4\:30ea/\:512a\:5148\:5ea6/\:3006\:5207)\:3092 SourceVaultInferMailDerivedBatch \:3067\:4e00\:62ec\:751f\:6210\:30fb\:4fdd\:5b58\:3059\:308b\:3002\:300c<mbox>\:306e\:65b0\:7740\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:8ffd\:52a0\:300d\:306e\:6b63\:6e96\:30a8\:30f3\:30c8\:30ea\:30dd\:30a4\:30f3\:30c8(EnsureLoaded \:3068\:30d0\:30c3\:30c1\:30921\:95a2\:6570\:306b\:5185\:5305\:3059\:308b\:306e\:3067\:3001\:5916\:90e8 WolframScript \:30b8\:30e7\:30d6\:3078\:9000\:907f\:3055\:308c\:3066\:3082\:30ed\:30fc\:30c9\:304b\:3089\:81ea\:5df1\:5b8c\:7d50\:3057\:3001\:7a7a\:30b9\:30c8\:30a2\:30670\:4ef6\:51e6\:7406\:306b\:306a\:308b\:5931\:6557\:3092\:9632\:3050)\:3002opts: \"Limit\"(\:65e2\:5b9a Infinity=\:65b0\:7740\:5168\:4ef6), \"Persist\"(\:65e2\:5b9a True)\:3002\:8fd4\:308a\:5024 <|Status, MBox, Period, Loaded, Batch|>\:3002";
 SourceVaultRegisterMailspecEnricher::usage =
-  "SourceVaultRegisterMailspecEnricher[name, f] は派生(サマリー作成)時に LLM へ渡す mailspec を拡張する enricher を登録する(Cerezo.wl 等の拡張用)。f[mailspec, snapshot] が変更後の mailspec(Association)を返すとそれが LLM 入力に使われ、Derived.DerivedEnrichment に名前が記録される。非該当/失敗時は mailspec をそのまま返す。取り込み・保存レコード形式には影響せず、未登録なら完全素通し。";
+  "SourceVaultRegisterMailspecEnricher[name, f] \:306f\:6d3e\:751f(\:30b5\:30de\:30ea\:30fc\:4f5c\:6210)\:6642\:306b LLM \:3078\:6e21\:3059 mailspec \:3092\:62e1\:5f35\:3059\:308b enricher \:3092\:767b\:9332\:3059\:308b(Cerezo.wl \:7b49\:306e\:62e1\:5f35\:7528)\:3002f[mailspec, snapshot] \:304c\:5909\:66f4\:5f8c\:306e mailspec(Association)\:3092\:8fd4\:3059\:3068\:305d\:308c\:304c LLM \:5165\:529b\:306b\:4f7f\:308f\:308c\:3001Derived.DerivedEnrichment \:306b\:540d\:524d\:304c\:8a18\:9332\:3055\:308c\:308b\:3002\:975e\:8a72\:5f53/\:5931\:6557\:6642\:306f mailspec \:3092\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002\:53d6\:308a\:8fbc\:307f\:30fb\:4fdd\:5b58\:30ec\:30b3\:30fc\:30c9\:5f62\:5f0f\:306b\:306f\:5f71\:97ff\:305b\:305a\:3001\:672a\:767b\:9332\:306a\:3089\:5b8c\:5168\:7d20\:901a\:3057\:3002";
 SourceVaultUnregisterMailspecEnricher::usage =
-  "SourceVaultUnregisterMailspecEnricher[name] は mailspec enricher の登録を解除する。";
+  "SourceVaultUnregisterMailspecEnricher[name] \:306f mailspec enricher \:306e\:767b\:9332\:3092\:89e3\:9664\:3059\:308b\:3002";
 SourceVaultMailspecEnrichers::usage =
-  "SourceVaultMailspecEnrichers[] は登録済み mailspec enricher 名のリストを返す。";
+  "SourceVaultMailspecEnrichers[] \:306f\:767b\:9332\:6e08\:307f mailspec enricher \:540d\:306e\:30ea\:30b9\:30c8\:3092\:8fd4\:3059\:3002";
 SourceVaultRegisterPostFetchHook::usage =
-  "SourceVaultRegisterPostFetchHook[name, f] は SourceVaultMailFetchNew の取り込み完了時に呼ぶフック f[mbox, fetchResult] を登録する。" <>
-  "取り込み後の派生(mining の著者抽出など)を maildb に依存させずに結線する拡張点。フックの失敗は fetch を壊さない。未登録なら完全素通し。";
+  "SourceVaultRegisterPostFetchHook[name, f] \:306f SourceVaultMailFetchNew \:306e\:53d6\:308a\:8fbc\:307f\:5b8c\:4e86\:6642\:306b\:547c\:3076\:30d5\:30c3\:30af f[mbox, fetchResult] \:3092\:767b\:9332\:3059\:308b\:3002" <>
+  "\:53d6\:308a\:8fbc\:307f\:5f8c\:306e\:6d3e\:751f(mining \:306e\:8457\:8005\:62bd\:51fa\:306a\:3069)\:3092 maildb \:306b\:4f9d\:5b58\:3055\:305b\:305a\:306b\:7d50\:7dda\:3059\:308b\:62e1\:5f35\:70b9\:3002\:30d5\:30c3\:30af\:306e\:5931\:6557\:306f fetch \:3092\:58ca\:3055\:306a\:3044\:3002\:672a\:767b\:9332\:306a\:3089\:5b8c\:5168\:7d20\:901a\:3057\:3002";
 SourceVaultUnregisterPostFetchHook::usage =
-  "SourceVaultUnregisterPostFetchHook[name] は post-fetch フックの登録を解除する。";
+  "SourceVaultUnregisterPostFetchHook[name] \:306f post-fetch \:30d5\:30c3\:30af\:306e\:767b\:9332\:3092\:89e3\:9664\:3059\:308b\:3002";
 SourceVaultPostFetchHooks::usage =
-  "SourceVaultPostFetchHooks[] は登録済み post-fetch フック名のリストを返す。";
+  "SourceVaultPostFetchHooks[] \:306f\:767b\:9332\:6e08\:307f post-fetch \:30d5\:30c3\:30af\:540d\:306e\:30ea\:30b9\:30c8\:3092\:8fd4\:3059\:3002";
 SourceVaultMailComputePriority::usage =
-  "SourceVaultMailComputePriority[snapshot, workRequest, category] は構造シグナル(送信者グループ重み + To/Cc 位置 + ML判定 + LLM 依頼度 + LLM カテゴリ)から重要度 0.0-1.0 を決定的に計算する。category が \"Notice\"(通知・一斉配信・広告)なら -0.30 減点。<|Priority, Components|> を返す。";
+  "SourceVaultMailComputePriority[snapshot, workRequest, category] \:306f\:69cb\:9020\:30b7\:30b0\:30ca\:30eb(\:9001\:4fe1\:8005\:30b0\:30eb\:30fc\:30d7\:91cd\:307f + To/Cc \:4f4d\:7f6e + ML\:5224\:5b9a + LLM \:4f9d\:983c\:5ea6 + LLM \:30ab\:30c6\:30b4\:30ea)\:304b\:3089\:91cd\:8981\:5ea6 0.0-1.0 \:3092\:6c7a\:5b9a\:7684\:306b\:8a08\:7b97\:3059\:308b\:3002category \:304c \"Notice\"(\:901a\:77e5\:30fb\:4e00\:6589\:914d\:4fe1\:30fb\:5e83\:544a)\:306a\:3089 -0.30 \:6e1b\:70b9\:3002<|Priority, Components|> \:3092\:8fd4\:3059\:3002";
 SourceVaultMailExplainPriority::usage =
-  "SourceVaultMailExplainPriority[snapshot] は snapshot の保存済み WorkRequest/Category を使って重要度の内訳(Components)を返す。";
+  "SourceVaultMailExplainPriority[snapshot] \:306f snapshot \:306e\:4fdd\:5b58\:6e08\:307f WorkRequest/Category \:3092\:4f7f\:3063\:3066\:91cd\:8981\:5ea6\:306e\:5185\:8a33(Components)\:3092\:8fd4\:3059\:3002";
 SourceVaultMailRecomputePriorities::usage =
-  "SourceVaultMailRecomputePriorities[opts] はロード済み snapshot のうち構造計算済み (PriorityComponents あり) のものについて、保存済み WorkRequest/Category から Priority を LLM なしで再計算し in-place 更新する。優先度式の変更を既処理メールへ反映するために使う (legacy maildb 由来の Priority は触らない)。opts: \"Persist\"(既定True)。";
+  "SourceVaultMailRecomputePriorities[opts] \:306f\:30ed\:30fc\:30c9\:6e08\:307f snapshot \:306e\:3046\:3061\:69cb\:9020\:8a08\:7b97\:6e08\:307f (PriorityComponents \:3042\:308a) \:306e\:3082\:306e\:306b\:3064\:3044\:3066\:3001\:4fdd\:5b58\:6e08\:307f WorkRequest/Category \:304b\:3089 Priority \:3092 LLM \:306a\:3057\:3067\:518d\:8a08\:7b97\:3057 in-place \:66f4\:65b0\:3059\:308b\:3002\:512a\:5148\:5ea6\:5f0f\:306e\:5909\:66f4\:3092\:65e2\:51e6\:7406\:30e1\:30fc\:30eb\:3078\:53cd\:6620\:3059\:308b\:305f\:3081\:306b\:4f7f\:3046 (legacy maildb \:7531\:6765\:306e Priority \:306f\:89e6\:3089\:306a\:3044)\:3002opts: \"Persist\"(\:65e2\:5b9aTrue)\:3002";
 SourceVaultSetPriorityGroupWeight::usage =
-  "SourceVaultSetPriorityGroupWeight[group, weight] はグループの重み(0.0-1.0)を登録し vault config に保存する。実体の Group がこれに解決される。";
-SourceVaultPriorityGroupWeights::usage = "SourceVaultPriorityGroupWeights[] は登録済みグループ重みを返す。";
-SourceVaultGroupWeightFor::usage = "SourceVaultGroupWeightFor[group] はグループの重みを返す。無ければ Missing。";
-SourceVaultPriorityGroupsLoad::usage = "SourceVaultPriorityGroupsLoad[] はグループ重み config を読み込む。";
+  "SourceVaultSetPriorityGroupWeight[group, weight] \:306f\:30b0\:30eb\:30fc\:30d7\:306e\:91cd\:307f(0.0-1.0)\:3092\:767b\:9332\:3057 vault config \:306b\:4fdd\:5b58\:3059\:308b\:3002\:5b9f\:4f53\:306e Group \:304c\:3053\:308c\:306b\:89e3\:6c7a\:3055\:308c\:308b\:3002";
+SourceVaultPriorityGroupWeights::usage = "SourceVaultPriorityGroupWeights[] \:306f\:767b\:9332\:6e08\:307f\:30b0\:30eb\:30fc\:30d7\:91cd\:307f\:3092\:8fd4\:3059\:3002";
+SourceVaultGroupWeightFor::usage = "SourceVaultGroupWeightFor[group] \:306f\:30b0\:30eb\:30fc\:30d7\:306e\:91cd\:307f\:3092\:8fd4\:3059\:3002\:7121\:3051\:308c\:3070 Missing\:3002";
+SourceVaultPriorityGroupsLoad::usage = "SourceVaultPriorityGroupsLoad[] \:306f\:30b0\:30eb\:30fc\:30d7\:91cd\:307f config \:3092\:8aad\:307f\:8fbc\:3080\:3002";
 SourceVaultRegisterMailAccount::usage =
-  "SourceVaultRegisterMailAccount[<|\"MBox\",\"User\",\"Email\",\"CredKey\",\"Server\",\"Port\"|>, opts] は IMAP アカウント設定を登録し vault config に保存する。パスワードは保存せず CredKey(SystemCredential 名)のみ。同一 MBox は上書き。NBRegisterTrustedLocalServer と同様、私的データはソースに置かずここで登録する。";
-SourceVaultMailAccounts::usage = "SourceVaultMailAccounts[] は登録済み IMAP アカウント設定を Dataset で返す(パスワードは含まない)。";
-SourceVaultGetMailAccount::usage = "SourceVaultGetMailAccount[mbox] は登録済みアカウント設定を返す。無ければ Missing。";
-SourceVaultRemoveMailAccount::usage = "SourceVaultRemoveMailAccount[mbox] は登録を削除する。";
-SourceVaultMailAccountsLoad::usage = "SourceVaultMailAccountsLoad[] は vault config からアカウント設定を読み込む。";
-$SourceVaultMailConfigRoot::usage = "IMAP アカウント設定の保存ルート(既定 PrivateVault/config)。テストで上書き可。";
+  "SourceVaultRegisterMailAccount[<|\"MBox\",\"User\",\"Email\",\"CredKey\",\"Server\",\"Port\"|>, opts] \:306f IMAP \:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:3092\:767b\:9332\:3057 vault config \:306b\:4fdd\:5b58\:3059\:308b\:3002\:30d1\:30b9\:30ef\:30fc\:30c9\:306f\:4fdd\:5b58\:305b\:305a CredKey(SystemCredential \:540d)\:306e\:307f\:3002\:540c\:4e00 MBox \:306f\:4e0a\:66f8\:304d\:3002NBRegisterTrustedLocalServer \:3068\:540c\:69d8\:3001\:79c1\:7684\:30c7\:30fc\:30bf\:306f\:30bd\:30fc\:30b9\:306b\:7f6e\:304b\:305a\:3053\:3053\:3067\:767b\:9332\:3059\:308b\:3002";
+SourceVaultMailAccounts::usage = "SourceVaultMailAccounts[] \:306f\:767b\:9332\:6e08\:307f IMAP \:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:3092 Dataset \:3067\:8fd4\:3059(\:30d1\:30b9\:30ef\:30fc\:30c9\:306f\:542b\:307e\:306a\:3044)\:3002";
+SourceVaultGetMailAccount::usage = "SourceVaultGetMailAccount[mbox] \:306f\:767b\:9332\:6e08\:307f\:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:3092\:8fd4\:3059\:3002\:7121\:3051\:308c\:3070 Missing\:3002";
+SourceVaultRemoveMailAccount::usage = "SourceVaultRemoveMailAccount[mbox] \:306f\:767b\:9332\:3092\:524a\:9664\:3059\:308b\:3002";
+SourceVaultMailAccountsLoad::usage = "SourceVaultMailAccountsLoad[] \:306f vault config \:304b\:3089\:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:3092\:8aad\:307f\:8fbc\:3080\:3002";
+$SourceVaultMailConfigRoot::usage = "IMAP \:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:306e\:4fdd\:5b58\:30eb\:30fc\:30c8(\:65e2\:5b9a PrivateVault/config)\:3002\:30c6\:30b9\:30c8\:3067\:4e0a\:66f8\:304d\:53ef\:3002";
 
 Begin["`Private`"];
 
-(* アカウント設定は空で初期化し、SourceVaultRegisterMailAccount で登録 -> vault config
-   へ永続化する。私的ログインはソースコードにハードコードしない。 *)
+(* \:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:306f\:7a7a\:3067\:521d\:671f\:5316\:3057\:3001SourceVaultRegisterMailAccount \:3067\:767b\:9332 -> vault config
+   \:3078\:6c38\:7d9a\:5316\:3059\:308b\:3002\:79c1\:7684\:30ed\:30b0\:30a4\:30f3\:306f\:30bd\:30fc\:30b9\:30b3\:30fc\:30c9\:306b\:30cf\:30fc\:30c9\:30b3\:30fc\:30c9\:3057\:306a\:3044\:3002 *)
 If[! AssociationQ[$iSVMDMailAccounts], $iSVMDMailAccounts = <||>];
 If[! ValueQ[$iSVMDMailAccountsLoaded], $iSVMDMailAccountsLoaded = False];
 
@@ -1201,7 +1203,7 @@ SourceVaultRemoveMailAccount[mbox_String, OptionsPattern[]] :=
    If[TrueQ[OptionValue["Persist"]], iSVMDMailAccountsSave[]];
    <|"Status" -> "Removed", "MBox" -> mbox|>);
 
-(* ---- 派生 pending 判定 ---- *)
+(* ---- \:6d3e\:751f pending \:5224\:5b9a ---- *)
 SourceVaultMailDerivedPendingQ[snap_Association] :=
   Module[{d = Lookup[snap, "Derived", <||>], st, sm},
     st = Lookup[d, "DerivedStatus", Missing[]];
@@ -1209,12 +1211,12 @@ SourceVaultMailDerivedPendingQ[snap_Association] :=
     Which[
       st === "Pending", True,
       st === "Processed", False,
-      (* DerivedStatus 無しの旧 snapshot: summary が空なら pending *)
+      (* DerivedStatus \:7121\:3057\:306e\:65e7 snapshot: summary \:304c\:7a7a\:306a\:3089 pending *)
       True, ! (StringQ[sm] && StringTrim[sm] =!= "")]];
 
-(* 既定 (引数なし) はロード済み全 pending。"MBox"/"DateFrom"/"DateTo" を渡すと絞り込む。
-   オプション付きでも必ず評価されるので、Length[...] が「未評価式の引数数」に化けて
-   偽の件数を返す事故 (例: "MBox"->... を渡して常に 3) が起きない。 *)
+(* \:65e2\:5b9a (\:5f15\:6570\:306a\:3057) \:306f\:30ed\:30fc\:30c9\:6e08\:307f\:5168 pending\:3002"MBox"/"DateFrom"/"DateTo" \:3092\:6e21\:3059\:3068\:7d5e\:308a\:8fbc\:3080\:3002
+   \:30aa\:30d7\:30b7\:30e7\:30f3\:4ed8\:304d\:3067\:3082\:5fc5\:305a\:8a55\:4fa1\:3055\:308c\:308b\:306e\:3067\:3001Length[...] \:304c\:300c\:672a\:8a55\:4fa1\:5f0f\:306e\:5f15\:6570\:6570\:300d\:306b\:5316\:3051\:3066
+   \:507d\:306e\:4ef6\:6570\:3092\:8fd4\:3059\:4e8b\:6545 (\:4f8b: "MBox"->... \:3092\:6e21\:3057\:3066\:5e38\:306b 3) \:304c\:8d77\:304d\:306a\:3044\:3002 *)
 Options[SourceVaultMailDerivedPending] =
   {"MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic};
 SourceVaultMailDerivedPending[OptionsPattern[]] :=
@@ -1226,13 +1228,13 @@ SourceVaultMailDerivedPending[OptionsPattern[]] :=
     If[df =!= Automatic || dt =!= Automatic, pend = Select[pend, iSVMDDateInRange[#, df, dt] &]];
     pend];
 
-(* ---- ローカル LLM (LM Studio, OpenAI 互換) ----
-   maildb の iQueryLMStudioDirect を踏襲: Headers に Content-Type + Authorization、
-   Body は UTF-8 ByteArray (Export RawJSON をファイル経由でバイト化)、
-   応答もファイル経由 Import で encoding-safe に。 *)
-(* ローカル LLM 専用 credential を AccessLevel 1.0 で取得する。
-   url は scheme://host:port に正規化されてマッピング照合される (path は無視)。
-   キー未登録/未保存なら認証オフ運用向けに "lm-studio" へフォールバック。 *)
+(* ---- \:30ed\:30fc\:30ab\:30eb LLM (LM Studio, OpenAI \:4e92\:63db) ----
+   maildb \:306e iQueryLMStudioDirect \:3092\:8e0f\:8972: Headers \:306b Content-Type + Authorization\:3001
+   Body \:306f UTF-8 ByteArray (Export RawJSON \:3092\:30d5\:30a1\:30a4\:30eb\:7d4c\:7531\:3067\:30d0\:30a4\:30c8\:5316)\:3001
+   \:5fdc\:7b54\:3082\:30d5\:30a1\:30a4\:30eb\:7d4c\:7531 Import \:3067 encoding-safe \:306b\:3002 *)
+(* \:30ed\:30fc\:30ab\:30eb LLM \:5c02\:7528 credential \:3092 AccessLevel 1.0 \:3067\:53d6\:5f97\:3059\:308b\:3002
+   url \:306f scheme://host:port \:306b\:6b63\:898f\:5316\:3055\:308c\:3066\:30de\:30c3\:30d4\:30f3\:30b0\:7167\:5408\:3055\:308c\:308b (path \:306f\:7121\:8996)\:3002
+   \:30ad\:30fc\:672a\:767b\:9332/\:672a\:4fdd\:5b58\:306a\:3089\:8a8d\:8a3c\:30aa\:30d5\:904b\:7528\:5411\:3051\:306b "lm-studio" \:3078\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3002 *)
 iSVLMStudioAPIKey[url_String] :=
   Module[{k},
     k = Quiet@Check[
@@ -1247,10 +1249,10 @@ iSVTmpJSON[tag_] := FileNameJoin[{$TemporaryDirectory,
 
 iSVQueryLMStudio[prompt_String, url_String, model_String] :=
   Module[{reqData, reqFile, bodyBytes, resp, bytes, respFile, strm, json, content},
-    (* このタスクは分類抽出なので推論 (thinking) は不要。Qwen3 系の
-       reasoning モデルは思考を reasoning_content に延々と出力し、長文メールで
-       TimeConstraint 内に最終 content を出せず空応答→FailedLLM になる。
-       enable_thinking:False で思考を抑止し、直接 3 行を出力させる。 *)
+    (* \:3053\:306e\:30bf\:30b9\:30af\:306f\:5206\:985e\:62bd\:51fa\:306a\:306e\:3067\:63a8\:8ad6 (thinking) \:306f\:4e0d\:8981\:3002Qwen3 \:7cfb\:306e
+       reasoning \:30e2\:30c7\:30eb\:306f\:601d\:8003\:3092 reasoning_content \:306b\:5ef6\:3005\:3068\:51fa\:529b\:3057\:3001\:9577\:6587\:30e1\:30fc\:30eb\:3067
+       TimeConstraint \:5185\:306b\:6700\:7d42 content \:3092\:51fa\:305b\:305a\:7a7a\:5fdc\:7b54\[RightArrow]FailedLLM \:306b\:306a\:308b\:3002
+       enable_thinking:False \:3067\:601d\:8003\:3092\:6291\:6b62\:3057\:3001\:76f4\:63a5 3 \:884c\:3092\:51fa\:529b\:3055\:305b\:308b\:3002 *)
     reqData = <|"messages" -> {<|"role" -> "user", "content" -> prompt|>},
        "stream" -> False, "temperature" -> 0.2,
        "chat_template_kwargs" -> <|"enable_thinking" -> False|>|> ~Join~
@@ -1275,7 +1277,7 @@ iSVQueryLMStudio[prompt_String, url_String, model_String] :=
     Quiet@DeleteFile[respFile];
     If[! AssociationQ[json], Return[""]];
     content = Quiet@Check[json["choices"][[1]]["message"]["content"], ""];
-    (* thinking モデルが content を空にして reasoning_content に出した場合の保険 *)
+    (* thinking \:30e2\:30c7\:30eb\:304c content \:3092\:7a7a\:306b\:3057\:3066 reasoning_content \:306b\:51fa\:3057\:305f\:5834\:5408\:306e\:4fdd\:967a *)
     If[! (StringQ[content] && StringTrim[content] =!= ""),
       content = Quiet@Check[
         json["choices"][[1]]["message"]["reasoning_content"], ""]];
@@ -1299,7 +1301,7 @@ iSVResolveLocalLLM[] :=
             model = j["data"][[1]]["id"]; If[! StringQ[model], model = ""]]]]];
     <|"URL" -> url, "Model" -> model|>];
 
-(* 所有者情報は SourceVault 識別子層 #1 から取得 (identity 未ロードでも安全) *)
+(* \:6240\:6709\:8005\:60c5\:5831\:306f SourceVault \:8b58\:5225\:5b50\:5c64 #1 \:304b\:3089\:53d6\:5f97 (identity \:672a\:30ed\:30fc\:30c9\:3067\:3082\:5b89\:5168) *)
 iSVMDOwnerEmails[] := Quiet@Check[
    If[Length[DownValues[SourceVault`SourceVaultOwnerEmails]] > 0,
      SourceVault`SourceVaultOwnerEmails[], {}], {}];
@@ -1319,34 +1321,34 @@ iSVDerivePrompt[mailspec_Association] :=
     pmail = iSVMDOwnerPrimaryEmail[];
     prof = iSVMDOwnerLLMProfile[];
     owners = iSVMDOwnerEmails[];
-    ownerRef = If[StringQ[pmail] && pmail =!= "", pmail, "オーナー"];
-    recvLine = "受信者(オーナー)は " <> ownerRef <>
+    ownerRef = If[StringQ[pmail] && pmail =!= "", pmail, "\:30aa\:30fc\:30ca\:30fc"];
+    recvLine = "\:53d7\:4fe1\:8005(\:30aa\:30fc\:30ca\:30fc)\:306f " <> ownerRef <>
        If[ListQ[owners] && owners =!= {},
-         "(オーナーのアドレス: " <> StringRiffle[owners, ", "] <> ")", ""] <>
-       If[StringQ[prof] && prof =!= "", "。プロフィール: " <> prof, ""] <> "。\n" <>
-       "to/cc がオーナー個人のアドレスでなくても、オーナーの所属するグループ・部署・メーリングリスト宛であれば、その依頼はオーナーへの依頼として扱う。\n\n";
-    "以下の[メール]について、WORKREQUEST、PRIVACY、CATEGORY、DEADLINE、SUMMARY の5つを推定せよ。\n" <>
-    "各行のフォーマットに従い、余計な説明は一切不要。\n\n" <>
+         "(\:30aa\:30fc\:30ca\:30fc\:306e\:30a2\:30c9\:30ec\:30b9: " <> StringRiffle[owners, ", "] <> ")", ""] <>
+       If[StringQ[prof] && prof =!= "", "\:3002\:30d7\:30ed\:30d5\:30a3\:30fc\:30eb: " <> prof, ""] <> "\:3002\n" <>
+       "to/cc \:304c\:30aa\:30fc\:30ca\:30fc\:500b\:4eba\:306e\:30a2\:30c9\:30ec\:30b9\:3067\:306a\:304f\:3066\:3082\:3001\:30aa\:30fc\:30ca\:30fc\:306e\:6240\:5c5e\:3059\:308b\:30b0\:30eb\:30fc\:30d7\:30fb\:90e8\:7f72\:30fb\:30e1\:30fc\:30ea\:30f3\:30b0\:30ea\:30b9\:30c8\:5b9b\:3067\:3042\:308c\:3070\:3001\:305d\:306e\:4f9d\:983c\:306f\:30aa\:30fc\:30ca\:30fc\:3078\:306e\:4f9d\:983c\:3068\:3057\:3066\:6271\:3046\:3002\n\n";
+    "\:4ee5\:4e0b\:306e[\:30e1\:30fc\:30eb]\:306b\:3064\:3044\:3066\:3001WORKREQUEST\:3001PRIVACY\:3001CATEGORY\:3001DEADLINE\:3001SUMMARY \:306e5\:3064\:3092\:63a8\:5b9a\:305b\:3088\:3002\n" <>
+    "\:5404\:884c\:306e\:30d5\:30a9\:30fc\:30de\:30c3\:30c8\:306b\:5f93\:3044\:3001\:4f59\:8a08\:306a\:8aac\:660e\:306f\:4e00\:5207\:4e0d\:8981\:3002\n\n" <>
     recvLine <>
-    "== WORKREQUEST ==\n依頼度を 0.0〜1.0 の数値で1つ出力。これは「このメールがオーナー個人への直接の依頼・要請・タスク(返信や対応が必要)である度合い」(優先度はシステムが別途計算するので、内容としての依頼度のみを評価せよ)。\n" <>
-    "1.0=明確にオーナー個人宛の直接依頼/要請(講演依頼、査読依頼、会議日程調整、投稿依頼、質問など)、0.7=対応・返信が望ましい連絡、0.4=確認/承認を求める連絡、0.2=情報共有・報告で対応不要、0.0=一斉配信/広告/通知/SPAM。\n\n" <>
-    "== PRIVACY ==\n秘匿度を 0.0〜1.0 の数値で1つ出力。これはクラウドLLMで処理してよいかの指標。" <>
-    "0.5以下ならクラウド可。1.0=人事/成績/個人情報、0.8=組織内部の内部連絡、0.5=組織内可視で問題なし、" <>
-    "0.4=外部の知人が見ても問題ない、0.0=どこに開示しても問題ない既知の内容。\n\n" <>
-    "== CATEGORY ==\nfrom から to への伝達の種類を、次のトークンから1つだけ出力。\n" <>
-    "TaskRequest=作業・仕事の依頼(査読、原稿・書類の提出、調査・対応の依頼など)、" <>
-    "AttendanceRequest=会議・行事等への出席依頼/日程調整、" <>
-    "Confirmation=確認・承認を求める連絡、" <>
-    "InfoProvision=情報提供・案内、Report=結果・状況の報告、" <>
-    "Notice=機械的な通知・一斉配信・広告、Other=その他。\n" <>
-    "宛先がオーナーの所属グループ(部署ML等)であっても、内容が依頼なら TaskRequest または AttendanceRequest と判定する。\n\n" <>
-    "== DEADLINE ==\n〆切・期限(提出期限、回答期限、申込期限、出欠回答期限など)が本文にあれば、" <>
-    "メールの date を基準に「来週月曜」等の相対表現も絶対日時へ変換して、YYYY-MM-DD または YYYY-MM-DD HH:MM の形式で出力。" <>
-    "〆切が無ければ NONE とだけ出力。会議開催日時そのものは〆切ではないが、出欠回答期限は〆切である。\n\n" <>
-    "== SUMMARY ==\n要約を1行で出力。形式「〔カテゴリ〕内容の要約〔関係者〕」。" <>
-    "カテゴリは 依頼/確認/報告/情報/雑務/〆切 から最適なものを選ぶ。\n\n" <>
-    "== 出力形式 ==\n以下の5行のみを出力。他のテキストは一切不要。\n" <>
-    "WORKREQUEST: <数値>\nPRIVACY: <数値>\nCATEGORY: <トークン>\nDEADLINE: <YYYY-MM-DD[ HH:MM] または NONE>\nSUMMARY: <要約文>\n\n[メール]\n" <> fld];
+    "== WORKREQUEST ==\n\:4f9d\:983c\:5ea6\:3092 0.0\:301c1.0 \:306e\:6570\:5024\:30671\:3064\:51fa\:529b\:3002\:3053\:308c\:306f\:300c\:3053\:306e\:30e1\:30fc\:30eb\:304c\:30aa\:30fc\:30ca\:30fc\:500b\:4eba\:3078\:306e\:76f4\:63a5\:306e\:4f9d\:983c\:30fb\:8981\:8acb\:30fb\:30bf\:30b9\:30af(\:8fd4\:4fe1\:3084\:5bfe\:5fdc\:304c\:5fc5\:8981)\:3067\:3042\:308b\:5ea6\:5408\:3044\:300d(\:512a\:5148\:5ea6\:306f\:30b7\:30b9\:30c6\:30e0\:304c\:5225\:9014\:8a08\:7b97\:3059\:308b\:306e\:3067\:3001\:5185\:5bb9\:3068\:3057\:3066\:306e\:4f9d\:983c\:5ea6\:306e\:307f\:3092\:8a55\:4fa1\:305b\:3088)\:3002\n" <>
+    "1.0=\:660e\:78ba\:306b\:30aa\:30fc\:30ca\:30fc\:500b\:4eba\:5b9b\:306e\:76f4\:63a5\:4f9d\:983c/\:8981\:8acb(\:8b1b\:6f14\:4f9d\:983c\:3001\:67fb\:8aad\:4f9d\:983c\:3001\:4f1a\:8b70\:65e5\:7a0b\:8abf\:6574\:3001\:6295\:7a3f\:4f9d\:983c\:3001\:8cea\:554f\:306a\:3069)\:30010.7=\:5bfe\:5fdc\:30fb\:8fd4\:4fe1\:304c\:671b\:307e\:3057\:3044\:9023\:7d61\:30010.4=\:78ba\:8a8d/\:627f\:8a8d\:3092\:6c42\:3081\:308b\:9023\:7d61\:30010.2=\:60c5\:5831\:5171\:6709\:30fb\:5831\:544a\:3067\:5bfe\:5fdc\:4e0d\:8981\:30010.0=\:4e00\:6589\:914d\:4fe1/\:5e83\:544a/\:901a\:77e5/SPAM\:3002\n\n" <>
+    "== PRIVACY ==\n\:79d8\:533f\:5ea6\:3092 0.0\:301c1.0 \:306e\:6570\:5024\:30671\:3064\:51fa\:529b\:3002\:3053\:308c\:306f\:30af\:30e9\:30a6\:30c9LLM\:3067\:51e6\:7406\:3057\:3066\:3088\:3044\:304b\:306e\:6307\:6a19\:3002" <>
+    "0.5\:4ee5\:4e0b\:306a\:3089\:30af\:30e9\:30a6\:30c9\:53ef\:30021.0=\:4eba\:4e8b/\:6210\:7e3e/\:500b\:4eba\:60c5\:5831\:30010.8=\:7d44\:7e54\:5185\:90e8\:306e\:5185\:90e8\:9023\:7d61\:30010.5=\:7d44\:7e54\:5185\:53ef\:8996\:3067\:554f\:984c\:306a\:3057\:3001" <>
+    "0.4=\:5916\:90e8\:306e\:77e5\:4eba\:304c\:898b\:3066\:3082\:554f\:984c\:306a\:3044\:30010.0=\:3069\:3053\:306b\:958b\:793a\:3057\:3066\:3082\:554f\:984c\:306a\:3044\:65e2\:77e5\:306e\:5185\:5bb9\:3002\n\n" <>
+    "== CATEGORY ==\nfrom \:304b\:3089 to \:3078\:306e\:4f1d\:9054\:306e\:7a2e\:985e\:3092\:3001\:6b21\:306e\:30c8\:30fc\:30af\:30f3\:304b\:30891\:3064\:3060\:3051\:51fa\:529b\:3002\n" <>
+    "TaskRequest=\:4f5c\:696d\:30fb\:4ed5\:4e8b\:306e\:4f9d\:983c(\:67fb\:8aad\:3001\:539f\:7a3f\:30fb\:66f8\:985e\:306e\:63d0\:51fa\:3001\:8abf\:67fb\:30fb\:5bfe\:5fdc\:306e\:4f9d\:983c\:306a\:3069)\:3001" <>
+    "AttendanceRequest=\:4f1a\:8b70\:30fb\:884c\:4e8b\:7b49\:3078\:306e\:51fa\:5e2d\:4f9d\:983c/\:65e5\:7a0b\:8abf\:6574\:3001" <>
+    "Confirmation=\:78ba\:8a8d\:30fb\:627f\:8a8d\:3092\:6c42\:3081\:308b\:9023\:7d61\:3001" <>
+    "InfoProvision=\:60c5\:5831\:63d0\:4f9b\:30fb\:6848\:5185\:3001Report=\:7d50\:679c\:30fb\:72b6\:6cc1\:306e\:5831\:544a\:3001" <>
+    "Notice=\:6a5f\:68b0\:7684\:306a\:901a\:77e5\:30fb\:4e00\:6589\:914d\:4fe1\:30fb\:5e83\:544a\:3001Other=\:305d\:306e\:4ed6\:3002\n" <>
+    "\:5b9b\:5148\:304c\:30aa\:30fc\:30ca\:30fc\:306e\:6240\:5c5e\:30b0\:30eb\:30fc\:30d7(\:90e8\:7f72ML\:7b49)\:3067\:3042\:3063\:3066\:3082\:3001\:5185\:5bb9\:304c\:4f9d\:983c\:306a\:3089 TaskRequest \:307e\:305f\:306f AttendanceRequest \:3068\:5224\:5b9a\:3059\:308b\:3002\n\n" <>
+    "== DEADLINE ==\n\:3006\:5207\:30fb\:671f\:9650(\:63d0\:51fa\:671f\:9650\:3001\:56de\:7b54\:671f\:9650\:3001\:7533\:8fbc\:671f\:9650\:3001\:51fa\:6b20\:56de\:7b54\:671f\:9650\:306a\:3069)\:304c\:672c\:6587\:306b\:3042\:308c\:3070\:3001" <>
+    "\:30e1\:30fc\:30eb\:306e date \:3092\:57fa\:6e96\:306b\:300c\:6765\:9031\:6708\:66dc\:300d\:7b49\:306e\:76f8\:5bfe\:8868\:73fe\:3082\:7d76\:5bfe\:65e5\:6642\:3078\:5909\:63db\:3057\:3066\:3001YYYY-MM-DD \:307e\:305f\:306f YYYY-MM-DD HH:MM \:306e\:5f62\:5f0f\:3067\:51fa\:529b\:3002" <>
+    "\:3006\:5207\:304c\:7121\:3051\:308c\:3070 NONE \:3068\:3060\:3051\:51fa\:529b\:3002\:4f1a\:8b70\:958b\:50ac\:65e5\:6642\:305d\:306e\:3082\:306e\:306f\:3006\:5207\:3067\:306f\:306a\:3044\:304c\:3001\:51fa\:6b20\:56de\:7b54\:671f\:9650\:306f\:3006\:5207\:3067\:3042\:308b\:3002\n\n" <>
+    "== SUMMARY ==\n\:8981\:7d04\:30921\:884c\:3067\:51fa\:529b\:3002\:5f62\:5f0f\:300c\:3014\:30ab\:30c6\:30b4\:30ea\:3015\:5185\:5bb9\:306e\:8981\:7d04\:3014\:95a2\:4fc2\:8005\:3015\:300d\:3002" <>
+    "\:30ab\:30c6\:30b4\:30ea\:306f \:4f9d\:983c/\:78ba\:8a8d/\:5831\:544a/\:60c5\:5831/\:96d1\:52d9/\:3006\:5207 \:304b\:3089\:6700\:9069\:306a\:3082\:306e\:3092\:9078\:3076\:3002\n\n" <>
+    "== \:51fa\:529b\:5f62\:5f0f ==\n\:4ee5\:4e0b\:306e5\:884c\:306e\:307f\:3092\:51fa\:529b\:3002\:4ed6\:306e\:30c6\:30ad\:30b9\:30c8\:306f\:4e00\:5207\:4e0d\:8981\:3002\n" <>
+    "WORKREQUEST: <\:6570\:5024>\nPRIVACY: <\:6570\:5024>\nCATEGORY: <\:30c8\:30fc\:30af\:30f3>\nDEADLINE: <YYYY-MM-DD[ HH:MM] \:307e\:305f\:306f NONE>\nSUMMARY: <\:8981\:7d04\:6587>\n\n[\:30e1\:30fc\:30eb]\n" <> fld];
 
 iSVParseDerived[raw_String] :=
   Module[{wr = Missing["NotParsed"], pv = Missing["NotParsed"],
@@ -1376,8 +1378,8 @@ SourceVaultMailInferDerived[mailspec_Association] :=
     parsed = iSVParseDerived[raw];
     Append[parsed, "Status" -> "Ok"]];
 
-(* ---- 重要度の構造的計算: グループ重み config + To/Cc 位置 + ML 判定 + LLM 依頼度 ---- *)
-(* グループ重み config (永続化、メールアカウントと同じ vault config 方式) *)
+(* ---- \:91cd\:8981\:5ea6\:306e\:69cb\:9020\:7684\:8a08\:7b97: \:30b0\:30eb\:30fc\:30d7\:91cd\:307f config + To/Cc \:4f4d\:7f6e + ML \:5224\:5b9a + LLM \:4f9d\:983c\:5ea6 ---- *)
+(* \:30b0\:30eb\:30fc\:30d7\:91cd\:307f config (\:6c38\:7d9a\:5316\:3001\:30e1\:30fc\:30eb\:30a2\:30ab\:30a6\:30f3\:30c8\:3068\:540c\:3058 vault config \:65b9\:5f0f) *)
 If[! AssociationQ[$iSVMDPriorityGroups], $iSVMDPriorityGroups = <||>];
 If[! ValueQ[$iSVMDPriorityGroupsLoaded], $iSVMDPriorityGroupsLoaded = False];
 iSVMDPriorityGroupsPath[] := FileNameJoin[{iSVMDMailConfigRoot[], "prioritygroups.jsonl"}];
@@ -1413,7 +1415,7 @@ SourceVaultPriorityGroupWeights[] := (iSVMDPriorityGroupsEnsureLoaded[]; $iSVMDP
 SourceVaultGroupWeightFor[group_] :=
   (iSVMDPriorityGroupsEnsureLoaded[]; Lookup[$iSVMDPriorityGroups, group, Missing["NotSet"]]);
 
-(* 構造シグナル *)
+(* \:69cb\:9020\:30b7\:30b0\:30ca\:30eb *)
 $iSVMDDefaultSenderWeight = 0.4;
 $iSVMDBulkPatterns = {"no-reply", "noreply", "no_reply", "do-not-reply",
    "donotreply", "do_not_reply", "mailer-daemon", "mailerdaemon", "bounce",
@@ -1433,11 +1435,11 @@ iSVMDBulkQ[snap_Association] :=
        Length[SourceVaultMailParseEmails[ToString@Lookup[md, "Cc", ""]]];
     StringContainsQ[from, Alternatives @@ $iSVMDBulkPatterns] || nRecip >= 8];
 
-(* 受信者ベースの決定的 privacy フロア (defense-in-depth)。オーナーが直接の To/Cc 受信者で、
-   非 bulk・少数宛のメール = 個人/小グループ通信とみなし PrivacyLevel の下限を保証する。
-   LLM 推論が個人メールの privacy を下げ過ぎても gate 側 (cloud) に漏れにくくする。
-   ML/一斉配信はオーナーが To/Cc に入らず position="Bulk" になるので floor 対象外。
-   owner 未設定 (position="Unknown") や bulk・多数宛は 0.0 (floor なし)。 *)
+(* \:53d7\:4fe1\:8005\:30d9\:30fc\:30b9\:306e\:6c7a\:5b9a\:7684 privacy \:30d5\:30ed\:30a2 (defense-in-depth)\:3002\:30aa\:30fc\:30ca\:30fc\:304c\:76f4\:63a5\:306e To/Cc \:53d7\:4fe1\:8005\:3067\:3001
+   \:975e bulk\:30fb\:5c11\:6570\:5b9b\:306e\:30e1\:30fc\:30eb = \:500b\:4eba/\:5c0f\:30b0\:30eb\:30fc\:30d7\:901a\:4fe1\:3068\:307f\:306a\:3057 PrivacyLevel \:306e\:4e0b\:9650\:3092\:4fdd\:8a3c\:3059\:308b\:3002
+   LLM \:63a8\:8ad6\:304c\:500b\:4eba\:30e1\:30fc\:30eb\:306e privacy \:3092\:4e0b\:3052\:904e\:304e\:3066\:3082 gate \:5074 (cloud) \:306b\:6f0f\:308c\:306b\:304f\:304f\:3059\:308b\:3002
+   ML/\:4e00\:6589\:914d\:4fe1\:306f\:30aa\:30fc\:30ca\:30fc\:304c To/Cc \:306b\:5165\:3089\:305a position="Bulk" \:306b\:306a\:308b\:306e\:3067 floor \:5bfe\:8c61\:5916\:3002
+   owner \:672a\:8a2d\:5b9a (position="Unknown") \:3084 bulk\:30fb\:591a\:6570\:5b9b\:306f 0.0 (floor \:306a\:3057)\:3002 *)
 iSVMDRecipientPrivacyFloor[snap_Association] :=
   Module[{md, pos, nRecip},
     If[$SourceVaultMailPersonalPrivacyFloor <= 0. || iSVMDBulkQ[snap], Return[0.]];
@@ -1484,10 +1486,10 @@ SourceVaultMailComputePriority[snap_Association, workRequest_: Missing[], catego
     wr = If[NumericQ[workRequest], Clip[N[workRequest], {0., 1.}], 0.0];
     posAdj = Which[pos === "To", 0.15, pos === "Cc", 0.0, pos === "Bulk", -0.25, True, 0.0];
     bulkAdj = If[bulk, -0.15, 0.0];
-    (* LLM カテゴリ Notice (機械的通知・一斉配信・広告) は強い減点。
-       DM はオーナー個人が To に入るため posAdj +0.15 が広告を持ち上げてしまう
-       (未知送信者 0.4 + To 0.15 = 0.55)。Notice -0.30 で 0.25 に落とす。
-       他カテゴリは WorkRequest が既に反映するので加減点しない。 *)
+    (* LLM \:30ab\:30c6\:30b4\:30ea Notice (\:6a5f\:68b0\:7684\:901a\:77e5\:30fb\:4e00\:6589\:914d\:4fe1\:30fb\:5e83\:544a) \:306f\:5f37\:3044\:6e1b\:70b9\:3002
+       DM \:306f\:30aa\:30fc\:30ca\:30fc\:500b\:4eba\:304c To \:306b\:5165\:308b\:305f\:3081 posAdj +0.15 \:304c\:5e83\:544a\:3092\:6301\:3061\:4e0a\:3052\:3066\:3057\:307e\:3046
+       (\:672a\:77e5\:9001\:4fe1\:8005 0.4 + To 0.15 = 0.55)\:3002Notice -0.30 \:3067 0.25 \:306b\:843d\:3068\:3059\:3002
+       \:4ed6\:30ab\:30c6\:30b4\:30ea\:306f WorkRequest \:304c\:65e2\:306b\:53cd\:6620\:3059\:308b\:306e\:3067\:52a0\:6e1b\:70b9\:3057\:306a\:3044\:3002 *)
     catAdj = If[category === "Notice", -0.30, 0.0];
     pri = Clip[sw + 0.30 wr + posAdj + bulkAdj + catAdj, {0.0, 1.0}];
     <|"Priority" -> Round[pri, 0.01],
@@ -1500,9 +1502,9 @@ SourceVaultMailExplainPriority[snap_Association] :=
     Quiet@Check[snap["Derived"]["WorkRequest"], Missing[]],
     Quiet@Check[With[{c = snap["Derived"]["Category"]}, If[StringQ[c], c, Missing[]]], Missing[]]];
 
-(* 優先度式の変更を既処理 snapshot に反映する (LLM 不要・高速)。
-   対象は PriorityComponents を持つもの = 過去に構造計算で Priority を出したもの。
-   legacy maildb 由来の Priority (PriorityComponents 無し) は有意な別ソースなので触らない。 *)
+(* \:512a\:5148\:5ea6\:5f0f\:306e\:5909\:66f4\:3092\:65e2\:51e6\:7406 snapshot \:306b\:53cd\:6620\:3059\:308b (LLM \:4e0d\:8981\:30fb\:9ad8\:901f)\:3002
+   \:5bfe\:8c61\:306f PriorityComponents \:3092\:6301\:3064\:3082\:306e = \:904e\:53bb\:306b\:69cb\:9020\:8a08\:7b97\:3067 Priority \:3092\:51fa\:3057\:305f\:3082\:306e\:3002
+   legacy maildb \:7531\:6765\:306e Priority (PriorityComponents \:7121\:3057) \:306f\:6709\:610f\:306a\:5225\:30bd\:30fc\:30b9\:306a\:306e\:3067\:89e6\:3089\:306a\:3044\:3002 *)
 Options[SourceVaultMailRecomputePriorities] = {"Persist" -> True};
 SourceVaultMailRecomputePriorities[OptionsPattern[]] :=
   Module[{snaps = SourceVaultMailSnapshotList[], n = 0, changed = 0},
@@ -1524,24 +1526,24 @@ SourceVaultMailRecomputePriorities[OptionsPattern[]] :=
     <|"Status" -> "Ok", "Eligible" -> n, "Recomputed" -> changed,
       "Total" -> Length[snaps]|>];
 
-(* snapshot に派生結果を適用。優先度は構造的に計算(LLM は WorkRequest のみ)。 *)
+(* snapshot \:306b\:6d3e\:751f\:7d50\:679c\:3092\:9069\:7528\:3002\:512a\:5148\:5ea6\:306f\:69cb\:9020\:7684\:306b\:8a08\:7b97(LLM \:306f WorkRequest \:306e\:307f)\:3002 *)
 iSVApplyDerived[snap_Association, res_Association] :=
   Module[{d = Lookup[snap, "Derived", <||>], s2 = snap, wr, cp, ct},
-    (* 旧 LLM の Priority は WorkRequest の代理として扱う(後方互換) *)
+    (* \:65e7 LLM \:306e Priority \:306f WorkRequest \:306e\:4ee3\:7406\:3068\:3057\:3066\:6271\:3046(\:5f8c\:65b9\:4e92\:63db) *)
     wr = Lookup[res, "WorkRequest", Lookup[res, "Priority", Missing[]]];
-    (* カテゴリは語彙へ正規化して保存 (注入 Inferencer の日本語値も受ける)。
-       優先度計算にも渡す (Notice = DM/一斉配信 は減点)。 *)
+    (* \:30ab\:30c6\:30b4\:30ea\:306f\:8a9e\:5f59\:3078\:6b63\:898f\:5316\:3057\:3066\:4fdd\:5b58 (\:6ce8\:5165 Inferencer \:306e\:65e5\:672c\:8a9e\:5024\:3082\:53d7\:3051\:308b)\:3002
+       \:512a\:5148\:5ea6\:8a08\:7b97\:306b\:3082\:6e21\:3059 (Notice = DM/\:4e00\:6589\:914d\:4fe1 \:306f\:6e1b\:70b9)\:3002 *)
     ct = iSVMDNormalizeCategory[Lookup[res, "Category", Missing[]]];
     cp = SourceVaultMailComputePriority[snap, wr, If[StringQ[ct], ct, Missing[]]];
     d["Priority"] = cp["Priority"];
     d["PriorityComponents"] = cp["Components"];
     If[NumericQ[wr], d["WorkRequest"] = N@Clip[wr, {0., 1.}]];
-    (* LLM 推論 PL に受信者ベースの決定的フロアを additive(Max)適用=個人メールの過小 privacy を防ぐ *)
+    (* LLM \:63a8\:8ad6 PL \:306b\:53d7\:4fe1\:8005\:30d9\:30fc\:30b9\:306e\:6c7a\:5b9a\:7684\:30d5\:30ed\:30a2\:3092 additive(Max)\:9069\:7528=\:500b\:4eba\:30e1\:30fc\:30eb\:306e\:904e\:5c0f privacy \:3092\:9632\:3050 *)
     If[NumericQ[res["PrivacyLevel"]],
       d["PrivacyLevel"] = Max[res["PrivacyLevel"], iSVMDRecipientPrivacyFloor[snap]]];
     If[StringQ[ct], d["Category"] = ct];
-    (* 〆切はキーが在るときだけ更新: 再処理で「〆切なし」になれば Missing で上書き、
-       Deadline 非対応の旧 Inferencer では既存値を保持。 *)
+    (* \:3006\:5207\:306f\:30ad\:30fc\:304c\:5728\:308b\:3068\:304d\:3060\:3051\:66f4\:65b0: \:518d\:51e6\:7406\:3067\:300c\:3006\:5207\:306a\:3057\:300d\:306b\:306a\:308c\:3070 Missing \:3067\:4e0a\:66f8\:304d\:3001
+       Deadline \:975e\:5bfe\:5fdc\:306e\:65e7 Inferencer \:3067\:306f\:65e2\:5b58\:5024\:3092\:4fdd\:6301\:3002 *)
     If[KeyExistsQ[res, "Deadline"],
       d["Deadline"] = With[{dl = res["Deadline"]},
          Which[
@@ -1553,11 +1555,11 @@ iSVApplyDerived[snap_Association, res_Association] :=
     d["DerivedSource"] = "LocalLLM+Structured";
     s2["Derived"] = d; s2];
 
-(* ---- mailspec enricher 登録 (拡張ポイント) ----
-   サマリー作成 (派生) のときだけ呼ばれる。登録が無ければ完全素通しで
-   SourceVault 単体の動作は変わらない。enricher が本文を拡張しても保存
-   レコードは標準形式のまま (Derived.DerivedEnrichment に名前が付くのみ。
-   暗号化済み body は変更しない)。 *)
+(* ---- mailspec enricher \:767b\:9332 (\:62e1\:5f35\:30dd\:30a4\:30f3\:30c8) ----
+   \:30b5\:30de\:30ea\:30fc\:4f5c\:6210 (\:6d3e\:751f) \:306e\:3068\:304d\:3060\:3051\:547c\:3070\:308c\:308b\:3002\:767b\:9332\:304c\:7121\:3051\:308c\:3070\:5b8c\:5168\:7d20\:901a\:3057\:3067
+   SourceVault \:5358\:4f53\:306e\:52d5\:4f5c\:306f\:5909\:308f\:3089\:306a\:3044\:3002enricher \:304c\:672c\:6587\:3092\:62e1\:5f35\:3057\:3066\:3082\:4fdd\:5b58
+   \:30ec\:30b3\:30fc\:30c9\:306f\:6a19\:6e96\:5f62\:5f0f\:306e\:307e\:307e (Derived.DerivedEnrichment \:306b\:540d\:524d\:304c\:4ed8\:304f\:306e\:307f\:3002
+   \:6697\:53f7\:5316\:6e08\:307f body \:306f\:5909\:66f4\:3057\:306a\:3044)\:3002 *)
 If[! AssociationQ[$iSVMDMailspecEnrichers], $iSVMDMailspecEnrichers = <||>];
 
 SourceVaultRegisterMailspecEnricher[name_String, f_] :=
@@ -1568,9 +1570,9 @@ SourceVaultUnregisterMailspecEnricher[name_String] :=
    <|"Status" -> "Unregistered", "Name" -> name|>);
 SourceVaultMailspecEnrichers[] := Keys[$iSVMDMailspecEnrichers];
 
-(* --- post-fetch hook: SourceVaultMailFetchNew 完了時に f[mbox, fetchResult] を呼ぶ。
-   取り込み後の派生処理 (mining の著者抽出など) を maildb に依存させずに結線するための拡張点。
-   hook の失敗は fetch を壊さない (Quiet@Check)。未登録なら完全素通し。 *)
+(* --- post-fetch hook: SourceVaultMailFetchNew \:5b8c\:4e86\:6642\:306b f[mbox, fetchResult] \:3092\:547c\:3076\:3002
+   \:53d6\:308a\:8fbc\:307f\:5f8c\:306e\:6d3e\:751f\:51e6\:7406 (mining \:306e\:8457\:8005\:62bd\:51fa\:306a\:3069) \:3092 maildb \:306b\:4f9d\:5b58\:3055\:305b\:305a\:306b\:7d50\:7dda\:3059\:308b\:305f\:3081\:306e\:62e1\:5f35\:70b9\:3002
+   hook \:306e\:5931\:6557\:306f fetch \:3092\:58ca\:3055\:306a\:3044 (Quiet@Check)\:3002\:672a\:767b\:9332\:306a\:3089\:5b8c\:5168\:7d20\:901a\:3057\:3002 *)
 If[! AssociationQ[$iSVMDPostFetchHooks], $iSVMDPostFetchHooks = <||>];
 SourceVaultRegisterPostFetchHook[name_String, f_] :=
   (AssociateTo[$iSVMDPostFetchHooks, name -> f];
@@ -1592,7 +1594,7 @@ iSVMDEnrichMailspec[spec_Association, snap_Association] :=
     If[applied =!= {}, s["_enrichedBy"] = applied];
     s];
 
-(* 派生レコードに enrichment 名を記録 (透明性のための追加キーのみ) *)
+(* \:6d3e\:751f\:30ec\:30b3\:30fc\:30c9\:306b enrichment \:540d\:3092\:8a18\:9332 (\:900f\:660e\:6027\:306e\:305f\:3081\:306e\:8ffd\:52a0\:30ad\:30fc\:306e\:307f) *)
 iSVMDStampEnrichment[snap_Association, spec_Association] :=
   With[{names = Lookup[spec, "_enrichedBy", Missing[]]},
     If[! ListQ[names] || names === {}, snap,
@@ -1607,8 +1609,8 @@ iSVSnapMailspec[snap_Association] :=
       "from" -> ToString@Lookup[md, "From", ""],
       "to" -> ToString@Lookup[md, "To", ""],
       "cc" -> ToString@Lookup[md, "Cc", ""],
-      (* 要約・カテゴリ・〆切などの派生は読める平文から (旧 snapshot の生 HTML 対策。
-         新 ingest は既に readable なので冪等)。 *)
+      (* \:8981\:7d04\:30fb\:30ab\:30c6\:30b4\:30ea\:30fb\:3006\:5207\:306a\:3069\:306e\:6d3e\:751f\:306f\:8aad\:3081\:308b\:5e73\:6587\:304b\:3089 (\:65e7 snapshot \:306e\:751f HTML \:5bfe\:7b56\:3002
+         \:65b0 ingest \:306f\:65e2\:306b readable \:306a\:306e\:3067\:51aa\:7b49)\:3002 *)
       "body" -> If[Lookup[bodyR, "Status", ""] === "Ok", iSVUIReadableBody[bodyR["Body"]], ""],
       "_bodyStatus" -> Lookup[bodyR, "Status", "Error"]|>;
     iSVMDEnrichMailspec[spec, snap]];
@@ -1625,16 +1627,16 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
     lim = OptionValue["Limit"]; ck = OptionValue["CheckpointEvery"];
     persist = TrueQ[OptionValue["Persist"]];
     mb = OptionValue["MBox"];
-    (* 日付範囲フィルタ (任意)。SourceVaultSearchMailSnapshots と同じ
-       iSVMDDayListOf / iSVMDDateInRange を使い、DateObject/文字列/{y,m,d} を
-       日単位で包含比較する。Limit はフィルタ後に適用される件数上限。
-       範囲内すべてを処理するには "Limit" -> Infinity を指定する。 *)
+    (* \:65e5\:4ed8\:7bc4\:56f2\:30d5\:30a3\:30eb\:30bf (\:4efb\:610f)\:3002SourceVaultSearchMailSnapshots \:3068\:540c\:3058
+       iSVMDDayListOf / iSVMDDateInRange \:3092\:4f7f\:3044\:3001DateObject/\:6587\:5b57\:5217/{y,m,d} \:3092
+       \:65e5\:5358\:4f4d\:3067\:5305\:542b\:6bd4\:8f03\:3059\:308b\:3002Limit \:306f\:30d5\:30a3\:30eb\:30bf\:5f8c\:306b\:9069\:7528\:3055\:308c\:308b\:4ef6\:6570\:4e0a\:9650\:3002
+       \:7bc4\:56f2\:5185\:3059\:3079\:3066\:3092\:51e6\:7406\:3059\:308b\:306b\:306f "Limit" -> Infinity \:3092\:6307\:5b9a\:3059\:308b\:3002 *)
     df = iSVMDDayListOf[OptionValue["DateFrom"]];
     dt = iSVMDDayListOf[OptionValue["DateTo"]];
-    (* "Refresh": None=Pending のみ (既定)。"MissingCategory"=Category 未生成の
-       Processed も対象 (Category/Deadline 導入前に処理済みの旧 snapshot の後埋め用)。
-       All=ロード済み全件を再処理。Function=述語に一致する snapshot を再処理
-       (例: Cerezo 通知だけリンク先込みで再派生)。 *)
+    (* "Refresh": None=Pending \:306e\:307f (\:65e2\:5b9a)\:3002"MissingCategory"=Category \:672a\:751f\:6210\:306e
+       Processed \:3082\:5bfe\:8c61 (Category/Deadline \:5c0e\:5165\:524d\:306b\:51e6\:7406\:6e08\:307f\:306e\:65e7 snapshot \:306e\:5f8c\:57cb\:3081\:7528)\:3002
+       All=\:30ed\:30fc\:30c9\:6e08\:307f\:5168\:4ef6\:3092\:518d\:51e6\:7406\:3002Function=\:8ff0\:8a9e\:306b\:4e00\:81f4\:3059\:308b snapshot \:3092\:518d\:51e6\:7406
+       (\:4f8b: Cerezo \:901a\:77e5\:3060\:3051\:30ea\:30f3\:30af\:5148\:8fbc\:307f\:3067\:518d\:6d3e\:751f)\:3002 *)
     ref = OptionValue["Refresh"];
     pend = Which[
       ref === All || ref === "All", SourceVaultMailSnapshotList[],
@@ -1646,8 +1648,8 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
         Select[SourceVaultMailSnapshotList[],
           TrueQ[Quiet@Check[ref[#], False]] &],
       True, SourceVaultMailDerivedPending[]];
-    (* "MBox": 文字列ならその mbox の snapshot に限定 (Refresh で選んだ集合への直交後フィルタ)。
-       SourceVaultSearchMailSnapshots と同じ #["MailSource"]["MBox"] パスで判定する。 *)
+    (* "MBox": \:6587\:5b57\:5217\:306a\:3089\:305d\:306e mbox \:306e snapshot \:306b\:9650\:5b9a (Refresh \:3067\:9078\:3093\:3060\:96c6\:5408\:3078\:306e\:76f4\:4ea4\:5f8c\:30d5\:30a3\:30eb\:30bf)\:3002
+       SourceVaultSearchMailSnapshots \:3068\:540c\:3058 #["MailSource"]["MBox"] \:30d1\:30b9\:3067\:5224\:5b9a\:3059\:308b\:3002 *)
     If[StringQ[mb], pend = Select[pend, Lookup[#["MailSource"], "MBox", Null] === mb &]];
     pendBefore = Length[pend];
     If[df =!= Automatic || dt =!= Automatic,
@@ -1674,10 +1676,10 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
         If[StringQ[mb], SourceVaultMailDerivedPending["MBox" -> mb],
            SourceVaultMailDerivedPending[]]]|>];
 
-(* ---- 既存 snapshot の HTML 本文を読める平文へ backfill ----
-   ingest 時テキスト化を導入する前に取り込んだメールが対象。本文を復号し、HTML なら
-   テキスト化して再暗号化格納 (原文は BodyRaw に温存)、BodyWasHTML フラグを立てる。
-   平文メールは触らない。冪等 (BodyWasHTML 済み / 平文は skip)。 *)
+(* ---- \:65e2\:5b58 snapshot \:306e HTML \:672c\:6587\:3092\:8aad\:3081\:308b\:5e73\:6587\:3078 backfill ----
+   ingest \:6642\:30c6\:30ad\:30b9\:30c8\:5316\:3092\:5c0e\:5165\:3059\:308b\:524d\:306b\:53d6\:308a\:8fbc\:3093\:3060\:30e1\:30fc\:30eb\:304c\:5bfe\:8c61\:3002\:672c\:6587\:3092\:5fa9\:53f7\:3057\:3001HTML \:306a\:3089
+   \:30c6\:30ad\:30b9\:30c8\:5316\:3057\:3066\:518d\:6697\:53f7\:5316\:683c\:7d0d (\:539f\:6587\:306f BodyRaw \:306b\:6e29\:5b58)\:3001BodyWasHTML \:30d5\:30e9\:30b0\:3092\:7acb\:3066\:308b\:3002
+   \:5e73\:6587\:30e1\:30fc\:30eb\:306f\:89e6\:3089\:306a\:3044\:3002\:51aa\:7b49 (BodyWasHTML \:6e08\:307f / \:5e73\:6587\:306f skip)\:3002 *)
 Options[SourceVaultBackfillMailBodies] =
   {"Limit" -> Infinity, "DryRun" -> False, "Persist" -> True, "CheckpointEvery" -> 20};
 SourceVaultBackfillMailBodies[OptionsPattern[]] :=
@@ -1686,7 +1688,7 @@ SourceVaultBackfillMailBodies[OptionsPattern[]] :=
     lim = OptionValue["Limit"]; dry = TrueQ[OptionValue["DryRun"]];
     persist = TrueQ[OptionValue["Persist"]]; ck = OptionValue["CheckpointEvery"];
     all = SourceVaultMailSnapshotList[];
-    (* 既に BodyWasHTML 済みは対象外 *)
+    (* \:65e2\:306b BodyWasHTML \:6e08\:307f\:306f\:5bfe\:8c61\:5916 *)
     candidates = Select[all,
       ! TrueQ[Lookup[Lookup[#, "MailMetadataPublic", <||>], "BodyWasHTML", False]] &];
     batch = If[IntegerQ[lim] && lim >= 0, Take[candidates, UpTo[lim]], candidates];
@@ -1695,7 +1697,7 @@ SourceVaultBackfillMailBodies[OptionsPattern[]] :=
         bodyR = SourceVaultMailSnapshotDecryptBody[snap];
         If[Lookup[bodyR, "Status", ""] =!= "Ok", failBody++; Continue[]];
         raw = bodyR["Body"];
-        (* 平文メールは変換不要 (触らない) *)
+        (* \:5e73\:6587\:30e1\:30fc\:30eb\:306f\:5909\:63db\:4e0d\:8981 (\:89e6\:3089\:306a\:3044) *)
         If[! iSVUILooksLikeHTML[iSVUINormalizeNewlines[raw]], skipped++; Continue[]];
         If[dry, done++; Continue[]];
         readable = iSVUIHtmlToText[raw];
@@ -1719,13 +1721,13 @@ SourceVaultBackfillMailBodies[OptionsPattern[]] :=
       "Converted" -> done, "SkippedPlain" -> skipped,
       "FailedBodyDecrypt" -> failBody, "FailedEncrypt" -> failEnc, "DryRun" -> dry|>];
 
-(* 「<mbox>の新着メールにサマリーを追加」の正準1関数。EnsureLoaded(スコープ確定)→
-   その mbox の未処理だけをバッチ要約・永続化、を内包する。
-   重要: 外部 WolframScript ジョブへ退避されたとき、子プロセスはメールストアが空
-   から始まる (SourceVaultMailDerivedPending[]=0)。EnsureLoaded を式の外で済ませて
-   バッチだけを外部化すると 0 件処理で終わる。本関数は両者を1式に閉じ込めるので、
-   提案が `SourceVaultMailAddSummaries["univ","Latest"]` 単体でも外部プロセスで
-   自己完結してロード→要約まで走る。mbox 絞りは正しいパス #["MailSource"]["MBox"] を使う。 *)
+(* \:300c<mbox>\:306e\:65b0\:7740\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:8ffd\:52a0\:300d\:306e\:6b63\:6e961\:95a2\:6570\:3002EnsureLoaded(\:30b9\:30b3\:30fc\:30d7\:78ba\:5b9a)\[RightArrow]
+   \:305d\:306e mbox \:306e\:672a\:51e6\:7406\:3060\:3051\:3092\:30d0\:30c3\:30c1\:8981\:7d04\:30fb\:6c38\:7d9a\:5316\:3001\:3092\:5185\:5305\:3059\:308b\:3002
+   \:91cd\:8981: \:5916\:90e8 WolframScript \:30b8\:30e7\:30d6\:3078\:9000\:907f\:3055\:308c\:305f\:3068\:304d\:3001\:5b50\:30d7\:30ed\:30bb\:30b9\:306f\:30e1\:30fc\:30eb\:30b9\:30c8\:30a2\:304c\:7a7a
+   \:304b\:3089\:59cb\:307e\:308b (SourceVaultMailDerivedPending[]=0)\:3002EnsureLoaded \:3092\:5f0f\:306e\:5916\:3067\:6e08\:307e\:305b\:3066
+   \:30d0\:30c3\:30c1\:3060\:3051\:3092\:5916\:90e8\:5316\:3059\:308b\:3068 0 \:4ef6\:51e6\:7406\:3067\:7d42\:308f\:308b\:3002\:672c\:95a2\:6570\:306f\:4e21\:8005\:30921\:5f0f\:306b\:9589\:3058\:8fbc\:3081\:308b\:306e\:3067\:3001
+   \:63d0\:6848\:304c `SourceVaultMailAddSummaries["univ","Latest"]` \:5358\:4f53\:3067\:3082\:5916\:90e8\:30d7\:30ed\:30bb\:30b9\:3067
+   \:81ea\:5df1\:5b8c\:7d50\:3057\:3066\:30ed\:30fc\:30c9\[RightArrow]\:8981\:7d04\:307e\:3067\:8d70\:308b\:3002mbox \:7d5e\:308a\:306f\:6b63\:3057\:3044\:30d1\:30b9 #["MailSource"]["MBox"] \:3092\:4f7f\:3046\:3002 *)
 Options[SourceVaultMailAddSummaries] =
   {"Limit" -> Infinity, "Persist" -> True, "CheckpointEvery" -> 3};
 SourceVaultMailAddSummaries[mbox_String, period_ : "Latest",
@@ -1733,31 +1735,31 @@ SourceVaultMailAddSummaries[mbox_String, period_ : "Latest",
   Module[{ensured, result},
     ensured = SourceVaultMailEnsureLoaded[mbox, period];
     result = SourceVaultInferMailDerivedBatch[
-      (* 既定 Refresh=None (=Pending のみ) を mbox で絞る。MBox 後フィルタは
-         #["MailSource"]["MBox"] で判定し、他 mbox の未処理を巻き込まない。 *)
+      (* \:65e2\:5b9a Refresh=None (=Pending \:306e\:307f) \:3092 mbox \:3067\:7d5e\:308b\:3002MBox \:5f8c\:30d5\:30a3\:30eb\:30bf\:306f
+         #["MailSource"]["MBox"] \:3067\:5224\:5b9a\:3057\:3001\:4ed6 mbox \:306e\:672a\:51e6\:7406\:3092\:5dfb\:304d\:8fbc\:307e\:306a\:3044\:3002 *)
       "MBox"    -> mbox,
       "Limit"   -> OptionValue["Limit"],
       "Persist" -> OptionValue["Persist"],
-      (* 同期実行が打ち切られても進捗が残るよう頻繁に保存 (既定 3 件ごと)。 *)
+      (* \:540c\:671f\:5b9f\:884c\:304c\:6253\:3061\:5207\:3089\:308c\:3066\:3082\:9032\:6357\:304c\:6b8b\:308b\:3088\:3046\:983b\:7e41\:306b\:4fdd\:5b58 (\:65e2\:5b9a 3 \:4ef6\:3054\:3068)\:3002 *)
       "CheckpointEvery" -> OptionValue["CheckpointEvery"]];
     <|"Status" -> "Ok", "MBox" -> mbox, "Period" -> period,
       "Loaded" -> ensured, "Batch" -> result|>];
 
-(* ---- 実 IMAP source (Python imaplib 経由) ---- *)
-(* Period 受理形式:
-   "Latest"(直近14日) / n(直近n日, 整数) /
-   {年, 月}(その月) / {年, 月, 日}(その日) / {from, to}(明示 ISO 範囲) /
-   "YYYYMM"(その月) / "YYYY"(その年) *)
+(* ---- \:5b9f IMAP source (Python imaplib \:7d4c\:7531) ---- *)
+(* Period \:53d7\:7406\:5f62\:5f0f:
+   "Latest"(\:76f4\:8fd114\:65e5) / n(\:76f4\:8fd1n\:65e5, \:6574\:6570) /
+   {\:5e74, \:6708}(\:305d\:306e\:6708) / {\:5e74, \:6708, \:65e5}(\:305d\:306e\:65e5) / {from, to}(\:660e\:793a ISO \:7bc4\:56f2) /
+   "YYYYMM"(\:305d\:306e\:6708) / "YYYY"(\:305d\:306e\:5e74) *)
 iSVIMAPFmt[d_] := DateString[d, {"Year", "-", "Month", "-", "Day"}];
 iSVIMAPDateRange[period_] :=
   Module[{today = DateObject[Take[DateList[], 3]]},
     Which[
       period === "Latest", {iSVIMAPFmt[DatePlus[today, {-14, "Day"}]], iSVIMAPFmt[DatePlus[today, {1, "Day"}]]},
       IntegerQ[period], {iSVIMAPFmt[DatePlus[today, {-period, "Day"}]], iSVIMAPFmt[DatePlus[today, {1, "Day"}]]},
-      MatchQ[period, {_Integer, _Integer}],   (* {年, 月} -> その月 *)
+      MatchQ[period, {_Integer, _Integer}],   (* {\:5e74, \:6708} -> \:305d\:306e\:6708 *)
         With[{s = DateObject[{period[[1]], period[[2]], 1}]},
           {iSVIMAPFmt[s], iSVIMAPFmt[DatePlus[s, {1, "Month"}]]}],
-      MatchQ[period, {_Integer, _Integer, _Integer}],  (* {年, 月, 日} -> その日 *)
+      MatchQ[period, {_Integer, _Integer, _Integer}],  (* {\:5e74, \:6708, \:65e5} -> \:305d\:306e\:65e5 *)
         With[{s = DateObject[{period[[1]], period[[2]], period[[3]]}]},
           {iSVIMAPFmt[s], iSVIMAPFmt[DatePlus[s, {1, "Day"}]]}],
       MatchQ[period, {_, _}], {ToString[period[[1]]], ToString[period[[2]]]},
@@ -1769,8 +1771,8 @@ iSVIMAPDateRange[period_] :=
           {iSVIMAPFmt[s], iSVIMAPFmt[DatePlus[s, {1, "Year"}]]}],
       True, iSVIMAPDateRange["Latest"]]];
 
-(* 添付の親ルート ($SourceVaultLegacyMailRoot は既定値なしの素シンボルなので
-   文字列フォールバックを自前で持つ。mailui の iSVUILegacyRoot と同ロジック)。 *)
+(* \:6dfb\:4ed8\:306e\:89aa\:30eb\:30fc\:30c8 ($SourceVaultLegacyMailRoot \:306f\:65e2\:5b9a\:5024\:306a\:3057\:306e\:7d20\:30b7\:30f3\:30dc\:30eb\:306a\:306e\:3067
+   \:6587\:5b57\:5217\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3092\:81ea\:524d\:3067\:6301\:3064\:3002mailui \:306e iSVUILegacyRoot \:3068\:540c\:30ed\:30b8\:30c3\:30af)\:3002 *)
 iSVIMAPLegacyRoot[] :=
   If[StringQ[SourceVault`$SourceVaultLegacyMailRoot],
     SourceVault`$SourceVaultLegacyMailRoot,
@@ -1782,28 +1784,28 @@ iSVIMAPPythonSource[mbox_String, srcOpts_Association] :=
     acct = iSVMDGetMailAccount[mbox];
     If[! AssociationQ[acct],
       Return[{<|"_error" -> "UnregisteredMailbox: " <> mbox <>
-         " — SourceVaultRegisterMailAccount で登録してください"|>}]];
+         " \[LongDash] SourceVaultRegisterMailAccount \:3067\:767b\:9332\:3057\:3066\:304f\:3060\:3055\:3044"|>}]];
     pw = Quiet@Check[ToString[SystemCredential[acct["CredKey"]]], "$Failed"];
     If[pw === "" || pw === "Null" || pw === "$Failed" || StringContainsQ[pw, "Missing"],
-      Return[{<|"_error" -> "NoCredential: SystemCredential[\"" <> acct["CredKey"] <> "\"] 未設定"|>}]];
+      Return[{<|"_error" -> "NoCredential: SystemCredential[\"" <> acct["CredKey"] <> "\"] \:672a\:8a2d\:5b9a"|>}]];
     range = iSVIMAPDateRange[Lookup[srcOpts, "Period", "Latest"]];
     attBase = FileNameJoin[{iSVIMAPLegacyRoot[], mbox}];
     If[! StringQ[attBase], Return[{<|"_error" -> "AttachmentRootUnresolved"|>}]];
     session = Quiet@Check[StartExternalSession["Python"], $Failed];
     If[Head[session] =!= ExternalSessionObject,
-      Return[{<|"_error" -> "PythonSessionFailed: ExternalEvaluate[\"Python\"] 不可 (Python 登録要確認)"|>}]];
+      Return[{<|"_error" -> "PythonSessionFailed: ExternalEvaluate[\"Python\"] \:4e0d\:53ef (Python \:767b\:9332\:8981\:78ba\:8a8d)"|>}]];
     code = iSVBuildPython[acct["Server"], acct["Port"], acct["User"], pw,
        range[[1]], range[[2]], attBase, Lookup[srcOpts, "MaxEmails", Automatic]];
     res = Quiet@Check[ExternalEvaluate[session, code], $Failed];
     Quiet@DeleteObject[session];
     If[! ListQ[res], Return[{<|"_error" -> "PythonEvalFailed"|>}]];
-    (* python は dict のリストを返す -> WL Association 化、キー名は maildb 互換 *)
+    (* python \:306f dict \:306e\:30ea\:30b9\:30c8\:3092\:8fd4\:3059 -> WL Association \:5316\:3001\:30ad\:30fc\:540d\:306f maildb \:4e92\:63db *)
     (Association[#] & /@ Select[res, AssociationQ]) /.
        r_Association :> KeyMap[ToString, r]];
 
 iSVBuildPython[server_, port_, user_, pw_, since_, before_, attBase_, maxN_] :=
   Module[{maxLine},
-    (* try ブロック内 (4スペース) に挿入されるので 4スペース字下げ。8スペースだと IndentationError で script 全体が PythonEvalFailed になる *)
+    (* try \:30d6\:30ed\:30c3\:30af\:5185 (4\:30b9\:30da\:30fc\:30b9) \:306b\:633f\:5165\:3055\:308c\:308b\:306e\:3067 4\:30b9\:30da\:30fc\:30b9\:5b57\:4e0b\:3052\:30028\:30b9\:30da\:30fc\:30b9\:3060\:3068 IndentationError \:3067 script \:5168\:4f53\:304c PythonEvalFailed \:306b\:306a\:308b *)
     maxLine = If[IntegerQ[maxN], "    email_ids = email_ids[-" <> ToString[maxN] <> ":]\n", ""];
     StringJoin[{
 "import imaplib, email, os, json, re\n",
@@ -1872,7 +1874,7 @@ iSVImapDate[iso_String] :=
   Module[{d = Quiet@Check[DateObject[iso], $Failed]},
     If[Head[d] === DateObject, DateString[d, {"Day", "-", "MonthNameShort", "-", "Year"}], iso]];
 
-(* ---- fetch エントリ ---- *)
+(* ---- fetch \:30a8\:30f3\:30c8\:30ea ---- *)
 Options[SourceVaultMailFetchNew] = {
    "Period" -> "Latest", "Process" -> False, "MessageSource" -> Automatic,
    "Inferencer" -> Automatic, "Persist" -> True, "MaxEmails" -> Automatic,
@@ -1890,13 +1892,13 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
       Return[<|"Status" -> "Error", "Reason" -> "IMAPError", "MBox" -> mbox,
         "Detail" -> Lookup[First[errs], "_error", ""]|>]];
     msgs = Select[msgs, AssociationQ];
-    iSVMDIdentityEnsureLoaded[];  (* 識別子を上書きしないよう先に load *)
-    (* 取り込み対象月の既存シャードを先にロードする。
-       未ロードのまま put -> save すると iSVMDWriteShard は in-memory の
-       $iSVMDShardMembers (=新着のみ) でその月のシャードファイル全体を再生成し、
-       既存メールの要約 (Derived) ごと上書き消失させてしまう。先読みしておけば
-       既存メールが store/members に乗り、シャード書き戻しで保全される。
-       (存在しない月/unknown はファイルが無いので no-op。) *)
+    iSVMDIdentityEnsureLoaded[];  (* \:8b58\:5225\:5b50\:3092\:4e0a\:66f8\:304d\:3057\:306a\:3044\:3088\:3046\:5148\:306b load *)
+    (* \:53d6\:308a\:8fbc\:307f\:5bfe\:8c61\:6708\:306e\:65e2\:5b58\:30b7\:30e3\:30fc\:30c9\:3092\:5148\:306b\:30ed\:30fc\:30c9\:3059\:308b\:3002
+       \:672a\:30ed\:30fc\:30c9\:306e\:307e\:307e put -> save \:3059\:308b\:3068 iSVMDWriteShard \:306f in-memory \:306e
+       $iSVMDShardMembers (=\:65b0\:7740\:306e\:307f) \:3067\:305d\:306e\:6708\:306e\:30b7\:30e3\:30fc\:30c9\:30d5\:30a1\:30a4\:30eb\:5168\:4f53\:3092\:518d\:751f\:6210\:3057\:3001
+       \:65e2\:5b58\:30e1\:30fc\:30eb\:306e\:8981\:7d04 (Derived) \:3054\:3068\:4e0a\:66f8\:304d\:6d88\:5931\:3055\:305b\:3066\:3057\:307e\:3046\:3002\:5148\:8aad\:307f\:3057\:3066\:304a\:3051\:3070
+       \:65e2\:5b58\:30e1\:30fc\:30eb\:304c store/members \:306b\:4e57\:308a\:3001\:30b7\:30e3\:30fc\:30c9\:66f8\:304d\:623b\:3057\:3067\:4fdd\:5168\:3055\:308c\:308b\:3002
+       (\:5b58\:5728\:3057\:306a\:3044\:6708/unknown \:306f\:30d5\:30a1\:30a4\:30eb\:304c\:7121\:3044\:306e\:3067 no-op\:3002) *)
     Module[{shardKeys},
       shardKeys = DeleteDuplicates[iSVMDShardKeyForMsg[mbox, #] & /@ msgs];
       Scan[
@@ -1908,7 +1910,7 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
     existsQ = ! MissingQ[SourceVaultMailSnapshotGet[
        iSVMDRecordId[mbox, ToString[Lookup[#, "id", "unknown"]]]]] &;
     newMsgs = Select[msgs, ! existsQ[#] &];
-    (* Overwrite->True なら既存(同一 RecordId)も再保存して修復/更新する *)
+    (* Overwrite->True \:306a\:3089\:65e2\:5b58(\:540c\:4e00 RecordId)\:3082\:518d\:4fdd\:5b58\:3057\:3066\:4fee\:5fa9/\:66f4\:65b0\:3059\:308b *)
     toStore = If[overwrite, msgs, newMsgs];
     overwritten = If[overwrite, Length[msgs] - Length[newMsgs], 0];
     infer = OptionValue["Inferencer"] /. Automatic -> SourceVaultMailInferDerived;
@@ -1930,8 +1932,8 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
       "Duplicates" -> If[overwrite, 0, Length[msgs] - Length[newMsgs]],
       "Processed" -> processed,
       "ProcessMode" -> If[TrueQ[OptionValue["Process"]], "Inline", "Deferred"]|>;
-    (* 取り込み完了後フック (mining の著者抽出など)。失敗しても fetch は成功扱い。
-       結果を観測できるよう PostFetchHooks に各フックの戻り値を載せる (フックは基底 result を受け取る)。 *)
+    (* \:53d6\:308a\:8fbc\:307f\:5b8c\:4e86\:5f8c\:30d5\:30c3\:30af (mining \:306e\:8457\:8005\:62bd\:51fa\:306a\:3069)\:3002\:5931\:6557\:3057\:3066\:3082 fetch \:306f\:6210\:529f\:6271\:3044\:3002
+       \:7d50\:679c\:3092\:89b3\:6e2c\:3067\:304d\:308b\:3088\:3046 PostFetchHooks \:306b\:5404\:30d5\:30c3\:30af\:306e\:623b\:308a\:5024\:3092\:8f09\:305b\:308b (\:30d5\:30c3\:30af\:306f\:57fa\:5e95 result \:3092\:53d7\:3051\:53d6\:308b)\:3002 *)
     Append[result, "PostFetchHooks" -> iSVMDRunPostFetchHooks[mbox, result]]];
 
 End[];
@@ -1939,56 +1941,58 @@ EndPackage[];
 
 
 (* ::Package:: *)
+(**)
+
 
 (* ============================================================
-   SourceVault_mailui.wl -- mail FE 操作 (本文/添付/返信) -- 旧 maildb 踏襲
+   SourceVault_mailui.wl -- mail FE \:64cd\:4f5c (\:672c\:6587/\:6dfb\:4ed8/\:8fd4\:4fe1) -- \:65e7 maildb \:8e0f\:8972
 
    This file is encoded in UTF-8.
    Load order: ... -> SourceVault_maildb.wl -> SourceVault_messagerelease.wl
                -> SourceVault_mailui.wl
 
-   ロジック (本文復号 / 添付パス解決 / 返信ドラフト生成) は headless でテスト可能。
-   FE ラッパ (ShowBody / OpenReplyNotebook / OpenAttachment) は front end が要る。
-   添付は旧 maildb の <legacyRoot>/<mbox>/<yyyymm>_attachment/<name> に在る。
+   \:30ed\:30b8\:30c3\:30af (\:672c\:6587\:5fa9\:53f7 / \:6dfb\:4ed8\:30d1\:30b9\:89e3\:6c7a / \:8fd4\:4fe1\:30c9\:30e9\:30d5\:30c8\:751f\:6210) \:306f headless \:3067\:30c6\:30b9\:30c8\:53ef\:80fd\:3002
+   FE \:30e9\:30c3\:30d1 (ShowBody / OpenReplyNotebook / OpenAttachment) \:306f front end \:304c\:8981\:308b\:3002
+   \:6dfb\:4ed8\:306f\:65e7 maildb \:306e <legacyRoot>/<mbox>/<yyyymm>_attachment/<name> \:306b\:5728\:308b\:3002
    ============================================================ *)
 
 BeginPackage["SourceVault`", {"NBAccess`"}];
 
-SourceVaultMailGetBody::usage = "SourceVaultMailGetBody[recordId] は snapshot の暗号化本文を復号して文字列で返す。";
-SourceVaultMailShowBody::usage = "SourceVaultMailShowBody[recordId] は本文を新規ノートブックで表示する (front end)。";
-SourceVaultMailAttachmentDir::usage = "SourceVaultMailAttachmentDir[mbox, yyyymm] は旧 maildb 添付ディレクトリのパスを返す。";
-SourceVaultMailAttachments::usage = "SourceVaultMailAttachments[recordId] は添付 {Name, Path, Exists} のリストを返す。";
-SourceVaultMailOpenAttachment::usage = "SourceVaultMailOpenAttachment[recordId, name] は添付ファイルを開く (front end / SystemOpen)。";
-SourceVaultMailComposeReply::usage = "SourceVaultMailComposeReply[recordId, opts] は返信ドラフト <|To,Cc,Subject,InReplyToToken,Quoted,Body|> を生成する。\"ReplyAll\"->True で Cc 含む。";
-SourceVaultMailOpenReplyNotebook::usage = "SourceVaultMailOpenReplyNotebook[recordId, opts] は返信用ウインドウ (To/Cc/件名/本文編集・ファイル添付・確認付き送信) を開く (front end)。opts: \"ReplyAll\"->True で全員に返信、\"Translate\"->True で日本語で書いて元メールの言語に翻訳して送る (旧 maildb replyMailTr 踏襲)。";
-SourceVaultMailView::usage = "SourceVaultMailView[query_String:\"\", opts] は検索結果を、行ごとに 本文表示(✉)/添付ポップアップ(📎)/返信(↩) のクリック操作を備えた表 (Dataset) で返す。旧 maildb showMails 踏襲。";
-SourceVaultMailSearchIndexView::usage = "SourceVaultMailSearchIndexView[query_String:\"\", opts] は SourceVaultMailSearchIndex (sidecar 索引検索、シャード非ロード) の View 版。連想リストを Dataset+UI 化し、行ごとに 本文(✉: 必要シャードを遅延ロードして表示)/スレッド(☰: アウトライン窓) ボタンを備える。表示件数は $SourceVaultMailViewMaxRows で制限。SourceVaultMailEnsureLoaded 不要 (索引 sidecar 必須: 無ければ SourceVaultMailRebuildMetadataIndex[] で構築)。opts は SourceVaultMailSearchIndex と同じ。";
-SourceVaultMailThreadNotebook::usage = "SourceVaultMailThreadNotebook[recordIdOrRow, opts] はスレッド全体 (同一正規化件名・同一 MBox) を 1 つのノートブック窓にアウトライン表示する (front end)。各メール = Section セル (日付+差出人) + 本文 Text セルのセルグループ=折りたたみ/アウトライン操作可。索引 sidecar でメンバーを特定し、必要シャードだけ遅延ロードして本文復号。セルは最大 PrivacyLevel で機密マーク。opts: \"MaxMails\"(50)。戻り値 <|Status, Mails, PrivacyLevel, LoadedShards|>。";
-SourceVaultMailRowActions::usage = "SourceVaultMailRowActions[snapshot] は1行分のアクション (Body/Attachments/Reply ボタン) を返す。";
-SourceVaultMailSend::usage = "SourceVaultMailSend[spec] はメールを送信する。spec=<|\"To\",\"Cc\",\"Bcc\",\"Subject\",\"Body\",\"Attachments\"->{パス...}|>。Bcc を省略すると $SourceVaultMailSendBccSelf が True のときオーナーの主アドレス宛に自分の控えを送る。$SourceVaultMailSignature が非空なら本文末尾に署名を付加する。返り値 <|\"Status\"->\"Sent\"|...|> / 失敗時 <|\"Status\"->\"Error\",\"Reason\"->...|>。Mathematica の SendMail 設定 (Preferences > Internet Connectivity > Mail Settings) が必要。";
-SourceVaultMailTranslateBody::usage = "SourceVaultMailTranslateBody[recordId] はメール本文を $Language (表示言語) に翻訳して返す (LLM, headless テスト可)。返り値 <|\"Status\"->\"Ok\",\"Text\"->訳文,\"Translated\"->True,\"Lang\"->...|>。";
-$SourceVaultMailSignature::usage = "$SourceVaultMailSignature は送信メール本文の末尾に付加する署名文字列。既定 \"\" (付加しない)。";
-$SourceVaultMailSendBccSelf::usage = "$SourceVaultMailSendBccSelf が True (既定) のとき、SourceVaultMailSend は Bcc 省略時にオーナーの主メールアドレスを Bcc に入れ、自分に控えを送る。";
-SourceVaultAddressBookView::usage = "SourceVaultAddressBookView[] は連絡先を整形表 (Dataset) で表示する。Uid/表示名/かな/メール/分類/信頼/MaxPL/AccessTags。";
-SourceVaultIdentityLinkUI::usage = "SourceVaultIdentityLinkUI[opts] は識別子を実体に紐付ける編集表(front end)。各行で 新規(ヘッダ継承で実体作成)/マージ(既存実体にアドレス追加)。opts: \"ShowLinked\"(既定False=未リンクのみ), \"Limit\"(既定200)。";
-SourceVaultEntityView::usage = "SourceVaultEntityView[] は実体(人/組織/Bot/ML)の一覧表(Dataset)。各行に編集ボタン。Uid/種別/表示名/かな/識別子数/グループ/重み/信頼。";
-SourceVaultEntityEditUI::usage = "SourceVaultEntityEditUI[entityIdOrUid] は実体1件の編集フォーム(front end)。表示名/種別/漢字/ローマ字/かな/分類/グループ/重み/所属/信頼 を編集し保存。";
-$SourceVaultLegacyMailRoot::usage = "旧 maildb のメールルート (添付ディレクトリの親)。既定は PrivateVault と同階層の udb/mails。";
-$SourceVaultMailNotebookStyle::usage = "本文表示・返信ノートブックの StyleDefinitions。既定 \"SourceVault default.nb\"。";
-$SourceVaultMailViewMaxRows::usage = "$SourceVaultMailViewMaxRows はメール一覧 Dataset (SourceVaultMailView 等) が一度に描画する最大行数。Windows 版 FrontEnd は項目数の多い Dataset の描画が重いため既定 25 (Pane スクロール + Dataset ページング前提)。All で無制限。整数を設定すると即反映。";
-SourceVaultMarkConfidentialViewCells::usage = "SourceVaultMarkConfidentialViewCells[nb] は notebook 内の「ノートブック生データを表示する出力セル」(メール View=SourceVaultMailView/MailDataset/MailSearchSummary、Todo 生テキスト=SourceVaultFindTodos) を、含まれる項目の最大プライバシーで機密マークする。メールは Derived.PrivacyLevel、Todo はソースノートブックの Publishable (全 Public なら 0.0=マークせず、1 つでも非 Public なら 1.0)。クラウド LLM (閾値0.5) へはスキーマのみ、ローカル LLM (閾値1.0) へは全文。サマリー/予定表 (SourceVaultUpcomingSchedule 等) はクラウド安全なので対象外。検出対象は共有レジストリで拡張される (SourceVault_eagle.wl ロード時は Eagle View/Dataset/Search/GeoView も対象)。nb 省略時は EvaluationNotebook[]。返り値: {<|\"Cell\"->idx,\"PrivacyLevel\"->pl|>...}。";
-SourceVaultMailMarkViewCells::usage = "SourceVaultMailMarkViewCells[nb] は SourceVaultMarkConfidentialViewCells の別名 (後方互換)。メール・Todo など生データ出力セルを機密マークする。";
-SourceVaultMailEnableAutoConfidential::usage = "SourceVaultMailEnableAutoConfidential[] は NBAccess`NBMakeContextPacket にフックを装着し、ClaudeEval/ClaudeQuery の文脈構築直前に SourceVaultMarkConfidentialViewCells で生データ出力セル (メール View / Todo 生テキスト) を自動機密マークする。冪等。SourceVaultMailDisableAutoConfidential[] で解除。";
-SourceVaultMailDisableAutoConfidential::usage = "SourceVaultMailDisableAutoConfidential[] は SourceVaultMailEnableAutoConfidential[] で装着したフックを解除し、NBMakeContextPacket を元に戻す。";
+SourceVaultMailGetBody::usage = "SourceVaultMailGetBody[recordId] \:306f snapshot \:306e\:6697\:53f7\:5316\:672c\:6587\:3092\:5fa9\:53f7\:3057\:3066\:6587\:5b57\:5217\:3067\:8fd4\:3059\:3002";
+SourceVaultMailShowBody::usage = "SourceVaultMailShowBody[recordId] \:306f\:672c\:6587\:3092\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3067\:8868\:793a\:3059\:308b (front end)\:3002";
+SourceVaultMailAttachmentDir::usage = "SourceVaultMailAttachmentDir[mbox, yyyymm] \:306f\:65e7 maildb \:6dfb\:4ed8\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:306e\:30d1\:30b9\:3092\:8fd4\:3059\:3002";
+SourceVaultMailAttachments::usage = "SourceVaultMailAttachments[recordId] \:306f\:6dfb\:4ed8 {Name, Path, Exists} \:306e\:30ea\:30b9\:30c8\:3092\:8fd4\:3059\:3002";
+SourceVaultMailOpenAttachment::usage = "SourceVaultMailOpenAttachment[recordId, name] \:306f\:6dfb\:4ed8\:30d5\:30a1\:30a4\:30eb\:3092\:958b\:304f (front end / SystemOpen)\:3002";
+SourceVaultMailComposeReply::usage = "SourceVaultMailComposeReply[recordId, opts] \:306f\:8fd4\:4fe1\:30c9\:30e9\:30d5\:30c8 <|To,Cc,Subject,InReplyToToken,Quoted,Body|> \:3092\:751f\:6210\:3059\:308b\:3002\"ReplyAll\"->True \:3067 Cc \:542b\:3080\:3002";
+SourceVaultMailOpenReplyNotebook::usage = "SourceVaultMailOpenReplyNotebook[recordId, opts] \:306f\:8fd4\:4fe1\:7528\:30a6\:30a4\:30f3\:30c9\:30a6 (To/Cc/\:4ef6\:540d/\:672c\:6587\:7de8\:96c6\:30fb\:30d5\:30a1\:30a4\:30eb\:6dfb\:4ed8\:30fb\:78ba\:8a8d\:4ed8\:304d\:9001\:4fe1) \:3092\:958b\:304f (front end)\:3002opts: \"ReplyAll\"->True \:3067\:5168\:54e1\:306b\:8fd4\:4fe1\:3001\"Translate\"->True \:3067\:65e5\:672c\:8a9e\:3067\:66f8\:3044\:3066\:5143\:30e1\:30fc\:30eb\:306e\:8a00\:8a9e\:306b\:7ffb\:8a33\:3057\:3066\:9001\:308b (\:65e7 maildb replyMailTr \:8e0f\:8972)\:3002";
+SourceVaultMailView::usage = "SourceVaultMailView[query_String:\"\", opts] \:306f\:691c\:7d22\:7d50\:679c\:3092\:3001\:884c\:3054\:3068\:306b \:672c\:6587\:8868\:793a(\:2709)/\:6dfb\:4ed8\:30dd\:30c3\:30d7\:30a2\:30c3\:30d7(\|01f4ce)/\:8fd4\:4fe1(\:21a9) \:306e\:30af\:30ea\:30c3\:30af\:64cd\:4f5c\:3092\:5099\:3048\:305f\:8868 (Dataset) \:3067\:8fd4\:3059\:3002\:65e7 maildb showMails \:8e0f\:8972\:3002";
+SourceVaultMailSearchIndexView::usage = "SourceVaultMailSearchIndexView[query_String:\"\", opts] \:306f SourceVaultMailSearchIndex (sidecar \:7d22\:5f15\:691c\:7d22\:3001\:30b7\:30e3\:30fc\:30c9\:975e\:30ed\:30fc\:30c9) \:306e View \:7248\:3002\:9023\:60f3\:30ea\:30b9\:30c8\:3092 Dataset+UI \:5316\:3057\:3001\:884c\:3054\:3068\:306b \:672c\:6587(\:2709: \:5fc5\:8981\:30b7\:30e3\:30fc\:30c9\:3092\:9045\:5ef6\:30ed\:30fc\:30c9\:3057\:3066\:8868\:793a)/\:30b9\:30ec\:30c3\:30c9(\:2630: \:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:7a93) \:30dc\:30bf\:30f3\:3092\:5099\:3048\:308b\:3002\:8868\:793a\:4ef6\:6570\:306f $SourceVaultMailViewMaxRows \:3067\:5236\:9650\:3002SourceVaultMailEnsureLoaded \:4e0d\:8981 (\:7d22\:5f15 sidecar \:5fc5\:9808: \:7121\:3051\:308c\:3070 SourceVaultMailRebuildMetadataIndex[] \:3067\:69cb\:7bc9)\:3002opts \:306f SourceVaultMailSearchIndex \:3068\:540c\:3058\:3002";
+SourceVaultMailThreadNotebook::usage = "SourceVaultMailThreadNotebook[recordIdOrRow, opts] \:306f\:30b9\:30ec\:30c3\:30c9\:5168\:4f53 (\:540c\:4e00\:6b63\:898f\:5316\:4ef6\:540d\:30fb\:540c\:4e00 MBox) \:3092 1 \:3064\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:7a93\:306b\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:8868\:793a\:3059\:308b (front end)\:3002\:5404\:30e1\:30fc\:30eb = Section \:30bb\:30eb (\:65e5\:4ed8+\:5dee\:51fa\:4eba) + \:672c\:6587 Text \:30bb\:30eb\:306e\:30bb\:30eb\:30b0\:30eb\:30fc\:30d7=\:6298\:308a\:305f\:305f\:307f/\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:64cd\:4f5c\:53ef\:3002\:7d22\:5f15 sidecar \:3067\:30e1\:30f3\:30d0\:30fc\:3092\:7279\:5b9a\:3057\:3001\:5fc5\:8981\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:9045\:5ef6\:30ed\:30fc\:30c9\:3057\:3066\:672c\:6587\:5fa9\:53f7\:3002\:30bb\:30eb\:306f\:6700\:5927 PrivacyLevel \:3067\:6a5f\:5bc6\:30de\:30fc\:30af\:3002opts: \"MaxMails\"(50)\:3002\:623b\:308a\:5024 <|Status, Mails, PrivacyLevel, LoadedShards|>\:3002";
+SourceVaultMailRowActions::usage = "SourceVaultMailRowActions[snapshot] \:306f1\:884c\:5206\:306e\:30a2\:30af\:30b7\:30e7\:30f3 (Body/Attachments/Reply \:30dc\:30bf\:30f3) \:3092\:8fd4\:3059\:3002";
+SourceVaultMailSend::usage = "SourceVaultMailSend[spec] \:306f\:30e1\:30fc\:30eb\:3092\:9001\:4fe1\:3059\:308b\:3002spec=<|\"To\",\"Cc\",\"Bcc\",\"Subject\",\"Body\",\"Attachments\"->{\:30d1\:30b9...}|>\:3002Bcc \:3092\:7701\:7565\:3059\:308b\:3068 $SourceVaultMailSendBccSelf \:304c True \:306e\:3068\:304d\:30aa\:30fc\:30ca\:30fc\:306e\:4e3b\:30a2\:30c9\:30ec\:30b9\:5b9b\:306b\:81ea\:5206\:306e\:63a7\:3048\:3092\:9001\:308b\:3002$SourceVaultMailSignature \:304c\:975e\:7a7a\:306a\:3089\:672c\:6587\:672b\:5c3e\:306b\:7f72\:540d\:3092\:4ed8\:52a0\:3059\:308b\:3002\:8fd4\:308a\:5024 <|\"Status\"->\"Sent\"|...|> / \:5931\:6557\:6642 <|\"Status\"->\"Error\",\"Reason\"->...|>\:3002Mathematica \:306e SendMail \:8a2d\:5b9a (Preferences > Internet Connectivity > Mail Settings) \:304c\:5fc5\:8981\:3002";
+SourceVaultMailTranslateBody::usage = "SourceVaultMailTranslateBody[recordId] \:306f\:30e1\:30fc\:30eb\:672c\:6587\:3092 $Language (\:8868\:793a\:8a00\:8a9e) \:306b\:7ffb\:8a33\:3057\:3066\:8fd4\:3059 (LLM, headless \:30c6\:30b9\:30c8\:53ef)\:3002\:8fd4\:308a\:5024 <|\"Status\"->\"Ok\",\"Text\"->\:8a33\:6587,\"Translated\"->True,\"Lang\"->...|>\:3002";
+$SourceVaultMailSignature::usage = "$SourceVaultMailSignature \:306f\:9001\:4fe1\:30e1\:30fc\:30eb\:672c\:6587\:306e\:672b\:5c3e\:306b\:4ed8\:52a0\:3059\:308b\:7f72\:540d\:6587\:5b57\:5217\:3002\:65e2\:5b9a \"\" (\:4ed8\:52a0\:3057\:306a\:3044)\:3002";
+$SourceVaultMailSendBccSelf::usage = "$SourceVaultMailSendBccSelf \:304c True (\:65e2\:5b9a) \:306e\:3068\:304d\:3001SourceVaultMailSend \:306f Bcc \:7701\:7565\:6642\:306b\:30aa\:30fc\:30ca\:30fc\:306e\:4e3b\:30e1\:30fc\:30eb\:30a2\:30c9\:30ec\:30b9\:3092 Bcc \:306b\:5165\:308c\:3001\:81ea\:5206\:306b\:63a7\:3048\:3092\:9001\:308b\:3002";
+SourceVaultAddressBookView::usage = "SourceVaultAddressBookView[] \:306f\:9023\:7d61\:5148\:3092\:6574\:5f62\:8868 (Dataset) \:3067\:8868\:793a\:3059\:308b\:3002Uid/\:8868\:793a\:540d/\:304b\:306a/\:30e1\:30fc\:30eb/\:5206\:985e/\:4fe1\:983c/MaxPL/AccessTags\:3002";
+SourceVaultIdentityLinkUI::usage = "SourceVaultIdentityLinkUI[opts] \:306f\:8b58\:5225\:5b50\:3092\:5b9f\:4f53\:306b\:7d10\:4ed8\:3051\:308b\:7de8\:96c6\:8868(front end)\:3002\:5404\:884c\:3067 \:65b0\:898f(\:30d8\:30c3\:30c0\:7d99\:627f\:3067\:5b9f\:4f53\:4f5c\:6210)/\:30de\:30fc\:30b8(\:65e2\:5b58\:5b9f\:4f53\:306b\:30a2\:30c9\:30ec\:30b9\:8ffd\:52a0)\:3002opts: \"ShowLinked\"(\:65e2\:5b9aFalse=\:672a\:30ea\:30f3\:30af\:306e\:307f), \"Limit\"(\:65e2\:5b9a200)\:3002";
+SourceVaultEntityView::usage = "SourceVaultEntityView[] \:306f\:5b9f\:4f53(\:4eba/\:7d44\:7e54/Bot/ML)\:306e\:4e00\:89a7\:8868(Dataset)\:3002\:5404\:884c\:306b\:7de8\:96c6\:30dc\:30bf\:30f3\:3002Uid/\:7a2e\:5225/\:8868\:793a\:540d/\:304b\:306a/\:8b58\:5225\:5b50\:6570/\:30b0\:30eb\:30fc\:30d7/\:91cd\:307f/\:4fe1\:983c\:3002";
+SourceVaultEntityEditUI::usage = "SourceVaultEntityEditUI[entityIdOrUid] \:306f\:5b9f\:4f531\:4ef6\:306e\:7de8\:96c6\:30d5\:30a9\:30fc\:30e0(front end)\:3002\:8868\:793a\:540d/\:7a2e\:5225/\:6f22\:5b57/\:30ed\:30fc\:30de\:5b57/\:304b\:306a/\:5206\:985e/\:30b0\:30eb\:30fc\:30d7/\:91cd\:307f/\:6240\:5c5e/\:4fe1\:983c \:3092\:7de8\:96c6\:3057\:4fdd\:5b58\:3002";
+$SourceVaultLegacyMailRoot::usage = "\:65e7 maildb \:306e\:30e1\:30fc\:30eb\:30eb\:30fc\:30c8 (\:6dfb\:4ed8\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:306e\:89aa)\:3002\:65e2\:5b9a\:306f PrivateVault \:3068\:540c\:968e\:5c64\:306e udb/mails\:3002";
+$SourceVaultMailNotebookStyle::usage = "\:672c\:6587\:8868\:793a\:30fb\:8fd4\:4fe1\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e StyleDefinitions\:3002\:65e2\:5b9a \"SourceVault default.nb\"\:3002";
+$SourceVaultMailViewMaxRows::usage = "$SourceVaultMailViewMaxRows \:306f\:30e1\:30fc\:30eb\:4e00\:89a7 Dataset (SourceVaultMailView \:7b49) \:304c\:4e00\:5ea6\:306b\:63cf\:753b\:3059\:308b\:6700\:5927\:884c\:6570\:3002Windows \:7248 FrontEnd \:306f\:9805\:76ee\:6570\:306e\:591a\:3044 Dataset \:306e\:63cf\:753b\:304c\:91cd\:3044\:305f\:3081\:65e2\:5b9a 25 (Pane \:30b9\:30af\:30ed\:30fc\:30eb + Dataset \:30da\:30fc\:30b8\:30f3\:30b0\:524d\:63d0)\:3002All \:3067\:7121\:5236\:9650\:3002\:6574\:6570\:3092\:8a2d\:5b9a\:3059\:308b\:3068\:5373\:53cd\:6620\:3002";
+SourceVaultMarkConfidentialViewCells::usage = "SourceVaultMarkConfidentialViewCells[nb] \:306f notebook \:5185\:306e\:300c\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:751f\:30c7\:30fc\:30bf\:3092\:8868\:793a\:3059\:308b\:51fa\:529b\:30bb\:30eb\:300d(\:30e1\:30fc\:30eb View=SourceVaultMailView/MailDataset/MailSearchSummary\:3001Todo \:751f\:30c6\:30ad\:30b9\:30c8=SourceVaultFindTodos) \:3092\:3001\:542b\:307e\:308c\:308b\:9805\:76ee\:306e\:6700\:5927\:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:3067\:6a5f\:5bc6\:30de\:30fc\:30af\:3059\:308b\:3002\:30e1\:30fc\:30eb\:306f Derived.PrivacyLevel\:3001Todo \:306f\:30bd\:30fc\:30b9\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e Publishable (\:5168 Public \:306a\:3089 0.0=\:30de\:30fc\:30af\:305b\:305a\:30011 \:3064\:3067\:3082\:975e Public \:306a\:3089 1.0)\:3002\:30af\:30e9\:30a6\:30c9 LLM (\:95be\:50240.5) \:3078\:306f\:30b9\:30ad\:30fc\:30de\:306e\:307f\:3001\:30ed\:30fc\:30ab\:30eb LLM (\:95be\:50241.0) \:3078\:306f\:5168\:6587\:3002\:30b5\:30de\:30ea\:30fc/\:4e88\:5b9a\:8868 (SourceVaultUpcomingSchedule \:7b49) \:306f\:30af\:30e9\:30a6\:30c9\:5b89\:5168\:306a\:306e\:3067\:5bfe\:8c61\:5916\:3002\:691c\:51fa\:5bfe\:8c61\:306f\:5171\:6709\:30ec\:30b8\:30b9\:30c8\:30ea\:3067\:62e1\:5f35\:3055\:308c\:308b (SourceVault_eagle.wl \:30ed\:30fc\:30c9\:6642\:306f Eagle View/Dataset/Search/GeoView \:3082\:5bfe\:8c61)\:3002nb \:7701\:7565\:6642\:306f EvaluationNotebook[]\:3002\:8fd4\:308a\:5024: {<|\"Cell\"->idx,\"PrivacyLevel\"->pl|>...}\:3002";
+SourceVaultMailMarkViewCells::usage = "SourceVaultMailMarkViewCells[nb] \:306f SourceVaultMarkConfidentialViewCells \:306e\:5225\:540d (\:5f8c\:65b9\:4e92\:63db)\:3002\:30e1\:30fc\:30eb\:30fbTodo \:306a\:3069\:751f\:30c7\:30fc\:30bf\:51fa\:529b\:30bb\:30eb\:3092\:6a5f\:5bc6\:30de\:30fc\:30af\:3059\:308b\:3002";
+SourceVaultMailEnableAutoConfidential::usage = "SourceVaultMailEnableAutoConfidential[] \:306f NBAccess`NBMakeContextPacket \:306b\:30d5\:30c3\:30af\:3092\:88c5\:7740\:3057\:3001ClaudeEval/ClaudeQuery \:306e\:6587\:8108\:69cb\:7bc9\:76f4\:524d\:306b SourceVaultMarkConfidentialViewCells \:3067\:751f\:30c7\:30fc\:30bf\:51fa\:529b\:30bb\:30eb (\:30e1\:30fc\:30eb View / Todo \:751f\:30c6\:30ad\:30b9\:30c8) \:3092\:81ea\:52d5\:6a5f\:5bc6\:30de\:30fc\:30af\:3059\:308b\:3002\:51aa\:7b49\:3002SourceVaultMailDisableAutoConfidential[] \:3067\:89e3\:9664\:3002";
+SourceVaultMailDisableAutoConfidential::usage = "SourceVaultMailDisableAutoConfidential[] \:306f SourceVaultMailEnableAutoConfidential[] \:3067\:88c5\:7740\:3057\:305f\:30d5\:30c3\:30af\:3092\:89e3\:9664\:3057\:3001NBMakeContextPacket \:3092\:5143\:306b\:623b\:3059\:3002";
 
 Begin["`Private`"];
 
 If[! ValueQ[$SourceVaultMailNotebookStyle],
   $SourceVaultMailNotebookStyle = "SourceVault default.nb"];
 
-(* Windows 版 FrontEnd は項目数の多い Dataset の描画が重い。メール一覧の
-   一度に描画する行数を既定 25 に抑え、Pane スクロール + Dataset ページング
-   前提にする。All で無制限。 *)
+(* Windows \:7248 FrontEnd \:306f\:9805\:76ee\:6570\:306e\:591a\:3044 Dataset \:306e\:63cf\:753b\:304c\:91cd\:3044\:3002\:30e1\:30fc\:30eb\:4e00\:89a7\:306e
+   \:4e00\:5ea6\:306b\:63cf\:753b\:3059\:308b\:884c\:6570\:3092\:65e2\:5b9a 25 \:306b\:6291\:3048\:3001Pane \:30b9\:30af\:30ed\:30fc\:30eb + Dataset \:30da\:30fc\:30b8\:30f3\:30b0
+   \:524d\:63d0\:306b\:3059\:308b\:3002All \:3067\:7121\:5236\:9650\:3002 *)
 If[! ValueQ[$SourceVaultMailViewMaxRows],
   $SourceVaultMailViewMaxRows = 25];
 
@@ -2021,7 +2025,7 @@ SourceVaultMailAttachments[record_] :=
     names = Lookup[snap["MailMetadataPublic"], "Attachments", Missing["NotInSnapshot"]];
     If[! ListQ[names],
       Return[{<|"Status" -> "AttachmentNamesNotInSnapshot",
-         "Hint" -> "再 import すると添付ファイル名が snapshot に入る (SourceVaultImportMaildbFile)。",
+         "Hint" -> "\:518d import \:3059\:308b\:3068\:6dfb\:4ed8\:30d5\:30a1\:30a4\:30eb\:540d\:304c snapshot \:306b\:5165\:308b (SourceVaultImportMaildbFile)\:3002",
          "Count" -> Lookup[snap["MailMetadataPublic"], "AttachmentCount", 0]|>}]];
     If[! StringQ[mbox] || ! StringQ[ym], Return[{}]];
     dir = SourceVaultMailAttachmentDir[mbox, ym];
@@ -2036,7 +2040,7 @@ SourceVaultMailOpenAttachment[record_, name_String] :=
     Quiet@Check[SystemOpen[hit["Path"]], Null];
     <|"Status" -> "Opened", "Path" -> hit["Path"]|>];
 
-(* ---- 返信ドラフト (ロジック) ---- *)
+(* ---- \:8fd4\:4fe1\:30c9\:30e9\:30d5\:30c8 (\:30ed\:30b8\:30c3\:30af) ---- *)
 iSVUIFromEmail[snap_] :=
   Module[{f = Lookup[snap["MailMetadataPublic"], "From", ""], em},
     em = If[StringQ[f], SourceVault`SourceVaultMailParseEmails[f], {}];
@@ -2048,14 +2052,14 @@ iSVUIReplyAddresses[snap_] :=
     cc = SourceVault`SourceVaultMailParseEmails[ToString@Lookup[snap["MailMetadataPublic"], "Cc", ""]];
     {to, cc}];
 
-(* 本文 readable 化ヘルパ (iSVUINormalizeNewlines/iSVUILooksLikeHTML/iSVUIHtmlToText/
-   iSVUIReadableBody) はコア (第1ブロック、ingest も使う) に定義済み。 *)
+(* \:672c\:6587 readable \:5316\:30d8\:30eb\:30d1 (iSVUINormalizeNewlines/iSVUILooksLikeHTML/iSVUIHtmlToText/
+   iSVUIReadableBody) \:306f\:30b3\:30a2 (\:7b2c1\:30d6\:30ed\:30c3\:30af\:3001ingest \:3082\:4f7f\:3046) \:306b\:5b9a\:7fa9\:6e08\:307f\:3002 *)
 iSVUIQuote[from_, date_, body_] :=
   With[{b = iSVUIReadableBody[body]},
     StringJoin[
       If[StringQ[date], date <> " ", ""], If[StringQ[from], from, ""], " wrote:\n",
-      (* 全行 (空行含む) に "> " を付ける。StringSplit は空行を落とし段落が潰れるため
-         改行を "\n> " 置換にする (標準的なメール引用)。 *)
+      (* \:5168\:884c (\:7a7a\:884c\:542b\:3080) \:306b "> " \:3092\:4ed8\:3051\:308b\:3002StringSplit \:306f\:7a7a\:884c\:3092\:843d\:3068\:3057\:6bb5\:843d\:304c\:6f70\:308c\:308b\:305f\:3081
+         \:6539\:884c\:3092 "\n> " \:7f6e\:63db\:306b\:3059\:308b (\:6a19\:6e96\:7684\:306a\:30e1\:30fc\:30eb\:5f15\:7528)\:3002 *)
       "> " <> StringReplace[b, "\n" -> "\n> "]]];
 
 Options[SourceVaultMailComposeReply] = {"ReplyAll" -> False, "Body" -> ""};
@@ -2067,12 +2071,12 @@ SourceVaultMailComposeReply[record_, OptionsPattern[]] :=
     fromEmail = iSVUIFromEmail[snap];
     bodyR = SourceVaultMailGetBody[snap];
     body = If[Lookup[bodyR, "Status", ""] === "Ok", bodyR["Body"],
-       (* 復号失敗を黙って空にせず、理由を明示する (鍵 backend の取り違え検知) *)
+       (* \:5fa9\:53f7\:5931\:6557\:3092\:9ed9\:3063\:3066\:7a7a\:306b\:305b\:305a\:3001\:7406\:7531\:3092\:660e\:793a\:3059\:308b (\:9375 backend \:306e\:53d6\:308a\:9055\:3048\:691c\:77e5) *)
        "[\:672c\:6587\:3092\:5fa9\:53f7\:3067\:304d\:307e\:305b\:3093\:3067\:3057\:305f: " <>
          ToString@Lookup[bodyR, "Reason", Lookup[bodyR, "Status", "Unknown"]] <>
-         " \:2014 NBAccess`$NBCredentialBackend = \"SystemCredential\" \:3092\:78ba\:8a8d\:3057\:3066\:304f\:3060\:3055\:3044]"];
+         " \[LongDash] NBAccess`$NBCredentialBackend = \"SystemCredential\" \:3092\:78ba\:8a8d\:3057\:3066\:304f\:3060\:3055\:3044]"];
     {to, cc} = iSVUIReplyAddresses[snap];
-    (* 自分(オーナー)宛は cc から除外 (ReplyAll 用)。オーナーのメールは識別子層 #1 から。 *)
+    (* \:81ea\:5206(\:30aa\:30fc\:30ca\:30fc)\:5b9b\:306f cc \:304b\:3089\:9664\:5916 (ReplyAll \:7528)\:3002\:30aa\:30fc\:30ca\:30fc\:306e\:30e1\:30fc\:30eb\:306f\:8b58\:5225\:5b50\:5c64 #1 \:304b\:3089\:3002 *)
     With[{ownerEmails = iSVMDOwnerEmails[]},
       cc = DeleteCases[Join[to, cc], _?(MemberQ[ownerEmails, ToLowerCase[#]] &)]];
     <|"Status" -> "Draft",
@@ -2085,16 +2089,16 @@ SourceVaultMailComposeReply[record_, OptionsPattern[]] :=
       "RecordId" -> Lookup[snap, "RecordId", Missing[]]|>];
 
 (* ============================================================ *)
-(* 翻訳 / 送信 / 返信パネル -- 旧 maildb replyMail/replyMailTr/sendReply 踏襲
-   ロジック (翻訳・送信) は headless テスト可能。パネルは front end が要る。 *)
+(* \:7ffb\:8a33 / \:9001\:4fe1 / \:8fd4\:4fe1\:30d1\:30cd\:30eb -- \:65e7 maildb replyMail/replyMailTr/sendReply \:8e0f\:8972
+   \:30ed\:30b8\:30c3\:30af (\:7ffb\:8a33\:30fb\:9001\:4fe1) \:306f headless \:30c6\:30b9\:30c8\:53ef\:80fd\:3002\:30d1\:30cd\:30eb\:306f front end \:304c\:8981\:308b\:3002 *)
 (* ============================================================ *)
 
 If[! ValueQ[$SourceVaultMailSignature], $SourceVaultMailSignature = ""];
 If[! ValueQ[$SourceVaultMailSendBccSelf], $SourceVaultMailSendBccSelf = True];
 
-(* LLM 呼び出し: 本文は機密たりうるので privacyLevel=1.0 (private/local 優先)。
-   iCallSummaryLLM / iSVLooksLikeLLMError は同一 SourceVault`Private` 文脈の
-   本体定義を再利用する (部分ロードで未定義でも AssociationQ ガードで安全に $Failed)。 *)
+(* LLM \:547c\:3073\:51fa\:3057: \:672c\:6587\:306f\:6a5f\:5bc6\:305f\:308a\:3046\:308b\:306e\:3067 privacyLevel=1.0 (private/local \:512a\:5148)\:3002
+   iCallSummaryLLM / iSVLooksLikeLLMError \:306f\:540c\:4e00 SourceVault`Private` \:6587\:8108\:306e
+   \:672c\:4f53\:5b9a\:7fa9\:3092\:518d\:5229\:7528\:3059\:308b (\:90e8\:5206\:30ed\:30fc\:30c9\:3067\:672a\:5b9a\:7fa9\:3067\:3082 AssociationQ \:30ac\:30fc\:30c9\:3067\:5b89\:5168\:306b $Failed)\:3002 *)
 iSVUILLM[prompt_String] :=
   Module[{r = Quiet@Check[iCallSummaryLLM[prompt, Automatic, 1.0], $Failed]},
     If[AssociationQ[r] && Lookup[r, "Status", ""] === "OK" &&
@@ -2103,18 +2107,18 @@ iSVUILLM[prompt_String] :=
         StringTrim[r["Response"]] =!= "",
       StringTrim[r["Response"]], $Failed]];
 
-(* 表示言語 (返信翻訳・本文翻訳の既定ターゲット読み手言語) *)
-iSVUIReadingLang[] := If[$Language === "Japanese", "日本語", ToString[$Language]];
+(* \:8868\:793a\:8a00\:8a9e (\:8fd4\:4fe1\:7ffb\:8a33\:30fb\:672c\:6587\:7ffb\:8a33\:306e\:65e2\:5b9a\:30bf\:30fc\:30b2\:30c3\:30c8\:8aad\:307f\:624b\:8a00\:8a9e) *)
+iSVUIReadingLang[] := If[$Language === "Japanese", "\:65e5\:672c\:8a9e", ToString[$Language]];
 
-(* 外国語メール本文を読み手言語へ翻訳 (読むため)。HTML/改行は readable 化してから。 *)
+(* \:5916\:56fd\:8a9e\:30e1\:30fc\:30eb\:672c\:6587\:3092\:8aad\:307f\:624b\:8a00\:8a9e\:3078\:7ffb\:8a33 (\:8aad\:3080\:305f\:3081)\:3002HTML/\:6539\:884c\:306f readable \:5316\:3057\:3066\:304b\:3089\:3002 *)
 iSVUITranslateBodyToReading[body_String] :=
   Module[{lang = iSVUIReadingLang[], readable = iSVUIReadableBody[body]},
     If[StringTrim[readable] === "", Return[""]];
     iSVUILLM[
-      "次のメール本文を" <> lang <> "に翻訳せよ。翻訳結果のみを出力し、" <>
-      "説明・見出し・注記は一切付けない。人名・団体名・固有名詞は原文の表記のまま残す。\n\n" <> readable]];
+      "\:6b21\:306e\:30e1\:30fc\:30eb\:672c\:6587\:3092" <> lang <> "\:306b\:7ffb\:8a33\:305b\:3088\:3002\:7ffb\:8a33\:7d50\:679c\:306e\:307f\:3092\:51fa\:529b\:3057\:3001" <>
+      "\:8aac\:660e\:30fb\:898b\:51fa\:3057\:30fb\:6ce8\:8a18\:306f\:4e00\:5207\:4ed8\:3051\:306a\:3044\:3002\:4eba\:540d\:30fb\:56e3\:4f53\:540d\:30fb\:56fa\:6709\:540d\:8a5e\:306f\:539f\:6587\:306e\:8868\:8a18\:306e\:307e\:307e\:6b8b\:3059\:3002\n\n" <> readable]];
 
-(* 公開: 本文翻訳 (headless) *)
+(* \:516c\:958b: \:672c\:6587\:7ffb\:8a33 (headless) *)
 SourceVaultMailTranslateBody[record_] :=
   Module[{r = SourceVaultMailGetBody[record], tr, lang = iSVUIReadingLang[]},
     If[Lookup[r, "Status", ""] =!= "Ok",
@@ -2125,14 +2129,14 @@ SourceVaultMailTranslateBody[record_] :=
       <|"Status" -> "Ok", "Text" -> tr, "Translated" -> True, "Lang" -> lang|>,
       <|"Status" -> "Error", "Reason" -> "TranslateFailed", "Lang" -> lang|>]];
 
-(* 元メールの言語・フォーマル度を判定 (返信翻訳のため) *)
+(* \:5143\:30e1\:30fc\:30eb\:306e\:8a00\:8a9e\:30fb\:30d5\:30a9\:30fc\:30de\:30eb\:5ea6\:3092\:5224\:5b9a (\:8fd4\:4fe1\:7ffb\:8a33\:306e\:305f\:3081) *)
 iSVUIDetectLangFormality[body_String] :=
   Module[{snippet = StringTake[body, UpTo[2000]], lang, form},
     lang = iSVUILLM[
-      "次のメール本文の言語を英語で一語で答えよ (English, Chinese, Korean, French など)。" <>
-      "日本語なら Japanese。\n\n" <> snippet];
+      "\:6b21\:306e\:30e1\:30fc\:30eb\:672c\:6587\:306e\:8a00\:8a9e\:3092\:82f1\:8a9e\:3067\:4e00\:8a9e\:3067\:7b54\:3048\:3088 (English, Chinese, Korean, French \:306a\:3069)\:3002" <>
+      "\:65e5\:672c\:8a9e\:306a\:3089 Japanese\:3002\n\n" <> snippet];
     form = iSVUILLM[
-      "次のメールのフォーマル度を一語で答えよ。formal / semi-formal / informal のいずれかのみ。\n\n" <> snippet];
+      "\:6b21\:306e\:30e1\:30fc\:30eb\:306e\:30d5\:30a9\:30fc\:30de\:30eb\:5ea6\:3092\:4e00\:8a9e\:3067\:7b54\:3048\:3088\:3002formal / semi-formal / informal \:306e\:3044\:305a\:308c\:304b\:306e\:307f\:3002\n\n" <> snippet];
     {If[StringQ[lang], lang, "English"], If[StringQ[form], form, "semi-formal"]}];
 
 iSVUIReplyDetect[record_] :=
@@ -2140,26 +2144,26 @@ iSVUIReplyDetect[record_] :=
     If[Lookup[r, "Status", ""] === "Ok",
       iSVUIDetectLangFormality[r["Body"]], {"English", "semi-formal"}]];
 
-(* 返信文 (日本語) の敬体/常体を簡易判定 (正規表現の二重エスケープを避け literal で) *)
+(* \:8fd4\:4fe1\:6587 (\:65e5\:672c\:8a9e) \:306e\:656c\:4f53/\:5e38\:4f53\:3092\:7c21\:6613\:5224\:5b9a (\:6b63\:898f\:8868\:73fe\:306e\:4e8c\:91cd\:30a8\:30b9\:30b1\:30fc\:30d7\:3092\:907f\:3051 literal \:3067) *)
 iSVUIDetectReplyStyle[replyText_String] :=
   If[StringContainsQ[replyText,
-      {"ます。", "ます、", "ます ", "ます\n", "です。", "です、", "です ", "です\n",
-       "ください", "いたします", "ございます", "でしょうか", "願います"}],
+      {"\:307e\:3059\:3002", "\:307e\:3059\:3001", "\:307e\:3059 ", "\:307e\:3059\n", "\:3067\:3059\:3002", "\:3067\:3059\:3001", "\:3067\:3059 ", "\:3067\:3059\n",
+       "\:304f\:3060\:3055\:3044", "\:3044\:305f\:3057\:307e\:3059", "\:3054\:3056\:3044\:307e\:3059", "\:3067\:3057\:3087\:3046\:304b", "\:9858\:3044\:307e\:3059"}],
     "keigo", "casual"];
 
-(* 日本語返信を元メールの言語へ翻訳 (旧 maildb sendReplyTr 踏襲) *)
+(* \:65e5\:672c\:8a9e\:8fd4\:4fe1\:3092\:5143\:30e1\:30fc\:30eb\:306e\:8a00\:8a9e\:3078\:7ffb\:8a33 (\:65e7 maildb sendReplyTr \:8e0f\:8972) *)
 iSVUITranslateReply[replyText_String, targetLang_String, origFormality_String] :=
   Module[{style = iSVUIDetectReplyStyle[replyText], instr},
-    instr = "相手の元メールのフォーマル度は " <> origFormality <> " である。" <>
+    instr = "\:76f8\:624b\:306e\:5143\:30e1\:30fc\:30eb\:306e\:30d5\:30a9\:30fc\:30de\:30eb\:5ea6\:306f " <> origFormality <> " \:3067\:3042\:308b\:3002" <>
       If[style === "keigo",
-        "返信者は丁寧な文体で書いているので、元メールより少しフォーマルに翻訳せよ。",
-        "返信者はカジュアルな文体で書いているので、元メールより少しインフォーマルに翻訳せよ。"];
+        "\:8fd4\:4fe1\:8005\:306f\:4e01\:5be7\:306a\:6587\:4f53\:3067\:66f8\:3044\:3066\:3044\:308b\:306e\:3067\:3001\:5143\:30e1\:30fc\:30eb\:3088\:308a\:5c11\:3057\:30d5\:30a9\:30fc\:30de\:30eb\:306b\:7ffb\:8a33\:305b\:3088\:3002",
+        "\:8fd4\:4fe1\:8005\:306f\:30ab\:30b8\:30e5\:30a2\:30eb\:306a\:6587\:4f53\:3067\:66f8\:3044\:3066\:3044\:308b\:306e\:3067\:3001\:5143\:30e1\:30fc\:30eb\:3088\:308a\:5c11\:3057\:30a4\:30f3\:30d5\:30a9\:30fc\:30de\:30eb\:306b\:7ffb\:8a33\:305b\:3088\:3002"];
     iSVUILLM[
-      "次の日本語のメール返信を" <> targetLang <> "に翻訳せよ。\n" <> instr <> "\n" <>
-      "人名・イニシャル・団体名は翻訳せず原文のアルファベット表記のまま残す。\n" <>
-      "できるだけ簡潔な文章として翻訳し、翻訳結果のみを出力せよ。\n\n" <> replyText]];
+      "\:6b21\:306e\:65e5\:672c\:8a9e\:306e\:30e1\:30fc\:30eb\:8fd4\:4fe1\:3092" <> targetLang <> "\:306b\:7ffb\:8a33\:305b\:3088\:3002\n" <> instr <> "\n" <>
+      "\:4eba\:540d\:30fb\:30a4\:30cb\:30b7\:30e3\:30eb\:30fb\:56e3\:4f53\:540d\:306f\:7ffb\:8a33\:305b\:305a\:539f\:6587\:306e\:30a2\:30eb\:30d5\:30a1\:30d9\:30c3\:30c8\:8868\:8a18\:306e\:307e\:307e\:6b8b\:3059\:3002\n" <>
+      "\:3067\:304d\:308b\:3060\:3051\:7c21\:6f54\:306a\:6587\:7ae0\:3068\:3057\:3066\:7ffb\:8a33\:3057\:3001\:7ffb\:8a33\:7d50\:679c\:306e\:307f\:3092\:51fa\:529b\:305b\:3088\:3002\n\n" <> replyText]];
 
-(* ---- 送信 (SendMail) ---- *)
+(* ---- \:9001\:4fe1 (SendMail) ---- *)
 iSVUIOwnerPrimaryEmail[] :=
   With[{e = iSVMDOwnerPrimaryEmail[]}, If[StringQ[e] && e =!= "", e, Missing[]]];
 
@@ -2173,13 +2177,13 @@ SourceVaultMailSend[spec_Association] :=
     sig = If[StringQ[$SourceVaultMailSignature] && StringTrim[$SourceVaultMailSignature] =!= "",
       "\n\n" <> $SourceVaultMailSignature, ""];
     body = body <> sig;
-    (* 改行を LF に統一。\r が残ると SMTP の \n->\r\n 正規化で \r\r\n になり
-       受信側で二重改行になる (旧 maildb と同じ対策)。 *)
+    (* \:6539\:884c\:3092 LF \:306b\:7d71\:4e00\:3002\r \:304c\:6b8b\:308b\:3068 SMTP \:306e \n->\r\n \:6b63\:898f\:5316\:3067 \r\r\n \:306b\:306a\:308a
+       \:53d7\:4fe1\:5074\:3067\:4e8c\:91cd\:6539\:884c\:306b\:306a\:308b (\:65e7 maildb \:3068\:540c\:3058\:5bfe\:7b56)\:3002 *)
     body = iSVUINormalizeNewlines[body];
     rawAtts = Lookup[spec, "Attachments", {}];
     rawAtts = If[ListQ[rawAtts], rawAtts, {rawAtts}];
     atts = Select[rawAtts, StringQ[#] && FileExistsQ[#] &];
-    (* 指定されたが存在しない添付は送信前に弾く (黙って欠落させない) *)
+    (* \:6307\:5b9a\:3055\:308c\:305f\:304c\:5b58\:5728\:3057\:306a\:3044\:6dfb\:4ed8\:306f\:9001\:4fe1\:524d\:306b\:5f3e\:304f (\:9ed9\:3063\:3066\:6b20\:843d\:3055\:305b\:306a\:3044) *)
     With[{missing = Select[rawAtts, StringQ[#] && ! FileExistsQ[#] &]},
       If[missing =!= {},
         Return[<|"Status" -> "Error", "Reason" -> "AttachmentNotFound",
@@ -2200,59 +2204,59 @@ SourceVaultMailSend[spec_Association] :=
       <|"Status" -> "Sent", "To" -> to, "Cc" -> cc, "Bcc" -> bcc,
         "Subject" -> subject, "Attachments" -> atts|>]];
 
-(* 送信前の確認ダイアログ (外向きの不可逆操作なので明示確認する) *)
+(* \:9001\:4fe1\:524d\:306e\:78ba\:8a8d\:30c0\:30a4\:30a2\:30ed\:30b0 (\:5916\:5411\:304d\:306e\:4e0d\:53ef\:9006\:64cd\:4f5c\:306a\:306e\:3067\:660e\:793a\:78ba\:8a8d\:3059\:308b) *)
 iSVUISendConfirm[spec_Association] :=
   Module[{to = ToString@Lookup[spec, "To", ""], subj = ToString@Lookup[spec, "Subject", ""],
       cc = StringTrim@ToString@Lookup[spec, "Cc", ""],
       natt = Length@Select[Lookup[spec, "Attachments", {}], StringQ]},
     ChoiceDialog[
       Column[{
-        Style["このメールを送信しますか？", "Subsection"],
+        Style["\:3053\:306e\:30e1\:30fc\:30eb\:3092\:9001\:4fe1\:3057\:307e\:3059\:304b\:ff1f", "Subsection"],
         Row[{Style["To: ", Bold], to}],
         If[cc =!= "", Row[{Style["Cc: ", Bold], cc}], Nothing],
-        Row[{Style["件名: ", Bold], subj}],
-        Row[{Style["添付: ", Bold], ToString[natt] <> " 件"}]}],
-      {"送信する" -> True, "キャンセル" -> False}, WindowTitle -> "送信確認"]];
+        Row[{Style["\:4ef6\:540d: ", Bold], subj}],
+        Row[{Style["\:6dfb\:4ed8: ", Bold], ToString[natt] <> " \:4ef6"}]}],
+      {"\:9001\:4fe1\:3059\:308b" -> True, "\:30ad\:30e3\:30f3\:30bb\:30eb" -> False}, WindowTitle -> "\:9001\:4fe1\:78ba\:8a8d"]];
 
-(* ---- 添付チップ (削除ボタン付き) ---- *)
+(* ---- \:6dfb\:4ed8\:30c1\:30c3\:30d7 (\:524a\:9664\:30dc\:30bf\:30f3\:4ed8\:304d) ---- *)
 iSVUIAttachChips[attachments_, removeFn_] :=
-  If[attachments === {}, Style["(添付なし)", Gray],
+  If[attachments === {}, Style["(\:6dfb\:4ed8\:306a\:3057)", Gray],
     Row[Riffle[
       (With[{ff = #},
          Framed[Row[{
            Tooltip[Style[FileNameTake[ff], "Text"], ff], Spacer[3],
-           Button[Style["×", Red, Bold], removeFn[ff],
+           Button[Style["\[Times]", Red, Bold], removeFn[ff],
              Appearance -> "Frameless"]}],
            RoundingRadius -> 4, FrameStyle -> GrayLevel[0.75],
            Background -> GrayLevel[0.96]]] & /@ attachments),
       Spacer[5]]]];
 
-(* ---- 返信用ノートブックのセル読み書き ----
-   返信本文は「普通のノートブックセル」(CellTags 付き Text セル) にする。
-   こうすると documentation.wl (DocExpandIdea/DocRefine/DocPolish/DocTranslate/
-   ShowDocPalette 等) が対象セルとしてそのまま使える。
-   制御パネル (To/Cc/件名/添付/送信) だけ DynamicModule、本文/翻訳/引用はセル。 *)
+(* ---- \:8fd4\:4fe1\:7528\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e\:30bb\:30eb\:8aad\:307f\:66f8\:304d ----
+   \:8fd4\:4fe1\:672c\:6587\:306f\:300c\:666e\:901a\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30bb\:30eb\:300d(CellTags \:4ed8\:304d Text \:30bb\:30eb) \:306b\:3059\:308b\:3002
+   \:3053\:3046\:3059\:308b\:3068 documentation.wl (DocExpandIdea/DocRefine/DocPolish/DocTranslate/
+   ShowDocPalette \:7b49) \:304c\:5bfe\:8c61\:30bb\:30eb\:3068\:3057\:3066\:305d\:306e\:307e\:307e\:4f7f\:3048\:308b\:3002
+   \:5236\:5fa1\:30d1\:30cd\:30eb (To/Cc/\:4ef6\:540d/\:6dfb\:4ed8/\:9001\:4fe1) \:3060\:3051 DynamicModule\:3001\:672c\:6587/\:7ffb\:8a33/\:5f15\:7528\:306f\:30bb\:30eb\:3002 *)
 
-(* セル式 -> 平文。FE の PlainText エクスポートを使い、稀に残る \:XXXX を実文字へ。 *)
+(* \:30bb\:30eb\:5f0f -> \:5e73\:6587\:3002FE \:306e PlainText \:30a8\:30af\:30b9\:30dd\:30fc\:30c8\:3092\:4f7f\:3044\:3001\:7a00\:306b\:6b8b\:308b \:XXXX \:3092\:5b9f\:6587\:5b57\:3078\:3002 *)
 iSVUICellPlainText[cellExpr_] :=
   Module[{txt},
     txt = Quiet@Check[
       First@FrontEndExecute[FrontEnd`ExportPacket[cellExpr, "PlainText"]], $Failed];
     If[! StringQ[txt], Return[$Failed]];
-    (* FE は \r\n を返しうる。LF に統一してから \:XXXX を実文字へ。 *)
+    (* FE \:306f \r\n \:3092\:8fd4\:3057\:3046\:308b\:3002LF \:306b\:7d71\:4e00\:3057\:3066\:304b\:3089 \:XXXX \:3092\:5b9f\:6587\:5b57\:3078\:3002 *)
     txt = iSVUINormalizeNewlines[txt];
     StringReplace[txt,
       RegularExpression["\\\\:([0-9a-fA-F]{4})"] :> FromCharacterCode[FromDigits["$1", 16]]]];
 
-(* CellTags でセルを探し平文を返す。無ければ Missing["NoCell"]。 *)
+(* CellTags \:3067\:30bb\:30eb\:3092\:63a2\:3057\:5e73\:6587\:3092\:8fd4\:3059\:3002\:7121\:3051\:308c\:3070 Missing["NoCell"]\:3002 *)
 iSVUIReadTaggedCell[nb_, tag_String] :=
   Module[{cells = Quiet@Check[Cells[nb, CellTags -> tag], {}]},
     If[! ListQ[cells] || cells === {}, Return[Missing["NoCell"]]];
     iSVUICellPlainText[NotebookRead[First[cells]]]];
 
-(* 翻訳結果を本文セル直後の「普通の編集可能セル」(svReplyTranslated) として書く。
-   再プレビューでは旧セルを消してから書く (重複防止)。書込後に元メール PL を再付与。
-   返り値: 翻訳セル。 *)
+(* \:7ffb\:8a33\:7d50\:679c\:3092\:672c\:6587\:30bb\:30eb\:76f4\:5f8c\:306e\:300c\:666e\:901a\:306e\:7de8\:96c6\:53ef\:80fd\:30bb\:30eb\:300d(svReplyTranslated) \:3068\:3057\:3066\:66f8\:304f\:3002
+   \:518d\:30d7\:30ec\:30d3\:30e5\:30fc\:3067\:306f\:65e7\:30bb\:30eb\:3092\:6d88\:3057\:3066\:304b\:3089\:66f8\:304f (\:91cd\:8907\:9632\:6b62)\:3002\:66f8\:8fbc\:5f8c\:306b\:5143\:30e1\:30fc\:30eb PL \:3092\:518d\:4ed8\:4e0e\:3002
+   \:8fd4\:308a\:5024: \:7ffb\:8a33\:30bb\:30eb\:3002 *)
 iSVUIWriteTranslatedCell[nb_, text_String, pl_ : 1.0] :=
   Module[{bodyCells, tc},
     Quiet@Scan[NotebookDelete, Cells[nb, CellTags -> "svReplyTranslated"]];
@@ -2263,15 +2267,15 @@ iSVUIWriteTranslatedCell[nb_, text_String, pl_ : 1.0] :=
       Cell[text, "Text", CellTags -> {"svReplyTranslated"},
         CellFrameMargins -> 6]];
     tc = First[Cells[nb, CellTags -> "svReplyTranslated"], $Failed];
-    (* 新規翻訳セルにも元メールの PrivacyLevel を付与 (全セル再マークで冪等) *)
+    (* \:65b0\:898f\:7ffb\:8a33\:30bb\:30eb\:306b\:3082\:5143\:30e1\:30fc\:30eb\:306e PrivacyLevel \:3092\:4ed8\:4e0e (\:5168\:30bb\:30eb\:518d\:30de\:30fc\:30af\:3067\:51aa\:7b49) *)
     iSVUIMarkCellsConfidential[nb, pl];
     tc];
 
-(* ---- 機密保持: メールウインドウの全セルを元メールの PrivacyLevel でマーク ----
-   表示・返信ウインドウの本文/引用/翻訳などのセルが元メールの PL を保持し、その
-   ウインドウからの LLM 呼び出し (documentation.wl / ClaudeEval 等) の文脈構築時に
-   NBMakeContextPacket が高 PL セルをクラウドへ送らない (クラウド閾値 0.5 / ローカル 1.0)。
-   PL < 0.5 (公開メール) はマークしない (クラウド可)。マークは NBAccess 公開 API 経由。 *)
+(* ---- \:6a5f\:5bc6\:4fdd\:6301: \:30e1\:30fc\:30eb\:30a6\:30a4\:30f3\:30c9\:30a6\:306e\:5168\:30bb\:30eb\:3092\:5143\:30e1\:30fc\:30eb\:306e PrivacyLevel \:3067\:30de\:30fc\:30af ----
+   \:8868\:793a\:30fb\:8fd4\:4fe1\:30a6\:30a4\:30f3\:30c9\:30a6\:306e\:672c\:6587/\:5f15\:7528/\:7ffb\:8a33\:306a\:3069\:306e\:30bb\:30eb\:304c\:5143\:30e1\:30fc\:30eb\:306e PL \:3092\:4fdd\:6301\:3057\:3001\:305d\:306e
+   \:30a6\:30a4\:30f3\:30c9\:30a6\:304b\:3089\:306e LLM \:547c\:3073\:51fa\:3057 (documentation.wl / ClaudeEval \:7b49) \:306e\:6587\:8108\:69cb\:7bc9\:6642\:306b
+   NBMakeContextPacket \:304c\:9ad8 PL \:30bb\:30eb\:3092\:30af\:30e9\:30a6\:30c9\:3078\:9001\:3089\:306a\:3044 (\:30af\:30e9\:30a6\:30c9\:95be\:5024 0.5 / \:30ed\:30fc\:30ab\:30eb 1.0)\:3002
+   PL < 0.5 (\:516c\:958b\:30e1\:30fc\:30eb) \:306f\:30de\:30fc\:30af\:3057\:306a\:3044 (\:30af\:30e9\:30a6\:30c9\:53ef)\:3002\:30de\:30fc\:30af\:306f NBAccess \:516c\:958b API \:7d4c\:7531\:3002 *)
 iSVUIMailWindowPL[snap_] :=
   With[{p = Quiet@Check[iSVMailProbePL[snap], 1.0]}, If[NumericQ[p], N[p], 1.0]];
 
@@ -2284,9 +2288,9 @@ iSVUIMarkCellsConfidential[nb_, pl_] :=
         Do[Quiet@Check[NBAccess`NBMarkCellConfidential[nb, i, N[pl]], Null], {i, n}]]],
     Null];
 
-(* ---- 返信制御パネル (DynamicModule) ----
-   本文セル (svReplyBody)・翻訳セル (svReplyTranslated)・引用セル (svReplyQuote) は
-   このパネルと同じノートブックにある。ボタンは EvaluationNotebook[] でそれらを読む。 *)
+(* ---- \:8fd4\:4fe1\:5236\:5fa1\:30d1\:30cd\:30eb (DynamicModule) ----
+   \:672c\:6587\:30bb\:30eb (svReplyBody)\:30fb\:7ffb\:8a33\:30bb\:30eb (svReplyTranslated)\:30fb\:5f15\:7528\:30bb\:30eb (svReplyQuote) \:306f
+   \:3053\:306e\:30d1\:30cd\:30eb\:3068\:540c\:3058\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306b\:3042\:308b\:3002\:30dc\:30bf\:30f3\:306f EvaluationNotebook[] \:3067\:305d\:308c\:3089\:3092\:8aad\:3080\:3002 *)
 iSVUIReplyControl[draft_Association, translateMode_, pl_ : 1.0] :=
   DynamicModule[{
       to = ToString@Lookup[draft, "To", ""],
@@ -2297,52 +2301,52 @@ iSVUIReplyControl[draft_Association, translateMode_, pl_ : 1.0] :=
       attachments = {}, includeQuote = True, busy = False, status = "",
       tr = TrueQ[translateMode]},
     Panel@Column[{
-      Style[If[tr, "返信 (日本語で書いて翻訳して送信)", "返信"], "Subtitle"],
+      Style[If[tr, "\:8fd4\:4fe1 (\:65e5\:672c\:8a9e\:3067\:66f8\:3044\:3066\:7ffb\:8a33\:3057\:3066\:9001\:4fe1)", "\:8fd4\:4fe1"], "Subtitle"],
       Grid[{
         {"To:", InputField[Dynamic[to], String, FieldSize -> {45, 1}]},
         {"Cc:", InputField[Dynamic[cc], String, FieldSize -> {45, 1}]},
-        {"件名:", InputField[Dynamic[subject], String, FieldSize -> {45, 1}]}},
+        {"\:4ef6\:540d:", InputField[Dynamic[subject], String, FieldSize -> {45, 1}]}},
         Alignment -> {{Right, Left}, Center}],
       Row[{
-        Button["ファイル添付",
-          With[{f = SystemDialogInput["FileOpen", WindowTitle -> "添付ファイルを選択"]},
+        Button["\:30d5\:30a1\:30a4\:30eb\:6dfb\:4ed8",
+          With[{f = SystemDialogInput["FileOpen", WindowTitle -> "\:6dfb\:4ed8\:30d5\:30a1\:30a4\:30eb\:3092\:9078\:629e"]},
             If[StringQ[f], attachments = DeleteDuplicates@Append[attachments, f]]],
           Method -> "Queued"],
         Spacer[8],
         Dynamic[iSVUIAttachChips[attachments,
           Function[ff, attachments = DeleteCases[attachments, ff]]]]}],
-      Row[{Checkbox[Dynamic[includeQuote]], Spacer[4], "引用元を含めて送信する"}],
+      Row[{Checkbox[Dynamic[includeQuote]], Spacer[4], "\:5f15\:7528\:5143\:3092\:542b\:3081\:3066\:9001\:4fe1\:3059\:308b"}],
       If[tr,
         Row[{
-          Button["翻訳プレビュー",
+          Button["\:7ffb\:8a33\:30d7\:30ec\:30d3\:30e5\:30fc",
             Module[{nb = EvaluationNotebook[], bodyTxt, t},
               busy = True;
               bodyTxt = iSVUIReadTaggedCell[nb, "svReplyBody"];
               If[! StringQ[bodyTxt] || StringTrim[bodyTxt] === "",
-                status = Style["返信本文セルに日本語を入力してください", Red]; busy = False,
+                status = Style["\:8fd4\:4fe1\:672c\:6587\:30bb\:30eb\:306b\:65e5\:672c\:8a9e\:3092\:5165\:529b\:3057\:3066\:304f\:3060\:3055\:3044", Red]; busy = False,
                 If[origLang === "",
                   With[{lf = iSVUIReplyDetect[rid]},
                     origLang = lf[[1]]; origFormality = lf[[2]]]];
                 t = iSVUITranslateReply[StringTrim[bodyTxt], origLang, origFormality];
-                iSVUIWriteTranslatedCell[nb, If[StringQ[t], t, "[翻訳に失敗しました]"], pl];
-                status = Style["翻訳結果セルを確認・編集してから送信してください", Gray];
+                iSVUIWriteTranslatedCell[nb, If[StringQ[t], t, "[\:7ffb\:8a33\:306b\:5931\:6557\:3057\:307e\:3057\:305f]"], pl];
+                status = Style["\:7ffb\:8a33\:7d50\:679c\:30bb\:30eb\:3092\:78ba\:8a8d\:30fb\:7de8\:96c6\:3057\:3066\:304b\:3089\:9001\:4fe1\:3057\:3066\:304f\:3060\:3055\:3044", Gray];
                 busy = False]],
             Method -> "Queued"],
           Spacer[6], Dynamic[If[busy, ProgressIndicator[Appearance -> "Necklace"], ""]],
           Spacer[6], Dynamic[If[origLang === "", "",
-            Style["→ " <> origLang <> " (" <> origFormality <> ")", Gray]]]}],
+            Style["\[RightArrow] " <> origLang <> " (" <> origFormality <> ")", Gray]]]}],
         Nothing],
       Row[{
-        Button[Style["送信", Bold],
+        Button[Style["\:9001\:4fe1", Bold],
           Module[{nb = EvaluationNotebook[], mainTxt, finalBody, q, spec, ok},
             mainTxt = If[tr,
               iSVUIReadTaggedCell[nb, "svReplyTranslated"],
               iSVUIReadTaggedCell[nb, "svReplyBody"]];
             Which[
               tr && ! StringQ[mainTxt],
-                status = Style["先に「翻訳プレビュー」を押してください", Red],
+                status = Style["\:5148\:306b\:300c\:7ffb\:8a33\:30d7\:30ec\:30d3\:30e5\:30fc\:300d\:3092\:62bc\:3057\:3066\:304f\:3060\:3055\:3044", Red],
               ! StringQ[mainTxt] || StringTrim[mainTxt] === "",
-                status = Style["本文が空です", Red],
+                status = Style["\:672c\:6587\:304c\:7a7a\:3067\:3059", Red],
               True,
                 finalBody = StringTrim[mainTxt];
                 If[TrueQ[includeQuote],
@@ -2356,18 +2360,18 @@ iSVUIReplyControl[draft_Association, translateMode_, pl_ : 1.0] :=
                   busy = True;
                   With[{res = SourceVaultMailSend[spec]},
                     If[Lookup[res, "Status", ""] === "Sent",
-                      (* 返信済を記録 (元メールの RecordId) *)
+                      (* \:8fd4\:4fe1\:6e08\:3092\:8a18\:9332 (\:5143\:30e1\:30fc\:30eb\:306e RecordId) *)
                       Quiet@Check[iSVMDRecordReplied[rid], Null]];
                     status = If[Lookup[res, "Status", ""] === "Sent",
-                      Style["✓ 送信しました", Bold, Darker@Green],
-                      Style["✗ 送信失敗: " <> ToString@Lookup[res, "Reason", ""], Red]]];
+                      Style["\[Checkmark] \:9001\:4fe1\:3057\:307e\:3057\:305f", Bold, Darker@Green],
+                      Style["\:2717 \:9001\:4fe1\:5931\:6557: " <> ToString@Lookup[res, "Reason", ""], Red]]];
                   busy = False]]],
           Method -> "Queued"],
         Spacer[10], Dynamic[status]}]
     }, Spacer[8]]];
 
-(* ---- front end ラッパ (GUI が要る) ---- *)
-(* メール本文ヘッダ (差出人/宛先/日付) *)
+(* ---- front end \:30e9\:30c3\:30d1 (GUI \:304c\:8981\:308b) ---- *)
+(* \:30e1\:30fc\:30eb\:672c\:6587\:30d8\:30c3\:30c0 (\:5dee\:51fa\:4eba/\:5b9b\:5148/\:65e5\:4ed8) *)
 iSVUIBodyHeader[snap_] :=
   Module[{md = Lookup[snap, "MailMetadataPublic", <||>], ff = iSVUIFont[]},
     Style[Column[{
@@ -2378,35 +2382,35 @@ iSVUIBodyHeader[snap_] :=
       Row[{Style["Date: ", Bold], iSVUIFormatDateJST@Lookup[md, "Date", Missing[]]}]},
       Spacing -> 0.3], "Text", Gray, FontFamily -> ff]];
 
-(* 本文表示パネル: 返信/全員に返信/翻訳して返信/翻訳表示/添付 ボタン付き。
-   翻訳表示は本文をインラインに $Language 訳で追記する。 *)
+(* \:672c\:6587\:8868\:793a\:30d1\:30cd\:30eb: \:8fd4\:4fe1/\:5168\:54e1\:306b\:8fd4\:4fe1/\:7ffb\:8a33\:3057\:3066\:8fd4\:4fe1/\:7ffb\:8a33\:8868\:793a/\:6dfb\:4ed8 \:30dc\:30bf\:30f3\:4ed8\:304d\:3002
+   \:7ffb\:8a33\:8868\:793a\:306f\:672c\:6587\:3092\:30a4\:30f3\:30e9\:30a4\:30f3\:306b $Language \:8a33\:3067\:8ffd\:8a18\:3059\:308b\:3002 *)
 iSVUIBodyPanel[snap_, subj_, body_, htmlQ_ : False] :=
   DynamicModule[{trans = "", busy = False, r = ToString@Lookup[snap, "RecordId", ""]},
     Panel@Column[{
       Style[subj, "Subtitle"],
       iSVUIBodyHeader[snap],
       Row[{
-        Button["返信", SourceVaultMailOpenReplyNotebook[r], Method -> "Queued"],
-        Button["全員に返信", SourceVaultMailOpenReplyNotebook[r, "ReplyAll" -> True],
+        Button["\:8fd4\:4fe1", SourceVaultMailOpenReplyNotebook[r], Method -> "Queued"],
+        Button["\:5168\:54e1\:306b\:8fd4\:4fe1", SourceVaultMailOpenReplyNotebook[r, "ReplyAll" -> True],
           Method -> "Queued"],
-        Button["翻訳して返信",
+        Button["\:7ffb\:8a33\:3057\:3066\:8fd4\:4fe1",
           SourceVaultMailOpenReplyNotebook[r, "ReplyAll" -> True, "Translate" -> True],
           Method -> "Queued"],
         iSVUIAttachMenu[snap],
-        Button["翻訳表示",
+        Button["\:7ffb\:8a33\:8868\:793a",
           busy = True;
           With[{t = iSVUITranslateBodyToReading[body]},
-            trans = If[StringQ[t], t, "[翻訳に失敗しました]"]];
+            trans = If[StringQ[t], t, "[\:7ffb\:8a33\:306b\:5931\:6557\:3057\:307e\:3057\:305f]"]];
           busy = False, Method -> "Queued"],
         Spacer[6], Dynamic[If[busy, ProgressIndicator[Appearance -> "Necklace"], ""]]},
         Spacer[6]],
       If[TrueQ[htmlQ],
-        Style["(HTML メールをテキストに変換して表示しています)", "Text", Gray, FontSlant -> Italic],
+        Style["(HTML \:30e1\:30fc\:30eb\:3092\:30c6\:30ad\:30b9\:30c8\:306b\:5909\:63db\:3057\:3066\:8868\:793a\:3057\:3066\:3044\:307e\:3059)", "Text", Gray, FontSlant -> Italic],
         Nothing],
       Pane[Style[body, "Text"], {Full, UpTo[460]}, Scrollbars -> Automatic],
       Dynamic[If[trans === "", "",
         Column[{
-          Style["【" <> iSVUIReadingLang[] <> "訳】", "Text", Bold],
+          Style["\:3010" <> iSVUIReadingLang[] <> "\:8a33\:3011", "Text", Bold],
           Pane[Style[trans, "Text"], {Full, UpTo[360]}, Scrollbars -> Automatic]}]]]
     }, Spacer[8]]];
 
@@ -2414,7 +2418,7 @@ SourceVaultMailShowBody[record_] :=
   Module[{snap = iSVUISnap[record], r, subj, raw, readable, htmlQ, nb, pl},
     r = SourceVaultMailGetBody[snap];
     If[Lookup[r, "Status", ""] =!= "Ok",
-      (* GUI button はリターン値を捨てるので、失敗理由をノートブックに出す *)
+      (* GUI button \:306f\:30ea\:30bf\:30fc\:30f3\:5024\:3092\:6368\:3066\:308b\:306e\:3067\:3001\:5931\:6557\:7406\:7531\:3092\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306b\:51fa\:3059 *)
       Quiet@Check[
         CreateDocument[{
           Cell[iSVL["DecryptFailTitle"], "Subtitle"],
@@ -2434,10 +2438,10 @@ SourceVaultMailShowBody[record_] :=
           CellMargins -> {{15, 15}, {12, 12}}],
         WindowTitle -> subj,
         StyleDefinitions -> $SourceVaultMailNotebookStyle], $Failed];
-    (* 本文セルに元メールの PrivacyLevel を付与: この窓からの LLM 呼び出しで
-       高 PL なら クラウドへ送られない (NBMakeContextPacket 閾値 0.5)。 *)
+    (* \:672c\:6587\:30bb\:30eb\:306b\:5143\:30e1\:30fc\:30eb\:306e PrivacyLevel \:3092\:4ed8\:4e0e: \:3053\:306e\:7a93\:304b\:3089\:306e LLM \:547c\:3073\:51fa\:3057\:3067
+       \:9ad8 PL \:306a\:3089 \:30af\:30e9\:30a6\:30c9\:3078\:9001\:3089\:308c\:306a\:3044 (NBMakeContextPacket \:95be\:5024 0.5)\:3002 *)
     iSVUIMarkCellsConfidential[nb, pl];
-    (* 開封回数を記録 (本文表示に成功したときのみ) *)
+    (* \:958b\:5c01\:56de\:6570\:3092\:8a18\:9332 (\:672c\:6587\:8868\:793a\:306b\:6210\:529f\:3057\:305f\:3068\:304d\:306e\:307f) *)
     Quiet@Check[iSVMDRecordOpen[ToString@Lookup[snap, "RecordId", ""]], Null];
     <|"Status" -> "Shown", "PrivacyLevel" -> pl|>];
 
@@ -2452,9 +2456,9 @@ SourceVaultMailOpenReplyNotebook[record_, opts : OptionsPattern[]] :=
     subj = ToString@Lookup[draft, "Subject", "Re:"];
     quoted = ToString@Lookup[draft, "Quoted", ""];
     instr = If[translate,
-      "↓ このセルに日本語で返信を入力し、上の「翻訳プレビュー」を押してください。本文は通常のノートブックセルなので文章作成パレット (ShowDocPalette 等) が使えます。",
-      "↓ このセルに返信本文を入力してください。本文は通常のノートブックセルなので文章作成パレット (ShowDocPalette 等) が使えます。"];
-    (* 制御パネル (Output) + 案内 + 本文セル + 引用セル。本文/引用/翻訳は普通の編集可能セル。 *)
+      "\[DownArrow] \:3053\:306e\:30bb\:30eb\:306b\:65e5\:672c\:8a9e\:3067\:8fd4\:4fe1\:3092\:5165\:529b\:3057\:3001\:4e0a\:306e\:300c\:7ffb\:8a33\:30d7\:30ec\:30d3\:30e5\:30fc\:300d\:3092\:62bc\:3057\:3066\:304f\:3060\:3055\:3044\:3002\:672c\:6587\:306f\:901a\:5e38\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30bb\:30eb\:306a\:306e\:3067\:6587\:7ae0\:4f5c\:6210\:30d1\:30ec\:30c3\:30c8 (ShowDocPalette \:7b49) \:304c\:4f7f\:3048\:307e\:3059\:3002",
+      "\[DownArrow] \:3053\:306e\:30bb\:30eb\:306b\:8fd4\:4fe1\:672c\:6587\:3092\:5165\:529b\:3057\:3066\:304f\:3060\:3055\:3044\:3002\:672c\:6587\:306f\:901a\:5e38\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30bb\:30eb\:306a\:306e\:3067\:6587\:7ae0\:4f5c\:6210\:30d1\:30ec\:30c3\:30c8 (ShowDocPalette \:7b49) \:304c\:4f7f\:3048\:307e\:3059\:3002"];
+    (* \:5236\:5fa1\:30d1\:30cd\:30eb (Output) + \:6848\:5185 + \:672c\:6587\:30bb\:30eb + \:5f15\:7528\:30bb\:30eb\:3002\:672c\:6587/\:5f15\:7528/\:7ffb\:8a33\:306f\:666e\:901a\:306e\:7de8\:96c6\:53ef\:80fd\:30bb\:30eb\:3002 *)
     nb = Quiet@Check[
       CreateDocument[{
         ExpressionCell[iSVUIReplyControl[draft, translate, pl], "Output",
@@ -2464,20 +2468,20 @@ SourceVaultMailOpenReplyNotebook[record_, opts : OptionsPattern[]] :=
         Cell[quoted, "Text", FontColor -> GrayLevel[0.55], CellTags -> {"svReplyQuote"}]},
         WindowTitle -> subj,
         StyleDefinitions -> $SourceVaultMailNotebookStyle], $Failed];
-    (* 引用(元メール)・本文・翻訳セルに元メールの PrivacyLevel を付与: この窓からの
-       LLM 呼び出し (documentation.wl / ClaudeEval) で高 PL なら クラウドへ送られない。 *)
+    (* \:5f15\:7528(\:5143\:30e1\:30fc\:30eb)\:30fb\:672c\:6587\:30fb\:7ffb\:8a33\:30bb\:30eb\:306b\:5143\:30e1\:30fc\:30eb\:306e PrivacyLevel \:3092\:4ed8\:4e0e: \:3053\:306e\:7a93\:304b\:3089\:306e
+       LLM \:547c\:3073\:51fa\:3057 (documentation.wl / ClaudeEval) \:3067\:9ad8 PL \:306a\:3089 \:30af\:30e9\:30a6\:30c9\:3078\:9001\:3089\:308c\:306a\:3044\:3002 *)
     iSVUIMarkCellsConfidential[nb, pl];
-    (* カーソルを本文セルに置き、すぐ入力・パレット操作できるようにする *)
+    (* \:30ab\:30fc\:30bd\:30eb\:3092\:672c\:6587\:30bb\:30eb\:306b\:7f6e\:304d\:3001\:3059\:3050\:5165\:529b\:30fb\:30d1\:30ec\:30c3\:30c8\:64cd\:4f5c\:3067\:304d\:308b\:3088\:3046\:306b\:3059\:308b *)
     Quiet@Check[
       With[{bc = Cells[nb, CellTags -> "svReplyBody"]},
         If[ListQ[bc] && bc =!= {}, SelectionMove[First[bc], Before, CellContents]]], Null];
     <|"Status" -> "ReplyNotebookOpened", "Draft" -> draft,
       "Translate" -> translate, "PrivacyLevel" -> pl|>];
 
-(* ---- インタラクティブ表 (旧 maildb showMails 踏襲) ---- *)
-(* 日付: JST に変換しコンパクト表示 "2026/06/05 木 14:53" (maildb formatDateJST 踏襲) *)
-iSVUIJstDay = <|"Monday" -> "月", "Tuesday" -> "火", "Wednesday" -> "水",
-   "Thursday" -> "木", "Friday" -> "金", "Saturday" -> "土", "Sunday" -> "日"|>;
+(* ---- \:30a4\:30f3\:30bf\:30e9\:30af\:30c6\:30a3\:30d6\:8868 (\:65e7 maildb showMails \:8e0f\:8972) ---- *)
+(* \:65e5\:4ed8: JST \:306b\:5909\:63db\:3057\:30b3\:30f3\:30d1\:30af\:30c8\:8868\:793a "2026/06/05 \:6728 14:53" (maildb formatDateJST \:8e0f\:8972) *)
+iSVUIJstDay = <|"Monday" -> "\:6708", "Tuesday" -> "\:706b", "Wednesday" -> "\:6c34",
+   "Thursday" -> "\:6728", "Friday" -> "\:91d1", "Saturday" -> "\:571f", "Sunday" -> "\:65e5"|>;
 iSVUIFormatDateJST[d_] :=
   Module[{obj, jst, dl},
     If[! StringQ[d] && Head[d] =!= DateObject, Return["-"]];
@@ -2495,7 +2499,7 @@ iSVUIFormatDateJST[d_] :=
 
 iSVUINumCell[x_] := If[NumericQ[x], ToString@NumberForm[Round[N[x], 0.01], {3, 2}], ""];
 
-(* 添付 ActionMenu: 名前ごとに開く Popup。名前が無い旧 snapshot は再 import を促す。 *)
+(* \:6dfb\:4ed8 ActionMenu: \:540d\:524d\:3054\:3068\:306b\:958b\:304f Popup\:3002\:540d\:524d\:304c\:7121\:3044\:65e7 snapshot \:306f\:518d import \:3092\:4fc3\:3059\:3002 *)
 iSVUIAttachMenu[snap_Association] :=
   Module[{rid = Lookup[snap, "RecordId", ""], names, cnt},
     names = Lookup[snap["MailMetadataPublic"], "Attachments", Missing[]];
@@ -2519,18 +2523,18 @@ SourceVaultMailRowActions[snap_Association] :=
       Button["\:21a9", SourceVaultMailOpenReplyNotebook[r], Appearance -> "Frameless",
         Method -> "Queued"]}, BaselinePosition -> Center]];
 
-(* 表テキストフォント (ClaudeCode`$ClaudeStandardFont、未ロード時フォールバック) *)
+(* \:8868\:30c6\:30ad\:30b9\:30c8\:30d5\:30a9\:30f3\:30c8 (ClaudeCode`$ClaudeStandardFont\:3001\:672a\:30ed\:30fc\:30c9\:6642\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af) *)
 iSVUIFont[] :=
   With[{f = Quiet@Check[ClaudeCode`$ClaudeStandardFont, $Failed]},
     If[StringQ[f] && f =!= "", f, "Yu Gothic UI"]];
 
-(* identity ストアの自動ロード (UI を開いたとき未ロードでも動くように)。未ロードなら safe。 *)
+(* identity \:30b9\:30c8\:30a2\:306e\:81ea\:52d5\:30ed\:30fc\:30c9 (UI \:3092\:958b\:3044\:305f\:3068\:304d\:672a\:30ed\:30fc\:30c9\:3067\:3082\:52d5\:304f\:3088\:3046\:306b)\:3002\:672a\:30ed\:30fc\:30c9\:306a\:3089 safe\:3002 *)
 iSVUIIdentityEnsureLoaded[] :=
   Quiet@Check[If[Length[DownValues[SourceVault`SourceVaultIdentityEnsureLoaded]] > 0,
      SourceVault`SourceVaultIdentityEnsureLoaded[], Null], Null];
 
-(* ---- i18n: 英語キー -> $Language で日英ラベルに解決 (iL化対応) ----
-   コード/スキーマのキーは英語固定。表示ラベルだけ $Language で切替。 *)
+(* ---- i18n: \:82f1\:8a9e\:30ad\:30fc -> $Language \:3067\:65e5\:82f1\:30e9\:30d9\:30eb\:306b\:89e3\:6c7a (iL\:5316\:5bfe\:5fdc) ----
+   \:30b3\:30fc\:30c9/\:30b9\:30ad\:30fc\:30de\:306e\:30ad\:30fc\:306f\:82f1\:8a9e\:56fa\:5b9a\:3002\:8868\:793a\:30e9\:30d9\:30eb\:3060\:3051 $Language \:3067\:5207\:66ff\:3002 *)
 $iSVUILabels = <|
   "Att" -> <|"Japanese" -> "\:6dfb\:4ed8", "English" -> "Att"|>,
   "Reply" -> <|"Japanese" -> "\:8fd4\:4fe1", "English" -> "Reply"|>,
@@ -2542,8 +2546,8 @@ $iSVUILabels = <|
   "Subject" -> <|"Japanese" -> "\:4ef6\:540d", "English" -> "Subject"|>,
   "From" -> <|"Japanese" -> "\:5dee\:51fa\:4eba", "English" -> "From"|>,
   "Summary" -> <|"Japanese" -> "\:6982\:8981", "English" -> "Summary"|>,
-  "Cat" -> <|"Japanese" -> "分類", "English" -> "Cat"|>,
-  "Deadline" -> <|"Japanese" -> "〆切", "English" -> "Due"|>,
+  "Cat" -> <|"Japanese" -> "\:5206\:985e", "English" -> "Cat"|>,
+  "Deadline" -> <|"Japanese" -> "\:3006\:5207", "English" -> "Due"|>,
   "NoMail" -> <|"Japanese" -> "\:8a72\:5f53\:3059\:308b\:30e1\:30fc\:30eb\:304c\:3042\:308a\:307e\:305b\:3093\:3002",
      "English" -> "No matching mail."|>,
   "Name" -> <|"Japanese" -> "\:8868\:793a\:540d", "English" -> "Name"|>,
@@ -2596,23 +2600,23 @@ iSVL[id_String] :=
     lang = If[$Language === "Japanese", "Japanese", "English"];
     Lookup[e, lang, Lookup[e, "English", id]]];
 
-(* 左寄せ・全文 Tooltip つきテキストセル (先頭が切れないように) *)
+(* \:5de6\:5bc4\:305b\:30fb\:5168\:6587 Tooltip \:3064\:304d\:30c6\:30ad\:30b9\:30c8\:30bb\:30eb (\:5148\:982d\:304c\:5207\:308c\:306a\:3044\:3088\:3046\:306b) *)
 iSVUITextCell[s_] :=
   With[{t = If[StringQ[s], s, ToString[s]], ff = iSVUIFont[]},
     Item[Tooltip[Style[t, "Text", FontFamily -> ff], t], Alignment -> Left]];
 
-(* Missing/Null は空文字に *)
+(* Missing/Null \:306f\:7a7a\:6587\:5b57\:306b *)
 iSVUIShow[x_] := Which[MissingQ[x] || x === Null, "", StringQ[x], x, True, ToString[x]];
 
-(* カテゴリトークン -> 短い表示ラベル (列幅節約)。Tooltip にトークン名 *)
+(* \:30ab\:30c6\:30b4\:30ea\:30c8\:30fc\:30af\:30f3 -> \:77ed\:3044\:8868\:793a\:30e9\:30d9\:30eb (\:5217\:5e45\:7bc0\:7d04)\:3002Tooltip \:306b\:30c8\:30fc\:30af\:30f3\:540d *)
 $iSVUICategoryShort = <|
-  "InfoProvision" -> <|"Japanese" -> "情報", "English" -> "Info"|>,
-  "AttendanceRequest" -> <|"Japanese" -> "出席", "English" -> "Attend"|>,
-  "TaskRequest" -> <|"Japanese" -> "作業", "English" -> "Task"|>,
-  "Confirmation" -> <|"Japanese" -> "確認", "English" -> "Confirm"|>,
-  "Report" -> <|"Japanese" -> "報告", "English" -> "Report"|>,
-  "Notice" -> <|"Japanese" -> "通知", "English" -> "Notice"|>,
-  "Other" -> <|"Japanese" -> "他", "English" -> "Other"|>|>;
+  "InfoProvision" -> <|"Japanese" -> "\:60c5\:5831", "English" -> "Info"|>,
+  "AttendanceRequest" -> <|"Japanese" -> "\:51fa\:5e2d", "English" -> "Attend"|>,
+  "TaskRequest" -> <|"Japanese" -> "\:4f5c\:696d", "English" -> "Task"|>,
+  "Confirmation" -> <|"Japanese" -> "\:78ba\:8a8d", "English" -> "Confirm"|>,
+  "Report" -> <|"Japanese" -> "\:5831\:544a", "English" -> "Report"|>,
+  "Notice" -> <|"Japanese" -> "\:901a\:77e5", "English" -> "Notice"|>,
+  "Other" -> <|"Japanese" -> "\:4ed6", "English" -> "Other"|>|>;
 
 iSVUICategoryCell[c_, ff_] :=
   Module[{e, lang, lbl},
@@ -2620,30 +2624,30 @@ iSVUICategoryCell[c_, ff_] :=
     e = Lookup[$iSVUICategoryShort, c, <||>];
     lang = If[$Language === "Japanese", "Japanese", "English"];
     lbl = Lookup[e, lang, Lookup[e, "English", c]];
-    (* 件名セル (iSVUITextCell) と同一構造にする。Tooltip 内の素の Style[文字列] は
-       Dataset セルで ShowStringCharacters が効き "通知" と引用符付きで表示される
-       (ユーザー報告)。"Text" スタイル (ShowStringCharacters->False) + Item で抑止。
-       Tooltip にはカテゴリトークン名を出す。 *)
+    (* \:4ef6\:540d\:30bb\:30eb (iSVUITextCell) \:3068\:540c\:4e00\:69cb\:9020\:306b\:3059\:308b\:3002Tooltip \:5185\:306e\:7d20\:306e Style[\:6587\:5b57\:5217] \:306f
+       Dataset \:30bb\:30eb\:3067 ShowStringCharacters \:304c\:52b9\:304d "\:901a\:77e5" \:3068\:5f15\:7528\:7b26\:4ed8\:304d\:3067\:8868\:793a\:3055\:308c\:308b
+       (\:30e6\:30fc\:30b6\:30fc\:5831\:544a)\:3002"Text" \:30b9\:30bf\:30a4\:30eb (ShowStringCharacters->False) + Item \:3067\:6291\:6b62\:3002
+       Tooltip \:306b\:306f\:30ab\:30c6\:30b4\:30ea\:30c8\:30fc\:30af\:30f3\:540d\:3092\:51fa\:3059\:3002 *)
     Item[Tooltip[Style[lbl, "Text", FontFamily -> ff], c], Alignment -> Left]];
 
-(* 〆切 ISO 文字列 -> "2026/06/19 17:00" / "2026/06/19" のコンパクト表示 *)
+(* \:3006\:5207 ISO \:6587\:5b57\:5217 -> "2026/06/19 17:00" / "2026/06/19" \:306e\:30b3\:30f3\:30d1\:30af\:30c8\:8868\:793a *)
 iSVUIFormatDeadline[dl_] :=
   If[! StringQ[dl], "",
     StringReplace[If[StringLength[dl] >= 16, StringTake[dl, 16], dl],
       {"-" -> "/", "T" -> " "}]];
 
 Options[SourceVaultMailView] = Options[SourceVault`SourceVaultSearchMailSnapshots];
-(* 返信済セル: 返信回数>0 なら緑チェック (Tooltip に日時・回数)、なければ空。
-   Dataset セルでは ShowStringCharacters が効き素の文字列に引用符が付くため明示 False。 *)
+(* \:8fd4\:4fe1\:6e08\:30bb\:30eb: \:8fd4\:4fe1\:56de\:6570>0 \:306a\:3089\:7dd1\:30c1\:30a7\:30c3\:30af (Tooltip \:306b\:65e5\:6642\:30fb\:56de\:6570)\:3001\:306a\:3051\:308c\:3070\:7a7a\:3002
+   Dataset \:30bb\:30eb\:3067\:306f ShowStringCharacters \:304c\:52b9\:304d\:7d20\:306e\:6587\:5b57\:5217\:306b\:5f15\:7528\:7b26\:304c\:4ed8\:304f\:305f\:3081\:660e\:793a False\:3002 *)
 iSVUIRepliedCell[rid_, ff_] :=
   With[{n = iSVMDRepliedCountOf[rid], at = iSVMDRepliedAtOf[rid]},
     If[IntegerQ[n] && n > 0,
       Tooltip[
-        Style["\:2713", Darker@Green, Bold, FontFamily -> ff, ShowStringCharacters -> False],
-        "返信済: " <> at <> If[n > 1, " (" <> ToString[n] <> "回)", ""]],
+        Style["\[Checkmark]", Darker@Green, Bold, FontFamily -> ff, ShowStringCharacters -> False],
+        "\:8fd4\:4fe1\:6e08: " <> at <> If[n > 1, " (" <> ToString[n] <> "\:56de)", ""]],
       ""]];
 
-(* 開封回数セル: 0 は空、>0 は回数 (引用符抑止) *)
+(* \:958b\:5c01\:56de\:6570\:30bb\:30eb: 0 \:306f\:7a7a\:3001>0 \:306f\:56de\:6570 (\:5f15\:7528\:7b26\:6291\:6b62) *)
 iSVUIOpensCell[rid_, ff_] :=
   With[{n = iSVMDOpenCountOf[rid]},
     If[IntegerQ[n] && n > 0,
@@ -2652,10 +2656,10 @@ iSVUIOpensCell[rid_, ff_] :=
 SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
   Module[{snaps, rows, ff = iSVUIFont[]},
     snaps = SourceVault`SourceVaultSearchMailSnapshots[query, opts];
-    (* 開封回数・返信済は最新をディスクから読む (他セッション/別 PC 反映) *)
+    (* \:958b\:5c01\:56de\:6570\:30fb\:8fd4\:4fe1\:6e08\:306f\:6700\:65b0\:3092\:30c7\:30a3\:30b9\:30af\:304b\:3089\:8aad\:3080 (\:4ed6\:30bb\:30c3\:30b7\:30e7\:30f3/\:5225 PC \:53cd\:6620) *)
     iSVMDInteractionLoad[];
-    (* アクションは maildb 同様に列を分ける (1 セルに詰めると幅超過で "..." になる)。
-       フォントは Dataset の BaseStyle が無いのでセルごとに適用する。 *)
+    (* \:30a2\:30af\:30b7\:30e7\:30f3\:306f maildb \:540c\:69d8\:306b\:5217\:3092\:5206\:3051\:308b (1 \:30bb\:30eb\:306b\:8a70\:3081\:308b\:3068\:5e45\:8d85\:904e\:3067 "..." \:306b\:306a\:308b)\:3002
+       \:30d5\:30a9\:30f3\:30c8\:306f Dataset \:306e BaseStyle \:304c\:7121\:3044\:306e\:3067\:30bb\:30eb\:3054\:3068\:306b\:9069\:7528\:3059\:308b\:3002 *)
     rows = Function[s,
        With[{r = Lookup[s, "RecordId", ""], md = s["MailMetadataPublic"], dv = s["Derived"]},
          <|"" -> Button["\:2709", SourceVaultMailShowBody[r],
@@ -2676,32 +2680,32 @@ SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
            iSVL["Summary"] -> iSVUITextCell[With[{sm = Lookup[dv, "Summary", ""]},
               If[StringQ[sm], sm, ""]]]|>]] /@ snaps;
     If[rows === {}, Return[Style[iSVL["NoMail"], "Text"]]];
-    (* PL >= 0.5 のメールを含む場合は Confidential 値として返す
-       (代入先変数も秘密登録され、派生値のセルにも伝播する) *)
+    (* PL >= 0.5 \:306e\:30e1\:30fc\:30eb\:3092\:542b\:3080\:5834\:5408\:306f Confidential \:5024\:3068\:3057\:3066\:8fd4\:3059
+       (\:4ee3\:5165\:5148\:5909\:6570\:3082\:79d8\:5bc6\:767b\:9332\:3055\:308c\:3001\:6d3e\:751f\:5024\:306e\:30bb\:30eb\:306b\:3082\:4f1d\:64ad\:3059\:308b) *)
     iSVMDWrapConfidential[
       Pane[
         Dataset[rows,
-          (* ⚠️この ItemSize 形式は Dataset 内ボタンの当たり領域を描画とズラす副作用があり、
-             SourceVaultMailSearchIndexView では2列目以降が押せなくなったため撤去した。
-             MailView は現行の列幅で偶然クリック可能なため据え置き (変更時は要クリック確認) *)
+          (* \:26a0\:fe0f\:3053\:306e ItemSize \:5f62\:5f0f\:306f Dataset \:5185\:30dc\:30bf\:30f3\:306e\:5f53\:305f\:308a\:9818\:57df\:3092\:63cf\:753b\:3068\:30ba\:30e9\:3059\:526f\:4f5c\:7528\:304c\:3042\:308a\:3001
+             SourceVaultMailSearchIndexView \:3067\:306f2\:5217\:76ee\:4ee5\:964d\:304c\:62bc\:305b\:306a\:304f\:306a\:3063\:305f\:305f\:3081\:64a4\:53bb\:3057\:305f\:3002
+             MailView \:306f\:73fe\:884c\:306e\:5217\:5e45\:3067\:5076\:7136\:30af\:30ea\:30c3\:30af\:53ef\:80fd\:306a\:305f\:3081\:636e\:3048\:7f6e\:304d (\:5909\:66f4\:6642\:306f\:8981\:30af\:30ea\:30c3\:30af\:78ba\:8a8d) *)
           ItemSize -> {2, {3, 4, 3, 4, 4, 15, 3, 3, 5, 12, 28, 14, 40}},
           Alignment -> {Left, Center},
-          (* MaxItems -> {最大行数, 最大列数}。第2要素を行数に縛ると
-             少件数時に列が隠れるので All (全列・全行) にする。 *)
+          (* MaxItems -> {\:6700\:5927\:884c\:6570, \:6700\:5927\:5217\:6570}\:3002\:7b2c2\:8981\:7d20\:3092\:884c\:6570\:306b\:7e1b\:308b\:3068
+             \:5c11\:4ef6\:6570\:6642\:306b\:5217\:304c\:96a0\:308c\:308b\:306e\:3067 All (\:5168\:5217\:30fb\:5168\:884c) \:306b\:3059\:308b\:3002 *)
           MaxItems -> {$SourceVaultMailViewMaxRows, All}],
         ImageSize -> Full],
       snaps]];
 
-(* ════════════════════════════════════════════════════════
-   索引行 View + スレッド アウトライン窓 (シャード非ロード検索の表示層)
-   方針 (全 SourceVault 共通): 検索/フィルタの core は連想リストを返す純データ
-   関数 (後段処理で連鎖可)。ノートブック出力は View 関数が Dataset+UI 化し、
-   一度に表示する件数の制限も View 層で行う ($SourceVaultMailViewMaxRows)。
-   索引は .svmailidx sidecar (低漏洩メタ) なので本文シャードを一切ロードせず
-   検索でき、✉/☰ クリック時に必要シャードだけ遅延ロードする。
-   ════════════════════════════════════════════════════════ *)
+(* \:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550
+   \:7d22\:5f15\:884c View + \:30b9\:30ec\:30c3\:30c9 \:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:7a93 (\:30b7\:30e3\:30fc\:30c9\:975e\:30ed\:30fc\:30c9\:691c\:7d22\:306e\:8868\:793a\:5c64)
+   \:65b9\:91dd (\:5168 SourceVault \:5171\:901a): \:691c\:7d22/\:30d5\:30a3\:30eb\:30bf\:306e core \:306f\:9023\:60f3\:30ea\:30b9\:30c8\:3092\:8fd4\:3059\:7d14\:30c7\:30fc\:30bf
+   \:95a2\:6570 (\:5f8c\:6bb5\:51e6\:7406\:3067\:9023\:9396\:53ef)\:3002\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:51fa\:529b\:306f View \:95a2\:6570\:304c Dataset+UI \:5316\:3057\:3001
+   \:4e00\:5ea6\:306b\:8868\:793a\:3059\:308b\:4ef6\:6570\:306e\:5236\:9650\:3082 View \:5c64\:3067\:884c\:3046 ($SourceVaultMailViewMaxRows)\:3002
+   \:7d22\:5f15\:306f .svmailidx sidecar (\:4f4e\:6f0f\:6d29\:30e1\:30bf) \:306a\:306e\:3067\:672c\:6587\:30b7\:30e3\:30fc\:30c9\:3092\:4e00\:5207\:30ed\:30fc\:30c9\:305b\:305a
+   \:691c\:7d22\:3067\:304d\:3001\:2709/\:2630 \:30af\:30ea\:30c3\:30af\:6642\:306b\:5fc5\:8981\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:9045\:5ef6\:30ed\:30fc\:30c9\:3059\:308b\:3002
+   \:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550 *)
 
-(* 索引行 (flat) の PL: フェイルセーフで欠落は 1.0 (秘匿) 扱い *)
+(* \:7d22\:5f15\:884c (flat) \:306e PL: \:30d5\:30a7\:30a4\:30eb\:30bb\:30fc\:30d5\:3067\:6b20\:843d\:306f 1.0 (\:79d8\:533f) \:6271\:3044 *)
 iSVMDIxProbePL[row_] := With[{p = Lookup[row, "PrivacyLevel", Missing[]]},
   If[NumericQ[p], N[p], 1.0]];
 iSVMDIxConfidentialQ[rows_List] := rows =!= {} && TrueQ[Max[iSVMDIxProbePL /@ rows] >= 0.5];
@@ -2719,7 +2723,7 @@ iSVMDIxWrapConfidential[result_, rows_List] :=
        Null];
      result)];
 
-(* record の shard を必要時のみ遅延ロードして snapshot を返す (索引行の ShardKey 経由) *)
+(* record \:306e shard \:3092\:5fc5\:8981\:6642\:306e\:307f\:9045\:5ef6\:30ed\:30fc\:30c9\:3057\:3066 snapshot \:3092\:8fd4\:3059 (\:7d22\:5f15\:884c\:306e ShardKey \:7d4c\:7531) *)
 iSVMDIxEnsureLoaded[recordId_String, shardKey_] :=
   Module[{snap = SourceVaultMailSnapshotGet[recordId]},
     If[! MissingQ[snap], Return[snap]];
@@ -2745,10 +2749,10 @@ SourceVaultMailSearchIndexView[query_String : "", opts : OptionsPattern[]] :=
        With[{rid = ToString@Lookup[r, "RecordId", ""], sk = Lookup[r, "ShardKey", Missing[]]},
          <|"" -> Button["\:2709", iSVMDIxShowBody[rid, sk],
               Appearance -> "Frameless", Method -> "Queued"],
-           (* action には小さいリテラルだけを埋め込む (行の連想を埋め込むと
-              Dataset がセルを大きすぎる式として "..." に省略しボタンが押せない)。
-              コントロールは MailView の ✉/↩ と同じ「素の Frameless + 文字列ラベル」。
-              ※2列目以降が押せない場合の真因は Dataset の不正 ItemSize (下記) *)
+           (* action \:306b\:306f\:5c0f\:3055\:3044\:30ea\:30c6\:30e9\:30eb\:3060\:3051\:3092\:57cb\:3081\:8fbc\:3080 (\:884c\:306e\:9023\:60f3\:3092\:57cb\:3081\:8fbc\:3080\:3068
+              Dataset \:304c\:30bb\:30eb\:3092\:5927\:304d\:3059\:304e\:308b\:5f0f\:3068\:3057\:3066 "..." \:306b\:7701\:7565\:3057\:30dc\:30bf\:30f3\:304c\:62bc\:305b\:306a\:3044)\:3002
+              \:30b3\:30f3\:30c8\:30ed\:30fc\:30eb\:306f MailView \:306e \:2709/\:21a9 \:3068\:540c\:3058\:300c\:7d20\:306e Frameless + \:6587\:5b57\:5217\:30e9\:30d9\:30eb\:300d\:3002
+              \:203b2\:5217\:76ee\:4ee5\:964d\:304c\:62bc\:305b\:306a\:3044\:5834\:5408\:306e\:771f\:56e0\:306f Dataset \:306e\:4e0d\:6b63 ItemSize (\:4e0b\:8a18) *)
            "\:30b9\:30ec" -> Button["\:30b9\:30ec", SourceVaultMailThreadNotebook[rid],
               Appearance -> "Frameless", Method -> "Queued"],
            iSVL["Date"] -> Style[iSVUIFormatDateJST[Lookup[r, "Date", Missing[]]], FontFamily -> ff],
@@ -2761,20 +2765,20 @@ SourceVaultMailSearchIndexView[query_String : "", opts : OptionsPattern[]] :=
            iSVL["From"] -> iSVUITextCell[ToString@Lookup[r, "From", Lookup[r, "FromRaw", ""]]],
            iSVL["Summary"] -> iSVUITextCell[With[{sm = Lookup[r, "Summary", ""]},
               If[StringQ[sm], sm, ""]]]|>]] /@ rows;
-    (* ⚠️実測確定: ItemSize -> {2, {w1,...}} 形式 (MailView 由来) を指定すると
-       2列目以降の埋め込みボタンが FE でクリック不能になる (当たり領域が描画とズレる。
-       1列目だけ原点一致で押せる・列単独ドリルダウンでは再レイアウトされ押せる、が指紋)。
-       ItemSize は指定しない (自動幅)。幅調整が要る場合も この形式は使わないこと。
-       MailView 側は現行の列幅で偶然クリック可能なため据え置き *)
+    (* \:5217\:5e45\:306f MailView \:3068\:540c\:3058\:5024\:3067\:3001\:26a0\:fe0f\:6b63\:898f\:306e Grid \:6587\:6cd5 {{\:5217\:5e45\:30ea\:30b9\:30c8}, Automatic} \:3092\:4f7f\:3046\:3002
+       MailView \:7531\:6765\:306e {2, {\:5217\:5e45\:30ea\:30b9\:30c8}} \:5f62\:5f0f\:306f\:4e0d\:6b63\:6587\:6cd5\:3067\:3001\:63cf\:753b\:306f\:305d\:308c\:3089\:3057\:304f\:51fa\:308b\:304c
+       2\:5217\:76ee\:4ee5\:964d\:306e\:57cb\:3081\:8fbc\:307f\:30dc\:30bf\:30f3\:306e\:5f53\:305f\:308a\:5224\:5b9a\:304c\:58ca\:308c\:308b (\:5e45\:3092 6 \:306b\:5e83\:3052\:3066\:3082\:6b7b\:306c\:3001\:3092\:5b9f\:6e2c\:78ba\:5b9a)\:3002
+       \:5217\:69cb\:6210\:3092\:5909\:3048\:305f\:3089\:5fc5\:305a\:30b9\:30ec/\:2709 \:306e\:30af\:30ea\:30c3\:30af\:3092\:5b9f\:6a5f\:78ba\:8a8d\:3059\:308b\:3053\:3068 *)
     iSVMDIxWrapConfidential[
       Pane[
         Dataset[urows,
+          ItemSize -> {{3, 6, 15, 3, 3, 5, 12, 28, 14, 40}, Automatic},
           Alignment -> {Left, Center},
           MaxItems -> {$SourceVaultMailViewMaxRows, All}],
         ImageSize -> Full],
       rows]];
 
-(* Re:/Fwd: 等を剥がした正規化件名 = スレッド key (索引行だけで判定できる) *)
+(* Re:/Fwd: \:7b49\:3092\:5265\:304c\:3057\:305f\:6b63\:898f\:5316\:4ef6\:540d = \:30b9\:30ec\:30c3\:30c9 key (\:7d22\:5f15\:884c\:3060\:3051\:3067\:5224\:5b9a\:3067\:304d\:308b) *)
 iSVMDIxNormSubject[s_] := If[! StringQ[s], "",
   Module[{t = ToLowerCase@StringTrim[s]},
     t = FixedPoint[StringTrim@StringReplace[#,
@@ -2793,19 +2797,19 @@ SourceVaultMailThreadNotebook[record_, OptionsPattern[]] :=
       Return[<|"Status" -> "Error", "Reason" -> "RecordNotFoundInIndex"|>]];
     mbox = Lookup[seed, "MBox", Automatic];
     subjN = iSVMDIxNormSubject[Lookup[seed, "Subject", ""]];
-    (* メンバー特定は索引 sidecar のみ (シャード非ロード)。空件名は単独スレッド扱い *)
+    (* \:30e1\:30f3\:30d0\:30fc\:7279\:5b9a\:306f\:7d22\:5f15 sidecar \:306e\:307f (\:30b7\:30e3\:30fc\:30c9\:975e\:30ed\:30fc\:30c9)\:3002\:7a7a\:4ef6\:540d\:306f\:5358\:72ec\:30b9\:30ec\:30c3\:30c9\:6271\:3044 *)
     thread = If[subjN === "", {seed},
       Select[SourceVaultMailSearchIndex["", "MBox" -> If[StringQ[mbox], mbox, Automatic]],
         iSVMDIxNormSubject[Lookup[#, "Subject", ""]] === subjN &]];
     If[thread === {}, thread = {seed}];
     thread = Take[SortBy[thread, Lookup[#, "Date", ""] &], UpTo[maxMails]];
-    (* 本文表示に必要なシャードだけ遅延ロード *)
+    (* \:672c\:6587\:8868\:793a\:306b\:5fc5\:8981\:306a\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:9045\:5ef6\:30ed\:30fc\:30c9 *)
     shardKeys = DeleteDuplicates@Select[Lookup[#, "ShardKey", Missing[]] & /@ thread, StringQ];
     Scan[If[! TrueQ[Lookup[$iSVMDLoadedShards, #, False]],
         Quiet@Check[SourceVaultMailLoadShard[#], 0]] &, shardKeys];
     maxPL = Max[iSVMDIxProbePL /@ thread];
-    (* アウトライン: Title=件名、各メール = Section(日付+差出人)+本文 Text。
-       Section セルは後続セルを自動グループ化するので折りたたみ/アウトラインが効く *)
+    (* \:30a2\:30a6\:30c8\:30e9\:30a4\:30f3: Title=\:4ef6\:540d\:3001\:5404\:30e1\:30fc\:30eb = Section(\:65e5\:4ed8+\:5dee\:51fa\:4eba)+\:672c\:6587 Text\:3002
+       Section \:30bb\:30eb\:306f\:5f8c\:7d9a\:30bb\:30eb\:3092\:81ea\:52d5\:30b0\:30eb\:30fc\:30d7\:5316\:3059\:308b\:306e\:3067\:6298\:308a\:305f\:305f\:307f/\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:304c\:52b9\:304f *)
     cells = Join[
       {Cell[ToString@Lookup[seed, "Subject", If[subjN === "", "(no subject)", subjN]], "Title"],
        Cell[ToString[Length[thread]] <> " mails / " <> ToString[mbox], "Subtitle"]},
@@ -2823,13 +2827,13 @@ SourceVaultMailThreadNotebook[record_, OptionsPattern[]] :=
       CreateDocument[cells,
         WindowTitle -> "Thread: " <> ToString@Lookup[seed, "Subject", subjN],
         StyleDefinitions -> $SourceVaultMailNotebookStyle], $Failed];
-    (* 全セルにスレッド最大 PL を付与 (この窓からの LLM 呼び出しで cloud gate が効く) *)
+    (* \:5168\:30bb\:30eb\:306b\:30b9\:30ec\:30c3\:30c9\:6700\:5927 PL \:3092\:4ed8\:4e0e (\:3053\:306e\:7a93\:304b\:3089\:306e LLM \:547c\:3073\:51fa\:3057\:3067 cloud gate \:304c\:52b9\:304f) *)
     iSVUIMarkCellsConfidential[nb, maxPL];
     Scan[Quiet@Check[iSVMDRecordOpen[ToString@Lookup[#, "RecordId", ""]], Null] &, thread];
     <|"Status" -> If[Head[nb] === NotebookObject, "Shown", "NoFrontEnd"],
       "Mails" -> Length[thread], "PrivacyLevel" -> maxPL, "LoadedShards" -> shardKeys|>];
 
-(* From 表示 (AddressBook 解決) -- maildb の SummaryRow と同じ規則 *)
+(* From \:8868\:793a (AddressBook \:89e3\:6c7a) -- maildb \:306e SummaryRow \:3068\:540c\:3058\:898f\:5247 *)
 iSVUIFromDisplayUI[s_] :=
   Module[{fc, c},
     fc = Lookup[s["AddressBookRefs"], "FromContact", Missing[]];
@@ -2839,7 +2843,7 @@ iSVUIFromDisplayUI[s_] :=
     With[{raw = Lookup[s["MailMetadataPublic"], "From", Missing[]]},
       If[StringQ[raw], raw, Missing["Unknown"]]]];
 
-(* ---- アドレス帳 表示 ---- *)
+(* ---- \:30a2\:30c9\:30ec\:30b9\:5e33 \:8868\:793a ---- *)
 iSVABPrimaryEmailUI[c_Association] :=
   Module[{ems = Lookup[c, "Emails", {}], hit},
     If[! ListQ[ems] || ems === {}, Return[""]];
@@ -2869,7 +2873,7 @@ SourceVaultAddressBookView[] :=
         MaxItems -> {$SourceVaultMailViewMaxRows, All}],
       ImageSize -> Full]];
 
-(* ---- 識別子 -> 実体 リンク編集 UI (新規作成 / 既存マージ) ---- *)
+(* ---- \:8b58\:5225\:5b50 -> \:5b9f\:4f53 \:30ea\:30f3\:30af\:7de8\:96c6 UI (\:65b0\:898f\:4f5c\:6210 / \:65e2\:5b58\:30de\:30fc\:30b8) ---- *)
 iSVUIEntityMenuItems[id_String, ents_List] :=
   (With[{ename = Lookup[#, "DisplayName", #["EntityId"]], eid = #["EntityId"],
        euid = Lookup[#, "EntityUid", ""]},
@@ -2891,14 +2895,14 @@ SourceVaultIdentityLinkUI[OptionsPattern[]] :=
         If[idfs === {}, Style[iSVL["NoUnlinked"], "Text"],
          rows = Function[idf,
             With[{id = idf["IdentifierId"]},
-             (* アクションは別列に (1 セルに詰めると幅超過で "..." になる) *)
+             (* \:30a2\:30af\:30b7\:30e7\:30f3\:306f\:5225\:5217\:306b (1 \:30bb\:30eb\:306b\:8a70\:3081\:308b\:3068\:5e45\:8d85\:904e\:3067 "..." \:306b\:306a\:308b) *)
              <|"" -> Button[iSVL["New"],
                   SourceVault`SourceVaultIdentifierCreateEntity[id]; refresh++,
                   Method -> "Queued"],
                iSVL["Merge"] -> ActionMenu[iSVL["Merge"],
                   Append[iSVUIEntityMenuItems[id, ents] /.
                      (lab_ :> act_) :> (lab :> (act; refresh++)),
-                    "\:2014"],
+                    "\[LongDash]"],
                   Appearance -> "Popup"],
                iSVL["Value"] -> iSVUITextCell[Lookup[idf, "Value", ""]],
                iSVL["ObservedNames"] -> iSVUITextCell[iSVABListStr[Lookup[idf, "ObservedNames", {}]]],
@@ -2913,7 +2917,7 @@ SourceVaultIdentityLinkUI[OptionsPattern[]] :=
              Alignment -> {Left, Center}, MaxItems -> {$SourceVaultMailViewMaxRows, All}],
            ImageSize -> Full]]]]]];
 
-(* ---- 実体 一覧 + 編集 ---- *)
+(* ---- \:5b9f\:4f53 \:4e00\:89a7 + \:7de8\:96c6 ---- *)
 iSVUINames[e_] := With[{n = Lookup[e, "Names", <||>]}, If[AssociationQ[n], n, <||>]];
 
 SourceVaultEntityView[] :=
@@ -3004,48 +3008,48 @@ SourceVaultEntityEditUI[idOrUid_] :=
           Spacer[10], Style[Dynamic[msg], Darker[Green]]}]},
        Spacings -> 1], BaseStyle -> {FontFamily -> ff}]]]);
 
-(* ════════════════════════════════════════════════════════
-   メール View 出力セルの自動機密マーク (2026-06)
-   ────────────────────────────────────────────────────────
-   方針: メール View 表は「生データ」なので、表示メールの最大 Derived.PrivacyLevel
-   をそのセルの PrivacyLevel として機密マークする。NBMakeContextPacket の閾値
-   (クラウド 0.5 / ローカル lmstudio 1.0) と組み合わさり、クラウド評価では
-   スキーマのみ、ローカル評価では全文が送られる。公開メールのみ (最大PL<=0.5)
-   の表はマークしない (クラウドでも全文可)。
-   依存方向 (SourceVault -> NBAccess) を守り、フックは SourceVault 側から
-   NBAccess`NBMakeContextPacket に「再入ガード付きの高優先 DownValue 追加」で
-   装着する (本体定義・Options は壊さない)。
-   ════════════════════════════════════════════════════════ *)
+(* \:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550
+   \:30e1\:30fc\:30eb View \:51fa\:529b\:30bb\:30eb\:306e\:81ea\:52d5\:6a5f\:5bc6\:30de\:30fc\:30af (2026-06)
+   \[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]\[HorizontalLine]
+   \:65b9\:91dd: \:30e1\:30fc\:30eb View \:8868\:306f\:300c\:751f\:30c7\:30fc\:30bf\:300d\:306a\:306e\:3067\:3001\:8868\:793a\:30e1\:30fc\:30eb\:306e\:6700\:5927 Derived.PrivacyLevel
+   \:3092\:305d\:306e\:30bb\:30eb\:306e PrivacyLevel \:3068\:3057\:3066\:6a5f\:5bc6\:30de\:30fc\:30af\:3059\:308b\:3002NBMakeContextPacket \:306e\:95be\:5024
+   (\:30af\:30e9\:30a6\:30c9 0.5 / \:30ed\:30fc\:30ab\:30eb lmstudio 1.0) \:3068\:7d44\:307f\:5408\:308f\:3055\:308a\:3001\:30af\:30e9\:30a6\:30c9\:8a55\:4fa1\:3067\:306f
+   \:30b9\:30ad\:30fc\:30de\:306e\:307f\:3001\:30ed\:30fc\:30ab\:30eb\:8a55\:4fa1\:3067\:306f\:5168\:6587\:304c\:9001\:3089\:308c\:308b\:3002\:516c\:958b\:30e1\:30fc\:30eb\:306e\:307f (\:6700\:5927PL<=0.5)
+   \:306e\:8868\:306f\:30de\:30fc\:30af\:3057\:306a\:3044 (\:30af\:30e9\:30a6\:30c9\:3067\:3082\:5168\:6587\:53ef)\:3002
+   \:4f9d\:5b58\:65b9\:5411 (SourceVault -> NBAccess) \:3092\:5b88\:308a\:3001\:30d5\:30c3\:30af\:306f SourceVault \:5074\:304b\:3089
+   NBAccess`NBMakeContextPacket \:306b\:300c\:518d\:5165\:30ac\:30fc\:30c9\:4ed8\:304d\:306e\:9ad8\:512a\:5148 DownValue \:8ffd\:52a0\:300d\:3067
+   \:88c5\:7740\:3059\:308b (\:672c\:4f53\:5b9a\:7fa9\:30fbOptions \:306f\:58ca\:3055\:306a\:3044)\:3002
+   \:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550\:2550 *)
 
-(* 入力テキストがメール View 系呼び出しを含むか *)
+(* \:5165\:529b\:30c6\:30ad\:30b9\:30c8\:304c\:30e1\:30fc\:30eb View \:7cfb\:547c\:3073\:51fa\:3057\:3092\:542b\:3080\:304b *)
 iSVMailViewInputQ[text_String] :=
   StringContainsQ[text,
     RegularExpression["SourceVaultMail(View|Dataset|SearchSummary|SearchIndexView)\\s*\\["]];
 iSVMailViewInputQ[_] := False;
 
-(* 機密判定用 PL アクセサ: フェイルセーフで PrivacyLevel 欠落は 1.0 (秘匿) 扱い。
-   (検索フィルタ用 iSVMDPrivacy は欠落を 0 にするので機密判定には使わない) *)
+(* \:6a5f\:5bc6\:5224\:5b9a\:7528 PL \:30a2\:30af\:30bb\:30b5: \:30d5\:30a7\:30a4\:30eb\:30bb\:30fc\:30d5\:3067 PrivacyLevel \:6b20\:843d\:306f 1.0 (\:79d8\:533f) \:6271\:3044\:3002
+   (\:691c\:7d22\:30d5\:30a3\:30eb\:30bf\:7528 iSVMDPrivacy \:306f\:6b20\:843d\:3092 0 \:306b\:3059\:308b\:306e\:3067\:6a5f\:5bc6\:5224\:5b9a\:306b\:306f\:4f7f\:308f\:306a\:3044) *)
 iSVMailProbePL[s_] :=
   With[{p = Quiet@Check[Lookup[Lookup[s, "Derived", <||>], "PrivacyLevel", Missing[]], Missing[]]},
     If[NumericQ[p], N[p], 1.0]];
 
-(* View/Dataset/SearchSummary を read-only に差し替えるプローブ: 同じクエリで
-   メモリ内 snapshot を検索し、表示メールの最大 PrivacyLevel を返す。 *)
+(* View/Dataset/SearchSummary \:3092 read-only \:306b\:5dee\:3057\:66ff\:3048\:308b\:30d7\:30ed\:30fc\:30d6: \:540c\:3058\:30af\:30a8\:30ea\:3067
+   \:30e1\:30e2\:30ea\:5185 snapshot \:3092\:691c\:7d22\:3057\:3001\:8868\:793a\:30e1\:30fc\:30eb\:306e\:6700\:5927 PrivacyLevel \:3092\:8fd4\:3059\:3002 *)
 iSVMailPLProbe[query_String : "", opts : OptionsPattern[SourceVaultSearchMailSnapshots]] :=
   Module[{snaps},
     snaps = Quiet@Check[SourceVaultSearchMailSnapshots[query, opts], {}];
     If[ListQ[snaps] && Length[snaps] > 0, Max[iSVMailProbePL /@ snaps], 0.0]];
 iSVMailPLProbe[___] := 1.0;
 
-(* SearchIndexView 用 probe: sidecar 索引だけ再検索して最大 PL (シャード非ロード) *)
+(* SearchIndexView \:7528 probe: sidecar \:7d22\:5f15\:3060\:3051\:518d\:691c\:7d22\:3057\:3066\:6700\:5927 PL (\:30b7\:30e3\:30fc\:30c9\:975e\:30ed\:30fc\:30c9) *)
 iSVMailIxPLProbe[query_String : "", opts : OptionsPattern[SourceVaultMailSearchIndex]] :=
   Module[{rows},
     rows = Quiet@Check[SourceVaultMailSearchIndex[query, opts], {}];
     If[ListQ[rows] && Length[rows] > 0, Max[iSVMDIxProbePL /@ rows], 0.0]];
 iSVMailIxPLProbe[___] := 1.0;
 
-(* 入力テキストから View 呼び出しだけを抜き出してプローブ評価し、最大 PL を得る。
-   入力全体は再評価しない (EnsureLoaded 等の副作用を再実行しない)。失敗時は安全側 1.0。 *)
+(* \:5165\:529b\:30c6\:30ad\:30b9\:30c8\:304b\:3089 View \:547c\:3073\:51fa\:3057\:3060\:3051\:3092\:629c\:304d\:51fa\:3057\:3066\:30d7\:30ed\:30fc\:30d6\:8a55\:4fa1\:3057\:3001\:6700\:5927 PL \:3092\:5f97\:308b\:3002
+   \:5165\:529b\:5168\:4f53\:306f\:518d\:8a55\:4fa1\:3057\:306a\:3044 (EnsureLoaded \:7b49\:306e\:526f\:4f5c\:7528\:3092\:518d\:5b9f\:884c\:3057\:306a\:3044)\:3002\:5931\:6557\:6642\:306f\:5b89\:5168\:5074 1.0\:3002 *)
 iSVMailCellMaxPLFromText[text_String] :=
   Module[{held, vals},
     held = Quiet@Check[ToExpression[text, InputForm, HoldComplete], $Failed];
@@ -3059,17 +3063,17 @@ iSVMailCellMaxPLFromText[text_String] :=
     If[ListQ[vals] && Length[vals] > 0 && AllTrue[vals, NumericQ], Max[vals], 1.0]];
 iSVMailCellMaxPLFromText[_] := 1.0;
 
-(* ── Todo (ノートブック本体セルの生テキスト) 用 ──
-   SourceVaultUpcomingSchedule / FormatNotebookList の表 (Summary 列) は
-   クラウド安全に生成されるので対象外。SourceVaultFindTodos は TodoText に
-   ノートブック本体の生セルを含むため、ソース NB が Public でない限り秘匿する。 *)
+(* \[HorizontalLine]\[HorizontalLine] Todo (\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:672c\:4f53\:30bb\:30eb\:306e\:751f\:30c6\:30ad\:30b9\:30c8) \:7528 \[HorizontalLine]\[HorizontalLine]
+   SourceVaultUpcomingSchedule / FormatNotebookList \:306e\:8868 (Summary \:5217) \:306f
+   \:30af\:30e9\:30a6\:30c9\:5b89\:5168\:306b\:751f\:6210\:3055\:308c\:308b\:306e\:3067\:5bfe\:8c61\:5916\:3002SourceVaultFindTodos \:306f TodoText \:306b
+   \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:672c\:4f53\:306e\:751f\:30bb\:30eb\:3092\:542b\:3080\:305f\:3081\:3001\:30bd\:30fc\:30b9 NB \:304c Public \:3067\:306a\:3044\:9650\:308a\:79d8\:533f\:3059\:308b\:3002 *)
 iSVTodoViewInputQ[text_String] :=
   StringContainsQ[text, RegularExpression["SourceVaultFindTodos\\s*\\["]];
 iSVTodoViewInputQ[_] := False;
 
-(* FindTodos を read-only 再実行し、ソース NB の Publishable を見る。
-   全ソース NB が CloudPublishable===True (Public) なら 0.0 (クラウド可)、
-   1 つでも非 Public (Unspecified/False) があれば 1.0 (秘匿)。 *)
+(* FindTodos \:3092 read-only \:518d\:5b9f\:884c\:3057\:3001\:30bd\:30fc\:30b9 NB \:306e Publishable \:3092\:898b\:308b\:3002
+   \:5168\:30bd\:30fc\:30b9 NB \:304c CloudPublishable===True (Public) \:306a\:3089 0.0 (\:30af\:30e9\:30a6\:30c9\:53ef)\:3001
+   1 \:3064\:3067\:3082\:975e Public (Unspecified/False) \:304c\:3042\:308c\:3070 1.0 (\:79d8\:533f)\:3002 *)
 iSVTodoPLProbe[opts___] :=
   Module[{cleanOpts, rows, paths},
     cleanOpts = DeleteCases[Flatten[{opts}], (("Format" | Format) -> _)];
@@ -3097,28 +3101,28 @@ iSVTodoCellMaxPLFromText[text_String] :=
     If[ListQ[vals] && Length[vals] > 0 && AllTrue[vals, NumericQ], Max[vals], 1.0]];
 iSVTodoCellMaxPLFromText[_] := 1.0;
 
-(* 機密対象 View の仕様: {入力判定(text->bool), 最大PL算出(text->pl)} のリスト。
-   メール (Derived.PrivacyLevel) と Todo 生テキスト (ソース NB の Publishable) を登録。
-   サマリー/予定表 (SourceVaultUpcomingSchedule/FormatNotebookList) は
-   クラウド安全に生成されるので登録しない。新たな「生セル内容を出す View」は
-   ここに spec を追加するか、他アダプタのロード時に共有レジストリ
-   $iSVConfidentialViewSpecRegistry (SourceVault`Private`、ロード順不問) へ
-   {判定, PL算出} を登録する (SourceVault_eagle.wl が Eagle View 用 spec を登録)。 *)
+(* \:6a5f\:5bc6\:5bfe\:8c61 View \:306e\:4ed5\:69d8: {\:5165\:529b\:5224\:5b9a(text->bool), \:6700\:5927PL\:7b97\:51fa(text->pl)} \:306e\:30ea\:30b9\:30c8\:3002
+   \:30e1\:30fc\:30eb (Derived.PrivacyLevel) \:3068 Todo \:751f\:30c6\:30ad\:30b9\:30c8 (\:30bd\:30fc\:30b9 NB \:306e Publishable) \:3092\:767b\:9332\:3002
+   \:30b5\:30de\:30ea\:30fc/\:4e88\:5b9a\:8868 (SourceVaultUpcomingSchedule/FormatNotebookList) \:306f
+   \:30af\:30e9\:30a6\:30c9\:5b89\:5168\:306b\:751f\:6210\:3055\:308c\:308b\:306e\:3067\:767b\:9332\:3057\:306a\:3044\:3002\:65b0\:305f\:306a\:300c\:751f\:30bb\:30eb\:5185\:5bb9\:3092\:51fa\:3059 View\:300d\:306f
+   \:3053\:3053\:306b spec \:3092\:8ffd\:52a0\:3059\:308b\:304b\:3001\:4ed6\:30a2\:30c0\:30d7\:30bf\:306e\:30ed\:30fc\:30c9\:6642\:306b\:5171\:6709\:30ec\:30b8\:30b9\:30c8\:30ea
+   $iSVConfidentialViewSpecRegistry (SourceVault`Private`\:3001\:30ed\:30fc\:30c9\:9806\:4e0d\:554f) \:3078
+   {\:5224\:5b9a, PL\:7b97\:51fa} \:3092\:767b\:9332\:3059\:308b (SourceVault_eagle.wl \:304c Eagle View \:7528 spec \:3092\:767b\:9332)\:3002 *)
 iSVConfidentialViewSpecs[] := Join[
   {{iSVMailViewInputQ, iSVMailCellMaxPLFromText},
    {iSVTodoViewInputQ, iSVTodoCellMaxPLFromText}},
   If[ListQ[$iSVConfidentialViewSpecRegistry], $iSVConfidentialViewSpecRegistry, {}]];
 
-(* 既存の機密/非機密タグ (True/False) があれば尊重し再マークしない。未判定のみ対象。 *)
+(* \:65e2\:5b58\:306e\:6a5f\:5bc6/\:975e\:6a5f\:5bc6\:30bf\:30b0 (True/False) \:304c\:3042\:308c\:3070\:5c0a\:91cd\:3057\:518d\:30de\:30fc\:30af\:3057\:306a\:3044\:3002\:672a\:5224\:5b9a\:306e\:307f\:5bfe\:8c61\:3002 *)
 iSVMailCellTaggedQ[nb_, i_] :=
   With[{t = Quiet@Check[NBAccess`NBGetConfidentialTag[nb, i], Missing[]]},
     t === True || t === False];
 
 SourceVaultMarkConfidentialViewCells[nb_NotebookObject] :=
   Module[{n, lastIn = 0, lastInText = "", marked = {}},
-    (* $iCellsCache は sticky (NBInvalidateCellsCache まで更新されない)。
-       セッション中に古い件数でキャッシュされていると新規セルを見落とすため、
-       走査前に必ず無効化して最新のセル一覧を読む。 *)
+    (* $iCellsCache \:306f sticky (NBInvalidateCellsCache \:307e\:3067\:66f4\:65b0\:3055\:308c\:306a\:3044)\:3002
+       \:30bb\:30c3\:30b7\:30e7\:30f3\:4e2d\:306b\:53e4\:3044\:4ef6\:6570\:3067\:30ad\:30e3\:30c3\:30b7\:30e5\:3055\:308c\:3066\:3044\:308b\:3068\:65b0\:898f\:30bb\:30eb\:3092\:898b\:843d\:3068\:3059\:305f\:3081\:3001
+       \:8d70\:67fb\:524d\:306b\:5fc5\:305a\:7121\:52b9\:5316\:3057\:3066\:6700\:65b0\:306e\:30bb\:30eb\:4e00\:89a7\:3092\:8aad\:3080\:3002 *)
     Quiet@Check[NBAccess`NBInvalidateCellsCache[nb], Null];
     n = Quiet@Check[NBAccess`NBCellCount[nb], 0];
     If[! IntegerQ[n] || n <= 0, Return[{}]];
@@ -3132,13 +3136,13 @@ SourceVaultMarkConfidentialViewCells[nb_NotebookObject] :=
             ! iSVMailCellTaggedQ[nb, i] &&
             AnyTrue[iSVConfidentialViewSpecs[], First[#][lastInText] &],
             Module[{pls, pl},
-              (* 複数 spec が同一セルに合致する場合 (メール+Eagle 混在等) は最大を採る *)
+              (* \:8907\:6570 spec \:304c\:540c\:4e00\:30bb\:30eb\:306b\:5408\:81f4\:3059\:308b\:5834\:5408 (\:30e1\:30fc\:30eb+Eagle \:6df7\:5728\:7b49) \:306f\:6700\:5927\:3092\:63a1\:308b *)
               pls = (Quiet@Check[Last[#][lastInText], 1.0] &) /@
                 Select[iSVConfidentialViewSpecs[], First[#][lastInText] &];
               pl = If[pls =!= {} && AllTrue[pls, NumericQ], Max[pls], 1.0];
-              (* 最大PL < 0.5 (公開メール / 全ソースNBが Public な Todo) はマークしない。
-                 0.5 ちょうどは安全側でマークする (ユーザー指定: 0.5 以上=機密。
-                 cloud gate の許可境界 PL<=0.5 より保守的) *)
+              (* \:6700\:5927PL < 0.5 (\:516c\:958b\:30e1\:30fc\:30eb / \:5168\:30bd\:30fc\:30b9NB\:304c Public \:306a Todo) \:306f\:30de\:30fc\:30af\:3057\:306a\:3044\:3002
+                 0.5 \:3061\:3087\:3046\:3069\:306f\:5b89\:5168\:5074\:3067\:30de\:30fc\:30af\:3059\:308b (\:30e6\:30fc\:30b6\:30fc\:6307\:5b9a: 0.5 \:4ee5\:4e0a=\:6a5f\:5bc6\:3002
+                 cloud gate \:306e\:8a31\:53ef\:5883\:754c PL<=0.5 \:3088\:308a\:4fdd\:5b88\:7684) *)
               If[pl >= 0.5,
                 Quiet@Check[NBAccess`NBMarkCellConfidential[nb, i, pl], Null];
                 AppendTo[marked, <|"Cell" -> i, "PrivacyLevel" -> pl|>]]],
@@ -3149,13 +3153,13 @@ SourceVaultMarkConfidentialViewCells[] :=
   With[{nb = Quiet@Check[EvaluationNotebook[], $Failed]},
     If[Head[nb] === NotebookObject, SourceVaultMarkConfidentialViewCells[nb], {}]];
 
-(* 後方互換の別名 (Enable フックが呼ぶ名前も含む) *)
+(* \:5f8c\:65b9\:4e92\:63db\:306e\:5225\:540d (Enable \:30d5\:30c3\:30af\:304c\:547c\:3076\:540d\:524d\:3082\:542b\:3080) *)
 SourceVaultMailMarkViewCells[args___] := SourceVaultMarkConfidentialViewCells[args];
 
-(* ── NBMakeContextPacket フック (既定で有効、再入ガード付き高優先 DownValue) ──
-   装着判定はフラグでなく DownValues の構造検査で行う: NBAccess を再ロードすると
-   NBMakeContextPacket の定義ごとフックが消えるため、フラグ頼みだと「装着済みの
-   つもりで実は無防備」になる。Enable は不在なら常に再装着する (冪等)。 *)
+(* \[HorizontalLine]\[HorizontalLine] NBMakeContextPacket \:30d5\:30c3\:30af (\:65e2\:5b9a\:3067\:6709\:52b9\:3001\:518d\:5165\:30ac\:30fc\:30c9\:4ed8\:304d\:9ad8\:512a\:5148 DownValue) \[HorizontalLine]\[HorizontalLine]
+   \:88c5\:7740\:5224\:5b9a\:306f\:30d5\:30e9\:30b0\:3067\:306a\:304f DownValues \:306e\:69cb\:9020\:691c\:67fb\:3067\:884c\:3046: NBAccess \:3092\:518d\:30ed\:30fc\:30c9\:3059\:308b\:3068
+   NBMakeContextPacket \:306e\:5b9a\:7fa9\:3054\:3068\:30d5\:30c3\:30af\:304c\:6d88\:3048\:308b\:305f\:3081\:3001\:30d5\:30e9\:30b0\:983c\:307f\:3060\:3068\:300c\:88c5\:7740\:6e08\:307f\:306e
+   \:3064\:3082\:308a\:3067\:5b9f\:306f\:7121\:9632\:5099\:300d\:306b\:306a\:308b\:3002Enable \:306f\:4e0d\:5728\:306a\:3089\:5e38\:306b\:518d\:88c5\:7740\:3059\:308b (\:51aa\:7b49)\:3002 *)
 If[! ValueQ[$iSVMailCtxHookInstalled], $iSVMailCtxHookInstalled = False];
 
 iSVMailCtxHookPresentQ[] :=
@@ -3164,8 +3168,8 @@ iSVMailCtxHookPresentQ[] :=
 
 SourceVaultMailEnableAutoConfidential[] :=
   (If[! iSVMailCtxHookPresentQ[],
-     (* nb_NotebookObject は本体の nb_ より特化なので先に試される。
-        $iSVMailCtxReentry で本体呼び出し時はこの規則を素通りさせる。 *)
+     (* nb_NotebookObject \:306f\:672c\:4f53\:306e nb_ \:3088\:308a\:7279\:5316\:306a\:306e\:3067\:5148\:306b\:8a66\:3055\:308c\:308b\:3002
+        $iSVMailCtxReentry \:3067\:672c\:4f53\:547c\:3073\:51fa\:3057\:6642\:306f\:3053\:306e\:898f\:5247\:3092\:7d20\:901a\:308a\:3055\:305b\:308b\:3002 *)
      NBAccess`NBMakeContextPacket[nb_NotebookObject, spec_Association,
          o : OptionsPattern[]] /; ! TrueQ[$iSVMailCtxReentry] :=
        Block[{$iSVMailCtxReentry = True},
@@ -3181,17 +3185,17 @@ SourceVaultMailDisableAutoConfidential[] :=
    $iSVMailCtxHookInstalled = False;
    <|"Status" -> "Disabled"|>);
 
-(* ロード時に自動有効化 (ユーザー指摘: PL>0.5 のメールを含む View 出力は
-   ClaudeEval の文脈構築前に必ず機密マークされていなければならない)。
-   解除したい場合は SourceVaultMailDisableAutoConfidential[]。
-   ヘッドレス/部分ロード環境では NBMakeContextPacket が呼ばれないだけで無害。 *)
+(* \:30ed\:30fc\:30c9\:6642\:306b\:81ea\:52d5\:6709\:52b9\:5316 (\:30e6\:30fc\:30b6\:30fc\:6307\:6458: PL>0.5 \:306e\:30e1\:30fc\:30eb\:3092\:542b\:3080 View \:51fa\:529b\:306f
+   ClaudeEval \:306e\:6587\:8108\:69cb\:7bc9\:524d\:306b\:5fc5\:305a\:6a5f\:5bc6\:30de\:30fc\:30af\:3055\:308c\:3066\:3044\:306a\:3051\:308c\:3070\:306a\:3089\:306a\:3044)\:3002
+   \:89e3\:9664\:3057\:305f\:3044\:5834\:5408\:306f SourceVaultMailDisableAutoConfidential[]\:3002
+   \:30d8\:30c3\:30c9\:30ec\:30b9/\:90e8\:5206\:30ed\:30fc\:30c9\:74b0\:5883\:3067\:306f NBMakeContextPacket \:304c\:547c\:3070\:308c\:306a\:3044\:3060\:3051\:3067\:7121\:5bb3\:3002 *)
 SourceVaultMailEnableAutoConfidential[];
 
-(* 機密生成ヘッド登録: 「返り値が機密たり得る」関数を NBAccess レジストリへ宣言。
-   claudecode が (a) LLM 生成コード/応答を書き込んだセルの自動機密マーク、
-   (b) CellEpilog の依存秘密判定 (snaps = SourceVaultSearch...[..] 等) に使う。
-   関数本体の変更は不要 (View 3 関数の実 PL 判定 self-wrap は精密層として併存)。
-   NBAccess full (NBAccess.wl) 未ロードの部分環境では skip。 *)
+(* \:6a5f\:5bc6\:751f\:6210\:30d8\:30c3\:30c9\:767b\:9332: \:300c\:8fd4\:308a\:5024\:304c\:6a5f\:5bc6\:305f\:308a\:5f97\:308b\:300d\:95a2\:6570\:3092 NBAccess \:30ec\:30b8\:30b9\:30c8\:30ea\:3078\:5ba3\:8a00\:3002
+   claudecode \:304c (a) LLM \:751f\:6210\:30b3\:30fc\:30c9/\:5fdc\:7b54\:3092\:66f8\:304d\:8fbc\:3093\:3060\:30bb\:30eb\:306e\:81ea\:52d5\:6a5f\:5bc6\:30de\:30fc\:30af\:3001
+   (b) CellEpilog \:306e\:4f9d\:5b58\:79d8\:5bc6\:5224\:5b9a (snaps = SourceVaultSearch...[..] \:7b49) \:306b\:4f7f\:3046\:3002
+   \:95a2\:6570\:672c\:4f53\:306e\:5909\:66f4\:306f\:4e0d\:8981 (View 3 \:95a2\:6570\:306e\:5b9f PL \:5224\:5b9a self-wrap \:306f\:7cbe\:5bc6\:5c64\:3068\:3057\:3066\:4f75\:5b58)\:3002
+   NBAccess full (NBAccess.wl) \:672a\:30ed\:30fc\:30c9\:306e\:90e8\:5206\:74b0\:5883\:3067\:306f skip\:3002 *)
 iSVMDRegisterConfidentialHeads[] :=
   Quiet@Check[
     If[Length[DownValues[NBAccess`NBRegisterConfidentialHead]] > 0,

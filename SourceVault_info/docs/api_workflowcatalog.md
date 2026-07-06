@@ -25,7 +25,7 @@ slug のフォルダ位置から現在 stage を返す。戻り値: `"system"` |
 
 ### SourceVaultSetWorkflowStatus[slug, stage] → Association
 slug を指定 stage のフォルダへ移動し、束ねレコードの Status を更新する。`stage` は `"testing"` | `"production"` | `"archive"` のいずれか。システムワークフロー (root) は移動しない。archive は通常一覧・横断検索に表示されない。
-戻り値キー: `Status` (`"Moved"` | `"Unchanged"` | `"SystemWorkflow"` | `"NotFound"` | `"BadStage"` | `"DestExists"` | `"MoveFailed"`), `Slug`, `Stage`, `From`, `To`。BadStage 時は `Requested`, `Allowed` を、SystemWorkflow 時は `Detail` を、Unchanged 時は `Path` を含む。
+戻り値キー: `Status` (`"Moved"` | `"Unchanged"` | `"SystemWorkflow"` | `"NotFound"` | `"BadStage"` | `"DestExists"` | `"MoveFailed"`), `Slug`, `Stage`, `From`, `To`。BadStage 時は `Requested`, `Allowed` を、SystemWorkflow 時は `Detail` を、Unchanged/DestExists 時は `Path` を含む。
 
 ### SourceVaultPromoteWorkflow[slug] → Association
 `SourceVaultSetWorkflowStatus[slug, "production"]` の短縮形。
@@ -76,7 +76,7 @@ URI が指す元 notebook を開く (既に開いていれば前面化)。解決
 ## UI
 
 ### SourceVaultWorkflowPanel[] → Panel
-archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (example.md を実行可能セルとして新規ノートに展開)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)、自動起動 ([SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger) ロード時のみ表示; 未ロードは "—")。行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。
+archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (2ボタン: 「▶ 実行」= `SourceVaultRunWorkflowAsync[slug, "run"]` で非同期実行しFEをブロックしない・前提は [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)/[ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) ロード済みかつ launch に `"run"` 形があること、実行結果は `SourceVaultRunWorkflowResult` で取得可; 「使用例」= `example.md` を実行可能セルとして新規ノートに展開)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)、自動起動 ([SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger) ロード時のみ表示; 未ロードは "—")。行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。
 
 ### SourceVaultWorkflowArchivePanel[] → Panel
 archive ステージのワークフローのみを一覧する UI。`SourceVaultWorkflowPanel` と同体裁。切替列は「testingへ戻す」ボタン (`SourceVaultSetWorkflowStatus[slug, "testing"]`)。

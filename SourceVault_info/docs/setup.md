@@ -47,7 +47,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_workflowregistry.wl` — コード化ワークフローのオンデマンドローダ
 - `SourceVault_promptrouter.wl` — PromptRouter 拡張
 
-リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。暗号化・メールを使う場合は `SourceVault_crypto.wl` / `SourceVault_identity.wl` / `SourceVault_maildb.wl` も、Eagle 統合を使う場合は `SourceVault_eagle.wl`（手動ロード）も同様に配置します。
+リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。暗号化・メールを使う場合は `SourceVault_crypto.wl` / `SourceVault_identity.wl` / `SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` も、Eagle 統合を使う場合は `SourceVault_eagle.wl`（手動ロード）も同様に配置します（メール系サブファイルは各 Mail 関数の初回呼び出し時にオンデマンドで読み込まれます）。
 
 依存パッケージも同様にインストールできます。
 
@@ -104,7 +104,7 @@ $packageDirectory\
 
 > サブフォルダには配置しないでください（コード化ワークフローを置く `SourceVault_workflows/` のみ例外で、これは本体が自動で解決します）。
 >
-> 上記の `SourceVault_*.wl` はいずれも `SourceVault.wl` のロード時に同じディレクトリから自動的に読み込まれます（旧 `SourceVault_objectview.wl` は `mcp`/`eagle` に統合され廃止）。
+> 上記の `SourceVault_*.wl` はいずれも `SourceVault.wl` のロード時に同じディレクトリから自動的に読み込まれます（旧 `SourceVault_objectview.wl` は `mcp`/`eagle` に統合され廃止）。メール系サブファイル（`SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` など）は、メール関数の初回呼び出し時にオンデマンドでロードされます。
 
 ### 3. `$Path` の設定
 
@@ -825,6 +825,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultSources` / `SourceVaultArXiv` が arXiv メタデータを取得しない | ネットワーク接続を確認するか、`"FetchMetadata" -> True` を明示して強制再取得してください |
 | arXiv ソースの Summary が空・英語のまま | `SourceVaultBackfillArXivSummaries[]` を `$Language = "Japanese"` のセッションで実行。LLM エラー本文が残っている場合は `"Force" -> True` で再生成 |
 | 公開 arXiv / Web ソースが機密扱い（PrivacyLevel 0.5 以上）になっている | 旧版の誤タグの名残。`SourceVaultReclassifyPublicPrivacy[]` で公開既定値（0.0 / 0.4）に是正（冪等） |
+| モデルのバージョン比較が誤る（新メジャー版に旧マイナー付き版が負ける） | `iSVParseModelVersion` の数値キーを固定幅パディング方式（base-100000・width 6）に修正済み。旧実装は指数に桁数 `Length` を使っていたため、桁数の異なるバージョン間（例: `claude-sonnet-4-6` の `{4,6}` と `claude-sonnet-5` の `{5}`）で `{5}` が誤って上位になっていました。SourceVault を最新版に更新すれば `{4,6}` が `{5}` を正しく上回ります |
 | `SourceVaultShowSourceSummary` がいつも自動生成版を開く（追記が反映されない） | ノート内の「このノートを保存する」ボタンを押して `<PrivateVault>/sources/summary-notes/` に保存したか確認。保存版が正本として優先されます。逆に保存版を無視して record から作り直したい場合は `"Fresh" -> True` |
 | `SourceVaultWebSearch` / `SourceVaultSearXNGAvailableQ` が失敗・空を返す | SearXNG が `127.0.0.1:8888`（`$SourceVaultSearXNGEndpoint`）で稼働しているか、`settings.yml` の `search.formats` に `json` が含まれるか、`limiter`/`botdetection` がローカルアクセスをブロックしていないか確認 |
 | MCP トグル/検索を変更したのに反映されない | detached service は起動時コードを保持。`SourceVaultRestartService["sourcevault"]`（または `SourceVaultStopMCP[]`→`SourceVaultStartMCP[]`）で再起動する |

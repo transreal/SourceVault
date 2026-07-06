@@ -407,6 +407,8 @@ SourceVaultIdentityInitialize::usage = "SourceVaultIdentityInitialize[] は load
 SourceVaultIdentityEnsureLoaded::usage = "SourceVaultIdentityEnsureLoaded[] は未ロードなら Initialize する(import が既存を上書きしないため)。";
 SourceVaultIdentityBootstrapSelf::usage = "SourceVaultIdentityBootstrapSelf[opts] は self を EntityUid=1 として登録(既存 self 連絡先を継承)。既にあれば何もしない。";
 SourceVaultIdentityStorePaths::usage = "SourceVaultIdentityStorePaths[] は {identifiers.jsonl, entities.jsonl} のパスを返す。";
+SourceVaultRecomputeOwnershipLinks::usage = "SourceVaultRecomputeOwnershipLinks[opts] はオブジェクト間所有関係の双方向リンク (Identifier.EntityRef ⇄ Entity.Identifiers) を全走査で整合再計算する (identity-tag spec §1.2)。dangling 参照は除去、欠落した逆/順リンクは補完、両側の食い違いは Identifier.EntityRef を正として解決する。\"UpdateEntitySummary\"->True (既定) なら event log の EntityLinkProposal から各 Entity の SuggestedIdentifierRefs / RejectedIdentifierRefs / EvidenceSummary (projection) も再生成する (mining/core 未ロード時は skip)。opts: \"Persist\"(False; True で修復があった場合のみ save), \"UpdateEntitySummary\"(True), \"EventLimit\"(5000)。戻り値は修復 report <|RepairCount, RepairKinds, Repairs, EntitySummaryUpdated, Persisted, ...|>。";
+SourceVaultScheduleOwnershipRefresh::usage = "SourceVaultScheduleOwnershipRefresh[opts] は SourceVaultRecomputeOwnershipLinks[\"Persist\"->True] を ScheduledTask (SessionSubmit) でカーネル内定期実行する。冪等: 再呼出は既存タスクを差し替える。opts: \"IntervalSeconds\"(21600 = 6時間), \"Remove\"(True で解除のみ)。戻り値 <|Status, IntervalSeconds, Task|>。";
 $SourceVaultIdentityRoot::usage = "identity の保存ルート(既定 PrivateVault/identity)。テストで上書き可。";
 
 Begin["`Private`"];
@@ -773,6 +775,116 @@ SourceVaultIdentityInitialize[] :=
    <|"Status" -> "Initialized", "Identifiers" -> Length[$iSVIDIdentifiers],
      "Entities" -> Length[$iSVIDEntities],
      "SelfUid" -> Quiet@Check[SourceVaultGetEntity[1]["EntityUid"], Missing[]]|>);
+
+(* ============================================================
+   所有関係双方向リンクの定期再計算 (identity-tag spec §1.2 / §9.1)
+   forward = Identifier.EntityRef、reverse = Entity.Identifiers。
+   通常運用では SourceVaultLinkIdentifierToEntity / PutEntity が両側を同時更新するが、
+   部分ロード・手動編集・migration・クラッシュで乖離しうる。ここは答え合わせ+修復。
+   衝突時は Identifier.EntityRef を正とする (確定リンクの所在は Identifier 側、spec §1.2)。
+   ============================================================ *)
+
+Options[SourceVaultRecomputeOwnershipLinks] = {
+  "Persist" -> False, "UpdateEntitySummary" -> True, "EventLimit" -> 5000};
+
+SourceVaultRecomputeOwnershipLinks[OptionsPattern[]] := Module[
+  {repairs = {}, summaryCount = 0, ev, props, byEnt, persisted = False},
+  SourceVaultIdentityEnsureLoaded[];
+  (* pass 1: forward (Identifier -> Entity) の答え合わせ。
+     dangling EntityRef は未リンクへ、逆リンク欠落は Entity.Identifiers に補完 *)
+  Do[Module[{idf = $iSVIDIdentifiers[iid], ent},
+     ent = Lookup[idf, "EntityRef", Missing[]];
+     If[StringQ[ent],
+       Module[{e = Lookup[$iSVIDEntities, ent, Missing[]]},
+         Which[
+          ! AssociationQ[e],
+            idf["EntityRef"] = Missing["Unlinked"];
+            AssociateTo[$iSVIDIdentifiers, iid -> idf];
+            AppendTo[repairs, <|"Kind" -> "DanglingEntityRef",
+              "Identifier" -> iid, "Entity" -> ent|>],
+          ! MemberQ[Lookup[e, "Identifiers", {}], iid],
+            e["Identifiers"] = Append[Lookup[e, "Identifiers", {}], iid];
+            AssociateTo[$iSVIDEntities, ent -> e];
+            AppendTo[repairs, <|"Kind" -> "MissingReverseLink",
+              "Identifier" -> iid, "Entity" -> ent|>]]]]],
+    {iid, Keys[$iSVIDIdentifiers]}];
+  (* pass 2: reverse (Entity -> Identifiers) の答え合わせ。
+     dangling は除去、forward 未設定は補完、別 entity へ確定済みなら Identifier 側を正として除去 *)
+  Do[Module[{e = $iSVIDEntities[eid], orig, keep = {}},
+     orig = DeleteDuplicates@Lookup[e, "Identifiers", {}];
+     Do[Module[{idf = Lookup[$iSVIDIdentifiers, iid2, Missing[]], fwd},
+        If[! AssociationQ[idf],
+          AppendTo[repairs, <|"Kind" -> "DanglingIdentifierRef",
+            "Entity" -> eid, "Identifier" -> iid2|>],
+          fwd = Lookup[idf, "EntityRef", Missing[]];
+          Which[
+           StringQ[fwd] && fwd === eid, AppendTo[keep, iid2],
+           StringQ[fwd],
+             AppendTo[repairs, <|"Kind" -> "ConflictResolvedByIdentifier",
+               "Entity" -> eid, "Identifier" -> iid2, "LinkedTo" -> fwd|>],
+           True,
+             idf["EntityRef"] = eid;
+             AssociateTo[$iSVIDIdentifiers, iid2 -> idf];
+             AppendTo[keep, iid2];
+             AppendTo[repairs, <|"Kind" -> "MissingForwardLink",
+               "Entity" -> eid, "Identifier" -> iid2|>]]]],
+       {iid2, orig}];
+     If[keep =!= Lookup[e, "Identifiers", {}],
+       e["Identifiers"] = keep;
+       AssociateTo[$iSVIDEntities, eid -> e]]],
+    {eid, Keys[$iSVIDEntities]}];
+  (* pass 3: Entity summary projection (spec §1.2) を EntityLinkProposal event から再生成。
+     mining/core は弱結合 (未ロードなら skip)。summary は再生成可能 projection であり正準履歴は event log。 *)
+  If[TrueQ[OptionValue["UpdateEntitySummary"]] &&
+     Length[DownValues[SourceVault`SourceVaultReplayEntityLinkProposals]] > 0 &&
+     Length[DownValues[SourceVault`SourceVaultTransactionLog]] > 0,
+    ev = Quiet@Check[
+       SourceVault`SourceVaultTransactionLog["Limit" -> OptionValue["EventLimit"]], {}];
+    If[! ListQ[ev], ev = {}];
+    props = Quiet@Check[SourceVault`SourceVaultReplayEntityLinkProposals[ev], {}];
+    If[! ListQ[props], props = {}];
+    byEnt = GroupBy[props, Lookup[#, "CandidateEntityRef", ""] &];
+    Do[Module[{e = Lookup[$iSVIDEntities, eid, Missing[]], ps, sugg, rej, pos, neg, ts},
+       ps = Lookup[byEnt, eid, {}];
+       If[AssociationQ[e] && ps =!= {},
+         sugg = DeleteDuplicates[Lookup[#, "CandidateIdentifierRef", ""] & /@
+            Select[ps, Lookup[#, "Status", ""] === "pending" &]];
+         rej = DeleteDuplicates[Lookup[#, "CandidateIdentifierRef", ""] & /@
+            Select[ps, Lookup[#, "Status", ""] === "rejected" &]];
+         pos = Count[ps, p_ /; Lookup[p, "Status", ""] === "accepted"];
+         neg = Length[rej];
+         ts = With[{ss = Select[Lookup[#, "LastScoredAtUTC", ""] & /@ ps, StringQ[#] && # =!= "" &]},
+            If[ss === {}, Missing["NoScore"], Last[Sort[ss]]]];
+         e["SuggestedIdentifierRefs"] = sugg;
+         e["RejectedIdentifierRefs"] = rej;
+         e["EvidenceSummary"] = <|"Positive" -> pos, "Negative" -> neg, "LastScoredAtUTC" -> ts|>;
+         AssociateTo[$iSVIDEntities, eid -> e];
+         summaryCount++]],
+      {eid, Keys[byEnt]}]];
+  If[TrueQ[OptionValue["Persist"]] && (repairs =!= {} || summaryCount > 0),
+    SourceVaultIdentitySave[]; persisted = True];
+  <|"Status" -> "OK",
+    "IdentifierCount" -> Length[$iSVIDIdentifiers],
+    "EntityCount" -> Length[$iSVIDEntities],
+    "RepairCount" -> Length[repairs],
+    "RepairKinds" -> Counts[Lookup[#, "Kind"] & /@ repairs],
+    "Repairs" -> Take[repairs, UpTo[50]],
+    "EntitySummaryUpdated" -> summaryCount,
+    "Persisted" -> persisted|>];
+
+(* ---- 定期実行 (カーネル内 ScheduledTask。冪等: 再呼出で差し替え) ---- *)
+
+If[! ValueQ[$iSVIDOwnershipTask], $iSVIDOwnershipTask = None];
+
+Options[SourceVaultScheduleOwnershipRefresh] = {"IntervalSeconds" -> 21600, "Remove" -> False};
+SourceVaultScheduleOwnershipRefresh[OptionsPattern[]] := Module[
+  {ival = OptionValue["IntervalSeconds"]},
+  If[Head[$iSVIDOwnershipTask] === TaskObject, Quiet@TaskRemove[$iSVIDOwnershipTask]];
+  $iSVIDOwnershipTask = None;
+  If[TrueQ[OptionValue["Remove"]], Return[<|"Status" -> "Removed"|>]];
+  $iSVIDOwnershipTask = SessionSubmit[ScheduledTask[
+     Quiet@Check[SourceVaultRecomputeOwnershipLinks["Persist" -> True], $Failed], ival]];
+  <|"Status" -> "Scheduled", "IntervalSeconds" -> ival, "Task" -> $iSVIDOwnershipTask|>];
 
 End[];
 EndPackage[];

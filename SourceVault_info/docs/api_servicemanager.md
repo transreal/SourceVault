@@ -70,7 +70,7 @@ ServiceManager registry を全消去する (テスト / 再 init 用)。→ `<|"
 ## PDFGroupSearchProfile (§19)
 
 ### SourceVaultCreatePDFGroupSearchProfile[groupAlias, spec] → Association
-PDF グループの検索 service 設定を一つの data object として registry に登録する。spec に QueryScopeResolver / EvidencePolicy / AnswerPolicy 等を inline field として持つ。
+PDF グループの検索 service 設定を一つの data object として registry に登録する。spec に QueryScopeResolver / EvidencePolicy / AnswerPolicy 等を inline field として持つ。`"GroupAlias"->groupAlias` が自動付与される。
 
 ### SourceVaultResolvePDFGroupSearchProfile[groupAlias] → Association | Failure
 登録済み PDFGroupSearchProfile を解決する。未登録なら Failure(fail-closed)。
@@ -79,14 +79,14 @@ PDF グループの検索 service 設定を一つの data object として regis
 登録済み PDFGroupSearchProfile の alias リストを返す。
 
 ### SourceVaultClonePDFGroupSearchProfile[srcAlias, newAlias, overrides] → Association
-`srcAlias` のプロファイルを `newAlias` としてコピーし、`overrides`(Association、省略可)でフィールドを上書きして登録する。
+`srcAlias` のプロファイルを `newAlias` としてコピーし、`overrides`(Association、省略可 既定 `<||>`)でフィールドを上書きして登録する。src が未登録なら Failure。
 
 ## パーソナル config doctor (§5.5)
 
 ### SourceVaultNoPersonalConfigDoctor[filesOrDirs, opts]
 repository / 配布対象ファイルに個人情報・環境依存値が混入していないか検査する。
-検出対象: IPv4 literal (octet 検証), localhost:port, Windows/macOS ユーザパス, credential らしき token, 実メールアドレス, private vault root。
-ファイル先頭付近に `doctor:private-design-doc` マーカーがあるファイルは検査対象外。
+検出対象: IPv4 literal (octet 検証, `0.0.0.0`/`255.255.255.255` は除外), localhost:port, Windows/macOS ユーザパス, credential らしき token, 実メールアドレス, private vault root。
+ファイル先頭付近(4000字以内)に `doctor:private-design-doc` マーカーがあるファイルは検査対象外。
 → `<|"Status" -> "OK"|"FindingsFound", "Findings" -> {...}, "FilesScanned" -> n, "Skipped" -> {...}, "FindingCount" -> n|>`
 Options: "MailAllowlist" -> {} (許可するメールアドレスリスト), "Extensions" -> Automatic (既定: {".wl",".wls",".m",".md",".json",".toml",".yaml",".yml"}), "Mask" -> True (マッチ文字列を先頭2文字+***に隠す)
 例: `SourceVaultNoPersonalConfigDoctor[{"src/", "config.wl"}, "MailAllowlist" -> {"admin@example.com"}, "Mask" -> False]`
@@ -156,9 +156,11 @@ runtime dir / pid / heartbeat / status の整合を点検する。
 detached service process 側の runner entrypoint。生成された `run.wls` から呼ばれる。pid/status/heartbeat を書き、command queue を処理し、Stop で終了する。メインカーネルから直接呼ばない(`SourceVaultStartService` 経由)。
 
 ### SourceVaultServiceRuntimeDir[serviceId] → String | Failure
-service の runtime directory を返す。パス構成: `<CoreRoot>/runtime/<MachineName>/services/<serviceId>`。
+service の runtime directory を返す。パス構成: `<CoreRoot>/runtime/<MachineName>/services/<serviceId>`。マシン固有状態を `$MachineName` 層で namespacing し Dropbox 共有 vault でも別マシンと衝突しない。
 
 ## Python HTTP リバースプロキシ
+
+SocketListen が headless で不可なため Python proxy を edge に置く。proxy code は SourceVault data として保存し、起動時に materialize + digest 検証して実行する。
 
 ### $SourceVaultPython
 型: String | Automatic, 初期値: Automatic
@@ -187,20 +189,22 @@ proxy の runtime directory を返す。
 
 ## MCP サーバ起動/停止 ラッパー
 
+WL service + HTTP/MCP proxy を一括制御する便利ラッパー。
+
 ### $SourceVaultMCPServiceId
 型: String, 初期値: `"sourcevault"`
 MCP サーバの既定 serviceId。
 
 ### $SourceVaultMCPPort
 型: Integer | Automatic, 初期値: Automatic
-MCP proxy の既定ポート。Automatic で既存 `proxy.config.json` から解決、無ければ 8731。SearXNG(8888)/LM Studio(1234) と衝突しない値を設定する。
+MCP proxy の既定ポート。Automatic で既存 `proxy.config.json` から解決、無ければ 8731。整数を設定すれば固定。SearXNG(8888)/LM Studio(1234) と衝突しない値を設定する。
 
 ### $SourceVaultMCPToken
 型: String | None | Automatic, 初期値: Automatic
 `/sv/mcp` の既定トークン。Automatic で既存設定から解決、無ければ None(localhost 無認証)。文字列なら `X-SourceVault-Token` ヘッダで要求する。
 
 ### SourceVaultStartMCP[opts] → Association
-MCP サーバ(WL service + HTTP/MCP proxy)を一括起動する。Port/MCPToken は Automatic なら既存 `proxy.config.json` から自動解決(env 依存値を直書きしない)。
+MCP サーバ(WL service + HTTP/MCP proxy)を一括起動する。WL service を確保し `/sv/mcp` を公開する Python proxy を起動する。Port/MCPToken は Automatic なら既存 `proxy.config.json` から自動解決(env 依存値を直書きしない)。
 → `<|"Status", "ServiceId", "Port", "Url", "Service", "Proxy"|>`
 Options: "ServiceId" -> $SourceVaultMCPServiceId, "Port" -> $SourceVaultMCPPort, "MCPToken" -> $SourceVaultMCPToken, "RestartService" -> False
 
@@ -258,7 +262,7 @@ capture source プロファイルの解決可否を fail-closed で点検する(
 ## マルチモーダル ingest / live session (§17, Phase 7b)
 
 ### SourceVaultIngestCapturedMedia[sessionId, kind, data, opts]
-capture 由来データを vault に取り込む(§17.4, §17.11)。data が `ByteArray` なら content-addressed blob に commit、`String` なら Text として記録。MultimodalEvent を append する。
+capture 由来データを vault に取り込む(§17.4, §17.11)。data が `ByteArray` なら content-addressed blob に commit(PersistRaw->True 時)、`String` なら Text として記録。MultimodalEvent を append する。実 ffmpeg/ASR driver はこの関数を呼ぶ(device 非依存の取込点)。
 Options: "PersistRaw" -> True, "SourceRef", "Tags", "State", "PrivacyLevel"
 
 ### SourceVaultUpdateLiveSummary[sessionId, summary]
@@ -310,6 +314,8 @@ Options: "Reason" -> ""
 二つの service version snapshot の主要 ref 差分を返す。
 
 ## Web UI / LLM バックエンド設定
+
+Web UI の HTTP は service 側で処理し、検索は必ず gate 越し(`SourceVaultSearch`)。LLM ライセンス/課金ポリシー: ClaudeCode/Codex(サブスク CLI)は契約者本人のみ = リクエスト元 IP がオーナー PC のときだけ許可、非オーナーは LM Studio(ローカル)一択(課金 OK なら課金 API も可)。client IP は proxy が実 TCP peer から付与する(X-Forwarded-For は非採用)。
 
 ### $SourceVaultWebLLMBase
 型: String, 初期値: `"http://localhost:1234"`

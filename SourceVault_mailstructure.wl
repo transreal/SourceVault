@@ -431,6 +431,11 @@ SourceVaultMailToGenericRecord[snap_Association, OptionsPattern[]] := Module[
 iSVMSParseISO[s_] := If[StringQ[s] && StringLength[s] >= 7,
   Quiet@Check[DateObject[s], Missing["BadDate"]], Missing["NoDate"]];
 
+(* Day 粒度に落とす。境界フィルタで instant(RFC2822 由来) と day(ISO 由来) の DateObject を比較すると
+   DateObject::nordol (粒度が重複して比較不能) を出し、比較が symbolic に化けて全件脱落しうる。
+   両辺を Day に揃えて Day↔Day 比較にする (メッセージも消える)。 *)
+iSVMSDay[d_] := If[Head[d] === DateObject, Quiet@Check[DateObject[d, "Day"], d], d];
+
 Options[SourceVaultMailRecordsForStructuring] = {"Snapshots" -> Automatic, "MBox" -> All,
   "DateFrom" -> None, "DateTo" -> None, "ReleaseContext" -> "mailstruct-local", "Limit" -> All};
 SourceVaultMailRecordsForStructuring[OptionsPattern[]] := Module[
@@ -440,16 +445,15 @@ SourceVaultMailRecordsForStructuring[OptionsPattern[]] := Module[
    dfo, dto, filtered, records},
   If[snaps === Automatic, snaps = SourceVaultMailSnapshotList[]];
   If[! ListQ[snaps], snaps = {}];
-  dfo = If[df === None, Missing[], iSVMSParseISO[df]];
-  dto = If[dt === None, Missing[], iSVMSParseISO[dt]];
+  dfo = If[df === None, Missing[], iSVMSDay[iSVMSParseISO[df]]];
+  dto = If[dt === None, Missing[], iSVMSDay[iSVMSParseISO[dt]]];
   filtered = Select[snaps, Function[s, Module[{sm = Lookup[s, "MailSource", <||>],
-      meta = Lookup[s, "MailMetadataPublic", <||>], d},
+      meta = Lookup[s, "MailMetadataPublic", <||>], d2},
+     d2 = iSVMSDay[iSVMSParseISO[Lookup[meta, "Date", ""]]];
      And[
        mbox === All || Lookup[sm, "MBox", Missing[]] === mbox,
-       If[Head[dfo] === DateObject, With[{d2 = iSVMSParseISO[Lookup[meta, "Date", ""]]},
-          Head[d2] =!= DateObject || d2 >= dfo], True],
-       If[Head[dto] === DateObject, With[{d2 = iSVMSParseISO[Lookup[meta, "Date", ""]]},
-          Head[d2] =!= DateObject || d2 <= dto], True]]]]];
+       If[Head[dfo] === DateObject, Head[d2] =!= DateObject || d2 >= dfo, True],
+       If[Head[dto] === DateObject, Head[d2] =!= DateObject || d2 <= dto, True]]]]];
   If[IntegerQ[lim], filtered = Take[filtered, UpTo[lim]]];
   records = SourceVaultMailToGenericRecord[#, "ReleaseContext" -> ctx] & /@ filtered;
   DeleteCases[records, Missing["Gated"]]];   (* 復号失敗は残す (低漏洩 metadata)。Gated のみ除外 *)

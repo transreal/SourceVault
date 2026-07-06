@@ -354,6 +354,7 @@ WorkflowInfo[] := <|
   "PlotTitle" -> $iPlotTitle,
   "Launch" -> "\:682a\:4fa1\:63a8\:79fb\:30ef\:30fc\:30af\:30d5\:30ed\:30fc2Launch",
   "Forms" -> {
+    "\:682a\:4fa1\:63a8\:79fb\:30ef\:30fc\:30af\:30d5\:30ed\:30fc2Launch[\"run\"]  (end-to-end: fetch + chart; async-drivable via SourceVaultRunWorkflowAsync)",
     "\:682a\:4fa1\:63a8\:79fb\:30ef\:30fc\:30af\:30d5\:30ed\:30fc2Launch[]",
     "\:682a\:4fa1\:63a8\:79fb\:30ef\:30fc\:30af\:30d5\:30ed\:30fc2Launch[\"generate\", \"Export\" -> path]",
     "\:682a\:4fa1\:63a8\:79fb\:30ef\:30fc\:30af\:30d5\:30ed\:30fc2Launch[\"normalize\", pairs]",
@@ -406,6 +407,12 @@ WorkflowInfo[] := <|
     If[! AssociationQ[normalized] || normalized === <||>,
       Return[Missing["NoData"]]];
     iPlotGraphic[normalized, TrueQ[Lookup[o, "Log", False]]]];
+
+(* ---- async-drivable end-to-end entry (= "plot"): fetch + normalized chart ----
+   generic runner SourceVault`SourceVaultRunWorkflowAsync[slug, "run"] が呼ぶ形。
+   自己完結 (引数不要) で成果物 (DateListPlot) を返すので非同期実行に載せられる。 *)
+\:682a\:4fa1\:63a8\:79fb\:30ef\:30fc\:30af\:30d5\:30ed\:30fc2Launch["run", opts___Rule] :=
+  \:682a\:4fa1\:63a8\:79fb\:30ef\:30fc\:30af\:30d5\:30ed\:30fc2Launch["plot", opts];
 
 End[]  (* `Private` *)
 

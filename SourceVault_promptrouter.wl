@@ -121,6 +121,19 @@ If[!ValueQ[SourceVault`$SourceVaultContextPlannerTrimSelfContained],
   SourceVault`$SourceVaultContextPlannerTrimSelfContained = False];
 
 (* ------------------------------------------------------------
+   Saved-prompt list panel: default row cap (fast startup).
+   When SourceVaultPromptRoutePanel opens in its standard state
+   (empty query), only the top-$SourceVaultPromptPanelMaxRows routes
+   (highest launch-minus-error score) are rendered, so a long saved-
+   prompt library does not make the panel slow to open. A keyword
+   search shows ALL matches (no cap), and the "\:5168\:4ef6" button forces the
+   full unlimited listing. Set to Infinity to always show every row.
+   Not cleared on reload so a user's setting survives a repeated Get[].
+   ------------------------------------------------------------ *)
+If[!ValueQ[SourceVault`$SourceVaultPromptPanelMaxRows],
+  SourceVault`$SourceVaultPromptPanelMaxRows = 30];
+
+(* ------------------------------------------------------------
    Public usage messages (Phase A scope).
    ------------------------------------------------------------ *)
 
@@ -392,8 +405,20 @@ SourceVaultPromptRoutePanel::usage =
   "PromptRoutes and lets you search them by keyword/memo, filter by channel, " <>
   "and manage each one (Preview / Run / ToInput / Primary / Memo / delete) " <>
   "via SourceVaultFormatPromptRouteList. It is the saved-prompt counterpart of " <>
-  "SourceVaultWorkflowPanel (manual refresh, FE-freeze safe). Options: " <>
-  "\"Channel\" -> All|\"public\"|\"private\"|\"local\" (initial channel filter).";
+  "SourceVaultWorkflowPanel (manual refresh, FE-freeze safe). By default " <>
+  "(no search) it renders only the first $SourceVaultPromptPanelMaxRows rows " <>
+  "so a long library opens quickly; a keyword search shows all matches and " <>
+  "the \"\:5168\:4ef6\" button shows the full unlimited list. Options: " <>
+  "\"Channel\" -> All|\"public\"|\"private\"|\"local\" (initial channel filter), " <>
+  "\"MaxRows\" -> Automatic|_Integer|Infinity (default-view row cap; " <>
+  "Automatic uses $SourceVaultPromptPanelMaxRows).";
+
+$SourceVaultPromptPanelMaxRows::usage =
+  "$SourceVaultPromptPanelMaxRows is the maximum number of saved-prompt rows " <>
+  "SourceVaultPromptRoutePanel renders in its default (no-search) state, so a " <>
+  "long library opens quickly. A keyword search shows all matches and the " <>
+  "\"\:5168\:4ef6\" button shows the full list regardless. Default 30; set to " <>
+  "Infinity to always show every row.";
 
 Begin["`Private`"];
 
@@ -4010,10 +4035,11 @@ iSVPRBumpLaunchId[___] := $Failed;
 iSVPRBumpLaunch[rt_Association, err_:False] :=
   iSVPRBumpLaunchId[ToString[Lookup[rt, "RouteId", ""]], err];
 
-Options[SourceVaultFormatPromptRouteList] = {};
+Options[SourceVaultFormatPromptRouteList] = {"MaxRows" -> Infinity};
 
 SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
-  Module[{filtered, cols, header, body},
+  Module[{filtered, cols, header, body, maxRows, totalN, limited,
+          theGrid, note},
     filtered = Select[Map[iSVPRNormalizeRoute, routes], AssociationQ];
     If[filtered === {},
       Return[Style[
@@ -4022,6 +4048,13 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
     (* \:691c\:7d22\:6642\:3082\:4e00\:89a7\:3082\:300c\:8d77\:52d5\:56de\:6570 - \:30a8\:30e9\:30fc\:56de\:6570\:300d\:306e\:5927\:304d\:3044\:9806\:306b\:4e26\:3079\:308b\:3002
        -score \:3092\:7b2c1\:30ad\:30fc\:306b\:3057 SortBy \:6607\:9806 = score \:964d\:9806\:3001ties \:306f\:65e2\:5b58\:9806\:3092\:7dad\:6301\:3002 *)
     filtered = SortBy[filtered, -iSVPRRouteScore[#] &];
+    (* \:5148\:982d\:884c\:5236\:9650: MaxRows \:304c\:6b63\:6574\:6570\:306e\:3068\:304d\:306f score \:4e0a\:4f4d
+       maxRows \:884c\:306e\:307f\:3092\:63cf\:753b\:3057\:3001\:9577\:3044\:4e00\:89a7\:3067\:3082\:8d77\:52d5\:3092\:901f\:304f\:3059\:308b\:3002
+       \:691c\:7d22\:6642\:306f MaxRows -> Infinity \:304c\:6e21\:308b\:306e\:3067\:5168\:4ef6\:8868\:793a\:3002 *)
+    maxRows = OptionValue[SourceVaultFormatPromptRouteList, {opts}, "MaxRows"];
+    totalN = Length[filtered];
+    limited = IntegerQ[maxRows] && maxRows >= 0 && totalN > maxRows;
+    If[limited, filtered = Take[filtered, maxRows]];
     cols = {"Prompt", "Memo", "Target", "\:4f5c\:6210/\:66f4\:65b0",
             "Privacy", "State", "Actions",
             "\:8d77\:52d5\:56de\:6570", "\:30a8\:30e9\:30fc\:56de\:6570", "\:81ea\:52d5"};
@@ -4232,7 +4265,7 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
               Style["\:2014", Gray]]
           }]],
       filtered];
-    Grid[
+    theGrid = Grid[
       Prepend[body, header],
       Frame -> All,
       FrameStyle -> Directive[GrayLevel[0.85]],
@@ -4240,7 +4273,15 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
       Alignment -> {Left, Center},
       Spacings -> {1.2, 0.7},
       BaseStyle -> {FontFamily -> "Yu Gothic UI"}
-    ]
+    ];
+    (* \:5148\:982d\:5236\:9650\:6642\:306f\:3001\:8868\:306e\:4e0a\:306b\:8868\:793a\:4ef6\:6570\:3092\:660e\:793a\:3059\:308b\:6ce8\:8a18 *)
+    If[! limited, theGrid,
+      note = Style[
+        ToString[maxRows] <> " / " <> ToString[totalN] <>
+          " \:4ef6\:3092\:8868\:793a\:4e2d\:ff08\:691c\:7d22\:3059\:308b\:3068\:5168\:4ef6\:8868\:793a\:ff09",
+        FontFamily -> "Yu Gothic UI", FontSize -> 10,
+        RGBColor[0.55, 0.45, 0.2]];
+      Column[{note, theGrid}, Spacings -> 0.4]]
   ];
 
 SourceVaultFormatPromptRouteList[___] :=
@@ -4270,17 +4311,26 @@ iSVPRPanelRoutes[query_String, channel_] :=
       x_ /; (AssociationQ[x] &&
         iSVPRWorkflowRouteQ[Quiet @ Check[iSVPRNormalizeRoute[x], x]])]];
 
-Options[SourceVaultPromptRoutePanel] = {"Channel" -> All};
+Options[SourceVaultPromptRoutePanel] = {"Channel" -> All, "MaxRows" -> Automatic};
 
 (* routes は DynamicModule の外 = この関数の「通常評価」(パレットクリック/手動評価)
    で先に算出して埋め込む。DynamicModule body での評価は FE の評価予算 abort の対象で
    $Aborted を招くため、ここでは評価させない (ワークフロー一覧と同じ方針)。 *)
 SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
   Module[{ch = OptionValue[SourceVaultPromptRoutePanel, {opts}, "Channel"],
+          maxRows = OptionValue[SourceVaultPromptRoutePanel, {opts}, "MaxRows"],
           initRoutes},
+    (* Automatic \:306f\:30e6\:30fc\:30b6\:30fc\:8a2d\:5b9a\:5024\:306b\:89e3\:6c7a\:3059\:308b\:3002\:6574\:6570/Infinity \:4ee5\:5916\:306f 30\:3002 *)
+    If[maxRows === Automatic,
+      maxRows = If[IntegerQ[SourceVault`$SourceVaultPromptPanelMaxRows] ||
+                   SourceVault`$SourceVaultPromptPanelMaxRows === Infinity,
+                 SourceVault`$SourceVaultPromptPanelMaxRows, 30]];
     initRoutes = Quiet @ Check[iSVPRPanelRoutes["", ch], {}];
     If[! ListQ[initRoutes], initRoutes = {}];
-    DynamicModule[{query = "", channel = ch, routes = initRoutes},
+    (* showAll: \:6a19\:6e96\:8868\:793a=False\:ff08\:5148\:982d mr \:884c\:306e\:307f\:ff09\:3001\:691c\:7d22/\:5168\:4ef6=True\:ff08\:5168\:4ef6\:63cf\:753b\:ff09\:3002
+       mr \:306f\:5916\:5074 Module \:3067\:6c7a\:307e\:308b\:6574\:6570\:306a\:306e\:3067 DynamicModule \:306b\:30ea\:30c6\:30e9\:30eb\:5316\:3055\:308c\:3066\:713c\:304d\:8fbc\:3080\:3002 *)
+    DynamicModule[{query = "", channel = ch, routes = initRoutes,
+                   showAll = False, mr = maxRows},
     Panel[Column[{
       Style["SourceVault \:4fdd\:5b58\:30d7\:30ed\:30f3\:30d7\:30c8\:4e00\:89a7", Bold, 15,
         FontFamily -> "Yu Gothic UI"],
@@ -4294,16 +4344,21 @@ SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
            "private" -> "private", "local" -> "local"},
           BaseStyle -> {FontFamily -> "Yu Gothic UI"}],
         Spacer[6],
+        (* \:691c\:7d22: \:30ad\:30fc\:30ef\:30fc\:30c9\:6709\:308a\:306a\:3089\:30de\:30c3\:30c1\:3092\:5168\:4ef6\:8868\:793a\:3001\:7a7a\:306a\:3089\:6a19\:6e96\:8868\:793a\:ff08\:5236\:9650\:ff09 *)
         Button[Style["\:691c\:7d22", FontFamily -> "Yu Gothic UI"],
+          showAll = (StringTrim[query] =!= "");
           routes = Quiet @ Check[
             iSVPRPanelRoutes[query, channel], {}],
           Method -> "Queued"],
         Spacer[4],
-        Button[Style["\:5168\:4ef6", FontFamily -> "Yu Gothic UI"],
-          query = "";
-          routes = Quiet @ Check[
-            iSVPRPanelRoutes["", channel], {}],
-          Method -> "Queued"],
+        (* \:5168\:4ef6: \:691c\:7d22\:306a\:3057\:3067\:3082\:5236\:9650\:3092\:5916\:3057\:3066\:5168\:4ef6\:8868\:793a *)
+        Tooltip[
+          Button[Style["\:5168\:4ef6", FontFamily -> "Yu Gothic UI"],
+            query = ""; showAll = True;
+            routes = Quiet @ Check[
+              iSVPRPanelRoutes["", channel], {}],
+            Method -> "Queued"],
+          "\:5168\:4ef6\:3092\:5236\:9650\:306a\:3057\:3067\:8868\:793a\:3057\:307e\:3059\:ff08\:9577\:3044\:3068\:8868\:793a\:304c\:91cd\:304f\:306a\:308a\:307e\:3059\:ff09\:3002"],
         Spacer[4],
         Tooltip[
           Button[Style["\:518d\:8aad\:8fbc", FontFamily -> "Yu Gothic UI"],
@@ -4316,9 +4371,11 @@ SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
           Style[ToString[Length[If[ListQ[routes], routes, {}]]] <> " \:4ef6",
             FontFamily -> "Yu Gothic UI", FontSize -> 10, GrayLevel[0.45]]}],
         TrackedSymbols :> {routes}],
+      (* \:6a19\:6e96\:8868\:793a\:ff08showAll=False\:ff09\:3067\:306f mr \:884c\:306b\:5236\:9650\:3001\:691c\:7d22/\:5168\:4ef6\:306f Infinity \:3067\:5168\:4ef6\:3002 *)
       Dynamic[
-        SourceVaultFormatPromptRouteList[If[ListQ[routes], routes, {}]],
-        TrackedSymbols :> {routes}]},
+        SourceVaultFormatPromptRouteList[If[ListQ[routes], routes, {}],
+          "MaxRows" -> If[TrueQ[showAll], Infinity, mr]],
+        TrackedSymbols :> {routes, showAll}]},
       Spacings -> 0.6],
       ImageMargins -> 4],
     (* フォールバック: 保存ノート再オープン等で routes が未確定の時のみ再取得。

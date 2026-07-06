@@ -818,7 +818,7 @@ SourceVaultSearchMailSnapshots["会議",
 | `Newest` | `True` (既定) で日付降順 |
 | `Limit` | 件数制限 |
 
-### 対話的な### 対話的なメール一覧 (Mail UI)
+### 対話的なメール一覧 (Mail UI)
 
 `SourceVaultMailView` は、各行に **✉本文表示 / 📎添付ポップアップ / ↩返信** のクリック操作を備えた表 (Dataset) を返します。件名はクリック可能で、ラベルは `$Language` に応じて日本語/英語に切り替わります。
 
@@ -939,7 +939,7 @@ SourceVaultGroupWeightFor["Colleagues"]    (* 0.8 *)
 
 ### 初期化と所有者プロフィール
 
-```wolfram
+```mathematica
 (* load + self(EntityUid=1) bootstrap (冪等)。初回アクセス時に自動ロードもされる *)
 SourceVaultIdentityInitialize[]
 
@@ -956,7 +956,7 @@ SourceVaultOwnerPrimaryEmail[]  (* プライマリメール *)
 
 ### 識別子と実体の操作
 
-```wolfram
+```mathematica
 (* 識別子を観測/登録 (メール取込で自動。手動 upsert も可) *)
 SourceVaultObserveIdentifier["Email", "alice@example.org",
   "ObservedName" -> "Alice", "Persist" -> True]
@@ -987,14 +987,14 @@ SourceVaultUpdateEntity[5, <|"Group" -> "Colleagues", "PriorityWeight" -> 0.8|>]
 
 identity 導入前に取り込んだ大量のメールには識別子がありません。`SourceVaultMailStoreLoad[]` で全件ロードしてから次を実行すると、平文ヘッダ (From/To/Cc) を走査して識別子を一括生成します (再取込不要)。
 
-```wolfram
+```mathematica
 SourceVaultMailStoreLoad[];
 SourceVaultIdentityBackfillFromMail[]
 ```
 
 ### identity 関連の UI
 
-```wolfram
+```mathematica
 SourceVaultAddressBookView[]      (* 連絡先の整形表 *)
 SourceVaultIdentityLinkUI[]       (* 未リンク識別子→実体 (新規作成/既存マージ) *)
 SourceVaultEntityView[]           (* 実体一覧 + 各行に編集ボタン *)
@@ -1930,6 +1930,8 @@ SourceVaultListModels["chatgptcodex"]
 | `"Local"` | ローカル LLM (LM Studio 等) |
 | `"Private"` | プライベート LLM (PrivacyLevel >= 0.5 のタスク向け) |
 
+> **バージョン比較のソートキー修正:** Freshness 判定（同一モデル系列内での新旧比較）に使う内部バージョン番号は、以前は `1000^(Length[v] - index)` という桁数依存の重み付けでソートキー化していたため、桁数の異なるバージョン間で逆転が起こり得ました。具体的には、バージョン `{4, 6}` が `4*1000 + 6 = 4006`、`{5}` が `5` という単調値になり、桁数の多い旧版 `{4, 6}` が桁数の少ない新版 `{5}` を上回っていました。その結果、`claude-sonnet-4-6` が `claude-sonnet-5` より新しいと誤判定される（＝桁数の少ない新しいメジャー版が実際より下位に順位付けされる）ことがありました。現在はバージョン番号を固定幅 (6 桁) まで右パディングしてから `base^(width - index)`（`base = 100000`、`width = 6`）で重み付けする方式に変更されており、この逆転は解消されています。各桁は `iSVParseModelVersion` の段階で日付など 10000 以上の値が除外されるため、固定基数 100000 で桁上がりは起きません。旧実装は各バージョンを実際の値より大きく（昇格）評価することはありませんでしたが、桁数の少ない新しいメジャー版が桁数の多い旧版より下位に評価されるという相対順位の不整合が、桁数の異なるバージョン間の比較でのみ生じていました。
+
 ---
 
 #### `SourceVaultModelContextLength`
@@ -2034,6 +2036,7 @@ claim extraction                    LLM による構造化 claim 抽出
 claim dedup + Compact               claim JSONL の重複排除と圧縮
 Compiled Registry                   topic 別の値解決 (Lookup / Resolve)
 Model Registry                      provider 別モデルの一元管理 (ListModels / Refresh)
+モデルバージョンソートキー修正      桁数依存の重み付けバグを固定幅パディング方式に変更し、異なる桁数のバージョン間の逆転を防止
 Light-Cloud モデルクラス            軽量クラウド推論モデル (Reasoning capable) の登録・選択
 ChatGPT Codex 対応                  codex debug models からのモデルカタログ取得
 Evidence Bundle                     claim と snapshot の依存記録・lazy 再評価
@@ -2166,3 +2169,5 @@ Dataset[Map[ImportString[#, "RawJSON"] &,
 - [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) — タスク分解・マルチエージェント機構 (NBAccess hook で SourceVault と連携可能)
 - [ClaudeTestKit](https://github.com/transreal/ClaudeTestKit) — モックプロバイダー・シナリオテスト基盤
 - [github](https://github.com/transreal/github) — パッケージのインストール・更新の簡略化
+
+ドキュメントの更新は以上です。今回の差分はモデルバージョン比較の内部ソートキー計算のバグ修正（桁数依存の重み付け `1000^(Length[v] - index)` を、固定幅 6 桁への右パディング + 固定基数 `100000^(width - index)` 方式に変更し、桁数の異なるバージョン間での逆転を解消）であり、新規の公開関数・オプションの追加や削除はありませんでした。この修正内容を「8. Registry」節の `SourceVaultListModels` の注記と「機能マトリックス」に反映しています。

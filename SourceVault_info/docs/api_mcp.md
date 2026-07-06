@@ -1,6 +1,6 @@
 # SourceVault_mcp API リファレンス
 
-パッケージ: `SourceVault`` (コンテキスト `SourceVault`MCPPrivate`` は内部)
+パッケージ: `SourceVault` (コンテキスト `SourceVault`MCPPrivate` は内部)
 ロード: `Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault_mcp.wl"]]`
 役割: MCP tool schema 定義・dispatch・argument validation・provenance 付与。HTTP/JSON-RPC transport は Python proxy 側。service kernel から `SourceVaultMCPDispatch` を呼ぶ。FrontEnd/Notebook/NBAccess 非依存。結果は JSON 安全 (string/assoc/list/bool)。
 
@@ -22,6 +22,14 @@ tool を実行し MCP result `<|"content", "isError"|>` を返す。
 ### SourceVaultMCPDispatch[method, params] → Association
 MCP JSON-RPC の method (initialize/tools/list/tools/call/ping) を処理し JSON-RPC result 相当の Association を返す。未知 method は `Failure["MCPMethodNotFound", ...]` (proxy が JSON-RPC error に変換)。
 
+## パッケージコミット履歴ツール
+
+### SourceVaultPackageCommitLog[packageName, opts]
+本システムのパッケージのコミット履歴を `GitHubREST`GitHubCommitLog` 経由で取得し、JSON-safe なコンパクト形式で返す SourceVault ラッパー。`GithubRepositories/` は `.git` を持たないミラーのため履歴の正本は GitHub API。コミットメタデータのみ (コード本文なし) で cloud-safe (PrivacyLevel 0.0)。`sourcevault_commit_log` tool の実体。
+→ Association `<|"Status", "Package", "Count", "Commits" -> {<|sha, date, author, message|>..}, "PrivacyLevel"|>`
+Options: "Since" -> None, "Until" -> None (ともに "YYYY-MM-DD" 等の日付), "MaxItems" -> 50
+例: `SourceVaultPackageCommitLog["SourceVault", "Since" -> "2026-06-20"]`
+
 ## OOPS メールスレッド検索ツール (SourceVault_oopsseed 露出)
 
 ClaudeEval / LM Studio / Codex の自然文プロンプト (「○○のスレッドを探して」等) から OOPS メールコーパスのスレッド検索・閲覧を行う 3 tool。実体は [api_oopsseed.md](api_oopsseed.md) の `SourceVaultOOPS...` 関数群 (thin wrapper)。
@@ -42,7 +50,7 @@ notebook / local から直接 `SourceVaultOOPS...` を呼ぶ場合は既定 `Clo
 
 OOPS 以外の一般メール (univ 等 maildb) を返信/引用 session ＋ topic に構造化して検索する 3 tool。実体は [api_mailstructure.md](api_mailstructure.md) の `SourceVaultMailStruct...` 関数群 (thin wrapper)。
 
-- **`sourcevault_mail_status`** — scope (`SourceVault`$svMailStructMCPScope = {mbox, period}`, 既定 `{"univ", "202606"}`) のメールをロード → StructureMail → BM25 index を cloud PrivacyScope で lazy build し状態 (`Loaded / Scope / MailCount / SessionCount / VocabSize / IndexId`) を返す。検索前に一度呼ぶ。実体 `SourceVaultMailStructEnsureIndex`。
+- **`sourcevault_mail_status`** — scope (`SourceVault`$svMailStructMCPScope = {mbox, period}`、既定 `{"univ", "202606"}`) のメールをロード → StructureMail → BM25 index を cloud PrivacyScope で lazy build し状態 (`Loaded / Scope / MailCount / SessionCount / VocabSize / IndexId`) を返す。検索前に一度呼ぶ。実体 `SourceVaultMailStructEnsureIndex`。
 - **`sourcevault_mail_search_threads`** {query, limit=10} — session を BM25 で検索し `{Session, Subject, Score, Snippet}` を返す。実体 `SourceVaultMailStructSearchThreads`。
 - **`sourcevault_mail_thread`** {session} — 1 session 詳細 `{SessionId, Subject, MailCount, Topics, CurrentDigest, HistoricalReferences, Released}` を返す。**digest は current session の結論と historical reference (過去メールの引用/前例/テンプレート) を分離** (§9)。実体 `SourceVaultMailStructThread`。
 
@@ -51,8 +59,8 @@ OOPS 以外の一般メール (univ 等 maildb) を返信/引用 session ＋ top
 ## URI 層 (spec §3.1)
 
 ### $SourceVaultURINamespaces
-型: List, 初期値: {"object","chunk","artifact","hash","group","relation","snapshot","record","citation","file"}
-sv:// URI の予約 identity namespace。data class (mail/web/pdf 等) は URI namespace でなく Class/MediaType/Kind sidecar に持つ。namespace arity: object/chunk/artifact/relation/record/citation/file → 1 segment、hash/snapshot → 2 segments、group → 2 segments。
+型: List, 初期値: {"object","chunk","artifact","hash","group","relation","snapshot","record","citation","file","packageapi","directive"}
+sv:// URI の予約 identity namespace。data class (mail/web/pdf 等) は URI namespace でなく Class/MediaType/Kind sidecar に持つ。namespace arity: object/chunk/artifact/relation/record/citation/file/packageapi/directive → 1 segment、hash/snapshot → 2 segments、group → 2 segments。packageapi/directive は retrieval spec v0.3 §7.2 の stable opaque id (`sv://packageapi/<stableHash(pkg,symbol,auxName)>`、世代非依存)。
 
 ### SourceVaultParseURI[uri] → Association
 sv:// URI または legacy ref (`blob:sha256:hex` / `snapshot:class:hex`) を解析する。純関数。
@@ -81,9 +89,9 @@ object/内部 ref から canonical sv:// URI を返す adapter hook。String 引
 
 ### SourceVaultRegisterMCPDataAdapter[name, spec] → Association|Failure
 data adapter を登録する。spec 必須: "Kinds" ({_String..})。
-任意 spec key: "Capabilities" (<|cap->bool|>)、"Search"/"Resolve"/"Read"/"SummaryRow"/"Metadata"/"Authorize"/"URIForObject" 関数、"Available" (bool)、"AvailableProbe" (Function[])、"RequireGrantFor" ({_String..})、"UnavailableReason"。
+任意 spec key: "Capabilities" (<|cap->bool|>)、"Search"/"Resolve"/"Read"/"SummaryRow"/"Metadata"/"Authorize"/"URIForObject" 関数、"Available" (bool)、"AvailableProbe" (Function[])、"RequireGrantFor" ({_String..})、"UnavailableReason"、"BodyGrantRequired" (bool、既定 True。False で view=body を grant なしで解放 — PublicDoc adapter 用、release gate は通す。R-spec §5.6)、"ExtraViews" (<|viewName -> Function[parsed, accessRequest]|>、adapter 固有 view。packageapi: contract/scaffolded/guided)、"FilterKeys"/"FilterExamples" ({_String..}、catalog に露出する adapter 固有 filter discovery。packageapi の packages 等)。
 Capabilities key: Search / ReadMetadata / ReadSummary / ReadContext / ReadBody / DepositArtifact / ResolveObjectURI / SemanticSearch / MetadataFilter。未指定 key は False で補完。
-返値: `<|"Status"->"OK", "Name", "Kinds", "Capabilities"|>`
+返値: `<|"Status"->"OK", "Name", "Kinds", "Capabilities"|>`。Kinds 不正は `Failure["AdapterMissingKinds"]`、spec 非 Association は `Failure["AdapterSpecNotAssociation"]`。
 
 ### SourceVaultListMCPDataAdapters[] → {String..}
 登録済み adapter 名のリスト (ソート済み) を返す。
@@ -94,7 +102,7 @@ Capabilities key: Search / ReadMetadata / ReadSummary / ReadContext / ReadBody /
 ## Access model 正規化 (spec §2.1 / §2.2 / §2.4)
 
 ### SourceVaultNormalizePrincipal[input, opts]
-MCP request 主体を Principal 連想に正規化する。ClientName は自己申告可 (provenance 扱い)。authoritative ProviderClass は opts "Trusted" からのみ採用し、無ければ "Unknown" (release 判定に client 自己申告は使わない)。
+MCP request 主体を Principal 連想に正規化する。ClientName は自己申告可 (provenance 扱い)。authoritative ProviderClass は opts "Trusted" からのみ採用し、無ければ "Unknown" (release 判定に client 自己申告は使わない)。有効 ProviderClass は {CloudLLM, LocalLLM, PrivateLLM}。
 → Association
 Options: "Trusted" -> <||> (transport/grant/main-kernel で確立した authoritative 情報)
 返値 key: Kind / ClientName / ProviderClass / ProviderClassTrusted / AssertedProviderClass / SessionId / UserPresent
@@ -113,7 +121,7 @@ Options: "Default" -> 0.5 (cloud 安全境界)
 ## Catalog (spec §9.2 / §16)
 
 ### SourceVaultMCPCatalog[opts]
-登録済み adapter の catalog を JSON 安全な連想で返す。各 adapter record: name/kinds/available/capabilities/requiresGrantFor、unavailable なら unavailableReason を付加。トップに defaultReturnFormats。
+登録済み adapter の catalog を JSON 安全な連想で返す。各 adapter record: name/kinds/available/capabilities/requiresGrantFor、adapter 固有の filterKeys/filterExamples があれば付加、unavailable なら unavailableReason を付加。トップに defaultReturnFormats ({"compactText","structuredJson","referencesOnly"})。可用性は spec "AvailableProbe" (Function[]) があれば動的評価、無ければ静的 "Available"。`sourcevault_catalog` tool の実体。
 → Association
 Options: "IncludeUnavailable" -> True
 
@@ -121,7 +129,7 @@ Options: "IncludeUnavailable" -> True
 
 ### SourceVaultSetModelAccessProfile[provider, intent, modelId, profile] → Association|Failure
 model 別 AccessProfile を PrivateVault/config/mcp-access-profiles.json に永続化する (AccessProfileRef 方式・GitHub 非公開)。modelId に "*" を渡すと provider/intent の wildcard profile。
-profile key: MaxAccessLevel / AllowedSinks / AllowedOperations / AllowedProjections / DeniedProjections / ScopePolicy / PurposeAllowed / RequireGrantFor / Audit / EndpointRef / TrustDomain。返値は正規化済み profile。
+profile key: MaxAccessLevel / AllowedSinks / AllowedOperations / AllowedProjections / DeniedProjections / ScopePolicy / PurposeAllowed / RequireGrantFor / Audit / EndpointRef / TrustDomain。返値は正規化済み profile。PrivateVault 未解決/書込失敗は Failure。
 
 ### SourceVaultGetModelAccessProfile[provider, intent, modelId] → Association|Missing
 保存済み AccessProfile を返す。未登録は `Missing["AccessProfileNotFound"]`。
@@ -152,7 +160,8 @@ PromptStrategy: "MCPDeferred" | "InlineContext" | "Hybrid" | "LocalToolRefs" | "
 ## LLM job trace / output privacy (spec §13.3 / §13.4)
 
 ### SourceVaultMintTraceId[kind] → String
-trace 用 opaque correlation id を生成する。kind → prefix: "batch"→svbatch- / "job"→svjob- / "trace"→svtrace- / "session"→svsession- / "work"→svwork- / "call"→svmcp-。capability ではなく漏れても権限を与えない。trusted host が mint する想定 (client tool 引数からは mint させない)。
+### SourceVaultMintTraceId[] → String
+trace 用 opaque correlation id を生成する。引数なしは "trace"。kind → prefix: "batch"→svbatch- / "job"→svjob- / "trace"→svtrace- / "session"→svsession- / "work"→svwork- / "call"→svmcp-。未知 kind は svid-。capability ではなく漏れても権限を与えない。trusted host が mint する想定 (client tool 引数からは mint させない)。
 
 ### SourceVaultNormalizeMCPCallRecord[spec] → Association
 MCP call 監査 record (spec §13.3) を既定補完して正規化する。
@@ -174,7 +183,8 @@ jobSpec key: DeliveryProfile / PromptPrivacyMax / BatchObservedReadMax / Session
 ## MCPCall 永続化 / batch mint (spec §13.3)
 
 ### SourceVaultStartBatch[spec] → Association
-prospective な BatchId を mint する (spec §13.3 / N2)。trusted host (main kernel/orchestrator) が呼ぶ前提。client tool 引数からは mint させない。LocalState/hotlog/mcp_batches に marker を記録する。
+### SourceVaultStartBatch[] → Association
+prospective な BatchId を mint する (spec §13.3 / N2)。trusted host (main kernel/orchestrator) が呼ぶ前提。client tool 引数からは mint させない。LocalState/hotlog/mcp_batches に marker を記録する。SessionId 未指定なら mint する。
 spec key: SessionId / Title / DeliveryProfileId / ExpectedJobCount
 返値: `<|BatchId, SessionId, Status->"Running", StartedAtUTC, MintAuthority->"TrustedHost"|>`
 
@@ -209,8 +219,9 @@ Options: "Principal" -> Automatic, "Trusted" -> <||>
 
 ### SourceVaultMCPGet[uri, opts]
 単一の sv:// URI を解決し、所有 adapter の Resolve で低漏洩メタ/サマリー projection を取り、SourceVaultMCPReleaseGate で出口 gate して返す (spec §11.2)。body/raw/attachment は含めず requiresGrant を示す (実 grant は Phase D)。`sourcevault_get` tool の実体。
+例外 (F6): adapter が "BodyGrantRequired"->False を宣言する PublicDoc 系 (packageapi) は view=body を grant なしで解放 (`Access.Why -> {"GrantFreePublicDoc"}`)。adapter の "ExtraViews" に登録された view (packageapi: contract=機械可読契約+AuditStatus / scaffolded / guided=粒度 tier 描画) はその projection を返す。
 → Association
-Options: "Principal" -> Automatic, "Trusted" -> <||>
+Options: "Principal" -> Automatic, "Trusted" -> <||>, "View" -> Automatic
 返値 key: URI / Found / Released / Adapter / Result(Permit 時のみ) / Access / RequiresGrantFor / Why / AccessRequest
 
 ### SourceVaultMCPReleaseGate[result, accessRequest] → Association
@@ -281,7 +292,7 @@ spec key:
 - Approved: True (RequiresApproval 回避用)
 
 mode "plan" 返値 key: EffectivePolicy / NormalizedSourceRefs / SourceRefRoles / PrivacyBasis / RequiresApproval
-mode "commit": DepositArtifact 権限 (有効 grant の AllowedActions または endpoint AccessProfile の AllowedOperations) が無ければ RequireGrant を返し書込まない。既定 profile の AllowedOperations は DepositArtifact を含まない (fail-closed)。contentSHA256+idempotencyKey で idempotent。RequiresApproval (high-privacy/未裏付け ref) は Approved->True か対応 grant 無しで RequireApproval を返し書込まない。
+mode "commit": text は DerivedArtifact、binary(base64) は CommitBlob + DerivedArtifact。DepositArtifact 権限 (有効 grant の AllowedActions または endpoint AccessProfile の AllowedOperations) が無ければ RequireGrant を返し書込まない。既定 profile の AllowedOperations は DepositArtifact を含まない (fail-closed)。contentSHA256+idempotencyKey で idempotent (per-session/batch quota、低 weight "Deposited" 参照イベント)。RequiresApproval (high-privacy/未裏付け ref) は Approved->True か対応 grant/profile の MaxAccessLevel>=effPL 無しで RequireApproval を返し書込まない。
 commit 返値 key: Status / ArtifactUri(sv://artifact/..) / DerivedArtifactRef / ContentUri / Existed / EffectivePolicy
 
 PrivacyLevel = Max[要求値, Session/Batch の observed-read max]。自己申告 SourceRefs が observed read で裏付けられない場合は fail-closed で 0.75 floor。

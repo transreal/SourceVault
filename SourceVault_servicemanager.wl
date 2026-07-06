@@ -1520,7 +1520,8 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
       <|"ServiceId" -> serviceId, "Kind" -> kind, "PackageRoot" -> pkgRoot,
         "CoreRoot" -> root, "HeartbeatIntervalSeconds" -> interval,
         "Packages" -> {"SourceVault_core.wl", "SourceVault_crypto.wl", "SourceVault_searchindex.wl",
-          "SourceVault_servicemanager.wl", "SourceVault_webingest.wl", "SourceVault_mcp.wl"},
+          "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
+          "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl"},
         "InjectedRootHash" -> rootHash,
         "HasPrelude" -> (StringLength[prelude] > 0), "CreatedAtUTC" -> iSMUTCNow[]|>];
     Module[{strm = OpenWrite[path, BinaryFormat -> True], text},
@@ -1534,6 +1535,11 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_servicemanager.wl\"}]];\n",
         (* webingest / mcp は存在する場合のみ load (spec v6 §4.6)。未作成段階でも安全。 *)
         "  With[{wpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_webingest.wl\"}]}, If[FileExistsQ[wpath], Get[wpath]]];\n",
+        (* packageapi (+依存 contracts) を mcp より前に load して、detached service
+           kernel 単独でも packageapi adapter を available にする。存在ガードで
+           fail-soft (packageapi は core のみ必須、contracts は alias 解決用で任意)。 *)
+        "  With[{kpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_contracts.wl\"}]}, If[FileExistsQ[kpath], Get[kpath]]];\n",
+        "  With[{apath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_packageapi.wl\"}]}, If[FileExistsQ[apath], Get[apath]]];\n",
         "  With[{mpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_mcp.wl\"}]}, If[FileExistsQ[mpath], Get[mpath]]];\n",
         "];\n",
         "SourceVault`$SourceVaultCoreRoot = ", q[root], ";\n",
@@ -1629,6 +1635,7 @@ SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
      (cmd /c bat を vbHide で起動) 経由にして窓を出さない (stdout リダイレクトは bat 側で維持)。 *)
   Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", iWriteHiddenLauncher[dir, batPath]["TR"],
     "/SC", "ONCE", "/ST", "23:59", "/F"}];
+  iClearTaskBatteryRestriction[task];  (* バッテリー運用でも起動できるよう電源条件を解除 *)
   runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", task}];
   If[! (AssociationQ[runRes] && Lookup[runRes, "ExitCode"] === 0),
     iSMWriteJSON[FileNameJoin[{dir, "status.json"}],
@@ -1879,6 +1886,22 @@ iWriteHiddenLauncher[dir_String, batPath_String] := Module[{vbsPath = FileNameJo
   iWriteTextFileUTF8[vbsPath, iHiddenBatLauncherVBS[batPath]];
   <|"VBS" -> vbsPath, "TR" -> iWScriptTR[vbsPath]|>];
 
+(* schtasks /Create で作られるタスクは Windows 既定で
+   DisallowStartIfOnBatteries=True / StopIfGoingOnBatteries=True になる。
+   ノート PC がバッテリー運用中だと Task Scheduler が「AC 電源時のみ」条件で弾き、
+   /Run しても State=Queued のまま起動せず、サービス/プロキシが上がらない
+   (関数は "Started" を返すのに実体は無く、パレットは「MCP 停止中」)。schtasks CLI に
+   このフラグを外すオプションが無いため、作成直後に PowerShell の Set-ScheduledTask で
+   解除する。RunLevel=Limited (非昇格) タスクなので UAC 不要。best-effort: 失敗しても
+   起動処理は続行する (電源連動が要件のノート機でも常駐サービスは電源に依らず動かす)。 *)
+iClearTaskBatteryRestriction[task_String] := Quiet @ RunProcess[{
+  "powershell", "-NoProfile", "-NonInteractive", "-Command",
+  StringJoin[
+    "try { $t = Get-ScheduledTask -TaskName '", task, "' -ErrorAction Stop; ",
+    "$t.Settings.DisallowStartIfOnBatteries = $false; ",
+    "$t.Settings.StopIfGoingOnBatteries = $false; ",
+    "Set-ScheduledTask -TaskName '", task, "' -Settings $t.Settings | Out-Null } catch {}"]}];
+
 Options[SourceVaultInstallWatchdog] = {"StaleSeconds" -> 90, "IntervalMinutes" -> 2};
 SourceVaultInstallWatchdog[serviceId_String, OptionsPattern[]] := Module[
   {svcDir, svcTask, wdTask, staleSec, interval, intervalSec, ps1Path, vbsPath,
@@ -1906,6 +1929,7 @@ SourceVaultInstallWatchdog[serviceId_String, OptionsPattern[]] := Module[
      scheduled task は detachment 境界 (メインカーネル終了後も生存) として残す。 *)
   cre = Quiet @ RunProcess[{"schtasks", "/Create", "/TN", wdTask, "/TR", trStr,
     "/SC", "ONCE", "/ST", "23:59", "/F"}];
+  iClearTaskBatteryRestriction[wdTask];  (* バッテリー運用でも起動できるよう電源条件を解除 *)
   runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", wdTask}];
   (* 常駐起動の確認: watchdog.pid.json を最大 ~8s 待つ (best-effort)。 *)
   deadline = AbsoluteTime[] + 8;
@@ -2408,6 +2432,7 @@ SourceVaultStartHTTPProxy[serviceId_String, OptionsPattern[]] := Module[
      コンソール窓を出さない (stdout リダイレクトは bat 側で維持)。 *)
   Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", iWriteHiddenLauncher[proxyDir, batPath]["TR"],
     "/SC", "ONCE", "/ST", "23:59", "/F"}];
+  iClearTaskBatteryRestriction[task];  (* バッテリー運用でも起動できるよう電源条件を解除 *)
   runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", task}];
   If[! (AssociationQ[runRes] && Lookup[runRes, "ExitCode"] === 0),
     Return[Failure["ProxyTaskRunFailed", <|"ServiceId" -> serviceId, "Task" -> task|>]]];
@@ -2612,6 +2637,75 @@ iRegisterMCPPaletteControl[] := If[
     $Failed],
   Missing["NoClaudeCode"]];
 iRegisterMCPPaletteControl[];
+
+(* ============================================================
+   headless claude CLI への MCP 配線 (2026-07-04)
+   claudecode の queryProvider / ClaudeQueryBg (--print モード) は対話承認
+   できないため、MCP サーバは --mcp-config + --allowedTools の明示指定でのみ
+   使える。ここで SourceVault MCP を claudecode の CLI MCP レジストリへ
+   自己登録する (claudecode は SourceVault を一切参照しない; palette control
+   と同じ package-neutral 方針)。
+   - ConfigFn: MCP が実到達 (SourceVaultMCPRunningQ) のときだけ proxy の /sv/mcp
+     URL と (token があれば) 認証ヘッダを返す。停止中は None → CLI は MCP なし。
+   - AllowedTools: read-only な情報取得 tool を pre-allow (--print は承認不可)。
+     deposit/workflow_write 等の書き込み系は載せない。
+   - PromptDirective: 「本システムに関する情報はまず MCP 経由で解決し、
+     見つからなければ次の方策へ」という解決順序方針を prompt に注入する。
+   ============================================================ *)
+iRegisterSourceVaultCLIMCP[] := If[
+  Length[Names["ClaudeCode`ClaudeRegisterCLIMCPServer"]] > 0,
+  Quiet @ Check[
+    ClaudeCode`ClaudeRegisterCLIMCPServer["sourcevault", <|
+      "ConfigFn" -> Function[
+        Module[{running, st, port, tok},
+          running = TrueQ[Quiet @ Check[SourceVault`SourceVaultMCPRunningQ[], False]];
+          If[! running, Return[None, Module]];
+          st = Quiet @ Check[SourceVault`SourceVaultMCPStatus[], $Failed];
+          port = If[AssociationQ[st], Lookup[st, "Port", Missing[]], Missing[]];
+          If[! IntegerQ[port], Return[None, Module]];
+          tok = Quiet @ Check[iMCPResolveToken[Automatic, iMCPServiceId[Automatic]], None];
+          <|"Url" -> "http://127.0.0.1:" <> ToString[port] <> "/sv/mcp",
+            "Headers" -> If[StringQ[tok] && tok =!= "",
+              <|"X-SourceVault-Token" -> tok|>, <||>]|>]],
+      (* read-only 情報取得 tool のみ pre-allow (書き込み/deposit は除外) *)
+      "AllowedTools" -> {
+        "sourcevault_catalog", "sourcevault_search", "sourcevault_get",
+        "sourcevault_commit_log", "sourcevault_directives",
+        "sourcevault_fs_list", "sourcevault_fs_read",
+        "sourcevault_web_search",
+        "sourcevault_oops_status", "sourcevault_oops_search_threads",
+        "sourcevault_oops_thread",
+        "sourcevault_mail_status", "sourcevault_mail_search_threads",
+        "sourcevault_mail_thread"},
+      "PromptDirective" -> Function[
+        If[$Language === "Japanese",
+          "本システム (SourceVault / claudecode / github / NBAccess 等の\n" <>
+          "パッケージ群、およびそのデータ・履歴・ドキュメント) に関する情報は、\n" <>
+          "まず SourceVault MCP tool (mcp__sourcevault__*) 経由で解決を図ること。\n" <>
+          "MCP はプライバシーレベルを考慮して安全に情報を返し、$packageDirectory へ\n" <>
+          "直接アクセスできない環境でも利用できる。解決順序:\n" <>
+          "  1. mcp__sourcevault__sourcevault_catalog で利用可能なデータ源を把握。\n" <>
+          "  2. コミット履歴・更新履歴・changelog の質問 → sourcevault_commit_log\n" <>
+          "     (git を自分で実行しない。ミラーは .git を持たない)。\n" <>
+          "  3. パッケージ API / ドキュメント / ディレクティブ → sourcevault_directives\n" <>
+          "     / sourcevault_fs_read、横断検索 → sourcevault_search / sourcevault_get。\n" <>
+          "  4. MCP で見つからない場合に限り、次の方策 (Read/Glob 等のファイルアクセス\n" <>
+          "     や一般知識) に切り替える。",
+          "For information about THIS SYSTEM (the SourceVault / claudecode / github /\n" <>
+          "NBAccess packages and their data, history and documentation), FIRST try to\n" <>
+          "resolve it through the SourceVault MCP tools (mcp__sourcevault__*). MCP\n" <>
+          "returns information with privacy levels enforced and works even where\n" <>
+          "$packageDirectory is not directly accessible. Resolution order:\n" <>
+          "  1. mcp__sourcevault__sourcevault_catalog to discover available data.\n" <>
+          "  2. commit history / update history / changelog questions -> sourcevault_commit_log\n" <>
+          "     (do NOT run git yourself; the mirror has no .git).\n" <>
+          "  3. package APIs / docs / directives -> sourcevault_directives / sourcevault_fs_read,\n" <>
+          "     cross-cutting search -> sourcevault_search / sourcevault_get.\n" <>
+          "  4. ONLY if MCP does not have it, fall back to the next method (file access\n" <>
+          "     via Read/Glob, or general knowledge)."]]|>],
+    Null],
+  Missing["NoClaudeCode"]];
+iRegisterSourceVaultCLIMCP[];
 
 (* ============================================================
    §9.8 channel pipeline / §13 Phase 6 mail・Discord / §17.9 OutputGate

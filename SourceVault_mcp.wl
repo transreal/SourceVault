@@ -37,6 +37,15 @@ SourceVaultMCPCallTool::usage =
 SourceVaultMCPServerInfo::usage =
   "SourceVaultMCPServerInfo[] は MCP serverInfo (<|\"name\",\"version\"|>) を返す。";
 
+SourceVaultPackageCommitLog::usage =
+  "SourceVaultPackageCommitLog[packageName] は本システムのパッケージのコミット履歴を\n" <>
+  "GitHubREST`GitHubCommitLog 経由で取得し、JSON-safe なコンパクト形式\n" <>
+  "<|\"Status\", \"Package\", \"Count\", \"Commits\" -> {<|sha,date,author,message|>..}, \"PrivacyLevel\"|>\n" <>
+  "で返す SourceVault ラッパー。コミットメタデータのみ (コード本文なし) で cloud-safe (PL 0.0)。\n" <>
+  "MCP tool sourcevault_commit_log の実体。GithubRepositories/ は .git を持たないミラーのため\n" <>
+  "履歴の正本は GitHub API。オプション: \"Since\" -> None, \"Until\" -> None, \"MaxItems\" -> 50。\n" <>
+  "例: SourceVaultPackageCommitLog[\"SourceVault\", \"Since\" -> \"2026-06-20\"]";
+
 $SourceVaultMCPProtocolVersion::usage =
   "$SourceVaultMCPProtocolVersion は initialize で返す MCP protocol version。";
 
@@ -219,7 +228,10 @@ SourceVaultMCPGet::usage =
   "メタ/サマリー projection を取り、SourceVaultMCPReleaseGate (B3) で出口 gate して返す (spec §11.2)。\n" <>
   "戻り値 <|URI, Found, Released, Adapter, Result(Permit時のみ), Access, RequiresGrantFor, Why,\n" <>
   "AccessRequest|>。body/raw/attachment は含めず requiresGrant を示す (実 grant は Phase D)。\n" <>
-  "opts \"Principal\" / \"Trusted\"。sourcevault_get tool の実体。";
+  "例外: adapter が \"BodyGrantRequired\"->False を宣言する PublicDoc 系 (packageapi 等) は\n" <>
+  "view=body を grant なしで解放する (release gate は通す)。adapter の \"ExtraViews\" に\n" <>
+  "登録された view 名 (packageapi: contract/scaffolded/guided) はその projection を返す。\n" <>
+  "opts \"Principal\" / \"Trusted\" / \"View\"。sourcevault_get tool の実体。";
 
 SourceVaultMCPReleaseGate::usage =
   "SourceVaultMCPReleaseGate[result, accessRequest] は正規化済み SearchResult を返却してよいか判定し\n" <>
@@ -338,11 +350,14 @@ SourceVaultMCPServerInfo[] := <|"name" -> "sourcevault", "version" -> "0.1.0"|>;
 (* 予約 namespace と arity (namespace の後に来る path segment 数) *)
 SourceVault`$SourceVaultURINamespaces = {
   "object", "chunk", "artifact", "hash", "group",
-  "relation", "snapshot", "record", "citation", "file"};
+  "relation", "snapshot", "record", "citation", "file",
+  "packageapi", "directive"};
 
 iSVURIArity = <|
   "object" -> 1, "chunk" -> 1, "artifact" -> 1, "relation" -> 1,
   "record" -> 1, "citation" -> 1, "file" -> 1,
+  (* retrieval spec v0.3 §7.2: package API / directive の stable opaque id *)
+  "packageapi" -> 1, "directive" -> 1,
   "hash" -> 2, "snapshot" -> 2, "group" -> 2|>;
 
 (* percent-encoding。opaque id 内の "/" ":" "#" "?" 空白等を 1 segment に収める *)
@@ -603,6 +618,11 @@ iSVCatalogRow[name_String] := Module[{spec, caps, capList, avail, row},
   avail = iSVAdapterAvailableQ[spec];
   row = <|"name" -> name, "kinds" -> Lookup[spec, "Kinds", {}], "available" -> avail,
     "capabilities" -> capList, "requiresGrantFor" -> Lookup[spec, "RequireGrantFor", {}]|>;
+  (* R2 B-2: adapter 固有の filter discovery を露出 (packageapi の packages 等) *)
+  If[ListQ[Lookup[spec, "FilterKeys", None]],
+    row["filterKeys"] = Lookup[spec, "FilterKeys"]];
+  If[ListQ[Lookup[spec, "FilterExamples", None]],
+    row["filterExamples"] = Lookup[spec, "FilterExamples"]];
   If[! avail, row["unavailableReason"] = ToString @ Lookup[spec, "UnavailableReason", "Unavailable"]];
   row
 ];
@@ -1532,6 +1552,28 @@ iSVRunAdapterSearch[name_String, spec_Association, accessRequest_Association] :=
     "MaxChars" -> Lookup[ret, "maxCharsPerResult", 800]]] /@ rows
 ];
 
+(* adapter が任意で公開する "SearchWarnings" フックを実行する (無ければ空)。
+   検索応答の metadata に非致命の注意 (UnknownPackage 等) を載せるため。 *)
+iSVRunAdapterSearchWarnings[name_String, spec_Association] := Module[
+  {aspec, fn, w},
+  aspec = SourceVaultResolveMCPDataAdapter[name];
+  If[! AssociationQ[aspec], Return[{}]];
+  fn = Lookup[aspec, "SearchWarnings", None];
+  If[fn === None, Return[{}]];
+  w = Quiet @ fn[spec];
+  If[ListQ[w], w, {}]];
+
+(* 検索 warnings を compactText 応答へ人が読める 1 行に整形 (空なら "") *)
+iSVFormatSearchWarnings[ws_List] := If[ws === {}, "",
+  "\n\n[warnings] " <> StringRiffle[
+    Function[w, ToString @ Lookup[w, "Code", "Warning"] <>
+      If[ListQ[Lookup[w, "Values", Null]],
+        ": " <> StringRiffle[Lookup[w, "Values"], ", "], ""] <>
+      If[ListQ[Lookup[w, "Known", Null]],
+        " (known: " <> StringRiffle[Lookup[w, "Known"], ", "] <> ")", ""]] /@ ws,
+    "; "]];
+iSVFormatSearchWarnings[_] := "";
+
 (* ============================================================
    Universal MCP Access -- per-result release gate (universal spec §11 / §2.4)
    Phase B / Increment B3。service-loadable (NBAccess 非依存の baseline gate)。
@@ -1644,7 +1686,7 @@ SourceVaultMCPReleaseGate[result_Association, accessRequest_Association] := Modu
 Options[SourceVaultMCPSearch] = {"Principal" -> Automatic, "Trusted" -> <||>, "AccessProfile" -> Automatic};
 SourceVaultMCPSearch[specIn_Association, OptionsPattern[]] := Module[
   {spec, scope, filt, principal, composedScope, accessRequest, kinds, selected,
-   normalized, gated, off, lim, limited, fmt},
+   normalized, gated, off, lim, limited, fmt, warnings},
   spec = SourceVaultNormalizeSearchSpec[specIn];
   scope = Lookup[spec, "scope", <||>]; filt = Lookup[spec, "filters", <||>];
   principal = OptionValue["Principal"];
@@ -1667,6 +1709,8 @@ SourceVaultMCPSearch[specIn_Association, OptionsPattern[]] := Module[
     iSVAdapterMatchesKinds[#, kinds] && iSVAdapterAvailableSearchable[#] &];
   normalized = Flatten[
     Function[aname, iSVRunAdapterSearch[aname, spec, accessRequest]] /@ selected, 1];
+  warnings = Flatten[
+    Function[aname, iSVRunAdapterSearchWarnings[aname, spec]] /@ selected, 1];
   (* B3: 返却直前に per-result release gate を再評価。Permit はそのまま、Screen は metadata-only へ
      降格 (§2.6 MetadataOnly: summary/snippet 抜き)、Deny は除外。 *)
   gated = DeleteCases[
@@ -1681,6 +1725,7 @@ SourceVaultMCPSearch[specIn_Association, OptionsPattern[]] := Module[
   fmt = Lookup[Lookup[spec, "return", <||>], "format", "compactText"];
   <|"Results" -> limited, "Count" -> Length[limited],
     "TotalBeforeLimit" -> Length[normalized],
+    "Warnings" -> warnings,
     "ReleaseGated" -> (Length[normalized] - Length[gated]),
     "Screened" -> Count[limited,
       _?(MatchQ[Lookup[#, "Summary", Null], Missing["ScreenedMetadataOnly"]] &)],
@@ -1752,6 +1797,18 @@ SourceVaultMCPGet[uriIn_, OptionsPattern[]] := Module[
   (* D3: body/raw/context は grant 必須。grant 検証+scope+非cloud sink+PL上限を通ったら
      adapter の ReadBody で本文を解放 (mail は該当 shard を on-demand 復号; main-kernel のみ)。 *)
   vw = With[{x = OptionValue["View"]}, If[StringQ[x], ToLowerCase[x], "summary"]];
+  (* adapter 固有 view (packageapi: contract/scaffolded/guided 等)。
+     PublicDoc 前提の projection なので release gate は PL で自明に通る。 *)
+  With[{ev = If[AssociationQ[aspec], Lookup[aspec, "ExtraViews", <||>], <||>]},
+    If[AssociationQ[ev] && KeyExistsQ[ev, vw],
+      Module[{row2 = Quiet @ ev[vw][parsed, accessRequest]},
+        Return[If[AssociationQ[row2],
+          <|"URI" -> canonical, "Found" -> True, "Released" -> True,
+            "Adapter" -> aname, "View" -> vw, "Result" -> row2,
+            "RequiresGrantFor" -> reqGrant|>,
+          <|"URI" -> canonical, "Found" -> False, "Released" -> False,
+            "Adapter" -> aname, "View" -> vw, "Why" -> {"NotFound"},
+            "RequiresGrantFor" -> reqGrant|>]]]]];
   If[MemberQ[{"body", "raw", "context"}, vw],
     Return[iSVMCPGetBody[normalized, parsed, aspec, aname, vw,
       OptionValue["Grant"], accessRequest, canonical, reqGrant]]];
@@ -1799,6 +1856,28 @@ iSVMCPGetBody[normalized_Association, parsed_Association, aspec_, aname_String, 
     grant_, accessRequest_Association, canonical_String, reqGrant_] := Module[{plevel, kind, gate, fn, body},
   plevel = Lookup[Lookup[normalized, "Privacy", <||>], "Level", Missing[]];
   kind = ToString @ Lookup[normalized, "Kind", ""];
+  (* R-spec §5.6: BodyGrantRequired->False の adapter (packageapi 等、PublicDoc doc) は
+     view=body を grant なしで解放する。release gate は通す (PL 0 なので cloud 可)。 *)
+  If[view === "body" && AssociationQ[aspec] &&
+     Lookup[aspec, "BodyGrantRequired", True] === False,
+    Module[{g2, fn2, body2},
+      g2 = SourceVaultMCPReleaseGate[normalized, accessRequest];
+      If[! MemberQ[{"Permit", "Screen"}, Lookup[g2, "Decision"]],
+        Return[<|"URI" -> canonical, "Found" -> True, "Released" -> False,
+          "Adapter" -> aname, "View" -> view, "Access" -> g2,
+          "Why" -> Lookup[g2, "Why", {"Denied"}]|>]];
+      fn2 = If[AssociationQ[aspec], Lookup[aspec, "ReadBody", None], None];
+      If[fn2 === None,
+        Return[<|"URI" -> canonical, "Found" -> True, "Released" -> False,
+          "Adapter" -> aname, "View" -> view, "Why" -> {"BodyNotSupported"}|>]];
+      body2 = Quiet @ fn2[parsed, None, accessRequest, view];
+      Return[If[AssociationQ[body2],
+        Join[<|"URI" -> canonical, "Found" -> True, "Released" -> True,
+          "Adapter" -> aname, "View" -> view, "Result" -> normalized,
+          "Access" -> <|"Decision" -> "Permit", "Why" -> {"GrantFreePublicDoc"}|>|>,
+          KeyTake[body2, {"Body", "Kind", "Chars"}]],
+        <|"URI" -> canonical, "Found" -> True, "Released" -> False,
+          "Adapter" -> aname, "View" -> view, "Why" -> {"BodyUnavailable"}|>]]]];
   If[! AssociationQ[grant],
     Return[<|"URI" -> canonical, "Found" -> True, "Released" -> False, "Adapter" -> aname,
       "View" -> view, "Why" -> {"GrantRequired"}, "RequiresGrantFor" -> reqGrant,
@@ -1867,20 +1946,44 @@ iSVReadJSONFile[path_] := If[StringQ[path] && FileExistsQ[path],
 iSVWriteJSONFile[path_String, assoc_] := Module[{dir = DirectoryName[path]},
   If[! DirectoryQ[dir], Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
   Quiet @ Check[Export[path, iSVJSONSafe[assoc], "RawJSON"]; path, $Failed]];
+(* 旧形式 (2026-07-03 以前の iSVAppendJSONL) は ExportString["RawJSON"] の戻り
+   (UTF-8 バイトが Latin-1 codepoint 展開された String) を StringToByteArray["UTF-8"]
+   で書いていたため、ディスク上の日本語は二重 UTF-8 エンコード。
+   一度 decode した行の codepoint が全て <256 で、codepoint 列を byte 列として
+   再解釈すると valid UTF-8 になる行は旧形式とみなして復号する。
+   codepoint >255 (日本語等) を含む行は単一エンコード (現行形式) 確定。
+   旧形式の行は単一エンコードとしても JSON parse 自体は成功してしまう
+   (化けた文字列が黙って返る) ため、parse 失敗ではなく codepoint 判定で分岐する。 *)
+iSVJSONLDecodeLegacyLine[line_String] := Module[{codes, s},
+  codes = ToCharacterCode[line];
+  If[codes === {} || Max[codes] < 128 || Max[codes] > 255, Return[line]];
+  s = Quiet @ Check[ByteArrayToString[ByteArray[codes], "UTF-8"], $Failed];
+  If[StringQ[s], s, line]];
+(* parse は ImportByteArray 経由 (テキスト→UTF-8 バイト→RawJSON)。
+   ImportString[s, "RawJSON"] は codepoint >255 (日本語等) を含む String だと
+   $Failed になるため使えない (wolframscript 実測)。 *)
+iSVParseJSONLLine[line_String] := With[{txt = iSVJSONLDecodeLegacyLine[line]},
+  Quiet @ Check[
+    ImportByteArray[StringToByteArray[txt, "UTF-8"], "RawJSON"],
+    (* 最終 fallback: 旧 read 経路そのまま (byte 再解釈 parse) *)
+    Quiet @ Check[ImportString[line, "RawJSON"], Nothing]]];
 iSVReadJSONLFile[path_] := Module[{raw, lines},
   raw = Quiet @ Check[ByteArrayToString[ReadByteArray[path], "UTF-8"], ""];
   If[! StringQ[raw], Return[{}]];
   lines = Select[StringSplit[raw, "\n"], StringTrim[#] =!= "" &];
-  Select[Quiet @ Check[ImportString[StringTrim[#], "RawJSON"], Nothing] & /@ lines, AssociationQ]];
-iSVAppendJSONL[path_String, assoc_] := Module[{dir = DirectoryName[path], line},
+  Select[iSVParseJSONLLine[StringTrim[#]] & /@ lines, AssociationQ]];
+iSVAppendJSONL[path_String, assoc_] := Module[{dir = DirectoryName[path], ba},
   If[! DirectoryQ[dir], Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
-  line = Quiet @ Check[ExportString[iSVJSONSafe[assoc], "RawJSON", "Compact" -> True], $Failed];
-  If[! StringQ[line], Return[$Failed]];
-  (* UTF-8 bytes で binary 追記。WriteString[OpenAppend] は Windows 既定 encoding で
-     非 ASCII (日本語) を文字化けさせ ImportString が parse 失敗するため使わない。
-     iSVReadJSONLFile は ByteArrayToString[.., "UTF-8"] で読むので往復する。 *)
+  (* ExportByteArray で単一 UTF-8 エンコード (iSMAppendJSONL / iMCPJSONText と同方式)。
+     ExportString["RawJSON"] は日本語 Windows で UTF-8 バイトを Latin-1 codepoint
+     展開した String を返すため、StringToByteArray["UTF-8"] と組むと二重エンコード
+     してディスク上の JSONL が外部ツール (Python / jq / iSMReadJSONL) から
+     文字化けして見える。旧形式ファイルは iSVReadJSONLFile が fallback 復号する。 *)
+  ba = Quiet @ Check[ExportByteArray[iSVJSONSafe[assoc], "RawJSON", "Compact" -> True], $Failed];
+  If[! ByteArrayQ[ba], Return[$Failed]];
   Quiet @ Check[With[{strm = OpenAppend[path, BinaryFormat -> True]},
-    BinaryWrite[strm, StringToByteArray[line <> "\n", "UTF-8"]]; Close[strm]; path], $Failed]];
+    BinaryWrite[strm, ba]; BinaryWrite[strm, StringToByteArray["\n", "UTF-8"]];
+    Close[strm]; path], $Failed]];
 
 (* ---- 署名鍵 ---- *)
 iSVGrantKeyFile[] := With[{d = iSVSecretsDir[]},
@@ -2641,6 +2744,75 @@ iSVFSReadFile[pathIn_String, maxBytesIn_:Automatic] := Module[
 iSVFSReadFile[_, ___] := <|"Status" -> "Denied", "Reason" -> "BadPath"|>;
 
 (* ============================================================
+   パッケージコミット履歴 (GitHubREST`GitHubCommitLog の SourceVault ラッパー)
+   目的: (1) プライバシー統制の側で履歴を提供する (コミットメッセージ/日付/
+   作者のみでコード本文を含まない cloud-safe メタデータ、PrivacyLevel 0.0)。
+   (2) $packageDirectory へ直接アクセスできない LLM (LM Studio 等) にも
+   MCP 経由で同じ情報を提供する。
+   GithubRepositories/ は .git を持たない REST ミラーなので履歴の正本は
+   GitHub API。github.wl (と依存 NBAccess) は service カーネルへ常駐させず、
+   初回呼び出し時に遅延ロードする (SourceVault_mcp 自体の service-loadable
+   制約を load 時には保つ)。
+   ============================================================ *)
+
+iSVEnsureGitHubREST[] := Module[{pkgDir},
+  If[Length[Names["GitHubREST`GitHubCommitLog"]] > 0 &&
+     Length[DownValues[GitHubREST`GitHubCommitLog]] > 0, Return[True]];
+  pkgDir = If[ValueQ[Global`$packageDirectory] && StringQ[Global`$packageDirectory],
+    Global`$packageDirectory, None];
+  If[!StringQ[pkgDir] || !FileExistsQ[FileNameJoin[{pkgDir, "github.wl"}]],
+    Return[False]];
+  Quiet @ Check[
+    Block[{$CharacterEncoding = "UTF-8"},
+      Needs["NBAccess`", FileNameJoin[{pkgDir, "NBAccess.wl"}]];
+      Needs["GitHubREST`", FileNameJoin[{pkgDir, "github.wl"}]]];
+    Length[Names["GitHubREST`GitHubCommitLog"]] > 0 &&
+      Length[DownValues[GitHubREST`GitHubCommitLog]] > 0,
+    False]];
+
+Options[SourceVaultPackageCommitLog] = {
+  "Since" -> None, "Until" -> None, "MaxItems" -> 50};
+
+SourceVaultPackageCommitLog[pkg_String, OptionsPattern[]] := Module[
+  {maxN, res},
+  If[pkg === "" || StringContainsQ[pkg, "/" | "\\" | ".."],
+    Return[<|"Status" -> "Denied", "Reason" -> "BadPackageName",
+      "Package" -> pkg|>]];
+  If[! iSVEnsureGitHubREST[],
+    Return[<|"Status" -> "Unavailable", "Reason" -> "GitHubRESTNotLoadable",
+      "Package" -> pkg|>]];
+  maxN = With[{m = OptionValue["MaxItems"]},
+    If[IntegerQ[m] && m > 0, Min[m, 300], 50]];
+  res = Quiet @ Check[
+    GitHubREST`GitHubCommitLog[pkg,
+      "Since" -> OptionValue["Since"],
+      "Until" -> OptionValue["Until"],
+      GitHubREST`MaxItems -> maxN], $Failed];
+  Which[
+    ListQ[res],
+      <|"Status" -> "OK", "Package" -> pkg, "Count" -> Length[res],
+        (* Date は DateObject → ISO 文字列 (JSON-safe) *)
+        "Commits" -> Map[Function[c, <|
+          "sha" -> ToString @ Lookup[c, "SHA", ""],
+          "date" -> With[{d = Lookup[c, "Date", ""]},
+            If[DateObjectQ[d], DateString[d, "ISODateTime"], ToString[d]]],
+          "author" -> ToString @ Lookup[c, "Author", ""],
+          "message" -> ToString @ Lookup[c, "Message", ""]|>], res],
+        (* コミットメタデータはコード本文を含まない公開可能メタデータとして
+           cloud-safe 扱い *)
+        "PrivacyLevel" -> 0.0|>,
+    MatchQ[res, _Failure],
+      <|"Status" -> "Failed", "Package" -> pkg,
+        "Reason" -> ToString @ Quiet @ Check[res[[1]], "Failure"],
+        "Message" -> StringTake[ToString[res], UpTo[300]]|>,
+    True,
+      <|"Status" -> "Failed", "Package" -> pkg,
+        "Reason" -> "UnexpectedResult",
+        "Message" -> StringTake[ToString[Short[res, 3]], UpTo[300]]|>]];
+SourceVaultPackageCommitLog[___] :=
+  <|"Status" -> "Denied", "Reason" -> "BadArguments"|>;
+
+(* ============================================================
    Filesystem WRITE relay (SourceVault_workflows only)
    For API / LM Studio models that cannot edit files directly (Claude Code and
    Codex edit $packageDirectory files directly and do not need this). Enforces the
@@ -2779,8 +2951,153 @@ iSVSnapshotResolve[parsed_Association, accessRequest_Association] := Module[
       "PrivacySource" -> Lookup[SourceVaultSnapshotPrivacyRecord[ref], "Source", "Default"]|>|>
 ];
 
+(* ============================================================
+   packageapi adapter (retrieval spec v0.3 Inc3 / wiring spec F6)
+   api.md chunk 索引 (SourceVault_packageapi.wl) を MCP へ露出する。
+   chunk 本文は PublicDoc (PrivacyLevel 0) — body も grant 不要
+   (R-spec §5.6 BodyGrantRequired->False)。契約 view は registry 投影
+   (評価可能式なし = W10)。tier 描画は view=scaffolded/guided で提供。
+   ============================================================ *)
+
+iSVPackageApiAvailableQ[] :=
+  Length[DownValues[SourceVault`SourceVaultPackageApiSearch]] > 0;
+
+iSVPackageApiUri[parsed_Association] :=
+  "sv://packageapi/" <> ToString @ Lookup[parsed, "Id", ""];
+
+iSVPackageApiOwnsURIQ[parsed_Association] :=
+  Lookup[parsed, "Namespace", ""] === "packageapi";
+
+iSVPackageApiRow[h_Association] := <|
+  "URI" -> Lookup[h, "Uri", Lookup[h, "URI", Missing[]]],
+  "Kind" -> "packageapi",
+  "Title" -> Lookup[h, "Signature", Lookup[h, "Symbol", "?"]],
+  "Summary" -> ("pkg " <> Lookup[h, "Pkg", "?"] <>
+    With[{aux = Lookup[h, "AuxName", ""]},
+      If[aux =!= "", " (api_" <> aux <> ".md)", " (api.md)"]] <>
+    " | section: " <> ToString @ Lookup[h, "Section", ""] <>
+    " | freshness: " <> ToString @ Lookup[h, "Freshness", "Fresh"]),
+  "Score" -> Lookup[h, "Score", Missing[]],
+  "MatchedFields" -> Lookup[h, "Reasons", {}],
+  "PrivacyLevel" -> 0., "PrivacyClass" -> "PublicDoc",
+  "Metadata" -> <|
+    "Pkg" -> Lookup[h, "Pkg", Missing[]],
+    "Symbol" -> Lookup[h, "Symbol", Missing[]],
+    "AuxName" -> Lookup[h, "AuxName", ""],
+    "Section" -> Lookup[h, "Section", ""],
+    "SymbolKind" -> Lookup[h, "Kind", "function"],
+    "Freshness" -> Lookup[h, "Freshness", "Fresh"]|>|>;
+
+iSVPackageApiAdapterSearch[spec_Association, accessRequest_Association] :=
+  Module[{q, lim, filt, pkgs, hits},
+    If[!iSVPackageApiAvailableQ[], Return[{}]];
+    q = Lookup[spec, "query", ""];
+    If[!StringQ[q] || StringTrim[q] === "", Return[{}]];
+    lim = Lookup[spec, "limit", 10];
+    (* R2 B-2/B-3: filters.packages (別名 package) を Packages scope へ委譲。
+       未知名は SourceVaultPackageApiSearch 側で canonical 正規化・除外され、
+       警告は SearchWarnings フック (iSVPackageApiSearchWarnings) が別途返す。 *)
+    filt = Lookup[spec, "filters", <||>];
+    pkgs = If[AssociationQ[filt],
+      Lookup[filt, "packages", Lookup[filt, "package", All]], All];
+    If[pkgs =!= All && !ListQ[pkgs], pkgs = {pkgs}];
+    hits = Quiet @ Check[
+      SourceVault`SourceVaultPackageApiSearch[q, "MaxResults" -> lim,
+        "Packages" -> pkgs], {}];
+    If[!ListQ[hits], Return[{}]];
+    Map[
+      Function[h,
+        Module[{row = iSVPackageApiRow[h], snip},
+          (* snippet = Expert 要約 (PublicDoc なので本文由来でも解放可) *)
+          snip = Quiet @ Check[
+            SourceVault`SourceVaultPackageApiGet[h["Uri"],
+              "View" -> "summary"]["Text"], Missing[]];
+          If[StringQ[snip], row["Snippet"] = snip];
+          row]],
+      hits]
+  ];
+
+(* R2 B-3: filters.packages に canonical で解決できない名があれば警告を返す
+   (静かな 0 件で LLM を grep に戻さない)。SearchWarnings フックとして登録。 *)
+iSVPackageApiSearchWarnings[spec_Association] :=
+  Module[{filt, req, canon, unknown},
+    filt = Lookup[spec, "filters", <||>];
+    If[!AssociationQ[filt], Return[{}]];
+    req = Lookup[filt, "packages", Lookup[filt, "package", Missing[]]];
+    If[MissingQ[req], Return[{}]];
+    req = Select[Flatten @ {req}, StringQ];
+    If[req === {}, Return[{}]];
+    canon = SourceVault`$SourceVaultPackageApiPackages;
+    unknown = Select[req, !MemberQ[ToLowerCase /@ canon, ToLowerCase[#]] &];
+    If[unknown === {}, {},
+      {<|"Code" -> "UnknownPackage", "Adapter" -> "packageapi",
+         "Values" -> unknown, "Known" -> canon|>}]
+  ];
+
+iSVPackageApiResolve[parsed_Association, accessRequest_Association] :=
+  Module[{g},
+    If[!iSVPackageApiAvailableQ[], Return[$Failed]];
+    g = Quiet @ Check[
+      SourceVault`SourceVaultPackageApiGet[iSVPackageApiUri[parsed],
+        "View" -> "summary"], $Failed];
+    If[!AssociationQ[g], Return[$Failed]];
+    Append[iSVPackageApiRow[g], "Snippet" -> Lookup[g, "Text", Missing[]]]
+  ];
+
+(* body: chunk 全文。PublicDoc のため grant 不要 (BodyGrantRequired->False 経由) *)
+iSVPackageApiReadBody[parsed_Association, grant_, accessRequest_Association,
+    view_String] :=
+  Module[{g},
+    If[!iSVPackageApiAvailableQ[], Return[Missing["MainKernelOnly"]]];
+    g = Quiet @ Check[
+      SourceVault`SourceVaultPackageApiGet[iSVPackageApiUri[parsed],
+        "View" -> "body"], $Failed];
+    If[!AssociationQ[g], Return[$Failed]];
+    <|"Body" -> Lookup[g, "Text", ""], "Kind" -> "packageapi",
+      "Chars" -> StringLength @ ToString @ Lookup[g, "Text", ""]|>
+  ];
+
+(* 追加 view: contract (W-spec §8.1) / scaffolded / guided (§8.3 tier 描画) *)
+iSVPackageApiExtraView[view_String][parsed_Association,
+    accessRequest_Association] :=
+  Module[{uri = iSVPackageApiUri[parsed], g},
+    If[!iSVPackageApiAvailableQ[], Return[$Failed]];
+    g = Switch[view,
+      "contract",
+        Quiet @ Check[SourceVault`SourceVaultPackageApiGet[uri,
+          "View" -> "contract"], $Failed],
+      "scaffolded" | "guided",
+        Quiet @ Check[SourceVault`SourceVaultPackageApiGet[uri,
+          "View" -> "summary",
+          "Tier" -> Capitalize[view]], $Failed],
+      _, $Failed];
+    If[AssociationQ[g], g, $Failed]
+  ];
+
 (* ---- built-in adapter のデフォルト登録 (load 時) ---- *)
 iSVRegisterDefaultAdapters[] := (
+  SourceVaultRegisterMCPDataAdapter["packageapi", <|
+    "Kinds" -> {"packageapi", "api"},
+    "AvailableProbe" -> Function[iSVPackageApiAvailableQ[]],
+    "UnavailableReason" -> "SourceVault_packageapi.wl (chunk index) required",
+    "Capabilities" -> <|"Search" -> True, "ReadMetadata" -> True,
+      "ReadSummary" -> True, "ResolveObjectURI" -> True, "ReadBody" -> True|>,
+    "RequireGrantFor" -> {},
+    (* R-spec §5.6: api doc chunk 本文は PublicDoc・grant 不要 *)
+    "BodyGrantRequired" -> False,
+    "Search" -> iSVPackageApiAdapterSearch,
+    "SearchWarnings" -> iSVPackageApiSearchWarnings,
+    (* R2 B-2: LLM が発見できるよう packageapi 固有 filter を catalog に露出 *)
+    "FilterKeys" -> {"packages", "package", "symbolKind", "freshness"},
+    "FilterExamples" -> {
+      "filters.packages=[\"SourceVault\",\"ClaudeOrchestrator\"]"},
+    "OwnsURIQ" -> iSVPackageApiOwnsURIQ,
+    "Resolve" -> iSVPackageApiResolve,
+    "ReadBody" -> iSVPackageApiReadBody,
+    "ExtraViews" -> <|
+      "contract" -> iSVPackageApiExtraView["contract"],
+      "scaffolded" -> iSVPackageApiExtraView["scaffolded"],
+      "guided" -> iSVPackageApiExtraView["guided"]|>|>];
   SourceVaultRegisterMCPDataAdapter["search", <|
     "Kinds" -> {"search", "pdf"}, "Available" -> True,
     "Capabilities" -> <|"Search" -> True, "ReadMetadata" -> True,
@@ -2911,11 +3228,15 @@ SourceVaultMCPTools[] := {
       "properties" -> <|
         "query" -> <|"type" -> "string", "description" -> "Search query."|>,
         "kinds" -> <|"type" -> "array", "items" -> <|"type" -> "string"|>,
-          "description" -> "Data kinds to search, e.g. [\"search\"] or [\"all\"] (default [\"all\"])."|>,
+          "description" -> "Data kinds to search, e.g. [\"search\"], [\"packageapi\"] " <>
+            "(Wolfram package API docs: function signatures/options), or [\"all\"] (default [\"all\"])."|>,
         "scope" -> <|"type" -> "object",
           "description" -> "releaseContext (string), requireAccessTags, denyAccessTags, untagged."|>,
         "filters" -> <|"type" -> "object",
-          "description" -> "accessLevelMax (number), dateFrom, dateTo, ext, tags, etc."|>,
+          "description" -> "accessLevelMax (number), dateFrom, dateTo, ext, tags, etc. " <>
+            "For kinds [\"packageapi\"] also: packages (or package) = canonical package " <>
+            "names to scope the search, e.g. [\"SourceVault\",\"ClaudeOrchestrator\"]; " <>
+            "symbolKind; freshness. See sourcevault_catalog packageapi filterKeys."|>,
         "limit" -> <|"type" -> "integer", "description" -> "Max results (default 20)."|>,
         "offset" -> <|"type" -> "integer", "description" -> "Result offset (default 0)."|>,
         "return" -> <|"type" -> "object",
@@ -2930,7 +3251,11 @@ SourceVaultMCPTools[] := {
       "properties" -> <|
         "uri" -> <|"type" -> "string", "description" -> "The sv:// URI to resolve."|>,
         "view" -> <|"type" -> "string",
-          "description" -> "metadata | summary (default) | body. body/raw/context need a valid grant and a non-cloud sink; mail body is main-kernel only."|>,
+          "description" -> "metadata | summary (default) | body. body/raw/context need a valid grant " <>
+            "and a non-cloud sink; mail body is main-kernel only. Exception: sv://packageapi/ chunks " <>
+            "are public docs — body is grant-free, and extra views contract (machine-readable " <>
+            "function contract: options/arguments/requires) / scaffolded / guided (doc granularity " <>
+            "tiers for smaller models) are available."|>,
         "grant" -> <|"type" -> "object",
           "description" -> "An AccessGrant from sourcevault_access_status (required for body/raw/context)."|>,
         "scope" -> <|"type" -> "object", "description" -> "releaseContext (string)."|>,
@@ -3048,6 +3373,15 @@ SourceVaultMCPTools[] := {
       "properties" -> <|
         "kind" -> <|"type" -> "string", "description" -> "rules | skills | root | all (default all)."|>|>,
       "required" -> {}|>|>,
+  <|"name" -> "sourcevault_commit_log",
+    "description" -> "Get the commit history of one of THIS SYSTEM's packages (e.g. SourceVault, claudecode, github, NBAccess) as compact metadata: {sha, date, author, message} per commit. Answer 'what changed / what was added since <date>?', 'update history', 'changelog' questions with THIS -- do NOT try to run git yourself (the mirror folder has no .git; history lives in the GitHub API). Commit metadata only (no code bodies), cloud-safe (privacyLevel 0.0). Use since/until to bound the range.",
+    "inputSchema" -> <|"type" -> "object",
+      "properties" -> <|
+        "package" -> <|"type" -> "string", "description" -> "Package name, e.g. \"SourceVault\", \"claudecode\", \"github\", \"NBAccess\"."|>,
+        "since" -> <|"type" -> "string", "description" -> "Only commits on/after this date. \"2026-06-20\" form. Optional."|>,
+        "until" -> <|"type" -> "string", "description" -> "Only commits on/before this date. \"2026-06-20\" form. Optional."|>,
+        "maxItems" -> <|"type" -> "integer", "description" -> "Max commits (default 50, cap 300)."|>|>,
+      "required" -> {"package"}|>|>,
   <|"name" -> "sourcevault_workflow_write",
     "description" -> "Relay a UTF-8 text WRITE to a SourceVault_workflows file under an allow-listed root ($packageDirectory / $ClaudeWorkingDirectory / $ClaudeAccessibleDirs). Intended for API / LM Studio models that cannot edit files directly (Claude Code and Codex edit files directly and do NOT need this). Write is SCOPED to paths inside a 'SourceVault_workflows/' subtree; paths outside the allowed roots, non-SourceVault_workflows paths, and secret-looking files are denied. Creates parent directories, overwrites existing files, size-capped (1 MiB). To READ workflow files use sourcevault_fs_read / sourcevault_fs_list.",
     "inputSchema" -> <|"type" -> "object",
@@ -3093,9 +3427,15 @@ SourceVaultMCPTools[] := {
 iMCPText[s_String] := <|"content" -> {<|"type" -> "text", "text" -> s|>}, "isError" -> False|>;
 iMCPError[s_String] := <|"content" -> {<|"type" -> "text", "text" -> s|>}, "isError" -> True|>;
 
-(* structured な連想を JSON-safe text block にして返す (structuredJson 用) *)
-iMCPJSONText[expr_] := Module[{s},
-  s = Quiet @ ExportString[iSVJSONSafe[expr], "RawJSON", "Compact" -> True];
+(* structured な連想を JSON-safe text block にして返す (structuredJson 用)。
+   ExportString[..,"RawJSON"] は日本語 Windows ($CharacterEncoding=ShiftJIS) で日本語を
+   「UTF-8 バイト→Latin-1 codepoint」に展開した String を返すため、そのまま "text" に
+   載せると transport 側 (iSMWriteJSON の ExportByteArray) の再エンコードで二重 UTF-8 化
+   する (SourceVault.wl Stage 9 P1 Step 4 utf8fix と同病理)。ExportByteArray →
+   ByteArrayToString["UTF-8"] で正しい codepoint の String に戻してから返す。 *)
+iMCPJSONText[expr_] := Module[{ba, s},
+  ba = Quiet @ ExportByteArray[iSVJSONSafe[expr], "RawJSON", "Compact" -> True];
+  s = If[ByteArrayQ[ba], Quiet @ Check[ByteArrayToString[ba, "UTF-8"], $Failed], $Failed];
   If[StringQ[s], iMCPText[s], iMCPError["JSON encode failed"]]];
 
 iMCPFormatResults[results_List] := StringRiffle[
@@ -3197,9 +3537,12 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
         iSVRecordToolCall["sourcevault_search", args, out];
         fmt = Lookup[out, "Format", "compactText"];
         If[fmt === "structuredJson",
-          iMCPJSONText[<|"count" -> Lookup[out, "Count", 0], "results" -> Lookup[out, "Results", {}]|>],
+          iMCPJSONText[<|"count" -> Lookup[out, "Count", 0],
+            "results" -> Lookup[out, "Results", {}],
+            "warnings" -> Lookup[out, "Warnings", {}]|>],
           iMCPText["Found " <> ToString @ Lookup[out, "Count", 0] <> " result(s):\n\n" <>
-            Lookup[out, "Rendered", ""]]]],
+            Lookup[out, "Rendered", ""] <>
+            iSVFormatSearchWarnings[Lookup[out, "Warnings", {}]]]]],
     "sourcevault_get",
       Module[{out, fmt},
         out = SourceVaultMCPGet[Lookup[args, "uri", ""],
@@ -3280,6 +3623,20 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
     "sourcevault_directives",
       Module[{o = iSVFSDirectivesList[Lookup[args, "kind", "all"]]},
         iSVRecordToolCall["sourcevault_directives", args, o]; iMCPJSONText[o]],
+    "sourcevault_commit_log",
+      Module[{o = SourceVaultPackageCommitLog[
+          ToString @ Lookup[args, "package", ""],
+          "Since" -> With[{s = Lookup[args, "since", None]},
+            If[StringQ[s] && s =!= "", s, None]],
+          "Until" -> With[{u = Lookup[args, "until", None]},
+            If[StringQ[u] && u =!= "", u, None]],
+          "MaxItems" -> With[{m = Lookup[args, "maxItems", 50]},
+            If[IntegerQ[m] && m > 0, m, 50]]]},
+        iSVRecordToolCall["sourcevault_commit_log", args,
+          <|"Package" -> Lookup[args, "package", ""],
+            "Status" -> Lookup[o, "Status", "?"],
+            "Count" -> Lookup[o, "Count", 0]|>];
+        iMCPJSONText[o]],
     "sourcevault_workflow_write",
       (* a write (scoped to SourceVault_workflows): not recorded via
          iSVRecordToolCall (that log = read observation / observed-read-max). *)
