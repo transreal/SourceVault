@@ -99,19 +99,23 @@ detached WolframScript service を起動する。メイン Mathematica 終了後
 Options: "Kind" -> "heartbeat" (サービス種別), "HeartbeatIntervalSeconds" -> 1, "PackageRoot" -> Automatic
 
 ### SourceVaultStopService[serviceId, opts]
-Stop command を queue に入れ、必要なら pid 検証後に kill する。
+Stop command を queue に入れ、必要なら pid 検証後に kill する。scheduled task も削除する。
 
 ### SourceVaultRestartService[serviceId, opts]
-stop してから同プロファイルで start する。
+stop してから同プロファイルで start する。root 設定が異なるカーネルから呼ぶと run.wls が誤った roots で再生成される点に注意。
 
 ### SourceVaultServiceStatus[serviceId] → Association
 `pid.json` / `status.json` / `heartbeat.json` から状態 association を返す。
 
 ### SourceVaultServiceHealth[serviceId] → String
-heartbeat の鮮度から `"OK"` / `"Degraded"` / `"Failing"` を返す。
+heartbeat の鮮度から `"OK"` / `"Degraded"` / `"Failing"` を返す。閾値は `$SourceVaultHealthThresholds` を参照。
+
+### $SourceVaultHealthThresholds
+型: Association, 初期値: `<|"OKSeconds"->15, "DegradedSeconds"->60, "WatchdogStaleSeconds"->90, "EvalTimeoutSeconds"->5, "EvalCacheSeconds"->30, "PingTimeoutSeconds"->10, "PingIntervalSeconds"->60|>`
+health 判定閾値の単一定義 (hardening 02)。WL 側 (ServiceStatus/Health)・watchdog PS1・Python proxy health() の全てがこの値から生成/参照される。生成物 (watchdog.ps1 / proxy config.json) への反映には watchdog 再インストール / proxy 再起動が必要。
 
 ### SourceVaultInstallWatchdog[serviceId, opts]
-軽量 PowerShell ウォッチドッグを常駐起動する。wscript hidden launcher 経由で一度だけ起動し、while ループで自前 sleep しながら常駐する(フリッカなし)。WL カーネルを spawn しない(ライセンス/電力配慮)。heartbeat 失効または crash 検知時に wedge ログを退避し pid kill して既存サービスタスクを再実行する。意図停止(State=Stopped)は復活させない。多重常駐は named mutex で 1 本に抑止する。
+軽量 PowerShell ウォッチドッグを常駐起動する。wscript hidden launcher 経由で一度だけ起動し、while ループで自前 sleep しながら常駐する(フリッカなし)。WL カーネルを spawn しない(ライセンス/電力配慮)。heartbeat 失効または crash 検知時に wedge ログを退避し pid kill して既存サービスタスクを再実行(run.wls 再利用=root 再注入なし)。意図停止(status.State=Stopped)は復活させない。多重常駐は named mutex で 1 本に抑止する。
 Options: "StaleSeconds" -> 90 (heartbeat 失効秒), "IntervalMinutes" -> 2 (ループ巡回間隔)
 
 ### SourceVaultUninstallWatchdog[serviceId]
@@ -130,6 +134,11 @@ Ping command を送り、command queue 経由で Pong を待つ。
 
 ### SourceVaultListServices[] → List
 `runtime/services` 配下の service とその状態を返す。
+
+### SourceVaultListRuntimeMachines[opts] → List
+この共有 vault を実際に使っている PC の machine tag 一覧を返す。根拠は `runtime/` ツリー: 各 PC は services/proxies を `runtime/<machineTag>/` 配下に namespacing するため、`runtime/` 直下のサブディレクトリのうち共有/レガシー予約名(`locks` / `proxies` / `services`)を除いたものが実 PC。自機 tag は runtime dir が未生成でも必ず含める。手動レジストリではなく実在の runtime を正本とするので、登録漏れや古いテストエントリを返さない。
+→ List(既定は machine tag の文字列リスト)
+Options: "Details" -> False (True で `<|MachineTag, IsSelf, HasServices, HasProxies|>` の一覧を返す)
 
 ### SourceVaultServiceLogs[serviceId, opts] → List
 `service.log.jsonl` の event を返す。
@@ -203,6 +212,10 @@ MCP proxy の既定ポート。Automatic で既存 `proxy.config.json` から解
 型: String | None | Automatic, 初期値: Automatic
 `/sv/mcp` の既定トークン。Automatic で既存設定から解決、無ければ None(localhost 無認証)。文字列なら `X-SourceVault-Token` ヘッダで要求する。
 
+### $SourceVaultServiceWLMCPEnabled
+型: Automatic | True | False, 初期値: Automatic
+Wolfram AgentTools MCP(`/wl/mcp`)を SourceVault サービスに集約する機能のトグル。Automatic = serviceId `"sourcevault"` のみ有効 / True = 常に有効 / False = 無効。有効時、サービスは起動時に永続サブカーネル(サブプロセス枠。プロセス席を消費しない)を温め、proxy の `/wl/mcp` への JSON-RPC を AgentTools handleMethod で処理する。評価はサブカーネル内(非ブロッキング・資格情報カーネルから隔離)。状態確認は command `"WLMCPStatus"`。
+
 ### SourceVaultStartMCP[opts] → Association
 MCP サーバ(WL service + HTTP/MCP proxy)を一括起動する。WL service を確保し `/sv/mcp` を公開する Python proxy を起動する。Port/MCPToken は Automatic なら既存 `proxy.config.json` から自動解決(env 依存値を直書きしない)。
 → `<|"Status", "ServiceId", "Port", "Url", "Service", "Proxy"|>`
@@ -219,6 +232,17 @@ Options: "ServiceId" -> $SourceVaultMCPServiceId
 ### SourceVaultMCPStatus[opts] → Association
 MCP の状態と公開 URL を返す。`"Running"` は実到達性(/health 接続成功)。`"ProxyState"` / `"ProxyPidAlive"` は pid ベース。両者が食い違う場合(PidAlive だが Running 偽)は stale/再利用 pid を示す。
 Options: "ServiceId" -> $SourceVaultMCPServiceId
+
+## Wolfram AgentTools MCP 集約(WLMCP、プロセス席 3→2 統合)
+
+proxy は `/sv/mcp` に加えて **`/wl/mcp`**(+`/wl/health`)を公開する。`/wl/mcp` への JSON-RPC は Command `"WLMCP"` としてファイルキュー経由でサービスカーネルへ渡り、サービスカーネルが抱える**永続サブカーネル**(サブプロセス枠=プロセス席を消費しない)内の AgentTools `handleMethod` で処理される。旧 wlmcp-gateway(9701、専用 `StartMCPServer` カーネル=独立プロセス 1 席)の置換で、定常のプロセス席は FE + サービス = **2 席**(2 席空き)になる。
+
+- **仕組み**: AgentTools の `startMCPServer` は init 部と stdio While ループが分離可能(paclet 2.1.21 実測)。init をサブカーネル内で再現し(`Wolfram`AgentTools`StartMCPServer`Private`` / `Common`` を完全修飾参照。Begin トリックは別コンテキストのヘルパに空シンボルを intern するため不可)、メッセージごとに `handleMethod` を呼ぶ。
+- **非ブロッキング**: WLMCP command は deferred(受付時に done を書かず `ParallelSubmit`、tick の poll が結果 WXF を検出して done を書く)。8 秒評価中も `/sv/health` 0.02s・`/sv/mcp` 0.62s 応答を実測。サブカーネルの状態は評価間で維持(旧 gateway と同じセッション永続)。
+- **隔離/回復**: 任意コード評価は資格情報を持つサービスカーネルでなくサブカーネルで走る。pending が `$iSMWLMCPHardTTLSeconds`(既定 240s)超で wedge 扱い=タイムアウトエラー応答+サブカーネル再生成。init 失敗時は Ready=False で各リクエストに明示エラー(無言タイムアウトにしない)。
+- **トグル/観測**: `$SourceVaultServiceWLMCPEnabled`(Automatic=serviceId `"sourcevault"` のみ / True / False)。状態確認は Command `"WLMCPStatus"` → `<|Ready, Init, Pending, Kernels|>`。
+- **クライアント**: `.claude.json` / `.codex/config.toml` の Wolfram MCP を `http://127.0.0.1:8731/wl/mcp` へ。
+- **運用注意**: `SourceVaultStopService` は scheduled task も削除する。**run.wls を再生成せずに**サービスを再起動するには task を再作成して `/Run` する(run.wls は roots 注入済みスナップショット。root 設定が異なるカーネルから `RestartService` すると誤った roots で再生成される)。
 
 ## チャネルパイプライン / mail / Discord / OutputGate (§9.8, §13, §17.9)
 

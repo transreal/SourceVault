@@ -91,6 +91,12 @@ SourceVaultServiceStatus::usage =
   "SourceVaultServiceStatus[serviceId] は pid.json / status.json / heartbeat.json から状態 association を返す。";
 SourceVaultServiceHealth::usage =
   "SourceVaultServiceHealth[serviceId] は heartbeat の鮮度から OK/Degraded/Failing を返す。";
+$SourceVaultHealthThresholds::usage =
+  "$SourceVaultHealthThresholds は health 判定閾値の単一定義 (hardening 02: スタック全体で統一)。\n" <>
+  "<|\"OKSeconds\"->15, \"DegradedSeconds\"->60, \"WatchdogStaleSeconds\"->90, ...|>。\n" <>
+  "WL 側 (SourceVaultServiceStatus/Health)・watchdog PS1・Python proxy health() の全てが\n" <>
+  "この値から生成/参照される。生成物 (watchdog.ps1 / proxy config.json) への反映には\n" <>
+  "watchdog 再インストール / proxy 再起動が必要。";
 SourceVaultInstallWatchdog::usage =
   "SourceVaultInstallWatchdog[serviceId, opts] は軽量 PowerShell ウォッチドッグを常駐起動する。\n" <>
   "wscript の hidden launcher 経由で一度だけ起動し、以後は PowerShell 内の while ループで自前 sleep し\n" <>
@@ -113,6 +119,13 @@ SourceVaultServicePing::usage =
   "SourceVaultServicePing[serviceId, opts] は Ping command を送り、command queue 経由で Pong を待つ。";
 SourceVaultListServices::usage =
   "SourceVaultListServices[] は runtime/services 配下の service とその状態を返す。";
+SourceVaultListRuntimeMachines::usage =
+  "SourceVaultListRuntimeMachines[] は、この共有 vault を実際に使っている PC の machine tag 一覧を返す。\n" <>
+  "根拠は runtime/ ツリー: 各 PC は services/proxies を runtime/<machineTag>/ 配下に namespacing するため、\n" <>
+  "runtime/ 直下のサブディレクトリのうち共有/レガシー予約名 (locks / proxies / services) を除いたものが実 PC。\n" <>
+  "自機 tag は runtime dir が未生成でも必ず含める。手動レジストリ (diagnostics/machines) ではなく実在の\n" <>
+  "runtime を正本とするので、登録漏れや古いテストエントリ (実在しない PC 名) を返さない。\n" <>
+  "オプション \"Details\" -> True で <|MachineTag, IsSelf, HasServices, HasProxies|> の一覧を返す。";
 SourceVaultServiceLogs::usage =
   "SourceVaultServiceLogs[serviceId, opts] は service.log.jsonl の event を返す。オプション \"Limit\"。";
 SourceVaultTailServiceLog::usage =
@@ -180,6 +193,13 @@ $SourceVaultMCPPort::usage =
 $SourceVaultMCPToken::usage =
   "$SourceVaultMCPToken は /sv/mcp の既定トークン (既定 Automatic=既存設定から解決、無ければ None=localhost 無認証)。\n" <>
   "文字列なら X-SourceVault-Token で要求する。";
+$SourceVaultServiceWLMCPEnabled::usage =
+  "$SourceVaultServiceWLMCPEnabled は Wolfram AgentTools MCP (/wl/mcp) を SourceVault サービスに\n" <>
+  "集約する機能のトグル。Automatic (既定) = serviceId \"sourcevault\" のみ有効 / True = 常に / False = 無効。\n" <>
+  "有効時、サービスは起動時に永続サブカーネル (サブプロセス枠。プロセス席を消費しない) を温め、\n" <>
+  "proxy の /wl/mcp への JSON-RPC を AgentTools handleMethod で処理する (旧 wlmcp-gateway の\n" <>
+  "専用 StartMCPServer カーネル = 独立プロセス 1 席を置換)。評価はサブカーネル内 (非ブロッキング・\n" <>
+  "資格情報カーネルから隔離)。状態確認は command \"WLMCPStatus\"。";
 
 (* ---- channel pipeline / mail / Discord / OutputGate (§9.8, §13 Phase 6, §17.9) ---- *)
 SourceVaultMakeQuestionEnvelope::usage =
@@ -514,13 +534,33 @@ iSMJSONSafe[x_] := Which[
    ShiftJIS 等(日本語 Windows 既定)のとき日本語を「UTF-8 バイト→Latin-1 codepoint」に
    展開し、後段の StringToByteArray["UTF-8"] が二重 UTF-8 化してしまう。
    ExportByteArray はエンコーディング非依存で常に正しい UTF-8 を返す。 *)
-iSMWriteJSON[path_String, assoc_] := Module[{strm, ba},
+(* hardening 02 Inc1 (2026-07-07): 状態 JSON は temp-rename で書く。
+   直接 OpenWrite だと書きかけを watchdog/proxy が読み、age=null が
+   『健康』に化ける事故 (green-but-dead) の温床になる。rename が
+   共有違反等で失敗した場合 (Windows で読者が FILE_SHARE_DELETE 無しで
+   open 中など) は 1 回だけ retry し、それでも駄目なら旧来の直接書きに
+   fallback (heartbeat の可用性 > 原子性)。 *)
+iSMWriteJSON[path_String, assoc_] := Module[{strm, ba, tmp, renamed},
   ba = Quiet @ ExportByteArray[iSMJSONSafe[assoc], "RawJSON", "Compact" -> True];
   If[! ByteArrayQ[ba], Return[$Failed]];
   iSMEnsureDir[DirectoryName[path]];
-  strm = Quiet @ OpenWrite[path, BinaryFormat -> True];
+  tmp = path <> ".tmp-" <> ToString[$ProcessID];
+  strm = Quiet @ OpenWrite[tmp, BinaryFormat -> True];
   If[Head[strm] =!= OutputStream, Return[$Failed]];
-  BinaryWrite[strm, ba]; Close[strm]; path];
+  BinaryWrite[strm, ba]; Close[strm];
+  renamed = Quiet @ Check[
+    RenameFile[tmp, path, OverwriteTarget -> True]; True, False];
+  If[! TrueQ[renamed],
+    Pause[0.05];
+    renamed = Quiet @ Check[
+      RenameFile[tmp, path, OverwriteTarget -> True]; True, False]];
+  If[! TrueQ[renamed],
+    (* fallback: 直接書き (旧挙動) *)
+    strm = Quiet @ OpenWrite[path, BinaryFormat -> True];
+    If[Head[strm] =!= OutputStream, Quiet @ DeleteFile[tmp]; Return[$Failed]];
+    BinaryWrite[strm, ba]; Close[strm];
+    Quiet @ DeleteFile[tmp]];
+  path];
 
 (* RawJSON はバイト列から直接解析する。ImportString[ByteArrayToString[...],"RawJSON"]
    は生 UTF-8 (非 ASCII。例: Python json.dump(ensure_ascii=False) が書く日本語) を
@@ -533,6 +573,20 @@ iSMReadJSON[path_String] := Module[{b},
   b = Quiet @ ReadByteArray[path];
   If[! ByteArrayQ[b], Return[Missing["Empty"]]];
   iSMParseRawJSON[b]];
+
+(* hardening 02 Inc1: health 閾値の単一定義 (spec 02 §2)。
+   WL 判定・watchdog PS1 生成・proxy config.json 生成の全てがここを参照する。 *)
+If[! AssociationQ[$SourceVaultHealthThresholds],
+  $SourceVaultHealthThresholds = <|
+    "OKSeconds" -> 15,
+    "DegradedSeconds" -> 60,
+    "WatchdogStaleSeconds" -> 90,
+    "EvalTimeoutSeconds" -> 5,
+    "EvalCacheSeconds" -> 30,
+    "PingTimeoutSeconds" -> 10,
+    "PingIntervalSeconds" -> 60|>];
+iSMHealthThreshold[k_String, def_] := With[{a = $SourceVaultHealthThresholds},
+  If[AssociationQ[a] && NumericQ[Lookup[a, k]], a[k], def]];
 
 iSMAppendJSONL[path_String, assoc_] := Module[{strm, ba},
   ba = Quiet @ ExportByteArray[iSMJSONSafe[assoc], "RawJSON", "Compact" -> True];
@@ -1354,8 +1408,211 @@ iServiceHttpRender[cmd_Association] := Module[
       <|"StatusCode" -> 404, "ContentType" -> "text/html; charset=utf-8",
         "Body" -> iWebPage[base, "404", "<h2>404 Not Found</h2><p>" <> iWebEsc[path] <> "</p>" <> iWebNav[base]]|>]];
 
+(* ============================================================
+   WLMCP: Wolfram AgentTools MCP を SourceVault サービスカーネルに集約する
+   (旧 wlmcp-gateway の専用 StartMCPServer カーネル = 独立プロセス枠 1 席を回収)。
+
+   設計 (席 3->2 統合・案B サブカーネル隔離):
+   - 実行体はサービスカーネルが抱える永続サブカーネル (サブプロセス枠 16 側。
+     プロセス席を消費しない)。AgentTools の startMCPServer は「init 部」と
+     「stdio While ループ」が分離可能で、リクエスト処理の実体 handleMethod は
+     stdio に触れない純関数 (paclet 2.1.21 実測)。init をサブカーネル内で再現し、
+     JSON-RPC メッセージごとに handleMethod を呼ぶ。
+   - 非ブロッキング: WLMCP command は ParallelSubmit で投げて即 return
+     (done を書かない=deferred)。tick の poll が結果ファイル (WXF) を検出して
+     done を書く。長い評価中もサービスの heartbeat / sv MCP は生き続ける。
+   - 隔離: 任意コード評価は資格情報を持つサービスカーネルでなくサブカーネルで
+     走る。評価が wedge したら subkernel を kill/relaunch (サービス本体は無傷)。
+   - 有効条件: $SourceVaultServiceWLMCPEnabled (Automatic = serviceId が
+     "sourcevault" のときのみ)。init 失敗時は Ready=False で各リクエストに
+     明示エラーを返す (無言タイムアウトにしない)。旧 gateway 構成は fallback
+     として残せる。
+   ============================================================ *)
+
+If[! ValueQ[$SourceVaultServiceWLMCPEnabled],
+  $SourceVaultServiceWLMCPEnabled = Automatic];
+If[! ValueQ[$iSMWLMCPKernels], $iSMWLMCPKernels = {}];
+If[! AssociationQ[$iSMWLMCPPending], $iSMWLMCPPending = <||>];
+If[! ValueQ[$iSMWLMCPReady], $iSMWLMCPReady = False];
+If[! ValueQ[$iSMWLMCPInitResult], $iSMWLMCPInitResult = <|"Status" -> "NotAttempted"|>];
+$iSMWLMCPServerName = "WolframLanguage";
+$iSMWLMCPHardTTLSeconds = 240;   (* これを超えた pending は wedge 扱い -> kernel 再生成 *)
+
+iSMWLMCPEnabledQ[serviceId_String] := Which[
+  TrueQ[$SourceVaultServiceWLMCPEnabled], True,
+  $SourceVaultServiceWLMCPEnabled === Automatic, serviceId === "sourcevault",
+  True, False];
+
+(* サブカーネル内に定義するドライバ。AgentTools private 実装への参照はすべて
+   完全修飾 (Begin トリックは別コンテキスト由来ヘルパ catchAlways 等に新規空
+   シンボルを intern してしまい未評価連鎖になる: 実測)。init は startMCPServer
+   本体 (StartMCPServer.wl) の再現から stdio 部分を除いたもの。paclet 更新で
+   private シンボル名が変わったら Init が失敗し Ready=False に落ちる (fail-soft)。 *)
+$iSMWLMCPDriverSource = "
+SourceVault`WLMCPChild`Init[name_String] := Module[
+  {obj, llmTools, toolList, promptList, promptLookup, logFile},
+  Needs[\"Wolfram`AgentTools`\"];
+  obj = Wolfram`AgentTools`Common`ensureMCPServerExists @
+    Wolfram`AgentTools`MCPServerObject[name];
+  obj = Wolfram`AgentTools`StartMCPServer`Private`ensurePacletsForStart @ obj;
+  Wolfram`AgentTools`StartMCPServer`Private`runServerInitialization @ obj;
+  llmTools = Wolfram`AgentTools`StartMCPServer`Private`disambiguateToolNames @
+    obj[\"Tools\"];
+  Wolfram`AgentTools`StartMCPServer`Private`runToolInitialization @ Values @ llmTools;
+  toolList = KeyValueMap[
+    Wolfram`AgentTools`StartMCPServer`Private`createMCPToolData, llmTools];
+  promptList = Wolfram`AgentTools`StartMCPServer`Private`makePromptData @
+    obj[\"PromptData\"];
+  promptLookup = Wolfram`AgentTools`StartMCPServer`Private`makePromptLookup @
+    obj[\"PromptData\"];
+  Wolfram`AgentTools`Common`initializeUIResources[];
+  Wolfram`AgentTools`Common`$toolOptions =
+    Wolfram`AgentTools`StartMCPServer`Private`parseToolOptions @
+      Environment[\"MCP_TOOL_OPTIONS\"];
+  logFile = Quiet @ Check[
+    Wolfram`AgentTools`Common`ensureFilePath @
+      Wolfram`AgentTools`Common`mcpServerLogFile @ obj,
+    FileNameJoin[{$TemporaryDirectory, \"svwlmcp.log\"}]];
+  Wolfram`AgentTools`StartMCPServer`Private`$toolList = toolList;
+  Wolfram`AgentTools`StartMCPServer`Private`$llmTools = llmTools;
+  Wolfram`AgentTools`StartMCPServer`Private`$promptList = promptList;
+  Wolfram`AgentTools`StartMCPServer`Private`$promptLookup = promptLookup;
+  Wolfram`AgentTools`StartMCPServer`Private`$logFile = logFile;
+  Wolfram`AgentTools`StartMCPServer`Private`$currentMCPServer = obj;
+  Wolfram`AgentTools`Common`$mcpEvaluation = True;
+  SourceVault`WLMCPChild`$Ready =
+    AssociationQ[llmTools] && ListQ[toolList] && Length[toolList] > 0;
+  <|\"Status\" -> If[TrueQ[SourceVault`WLMCPChild`$Ready], \"Initialized\", \"InitFailed\"],
+    \"Tools\" -> If[ListQ[toolList], Length[toolList], -1]|>];
+SourceVault`WLMCPChild`Handle[msg_Association] := Module[{method, id, req, resp},
+  method = Lookup[msg, \"method\", None];
+  id = Lookup[msg, \"id\", Null];
+  req = <|\"jsonrpc\" -> \"2.0\", \"id\" -> id|>;
+  resp = Wolfram`AgentTools`Common`catchAlways @
+    Wolfram`AgentTools`StartMCPServer`Private`handleMethod[method, msg, req];
+  If[! AssociationQ[resp],
+    <|req, \"error\" -> <|\"code\" -> -32603, \"message\" -> \"Internal error\"|>|>,
+    resp]];
+";
+
+iSMWLMCPEnsure[dir_String] := Module[{init},
+  If[TrueQ[$iSMWLMCPReady] && $iSMWLMCPKernels =!= {}, Return[True]];
+  $iSMWLMCPKernels = Quiet @ Check[
+    Select[Flatten[{$iSMWLMCPKernels}], MemberQ[Kernels[], #] &], {}];
+  If[$iSMWLMCPKernels === {},
+    $iSMWLMCPKernels = Quiet @ Check[LaunchKernels[1], $Failed];
+    If[! ListQ[$iSMWLMCPKernels] || $iSMWLMCPKernels === {},
+      $iSMWLMCPKernels = {}; $iSMWLMCPReady = False;
+      $iSMWLMCPInitResult = <|"Status" -> "LaunchFailed"|>;
+      iServiceLog[dir, "WLMCPInitFailed", <|"Reason" -> "LaunchFailed"|>];
+      Return[False]]];
+  init = With[{drv = $iSMWLMCPDriverSource, srv = $iSMWLMCPServerName},
+    Quiet @ Check[
+      ParallelEvaluate[
+        ToExpression[drv];
+        Quiet @ SourceVault`WLMCPChild`Init[srv],
+        First[$iSMWLMCPKernels]],
+      $Failed]];
+  $iSMWLMCPInitResult = If[AssociationQ[init], init, <|"Status" -> "InitException"|>];
+  $iSMWLMCPReady = AssociationQ[init] &&
+    Lookup[init, "Status", ""] === "Initialized";
+  iServiceLog[dir, If[$iSMWLMCPReady, "WLMCPInitialized", "WLMCPInitFailed"],
+    $iSMWLMCPInitResult];
+  $iSMWLMCPReady];
+
+iSMWLMCPResultFile[dir_String, doneName_String] :=
+  FileNameJoin[{dir, "wlmcp", doneName <> ".wxf"}];
+
+(* JSON-RPC error 応答つき done を即書き (backend 不可時の明示エラー) *)
+iSMWLMCPFailDone[dir_String, doneName_String, cmd_Association, msgStr_String] :=
+  iSMWriteJSON[FileNameJoin[{dir, "commands", "done", doneName}],
+    Join[cmd, <|"Result" -> <|"Status" -> "OK",
+      "WLMCP" -> <|"jsonrpc" -> "2.0",
+        "id" -> Lookup[Lookup[cmd, "Message", <||>], "id", Null],
+        "error" -> <|"code" -> -32000, "message" -> msgStr|>|>|>,
+      "ProcessedAtUTC" -> iSMUTCNow[]|>]];
+
+(* WLMCP command 受付: サブカーネルへ submit し done は書かない (deferred)。
+   poll (iSMWLMCPPoll) が結果ファイルを検出して done を書く。 *)
+iSMWLMCPAccept[dir_String, doneName_String, cmd_Association] := Module[
+  {msg = Lookup[cmd, "Message", <||>], rf, eo},
+  If[! AssociationQ[msg],
+    iSMWLMCPFailDone[dir, doneName, cmd, "WLMCP: Message missing"]; Return[Null]];
+  If[! iSMWLMCPEnsure[dir],
+    iSMWLMCPFailDone[dir, doneName, cmd,
+      "WLMCP backend unavailable: " <>
+        ToString[Lookup[$iSMWLMCPInitResult, "Status", "?"]]];
+    Return[Null]];
+  rf = iSMWLMCPResultFile[dir, doneName];
+  iSMEnsureDir[DirectoryName[rf]];
+  If[FileExistsQ[rf], Quiet @ DeleteFile[rf]];
+  (* 外側 With で値をサブカーネル評価式に焼き込む (ParallelSubmit は HoldFirst)。
+     ドライバ再定義ガード入り = kernel 再生成後も自己修復。 *)
+  eo = With[{msgv = msg, rfv = rf, drv = $iSMWLMCPDriverSource,
+       srv = $iSMWLMCPServerName},
+    ParallelSubmit[
+      Module[{resp},
+        If[! TrueQ[SourceVault`WLMCPChild`$Ready],
+          ToExpression[drv];
+          Quiet @ SourceVault`WLMCPChild`Init[srv]];
+        resp = Quiet @ SourceVault`WLMCPChild`Handle[msgv];
+        Export[rfv, resp, "WXF"]]]];
+  Quiet @ Check[Parallel`Developer`QueueRun[], Null];
+  $iSMWLMCPPending[doneName] = <|"EO" -> eo, "ResultFile" -> rf,
+    "Cmd" -> cmd, "SubmittedAbs" -> AbsoluteTime[]|>;
+  Null];
+
+(* pending の結果ファイルを検出して done を書く。waitSeconds > 0 なら
+   pending が残っている間その秒数まで短周期で追いポーリング (速い評価を
+   同一 tick 内で返してレイテンシを ~0.1s に抑える)。TTL 超過は wedge 扱い:
+   タイムアウトエラーを done に書き、subkernel を作り直す。 *)
+iSMWLMCPPoll[dir_String, waitSeconds_: 0] := Module[{t0 = AbsoluteTime[], finalized},
+  If[$iSMWLMCPPending === <||>, Return[Null]];
+  While[True,
+    Quiet @ Check[Parallel`Developer`QueueRun[], Null];
+    finalized = {};
+    KeyValueMap[
+      Function[{doneName, info},
+        Module[{rf = info["ResultFile"], resp, age},
+          age = AbsoluteTime[] - info["SubmittedAbs"];
+          Which[
+            FileExistsQ[rf],
+              resp = Quiet @ Check[Import[rf, "WXF"], $Failed];
+              Quiet @ Check[WaitNext[{info["EO"]}], Null];
+              Quiet @ DeleteFile[rf];
+              iSMWriteJSON[FileNameJoin[{dir, "commands", "done", doneName}],
+                Join[info["Cmd"], <|"Result" -> <|"Status" -> "OK",
+                  "WLMCP" -> If[AssociationQ[resp], resp,
+                    <|"jsonrpc" -> "2.0",
+                      "id" -> Lookup[Lookup[info["Cmd"], "Message", <||>], "id", Null],
+                      "error" -> <|"code" -> -32603,
+                        "message" -> "WLMCP: result unreadable"|>|>]|>,
+                  "ProcessedAtUTC" -> iSMUTCNow[]|>]];
+              AppendTo[finalized, doneName],
+            age > $iSMWLMCPHardTTLSeconds,
+              (* wedge: タイムアウトを返し、kernel を作り直す *)
+              iSMWLMCPFailDone[dir, doneName, info["Cmd"],
+                "WLMCP: evaluation exceeded " <>
+                  ToString[$iSMWLMCPHardTTLSeconds] <> "s (kernel recycled)"];
+              Quiet @ Check[CloseKernels[$iSMWLMCPKernels], Null];
+              $iSMWLMCPKernels = {}; $iSMWLMCPReady = False;
+              iServiceLog[dir, "WLMCPKernelRecycled", <|"DoneName" -> doneName|>];
+              AppendTo[finalized, doneName],
+            True, Null]]],
+      $iSMWLMCPPending];
+    Scan[($iSMWLMCPPending = KeyDrop[$iSMWLMCPPending, #]) &, finalized];
+    If[$iSMWLMCPPending === <||> ||
+       (AbsoluteTime[] - t0) >= waitSeconds, Break[]];
+    Pause[0.05]];
+  Null];
+
 iDispatchServiceCommand[cmd_Association] := Switch[Lookup[cmd, "Command"],
   "Ping", <|"Status" -> "OK", "Pong" -> True, "AtUTC" -> iSMUTCNow[]|>,
+  "WLMCPStatus",
+    <|"Status" -> "OK", "Ready" -> TrueQ[$iSMWLMCPReady],
+      "Init" -> $iSMWLMCPInitResult,
+      "Pending" -> Length[$iSMWLMCPPending],
+      "Kernels" -> Length[$iSMWLMCPKernels], "AtUTC" -> iSMUTCNow[]|>,
   "Http",
     Module[{r = Quiet @ iServiceHttpRender[cmd]},
       If[AssociationQ[r] && KeyExistsQ[r, "Body"],
@@ -1432,7 +1689,9 @@ iDispatchServiceCommand[cmd_Association] := Switch[Lookup[cmd, "Command"],
           <|"Status" -> "OK", "MCP" -> r|>]]],
   _, <|"Status" -> "UnknownCommand", "Command" -> Lookup[cmd, "Command", Missing[]]|>];
 
-(* pending command を処理。done/ へ結果付きで移し、Stop 要求の有無を返す *)
+(* pending command を処理。done/ へ結果付きで移し、Stop 要求の有無を返す。
+   WLMCP command だけは deferred: サブカーネルへ submit して done を書かずに
+   戻る (iSMWLMCPPoll が完了時に done を書く)。 *)
 iProcessServiceCommands[dir_String] := Module[{cmdDir, doneDir, files, stop = False},
   cmdDir = FileNameJoin[{dir, "commands"}];
   doneDir = FileNameJoin[{dir, "commands", "done"}];
@@ -1440,18 +1699,23 @@ iProcessServiceCommands[dir_String] := Module[{cmdDir, doneDir, files, stop = Fa
   files = If[DirectoryQ[cmdDir], FileNames["*.json", cmdDir], {}];  (* done/ は再帰しないので含まない *)
   Do[Module[{cmd = iSMReadJSON[f], result},
       If[AssociationQ[cmd],
-        result = iDispatchServiceCommand[cmd];
-        If[TrueQ[Lookup[result, "Stop"]], stop = True];
-        iSMWriteJSON[FileNameJoin[{doneDir, FileNameTake[f]}],
-          Join[cmd, <|"Result" -> result, "ProcessedAtUTC" -> iSMUTCNow[]|>]];
-        iServiceLog[dir, "CommandProcessed", <|"Command" -> Lookup[cmd, "Command"], "CommandId" -> Lookup[cmd, "CommandId"]|>]];
+        If[Lookup[cmd, "Command"] === "WLMCP",
+          iSMWLMCPAccept[dir, FileNameTake[f], cmd];
+          iServiceLog[dir, "CommandDeferred",
+            <|"Command" -> "WLMCP", "CommandId" -> Lookup[cmd, "CommandId"]|>],
+          result = iDispatchServiceCommand[cmd];
+          If[TrueQ[Lookup[result, "Stop"]], stop = True];
+          iSMWriteJSON[FileNameJoin[{doneDir, FileNameTake[f]}],
+            Join[cmd, <|"Result" -> result, "ProcessedAtUTC" -> iSMUTCNow[]|>]];
+          iServiceLog[dir, "CommandProcessed", <|"Command" -> Lookup[cmd, "Command"], "CommandId" -> Lookup[cmd, "CommandId"]|>]]];
       Quiet @ DeleteFile[f]],
     {f, files}];
   stop];
 
 Options[SourceVaultServiceMain] = {"HeartbeatIntervalSeconds" -> 1, "MaxSeconds" -> Automatic};
 SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Module[
-  {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath, lastRollupAbs},
+  {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath,
+   lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs},
   dir = iServiceRuntimeDir[serviceId];
   If[FailureQ[dir], Return[dir]];
   iSMEnsureDir[dir];
@@ -1461,7 +1725,18 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
   (* #2: 起動時に参照イベント hot ログを CoreRoot(Dropbox) へ rollup (webingest があれば) *)
   If[Length[DownValues[SourceVault`SourceVaultRollupReferenceEvents]] > 0,
     Quiet @ Check[SourceVault`SourceVaultRollupReferenceEvents[], Null]];
+  (* llmlog: 起動時に Claude Code セッションログのダイジェストを CoreRoot へ ingest
+     (llmlog があれば)。初回バックログは MaxSessionsPerRun で刻み、tick 毎に消化する。 *)
+  If[Length[DownValues[SourceVault`SourceVaultIngestClaudeCodeLogs]] > 0,
+    Quiet @ TimeConstrained[
+      Check[SourceVault`SourceVaultIngestClaudeCodeLogs["MaxSessionsPerRun" -> 40], Null], 120, Null]];
+  (* WLMCP: AgentTools MCP 用サブカーネルを起動時に温める (初回リクエストを
+     待たせない)。失敗しても fail-soft (Ready=False で明示エラー応答)。 *)
+  If[iSMWLMCPEnabledQ[serviceId],
+    Quiet @ TimeConstrained[Check[iSMWLMCPEnsure[dir], Null], 300, Null]];
   lastRollupAbs = AbsoluteTime[];
+  lastCCIngestAbs = AbsoluteTime[];
+  lastDiagIngestAbs = 0;   (* hardening 05 Inc2: 初回 tick で即 ingest *)
   interval = OptionValue["HeartbeatIntervalSeconds"];
   maxSec = OptionValue["MaxSeconds"];  (* 安全弁: Automatic なら無制限 *)
   statusPath = FileNameJoin[{dir, "status.json"}];
@@ -1483,6 +1758,9 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
       iSMWriteJSON[hbPath, <|"Counter" -> counter, "UpdatedAtUTC" -> iSMUTCNow[], "PID" -> $ProcessID|>];
       stop = iProcessServiceCommands[dir];
       If[stop, Break[]];
+      (* WLMCP: サブカーネルの完了結果を回収して done を書く。pending がある間は
+         0.8s まで短周期で追いポーリング (速い評価を同一 tick で返す)。 *)
+      Quiet @ Check[iSMWLMCPPoll[dir, 0.8], Null];
       (* #2: 低頻度で参照イベントを CoreRoot に rollup (per-event 同期を避ける; バッテリーノート配慮)。
          反映には service 再起動が必要 (rule105 §8)。 *)
       If[Length[DownValues[SourceVault`SourceVaultRollupReferenceEvents]] > 0 &&
@@ -1493,6 +1771,25 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
         Quiet @ TimeConstrained[
           Check[SourceVault`SourceVaultRollupReferenceEvents[], Null], 30, Null];
         lastRollupAbs = AbsoluteTime[]];
+      (* llmlog: 低頻度で Claude Code セッションログを増分 ingest (watermark 冪等・
+         変更セッションのみ digest)。rollup と同じく TimeConstrained で打ち切る。 *)
+      If[Length[DownValues[SourceVault`SourceVaultIngestClaudeCodeLogs]] > 0 &&
+         NumericQ[SourceVault`$SourceVaultClaudeCodeIngestIntervalSeconds] &&
+         (AbsoluteTime[] - lastCCIngestAbs) > SourceVault`$SourceVaultClaudeCodeIngestIntervalSeconds,
+        Quiet @ TimeConstrained[
+          Check[SourceVault`SourceVaultIngestClaudeCodeLogs["MaxSessionsPerRun" -> 40], Null],
+          120, Null];
+        lastCCIngestAbs = AbsoluteTime[]];
+      (* hardening 05 Inc2: producer per-process spool の診断イベントを
+         正準 diagnostics-log へ ingest (単一書き手=この service kernel。
+         EventId dedup で冪等)。rollup と同じく TimeConstrained で打ち切る。 *)
+      If[Length[DownValues[SourceVault`SourceVaultDiagnosticsIngestSpool]] > 0 &&
+         (AbsoluteTime[] - lastDiagIngestAbs) >
+           If[NumericQ[SourceVault`$SourceVaultDiagIngestIntervalSeconds],
+             SourceVault`$SourceVaultDiagIngestIntervalSeconds, 60],
+        Quiet @ TimeConstrained[
+          Check[SourceVault`SourceVaultDiagnosticsIngestSpool[], Null], 30, Null];
+        lastDiagIngestAbs = AbsoluteTime[]];
       If[NumericQ[maxSec] && (AbsoluteTime[] - startAbs) > maxSec, stop = True; Break[]];
       Pause[interval]],
     stop = True];
@@ -1521,7 +1818,8 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
         "CoreRoot" -> root, "HeartbeatIntervalSeconds" -> interval,
         "Packages" -> {"SourceVault_core.wl", "SourceVault_crypto.wl", "SourceVault_searchindex.wl",
           "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
-          "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl"},
+          "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl",
+          "SourceVault_llmlog.wl"},
         "InjectedRootHash" -> rootHash,
         "HasPrelude" -> (StringLength[prelude] > 0), "CreatedAtUTC" -> iSMUTCNow[]|>];
     Module[{strm = OpenWrite[path, BinaryFormat -> True], text},
@@ -1541,6 +1839,9 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
         "  With[{kpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_contracts.wl\"}]}, If[FileExistsQ[kpath], Get[kpath]]];\n",
         "  With[{apath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_packageapi.wl\"}]}, If[FileExistsQ[apath], Get[apath]]];\n",
         "  With[{mpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_mcp.wl\"}]}, If[FileExistsQ[mpath], Get[mpath]]];\n",
+        (* llmlog は mcp より後に load (adapter 登録が mcp の registry を要するため)。
+           存在ガードで fail-soft。 *)
+        "  With[{lpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_llmlog.wl\"}]}, If[FileExistsQ[lpath], Get[lpath]]];\n",
         "];\n",
         "SourceVault`$SourceVaultCoreRoot = ", q[root], ";\n",
         (* root snapshot 注入 (spec v6 §3.7): service kernel は注入値を最優先する。
@@ -1594,7 +1895,7 @@ Options[SourceVaultStartService] = {
   "PreludeCode" -> ""};
 SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
   {dir, root, pkgRoot, kind, interval, runWls, exe, batPath, task, runRes, pid,
-   existing, pidPath, deadline, pidRec, prelude},
+   existing, pidPath, deadline, pidRec, prelude, seat, seatTok},
   root = SourceVault`SourceVaultCoreRoot[];
   If[FailureQ[root], Return[root]];
   kind = OptionValue["Kind"];
@@ -1633,11 +1934,24 @@ SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
      【窓非表示】bat を直接 /TR にすると Task Scheduler が対話セッションで
      wolframscript のコンソール窓を表示し続ける。wscript の hidden launcher
      (cmd /c bat を vbHide で起動) 経由にして窓を出さない (stdout リダイレクトは bat 側で維持)。 *)
+  (* hardening 01 Inc2: 席ゲート (SeatBroker ロード済み環境のみ)。
+     service は常駐だが seat は boot 窓 (pid.json 出現まで) のみ保持し、
+     起動確認後に返却する — 以後は license 実測側に本体が現れる。
+     枯渇時は黙って Queued/即死させず Failure で可視化する (spec 01 §6)。 *)
+  seat = If[Length[DownValues[ClaudeRuntime`ClaudeSeatAcquire]] > 0,
+    ClaudeRuntime`ClaudeSeatAcquire["SourceVaultService", "Priority" -> 60,
+      "TTLSeconds" -> 180, "JobId" -> serviceId],
+    <|"Token" -> None|>];
+  If[FailureQ[seat],
+    Return[Failure["NoSeat", <|"ServiceId" -> serviceId, "Deferred" -> True,
+      "Detail" -> "ライセンス席が不足しています。SourceVaultSystemDoctor[] で回収候補 (放置 wolframscript / 重複 MCP) を確認してください。"|>]]];
+  seatTok = Lookup[seat, "Token", None];
   Quiet @ RunProcess[{"schtasks", "/Create", "/TN", task, "/TR", iWriteHiddenLauncher[dir, batPath]["TR"],
     "/SC", "ONCE", "/ST", "23:59", "/F"}];
   iClearTaskBatteryRestriction[task];  (* バッテリー運用でも起動できるよう電源条件を解除 *)
   runRes = Quiet @ RunProcess[{"schtasks", "/Run", "/TN", task}];
   If[! (AssociationQ[runRes] && Lookup[runRes, "ExitCode"] === 0),
+    If[StringQ[seatTok], Quiet @ ClaudeRuntime`ClaudeSeatRelease[seatTok]];
     iSMWriteJSON[FileNameJoin[{dir, "status.json"}],
       <|"State" -> "Crashed", "Reason" -> "ScheduledTaskRunFailed"|>];
     Return[Failure["ScheduledTaskRunFailed", <|"ServiceId" -> serviceId, "Task" -> task,
@@ -1648,6 +1962,8 @@ SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
   While[AbsoluteTime[] < deadline && ! FileExistsQ[pidPath], Pause[0.5]];
   pidRec = iSMReadJSON[pidPath];
   pid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing["Pending"]];
+  (* boot 窓終了 → 席返却 (成否問わず。以後は実測が本体を数える) *)
+  If[StringQ[seatTok], Quiet @ ClaudeRuntime`ClaudeSeatRelease[seatTok]];
   iServiceLog[dir, "ServiceLaunched", <|"PID" -> pid, "Kind" -> kind, "Task" -> task|>];
   <|"Status" -> "Started", "ServiceId" -> serviceId, "PID" -> pid,
     "RuntimeDir" -> dir, "Task" -> task|>];
@@ -1669,10 +1985,14 @@ SourceVaultServiceStatus[serviceId_String, opts___] := Module[
   pid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing[]];
   alive = If[IntegerQ[pid], iPidAlive[pid], False];
   age = iHeartbeatAgeSeconds[dir];
+  (* hardening 02 Inc1: 閾値を $SourceVaultHealthThresholds に統一
+     (旧 5/15s は Python proxy の 15/60s と食い違っていた)。
+     age が読めない (Missing = heartbeat 欠損/壊れ) は従来どおり Failing
+     (『読めない=健康』にしない)。 *)
   health = Which[
     ! TrueQ[alive], "Failing",
-    NumericQ[age] && age <= 5, "OK",
-    NumericQ[age] && age <= 15, "Degraded",
+    NumericQ[age] && age <= iSMHealthThreshold["OKSeconds", 15], "OK",
+    NumericQ[age] && age <= iSMHealthThreshold["DegradedSeconds", 60], "Degraded",
     True, "Failing"];
   <|"ServiceId" -> serviceId,
     "State" -> If[AssociationQ[status], Lookup[status, "State", "Unknown"], "Unknown"],
@@ -1818,20 +2138,34 @@ iWriteTextFileUTF8[path_String, text_String] := Module[{strm = OpenWrite[path, B
    バックスラッシュ・二重引用符を含めない (WL 文字列エスケープ回避; パスは単一引用符で埋め込む)。
    常駐ループ: 1 回チェック → intervalSec 秒 sleep を繰り返す。終了は外部 kill (uninstall) のみ。 *)
 iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJoin[
+  "param([switch]$Once)\n",   (* hardening 02 Inc2: 単発実行 (テスト/運用診断用) *)
   "$ErrorActionPreference = 'SilentlyContinue'\n",
   "$svc = '", svcDir, "'\n",
   "$task = '", svcTask, "'\n",
   "$staleSec = ", ToString[staleSec], "\n",
   "$intervalSec = ", ToString[intervalSec], "\n",
   "$pidFile = Join-Path $svc 'watchdog.pid.json'\n",
-  (* 二重起動防止: 既に常駐 watchdog がいれば mutex を取れず即終了する。 *)
+  "$stateFile = Join-Path $svc 'restart_state.json'\n",
+  (* 二重起動防止: 既に常駐 watchdog がいれば mutex を取れず即終了する。
+     hardening 02 Inc2 (P0-8): New-Object の .NET 例外は SilentlyContinue でも
+     script を殺すため try/catch (多重 watchdog を作らない側に倒す)。 *)
   "$createdNew = $false\n",
-  "$mtx = New-Object System.Threading.Mutex($true, '", iWatchdogMutexName[svcTask], "', [ref]$createdNew)\n",
-  "if(-not $createdNew){ exit 0 }\n",
+  "$mtx = $null\n",
+  "try { $mtx = New-Object System.Threading.Mutex($true, '", iWatchdogMutexName[svcTask], "', [ref]$createdNew) } catch { if($Once){ Write-Output 'mutex-error' }; exit 0 }\n",
+  (* -Once 診断は常駐と併走させない (二重 restart 防止) が、黙って空を
+     返さず 'resident-active' を出力する (result8 知見)。 *)
+  "if(-not $createdNew){ if($Once){ Write-Output 'resident-active' }; exit 0 }\n",
   (* 自 PID を記録 (uninstall が確実に止められるように)。 *)
   "try{ [IO.File]::WriteAllText($pidFile, ('{\"PID\":' + $PID + ',\"StartedAtUTC\":\"' + ([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) + '\"}')) }catch{}\n",
   "function RJ($p){ if(Test-Path $p){ try{ Get-Content -Raw -Encoding UTF8 $p | ConvertFrom-Json }catch{ $null } } else { $null } }\n",
-  (* --- 1 周期分の健全性チェック。'ok'/'idle'/'restarted' を返す。 --- *)
+  (* hardening 02 Inc2: restart 状態 (backoff/GivenUp) とログのヘルパ。 *)
+  "function RState { $s = RJ $stateFile; if($null -eq $s){ [pscustomobject]@{ ConsecutiveFailures=0; LastRestartAtUTC=$null; GivenUp=$false } } else { $s } }\n",
+  "function WState($f,$l,$g){ try{ [IO.File]::WriteAllText($stateFile, (([ordered]@{ConsecutiveFailures=$f;LastRestartAtUTC=$l;GivenUp=$g}) | ConvertTo-Json -Compress)) }catch{} }\n",
+  "function WLog($obj){ try{ [IO.File]::AppendAllText((Join-Path $svc 'watchdog.log.jsonl'), ($obj | ConvertTo-Json -Compress)+[Environment]::NewLine) }catch{} }\n",
+  "function NowUTC { [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') }\n",
+  (* 健康確認できたら失敗カウンタを解除 (人手復旧後の GivenUp 自動解除を含む)。 *)
+  "function MarkOk { $s0 = RState; if(([int]$s0.ConsecutiveFailures -gt 0) -or [bool]$s0.GivenUp){ WState 0 $s0.LastRestartAtUTC $false } }\n",
+  (* --- 1 周期分の健全性チェック。'ok'/'idle'/'restarted'/'backoff'/'givenup'/'restartfailed' を返す。 --- *)
   "function Invoke-WatchdogCheck {\n",
   "$status = RJ (Join-Path $svc 'status.json')\n",
   "if($null -eq $status -or $status.State -ne 'Running'){ return 'idle' }\n",
@@ -1843,18 +2177,38 @@ iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJo
   "$svpid = if($pr){ [int]$pr.PID } else { 0 }\n",
   "$proc = if($svpid -gt 0){ Get-Process -Id $svpid -ErrorAction SilentlyContinue } else { $null }\n",
   "$alive = ($null -ne $proc) -and ($proc.ProcessName -match 'wolfram')\n",
-  "if($alive -and $null -ne $age -and $age -le $staleSec){ return 'ok' }\n",
-  "if($alive -and $null -eq $age){ return 'ok' }\n",
-  "if($alive){ Start-Sleep -Seconds 5; $hb2 = RJ (Join-Path $svc 'heartbeat.json'); $c2 = if($hb2){ $hb2.Counter } else { $null }; if($null -ne $c1 -and $null -ne $c2 -and $c1 -ne $c2){ return 'ok' } }\n",
+  "if($alive -and $null -ne $age -and $age -le $staleSec){ MarkOk; return 'ok' }\n",
+  (* hardening 02 Inc1: age が読めない (null = heartbeat 欠損/壊れ) を『健康』
+     扱いしない (旧: null -> 即 ok = green-but-dead の穴)。counter の進行
+     (5s 二重読み) だけを生存証拠とする。c1 が null でも c2 が読めれば
+     『いま書き始めた』ので ok (起動直後: status=Running 直後〜初回 heartbeat
+     の隙間で誤 restart しないため)。二重読みでも読めない/凍結なら restart へ。 *)
+  "if($alive){ Start-Sleep -Seconds 5; $hb2 = RJ (Join-Path $svc 'heartbeat.json'); $c2 = if($hb2){ $hb2.Counter } else { $null }; if(($null -ne $c2) -and (($null -eq $c1) -or ($c1 -ne $c2))){ MarkOk; return 'ok' } }\n",
+  (* hardening 02 Inc2 (P0-8): restart storm 抑制。
+     GivenUp なら再起動しない (人手で service を直せば MarkOk が解除)。
+     直近の restart から指数バックオフ (interval*2^failures, 上限 3600s)
+     経過前は再起動しない。 *)
+  "$state = RState\n",
+  "if([bool]$state.GivenUp){ return 'givenup' }\n",
+  "$backoff = [math]::Min($intervalSec * [math]::Pow(2, [int]$state.ConsecutiveFailures), 3600)\n",
+  "if($state.LastRestartAtUTC){ try{ $lr=[DateTimeOffset]::Parse([string]$state.LastRestartAtUTC,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal); if((([DateTimeOffset]::UtcNow)-$lr).TotalSeconds -lt $backoff){ return 'backoff' } }catch{} }\n",
   "$stdout = Join-Path $svc 'stdout.log'\n",
   "if(Test-Path $stdout){ $st=[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'); Copy-Item $stdout (Join-Path $svc ('stdout.wedge-'+$st+'.log')) -Force }\n",
   "if($alive){ Stop-Process -Id $svpid -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }\n",
+  (* hardening 02 Inc2: /Run の exit code を捨てず、成功判定は実体で行う:
+     60s 以内に「新 PID の heartbeat」が書かれ始めたら成功
+     (schtasks は ExitCode 0 でも Queued 固着で実体が起きないことがある)。 *)
   "schtasks /Run /TN $task | Out-Null\n",
-  "$rec=[ordered]@{ EventClass='WatchdogRestart'; AtUTC=[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'); HeartbeatAgeSeconds=$age; PidWasAlive=$alive; PID=$svpid }\n",
-  "[IO.File]::AppendAllText((Join-Path $svc 'watchdog.log.jsonl'), ($rec | ConvertTo-Json -Compress)+[Environment]::NewLine)\n",
-  "return 'restarted'\n",
+  "$rc = $LASTEXITCODE\n",
+  "$ok2 = $false; $newpid = 0\n",
+  "for($i=0; $i -lt 30; $i++){ Start-Sleep -Seconds 2; $pr2 = RJ (Join-Path $svc 'pid.json'); $newpid = if($pr2){ [int]$pr2.PID } else { 0 }; if(($newpid -gt 0) -and ($newpid -ne $svpid)){ $p2 = Get-Process -Id $newpid -ErrorAction SilentlyContinue; if($null -ne $p2){ $hb3 = RJ (Join-Path $svc 'heartbeat.json'); if($hb3 -and ([int]$hb3.PID -eq $newpid)){ $ok2 = $true; break } } } }\n",
+  "if($ok2){ WState 0 (NowUTC) $false } else { $nf = [int]$state.ConsecutiveFailures + 1; $gu = ($nf -ge 5); WState $nf (NowUTC) $gu; if($gu){ WLog ([ordered]@{ Type='DiagnosticsEvent'; EventId=[guid]::NewGuid().ToString(); EventClass='ServiceRestartGivenUp'; AtUTC=(NowUTC); Producer='watchdog'; Severity='critical'; Payload=@{ Failures=$nf; Task=$task } }) } }\n",
+  "WLog ([ordered]@{ Type='DiagnosticsEvent'; EventId=[guid]::NewGuid().ToString(); EventClass='ServiceRestarted'; AtUTC=(NowUTC); Producer='watchdog'; Severity=$(if($ok2){'warn'}else{'error'}); Payload=@{ Success=$ok2; NewPid=$newpid; OldPid=$svpid; SchtasksExit=$rc; HeartbeatAgeSeconds=$age; PidWasAlive=$alive; ConsecutiveFailures=$(if($ok2){0}else{[int]$state.ConsecutiveFailures + 1}) } })\n",
+  "if($ok2){ return 'restarted' } else { return 'restartfailed' }\n",
   "}\n",
-  (* --- 常駐ループ: チェック → sleep を繰り返す。窓を出さず終了もしない。 --- *)
+  (* --- 常駐ループ: チェック → sleep を繰り返す。窓を出さず終了もしない。
+     -Once なら 1 回だけ実行して結果を出力 (テスト/診断用)。 --- *)
+  "if($Once){ $r = 'ok'; try{ $r = Invoke-WatchdogCheck }catch{ $r = 'error' }; Write-Output $r; exit 0 }\n",
   "while($true){\n",
   "  $r = 'ok'\n",
   "  try{ $r = Invoke-WatchdogCheck }catch{ $r = 'ok' }\n",
@@ -1902,7 +2256,7 @@ iClearTaskBatteryRestriction[task_String] := Quiet @ RunProcess[{
     "$t.Settings.StopIfGoingOnBatteries = $false; ",
     "Set-ScheduledTask -TaskName '", task, "' -Settings $t.Settings | Out-Null } catch {}"]}];
 
-Options[SourceVaultInstallWatchdog] = {"StaleSeconds" -> 90, "IntervalMinutes" -> 2};
+Options[SourceVaultInstallWatchdog] = {"StaleSeconds" -> Automatic, "IntervalMinutes" -> 2};
 SourceVaultInstallWatchdog[serviceId_String, OptionsPattern[]] := Module[
   {svcDir, svcTask, wdTask, staleSec, interval, intervalSec, ps1Path, vbsPath,
    trStr, oldPid, cre, runRes, deadline, wdPid},
@@ -1911,7 +2265,8 @@ SourceVaultInstallWatchdog[serviceId_String, OptionsPattern[]] := Module[
   If[! DirectoryQ[svcDir], Return[Failure["ServiceNotInstalled", <|"ServiceId" -> serviceId|>]]];
   svcTask = iServiceTaskName[serviceId];
   wdTask = iWatchdogTaskName[serviceId];
-  staleSec = OptionValue["StaleSeconds"];
+  staleSec = OptionValue["StaleSeconds"] /.
+    Automatic -> iSMHealthThreshold["WatchdogStaleSeconds", 90];
   interval = OptionValue["IntervalMinutes"];
   intervalSec = Max[5, Round[interval*60]];
   (* 旧 watchdog が常駐していれば先に止める (interval 変更を反映 / 二重常駐回避)。 *)
@@ -1977,6 +2332,34 @@ SourceVaultListServices[opts___] := Module[{base, dirs},
   If[! DirectoryQ[base], Return[{}]];
   dirs = Select[FileNames["*", base], DirectoryQ];
   SourceVaultServiceStatus[FileNameTake[#]] & /@ dirs];
+
+(* runtime/ 直下の共有/レガシー予約名 (実 PC ではない)。machine tag は $MachineName 由来なので
+   これらと衝突しない。旧構成では proxies/services が runtime 直下に置かれていた名残も除外する。 *)
+$iSMRuntimeReservedDirs = {"locks", "proxies", "services"};
+
+Options[SourceVaultListRuntimeMachines] = {"Details" -> False};
+SourceVaultListRuntimeMachines[OptionsPattern[]] := Module[
+  {root, base, dirs, tags, self},
+  root = SourceVault`SourceVaultCoreRoot[];
+  self = iRuntimeMachineTag[];
+  If[FailureQ[root], Return[If[TrueQ[OptionValue["Details"]],
+    {<|"MachineTag" -> self, "IsSelf" -> True, "HasServices" -> False,
+       "HasProxies" -> False|>}, {self}]]];
+  base = FileNameJoin[{root, "runtime"}];
+  dirs = If[DirectoryQ[base], Select[FileNames["*", base], DirectoryQ], {}];
+  tags = Select[FileNameTake /@ dirs,
+    ! MemberQ[$iSMRuntimeReservedDirs, ToLowerCase[#]] &];
+  (* 自機は runtime dir が無くても sharing なので必ず含める *)
+  tags = Sort[DeleteDuplicates[Append[tags, self]]];
+  If[! TrueQ[OptionValue["Details"]], Return[tags]];
+  Map[
+    Function[tag,
+      Module[{md = FileNameJoin[{base, tag}]},
+        <|"MachineTag" -> tag,
+          "IsSelf" -> (tag === self),
+          "HasServices" -> DirectoryQ[FileNameJoin[{md, "services"}]],
+          "HasProxies" -> DirectoryQ[FileNameJoin[{md, "proxies"}]]|>]],
+    tags]];
 
 Options[SourceVaultServiceLogs] = {"Limit" -> 100};
 SourceVaultServiceLogs[serviceId_String, OptionsPattern[]] := Module[{dir, evs, lim},
@@ -2155,6 +2538,8 @@ SUBALLOW = CFG.get('subscriptionAllowed', False)
 TIMEOUT = CFG.get('searchTimeoutMs', 8000) / 1000.0
 MCPTOKEN = CFG.get('mcpToken')
 MCPTIMEOUT = CFG.get('mcpTimeoutMs', 60000) / 1000.0
+HOK = CFG.get('healthOkSeconds', 15)
+HDEG = CFG.get('healthDegradedSeconds', 60)
 RUNTIME = os.path.dirname(os.path.abspath(sys.argv[1]))
 
 def rj(path):
@@ -2176,13 +2561,13 @@ def health():
             age = None
     if age is None:
         hstate = 'Unknown'
-    elif age <= 15:
+    elif age <= HOK:
         hstate = 'OK'
-    elif age <= 60:
+    elif age <= HDEG:
         hstate = 'Degraded'
     else:
         hstate = 'Stale'
-    return {'ok': hstate != 'Stale', 'service': st.get('ServiceId'), 'state': st.get('State'),
+    return {'ok': hstate in ('OK', 'Degraded'), 'service': st.get('ServiceId'), 'state': st.get('State'),
             'pid': st.get('PID'), 'heartbeatCounter': hb.get('Counter'),
             'heartbeatAgeSeconds': (round(age, 1) if age is not None else None),
             'healthState': hstate,
@@ -2240,6 +2625,14 @@ class H(BaseHTTPRequestHandler):
         if u.path == PREFIX + '/mcp':
             self.handle_mcp(method)
             return
+        # Wolfram AgentTools MCP (service kernel + subkernel; replaces wlmcp-gateway)
+        if u.path == '/wl/mcp':
+            self.handle_wlmcp(method)
+            return
+        if u.path == '/wl/health':
+            self.emit(200, 'application/json; charset=utf-8',
+                      json.dumps(health(), ensure_ascii=False))
+            return
         body = ''
         if method == 'POST':
             ln = int(self.headers.get('Content-Length', 0) or 0)
@@ -2252,6 +2645,40 @@ class H(BaseHTTPRequestHandler):
         self.emit(int(res.get('StatusCode', 200)),
                   res.get('ContentType', 'text/html; charset=utf-8'),
                   res.get('Body', ''))
+    def handle_wlmcp(self, method):
+        if MCPTOKEN:
+            if self.headers.get('X-SourceVault-Token', '') != MCPTOKEN:
+                self.emit(401, 'application/json; charset=utf-8',
+                          json.dumps({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32001, 'message': 'Unauthorized'}}))
+                return
+        if method != 'POST':
+            self.emit(405, 'application/json; charset=utf-8',
+                      json.dumps({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Use POST'}}))
+            return
+        ln = int(self.headers.get('Content-Length', 0) or 0)
+        raw = self.rfile.read(ln).decode('utf-8', 'replace') if ln > 0 else ''
+        try:
+            req = json.loads(raw)
+        except Exception:
+            self.emit(400, 'application/json; charset=utf-8',
+                      json.dumps({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'Parse error'}}))
+            return
+        rid = req.get('id')
+        rmethod = req.get('method', '')
+        if rid is None and isinstance(rmethod, str) and rmethod.startswith('notifications/'):
+            self.emit(202, 'application/json; charset=utf-8', '')
+            return
+        cid = 'cmd:' + str(uuid.uuid4())
+        cmd = {'CommandId': cid, 'Command': 'WLMCP', 'Message': req, 'ClientIP': self.client_address[0]}
+        res = run_cmd(cmd, MCPTIMEOUT)
+        if not isinstance(res, dict):
+            self.emit(504, 'application/json; charset=utf-8',
+                      json.dumps({'jsonrpc': '2.0', 'id': rid, 'error': {'code': -32000, 'message': 'service timeout'}}))
+            return
+        out = res.get('WLMCP')
+        if not isinstance(out, dict):
+            out = {'jsonrpc': '2.0', 'id': rid, 'error': {'code': -32603, 'message': 'Internal error'}}
+        self.emit(200, 'application/json; charset=utf-8', json.dumps(out, ensure_ascii=False))
     def handle_mcp(self, method):
         if MCPTOKEN:
             if self.headers.get('X-SourceVault-Token', '') != MCPTOKEN:
@@ -2417,7 +2844,9 @@ SourceVaultStartHTTPProxy[serviceId_String, OptionsPattern[]] := Module[
     "chatModel" -> (chatModel /. Automatic -> Null),
     "searchTimeoutMs" -> OptionValue["SearchTimeoutMs"],
     "mcpToken" -> (OptionValue["MCPToken"] /. (None | Automatic) -> Null),
-    "mcpTimeoutMs" -> OptionValue["MCPTimeoutMs"]|>];
+    "mcpTimeoutMs" -> OptionValue["MCPTimeoutMs"],
+    "healthOkSeconds" -> iSMHealthThreshold["OKSeconds", 15],
+    "healthDegradedSeconds" -> iSMHealthThreshold["DegradedSeconds", 60]|>];
   py = iResolvePython[];
   batPath = FileNameJoin[{proxyDir, "launch.bat"}];
   iRotateLog[FileNameJoin[{proxyDir, "stdout.log"}]];  (* #1: proxy ログも世代退避 *)

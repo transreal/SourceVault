@@ -1,3 +1,5 @@
+---
+
 # SourceVault — ingest → グループ化 → 補足知識 → 検索 → ClaudeEval → Web 公開 実行例
 
 このドキュメントは、**PDF / Web ページを取り込み（ingest）、グループ化して release context と補足知識を付け、検索し、ノートブック（ClaudeEval）から問い合わせ、最後に Web で公開する**までの一連の流れを、実際に動くコードで示します。
@@ -7,8 +9,9 @@
 ## 全体像
 
 ```
-PDF / Web ページ / arXiv 論文
+PDF / Web ページ / arXiv 論文 / Claude Code セッションログ
    │ pdfIndex / pdfIndexDirectory / pdfIndexURL   ← コレクションに取り込む
+   │ SourceVaultIngestClaudeCodeLogs              ← Claude Code ログを取り込む
    ▼
 コレクション(collection)
    │ + ReleaseContext (公開ポリシー)
@@ -34,21 +37,35 @@ PDF / Web ページ / arXiv 論文
 
 ```mathematica
 Block[{$CharacterEncoding = "UTF-8"},
-  Get[FileNameJoin[{$packageDirectory, "SourceVault.wl"}]];   (* core/searchindex/servicemanager/objectview を自動ロード *)
+  Get[FileNameJoin[{$packageDirectory, "SourceVault.wl"}]];   (* core/searchindex/servicemanager/objectview 等を自動ロード *)
   Get[FileNameJoin[{$packageDirectory, "PDFIndex.wl"}]];       (* 検索バックエンド *)
   Get[FileNameJoin[{$packageDirectory, "NBAccess.wl"}]]];      (* LLM トークン *)
 ```
 
-> **自動ロード**: `Get["SourceVault.wl"]` 単体で `SourceVault_core.wl` / `SourceVault_searchindex.wl` / `SourceVault_servicemanager.wl` / `SourceVault_mcp.wl` / **`SourceVault_objectview.wl`** が自動でロードされます。`$CharacterEncoding` を UTF-8 に固定することで、日本語リテラルが正しくロードされます。
+> **自動ロード**: `Get["SourceVault.wl"]` 単体で、`SourceVault_core.wl` を起点に多数のサブモジュールが自動でロードされます。現在の自動ロード対象には、従来の `SourceVault_core.wl` / `SourceVault_searchindex.wl` / `SourceVault_servicemanager.wl` / `SourceVault_mcp.wl` / `SourceVault_objectview.wl` に加えて、`SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_simrun.wl` / `SourceVault_searchview.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / **`SourceVault_llmlog.wl`**（Claude Code セッションログ）/ `SourceVault_workflowregistry.wl` などが含まれます。`$CharacterEncoding` を UTF-8 に固定することで、日本語リテラルが正しくロードされます。
 
-### `$SourceVaultDefaultNotebookFolder`（新規）
+### auto-trigger scheduler の自動起動（対話 FE カーネルのみ）
+
+`SourceVault.wl` をロードすると、そのマシンで**対話フロントエンド（FE）カーネル**の場合に限り、auto-trigger scheduler が自動的に起動されます（他 PC から「この PC でこのワークフローを実行」といったジョブを、この PC が常に拾えるようにするためです）。
+
+- **FE メインカーネル限定ガード**: `$FrontEnd =!= Null` の対話カーネルでのみ起動します。headless カーネル（`$FrontEnd === Null`）・サブカーネル・サービスカーネル・MCP ゲートウェイカーネル・外部ジョブ用 wolframscript 等では起動しません。scheduler はマシンあたり 1 か所（対話 FE）でのみ動くべき、という設計です。
+- **冪等**: 既に起動済みなら同じ tick を再登録するだけの no-op です。`SourceVault_autotrigger.wl`（[SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger)）がまだロードされていない場合は、`ClaudeCodeAbsent` を返す安価な no-op となり、次回 (再)ロード時に自動起動を試みます。
+- **オプトアウト**: 自動起動を抑止したい場合は、ロード前に次を設定します。
+
+```mathematica
+SourceVault`Private`$iSVDisableAutoTriggerScheduler = True;
+```
+
+自動起動の結果は `SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult` に記録されます（`<|"Status" -> "Skipped"/"Failed"/..., "Reason" -> "NotFrontEndKernel"|"DisabledByUser"|"AutoTriggerUnavailable"|...|>` 等）。
+
+### `$SourceVaultDefaultNotebookFolder`
 
 ```mathematica
 $SourceVaultDefaultNotebookFolder::usage
 (* => "the default folder for SourceVault notebooks." *)
 ```
 
-`$SourceVaultDefaultNotebookFolder` は SourceVault がノートブックを保存・参照する際のデフォルトフォルダーです。既定値は `Automatic` で、実行時に `Global`$onWork` を参照し、未設定なら `$packageDirectory` にフォールバックします。`PresentationListener` の保存先としても使用されます。
+`$SourceVaultDefaultNotebookFolder` は SourceVault がノートブックを保存・参照する際のデフォルトフォルダーです。既定値は `Automatic` で、実行時に `Global`$onWork` を参照し、未設定なら `$packageDirectory` にフォールバックします。`PresentationListener`（[PresentationListener](https://github.com/transreal/PresentationListener)）の保存先としても使用されます。
 
 ```mathematica
 (* 任意のフォルダーを明示的に設定する場合 *)
@@ -86,7 +103,20 @@ PDFIndex`pdfIndexDirectory["F:\\docs\\papers",
 
 > **arXiv 論文**: arXiv の論文 PDF を `pdfIndexURL` で取り込んだ場合、後述の `SourceVaultSources` / `SourceVaultSummaries` を `"FetchMetadata" -> Automatic` で呼び出すと、arXiv API（`export.arxiv.org`）から論文タイトル・著者・出版日・アブストラクトを自動取得してメタにキャッシュします。取得された `Authors`（著者リスト）はメタ情報の `"Authors"` フィールドとして検索結果からも参照できます。
 
-### 1b. ingest 済みのプライバシーレベル是正（`SourceVaultReclassifyPublicPrivacy`）
+### 1b. Claude Code セッションログの取り込み（`SourceVaultIngestClaudeCodeLogs`）
+
+Claude Code の**セッションログ（実行ログ・作業ログ）**を取り込んで検索対象にする専用サブシステムが `SourceVault_llmlog.wl`（[SourceVault_llmlog](https://github.com/transreal/SourceVault_llmlog)、自動ロード）として用意されています。
+
+```mathematica
+(* Claude Code のセッションログを取り込む *)
+SourceVaultIngestClaudeCodeLogs[]
+```
+
+取り込んだログは `SourceVaultSources` / `SourceVaultSummaries` の横断一覧・検索から `"claudecode_sessions"` として参照できます。
+
+> **プロンプトルーターとの連携**: 「Claude Code のログ」「実行ログ」「セッションログ」「作業ログ」「過去のセッション」「`svcclog`」「`SourceVaultClaudeCode`」等のキーワードを含むタスクでは、プロンプトルーター（[SourceVault_promptrouter](https://github.com/transreal/SourceVault_promptrouter)）が自動的に llmlog 系 API（`SourceVaultIngestClaudeCodeLogs` 等）を注入します。**Claude Code のログ検索は、GitHubCommitLog（コミット履歴）や GitHub リポジトリ検索とは別物**であり、両者を混同しないようルーティングが調整されています（bare の「ログ」は over-match するためルーターのトリガ語には含めない設計です）。
+
+### 1c. ingest 済みのプライバシーレベル是正（`SourceVaultReclassifyPublicPrivacy`）
 
 arXiv 等の公開ソースがプライバシーレベル 0.5 以上に誤タグされていた場合、`SourceVaultReclassifyPublicPrivacy` で一括是正できます。本来の公開既定値（`OfficialDocs` / `OfficialAPI` = 0.0、`PublicWeb` = 0.4）に source・snapshot 両メタを書き換えます。
 
@@ -213,7 +243,7 @@ Dataset[<|
 
 ## 5. ソース一覧・横断検索（`SourceVaultSources` / `SourceVaultSummaries`）
 
-PDFIndex・Eagle 保存済みサマリー等、**登録済み provider を横断**してソースを一覧表示したり、クエリで絞り込んだりするには `SourceVaultSources` / `SourceVaultSummaries` を使います。gate 付き `SourceVaultSearch` が「チャンク単位の根拠検索」であるのに対し、こちらは「ソース（ドキュメント）単位の一覧・横断検索」です。
+PDFIndex・Eagle 保存済みサマリー・Claude Code セッションログ等、**登録済み provider を横断**してソースを一覧表示したり、クエリで絞り込んだりするには `SourceVaultSources` / `SourceVaultSummaries` を使います。gate 付き `SourceVaultSearch` が「チャンク単位の根拠検索」であるのに対し、こちらは「ソース（ドキュメント）単位の一覧・横断検索」です。
 
 ### 主なオプション
 
@@ -247,13 +277,13 @@ SourceVaultSources["可逆計算", "Author" -> "Bennett", "Format" -> "Grid"]
 (* 期間指定（2025-06-01 以降に ingest） *)
 SourceVaultSources["", "Since" -> "2025-06-01", "Format" -> "Dataset"]
 
-(* Eagle 保存済みサマリー等も含めた統合表で横断検索 *)
+(* Eagle 保存済みサマリー・Claude Code ログ等も含めた統合表で横断検索 *)
 SourceVaultSummaries["強化学習",
   "FetchMetadata" -> False,   (* ネットワーク不要な場合 *)
   "Format" -> "Grid"]
 ```
 
-`SourceVaultSummaries` も同じ `"Since"` / `"Until"` / `"On"` / `"Author"` / `"Format"` オプションを受け付けます。さらに `"Providers" -> All | {"sources", "eagle", ...}` で横断対象の provider を絞り込めます。
+`SourceVaultSummaries` も同じ `"Since"` / `"Until"` / `"On"` / `"Author"` / `"Format"` オプションを受け付けます。さらに `"Providers" -> All | {"sources", "eagle", ...}` で横断対象の provider を絞り込めます。横断 provider は `SourceVaultRegisterSummaryProvider[name, fn]` で追加登録でき、登録済み provider は `$SourceVaultSummaryProviders`（`name -> fn` の Association）で確認できます。各 provider の `fn[query_String, opts_Association]` は共通スキーマ行（`SourceVaultSourceRow` 参照）のリストを返します。
 
 ### arXiv 専用ビュー（`SourceVaultArXiv`）
 
@@ -270,7 +300,7 @@ SourceVaultArXiv["可逆", "Author" -> "Bennett"]
 SourceVaultArXiv["quantum", "Since" -> "2025-01-01", "Format" -> "Dataset"]
 ```
 
-> **横断検索との連携**: `SourceVaultArXiv` は `SourceVaultSummaries` の横断検索にも相乗りしており、`SourceVaultSummaries["クエリ"]` を実行した際にも arXiv ソースが含まれます。
+> **横断検索との連携**: `SourceVaultArXiv` は `SourceVaultSummaries` の横断検索にも相乗りしており、`SourceVaultSummaries["クエリ"]` を実行した際にも arXiv ソースが含まれます。同様に Claude Code セッションログ（§1b）や Eagle サマリーも横断対象に含まれます。
 
 ### arXiv 論文のメタ自動取得
 
@@ -353,7 +383,7 @@ row = SourceVaultSourceRow["src-xxxxxxxx"]
     "PrivacyLevel" -> 0.0|> *)
 ```
 
-> **`"URI"` フィールド**: `sv://snapshot/sha256/<hex>` 形式の content-addressed な正準 URI です。`SourceVaultEagleSummaryRow` と同じキーを共有しており、Eagle・arXiv・web・local など異種ソースを混在させたデータセットを `"URI"` キーで join・参照する際の共通識別子として使用します。
+> **`"URI"` フィールド**: `sv://snapshot/sha256/<hex>` 形式の content-addressed な正準 URI です。`SourceVaultEagleSummaryRow` と同じキーを共有しており、Eagle・arXiv・web・local・Claude Code ログなど異種ソースを混在させたデータセットを `"URI"` キーで join・参照する際の共通識別子として使用します。
 
 ---
 
@@ -448,6 +478,8 @@ SourceVaultStartHTTPProxy["handbook-web-svc",
   "Port" -> 8080, "SearchTimeoutMs" -> 30000];
 ```
 
+> サービスカーネルは対話 FE カーネルではない（`$FrontEnd === Null`）ため、§0 の auto-trigger scheduler 自動起動の対象外です。scheduler はマシン内の対話 FE カーネル 1 か所でのみ動きます。
+
 ブラウザで:
 - `http://127.0.0.1:8080/sv/pdfsearch?q=履修登録` — gate 済み検索（LLM 非使用・即時）
 - `http://127.0.0.1:8080/sv/pdfask?q=情報工学科R7入学生の必修科目` — gate 済み根拠＋補足知識を LLM が合成（非同期）
@@ -480,10 +512,11 @@ SourceVaultStartHTTPProxy["research-web-svc", "PDFGroupProfile" -> "research-web
 | 段階 | API |
 |---|---|
 | 取り込み | `PDFIndex\`pdfIndex` / `pdfIndexDirectory` / `pdfIndexURL` / `pdfStatus` / `pdfListDocs` / `pdfReembed` |
+| Claude Code ログ取り込み | `SourceVaultIngestClaudeCodeLogs`（セッションログ / 実行ログ / 作業ログを `"claudecode_sessions"` として取り込み。プロンプトルーターが llmlog キーワードで自動注入） |
 | グループ化 | `SourceVaultRegisterReleaseContext` / `RegisterPDFIndexProfile` / `RegisterPDFIndexMigrationRule` |
 | 補足知識 | `SourceVaultRegisterCuratedKnowledge` / `DraftCuratedTranscription` / `ListCuratedKnowledge` |
 | 不変スナップショット | `SourceVaultImmutableSnapshotExistsQ`（存在確認）/ `SourceVaultSetImmutableSnapshotPrivacyLevel`（プライバシー設定・サイドレコード委譲）。URI 形式: `snapshot:class:hex` / `sv://snapshot/..` |
-| ソース一覧・横断検索 | `SourceVaultSources` / `SourceVaultSummaries`（provider 横断。オプション: `"FetchMetadata"` / `"Kind"` / `"Since"` / `"Until"` / `"On"` / `"Author"` / `"Format"` / `"Limit"`） |
+| ソース一覧・横断検索 | `SourceVaultSources` / `SourceVaultSummaries`（provider 横断。オプション: `"FetchMetadata"` / `"Kind"` / `"Since"` / `"Until"` / `"On"` / `"Author"` / `"Format"` / `"Limit"`）/ `SourceVaultRegisterSummaryProvider`・`$SourceVaultSummaryProviders`（横断 provider の登録・確認） |
 | arXiv 専用ビュー | `SourceVaultArXiv`（`SourceVaultSources["", "Kind"->"arxiv"]` の薄ラッパ。`"On"` / `"Author"` 等で絞り込み可） |
 | サマリーノート | `SourceVaultShowSourceSummary`（ソースのサマリーを編集可能ノートで開く。タイトル/サマリークリックの既定アクション）/ `$SourceVaultSummaryNotebookStyle`（ノートスタイル） |
 | ファイルを開く | `SourceVaultOpenSourceFile`（ContentHash から現 PC の vault パスを live 再算出して SystemOpen） |
@@ -494,17 +527,20 @@ SourceVaultStartHTTPProxy["research-web-svc", "PDFGroupProfile" -> "research-web
 | ClaudeEval 検索 | 上記 + `ClaudeCode\`ClaudeQuery` / `ClaudeQueryBg` / `PDFIndex\`pdfAskLLM`（簡易） |
 | Web 公開 | `SourceVaultCreatePDFGroupSearchProfile` / `ClonePDFGroupSearchProfile` / `StartService` / `StartHTTPProxy` |
 | グローバル設定 | `$SourceVaultDefaultNotebookFolder`（ノートブック保存先。Automatic → `$onWork` → `$packageDirectory` の順に解決） |
+| 自動起動 | auto-trigger scheduler（対話 FE カーネルのみ自動起動。`SourceVaultAutoTriggerStartScheduler` / opt-out は `SourceVault\`Private\`$iSVDisableAutoTriggerScheduler = True`） |
 | メール（関連） | `SourceVaultMailEnsureLoaded` / `SourceVaultMailView` / `SourceVaultMailDataset` / `SourceVaultMailFetchNew` / `SourceVaultMailComposeReply` / `SourceVaultSearchMailSnapshots` / `SourceVaultInferMailDerivedBatch`（[SourceVault_maildb](https://github.com/transreal/SourceVault_maildb) サブシステム） |
 
 要点:
 
 - **グループ = コレクション ＋ release context ＋ profile ＋ migration rule ＋ 補足知識**。release context でグループごとに公開範囲を制御。
-- **`Get["SourceVault.wl"]` で `SourceVault_objectview.wl` も自動ロード**されます（従来の core / searchindex / servicemanager / mcp に加えて追加）。
+- **`Get["SourceVault.wl"]` で多数のサブモジュールが自動ロード**されます（従来の core / searchindex / servicemanager / mcp / objectview に加えて、`SourceVault_contracts` / `SourceVault_wiring` / `SourceVault_simrun` / `SourceVault_searchview` / `SourceVault_mailstructure` / `SourceVault_mailsuggest` / **`SourceVault_llmlog`** / `SourceVault_workflowregistry` 等）。
+- **auto-trigger scheduler は対話 FE カーネルでのみ自動起動**します（`$FrontEnd =!= Null` ガード。headless / サービス / サブカーネルは対象外）。冪等で、opt-out は `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True`。
+- **Claude Code セッションログの取り込み・検索**は `SourceVaultIngestClaudeCodeLogs`（llmlog サブシステム）。「Claude Code のログ」「実行ログ」「セッションログ」等のキーワードでプロンプトルーターが自動注入し、GitHubCommitLog（コミット履歴）とは区別されます。
 - **不変スナップショット**（URI: `snapshot:class:hex` / `sv://snapshot/..`）は content-addressed で本体不変。プライバシーレベルの変更は `SourceVaultSetImmutableSnapshotPrivacyLevel` でサイドレコードに委譲されます。存在確認は `SourceVaultImmutableSnapshotExistsQ`。
-- **provider 横断の一覧・検索**は `SourceVaultSources` / `SourceVaultSummaries`。`"FetchMetadata" -> Automatic` で arXiv 論文のタイトル・著者・出版日・アブストラクトを自動取得してキャッシュします。`"On"` / `"Since"` / `"Until"` / `"Author"` / `"Kind"` でさらに絞り込めます。
+- **provider 横断の一覧・検索**は `SourceVaultSources` / `SourceVaultSummaries`。`"FetchMetadata" -> Automatic` で arXiv 論文のタイトル・著者・出版日・アブストラクトを自動取得してキャッシュします。`"On"` / `"Since"` / `"Until"` / `"Author"` / `"Kind"` でさらに絞り込めます。横断 provider は `SourceVaultRegisterSummaryProvider` で追加登録できます。
 - **arXiv 専用ビュー**は `SourceVaultArXiv`（`SourceVaultSources["", "Kind"->"arxiv"]` の薄ラッパ）。タイトルまたはサマリーをクリックすると `SourceVaultShowSourceSummary` が開き、編集可能なサマリーノートが表示されます。
 - **arXiv サマリーの一括生成**は `SourceVaultBackfillArXivSummaries`。Summary 未設定のソースにアブストラクト翻訳を付与します（`$Language` = `Japanese` 推奨）。
-- **共通スキーマ行**（`SourceVaultSourceRow`）は `"URI"` フィールド（`sv://snapshot/sha256/<hex>`）を含み、Eagle・arXiv・web・local など異種ソースを混在させたデータセットの join キーとして使用できます。
+- **共通スキーマ行**（`SourceVaultSourceRow`）は `"URI"` フィールド（`sv://snapshot/sha256/<hex>`）を含み、Eagle・arXiv・web・local・Claude Code ログなど異種ソースを混在させたデータセットの join キーとして使用できます。
 - **プライバシーの誤タグ是正**は `SourceVaultReclassifyPublicPrivacy`。公開ソース（arXiv 等）が 0.5 以上に誤設定されている場合に本来の既定値へ一括是正します（冪等）。
 - 公開検索は必ず **`SourceVaultSearch`（gate 付き）**。`pdfSearch`/`pdfAskLLM` は ungated（確認用）。
 - 凡例・崩れ表は **補足知識（人手レビュー済み）** で補う。永続化され service も自動利用。

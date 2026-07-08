@@ -1,3 +1,5 @@
+---
+
 # SourceVault OOPS seed 使用例 — 日本語オントロジと auto-tag
 
 SourceVault の **OOPS seed オントロジ層**（`SourceVault_oopsseed.wl`）の使用例集です。個人メーリングリスト OOPS（1992–2005、約 6500 通・約 4100 topic item）から作った seed 辞書を取り込み、**一般メールを同じ topic 付き形式に自動変換して日本語検索の精度を上げる**、というのが狙いです。

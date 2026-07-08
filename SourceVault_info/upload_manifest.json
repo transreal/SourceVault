@@ -25,7 +25,9 @@
 		"SourceVault_contracts.wl",
 		"SourceVault_wiring.wl",
 		"SourceVault_mailsuggest.wl",
-		"SourceVault_packageapi.wl"
+		"SourceVault_packageapi.wl",
+		"SourceVault_llmlog.wl",
+		"SourceVault_simrun.wl"
 	],
 	"directories":[
 		"SourceVault_info",

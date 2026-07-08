@@ -80,7 +80,9 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultDiagnosticsCloudInbox",
   "SourceVault`SourceVaultDiagnosticsCloudCommsStatus",
   "SourceVault`SourceVaultDiagnosticsCloudPeerLiveness",
-  "SourceVault`SourceVaultDiagnosticsCloudConsume"
+  "SourceVault`SourceVaultDiagnosticsCloudConsume",
+  "SourceVault`SourceVaultDiagnosticsIngestSpool",
+  "SourceVault`$SourceVaultDiagIngestIntervalSeconds"
 ]];
 
 $SourceVaultDiagnosticsVersion = "0.1-phase0";
@@ -93,6 +95,17 @@ SourceVaultDiagnosticsSinkAvailableQ::usage =
   "SourceVaultDiagnosticsSinkAvailableQ[] returns True when the SourceVault \
 diagnostics sink (this layer) is loaded. Producers test this (weakly) before \
 emitting; if absent they no-op.";
+
+SourceVaultDiagnosticsIngestSpool::usage =
+  "SourceVaultDiagnosticsIngestSpool[] は producer per-process spool \
+($UserBaseDirectory/ApplicationData/ClaudeRuntime/diag-spool/*.jsonl) の \
+DiagnosticsEvent を正準 diagnostics-log へ転記する (hardening 05 Inc2)。\
+呼び出しは service kernel の低頻度 hook からのみ (単一書き手原則)。\
+offset sidecar (<file>.ingest.json) で差分読み・EventId dedup で冪等。\
+消化済みの過去日 shard は削除。戻り値は件数集計。";
+
+$SourceVaultDiagIngestIntervalSeconds::usage =
+  "$SourceVaultDiagIngestIntervalSeconds は service ループの spool ingest 周期 (秒, 既定 60)。";
 
 SourceVaultDiagnosticsLog::usage =
   "SourceVaultDiagnosticsLog[record_Association] appends a structured \
@@ -673,11 +686,25 @@ SourceVaultDiagnosticsLog[record_Association] :=
     enriched = Join[
       <|"AtUTC" -> iSVDiagUTCNow[], "MachineTag" -> iSVDiagMachineTag[]|>,
       record];
-    json = iSVDiagToJSON[enriched];
-    strm = Quiet @ Check[OpenAppend[path, CharacterEncoding -> "UTF-8"], $Failed];
+    (* hardening 05 Inc2 (2026-07-08): 単一エンコード化。旧実装は
+       WriteRawJSONString の返す「UTF-8 バイト文字列」を WriteString が
+       UTF-8 で再エンコードし、日本語 payload が二重エンコードで化けた
+       (SourceVault_mcp iSVAppendJSONL と同族の罠。実測 31B vs 正 22B)。
+       ExportByteArray で一発エンコードし BinaryWrite する。fallback は
+       byte-string を ISO8859-1 で素通し (= 元バイトそのまま)。 *)
+    json = Quiet @ Check[
+      ExportByteArray[enriched, "RawJSON", "Compact" -> True], $Failed];
+    If[! ByteArrayQ[json],
+      json = Quiet @ Check[
+        StringToByteArray[iSVDiagToJSON[enriched], "ISO8859-1"], $Failed]];
+    If[! ByteArrayQ[json], json = StringToByteArray["{}", "UTF-8"]];
+    strm = Quiet @ Check[OpenAppend[path, BinaryFormat -> True], $Failed];
     If[strm === $Failed,
       Return[Failure["LogOpenFailed", <|"MessageTemplate" -> "Cannot open diagnostics log."|>]]];
-    Quiet @ Check[WriteString[strm, json <> "\n"]; Close[strm], Close[strm]];
+    Quiet @ Check[
+      BinaryWrite[strm, json];
+      BinaryWrite[strm, StringToByteArray["\n", "UTF-8"]];
+      Close[strm], Close[strm]];
     enriched];
 
 (* ------------------------------------------------------------
@@ -1403,6 +1430,118 @@ SourceVaultDiagnosticsEscalate[event_Association] :=
       "DryRun" -> dryRun,
       "MailResult" -> mailResult,
       "Subject" -> subject|>];
+
+(* ------------------------------------------------------------
+   Spool ingest (hardening 05 Inc2, 2026-07-08)
+
+   producer (claudecode / ClaudeRuntime / servicemanager) は
+   iClaudeDiagEmit で machine-local per-process spool に書く。
+   本関数がそれを正準 diagnostics-log へ転記する唯一の経路
+   (単一書き手 = service kernel。P0-6 の多重追記を再導入しない)。
+
+   冪等性:
+     - offset sidecar (<spool>.ingest.json) による差分読み
+     - EventId dedup (ingest-seen.json, 直近 20000 件)
+       → sidecar 消失/巻き戻りでも二重転記しない
+   部分行:
+     - producer が書き込み途中の末尾行 (改行なし) はバイト位置で
+       消費せず次回に回す (UTF-8 日本語でも安全なバイト単位処理)
+   制限:
+     - ローテート済み .jsonl.1 は対象外 (20MB 到達時のみ・稀)
+   ------------------------------------------------------------ *)
+
+If[! ValueQ[$SourceVaultDiagIngestIntervalSeconds],
+  $SourceVaultDiagIngestIntervalSeconds = 60];
+
+iSVDiagSpoolDir[] := FileNameJoin[{$UserBaseDirectory, "ApplicationData",
+  "ClaudeRuntime", "diag-spool"}];
+
+iSVDiagAtomicWriteJSON[path_String, assoc_Association] :=
+  Module[{ba, tmp, strm},
+    ba = Quiet @ ExportByteArray[assoc, "RawJSON", "Compact" -> True];
+    If[! ByteArrayQ[ba], Return[$Failed]];
+    tmp = path <> ".tmp-" <> ToString[$ProcessID];
+    strm = Quiet @ OpenWrite[tmp, BinaryFormat -> True];
+    If[Head[strm] =!= OutputStream, Return[$Failed]];
+    BinaryWrite[strm, ba]; Close[strm];
+    Quiet @ Check[RenameFile[tmp, path, OverwriteTarget -> True]; path,
+      Quiet @ DeleteFile[tmp]; $Failed]];
+
+iSVDiagIngestSeenPath[] :=
+  Module[{dir = iSVDiagMachineDir[]},
+    If[dir === $Failed, $Failed,
+      FileNameJoin[{dir, "ingest-seen.json"}]]];
+
+SourceVaultDiagnosticsIngestSpool[] := Module[
+  {dir = iSVDiagSpoolDir[], files, seenPath, seen, nowU,
+   ingested = 0, corrupt = 0, pruned = 0, today},
+  If[! DirectoryQ[dir],
+    Return[<|"Ingested" -> 0, "Corrupt" -> 0, "PrunedSpools" -> 0,
+      "Files" -> 0|>]];
+  seenPath = iSVDiagIngestSeenPath[];
+  seen = If[StringQ[seenPath] && FileExistsQ[seenPath],
+    Quiet @ Check[Import[seenPath, "RawJSON"], <||>], <||>];
+  If[! AssociationQ[seen], seen = <||>];
+  nowU = UnixTime[];
+  today = DateString[TimeZoneConvert[Now, 0], {"Year", "Month", "Day"}];
+  files = Quiet @ Check[FileNames["*.jsonl", dir], {}];
+  Scan[Function[f, Module[
+      {sc = f <> ".ingest.json", off, size, strm, ba, bytes, lastNL = 0,
+       text, lines, newOff, dateTag},
+      off = Quiet @ Check[
+        Lookup[Import[sc, "RawJSON"], "Offset", 0], 0];
+      If[! IntegerQ[off] || off < 0, off = 0];
+      size = Quiet @ Check[FileByteCount[f], 0];
+      If[off > size, off = 0];   (* 巻き戻り (rotate 等) → dedup が守る *)
+      newOff = off;
+      If[size > off,
+        strm = Quiet @ OpenRead[f, BinaryFormat -> True];
+        If[Head[strm] === InputStream,
+          Quiet @ SetStreamPosition[strm, off];
+          ba = Quiet @ Check[ReadByteArray[strm, size - off], $Failed];
+          Quiet @ Close[strm];
+          If[ByteArrayQ[ba],
+            bytes = Normal[ba];
+            lastNL = Last[Flatten[Position[bytes, 10]], 0];
+            If[lastNL > 0,
+              text = Quiet @ Check[
+                ByteArrayToString[ByteArray[bytes[[1 ;; lastNL]]], "UTF-8"],
+                ""];
+              lines = Select[StringTrim /@ StringSplit[text, "\n"],
+                # =!= "" &];
+              Scan[Function[ln, Module[{rec, eid},
+                  rec = Quiet @ Check[ImportByteArray[
+                    StringToByteArray[ln, "UTF-8"], "RawJSON"], $Failed];
+                  If[! AssociationQ[rec],
+                    corrupt++,
+                    eid = Lookup[rec, "EventId", None];
+                    If[! (StringQ[eid] && KeyExistsQ[seen, eid]),
+                      Quiet @ Check[
+                        SourceVaultDiagnosticsLog[Join[rec,
+                          <|"IngestedAtUTC" -> iSVDiagUTCNow[]|>]], Null];
+                      If[StringQ[eid], seen[eid] = nowU];
+                      ingested++]]]],
+                lines];
+              newOff = off + lastNL;
+              iSVDiagAtomicWriteJSON[sc, <|"Offset" -> newOff|>]]]]];
+      (* 消化済みの過去日 shard は削除 (producer 名-<pid>-<yyyymmdd>.jsonl) *)
+      dateTag = Last[StringCases[FileBaseName[f],
+        RegularExpression["(\\d{8})$"] -> "$1"], ""];
+      If[newOff >= size && size === Quiet @ Check[FileByteCount[f], -1] &&
+         dateTag =!= "" && dateTag =!= today,
+        Quiet @ DeleteFile[f]; Quiet @ DeleteFile[sc]; pruned++]]],
+    files];
+  If[Length[seen] > 20000,
+    seen = Association @ Take[SortBy[Normal[seen], Last], -20000]];
+  If[StringQ[seenPath], iSVDiagAtomicWriteJSON[seenPath, seen]];
+  If[corrupt > 0,
+    Quiet @ Check[SourceVaultDiagnosticsLog[<|
+      "Type" -> "DiagnosticsEvent", "EventId" -> CreateUUID[],
+      "EventClass" -> "SpoolLineCorrupt", "Producer" -> "servicemanager",
+      "ProducerPid" -> $ProcessID, "Severity" -> "warn",
+      "Payload" -> <|"Count" -> corrupt|>|>], Null]];
+  <|"Ingested" -> ingested, "Corrupt" -> corrupt,
+    "PrunedSpools" -> pruned, "Files" -> Length[files]|>];
 
 End[];
 

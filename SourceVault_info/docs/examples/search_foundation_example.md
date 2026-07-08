@@ -29,6 +29,8 @@ Names["SourceVault`SourceVaultBuildProjectionIndex"]
 
 > release context を登録する例（中級編以降）は末尾で必ず登録解除します。immutable index の `IndexId` は `CreateUUID` で毎回ユニークにしてあり、再実行しても alias 衝突しません。
 
+> **ロード時の副作用について**: SourceVault.wl をインタラクティブな Front End カーネル（`$FrontEnd =!= Null`）でロードすると、自動トリガのスケジューラが 1 台につき 1 箇所（対話 FE）だけ自動起動します。これは検索基盤とは独立の仕組みで、本ファイルの例には影響しません。ヘッドレスカーネル（`$FrontEnd === Null`）やサブカーネルでは起動しません。無効化したい場合は、ロード前に `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True` を設定します。
+
 ---
 
 # 0. 実運用シナリオ — これらの関数はいつ呼ばれるか
@@ -36,6 +38,8 @@ Names["SourceVault`SourceVaultBuildProjectionIndex"]
 基本編以降の関数を、ユーザーが 1 つずつ手で呼ぶことは多くありません。実際には **LLM が MCP ツール `sourcevault_search` を呼んだとき** に、内部でこれらの関数が走ります。`ClaudeEval[...]`（claudecode）・Claude Code・LM Studio・Codex いずれも、SourceVault MCP に接続した LLM クライアントで、`claudecode` 自身は package-neutral（SourceVault を直接呼ばず、ツール経由）です。
 
 以降の 2 シナリオは共通の索引を使うので、まずそれを用意します。
+
+> **補足: 検索ドメインの取り違えについて**: `sourcevault_search` の内部ルータは、クエリの手掛かり語から検索ドメインを補助的に振り分けます（aux map）。たとえば「Claude Code のログ」「セッションログ」「作業ログ」といった語は、本ファイルの汎用 BM25 索引ではなく、Claude Code セッションログ専用ドメイン（`llmlog`）にルーティングされます（GitHub のコミット履歴＝`GitHubCommitLog` とも区別されます）。本ファイルの例は明示的に `releaseContext` と `bm25Index` を指定するため、こうした自動ルーティングの影響を受けず、狙った BM25 索引だけを引きます。
 
 ## 共通セットアップ: 検索対象の索引を用意する
 

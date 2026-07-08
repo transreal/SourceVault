@@ -764,8 +764,34 @@ iSVWFOpenArchivePanel[] := CreateDocument[
    FE の評価予算 abort の対象になり $Aborted を招くため、ここでは評価させない。
    保存ノートを開き直した場合は rows にリテラルのリストが焼かれているのでそのまま
    表示され、万一 rows がリストでなければ Initialization が SessionSubmit で再取得する。 *)
-iSVWFMakePanel[archiveQ_] := With[{initRows = iSVWFPanelRows["", archiveQ]},
-  DynamicModule[{rows = initRows, query = ""},
+(* 実行 PC 選択用: 自機 tag (= $MachineName サニタイズ、servicemanager と同一規則) と
+   この vault を共有する PC 一覧 (SourceVaultListRuntimeMachines: runtime/ ツリー由来の
+   正本、弱参照)。servicemanager 未ロード時は自機のみ。 *)
+iSVWFSelfMachineTag[] :=
+  StringReplace[ToString[$MachineName],
+    Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"];
+
+iSVWFRunMachines[] :=
+  Module[{self = iSVWFSelfMachineTag[], ms},
+    ms = If[Length[Names["SourceVault`SourceVaultListRuntimeMachines"]] > 0,
+      Quiet @ Check[SourceVault`SourceVaultListRuntimeMachines[], {self}], {self}];
+    If[! ListQ[ms] || ms === {}, ms = {self}];
+    DeleteDuplicates[Prepend[Select[ms, StringQ], self]]];   (* 自機を先頭に *)
+
+(* 空きプロセスライセンス枠 (外部エグゼキュータが消費する枠)。診断未ロード時は
+   Missing["Unknown"] を返し、その場合はガードしない (不明で実行を止めない)。 *)
+iSVWFProcessSeatsFree[] :=
+  If[Length[Names["SourceVault`SourceVaultDiagnosticsLicenseProbe"]] == 0,
+    Missing["Unknown"],
+    Module[{p = Quiet @ Check[SourceVault`SourceVaultDiagnosticsLicenseProbe[], $Failed]},
+      If[AssociationQ[p], Lookup[p, "ProcessSlotsFree", Missing["Unknown"]],
+        Missing["Unknown"]]]];
+
+iSVWFMakePanel[archiveQ_] := With[
+  {initRows = iSVWFPanelRows["", archiveQ],
+   selfMachine = iSVWFSelfMachineTag[],
+   runMachines = iSVWFRunMachines[]},
+  DynamicModule[{rows = initRows, query = "", runMachine = selfMachine},
   Panel[Column[{
     Style[If[TrueQ[archiveQ],
         "SourceVault ワークフロー (アーカイブ)",
@@ -786,7 +812,17 @@ iSVWFMakePanel[archiveQ_] := With[{initRows = iSVWFPanelRows["", archiveQ]},
       If[TrueQ[archiveQ], Nothing,
         Tooltip[
           Button["アーカイブ", iSVWFOpenArchivePanel[], Method -> "Queued"],
-          "アーカイブしたワークフローの一覧を開く"]]}],
+          "アーカイブしたワークフローの一覧を開く"]],
+      (* 実行 PC 選択: 既定は自機。他 PC を選ぶと「実行」でその PC のキューに投入し、
+         その PC のスケジューラが拾って実行する (自機はその場で即実行)。 *)
+      Spacer[16],
+      Tooltip[
+        Row[{Style["実行PC:", Bold], Spacer[4],
+          PopupMenu[Dynamic[runMachine], runMachines, FieldSize -> 12]}],
+        "「実行」ボタンの実行先 PC。既定 = このノートブックが走っている PC (" <>
+        selfMachine <> ")。\n他 PC を選ぶと SourceVaultEnqueueWorkflowRun で" <>
+        "その PC 宛にキューし、その PC のスケジューラ (SourceVaultAutoTriggerStartScheduler) " <>
+        "が実行します。"]}],
     Dynamic[
       Which[
        (* 初期化中 (Dropbox 走査が背景で進行中): 中断せず読み込み中表示 *)
@@ -808,16 +844,65 @@ iSVWFMakePanel[archiveQ_] := With[{initRows = iSVWFPanelRows["", archiveQ]},
                  Column[{
                    Tooltip[
                      Button["▶ 実行",
-                       Module[{r = SourceVault`SourceVaultRunWorkflowAsync[slug, "run"]},
+                       Module[{remote =
+                            StringQ[runMachine] &&
+                              ToLowerCase[runMachine] =!= ToLowerCase[selfMachine],
+                          r, free, okStatuses = {"Submitted", "Enqueued"}},
+                         free = iSVWFProcessSeatsFree[];
+                         Which[
+                           (* 自機実行は外部プロセス枠を要する。枠 0 なら無言で
+                              子プロセスが落ちる (NotReady 永遠) ので事前に止める。
+                              リモートは対象 PC 側でガードされるのでここでは投入する。 *)
+                           ! remote && IntegerQ[free] && free <= 0,
+                             MessageDialog[Column[{
+                               Style["プロセスライセンス枠が空いていません" <>
+                                 " (ProcessSlotsFree = 0)。", Bold, RGBColor[0.7,0.1,0.1]],
+                               "外部エグゼキュータはプロセス枠を使うため、このまま" <>
+                                 "実行しても子プロセスが起動直後に落ちます" <>
+                                 " (結果は NotReady のまま)。",
+                               "重複した Wolfram MCP カーネル等を 1 つ閉じて枠を空けてから" <>
+                                 "再実行してください。サブカーネル枠 (16) は空いていても" <>
+                                 "この経路では使われません。"}]];
+                             r = <|"Status" -> "SeatUnavailable"|>,
+                           True,
+                             r = If[remote,
+                               SourceVault`SourceVaultEnqueueWorkflowRun[slug, runMachine],
+                               SourceVault`SourceVaultRunWorkflowAsync[slug, "run"]];
+                             If[remote && AssociationQ[r] &&
+                                Lookup[r, "Status", ""] === "Enqueued",
+                               (* 完了/失敗をこのノートに書き戻す watch を登録
+                                  (tick が終端記録を検出 -> final action 経由で
+                                   取得セル/エラーレポートを書く) *)
+                               If[Length[Names[
+                                    "SourceVault`SourceVaultAutoTriggerWatchRemoteRun"]] > 0,
+                                 Quiet @ SourceVault`SourceVaultAutoTriggerWatchRemoteRun[
+                                   Lookup[r, "DispatchSlotKey", ""],
+                                   <|"Notebook" -> Quiet[InputNotebook[]],
+                                     "Slug" -> slug,
+                                     "MachineTag" -> runMachine|>]];
+                               MessageDialog[
+                                 Column[{
+                                   Row[{Style[runMachine, Bold],
+                                     " 宛にワークフローをキューしました。"}],
+                                   "その PC のスケジューラが拾って実行します" <>
+                                     " (未起動なら SourceVaultAutoTriggerStartScheduler[] を" <>
+                                     "その PC で実行してください)。",
+                                   "完了するとこのノートブックに結果取得セル" <>
+                                     " (SourceVaultRemoteWorkflowResult[...]) が、" <>
+                                     "失敗するとエラーレポートが書き込まれます。"}]]]];
                          iSVWFStatsBump[slug,
-                           ! (AssociationQ[r] && Lookup[r, "Status", ""] === "Submitted")];
+                           ! (AssociationQ[r] &&
+                              MemberQ[okStatuses, Lookup[r, "Status", ""]])];
                          rows = iSVWFPanelRows[query, archiveQ]],
                        Method -> "Queued",
                        Background -> RGBColor[0.2, 0.55, 0.35],
                        BaseStyle -> {White, FontWeight -> Bold}],
-                     "ワークフローを非同期実行する (FRONT END を止めない)。" <>
-                     "既存の External executor 経由で子プロセスが走り、完了時に呼出元ノートへ" <>
-                     "summary を書く。実行結果 (View) は SourceVaultRunWorkflowResult で取得。" <>
+                     "選択中の実行 PC でワークフローを実行する。\n" <>
+                     "自機 (" <> selfMachine <> "): その場で非同期実行 (FRONT END を止めない)。" <>
+                     "External executor 経由で子プロセスが走り、完了時に呼出元ノートへ" <>
+                     "summary を書く。実行結果 (View) は SourceVaultRunWorkflowResult で取得。\n" <>
+                     "他 PC: その PC 宛にキュー投入 (SourceVaultEnqueueWorkflowRun)。" <>
+                     "その PC のスケジューラが placement gate で拾って実行する。\n" <>
                      "前提: ClaudeRuntime / ClaudeOrchestrator ロード済み・launch に \"run\" 形あり。"],
                    Tooltip[
                      Button["使用例",

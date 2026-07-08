@@ -262,7 +262,11 @@ SourceVaultRunWorkflowAsync[slug_String, form_String: "run"] :=
       "BootstrapFiles" -> {FileNameJoin[{root, "SourceVault.wl"}]},
       "NotifyNotebook" -> If[Head[nb] === NotebookObject, nb, None],
       (* 完了時、呼出元ノートへ評価可能な結果取得 Input セルを書かせる *)
-      "ResultRetriever" -> "SourceVault`SourceVaultRunWorkflowResult"];
+      "ResultRetriever" -> "SourceVault`SourceVaultRunWorkflowResult",
+      (* ユーザー操作起点 = FE 対話の代理実行なので、席 broker の FE 予約席へ
+         食い込める優先度で取得する (FE+常駐で空き=Reserve のトポロジーでも
+         恒久 NoSeat にならない)。 *)
+      "SeatPriority" -> 90];
     (* プロセス一覧 (ClaudeProcessList) に「実行中ワークフロー名+経過」を出すため登録 *)
     If[AssociationQ[sub] && Lookup[sub, "Status", ""] === "Submitted",
       iSVRunAsyncRegister[Lookup[sub, "JobID", ""], slug, form,

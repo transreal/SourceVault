@@ -1,9 +1,12 @@
+---
+
 # SourceVault 一般メール構造化・検索 使用例 — maildb → session / topic / digest
 
 SourceVault の **一般メール構造化層**（`SourceVault_mailstructure.wl`）の使用例集です。OOPS 以外の一般メール（`SourceVault_maildb` の univ 受信箱等）を、**OOPS シードが無くても** 返信/引用 session・段落 topic・topic graph に構造化し、スレッド検索・要約（digest）・分析につなげます。中核は seed-optional な `TopicVocabulary` と、引用/参照を typed graph として掘る **mail relation graph mining** です。
 
 - OOPS メール（seed 辞書・quote-table あり）の構造化は [`mail_structuring_example.md`](mail_structuring_example.md)
 - OOPS 非依存の検索基盤（BM25 / release gate / primer / KG）は [`search_foundation_example.md`](search_foundation_example.md)
+- 構造化した session/topic を土台にした **新着取得・返信下書き** は姉妹モジュール `SourceVault_mailsuggest.wl`（`SourceVaultMailFetchNew` / `SourceVaultMailComposeReply`）。本構造化層の出力（session・topic・digest）を入力に使うため、まず本ドキュメントの構造化を通します。
 - 関数仕様は [`../api_mailstructure.md`](../api_mailstructure.md) / [`../api_searchview.md`](../api_searchview.md)
 
 構成は 4 部です。
@@ -397,6 +400,11 @@ maildb snapshot ─▶ SourceVaultMailRecordsForStructuring   (release gate → 
  (スレッド検索)      (current/historical 分離)  (agentic 検索・live view)
                        │
    MCP: sourcevault_mail_status / _search_threads / _thread   (cloud-safe 二重防御)
+                       │
+   下流: SourceVault_mailsuggest.wl (SourceVaultMailFetchNew / SourceVaultMailComposeReply)
+         ── 本層の session/topic/digest を土台に新着取得・返信下書きを生成
 ```
+
+> **姉妹モジュール `SourceVault_mailsuggest.wl`**: 本構造化層の出力（session・topic・digest）を入力に、新着メールの取得（`SourceVaultMailFetchNew`）と返信下書きの生成（`SourceVaultMailComposeReply`）を担います。構造化を前提に動くため、本ドキュメントのフロー（構造化 → index / digest）を先に通してから利用します。
 
 参照: [../api_mailstructure.md](../api_mailstructure.md)（本層の全 API）/ [../api_searchview.md](../api_searchview.md)（SearchView / episode / context profile / agentic）/ [../api_searchindex.md](../api_searchindex.md)（BM25 / release gate）。

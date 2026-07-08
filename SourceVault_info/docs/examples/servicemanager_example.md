@@ -27,7 +27,7 @@
 
 ## 2. ロード
 
-`SourceVault.wl` を読むだけで補助サブファイル（`SourceVault_core` / `_searchindex` / `_servicemanager` / `_mcp` / `_objectview`）も自動でロードされます。
+`SourceVault.wl` を読むだけで補助サブファイル（`SourceVault_core` / `_simrun` / `_contracts` / `_wiring` / `_searchindex` / `_servicemanager` / `_mailstructure` / `_mailsuggest` / `_mcp` / `_llmlog` / `_workflowregistry` / `_searchview` / `_objectview` など）も自動でロードされます。
 
 ```mathematica
 Block[{$CharacterEncoding = "UTF-8"},
@@ -35,6 +35,10 @@ Block[{$CharacterEncoding = "UTF-8"},
 ```
 
 アプリ（学生便覧）が使う検索バックエンドと UI 資産は**サービスの prelude**でロードします（後述）。メインカーネルでは endpoint profile を解決するために local init を読みます。
+
+> **自動トリガスケジューラについて（サービスカーネルでは no-op）**: `Get["SourceVault.wl"]` は、**対話 FE メインカーネル（`$FrontEnd =!= Null`）でのみ** 自動トリガスケジューラを起動します（`SourceVaultAutoTriggerStartScheduler`）。これは 1 台の PC につき**ちょうど 1 か所**（対話 FE）でだけ動く設計で、他 PC からの job（例: 「このワークフローを <PC> で実行して」）を確実に拾うための仕組みです。**headless カーネル（`$FrontEnd === Null`）は除外**されるため、本書の detached web サービスカーネル（wolframscript）・MCP ゲートウェイ・subkernel・external-job 用 wolframscript プロセス等では**スケジューラは起動しません**（未ロード時は `ClaudeCodeAbsent` を返す cheap no-op）。これにより多重起動によるライセンスシート増・dispatch 重複を防いでいます。
+>
+> 起動を無効化したい場合は、再ロード前に `SourceVault\`Private\`$iSVDisableAutoTriggerScheduler = True` を設定します（自動起動結果は `SourceVault\`Private\`$iSVAutoTriggerSchedulerAutoStartResult` に記録され、`Status -> "Skipped"/"Reason"`（`NotFrontEndKernel` / `DisabledByUser` / `AutoTriggerUnavailable`）等で確認できます）。
 
 ---
 
@@ -339,6 +343,16 @@ SourceVaultSourceRow["sv-src-XXXXXXXX"]
 
 ---
 
+## 6g. Claude Code セッションログ (llmlog) の取り込み
+
+`SourceVault.wl` は補助サブファイル `SourceVault_llmlog.wl` を自動ロードし、**Claude Code の実行ログ（セッションログ・作業ログ）** を検索対象として取り込む `SourceVaultIngestClaudeCodeLogs` を提供します（本書の web サービスとは別系統の機能ですが、同一ロードに含まれます）。
+
+llmlog は auto-trigger（§2）や横断検索のルーティングで、キーワード（`"Claude Code"` / `"ClaudeCode"` / `"実行ログ"` / `"セッションログ"` / `"作業ログ"` / `"過去のセッション"` / `"svcclog"` / `"SourceVaultClaudeCode"`）から `SourceVaultIngestClaudeCodeLogs` へ誘導します。
+
+> **混同回避**: 「Claude Code のログ」は **GitHubCommitLog（コミット履歴）や GitHub リポジトリ検索とは別物**として扱われます（bare `"ログ"` は over-match するのでルーティング語には含めません）。過去に LM Studio モデルが「Claude Code のログ」をコミット履歴へ誤ルートした実例への対処として、上記の限定キーワードで llmlog を確実にトリガするよう調整されています。
+
+---
+
 ## 7. 停止・再起動
 
 ```mathematica
@@ -361,6 +375,8 @@ SourceVaultStopService["handbook-web-svc"];      (* service 停止 (task 削除 
 | 既存 index の embedding が壊れている | 索引時にエンコード不整合があった場合、`PDFIndex\`pdfReembed["default"]` で保存済みテキストから embedding のみ再生成（PDF 再抽出・LLM 再要約なしの軽量処理）。 |
 | `/pdfask` と `/pdfsearch` が同じ結果 | `ChatModel` 未解決で LLM が呼べず degrade している。loaded な chat モデルを確認。 |
 | `ChatModel` が古いメジャー版に解決される（例: `claude-sonnet-5` があるのに `claude-sonnet-4-6` が選ばれる） | 旧版のモデルバージョン比較バグ。バージョン `{4,6}` を base-1000 で `4006` に変換していたため、桁数の少ない新メジャー版 `{5}`（=5）を上回り、新版が昇格しなかった。現行版は各バージョンを固定幅（width 6・base 100000）で右パディングしてから重み付けするため、`claude-sonnet-5` が正しく `claude-sonnet-4-6` に勝つ。古い挙動が残る場合は `Quit[]`→`Get["SourceVault.wl"]` 再ロードで解消。 |
+| 「Claude Code のログ」が GitHub コミット履歴へ誤ルートする | 旧版の over-match。現行は §6g の限定キーワードで `SourceVaultIngestClaudeCodeLogs`（llmlog）へ誘導し、GitHubCommitLog と混同しないよう調整済み。再ロードで反映。 |
+| 対話カーネルで自動トリガスケジューラを止めたい / サービスカーネルでスケジューラが動くか不安 | detached サービスカーネル（headless, `$FrontEnd === Null`）では**そもそもスケジューラは起動しない**（no-op）ので通常は無関係（§2）。対話 FE カーネルで止めたい場合は再ロード前に `SourceVault\`Private\`$iSVDisableAutoTriggerScheduler = True` を設定。起動可否は `SourceVault\`Private\`$iSVAutoTriggerSchedulerAutoStartResult` で確認できる。 |
 | 必修/選択が断定されず候補列挙だけになる | 凡例 (LegendMap) が未登録。§6b で `ProvidesLegend->True` の凡例 curated を該当 release context・年度で登録すれば分類が解禁される。`SourceVaultListEvidenceGaps[]` で「凡例が要る質問」を確認できる。 |
 | 崩れた表が検索に出ない / 内容が拾えない | bge-m3＋窓拡大で `PDFIndex\`pdfReembed["default"]`。それでも不足なら §6b の `SourceVaultDraftCuratedTranscription` で転記→確認→ curated 登録（clean text は検索で上位に来る）。 |
 | arXiv ソースが一覧に出ない / 機密扱いになる | 旧版の PrivacyLevel 誤設定バグ（OfficialDocs が 0.6 になっていた）。`SourceVaultReclassifyPublicPrivacy[]` で一括修正し、その後 `SourceVaultArXiv[]` で確認する。 |
@@ -384,6 +400,7 @@ Import["http://127.0.0.1:1234/api/v0/models", "Text"]   (* state=loaded, type=ll
 - `/pdfask` の LLM には **gate 済み根拠だけ**を渡す（生 vault 非露出）。
 - **content-addressed 不変スナップショット**（ID が `snapshot:class:hex` または `sv://snapshot/...` 形式）は本体ファイルが書き換わらないため、プライバシーレベルの変更はサイドレコードへ委譲されます（§10 参照）。スナップショット ID はコロンを含む形式のため、通常の colon-path ファイルパスより**先に pattern で判定**されます。`SourceVaultSourceRow` が返す `"URI"` フィールド（`sv://snapshot/sha256/<hex>`）はこの正準 URI であり、横断データセットの join/参照キーとして使用できます。
 - **ClaudeCode/Codex（サブスク）はオーナー PC の IP からのリクエストのみ**（§6e）。他者には絶対に使わせない（ライセンス遵守）。クライアント IP は実 TCP 接続元から取得し、`X-Forwarded-For` は信用しない。
+- **自動トリガスケジューラは対話 FE メインカーネルでのみ起動**し、headless サービスカーネルは除外されます（§2）。1 台につき 1 か所でしか動かないため、サービスカーネル・subkernel・external-job プロセスがスケジューラを多重起動してライセンスシートを浪費することはありません。
 - mail = draft のみ（自動送信しない）、Discord = 承認必須（`DispatchOutput`）。
 - アプリ固有の実 path / endpoint / token は **private local init と NBAccess credential** に置き、リポジトリには残さない。
 
@@ -396,6 +413,8 @@ Import["http://127.0.0.1:1234/api/v0/models", "Text"]   (* state=loaded, type=ll
 | 設定登録 | `SourceVaultRegisterReleaseContext` / `RegisterPDFIndexProfile` / `RegisterPDFIndexMigrationRule` / `RegisterWebServiceEndpoint` / `RegisterLLMBackend`（`"Class"->"Light-Cloud"` / `"Capabilities"->{"Reasoning"}` 等のフィールドをサポート。バッテリー節約・LM Studio 未起動時の代替 LLM をデータとして登録できる） |
 | サービス | `SourceVaultStartService` / `StopService` / `ServiceStatus` / `SendServiceCommand` |
 | プロキシ | `SourceVaultStartHTTPProxy`（`PDFGroupProfile`/`EndpointProfile`/`AppTitle`/`AskPrompt`/`ChatModel`/`ReleaseContext`/`PDFIndexProfile`/`SearchTimeoutMs`） / `StopHTTPProxy` / `HTTPProxyStatus` |
+| 自動トリガ | `SourceVaultAutoTriggerStartScheduler`（対話 FE メインカーネルでのみ自動起動。headless は除外。未ロード時は `ClaudeCodeAbsent` を返す no-op）。opt-out は `SourceVault\`Private\`$iSVDisableAutoTriggerScheduler = True`、起動結果は `SourceVault\`Private\`$iSVAutoTriggerSchedulerAutoStartResult`（§2） |
+| Claude Code ログ | `SourceVaultIngestClaudeCodeLogs`（`SourceVault_llmlog.wl` 提供。セッション/作業ログ取り込み。GitHubCommitLog と混同しないよう限定キーワードでルーティング）（§6g） |
 | モデル解決 | `SourceVaultResolve`（`"Model"` の intent 単位最適 1 件。バージョン比較は固定幅パディングで新メジャー版を正しく優先） / `ClaudeResolveModel`（互換 wrapper） / `SourceVaultListModels`（provider の catalog 列挙） |
 | ソース一覧・閲覧 | `SourceVaultSources`（`"Kind"`/`"Author"`/`"Since"`/`"Until"`/`"On"` で絞り込み） / `SourceVaultArXiv`（arXiv 専用ビュー・`SourceVaultSources["", "Kind"->"arxiv", ...]` の薄ラッパ） / `SourceVaultSummaries`（横断検索） / `SourceVaultBackfillArXivSummaries`（既存 arXiv ソースにアブストラクト翻訳を Summary としてバックフィル） / `SourceVaultShowSourceSummary`（タイトル/サマリークリックで編集可能ノートを開く） / `SourceVaultOpenSourceFile`（raw ファイルを現 PC で解決して開く） / `SourceVaultSourceRow`（共通スキーマ行取得・`"URI"` フィールド `sv://snapshot/sha256/<hex>` を含む） |
 | 補足知識 | `SourceVaultRegisterCuratedKnowledge` / `ListCuratedKnowledge` / `DraftCuratedTranscription`（崩れ表の LLM 転記ドラフト） |
@@ -405,14 +424,32 @@ Import["http://127.0.0.1:1234/api/v0/models", "Text"]   (* state=loaded, type=ll
 | 不変スナップショット | `SourceVaultImmutableSnapshotExistsQ[snapshotId]`（存在確認）/ `SourceVaultSetImmutableSnapshotPrivacyLevel[snapshotId, lv]`（プライバシーレベル変更。本体不変・サイドレコードへ委譲） |
 | 修復ユーティリティ | `SourceVaultReclassifyPublicPrivacy`（公開ソースの PrivacyLevel 誤設定を一括修正。`OfficialDocs`/`OfficialAPI` = 0.0、`PublicWeb` = 0.4 に是正） |
 
+### 自動トリガスケジューラの自動起動（対話 FE のみ）
+
+`Get["SourceVault.wl"]` は末尾で、**対話 FE メインカーネル（`$FrontEnd =!= Null`）に限って** `SourceVaultAutoTriggerStartScheduler[]` を 1 回だけ呼び、自動トリガスケジューラを起動します。これは冪等（idempotent）で、同じ tick を再登録するだけです。
+
+- **なぜ対話 FE 限定か**: スケジューラは 1 台につき**ちょうど 1 か所**で動く必要があります。各カーネル（サービスカーネル・MCP ゲートウェイ・subkernel・external-job 用 wolframscript）がそれぞれスケジューラ（＋ subkernel の pre-launch）を立てると、ライセンスシート数が膨れ、dispatch が多重化してしまうためです。
+- **headless は除外**: `$FrontEnd === Null` の headless カーネル（＝本書の detached web サービス）は対象外で、cheap no-op になります。auto-trigger が未ロードのときも `ClaudeCodeAbsent` を返すだけの安全な no-op です。
+- **opt-out / 確認**:
+
+```mathematica
+(* 対話カーネルでも自動起動を止める (再ロード前に設定) *)
+SourceVault`Private`$iSVDisableAutoTriggerScheduler = True;
+
+(* 自動起動の結果を確認 *)
+SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult
+(* 例: <|"Status" -> "Skipped", "Reason" -> "NotFrontEndKernel"|>
+   その他 Reason: "DisabledByUser" / "AutoTriggerUnavailable" / "AutoStartException" *)
+```
+
 ### モデルバージョン比較の修正（`SourceVaultResolve` / `ChatModel` 解決）
 
-`ChatModel` にモデル名のパターン（例: 同一プロバイダの複数バージョン）を渡すと、`SourceVaultResolve[\"Model\", ...]` が最新版を選びます。この「最新版」の判定に使うバージョン数値キーの生成方法が修正されました。
+`ChatModel` にモデル名のパターン（例: 同一プロバイダの複数バージョン）を渡すと、`SourceVaultResolve["Model", ...]` が最新版を選びます。この「最新版」の判定に使うバージョン数値キーの生成方法が修正されました。
 
 - **旧実装**: バージョンリスト `{4,8}` を各桁 1000 進の重み（`1000^(Length[v]-i)`）で単調値に変換していました。この方式では桁数（要素数）が重みに影響するため、**桁数の異なるバージョン間で正しく比較できず**、`{4,6} -> 4006` が `{5} -> 5` を上回るなど、**桁数の少ない新メジャー版が昇格されない**不具合がありました（例: `claude-sonnet-5` があるのに `claude-sonnet-4-6` が優先される）。
-- **現行実装**: 各バージョンを固定幅（`width = 6`）まで右パディングしてから、`base = 100000` で先頭（major）ほど大きな重みを付けて単調値に変換します。これにより桁数に依らずメジャー版が正しく優先され、`claude-sonnet-5` が `claude-sonnet-4-6` に勝ちます。
+- **現行実装**: 各バージョンを固定幅（`width = 6`）まで右パディングしてから、`base = 100000` で先頭（major）ほど大きな重みを付けて単調値に変換します（`Total @ MapIndexed[#1 * base^(width - First[#2]) &, v]`、`v = PadRight[Take[v, UpTo[width]], width]`）。これにより桁数に依らずメジャー版が正しく優先され、`claude-sonnet-5` が `claude-sonnet-4-6` に勝ちます。日付は `iSVParseModelVersion` で除外済み（`<10000`）なので桁上がりしません。
 
-この変更は内部ヘルパー（`iSVParseModelVersion`）のみで、公開 API のシグネチャは変わりません。古い挙動が残る場合は `Quit[]` → `Get[\"SourceVault.wl\"]` で再ロードしてください。
+この変更は内部ヘルパー（`iSVParseModelVersion`）のみで、公開 API のシグネチャは変わりません。古い挙動が残る場合は `Quit[]` → `Get["SourceVault.wl"]` で再ロードしてください。
 
 ### LLM バックエンド登録例（バッテリー節約・LM Studio 未起動時の代替）
 
@@ -447,14 +484,16 @@ SourceVaultSetImmutableSnapshotPrivacyLevel["snapshot:pdf:a1b2c3...", 0.5]
 
 ## 11. まとめ
 
-- `Get["SourceVault.wl"]` で基盤一式（core / searchindex / servicemanager / mcp / objectview）がロードされます。
+- `Get["SourceVault.wl"]` で基盤一式（core / simrun / contracts / wiring / searchindex / servicemanager / mailstructure / mailsuggest / mcp / llmlog / workflowregistry / searchview / objectview など）がロードされます。
+- ロード時、**対話 FE メインカーネルに限り**自動トリガスケジューラ（`SourceVaultAutoTriggerStartScheduler`）が起動します。headless の detached サービスカーネルでは起動しない（no-op）ので、本書の web サービスには影響しません。無効化は `SourceVault\`Private\`$iSVDisableAutoTriggerScheduler = True`（§2・§10）。
 - アプリ（学生便覧）は **release context / profile / migration rule** をサービス prelude（方式A）または private local init（方式B）で登録するだけ。SourceVault コードはドメイン非依存です。
 - 起動は **StartService(prelude) → StartHTTPProxy** の 2 ステップ（方式B は前に `LoadLocalInit`）。
 - arXiv ソースは ingest 時にアブストラクトが自動翻訳されて Summary に格納されます。`SourceVaultArXiv` で種別専用一覧表示、`SourceVaultBackfillArXivSummaries` で既存ソースへの一括補完が可能です（§6f）。タイトル/サマリーのクリックは `SourceVaultShowSourceSummary` で編集可能ノートブックを開きます。
 - 旧版で arXiv 等が PrivacyLevel 0.6 と誤タグされた場合は `SourceVaultReclassifyPublicPrivacy[]` で修正できます（§6f）。
+- Claude Code のセッション/作業ログは `SourceVault_llmlog.wl` の `SourceVaultIngestClaudeCodeLogs` で取り込めます。限定キーワードでルーティングされ、GitHubCommitLog（コミット履歴）と混同しません（§6g）。
 - 崩れた表・凡例は **補足知識 (curated)** で補い（§6b）、凡例があれば必修/選択を**分類**、無ければ**列挙のみ＋Evidence Gap 記録**（§6c）。
 - 別 PDF グループは **`PDFGroupSearchProfile` を clone+override** するだけで横展開できます（§6d）。コード変更は不要です。
 - LLM バックエンドは `SourceVaultRegisterLLMBackend` でデータとして登録でき、`"Class"->"Light-Cloud"` / `"Capabilities"->{"Reasoning"}` によりバッテリー節約・LM Studio 未起動時の代替を設定として管理できます（§10）。
-- `ChatModel` のモデルバージョン解決は固定幅パディングで比較するよう修正され、**桁数の少ない新メジャー版**（例: `claude-sonnet-5`）が旧版（例: `claude-sonnet-4-6`）に正しく優先されるようになりました（§8・§10）。
+- `ChatModel` のモデルバージョン解決は固定幅パディング（width 6・base 100000）で比較するよう修正され、**桁数の少ない新メジャー版**（例: `claude-sonnet-5`）が旧版（例: `claude-sonnet-4-6`）に正しく優先されるようになりました（§8・§10）。
 - **content-addressed 不変スナップショット**（`snapshot:class:hex` / `sv://snapshot/...` 形式）は本体不変。存在確認は `SourceVaultImmutableSnapshotExistsQ`、プライバシーレベル変更は `SourceVaultSetImmutableSnapshotPrivacyLevel`（サイドレコードへ委譲）で行います（§9・§10）。`SourceVaultSourceRow` の `"URI"` フィールドがこの正準 URI を提供します。
 - 埋め込みは **bge-m3（8192）**、回答合成は **ローカル instruct or `ChatModel->"cloud"`**。`/pdfask` は**非同期**で遅いモデルでも timeout しません。JSON の読み書きは `ExportByteArray`/`ImportByteArray` 経路で文字化けを防いでいます。

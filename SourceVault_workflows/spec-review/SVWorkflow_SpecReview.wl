@@ -242,11 +242,51 @@ iOrchQuery[m_, prompt_] := Module[{tup = iModelTuple[m], prov, r},
       Block[{ClaudeCode`$ClaudeModel = tup}, ClaudeCode`ClaudeQuerySync[prompt]], $Failed];
     If[StringQ[r], r, ""]]];
 
+(* ---- compute-aware spec drafting: execution profile rules + machine table ----
+   The known-machine table comes from SourceVault_simrun.wl's shared store
+   (each PC runs SourceVaultMachineProfileRefresh[] once); fail-soft when absent. *)
+iMachineSpecsText[] := Module[{r},
+  r = Quiet @ Check[
+    If[Length[Names["SourceVault`SourceVaultMachineSpecsText"]] > 0,
+      SourceVault`SourceVaultMachineSpecsText[], $Failed], $Failed];
+  If[StringQ[r] && r =!= "", r, "(machine spec table unavailable)"]];
+
+iComputeProfileBlock[] :=
+  "\n=== EXECUTION PROFILE RULES (compute-aware specs) ===\n" <>
+  "Classify the workflow you are specifying into one of two execution classes:\n" <>
+  "- \"simulation\": numerical simulation / Monte Carlo / parameter sweeps run repeatedly while " <>
+  "tuning parameters, GPU (CUDA) jobs, media generation (video/image batches), or ANY run whose " <>
+  "output artifacts can be large (more than a few MB, or many files).\n" <>
+  "- \"standard\": specs, reviews, reports, notebooks, small datasets/plots -- everything else.\n" <>
+  "IF the requirements mention ANY of: execution-speed priority, parallel execution / subkernels, " <>
+  "CUDA / GPU, a specific machine name, numerical simulation, or large outputs, THEN the spec MUST " <>
+  "contain a section titled exactly \"## Execution Profile\" with EXACTLY these fields:\n" <>
+  "  - ExecutionClass: \"simulation\" | \"standard\"\n" <>
+  "  - Parallelization: \"subkernels\" | \"none\"  (subkernels = launch ALL available subkernels " <>
+  "for the run and CLOSE them when the run finishes, so the license seats return to standby; the " <>
+  "implementation uses SourceVault`SourceVaultWithSubkernels)\n" <>
+  "  - CUDA: \"required\" | \"none\"  (required = the run only works on machines with an Nvidia GPU; " <>
+  "non-GPU machines must fail gracefully with a clear message, never crash)\n" <>
+  "  - TargetMachine: a machine tag from the known-machine table below, or \"any\" (when CUDA is " <>
+  "required, pick a machine that actually has an Nvidia GPU; honor an explicit machine name in the " <>
+  "requirements, e.g. rapterlake4t)\n" <>
+  "  - OutputMode: \"reference\" | \"inline\"  (reference = bulk outputs -- data files, images, " <>
+  "videos, frames -- are written to a per-run folder under udb/simruns named " <>
+  "<yyyymmddHHmm>-<machine>-<slug>, and SourceVault stores ONLY a metadata snapshot; the run " <>
+  "returns the sv://snapshot/SimulationRun/... URI plus a SMALL summary. simulation-class " <>
+  "workflows MUST use reference; standard workflows keep the existing inline behavior)\n" <>
+  "  - Outputs: the list of artifact files the run writes into the run folder\n" <>
+  "When ExecutionClass is \"simulation\", the spec must also name the tunable parameters (what the " <>
+  "user will vary between trial runs) and their defaults, so every run is reproducible from its " <>
+  "recorded Params. Requirements that only produce a small report need NO Execution Profile section.\n" <>
+  "Known machines (shared, measured; memory/cores/GPU per PC):\n" <> iMachineSpecsText[] <> "\n";
+
 iRealDraft[model_, payload_] := Module[{prompt, lastReview, text},
   lastReview = Lookup[payload, "LastReviewText", ""];
   prompt = Lookup[payload, "DraftPrompt", "Write a Wolfram Language design spec."] <>
     If[StringQ[lastReview] && lastReview =!= "",
       "\n\n=== Previous review (address every point; rewrite the FULL spec) ===\n" <> lastReview, ""] <>
+    iComputeProfileBlock[] <>
     "\n\nOutput ONLY the design spec in Markdown as your reply. No preamble and no file writing.";
   text = iOrchQuery[model, prompt];
   <|"SpecText" -> If[StringQ[text], text, ""]|>];
@@ -255,6 +295,18 @@ iRealReview[model_, payload_, specText_] := Module[
   {prompt, out, json, verdict, findings, reviewText},
   prompt =
     "Review the following Wolfram Language design spec strictly and decide whether it is implementable.\n" <>
+    "EXECUTION PROFILE CHECK: if the spec's requirements involve execution-speed priority, parallel " <>
+    "execution / subkernels, CUDA / GPU, a specific machine, numerical simulation, or large outputs " <>
+    "(big data files / images / video), the spec MUST contain an \"## Execution Profile\" section " <>
+    "with fields ExecutionClass / Parallelization / CUDA / TargetMachine / OutputMode / Outputs, and " <>
+    "it must be CONSISTENT: ExecutionClass \"simulation\" requires OutputMode \"reference\" (bulk " <>
+    "artifacts go to a per-run udb/simruns folder; SourceVault keeps only a metadata snapshot and " <>
+    "the run returns its sv:// URI with a small summary); CUDA \"required\" needs a TargetMachine " <>
+    "that has an Nvidia GPU (see the machine table) and a graceful non-GPU failure path; " <>
+    "Parallelization \"subkernels\" means all available subkernels are launched for the run and " <>
+    "closed afterwards. A missing or inconsistent Execution Profile in such a spec is a blocker. " <>
+    "Specs for ordinary small reports need no such section -- do not demand one.\n" <>
+    "Known machines:\n" <> iMachineSpecsText[] <> "\n" <>
     "Respond with EXACTLY one JSON object inside a ```json block and nothing else.\n" <>
     "Write the \"reviewText\" value and every finding \"title\" in " <> iLangName[] <> ".\n" <>
     "Keep the JSON keys and the \"verdict\" / \"severity\" enum values in ASCII exactly as in the schema.\n" <>

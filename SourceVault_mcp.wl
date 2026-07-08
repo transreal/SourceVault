@@ -618,6 +618,9 @@ iSVCatalogRow[name_String] := Module[{spec, caps, capList, avail, row},
   avail = iSVAdapterAvailableQ[spec];
   row = <|"name" -> name, "kinds" -> Lookup[spec, "Kinds", {}], "available" -> avail,
     "capabilities" -> capList, "requiresGrantFor" -> Lookup[spec, "RequireGrantFor", {}]|>;
+  (* adapter の用途説明 (LLM がどの kind を選ぶべきか catalog から判断できるように) *)
+  If[StringQ[Lookup[spec, "Description", None]],
+    row["description"] = Lookup[spec, "Description"]];
   (* R2 B-2: adapter 固有の filter discovery を露出 (packageapi の packages 等) *)
   If[ListQ[Lookup[spec, "FilterKeys", None]],
     row["filterKeys"] = Lookup[spec, "FilterKeys"]];
@@ -3229,7 +3232,9 @@ SourceVaultMCPTools[] := {
         "query" -> <|"type" -> "string", "description" -> "Search query."|>,
         "kinds" -> <|"type" -> "array", "items" -> <|"type" -> "string"|>,
           "description" -> "Data kinds to search, e.g. [\"search\"], [\"packageapi\"] " <>
-            "(Wolfram package API docs: function signatures/options), or [\"all\"] (default [\"all\"])."|>,
+            "(Wolfram package API docs: function signatures/options), [\"llmlog\"] " <>
+            "(Claude Code session/work logs from ALL machines: what was implemented/discussed " <>
+            "in past coding sessions -- NOT git commit history), or [\"all\"] (default [\"all\"])."|>,
         "scope" -> <|"type" -> "object",
           "description" -> "releaseContext (string), requireAccessTags, denyAccessTags, untagged."|>,
         "filters" -> <|"type" -> "object",

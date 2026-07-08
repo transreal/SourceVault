@@ -23,6 +23,8 @@ Names["SourceVault`SourceVaultLoadWorkflow"]
 
 > `SourceVaultLoadWorkflow` がワークフロー本体をロードする際に `ClaudeOrchestrator`Workflow`` を自己ブートストラップするため、最低限 `SourceVault.wl` だけでも動きます（上では明示的に ClaudeOrchestrator も先にロードしています）。
 
+> **補足（対話 FE カーネルでの自動トリガ起動）**: `SourceVault.wl` を対話フロントエンド（FE）カーネルでロードすると、この PC がジョブを常に拾えるよう自動トリガのスケジューラが自動起動されます（`SourceVaultAutoTriggerStartScheduler` を内部で呼びます）。この起動は **FE メインカーネル（`$FrontEnd =!= Null`）でのみ**行われ、ヘッドレスカーネル・サブカーネル・外部ジョブの wolframscript プロセスなどは除外されます（各カーネルが自前スケジューラを立てるとライセンスシートやディスパッチが多重化するため、機械あたり 1 か所＝対話 FE に限定しています）。起動は冪等で、結果は `SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult` に記録されます。無効化したい場合はロード前に `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True` を設定してください（このとき自動起動は `Status -> "Skipped"`, `Reason -> "DisabledByUser"` を返します）。spec-review ワークフローを手元で試すだけであれば、この挙動を意識する必要はありません。
+
 ---
 
 ## 例 1: レジストリで収納済みワークフローを発見
@@ -215,7 +217,7 @@ SourceVaultWorkflow`SpecReview`RunSpecReview["RealProject",
 
 ノートブックから使う場合は、**パレットの「仕様生成」ボタン**が同じループをバックグラウンドで実行します（SourceVault と ClaudeOrchestrator が両方ロードされている場合）。FE カーネルは重いループを直接実行せず、`SourceVault_workflows/spec-review/palette_driver.wls` を別 wolframscript プロセスで起動し、`SourceVaultLoadWorkflow["spec-review"]` でオンデマンドロードして走らせ、完了後に合意 spec と `sv://` 鎖をノートブックへ追記します。状態は `ClaudeSpecStatus[]` で確認できます。
 
-> **補足（モデル解決の版比較について）**: 実 LLM 実行で使われる Codex/Claude 役のモデルは `SourceVaultResolve["Model", ...]` を通じて選択されます。内部の版比較キー算出は、バージョン各桁を固定幅（右パディング後に一定の基数で重み付け）で単調値化する方式に更新されており、桁数の異なるバージョン間（例: `claude-sonnet-4-6` と `claude-sonnet-5`）でも意図どおりに新しい版が優先されます。この挙動はワークフロー利用側から明示的に触れる API ではなく、モデル解決の結果が正しく最新版を返すことを保証する内部改善です。
+> **補足（モデル解決の版比較について）**: 実 LLM 実行で使われる Codex/Claude 役のモデルは `SourceVaultResolve["Model", ...]` を通じて選択されます。内部の版比較キー算出（`SortBy` 用の数値キー）は、バージョン各桁を**固定幅で右パディングしてから一定の基数で重み付けする**方式に更新されました（現行実装では `width = 6`, `base = 100000`。バージョン列を上位から幅 6 に `PadRight` してゼロ埋めし、各桁に `base^(width - 位置)` を掛けて単調値化します）。旧実装は指数に列長 `Length[v]` を使っていたため、桁数の異なるバージョン間で不整合が生じ、`{4,6} -> 4006` が `{5} -> 5` を上回って `claude-sonnet-4-6` が `claude-sonnet-5` に誤って勝つ（＝桁数の少ない新メジャー版が昇格されない）逆転が起きていました。新方式ではこの逆転が解消され、`claude-sonnet-4-6` と `claude-sonnet-5` のように桁数の異なる版でも意図どおり新しい版が優先されます。なお日付要素は `iSVParseModelVersion` の段階で除外済みのため桁上がりには影響しません。この挙動はワークフロー利用側から明示的に触れる API ではなく、モデル解決の結果が正しく最新版を返すことを保証する内部改善です。
 
 ---
 

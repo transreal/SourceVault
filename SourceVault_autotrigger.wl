@@ -76,10 +76,14 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultAutoTriggerStatusCell",
   "SourceVault`SourceVaultAutoTriggerSourcesURIResolver",
   "SourceVault`SourceVaultAutoTriggerKnownMachineTags",
-  "SourceVault`SourceVaultParseAutoTriggerPrompt"
+  "SourceVault`SourceVaultParseAutoTriggerPrompt",
+  "SourceVault`SourceVaultEnqueueWorkflowRun",
+  "SourceVault`SourceVaultAutoTriggerDispatchCatalogRuns",
+  "SourceVault`SourceVaultRemoteWorkflowResult",
+  "SourceVault`SourceVaultAutoTriggerWatchRemoteRun"
 ]];
 
-$SourceVaultAutoTriggerVersion = "0.1-phase1.2";
+$SourceVaultAutoTriggerVersion = "0.1-phase1.4";
 
 SourceVaultAutoTriggerStatus::usage =
   "SourceVaultAutoTriggerStatus[] returns the auto-trigger subsystem status \
@@ -319,9 +323,13 @@ unavailable.";
 
 SourceVaultAutoTriggerKnownMachineTags::usage =
   "SourceVaultAutoTriggerKnownMachineTags[] returns the machine tags known to \
-this vault: this machine's tag plus every MachineTag in the diagnostics \
-machine registry (weakly; no registry -> just this machine). Used by the \
-SpecificMachine placement validation (unknown-tag warning) and by \
+this vault: this machine's tag, the AUTHORITATIVE runtime machine list \
+(SourceVaultListRuntimeMachines, the PCs actually sharing the vault per the \
+on-disk runtime/ tree), and every MachineTag in the diagnostics machine \
+registry (weakly; the registry is unioned in but is not the source of truth, \
+since it can lag or carry stale test entries). All refs are weak (no service \
+manager / diagnostics -> just this machine). Used by the SpecificMachine \
+placement validation (unknown-tag warning) and by \
 SourceVaultParseAutoTriggerPrompt (machine-name detection in prompts).";
 
 SourceVaultParseAutoTriggerPrompt::usage =
@@ -345,6 +353,54 @@ original prompt is stored HashOnly (privacy default). Returns \
 \"NextFirePreview\"|>. Options: \"TimeZone\" -> \"Asia/Tokyo\", \
 \"KnownMachineTags\" -> Automatic, \"LLMFunction\" -> Automatic, \"Now\" -> \
 Automatic (ISO string for reproducible tests).";
+
+SourceVaultEnqueueWorkflowRun::usage =
+  "SourceVaultEnqueueWorkflowRun[slug_String, machineTag_String, opts] enqueues a \
+one-shot \"run this catalog workflow (slug) on <machineTag>\" job into the shared \
+auto-trigger job log (autotrigger/jobs.jsonl). The job is self-contained \
+(SpecificMachine placement, no registered trigger); the TARGET PC's scheduler \
+picks it up via the same placement gate as auto-triggers and runs it locally via \
+SourceVaultRunWorkflowAsync. Used by the workflow-list panel's per-row run button \
+when a NON-local machine is chosen (a local run executes immediately instead). \
+Option \"Form\" -> \"run\". Returns <|\"Status\" -> \"Enqueued\" | \"EnqueueFailed\", \
+\"Slug\", \"MachineTag\", \"DispatchSlotKey\", \"EligibleHere\", \"Note\"|>. NOTE: \
+the target PC must have SourceVaultAutoTriggerStartScheduler[] running to pick the \
+job up.";
+
+SourceVaultAutoTriggerDispatchCatalogRuns::usage =
+  "SourceVaultAutoTriggerDispatchCatalogRuns[opts] runs the CatalogWorkflow jobs \
+(enqueued by SourceVaultEnqueueWorkflowRun) that THIS machine is allowed to \
+execute (placement gate: RequiredMachineTags includes this machine). Each is \
+launched non-blocking via SourceVaultRunWorkflowAsync (external process) and \
+recorded to autotrigger/runs.jsonl as CatalogRunSubmitted (a spoken-for terminal \
+status, so it is not re-dispatched). No orchestrator dependency. Wired into the \
+scheduler tick, so a machine with the scheduler running auto-picks up runs \
+addressed to it. Option \"MaxRuns\" -> 4 per call. Returns a dispatch summary.";
+
+SourceVaultRemoteWorkflowResult::usage =
+  "SourceVaultRemoteWorkflowResult[dispatchSlotKey_String] retrieves the result \
+of a REMOTE catalog-workflow run (enqueued with SourceVaultEnqueueWorkflowRun \
+and executed on another PC). The executing PC publishes the external job's \
+output.wxf into the shared vault (autotrigger/results/) when it finishes; this \
+imports it from any PC. Returns the workflow result (e.g. a View), \
+Failure[\"CatalogRunFailed\", ...] when the run failed (Reason/MachineTag/\
+FinishedAtUTC), Missing[\"StillRunning\"|\"ResultSyncing\"|\"NotFinished\"|\
+\"NotFound\", slot] otherwise. The requester's notebook receives an evaluatable \
+cell with this call automatically when the run completes (see \
+SourceVaultAutoTriggerWatchRemoteRun).";
+
+SourceVaultAutoTriggerWatchRemoteRun::usage =
+  "SourceVaultAutoTriggerWatchRemoteRun[dispatchSlotKey, meta] registers a watch \
+for a remote catalog run on THIS (requesting) machine. The scheduler tick polls \
+the merged run logs and, when the executing PC publishes a terminal record, \
+writes into the originating notebook (meta \"Notebook\" -> NotebookObject) via \
+the NBAccess final-action queue (WriteNotebookCell; single committer, CellPrint \
+fallback): on completion an evaluatable SourceVaultRemoteWorkflowResult[slot] \
+cell, on failure / watch timeout ($iSVATRemoteWatchTTLSeconds, default 7200s) a \
+red report cell. meta keys: \"Notebook\", \"Slug\", \"MachineTag\". The \
+workflow-list panel registers this automatically on remote \"\:5b9f\:884c\". \
+Watches are session-local (an FE restart drops them; the result itself is still \
+retrievable via SourceVaultRemoteWorkflowResult).";
 
 (* settable hook, deliberately NOT ClearAll'd (idempotent reload keeps it) *)
 SourceVaultAutoTriggerPromptLLM::usage =
@@ -378,20 +434,28 @@ iSVATMachineTag[] :=
   StringReplace[ToString[$MachineName],
     Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"];
 
-(* known machine tags = self + diagnostics machine registry (weak; the
-   registry is optional). Comparisons elsewhere are case-insensitive:
-   $MachineName is lowercase on Windows while specs / prompts typically
-   carry display casing like "ProArtPX13". *)
+(* known machine tags = self + the AUTHORITATIVE runtime machine list
+   (SourceVaultListRuntimeMachines, derived from the on-disk runtime/ tree =
+   the PCs actually sharing this vault) + the diagnostics machine registry
+   (weak / optional; may lag or carry stale test entries, so it is unioned in
+   but NOT the source of truth). All refs are weak so autotrigger still loads
+   standalone. Comparisons elsewhere are case-insensitive: $MachineName is
+   lowercase on Windows while specs / prompts carry display casing. *)
 iSVATKnownMachineTags[] :=
-  Module[{reg = {}},
+  Module[{runtime = {}, reg = {}, regTags},
+    If[Length[Names["SourceVault`SourceVaultListRuntimeMachines"]] > 0,
+      runtime = Quiet @ Check[
+        ToExpression["SourceVault`SourceVaultListRuntimeMachines"][], {}]];
+    If[!ListQ[runtime], runtime = {}];
     If[Length[Names["SourceVault`SourceVaultDiagnosticsMachineRegistry"]] > 0,
       reg = Quiet @ Check[
         ToExpression["SourceVault`SourceVaultDiagnosticsMachineRegistry"][], {}]];
     If[!ListQ[reg], reg = {}];
-    DeleteDuplicates @ Prepend[
-      Select[(Lookup[#, "MachineTag", Missing[]] &) /@ Select[reg, AssociationQ],
-        StringQ],
-      iSVATMachineTag[]]];
+    regTags = Select[
+      (Lookup[#, "MachineTag", Missing[]] &) /@ Select[reg, AssociationQ],
+      StringQ];
+    DeleteDuplicates @ Join[{iSVATMachineTag[]},
+      Select[runtime, StringQ], regTags]];
 
 SourceVaultAutoTriggerKnownMachineTags[] := iSVATKnownMachineTags[];
 
@@ -425,7 +489,7 @@ iSVATAtomicExportWXF[path_String, expr_] :=
 (* ---- enums ---- *)
 
 $iSVATTargetTypes = {"PromptRoute", "WorkflowRoute", "WorkflowTemplate",
-   "PureComputation"};
+   "PureComputation", "CatalogWorkflow"};
 $iSVATOwnerModes = {"OwnerMachine", "Lease"};
 $iSVATScheduleKinds = {"Alarm", "Timer", "CalendarPattern", "Cron"};
 $iSVATPlacementModes = {"EnvironmentIndependent", "WorkerPool", "SpecificMachine"};
@@ -1065,21 +1129,48 @@ iSVATSaveState[id_String, state_Association] :=
   Module[{p = iSVATStatePath[id]},
     If[p === $Failed, $Failed, iSVATAtomicExportWXF[p, state]]];
 
-iSVATJobsLogPath[] :=
+(* ---- multi-machine-safe job/run logs (spec 3.1.1) ----
+   jobs.jsonl / runs.jsonl were single SHARED append files; with several
+   machines appending (cross-machine dispatch + a per-minute trigger) Dropbox
+   produced CONFLICT COPIES and remote machines' appends were lost (observed
+   2026-07-07). Fix = single-writer principle, same as machine heartbeats:
+   each machine APPENDS ONLY to its own autotrigger/jobs/<machineTag>.jsonl
+   (runs/<machineTag>.jsonl) and READS the union of every machine's file plus
+   the legacy shared file (pre-phase1.3 history, now read-only). Cross-file
+   ordering does not matter: dedup keys on DispatchSlotKey. *)
+
+iSVATJobsLegacyPath[] :=
   Module[{root = iSVATRoot[]},
     If[root === $Failed, $Failed,
       FileNameJoin[{root, "autotrigger", "jobs.jsonl"}]]];
 
-iSVATReadJobs[] :=
-  Module[{p = iSVATJobsLogPath[], lines},
-    If[p === $Failed || !FileExistsQ[p], Return[{}]];
+iSVATJobsDir[] :=
+  Module[{root = iSVATRoot[]},
+    If[root === $Failed, $Failed,
+      FileNameJoin[{root, "autotrigger", "jobs"}]]];
+
+iSVATJobsWritePath[] :=
+  Module[{d = iSVATJobsDir[]},
+    If[d === $Failed, $Failed,
+      FileNameJoin[{d, iSVATMachineTag[] <> ".jsonl"}]]];
+
+(* parse one JSONL file -> list of Associations (bad lines skipped) *)
+iSVATReadJSONLFile[p_] :=
+  Module[{lines},
+    If[!StringQ[p] || !FileExistsQ[p], Return[{}]];
     lines = Quiet @ Check[Import[p, {"Text", "Lines"}], {}];
     If[!ListQ[lines], lines = {}];
     Select[(Quiet @ Check[Developer`ReadRawJSONString[#], $Failed] &) /@ lines,
       AssociationQ]];
 
+iSVATReadJobs[] :=
+  Module[{legacy = iSVATJobsLegacyPath[], d = iSVATJobsDir[], files},
+    files = If[d =!= $Failed && DirectoryQ[d], FileNames["*.jsonl", d], {}];
+    If[legacy =!= $Failed, files = Prepend[files, legacy]];
+    Join @@ (iSVATReadJSONLFile /@ files)];
+
 iSVATAppendJob[job_Association] :=
-  Module[{p = iSVATJobsLogPath[], strm},
+  Module[{p = iSVATJobsWritePath[], strm},
     If[p === $Failed, Return[$Failed]];
     If[iSVATEnsureDir[DirectoryName[p]] === $Failed, Return[$Failed]];
     strm = Quiet @ Check[OpenAppend[p, CharacterEncoding -> "UTF-8"], $Failed];
@@ -1151,21 +1242,30 @@ SourceVaultAutoTriggerJobQueue[opts : OptionsPattern[]] :=
 
 $iSVATTimeoutSentinel = "iSVATTimedOut";
 
-iSVATRunsLogPath[] :=
+(* runs: same single-writer scheme as jobs (see iSVATReadJobs comment) *)
+iSVATRunsLegacyPath[] :=
   Module[{root = iSVATRoot[]},
     If[root === $Failed, $Failed,
       FileNameJoin[{root, "autotrigger", "runs.jsonl"}]]];
 
+iSVATRunsDir[] :=
+  Module[{root = iSVATRoot[]},
+    If[root === $Failed, $Failed,
+      FileNameJoin[{root, "autotrigger", "runs"}]]];
+
+iSVATRunsWritePath[] :=
+  Module[{d = iSVATRunsDir[]},
+    If[d === $Failed, $Failed,
+      FileNameJoin[{d, iSVATMachineTag[] <> ".jsonl"}]]];
+
 iSVATReadRuns[] :=
-  Module[{p = iSVATRunsLogPath[], lines},
-    If[p === $Failed || !FileExistsQ[p], Return[{}]];
-    lines = Quiet @ Check[Import[p, {"Text", "Lines"}], {}];
-    If[!ListQ[lines], lines = {}];
-    Select[(Quiet @ Check[Developer`ReadRawJSONString[#], $Failed] &) /@ lines,
-      AssociationQ]];
+  Module[{legacy = iSVATRunsLegacyPath[], d = iSVATRunsDir[], files},
+    files = If[d =!= $Failed && DirectoryQ[d], FileNames["*.jsonl", d], {}];
+    If[legacy =!= $Failed, files = Prepend[files, legacy]];
+    Join @@ (iSVATReadJSONLFile /@ files)];
 
 iSVATAppendRun[run_Association] :=
-  Module[{p = iSVATRunsLogPath[], strm},
+  Module[{p = iSVATRunsWritePath[], strm},
     If[p === $Failed, Return[$Failed]];
     If[iSVATEnsureDir[DirectoryName[p]] === $Failed, Return[$Failed]];
     strm = Quiet @ Check[OpenAppend[p, CharacterEncoding -> "UTF-8"], $Failed];
@@ -1186,7 +1286,10 @@ iSVATCompletedSlots[] :=
                so it is not re-dispatched even before it reaches a terminal run;
                this also survives a kernel restart (run is persisted). *)
             "WorkflowStarted", "WorkflowCompleted", "WorkflowFailed",
-            "WorkflowTimedOut"},
+            "WorkflowTimedOut",
+            (* a catalog run is spoken for once its external process is submitted
+               (it runs independently; the slot must not be re-dispatched) *)
+            "CatalogRunSubmitted"},
            Lookup[#, "Status", ""]],
          Lookup[#, "DispatchSlotKey", Null], Null] &) /@ runs, Null]];
 
@@ -1223,6 +1326,20 @@ iSVATSubprocessSlotsFree[] :=
     max = Lookup[p, "MaxLicenseSubprocesses", Missing[]];
     If[IntegerQ[max], max - Length[Quiet @ Check[Kernels[], {}]],
       Missing["Unknown"]]];
+
+(* best-effort free PROCESS slots (independent wolframscript / MCP / service /
+   FE kernels consume this pool). The external executor used by CatalogWorkflow
+   spawns an independent wolframscript process, so it needs a free PROCESS seat
+   (NOT a subprocess seat). When 0, that spawn dies during startup without
+   writing status/output -> a silent NotReady. Missing["Unknown"] when the
+   diagnostics probe is unavailable (never block on an unknown reading). *)
+iSVATProcessSeatsFree[] :=
+  If[Length[Names["SourceVault`SourceVaultDiagnosticsLicenseProbe"]] == 0,
+    Missing["Unknown"],
+    Module[{p = Quiet @ Check[
+        ToExpression["SourceVault`SourceVaultDiagnosticsLicenseProbe"][], $Failed]},
+      If[AssociationQ[p], Lookup[p, "ProcessSlotsFree", Missing["Unknown"]],
+        Missing["Unknown"]]]];
 
 (* run a bounded pure computation in a subkernel; prove out-of-process by
    returning the subkernel $ProcessID. Optional Target SleepSeconds (number,
@@ -1547,9 +1664,13 @@ SourceVaultAutoTriggerDispatchAsync[opts : OptionsPattern[]] :=
 
 SourceVaultAutoTriggerPoll[opts : OptionsPattern[]] :=
   Module[{sub = iSVATPollAsyncJobs[], wf = iSVATPollWorkflows[]},
+    Quiet @ Check[iSVATPollCatalogRuns[], Null];
+    Quiet @ Check[iSVATPollRemoteWatches[], Null];
     <|"Finalized" -> Join[Lookup[sub, "Finalized", {}], Lookup[wf, "Finalized", {}]],
       "StillRunning" -> Join[Lookup[sub, "StillRunning", {}], Lookup[wf, "StillRunning", {}]],
-      "Subkernel" -> sub, "Workflow" -> wf|>];
+      "Subkernel" -> sub, "Workflow" -> wf,
+      "CatalogPending" -> Keys[$iSVATCatalogRunsPending],
+      "RemoteWatches" -> Keys[$iSVATRemoteWatches]|>];
 
 SourceVaultAutoTriggerRunningJobs[] :=
   KeyValueMap[
@@ -1814,6 +1935,355 @@ SourceVaultAutoTriggerRunningWorkflows[] :=
     $iSVATRunningWorkflows];
 
 (* ============================================================
+   CatalogWorkflow: run a generated *catalog* workflow (a slug from the
+   SourceVault workflow list) on a CHOSEN machine. The panel's own local
+   run uses SourceVaultRunWorkflowAsync (external process on THIS PC); to
+   run on ANOTHER PC we enqueue a SpecificMachine job here, and the target
+   PC's scheduler picks it up via the same placement gate that governs
+   auto-triggers and executes SourceVaultRunWorkflowAsync locally there.
+   This is a DIFFERENT executor from WorkflowRoute/WorkflowTemplate (which
+   go through ClaudeRunWorkflow): catalog slugs run via their generated
+   Launch entry, so they must use SourceVaultRunWorkflowAsync, not the
+   orchestrator. No orchestrator dependency here. jobs.jsonl is shared, so
+   the other dispatchers ignore CatalogWorkflow (they filter by their own
+   target types) and only SourceVaultAutoTriggerDispatchCatalogRuns runs it. *)
+
+iSVATCatalogTargetQ[job_] :=
+  Lookup[Lookup[job, "Target", <||>], "TargetType", ""] === "CatalogWorkflow";
+
+(* run the slug on THIS machine, non-blocking, via the existing external
+   executor. Weak ref: SourceVaultRunWorkflowAsync lives in workflowregistry
+   (loaded as part of SourceVault); reference it by full name at run time. *)
+iSVATExecuteCatalogWorkflow[job_Association] :=
+  Module[{target, slug, form, started, runFn, res, free},
+    started = iSVATUTCNow[];
+    target = Lookup[job, "Target", <||>];
+    slug = Lookup[target, "TargetId", Missing[]];
+    form = Lookup[target, "Form", "run"];
+    If[!StringQ[slug],
+      Return[<|"Status" -> "Failed", "Reason" -> "NoSlug",
+        "Backend" -> "None", "StartedAtUTC" -> started,
+        "FinishedAtUTC" -> iSVATUTCNow[]|>]];
+    (* seat guard: the external executor needs a free PROCESS seat. If the pool
+       is saturated the spawn dies during startup without writing status/output
+       (a silent NotReady). Refuse up front with an explicit, actionable status
+       instead. Deferred (NOT Failed) so the job stays Built and retries when a
+       seat frees; subprocess seats are irrelevant here (wrong pool). *)
+    free = iSVATProcessSeatsFree[];
+    If[IntegerQ[free] && free <= 0,
+      Return[<|"Status" -> "DeferredLicenseSeatUnavailable",
+        "Reason" -> "ProcessSeatPoolSaturated",
+        "ProcessSlotsFree" -> free, "Slug" -> slug,
+        "Detail" -> "External executor needs a free PROCESS seat; pool is 0. " <>
+          "Free one (e.g. consolidate duplicate Wolfram MCP kernels via " <>
+          "wlmcp-gateway, or close a stale kernel) and it retries automatically.",
+        "Backend" -> "None", "StartedAtUTC" -> started,
+        "FinishedAtUTC" -> iSVATUTCNow[]|>]];
+    If[Length[Names["SourceVault`SourceVaultRunWorkflowAsync"]] == 0,
+      Return[<|"Status" -> "Skipped", "Reason" -> "RunWorkflowAsyncUnavailable",
+        "Backend" -> "None", "StartedAtUTC" -> started,
+        "FinishedAtUTC" -> iSVATUTCNow[]|>]];
+    runFn = Symbol["SourceVault`SourceVaultRunWorkflowAsync"];
+    res = Quiet @ Check[runFn[slug, form], $Failed];
+    If[!AssociationQ[res] || Lookup[res, "Status", ""] =!= "Submitted",
+      Return[<|"Status" -> "Failed", "Reason" -> "SubmitFailed",
+        "Detail" -> If[AssociationQ[res], Lookup[res, "Status", ""], ToString[res]],
+        "Slug" -> slug, "Backend" -> "ExternalExecutor",
+        "StartedAtUTC" -> started, "FinishedAtUTC" -> iSVATUTCNow[]|>]];
+    (* track the external job until it finishes, so completion/failure can be
+       PUBLISHED to the shared vault (the requester may be another PC that
+       cannot read this machine's local ClaudeRuntime job dir) *)
+    With[{slot = Lookup[job, "DispatchSlotKey", Missing[]]},
+      If[StringQ[slot],
+        $iSVATCatalogRunsPending[slot] = <|
+          "JobID" -> Lookup[res, "JobID", Missing[]],
+          "JobDir" -> Lookup[res, "JobDir", Missing[]],
+          "Slug" -> slug, "StartedAbs" -> AbsoluteTime[]|>]];
+    <|"Status" -> "CatalogRunSubmitted", "Slug" -> slug, "Form" -> form,
+      "JobID" -> Lookup[res, "JobID", Missing[]],
+      "JobDir" -> Lookup[res, "JobDir", Missing[]],
+      "Backend" -> "ExternalExecutor",
+      "StartedAtUTC" -> started, "FinishedAtUTC" -> iSVATUTCNow[]|>];
+
+Options[SourceVaultAutoTriggerDispatchCatalogRuns] = {"MaxRuns" -> 4};
+
+SourceVaultAutoTriggerDispatchCatalogRuns[opts : OptionsPattern[]] :=
+  Module[{maxRuns, completed, builtJobs, eligible, results = {}, count = 0,
+          mt = iSVATMachineTag[]},
+    If[iSVATAsyncActiveQ[], Return[<|"Status" -> "DeferredAsyncActive"|>]];
+    maxRuns = OptionValue["MaxRuns"];
+    completed = iSVATCompletedSlots[];
+    builtJobs = Select[iSVATReadJobs[], Lookup[#, "Status", ""] === "Built" &];
+    (* only CatalogWorkflow jobs this machine is allowed to execute *)
+    eligible = Select[builtJobs,
+      iSVATCatalogTargetQ[#] && iSVATJobEligibleHereQ[#] &&
+        !MemberQ[completed, Lookup[#, "DispatchSlotKey", Null]] &];
+    Scan[
+      Function[job,
+        Module[{slot, tid, exec, free},
+          If[count >= maxRuns, Return[Null]];
+          slot = Lookup[job, "DispatchSlotKey", Null];
+          tid = Lookup[job, "TriggerId", Null];
+          (* seat guard BEFORE claiming: if the PROCESS pool is saturated the
+             external executor would spawn a wolframscript that dies at startup
+             (silent NotReady). Defer WITHOUT claiming / recording a run, so the
+             job stays Built and retries next tick when a seat frees -- and the
+             append-only log is not spammed with a Claimed/Deferred pair every
+             tick. Surfaced in the returned Results only. *)
+          free = iSVATProcessSeatsFree[];
+          If[IntegerQ[free] && free <= 0,
+            AppendTo[results, <|"Slot" -> slot,
+              "Status" -> "DeferredLicenseSeatUnavailable",
+              "ProcessSlotsFree" -> free,
+              "Reason" -> "ProcessSeatPoolSaturated(retriesWhenFree)"|>];
+            Return[Null]];
+          (* claim (best-effort exactly-once marker) *)
+          iSVATAppendRun[<|"Type" -> "AutoTriggerRun", "RunId" -> CreateUUID[],
+            "DispatchSlotKey" -> slot, "TriggerId" -> tid, "MachineTag" -> mt,
+            "Status" -> "Claimed", "ClaimedAtUTC" -> iSVATUTCNow[]|>];
+          exec = iSVATExecuteCatalogWorkflow[job];
+          count++;
+          iSVATAppendRun[Join[
+            <|"Type" -> "AutoTriggerRun", "RunId" -> CreateUUID[],
+              "DispatchSlotKey" -> slot, "TriggerId" -> tid, "MachineTag" -> mt|>,
+            exec]];
+          AppendTo[results, <|"Slot" -> slot, "Status" -> exec["Status"],
+            "Slug" -> Lookup[exec, "Slug", Missing[]],
+            "Reason" -> Lookup[exec, "Reason", Missing[]]|>]]],
+      eligible];
+    <|"Status" -> "Dispatched", "AtUTC" -> iSVATUTCNow[], "MachineTag" -> mt,
+      "Submitted" -> count, "Results" -> results|>];
+
+(* PUBLIC: enqueue a one-shot "run this catalog slug on <machineTag>" job.
+   Self-contained (no registered trigger): carries its own placement so any
+   machine's DispatchCatalogRuns decides locally whether it may execute.
+   When machineTag is THIS machine, EligibleHere is True and this machine's
+   scheduler runs it; otherwise the target PC's scheduler picks it up. The
+   panel calls this only for the REMOTE case (local runs immediately via
+   SourceVaultRunWorkflowAsync). Returns an Enqueued status. *)
+Options[SourceVaultEnqueueWorkflowRun] = {"Form" -> "run"};
+
+SourceVaultEnqueueWorkflowRun[slug_String, machineTag_String,
+    opts : OptionsPattern[]] :=
+  Module[{self = iSVATMachineTag[], form, uid, slot, job},
+    form = OptionValue["Form"];
+    uid = StringTake[StringReplace[CreateUUID[], "-" -> ""], 8];
+    slot = "manual-catalog-" <> slug <> "@" <> iSVATUTCNow[] <> "-" <> uid;
+    job = <|
+      "Type" -> "AutoTriggerJob",
+      "TriggerId" -> "manual-" <> uid,
+      "Target" -> <|"TargetType" -> "CatalogWorkflow", "TargetId" -> slug,
+        "Form" -> form|>,
+      "FireTimes" -> {iSVATUTCNow[]},
+      "DispatchSlotKey" -> slot,
+      "MachineTag" -> self,
+      "PlacementMode" -> "SpecificMachine",
+      "RequiredMachineTags" -> {machineTag},
+      "EligibleHere" -> (ToLowerCase[machineTag] === ToLowerCase[self]),
+      "Priority" -> "Normal",
+      "Manual" -> True,
+      "Status" -> "Built",
+      "BuiltAtUTC" -> iSVATUTCNow[],
+      "Dispatched" -> False|>;
+    If[iSVATAppendJob[job] === $Failed,
+      Return[<|"Status" -> "EnqueueFailed", "Slug" -> slug,
+        "MachineTag" -> machineTag|>]];
+    <|"Status" -> "Enqueued", "Slug" -> slug, "MachineTag" -> machineTag,
+      "DispatchSlotKey" -> slot,
+      "EligibleHere" -> job["EligibleHere"],
+      "Note" -> "Queued for " <> machineTag <>
+        "; that PC's scheduler will run it (start it there with " <>
+        "SourceVaultAutoTriggerStartScheduler[] if not already running)."|>];
+
+(* ============================================================
+   Remote-run result round trip. The external job's output.wxf lives
+   in the EXECUTING machine's local ClaudeRuntime job dir, which the
+   requesting PC cannot read. So:
+     executor side  iSVATPollCatalogRuns[] tracks the submitted external
+                    job; on completion it PUBLISHES the output to the
+                    shared vault (autotrigger/results/) and appends a
+                    terminal run record (CatalogRunCompleted/Failed) to
+                    its per-machine runs log.
+     any machine    SourceVaultRemoteWorkflowResult[slot] imports the
+                    published result (or reports failure/still-running).
+     requester side SourceVaultAutoTriggerWatchRemoteRun registers a
+                    watch; the scheduler tick polls the merged runs and,
+                    on a terminal record, writes to the ORIGINATING
+                    notebook via the NBAccess final-action queue
+                    (WriteNotebookCell - the same safe single-committer
+                    path the external executor uses; never a raw
+                    NotebookWrite from the tick). Completion writes an
+                    evaluatable retriever cell; failure writes a report.
+   ============================================================ *)
+
+If[!AssociationQ[$iSVATCatalogRunsPending], $iSVATCatalogRunsPending = <||>];
+If[!AssociationQ[$iSVATRemoteWatches], $iSVATRemoteWatches = <||>];
+$iSVATCatalogRunTTLSeconds = 7200;
+$iSVATRemoteWatchTTLSeconds = 7200;
+
+iSVATSharedCatalogResultPath[slot_] :=
+  Module[{root = iSVATRoot[], safe},
+    If[root === $Failed, Return[$Failed]];
+    safe = StringReplace[ToString[slot],
+      Except[LetterCharacter | DigitCharacter] .. -> "-"];
+    FileNameJoin[{root, "autotrigger", "results", safe <> "-result.wxf"}]];
+
+(* EXECUTOR side: finalize tracked external catalog jobs. Publishes the
+   result to the shared vault so the requesting PC can retrieve it. *)
+iSVATPollCatalogRuns[] :=
+  Module[{finalized = {}, mt = iSVATMachineTag[]},
+    If[$iSVATCatalogRunsPending === <||>, Return[Null]];
+    KeyValueMap[
+      Function[{slot, info},
+        Module[{jd = Lookup[info, "JobDir", Missing[]], age, st, statusStr,
+                outFile, shared, rec},
+          age = AbsoluteTime[] - Lookup[info, "StartedAbs", AbsoluteTime[]];
+          outFile = If[StringQ[jd], FileNameJoin[{jd, "output.wxf"}], ""];
+          st = If[StringQ[jd],
+            Quiet @ Check[
+              Import[FileNameJoin[{jd, "status.json"}], "RawJSON"], <||>], <||>];
+          statusStr = If[AssociationQ[st], Lookup[st, "Status", ""], ""];
+          rec = <|"Type" -> "AutoTriggerRun", "RunId" -> CreateUUID[],
+            "DispatchSlotKey" -> slot, "MachineTag" -> mt,
+            "Slug" -> Lookup[info, "Slug", Missing[]],
+            "JobID" -> Lookup[info, "JobID", Missing[]],
+            "Backend" -> "ExternalExecutor",
+            "FinishedAtUTC" -> iSVATUTCNow[]|>;
+          Which[
+            StringQ[jd] && FileExistsQ[outFile],
+              shared = iSVATSharedCatalogResultPath[slot];
+              If[shared =!= $Failed,
+                iSVATEnsureDir[DirectoryName[shared]];
+                Quiet @ Check[CopyFile[outFile, shared,
+                  OverwriteTarget -> True], Null]];
+              iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunCompleted",
+                "ResultPublished" -> (shared =!= $Failed && FileExistsQ[shared]),
+                "ResultFile" -> If[shared =!= $Failed,
+                  FileNameTake[shared], Missing[]]|>]];
+              AppendTo[finalized, slot],
+            MemberQ[{"Failed", "Expired"}, statusStr],
+              iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
+                "Reason" -> statusStr,
+                "ErrorRef" -> Lookup[st, "ErrorRef", Missing[]]|>]];
+              AppendTo[finalized, slot],
+            (* no status.json well past startup -> child died before writing *)
+            statusStr === "" && age > 180,
+              iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
+                "Reason" -> "ChildDiedAtStartup(NoStatusWritten)"|>]];
+              AppendTo[finalized, slot],
+            age > $iSVATCatalogRunTTLSeconds,
+              iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
+                "Reason" -> "Timeout(" <>
+                  ToString[$iSVATCatalogRunTTLSeconds] <> "s)"|>]];
+              AppendTo[finalized, slot],
+            True, Null]]],
+      $iSVATCatalogRunsPending];
+    Scan[($iSVATCatalogRunsPending = KeyDrop[$iSVATCatalogRunsPending, #]) &,
+      finalized];
+    Null];
+
+(* ANY machine: retrieve a published remote-run result by DispatchSlotKey *)
+SourceVaultRemoteWorkflowResult[slot_String] :=
+  Module[{shared = iSVATSharedCatalogResultPath[slot], runs, recs, term},
+    If[shared =!= $Failed && FileExistsQ[shared],
+      Return[Quiet @ Check[Import[shared, "WXF"],
+        Failure["ResultUnreadable", <|"Path" -> shared|>]]]];
+    runs = iSVATReadRuns[];
+    recs = Select[runs, Lookup[#, "DispatchSlotKey", ""] === slot &];
+    term = SelectFirst[recs,
+      MemberQ[{"CatalogRunCompleted", "CatalogRunFailed"},
+        Lookup[#, "Status", ""]] &, Missing[]];
+    Which[
+      AssociationQ[term] && term["Status"] === "CatalogRunFailed",
+        Failure["CatalogRunFailed", <|
+          "Reason" -> Lookup[term, "Reason", "?"],
+          "MachineTag" -> Lookup[term, "MachineTag", "?"],
+          "Slug" -> Lookup[term, "Slug", "?"],
+          "FinishedAtUTC" -> Lookup[term, "FinishedAtUTC", "?"]|>],
+      AssociationQ[term],   (* completed but result file not synced yet *)
+        Missing["ResultSyncing", slot],
+      AnyTrue[recs, Lookup[#, "Status", ""] === "CatalogRunSubmitted" &],
+        Missing["StillRunning", slot],
+      recs =!= {}, Missing["NotFinished", slot],
+      True, Missing["NotFound", slot]]];
+
+(* REQUESTER side: watch a remote run and report back into the originating
+   notebook when it finishes (or fails / times out). *)
+SourceVaultAutoTriggerWatchRemoteRun[slot_String, meta_Association : <||>] := (
+  $iSVATRemoteWatches[slot] = <|
+    "Notebook" -> Lookup[meta, "Notebook", None],
+    "Slug" -> Lookup[meta, "Slug", Missing[]],
+    "MachineTag" -> Lookup[meta, "MachineTag", Missing[]],
+    "StartedAbs" -> AbsoluteTime[]|>;
+  <|"Status" -> "Watching", "DispatchSlotKey" -> slot,
+    "Watches" -> Length[$iSVATRemoteWatches]|>);
+
+(* write into the originating notebook via the NBAccess final-action queue
+   (single committer; TargetNotebook resolved there, CellPrint fallback).
+   Weak: without claudecode, log-only. *)
+iSVATNotifyRequester[cellExpr_Cell, nb_, summary_String] :=
+  Module[{enq = iSVATClaudeSym["ClaudeEnqueueFinalAction"], fa},
+    fa = <|"Action" -> "WriteNotebookCell", "Cell" -> cellExpr,
+      "Source" -> "AutoTriggerRemoteRun", "RequiresFinalNode" -> True,
+      "Summary" -> summary|>;
+    If[MatchQ[nb, _NotebookObject], fa["TargetNotebook"] = nb];
+    If[enq === $Failed, Return[<|"Status" -> "NoFinalActionQueue"|>]];
+    Quiet @ Check[enq[fa], <|"Status" -> "EnqueueFailed"|>]];
+
+iSVATPollRemoteWatches[] :=
+  Module[{finalized = {}, runs},
+    If[$iSVATRemoteWatches === <||>, Return[Null]];
+    runs = iSVATReadRuns[];
+    KeyValueMap[
+      Function[{slot, w},
+        Module[{recs, term, age, slug, mtag, cell, summary},
+          recs = Select[runs, Lookup[#, "DispatchSlotKey", ""] === slot &];
+          term = SelectFirst[recs,
+            MemberQ[{"CatalogRunCompleted", "CatalogRunFailed"},
+              Lookup[#, "Status", ""]] &, Missing[]];
+          age = AbsoluteTime[] - Lookup[w, "StartedAbs", AbsoluteTime[]];
+          slug = ToString[Lookup[w, "Slug", "?"]];
+          mtag = ToString[Lookup[w, "MachineTag", "?"]];
+          Which[
+            AssociationQ[term] && term["Status"] === "CatalogRunCompleted",
+              summary = "remote workflow completed: " <> slug <> " @ " <> mtag;
+              cell = Cell[
+                "(* " <> slug <> " : " <> mtag <>
+                  " \:3067\:306e\:5b9f\:884c\:304c\:5b8c\:4e86\:3057\:307e\:3057\:305f - \:8a55\:4fa1\:3059\:308b\:3068\:7d50\:679c\:3092\:53d6\:308a\:51fa\:305b\:307e\:3059 *)\n" <>
+                  "SourceVaultRemoteWorkflowResult[\"" <> slot <> "\"]",
+                "Input"];
+              iSVATNotifyRequester[cell, w["Notebook"], summary];
+              AppendTo[finalized, slot],
+            AssociationQ[term],   (* CatalogRunFailed *)
+              summary = "remote workflow FAILED: " <> slug <> " @ " <> mtag <>
+                " (" <> ToString[Lookup[term, "Reason", "?"]] <> ")";
+              cell = Cell[
+                "\:26a0 \:30ea\:30e2\:30fc\:30c8\:5b9f\:884c\:5931\:6557: " <> slug <>
+                  " @ " <> mtag <>
+                  "\n\:7406\:7531: " <> ToString[Lookup[term, "Reason", "?"]] <>
+                  "\n\:6642\:523b: " <> ToString[Lookup[term, "FinishedAtUTC", "?"]] <>
+                  "\n\:8a73\:7d30: SourceVaultRemoteWorkflowResult[\"" <> slot <> "\"]",
+                "Text", FontColor -> RGBColor[0.7, 0.1, 0.1]];
+              iSVATNotifyRequester[cell, w["Notebook"], summary];
+              AppendTo[finalized, slot],
+            age > $iSVATRemoteWatchTTLSeconds,
+              summary = "remote workflow timeout (no terminal record): " <> slug;
+              cell = Cell[
+                "\:26a0 \:30ea\:30e2\:30fc\:30c8\:5b9f\:884c\:306e\:7d42\:4e86\:5831\:544a\:304c " <>
+                  ToString[$iSVATRemoteWatchTTLSeconds] <>
+                  "s \:4ee5\:5185\:306b\:5c4a\:304d\:307e\:305b\:3093\:3067\:3057\:305f: " <> slug <>
+                  " @ " <> mtag <>
+                  "\n\:5b9f\:884cPC\:306e\:30b9\:30b1\:30b8\:30e5\:30fc\:30e9\:7a3c\:50cd/\:540c\:671f\:3092\:78ba\:8a8d\:3057\:3066\:304f\:3060\:3055\:3044\:3002" <>
+                  "\n\:78ba\:8a8d: SourceVaultRemoteWorkflowResult[\"" <> slot <> "\"]",
+                "Text", FontColor -> RGBColor[0.7, 0.1, 0.1]];
+              iSVATNotifyRequester[cell, w["Notebook"], summary];
+              AppendTo[finalized, slot],
+            True, Null]]],
+      $iSVATRemoteWatches];
+    Scan[($iSVATRemoteWatches = KeyDrop[$iSVATRemoteWatches, #]) &, finalized];
+    Null];
+
+(* ============================================================
    Scheduler: rides claudecode's shared polling tick (opt-in,
    default off). Each (throttled) fire is non-blocking:
    Poll finished async jobs -> Tick (build jobs) -> DispatchAsync
@@ -1847,6 +2317,13 @@ iSVATSchedulerTickBody[interval_] :=
     (* workflow targets: non-blocking kick-off (only if orchestrator present) *)
     If[iSVATOrchestratorReadyQ[],
       Quiet @ Check[SourceVaultAutoTriggerDispatchWorkflows[], Null]];
+    (* catalog-workflow runs enqueued for THIS machine (e.g. a "run on <PC>"
+       request from another PC's panel); no orchestrator needed *)
+    Quiet @ Check[SourceVaultAutoTriggerDispatchCatalogRuns[], Null];
+    (* executor: publish finished catalog runs to the shared vault *)
+    Quiet @ Check[iSVATPollCatalogRuns[], Null];
+    (* requester: report remote-run completion/failure into the origin notebook *)
+    Quiet @ Check[iSVATPollRemoteWatches[], Null];
     $iSVATLastSchedulerResult = <|"AtUTC" -> iSVATUTCNow[],
       "Running" -> Keys[$iSVATRunningJobs],
       "RunningWorkflows" -> Keys[$iSVATRunningWorkflows]|>;
@@ -2405,6 +2882,9 @@ SourceVaultAutoTriggerCapability[spec_Association] :=
         If[feReq, {"FrontendRequired", "FE\:5fc5\:8981", False},
           {"HeadlessAsync",
            "\:5225\:30ab\:30fc\:30cd\:30eb\:975e\:30d6\:30ed\:30c3\:30af(workflow)", True}],
+      "CatalogWorkflow",
+        {"HeadlessAsync",
+         "\:5225\:30d7\:30ed\:30bb\:30b9(\:30ab\:30bf\:30ed\:30b0)", True},
       "PromptRoute",
         {"BlockingSyncUserInitiated",
          "\:4e3b\:30ab\:30fc\:30cd\:30eb(\:624b\:52d5\:8d77\:52d5)", False},

@@ -14687,7 +14687,12 @@ If[AssociationQ[ClaudeCode`$ClaudePackageKeywordMap],
      "\:8fd4\:4fe1", "reply",
      "SourceVaultMailEnsureLoaded", "SourceVaultMailView", "SourceVaultMailDataset",
      "SourceVaultSearchMailSnapshots", "SourceVaultInferMailDerivedBatch",
-     "SourceVaultMailFetchNew", "SourceVaultMailComposeReply"}];
+     "SourceVaultMailFetchNew", "SourceVaultMailComposeReply",
+     (* Claude Code セッションログ (llmlog)。「Claude Code のログ」を
+        GitHubCommitLog (コミット履歴) と混同させないため、ここで SourceVault
+        docs を確実にトリガする (bare "ログ" は over-match するので入れない) *)
+     "Claude Code", "ClaudeCode", "実行ログ", "セッションログ", "作業ログ",
+     "SourceVaultClaudeCode", "llmlog"}];
 
 (* \:88dc\:52a9 api_maildb.md \:306e\:6ce8\:5165\:6761\:4ef6 ($ClaudePackageAuxKeywordMap)\:3002
    \:30e1\:30fc\:30eb\:7cfb\:30ad\:30fc\:30ef\:30fc\:30c9\:304c task \:306b\:542b\:307e\:308c\:308b\:3068\:304d\:306e\:307f api_maildb.md \:3092\:6ce8\:5165\:3057\:3001
@@ -14741,6 +14746,13 @@ If[AssociationQ[ClaudeCode`$ClaudePackageAuxKeywordMap],
       "SourceVaultPackageApi", "packageapi",
       "API\:691c\:7d22", "API \:7d22\:5f15", "api.md \:7d22\:5f15",
       "chunk \:7d22\:5f15", "sv://packageapi"};
+    (* api_llmlog.md: Claude Code セッションログの検索/共有タスクで注入。
+       「Claude Codeのログ」を GitHubCommitLog (コミット履歴) や GitHub リポジトリ
+       検索と混同させない (2026-07-06: LM Studio モデルが誤ルートした実例への対処)。 *)
+    auxMap["llmlog"] = {
+      "Claude Code", "ClaudeCode", "実行ログ", "セッションログ", "作業ログ",
+      "過去のセッション", "svcclog", "SourceVaultClaudeCode",
+      "claudecode_sessions", "SourceVaultIngestClaudeCodeLogs"};
     ClaudeCode`$ClaudePackageAuxKeywordMap["SourceVault"] = auxMap]];
 
 (* ============================================================
@@ -14933,13 +14945,14 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
     Scan[
       Function[f, Module[{p = FileNameJoin[{svDir, f}]},
         Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
-      {"SourceVault_core.wl", "SourceVault_contracts.wl", "SourceVault_wiring.wl",
+      {"SourceVault_core.wl", "SourceVault_simrun.wl",
+       "SourceVault_contracts.wl", "SourceVault_wiring.wl",
        "SourceVault_packageapi.wl", "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
        "SourceVault_mailstructure.wl", "SourceVault_mailsuggest.wl",
        "SourceVault_searchview.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
-       "SourceVault_mcp.wl", "SourceVault_workflowregistry.wl",
+       "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",
        "SourceVault_workflowcatalog.wl"}]]];
 
 (* ============================================================
@@ -14954,3 +14967,44 @@ Quiet @ Check[
       <|"Status" -> "Skipped", "Reason" -> "MiningUnavailable"|>],
   SourceVault`Private`$iSVMiningWireResult =
     <|"Status" -> "Failed", "Reason" -> "WireException"|>];
+
+(* ============================================================
+   Auto-start the auto-trigger scheduler so this machine ALWAYS picks up
+   jobs addressed to it (e.g. "run this workflow on <PC>" from another PC's
+   panel), per the always-both-loaded (ClaudeOrchestrator + SourceVault)
+   convention. SourceVault_autotrigger.wl is already auto-loaded above; here
+   we just turn the scheduler ON.
+
+   CRITICAL guard -- FE main kernel ONLY ($FrontEnd =!= Null):
+   SourceVault.wl is also loaded by subkernels, external-job wolframscript
+   processes, the SourceVault service kernel, the MCP gateway kernel, etc.
+   Each such kernel starting its own scheduler (+ pre-launching a subkernel
+   pool) would explode the license seat count and multiply dispatch. The
+   scheduler must run in exactly ONE place per machine: the interactive FE.
+   Headless kernels have $FrontEnd === Null and are excluded.
+
+   The scheduler rides claudecode's shared polling tick; if that base is not
+   loaded yet, StartScheduler is a cheap no-op returning ClaudeCodeAbsent
+   (recorded below) and starts on the next SourceVault (re)load once the
+   Claude stack is up. Idempotent: StartScheduler re-registers the same tick
+   key harmlessly. Opt out with
+     SourceVault`Private`$iSVDisableAutoTriggerScheduler = True
+   ============================================================ *)
+If[!ValueQ[SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult],
+  SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult =
+    <|"Status" -> "NotAttempted"|>];
+
+Quiet @ Check[
+  SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult =
+    Which[
+      $FrontEnd === Null,
+        <|"Status" -> "Skipped", "Reason" -> "NotFrontEndKernel"|>,
+      TrueQ[SourceVault`Private`$iSVDisableAutoTriggerScheduler],
+        <|"Status" -> "Skipped", "Reason" -> "DisabledByUser"|>,
+      Length[Names["SourceVault`SourceVaultAutoTriggerStartScheduler"]] == 0,
+        <|"Status" -> "Skipped", "Reason" -> "AutoTriggerUnavailable"|>,
+      True,
+        With[{r = SourceVault`SourceVaultAutoTriggerStartScheduler[]},
+          If[AssociationQ[r], r, <|"Status" -> "Failed"|>]]],
+  SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult =
+    <|"Status" -> "Failed", "Reason" -> "AutoStartException"|>];

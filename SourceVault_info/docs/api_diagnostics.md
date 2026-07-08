@@ -32,6 +32,13 @@ Phase 0 スコープ: シンク可用性の弱検出 / 構造化 append-only 診
 ### SourceVaultDiagnosticsLog[record_Association] → Association | Failure
 構造化診断レコード（reason code / component / severity / health / machine tag）を machine-local append-only 診断ログに追記する。格納したレコードを返す。vault root が解決できない場合は Failure。
 
+### SourceVaultDiagnosticsIngestSpool[] → Association
+producer per-process spool（`$UserBaseDirectory/ApplicationData/ClaudeRuntime/diag-spool/*.jsonl`）の DiagnosticsEvent を正準 diagnostics-log へ転記する（hardening 05 Inc2）。service kernel の低頻度 hook からのみ呼ぶ（単一書き手原則）。offset sidecar（`<file>.ingest.json`）で差分読み・EventId dedup により冪等。消化済みの過去日 shard は削除。件数集計を返す。
+
+### $SourceVaultDiagIngestIntervalSeconds
+型: Integer, 初期値: 60
+service ループの spool ingest 周期（秒）。
+
 ## ライセンス / トポロジ / 容量プローブ
 
 ### SourceVaultDiagnosticsLicenseProbe[] → Association

@@ -1,3 +1,5 @@
+---
+
 # SourceVault マイニング使用例 — identity / tag / 記憶代謝
 
 SourceVault の **マイニングレイヤ**（`SourceVault_mining.wl`、記憶の代謝・検証・自己修復）の使用例集です。

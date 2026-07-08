@@ -1,3 +1,5 @@
+---
+
 ## 動作要件
 
 | 項目 | 要件 |
@@ -40,11 +42,17 @@ GitHubInstallPackage["SourceVault",
 `SourceVault.wl` のロード時には、同じディレクトリにある以下の補助サブファイルが自動的に読み込まれます。これらも `$packageDirectory` 直下に配置してください。
 
 - `SourceVault_core.wl` — コア基盤（排他制御・不変 snapshot・event log・blob・pointer）
+- `SourceVault_contracts.wl` — サブシステム間のコントラクト（型・不変条件）定義
+- `SourceVault_wiring.wl` — サブシステム間の配線・初期化
+- `SourceVault_simrun.wl` — シミュレーション実行との連携
 - `SourceVault_searchindex.wl` — 検索インデックス・公開ポリシー
+- `SourceVault_searchview.wl` — 検索結果ビュー
 - `SourceVault_servicemanager.wl` — サービス管理・Python proxy
 - `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得
 - `SourceVault_mcp.wl` — MCP tool schema / dispatch ＋ sv:// オブジェクト解決
+- `SourceVault_llmlog.wl` — Claude Code セッションログの取り込み・検索・共有（llmlog）
 - `SourceVault_workflowregistry.wl` — コード化ワークフローのオンデマンドローダ
+- `SourceVault_autotrigger.wl` — 自動トリガスケジューラ（対話 FE カーネルで自動起動）
 - `SourceVault_promptrouter.wl` — PromptRouter 拡張
 
 リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。暗号化・メールを使う場合は `SourceVault_crypto.wl` / `SourceVault_identity.wl` / `SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` も、Eagle 統合を使う場合は `SourceVault_eagle.wl`（手動ロード）も同様に配置します（メール系サブファイルは各 Mail 関数の初回呼び出し時にオンデマンドで読み込まれます）。
@@ -91,11 +99,17 @@ $packageDirectory
 $packageDirectory\
   SourceVault.wl                 ← 本体
   SourceVault_core.wl            ← コア基盤（本体ロード時に自動ロード）
+  SourceVault_contracts.wl       ← コントラクト定義（本体ロード時に自動ロード）
+  SourceVault_wiring.wl          ← 配線・初期化（本体ロード時に自動ロード）
+  SourceVault_simrun.wl          ← シミュレーション実行連携（本体ロード時に自動ロード）
   SourceVault_searchindex.wl     ← 検索インデックス（本体ロード時に自動ロード）
+  SourceVault_searchview.wl      ← 検索結果ビュー（本体ロード時に自動ロード）
   SourceVault_servicemanager.wl  ← サービス管理（本体ロード時に自動ロード）
   SourceVault_webingest.wl       ← SearXNG/Web 検索（本体ロード時に自動ロード）
   SourceVault_mcp.wl             ← MCP + sv:// オブジェクト解決（本体ロード時に自動ロード）
+  SourceVault_llmlog.wl          ← Claude Code セッションログ（本体ロード時に自動ロード）
   SourceVault_workflowregistry.wl ← ワークフローレジストリ（本体ロード時に自動ロード）
+  SourceVault_autotrigger.wl     ← 自動トリガスケジューラ（本体ロード時に自動ロード）
   SourceVault_promptrouter.wl    ← PromptRouter 拡張（本体ロード時に自動ロード）
   NBAccess.wl
   claudecode.wl
@@ -188,6 +202,31 @@ $SourceVaultDefaultNotebookFolder = "C:\\path\\to\\your\\notebooks";
 ```mathematica
 (* 現在の解決先を確認する（Automatic のときは $onWork → $packageDirectory に解決される） *)
 $SourceVaultDefaultNotebookFolder
+```
+
+---
+
+## 自動トリガスケジューラの自動起動（対話 FE カーネルのみ）
+
+SourceVault は、他 PC からの依頼を含むジョブ（llmlog・docs・MCP など各種タスク）を自動的に拾い上げてトリガする **自動トリガスケジューラ** を備えています。`SourceVault_autotrigger.wl` は本体ロード時に自動的に読み込まれ、SourceVault の (再)ロード時にスケジューラが自動起動します。
+
+- スケジューラは **1 マシンにつき 1 か所だけ**で動く必要があるため、自動起動は**対話フロントエンド（FE）のメインカーネル（`$FrontEnd =!= Null`）に限定**されます。headless カーネル（`$FrontEnd === Null`。並列サブカーネルの親・SourceVault サービスカーネル・MCP ゲートウェイカーネル・外部ジョブの wolframscript プロセス等）では起動しません。各 headless カーネルがそれぞれスケジューラを立ち上げると、Wolfram ライセンス席の浪費とディスパッチの多重化を招くためです。
+- 冪等です。すでに起動済みの場合は同じ tick を再登録するだけの no-op として振る舞います。スケジューラは claudecode の共有ポーリング tick に相乗りします（claudecode がまだロードされていない場合、`SourceVaultAutoTriggerStartScheduler` は `ClaudeCodeAbsent` を返す安価な no-op となり、次回 SourceVault (再)ロード時に自動起動します）。
+- 自動起動の結果は `SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult` に記録されます。`Status` は次のいずれかです。
+  - スケジューラを起動した（`Started` 等）
+  - `Skipped`（`Reason`: `AutoTriggerUnavailable` / `DisabledByUser` / `NotFrontEndKernel`）
+  - `Failed`（`Reason`: `AutoStartException`）
+
+自動起動を無効にしたい場合は、SourceVault ロード前に次を設定します（例: このマシンではスケジューラを動かしたくない場合）。
+
+```mathematica
+SourceVault`Private`$iSVDisableAutoTriggerScheduler = True;
+```
+
+スケジューラを手動で起動したい場合は次を使います（冪等）。
+
+```mathematica
+SourceVault`SourceVaultAutoTriggerStartScheduler[]
 ```
 
 ---
@@ -782,6 +821,20 @@ SourceVault`SourceVaultReclassifyPublicPrivacy[]
 
 > arXiv・wikipedia・公式 docs 等の公開 web データは PrivacyLevel 0.0（クラウド LLM 可・機密閾値 0.5 未満）として扱われます。一覧（`SourceVaultSources["", "Kind" -> "arxiv"]` 等）の公開 arxiv セルが Max PL 1.0 と誤判定され機密化される不具合は修正済みで、本関数で過去分を是正できます。
 
+### Claude Code セッションログ（llmlog）の動作確認
+
+`SourceVault_llmlog.wl`（本体ロード時に自動ロード）は、Claude Code のセッションログ（実行ログ・作業ログ）を PrivateVault に取り込み、検索・共有するサブシステムです。「Claude Code のログ」を GitHub のコミット履歴（`GitHubCommitLog`）や GitHub リポジトリ検索と混同させないよう、専用のルーティングキーワード（`"Claude Code"` / `"セッションログ"` / `"実行ログ"` / `"作業ログ"` / `"過去のセッション"` / `"svcclog"` 等）で扱われます。
+
+```mathematica
+(* Claude Code のセッションログを PrivateVault に取り込む *)
+SourceVault`SourceVaultIngestClaudeCodeLogs[]
+
+(* 取り込んだセッションログを検索・閲覧する *)
+SourceVault`SourceVaultClaudeCode["検索語"]
+```
+
+> セッションログの取り込みは、前述の「自動トリガスケジューラ」からも自動的にトリガされ得ます（`claudecode_sessions` タスク）。
+
 ### メールサブシステムの動作確認（IMAP アカウント登録済みが前提）
 
 「初回セットアップ」の手順 1〜5 を済ませてある場合、メールの取得・閲覧を確認できます。
@@ -825,7 +878,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultSources` / `SourceVaultArXiv` が arXiv メタデータを取得しない | ネットワーク接続を確認するか、`"FetchMetadata" -> True` を明示して強制再取得してください |
 | arXiv ソースの Summary が空・英語のまま | `SourceVaultBackfillArXivSummaries[]` を `$Language = "Japanese"` のセッションで実行。LLM エラー本文が残っている場合は `"Force" -> True` で再生成 |
 | 公開 arXiv / Web ソースが機密扱い（PrivacyLevel 0.5 以上）になっている | 旧版の誤タグの名残。`SourceVaultReclassifyPublicPrivacy[]` で公開既定値（0.0 / 0.4）に是正（冪等） |
-| モデルのバージョン比較が誤る（新メジャー版に旧マイナー付き版が負ける） | `iSVParseModelVersion` の数値キーを固定幅パディング方式（base-100000・width 6）に修正済み。旧実装は指数に桁数 `Length` を使っていたため、桁数の異なるバージョン間（例: `claude-sonnet-4-6` の `{4,6}` と `claude-sonnet-5` の `{5}`）で `{5}` が誤って上位になっていました。SourceVault を最新版に更新すれば `{4,6}` が `{5}` を正しく上回ります |
+| モデルのバージョン比較が誤る（新メジャー版に旧マイナー付き版が負ける） | `iSVParseModelVersion` の数値キーを固定幅パディング方式（base-100000・width 6）に修正済み。旧実装は指数に桁数 `Length` を使っていたため、桁数の異なるバージョン間（例: `claude-sonnet-4-6` の `{4,6}` と `claude-sonnet-5` の `{5}`）で `{5}` が誤って上位になっていました。SourceVault を最新版に更新すれば `{4,6}` が `{5}` を正しく上回ります。2026-07-06 に、この不具合で LM Studio モデルが誤ルートした実例が確認され対処済みです。日付らしき数値は `iSVParseModelVersion` で事前に除外されるため（10000 未満のみ通す）、固定幅パディング（base-100000・width 6）と衝突して桁上がりすることはありません |
 | `SourceVaultShowSourceSummary` がいつも自動生成版を開く（追記が反映されない） | ノート内の「このノートを保存する」ボタンを押して `<PrivateVault>/sources/summary-notes/` に保存したか確認。保存版が正本として優先されます。逆に保存版を無視して record から作り直したい場合は `"Fresh" -> True` |
 | `SourceVaultWebSearch` / `SourceVaultSearXNGAvailableQ` が失敗・空を返す | SearXNG が `127.0.0.1:8888`（`$SourceVaultSearXNGEndpoint`）で稼働しているか、`settings.yml` の `search.formats` に `json` が含まれるか、`limiter`/`botdetection` がローカルアクセスをブロックしていないか確認 |
 | MCP トグル/検索を変更したのに反映されない | detached service は起動時コードを保持。`SourceVaultRestartService["sourcevault"]`（または `SourceVaultStopMCP[]`→`SourceVaultStartMCP[]`）で再起動する |
@@ -837,6 +890,8 @@ SourceVaultNotebookSummary[nbPath]
 | サービスカーネルが起動直後に消える（`stdout.log` 末尾に *"The product exited because an error occurred … unregistered"*） | **Wolfram ライセンスの同時メインカーネル席の枯渇**。FE＋並列 subkernel の親＋ネイティブ Wolfram MCP（Claude Code がセッション毎に起動）＋wolframscript ジョブが席を食うと、detached サービスカーネルが弾かれる。`/health` は proxy 生存で緑のままなので気づきにくい。対策 = 余分な Wolfram メインカーネルを減らす（ネイティブ Wolfram MCP を単一共有カーネルの HTTP ゲートウェイに集約 / claudecode の前置並列カーネルを `$ClaudeParallelKernelCount` で削減 / Claude Code の余分セッションを閉じる） |
 | パレットの「実行中／停止中」が実態と食い違う | 旧実装は proxy 到達性のみで判定していた。`healthState=="OK"` 判定に修正済み（2026-06）。稼働中カーネルで `Get["SourceVault_servicemanager.wl"]` 再読込すると反映される |
 | パレットの「MCP実行」を押したのに起動しない／`SourceVaultSvc_<id>` タスクが消えている | 上記の状態誤判定で、トグルが「実行中」と誤認して逆に Stop（Svc タスク削除）した名残。RunningQ 修正で再発防止済み。当座は service の `launch_hidden.vbs` を直接起動するか `SourceVaultStartMCP[]` を再実行（タスクは再生成される） |
+| 自動トリガスケジューラが動かない／二重に動く | 自動起動は対話 FE カーネル（`$FrontEnd =!= Null`）に限定。`SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult` の `Status`/`Reason` を確認（`NotFrontEndKernel` = headless、`DisabledByUser` = `$iSVDisableAutoTriggerScheduler` が `True`、`AutoTriggerUnavailable` = claudecode 未ロード）。手動起動は `SourceVaultAutoTriggerStartScheduler[]`（冪等）。無効化は SourceVault ロード前に `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True` |
+| 「Claude Code のログ」検索が GitHub コミット履歴やリポジトリ検索に誤ルートする | llmlog 専用キーワード（`"セッションログ"` / `"実行ログ"` / `"svcclog"` 等）を使う。取り込みは `SourceVaultIngestClaudeCodeLogs[]`、検索は `SourceVaultClaudeCode[...]`。`SourceVault_llmlog.wl` がロードされているか確認 |
 
 ---
 

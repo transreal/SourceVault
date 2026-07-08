@@ -380,7 +380,46 @@ iConventions[name_, canon_] :=
   "    Needs[\"SourceVault`\"]; SourceVault`SourceVaultLoadWorkflow[\"" <> name <> "\"]\n" <>
   "  Do NOT use a manual Get with a hardcoded path or any placeholder symbol. Then call WorkflowInfo[] and the launch entry, showing the real invocation (with arguments if the launch needs them to do its work). For a LONG-RUNNING end-to-end run (network / LLM), show SourceVault`SourceVaultRunWorkflowAsync[\"" <> name <> "\", \"run\"] as the DEFAULT way to run it (it runs off the FRONT END so the notebook does not freeze; the synchronous <Launch>[\"run\"] is only for quick/offline cases). The completion writes a summary to the notebook; the result View is retrieved via SourceVault`SourceVaultRunWorkflowResult.\n" <>
   "- Extra subfiles, if any, are SVWorkflow_" <> canon <> "_<sub>.wl .\n" <>
-  "- Encode in UTF-8; use only \\:XXXX style Unicode escapes inside .wl strings; do not Clear/Remove the Global` context.\n";
+  "- Encode in UTF-8; use only \\:XXXX style Unicode escapes inside .wl strings; do not Clear/Remove the Global` context.\n" <>
+  "SIMULATION / HEAVY-COMPUTE CONVENTIONS -- apply ONLY when the spec has an \"## Execution Profile\" " <>
+  "section with ExecutionClass \"simulation\", or otherwise requires subkernel parallelism / CUDA / " <>
+  "large (reference-mode) outputs:\n" <>
+  "- The no-arg launch stays a SAFE report: it must never run the simulation, launch kernels, or " <>
+  "touch the GPU. The real run is <Launch>[\"run\", opts] with the spec's tunable parameters as options.\n" <>
+  "- REFERENCE OUTPUTS (OutputMode \"reference\"): at the start of \"run\" call " <>
+  "run = SourceVault`SourceVaultSimRunCreate[\"" <> name <> "\", params] (params = an Association of " <>
+  "the tunable parameters; it creates the per-run folder <udb>/simruns/<yyyymmddHHmm>-<machine>-<slug>). " <>
+  "Write EVERY bulk artifact (data .wxf/.csv, images, videos, frames) under run[\"Folder\"]. At the end " <>
+  "call fin = SourceVault`SourceVaultSimRunFinalize[run, <|\"Status\"->\"Done\",\"Summary\"-><SMALL assoc>|>] " <>
+  "and RETURN a small association that includes fin[\"URI\"] (the sv://snapshot/SimulationRun/... " <>
+  "reference), fin[\"Folder\"], and key summary numbers. NEVER return or store bulk data/graphics " <>
+  "inline, never deposit the bulk files as vault blobs, and never put large values into the Finalize " <>
+  "extra argument (metadata + small summary only).\n" <>
+  "- CPU PARALLEL (Parallelization \"subkernels\"): wrap the heavy compute in " <>
+  "SourceVault`SourceVaultWithSubkernels[ ... ] -- it launches ALL available subkernels and ALWAYS " <>
+  "closes the ones it launched when the body finishes, returning the license seats to standby. Do NOT " <>
+  "call LaunchKernels/CloseKernels yourself. Inside the body, ParallelMap / ParallelTable / " <>
+  "DistributeDefinitions / ParallelEvaluate work as usual (remember to DistributeDefinitions or " <>
+  "ParallelEvaluate[Get[...]] anything the subkernels need).\n" <>
+  "- CUDA (CUDA \"required\"): begin \"run\" with gate = SourceVault`SourceVaultCUDARequire[]; " <>
+  "If[FailureQ[gate], Return[gate]] -- on a non-Nvidia machine this returns a graceful Failure naming " <>
+  "the known GPU machines (e.g. the spec's TargetMachine). Ship the CUDA C source as a .cu file in the " <>
+  "package folder; compile with exe = SourceVault`SourceVaultCUDACompile[cuPath] (nvcc -O3, cached " <>
+  "under LocalState; a Failure means nvcc is unavailable -- return it). Exchange data with the " <>
+  "executable via BINARY FILES inside the run folder (BinaryWrite / BinaryReadList), never by parsing " <>
+  "large data from stdout.\n" <>
+  "- Test file: keep it LIGHT -- tiny problem sizes, no subkernel launch, no GPU/nvcc requirement " <>
+  "(skip CUDA paths printing SKIP when SourceVault`SourceVaultGPUAvailableQ[] is False), network-free; " <>
+  "SimRunCreate/Finalize may be exercised with $SourceVaultSimRunRoot redirected to a temp directory.\n" <>
+  "- Exact simrun API (auto-loaded with SourceVault`): " <>
+  "SourceVaultSimRunCreate[slug_String, params_Association] -> <|\"RunId\",\"Folder\",\"Slug\",\"Machine\",\"Params\",\"StartedAtUTC\"|>; " <>
+  "SourceVaultSimRunFinalize[run_Association, extra_Association] -> <|\"Status\",\"URI\",\"Ref\",\"RunId\",\"Folder\",\"Files\",\"TotalBytes\"|> | Failure; " <>
+  "SourceVaultWithSubkernels[body] / SourceVaultWithSubkernels[n, body] (HoldAll; returns body's value); " <>
+  "SourceVaultCUDARequire[] -> <|\"OK\"->True,\"GPUs\"->...|> | Failure[\"NoNvidiaGPU\",...]; " <>
+  "SourceVaultCUDACompile[cuFile_String] -> exePath_String | Failure; " <>
+  "SourceVaultGPUAvailableQ[] -> True|False; " <>
+  "SourceVaultMachineProfile[] -> <|\"MachineTag\",\"ProcessorCount\",\"MemoryGB\",\"GPUs\",...|>; " <>
+  "SourceVaultSimRunFolder[uri_String] -> local folder path | Missing.\n";
 
 (* PLAN: decide single vs multi-stage; if multi, draft a split-implementation aux spec. *)
 iRealPlan[model_, payload_] := Module[{name, canon, spec, notes, prompt, out, json, multi, stages, aux},
@@ -637,7 +676,14 @@ iRealVerify[model_, payload_, filesText_] := Module[{prompt, out, json, verdict,
     "request ASCII-izing, renaming, or otherwise changing the context / file name / BeginPackage form " <>
     "-- treat naming, syntax and load-ability as settled facts, never a finding.\n\n" <>
     "WHAT TO JUDGE -- SPEC FIDELITY ONLY: does the package implement the APPROVED requirements" <>
-    If[multi, " for THIS stage", ""] <> "? You MAY check that WorkflowInfo[] exposes a Launch entry, " <>
+    If[multi, " for THIS stage", ""] <> "? When the APPROVED spec has an \"## Execution Profile\" " <>
+    "with ExecutionClass \"simulation\", also check the simulation contract: bulk outputs must go to " <>
+    "a SourceVaultSimRunCreate run folder and be finalized with SourceVaultSimRunFinalize (the run " <>
+    "returns the sv:// URI + a small summary, never bulk data inline); subkernel parallelism must go " <>
+    "through SourceVaultWithSubkernels (never bare LaunchKernels without closing); CUDA runs must " <>
+    "gate on SourceVaultCUDARequire[] and fail gracefully on non-GPU machines; the no-arg launch " <>
+    "must not start the simulation. A violation of this contract is a blocker. " <>
+    "You MAY check that WorkflowInfo[] exposes a Launch entry, " <>
     "that a usage/example doc and a test file exist and are adequate, and that the code matches the " <>
     "spec. But a RUN result of NOT-RUN that the implementer attributes to the sandbox/approval gate " <>
     "is NOT, by itself, a blocker.\n" <>

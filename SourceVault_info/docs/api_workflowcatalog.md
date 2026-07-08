@@ -76,7 +76,10 @@ URI が指す元 notebook を開く (既に開いていれば前面化)。解決
 ## UI
 
 ### SourceVaultWorkflowPanel[] → Panel
-archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (2ボタン: 「▶ 実行」= `SourceVaultRunWorkflowAsync[slug, "run"]` で非同期実行しFEをブロックしない・前提は [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)/[ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) ロード済みかつ launch に `"run"` 形があること、実行結果は `SourceVaultRunWorkflowResult` で取得可; 「使用例」= `example.md` を実行可能セルとして新規ノートに展開)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)、自動起動 ([SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger) ロード時のみ表示; 未ロードは "—")。行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。
+archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (2ボタン)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)、自動起動 ([SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger) ロード時のみ表示; 未ロードは "—")。
+起動列2ボタン: 「▶ 実行」= 選択中の「実行PC」でワークフローを実行 (自機なら `SourceVaultRunWorkflowAsync[slug, "run"]` で非同期実行しFEをブロックしない・実行結果は `SourceVaultRunWorkflowResult` で取得; 他PCなら `SourceVaultEnqueueWorkflowRun[slug, runMachine]` でそのPC宛にキュー投入し、そのPCのスケジューラ `SourceVaultAutoTriggerStartScheduler` が拾って実行、完了/失敗は `SourceVaultAutoTriggerWatchRemoteRun` 経由で呼出元ノートに結果取得セル `SourceVaultRemoteWorkflowResult[...]` またはエラーレポートが書き戻される)。前提は [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)/[ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) ロード済みかつ launch に `"run"` 形があること。「使用例」= `example.md` を実行可能セルとして新規ノートに展開。
+検索行に「実行PC:」PopupMenu (既定=自機 `$MachineName` サニタイズ tag、候補は `SourceVaultListRuntimeMachines` 由来の vault 共有 PC 一覧)。自機実行時はプロセスライセンス枠 (`SourceVaultDiagnosticsLicenseProbe` の `ProcessSlotsFree`) が 0 なら子プロセスが落ちるため事前に MessageDialog で警告し実行を止める (診断未ロードならガードしない)。
+行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。
 
 ### SourceVaultWorkflowArchivePanel[] → Panel
 archive ステージのワークフローのみを一覧する UI。`SourceVaultWorkflowPanel` と同体裁。切替列は「testingへ戻す」ボタン (`SourceVaultSetWorkflowStatus[slug, "testing"]`)。
