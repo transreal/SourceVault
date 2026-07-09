@@ -80,7 +80,12 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultEnqueueWorkflowRun",
   "SourceVault`SourceVaultAutoTriggerDispatchCatalogRuns",
   "SourceVault`SourceVaultRemoteWorkflowResult",
-  "SourceVault`SourceVaultAutoTriggerWatchRemoteRun"
+  "SourceVault`SourceVaultAutoTriggerWatchRemoteRun",
+  "SourceVault`SourceVaultAutoTriggerPublishCatalogRuns",
+  "SourceVault`SourceVaultAutoTriggerHeadlessDispatchTick",
+  "SourceVault`SourceVaultHeadlessDispatchEnabledQ",
+  "SourceVault`SourceVaultEnableHeadlessDispatch",
+  "SourceVault`SourceVaultDisableHeadlessDispatch"
 ]];
 
 $SourceVaultAutoTriggerVersion = "0.1-phase1.4";
@@ -364,8 +369,10 @@ SourceVaultRunWorkflowAsync. Used by the workflow-list panel's per-row run butto
 when a NON-local machine is chosen (a local run executes immediately instead). \
 Option \"Form\" -> \"run\". Returns <|\"Status\" -> \"Enqueued\" | \"EnqueueFailed\", \
 \"Slug\", \"MachineTag\", \"DispatchSlotKey\", \"EligibleHere\", \"Note\"|>. NOTE: \
-the target PC must have SourceVaultAutoTriggerStartScheduler[] running to pick the \
-job up.";
+the target PC picks the job up either via the FE scheduler \
+(SourceVaultAutoTriggerStartScheduler[], auto-started on FE main kernels) or, \
+on an FE-less compute node, via the SourceVault service's headless dispatch \
+mode (opt-in: SourceVaultEnableHeadlessDispatch[machineTag]).";
 
 SourceVaultAutoTriggerDispatchCatalogRuns::usage =
   "SourceVaultAutoTriggerDispatchCatalogRuns[opts] runs the CatalogWorkflow jobs \
@@ -402,6 +409,67 @@ workflow-list panel registers this automatically on remote \"\:5b9f\:884c\". \
 Watches are session-local (an FE restart drops them; the result itself is still \
 retrievable via SourceVaultRemoteWorkflowResult).";
 
+SourceVaultAutoTriggerPublishCatalogRuns::usage =
+  "SourceVaultAutoTriggerPublishCatalogRuns[opts] is the STATELESS recovery \
+publisher for catalog runs submitted on THIS machine: it scans the merged run \
+logs for CatalogRunSubmitted slots that have no terminal record and are NOT \
+tracked by this kernel's in-memory pending map (i.e. the dispatching kernel \
+died / restarted after submitting), inspects each job dir (output.wxf / \
+status.json) and publishes the result to the shared vault + appends the \
+terminal CatalogRunCompleted/Failed record, exactly like the in-memory \
+finalizer. Options: \"MinAgeSeconds\" -> 600 (only orphans older than this; \
+keeps it a recovery-only path so the live dispatcher publishes first), \
+\"MaxRuns\" -> 8. Safe to call from any kernel on the executing machine.";
+
+SourceVaultAutoTriggerHeadlessDispatchTick::usage =
+  "SourceVaultAutoTriggerHeadlessDispatchTick[opts] is the DISPATCH-ONLY tick \
+for headless kernels (SourceVault service / wolframscript): it picks up \
+CatalogWorkflow jobs enqueued for THIS machine (SourceVaultEnqueueWorkflowRun) \
+and delegates execution to SourceVaultRunWorkflowAsync (external process), \
+then finalizes/publishes finished runs. It holds NO subkernel pool, evaluates \
+NO registered triggers, and registers NO ScheduledTask (the caller paces it). \
+Gated by SourceVaultHeadlessDispatchEnabledQ[] (override with \"Force\" -> \
+True for tests). The execution stack (workflowregistry + ClaudeOrchestrator \
+workflow engine) is lazily loaded ONLY when an eligible job is actually \
+pending; background poll-tick registrations made by the executor are \
+unregistered again after dispatch (the tick pumps the job poll itself). \
+Cross-kernel exclusion vs a concurrently running FE scheduler is provided by \
+the per-slot dispatch claim (see SourceVaultAutoTriggerDispatchCatalogRuns). \
+Options: \"MaxRuns\" -> 4, \"Force\" -> False. Returns a tick summary.";
+
+SourceVaultHeadlessDispatchEnabledQ::usage =
+  "SourceVaultHeadlessDispatchEnabledQ[] returns whether headless dispatch is \
+enabled on THIS machine. Precedence: session override $SourceVaultHeadlessDispatch \
+(True/False) > per-machine opt-in file autotrigger/headless/<machineTag>.json \
+in the shared vault (written by SourceVaultEnableHeadlessDispatch, so a compute \
+node can be enabled from any PC) > False.";
+
+SourceVaultEnableHeadlessDispatch::usage =
+  "SourceVaultEnableHeadlessDispatch[machineTag] opts the given machine \
+(default: this machine) into headless dispatch by writing \
+autotrigger/headless/<machineTag>.json to the shared vault. The target \
+machine's SourceVault service picks the flag up on its next dispatch tick; \
+loading the execution stack at service START is preferred, so restart the \
+target's service after first enabling (SourceVaultRestartService) to avoid a \
+long in-loop first load. Returns a status Association.";
+
+SourceVaultDisableHeadlessDispatch::usage =
+  "SourceVaultDisableHeadlessDispatch[machineTag] disables headless dispatch \
+for the given machine (default: this machine) by rewriting the opt-in file \
+with Enabled -> False (kept for audit). Takes effect on the next tick.";
+
+$SourceVaultHeadlessDispatch::usage =
+  "$SourceVaultHeadlessDispatch is the session-level override for headless \
+dispatch: True forces it on, False forces it off, unset defers to the \
+per-machine opt-in file (SourceVaultEnableHeadlessDispatch). Deliberately not \
+cleared on reload.";
+
+$SourceVaultHeadlessDispatchIntervalSeconds::usage =
+  "$SourceVaultHeadlessDispatchIntervalSeconds is the pacing (seconds, default \
+60) at which the SourceVault service loop calls \
+SourceVaultAutoTriggerHeadlessDispatchTick on an opted-in machine. Read by \
+SourceVault_servicemanager.wl; set it in the service PreludeCode to change.";
+
 (* settable hook, deliberately NOT ClearAll'd (idempotent reload keeps it) *)
 SourceVaultAutoTriggerPromptLLM::usage =
   "SourceVaultAutoTriggerPromptLLM is a settable hook: a function \
@@ -423,6 +491,13 @@ TargetId to something ClaudeRunWorkflow can run. Defaults to a catalog lookup.";
 Begin["`Private`"];
 
 (* ---- local helpers ---- *)
+
+(* package directory captured at load (this file lives at package root);
+   used by the headless exec-stack loader to Get sibling packages. Keep the
+   previous value on reload paths where $InputFileName is unavailable. *)
+If[StringQ[$InputFileName] && $InputFileName =!= "",
+  $iSVATPackageDir = DirectoryName[$InputFileName]];
+If[!StringQ[$iSVATPackageDir], $iSVATPackageDir = ""];
 
 iSVATUTCNow[] :=
   Quiet @ Check[
@@ -1293,6 +1368,84 @@ iSVATCompletedSlots[] :=
            Lookup[#, "Status", ""]],
          Lookup[#, "DispatchSlotKey", Null], Null] &) /@ runs, Null]];
 
+(* ---- cross-kernel dispatch claim (FE scheduler / headless service coexistence) ----
+   The append-only "Claimed" run record is only a best-effort marker: two
+   dispatchers on the SAME machine (interactive FE + headless service, or two
+   FE sessions) both read the completed-slot set, then both append -> double
+   execution (TOCTOU). The real mutex is an atomically created per-slot claim
+   DIRECTORY under <root>/autotrigger/claims/: CreateDirectory of an existing
+   dir fails, and directory creation is atomic on the local filesystem. Claims
+   are only ever taken on the single machine the placement gate selects, so
+   local-FS atomicity suffices (Dropbox sync lag cannot double-claim).
+   Staleness: a holder that died between claim and submit would otherwise
+   wedge the slot forever, so a claim older than $iSVATClaimTTLSeconds may be
+   stolen -- the steal itself is an atomic RenameDirectory (only one stealer
+   wins). Fail-open when the vault root is unavailable (matches the previous
+   no-claim behavior; run-log appends fail there too). *)
+
+If[!NumberQ[$iSVATClaimTTLSeconds], $iSVATClaimTTLSeconds = 3600];
+
+iSVATSafeSlotName[slot_] :=
+  StringReplace[ToString[slot],
+    Except[LetterCharacter | DigitCharacter] .. -> "-"];
+
+iSVATClaimsDir[] :=
+  Module[{root = iSVATRoot[]},
+    If[root === $Failed, $Failed,
+      FileNameJoin[{root, "autotrigger", "claims"}]]];
+
+iSVATClaimPath[slot_] :=
+  Module[{d = iSVATClaimsDir[]},
+    If[d === $Failed, $Failed, FileNameJoin[{d, iSVATSafeSlotName[slot]}]]];
+
+iSVATClaimSlot[slot_String, kind_String] :=
+  Module[{cd = iSVATClaimPath[slot], created, age},
+    If[cd === $Failed, Return[True]];
+    If[iSVATEnsureDir[DirectoryName[cd]] === $Failed, Return[True]];
+    created = TrueQ @ Quiet @ Check[CreateDirectory[cd]; True, False];
+    If[!created,
+      (* held by someone: steal only when stale (holder died pre-submit) *)
+      age = Quiet @ Check[
+        AbsoluteTime[] - AbsoluteTime[FileDate[cd, "Modification"]], 0];
+      If[!TrueQ[age > $iSVATClaimTTLSeconds], Return[False]];
+      If[!TrueQ @ Quiet @ Check[
+          RenameDirectory[cd, cd <> "-stale-" <>
+            StringTake[StringReplace[CreateUUID[], "-" -> ""], 8]]; True,
+          False],
+        Return[False]];
+      created = TrueQ @ Quiet @ Check[CreateDirectory[cd]; True, False];
+      If[!created, Return[False]]];
+    (* informational only; the dir itself is the mutex *)
+    Quiet @ Check[
+      Export[FileNameJoin[{cd, "claim.json"}], <|
+        "DispatchSlotKey" -> slot, "MachineTag" -> iSVATMachineTag[],
+        "PID" -> $ProcessID, "Kind" -> kind,
+        "ClaimedAtUTC" -> iSVATUTCNow[]|>, "RawJSON"], Null];
+    True];
+
+iSVATReleaseClaim[slot_] :=
+  Module[{cd = iSVATClaimPath[slot]},
+    If[cd =!= $Failed && DirectoryQ[cd],
+      Quiet @ Check[DeleteDirectory[cd, DeleteContents -> True], Null]];
+    Null];
+
+(* prune claim leftovers (released ones are deleted at finalize; this catches
+   stale-* renames and claims of long-terminal slots) *)
+If[!NumberQ[$iSVATClaimPruneAfterSeconds],
+  $iSVATClaimPruneAfterSeconds = 7*86400];
+
+iSVATPruneClaims[] :=
+  Module[{d = iSVATClaimsDir[], dirs},
+    If[d === $Failed || !DirectoryQ[d], Return[0]];
+    dirs = Select[Quiet @ Check[FileNames["*", d], {}],
+      Quiet @ Check[
+        DirectoryQ[#] &&
+          (AbsoluteTime[] - AbsoluteTime[FileDate[#, "Modification"]]) >
+            $iSVATClaimPruneAfterSeconds, False] &];
+    Scan[Quiet @ Check[DeleteDirectory[#, DeleteContents -> True], Null] &,
+      dirs];
+    Length[dirs]];
+
 (* placement gate (spec 7.2.1): may THIS machine execute the job? jobs.jsonl
    lives in the shared vault root, so every machine's dispatcher sees every
    built job; a SpecificMachine job is executed only by a machine whose tag is
@@ -2037,12 +2190,27 @@ SourceVaultAutoTriggerDispatchCatalogRuns[opts : OptionsPattern[]] :=
               "ProcessSlotsFree" -> free,
               "Reason" -> "ProcessSeatPoolSaturated(retriesWhenFree)"|>];
             Return[Null]];
-          (* claim (best-effort exactly-once marker) *)
+          (* cross-kernel exclusion: exactly ONE dispatcher proceeds even when
+             the FE scheduler and the headless service tick concurrently on
+             this machine (atomic claim dir; see iSVATClaimSlot). *)
+          If[!iSVATClaimSlot[slot, "CatalogRun"],
+            AppendTo[results, <|"Slot" -> slot,
+              "Status" -> "SkippedClaimHeld",
+              "Reason" -> "ClaimHeldByAnotherDispatcher"|>];
+            Return[Null]];
+          (* claim run record (best-effort marker / observability) *)
           iSVATAppendRun[<|"Type" -> "AutoTriggerRun", "RunId" -> CreateUUID[],
             "DispatchSlotKey" -> slot, "TriggerId" -> tid, "MachineTag" -> mt,
             "Status" -> "Claimed", "ClaimedAtUTC" -> iSVATUTCNow[]|>];
           exec = iSVATExecuteCatalogWorkflow[job];
           count++;
+          (* a non-submitted outcome (Deferred*/Skipped: exec-level seat or
+             executor unavailability) must retry on a later tick -> release the
+             claim, or this kernel would block ITSELF until the claim TTL.
+             Submitted keeps the claim until finalize; Failed is terminal via
+             the run record, so its claim is released as cleanup. *)
+          If[Lookup[exec, "Status", ""] =!= "CatalogRunSubmitted",
+            iSVATReleaseClaim[slot]];
           iSVATAppendRun[Join[
             <|"Type" -> "AutoTriggerRun", "RunId" -> CreateUUID[],
               "DispatchSlotKey" -> slot, "TriggerId" -> tid, "MachineTag" -> mt|>,
@@ -2128,59 +2296,125 @@ iSVATSharedCatalogResultPath[slot_] :=
       Except[LetterCharacter | DigitCharacter] .. -> "-"];
     FileNameJoin[{root, "autotrigger", "results", safe <> "-result.wxf"}]];
 
+(* one submitted catalog run -> inspect its job dir and, when it reached a
+   terminal state, publish the result to the shared vault + append the
+   terminal run record + release the dispatch claim. info keys: "JobDir",
+   "JobID", "Slug", "StartedAbs". Returns True when finalized (a terminal
+   record was appended), False while still running. Shared by the in-memory
+   poll (iSVATPollCatalogRuns) and the stateless recovery publisher
+   (SourceVaultAutoTriggerPublishCatalogRuns). *)
+iSVATFinalizeCatalogRun[slot_, info_Association] :=
+  Module[{jd = Lookup[info, "JobDir", Missing[]], age, st, statusStr,
+          outFile, shared, rec, finalized = True},
+    age = AbsoluteTime[] - Lookup[info, "StartedAbs", AbsoluteTime[]];
+    outFile = If[StringQ[jd], FileNameJoin[{jd, "output.wxf"}], ""];
+    st = If[StringQ[jd],
+      Quiet @ Check[
+        Import[FileNameJoin[{jd, "status.json"}], "RawJSON"], <||>], <||>];
+    statusStr = If[AssociationQ[st], Lookup[st, "Status", ""], ""];
+    rec = <|"Type" -> "AutoTriggerRun", "RunId" -> CreateUUID[],
+      "DispatchSlotKey" -> slot, "MachineTag" -> iSVATMachineTag[],
+      "Slug" -> Lookup[info, "Slug", Missing[]],
+      "JobID" -> Lookup[info, "JobID", Missing[]],
+      "Backend" -> "ExternalExecutor",
+      "FinishedAtUTC" -> iSVATUTCNow[]|>;
+    Which[
+      StringQ[jd] && FileExistsQ[outFile],
+        shared = iSVATSharedCatalogResultPath[slot];
+        If[shared =!= $Failed,
+          iSVATEnsureDir[DirectoryName[shared]];
+          Quiet @ Check[CopyFile[outFile, shared,
+            OverwriteTarget -> True], Null]];
+        iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunCompleted",
+          "ResultPublished" -> (shared =!= $Failed && FileExistsQ[shared]),
+          "ResultFile" -> If[shared =!= $Failed,
+            FileNameTake[shared], Missing[]]|>]],
+      MemberQ[{"Failed", "Expired"}, statusStr],
+        iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
+          "Reason" -> statusStr,
+          "ErrorRef" -> Lookup[st, "ErrorRef", Missing[]]|>]],
+      (* no status.json well past startup -> child died before writing *)
+      statusStr === "" && age > 180,
+        iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
+          "Reason" -> "ChildDiedAtStartup(NoStatusWritten)"|>]],
+      age > $iSVATCatalogRunTTLSeconds,
+        iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
+          "Reason" -> "Timeout(" <>
+            ToString[$iSVATCatalogRunTTLSeconds] <> "s)"|>]],
+      True, finalized = False];
+    If[finalized, iSVATReleaseClaim[slot]];
+    finalized];
+
 (* EXECUTOR side: finalize tracked external catalog jobs. Publishes the
    result to the shared vault so the requesting PC can retrieve it. *)
 iSVATPollCatalogRuns[] :=
-  Module[{finalized = {}, mt = iSVATMachineTag[]},
+  Module[{finalized = {}},
     If[$iSVATCatalogRunsPending === <||>, Return[Null]];
     KeyValueMap[
       Function[{slot, info},
-        Module[{jd = Lookup[info, "JobDir", Missing[]], age, st, statusStr,
-                outFile, shared, rec},
-          age = AbsoluteTime[] - Lookup[info, "StartedAbs", AbsoluteTime[]];
-          outFile = If[StringQ[jd], FileNameJoin[{jd, "output.wxf"}], ""];
-          st = If[StringQ[jd],
-            Quiet @ Check[
-              Import[FileNameJoin[{jd, "status.json"}], "RawJSON"], <||>], <||>];
-          statusStr = If[AssociationQ[st], Lookup[st, "Status", ""], ""];
-          rec = <|"Type" -> "AutoTriggerRun", "RunId" -> CreateUUID[],
-            "DispatchSlotKey" -> slot, "MachineTag" -> mt,
-            "Slug" -> Lookup[info, "Slug", Missing[]],
-            "JobID" -> Lookup[info, "JobID", Missing[]],
-            "Backend" -> "ExternalExecutor",
-            "FinishedAtUTC" -> iSVATUTCNow[]|>;
-          Which[
-            StringQ[jd] && FileExistsQ[outFile],
-              shared = iSVATSharedCatalogResultPath[slot];
-              If[shared =!= $Failed,
-                iSVATEnsureDir[DirectoryName[shared]];
-                Quiet @ Check[CopyFile[outFile, shared,
-                  OverwriteTarget -> True], Null]];
-              iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunCompleted",
-                "ResultPublished" -> (shared =!= $Failed && FileExistsQ[shared]),
-                "ResultFile" -> If[shared =!= $Failed,
-                  FileNameTake[shared], Missing[]]|>]];
-              AppendTo[finalized, slot],
-            MemberQ[{"Failed", "Expired"}, statusStr],
-              iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
-                "Reason" -> statusStr,
-                "ErrorRef" -> Lookup[st, "ErrorRef", Missing[]]|>]];
-              AppendTo[finalized, slot],
-            (* no status.json well past startup -> child died before writing *)
-            statusStr === "" && age > 180,
-              iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
-                "Reason" -> "ChildDiedAtStartup(NoStatusWritten)"|>]];
-              AppendTo[finalized, slot],
-            age > $iSVATCatalogRunTTLSeconds,
-              iSVATAppendRun[Join[rec, <|"Status" -> "CatalogRunFailed",
-                "Reason" -> "Timeout(" <>
-                  ToString[$iSVATCatalogRunTTLSeconds] <> "s)"|>]];
-              AppendTo[finalized, slot],
-            True, Null]]],
+        If[TrueQ[iSVATFinalizeCatalogRun[slot, info]],
+          AppendTo[finalized, slot]]],
       $iSVATCatalogRunsPending];
     Scan[($iSVATCatalogRunsPending = KeyDrop[$iSVATCatalogRunsPending, #]) &,
       finalized];
     Null];
+
+(* STATELESS recovery publisher: finalize submitted catalog runs of THIS
+   machine whose dispatching kernel is gone (FE restart / service restart
+   after submit). The CatalogRunSubmitted run record persists JobDir/JobID,
+   so any kernel on the executing machine can publish the result -- before
+   this, an FE restart mid-run silently orphaned the result forever. Kept a
+   RECOVERY path via "MinAgeSeconds" (default 600): the live dispatcher's
+   in-memory poll publishes long before, so duplicate terminal records only
+   occur in a narrow race and are harmless (readers take the first terminal
+   record per slot). *)
+Options[SourceVaultAutoTriggerPublishCatalogRuns] = {
+  "MinAgeSeconds" -> 600, "MaxRuns" -> 8};
+
+SourceVaultAutoTriggerPublishCatalogRuns[opts : OptionsPattern[]] :=
+  Module[{minAge, maxRuns, mt = iSVATMachineTag[], runs, terminal, submitted,
+          orphans, results = {}, count = 0},
+    minAge = OptionValue["MinAgeSeconds"];
+    If[!NumberQ[minAge], minAge = 600];
+    maxRuns = OptionValue["MaxRuns"];
+    runs = iSVATReadRuns[];
+    terminal = DeleteDuplicates @ DeleteCases[
+      (If[MemberQ[{"CatalogRunCompleted", "CatalogRunFailed"},
+           Lookup[#, "Status", ""]],
+         Lookup[#, "DispatchSlotKey", Null], Null] &) /@ runs, Null];
+    submitted = Select[runs,
+      Lookup[#, "Status", ""] === "CatalogRunSubmitted" &&
+        Lookup[#, "MachineTag", ""] === mt &];
+    orphans = Select[submitted,
+      Function[rec, Module[{slot, subAbs, age},
+        slot = Lookup[rec, "DispatchSlotKey", Null];
+        subAbs = Quiet @ Check[AbsoluteTime[
+          DateObject[Lookup[rec, "FinishedAtUTC", ""], TimeZone -> 0]], 0];
+        age = AbsoluteTime[] - subAbs;
+        StringQ[slot] &&
+          !MemberQ[terminal, slot] &&
+          !KeyExistsQ[$iSVATCatalogRunsPending, slot] &&
+          age > minAge]]];
+    Scan[
+      Function[rec,
+        Module[{slot, info, subAbs, fin},
+          If[IntegerQ[maxRuns] && count >= maxRuns, Return[Null]];
+          slot = rec["DispatchSlotKey"];
+          subAbs = Quiet @ Check[AbsoluteTime[
+            DateObject[Lookup[rec, "FinishedAtUTC", ""], TimeZone -> 0]], 0];
+          info = <|
+            "JobDir" -> Lookup[rec, "JobDir", Missing[]],
+            "JobID" -> Lookup[rec, "JobID", Missing[]],
+            "Slug" -> Lookup[rec, "Slug", Missing[]],
+            "StartedAbs" -> subAbs|>;
+          fin = TrueQ[iSVATFinalizeCatalogRun[slot, info]];
+          If[fin, count++];
+          AppendTo[results, <|"Slot" -> slot, "Finalized" -> fin|>]]],
+      orphans];
+    Quiet @ Check[iSVATPruneClaims[], Null];
+    <|"Status" -> "Published", "AtUTC" -> iSVATUTCNow[], "MachineTag" -> mt,
+      "Orphans" -> Length[orphans], "Finalized" -> count,
+      "Results" -> results|>];
 
 (* ANY machine: retrieve a published remote-run result by DispatchSlotKey *)
 SourceVaultRemoteWorkflowResult[slot_String] :=
@@ -2370,6 +2604,241 @@ SourceVaultAutoTriggerSchedulerStatus[] :=
       "Key" -> $iSVATSchedulerTickKey,
       "LastSchedulerTick" -> $iSVATLastSchedulerResult,
       "RunningJobs" -> SourceVaultAutoTriggerRunningJobs[]|>];
+
+(* ============================================================
+   Headless dispatch mode (dispatch-only, for compute nodes without an
+   interactive FE, e.g. rapterlake4t). Motivation: the scheduler above is
+   FE-main-kernel-only (SourceVault.wl load guard), so jobs enqueued via
+   SourceVaultEnqueueWorkflowRun for an FE-less machine sat forever
+   (observed 2026-07-08: sim-mandelbrot-cuda / turtle-tiling-cuda from
+   strixhalo128 to rapterlake4t). This layer lets the SourceVault SERVICE
+   kernel (or any headless kernel) pick those jobs up SAFELY:
+     - no subkernel pool, no trigger evaluation, no own ScheduledTask;
+       execution is delegated to SourceVaultRunWorkflowAsync (external
+       process, SeatPriority 90) exactly like the FE path.
+     - double-dispatch vs a concurrently running FE scheduler is prevented
+       by the per-slot atomic claim inside DispatchCatalogRuns.
+     - per-machine OPT-IN (shared-vault flag file or session variable);
+       default off, so plain service kernels are unaffected.
+     - the execution stack (workflowregistry + ClaudeOrchestrator workflow
+       engine, which chain-loads claudecode) is loaded LAZILY and only when
+       an eligible job is actually pending, keeping idle services light.
+     - liveness: the service loop stamps each tick into heartbeat.json
+       ("Dispatch" field) so health checks can detect a dead dispatcher
+       (see SourceVault_servicemanager.wl).
+   ============================================================ *)
+
+(* ---- per-machine opt-in ---- *)
+
+iSVATHeadlessConfigPath[machineTag_String] :=
+  Module[{root = iSVATRoot[]},
+    If[root === $Failed, $Failed,
+      FileNameJoin[{root, "autotrigger", "headless",
+        ToLowerCase[machineTag] <> ".json"}]]];
+
+iSVATAtomicWriteJSON[path_String, assoc_Association] :=
+  Module[{tmp = path <> ".tmp", strm},
+    If[iSVATEnsureDir[DirectoryName[path]] === $Failed, Return[$Failed]];
+    Quiet @ Check[
+      strm = OpenWrite[tmp, BinaryFormat -> True];
+      BinaryWrite[strm, StringToByteArray[
+        Developer`WriteRawJSONString[assoc], "UTF-8"]];
+      Close[strm];
+      If[FileExistsQ[path], DeleteFile[path]];
+      RenameFile[tmp, path];
+      path, $Failed]];
+
+SourceVaultHeadlessDispatchEnabledQ[] :=
+  Which[
+    $SourceVaultHeadlessDispatch === True, True,
+    $SourceVaultHeadlessDispatch === False, False,
+    True,
+      Module[{p = iSVATHeadlessConfigPath[iSVATMachineTag[]], cfg},
+        If[p === $Failed || !FileExistsQ[p], Return[False]];
+        cfg = Quiet @ Check[Import[p, "RawJSON"], <||>];
+        AssociationQ[cfg] && TrueQ[Lookup[cfg, "Enabled", False]]]];
+
+SourceVaultEnableHeadlessDispatch[machineTag_String] :=
+  Module[{p = iSVATHeadlessConfigPath[machineTag], w},
+    If[p === $Failed,
+      Return[<|"Status" -> "Failed", "Reason" -> "RootUnavailable"|>]];
+    w = iSVATAtomicWriteJSON[p, <|
+      "Enabled" -> True, "MachineTag" -> machineTag,
+      "UpdatedAtUTC" -> iSVATUTCNow[], "By" -> iSVATMachineTag[]|>];
+    If[w === $Failed,
+      <|"Status" -> "Failed", "Reason" -> "WriteFailed", "Path" -> p|>,
+      <|"Status" -> "Enabled", "MachineTag" -> machineTag, "Path" -> p,
+        "Note" -> "Takes effect on the target's next service dispatch tick; " <>
+          "restart the target's SourceVault service once so the execution " <>
+          "stack is preloaded at startup."|>]];
+SourceVaultEnableHeadlessDispatch[] :=
+  SourceVaultEnableHeadlessDispatch[iSVATMachineTag[]];
+
+SourceVaultDisableHeadlessDispatch[machineTag_String] :=
+  Module[{p = iSVATHeadlessConfigPath[machineTag], w},
+    If[p === $Failed,
+      Return[<|"Status" -> "Failed", "Reason" -> "RootUnavailable"|>]];
+    w = iSVATAtomicWriteJSON[p, <|
+      "Enabled" -> False, "MachineTag" -> machineTag,
+      "UpdatedAtUTC" -> iSVATUTCNow[], "By" -> iSVATMachineTag[]|>];
+    If[w === $Failed,
+      <|"Status" -> "Failed", "Reason" -> "WriteFailed", "Path" -> p|>,
+      <|"Status" -> "Disabled", "MachineTag" -> machineTag, "Path" -> p|>]];
+SourceVaultDisableHeadlessDispatch[] :=
+  SourceVaultDisableHeadlessDispatch[iSVATMachineTag[]];
+
+(* ---- lazy execution stack ----
+   SourceVaultRunWorkflowAsync needs SourceVault_workflowregistry.wl plus the
+   ClaudeOrchestrator`Workflow` engine (ClaudeOrchestrator_workflow.wl, which
+   chain-loads claudecode.wl); the external runner itself is self-bootstrapped
+   by SourceVaultRunWorkflowAsync. Verified headless-loadable end-to-end
+   (wolframscript probe 2026-07-08: load -> submit -> child Completed).
+   SourceVault_diagnostics.wl is optional and only feeds the process-seat
+   guard (iSVATProcessSeatsFree; Missing["Unknown"] without it never blocks). *)
+
+iSVATHeadlessStackReadyQ[] :=
+  Length[DownValues[SourceVault`SourceVaultRunWorkflowAsync]] > 0 &&
+    Length[Names["ClaudeOrchestrator`Workflow`ClaudeSubmitExternalHeldExprJob"]] > 0 &&
+    Length[DownValues[
+      ClaudeOrchestrator`Workflow`ClaudeSubmitExternalHeldExprJob]] > 0;
+
+iSVATEnsureHeadlessExecStack[] :=
+  Module[{dir = $iSVATPackageDir, loaded = {}, files},
+    If[iSVATHeadlessStackReadyQ[],
+      Return[<|"Status" -> "Ready", "Loaded" -> {}|>]];
+    If[!StringQ[dir] || dir === "" || !DirectoryQ[dir],
+      Return[<|"Status" -> "NoPackageDir"|>]];
+    files = {
+      (* readyQ-per-file so a reload never re-Gets what is already present *)
+      {"SourceVault_diagnostics.wl",
+        "SourceVault`SourceVaultDiagnosticsLicenseProbe"},
+      {"SourceVault_workflowregistry.wl",
+        "SourceVault`SourceVaultRunWorkflowAsync"},
+      {"ClaudeOrchestrator_workflow.wl",
+        "ClaudeOrchestrator`Workflow`ClaudeSubmitExternalHeldExprJob"}};
+    Scan[
+      Function[{fileSpec},
+        Module[{f = fileSpec[[1]], symName = fileSpec[[2]], p, haveQ},
+          (* success = the file's marker symbol is DEFINED, not "no messages
+             during Get" (the claudecode chain emits benign headless warnings
+             like FrontEndObject::notavail that would trip Check) *)
+          haveQ := Length[Names[symName]] > 0 &&
+            TrueQ[Quiet @ Check[
+              ToExpression[symName, InputForm,
+                Function[s, Length[DownValues[s]] > 0, {HoldAll}]], False]];
+          p = FileNameJoin[{dir, f}];
+          If[!haveQ && FileExistsQ[p],
+            Quiet @ Check[
+              Block[{$CharacterEncoding = "UTF-8"}, Get[p]], Null];
+            AppendTo[loaded, f <> If[haveQ, "", ":LoadFailed"]]]]],
+      files];
+    <|"Status" -> If[iSVATHeadlessStackReadyQ[], "Ready", "Unavailable"],
+      "Loaded" -> loaded|>];
+
+(* the executor activation inside SourceVaultRunWorkflowAsync registers the
+   external-job poll on claudecode's shared polling base, which CREATES a
+   real ScheduledTask -- unwanted background concurrency in a service kernel
+   whose contract is one deterministic loop. Unregister it again after
+   dispatching; the headless tick pumps the poll itself. When all entries are
+   gone the shared task self-stops on its next tick. *)
+iSVATQuiesceExternalPollTicks[] :=
+  Module[{unreg = iSVATClaudeSym["ClaudeUnregisterPollingTick"], key},
+    If[unreg === $Failed, Return[Null]];
+    key = Quiet @ Check[ClaudeRuntime`$ClaudeExternalPollTickKey, $Failed];
+    If[!StringQ[key], key = "external-job-poll"];
+    Quiet @ Check[unreg[key], Null];
+    Quiet @ Check[unreg[key <> "-subkernel"], Null];
+    Null];
+
+(* pump the external-job poll once (net GC / completion bookkeeping); weak *)
+iSVATPumpExternalJobPoll[] :=
+  If[Length[Names[
+      "ClaudeOrchestrator`Workflow`ClaudeExternalJobPollTick"]] > 0 &&
+     Length[DownValues[
+       ClaudeOrchestrator`Workflow`ClaudeExternalJobPollTick]] > 0,
+    Quiet @ Check[
+      ClaudeOrchestrator`Workflow`ClaudeExternalJobPollTick[], Null],
+    Null];
+
+(* ---- the dispatch-only tick ---- *)
+
+If[!AssociationQ[$iSVATLastHeadlessDispatchResult],
+  $iSVATLastHeadlessDispatchResult = <||>];
+
+(* stage marker for post-mortem of a WEDGED tick (rapterlake4t 2026-07-08:
+   the loop froze between the run-record append and the tick-end log, inside
+   a non-abortable I/O block that TimeConstrained could not cut). The marker
+   file (autotrigger/headless/<tag>.stage.json, Dropbox-visible) records the
+   last ENTERED phase, so a remote observer can see exactly where it died.
+   Written only on ACTIVE ticks (eligible jobs or pending/finalizable runs)
+   to avoid per-minute Dropbox churn when idle. *)
+iSVATHeadlessStagePath[] :=
+  Module[{root = iSVATRoot[]},
+    If[root === $Failed, $Failed,
+      FileNameJoin[{root, "autotrigger", "headless",
+        ToLowerCase[iSVATMachineTag[]] <> ".stage.json"}]]];
+
+iSVATHeadlessStage[stage_String] :=
+  Module[{p = iSVATHeadlessStagePath[]},
+    If[p =!= $Failed,
+      Quiet @ Check[iSVATAtomicWriteJSON[p, <|
+        "Stage" -> stage, "AtUTC" -> iSVATUTCNow[],
+        "PID" -> $ProcessID|>], Null]];
+    Null];
+
+Options[SourceVaultAutoTriggerHeadlessDispatchTick] = {
+  "MaxRuns" -> 4, "Force" -> False};
+
+SourceVaultAutoTriggerHeadlessDispatchTick[opts : OptionsPattern[]] :=
+  Module[{maxRuns, completed, eligible, active, stack = Missing["NotNeeded"],
+          disp = Missing["NoEligibleJobs"], pub, r},
+    If[!TrueQ[OptionValue["Force"]] &&
+       !TrueQ[SourceVaultHeadlessDispatchEnabledQ[]],
+      Return[<|"Status" -> "Disabled"|>]];
+    If[iSVATAsyncActiveQ[], Return[<|"Status" -> "DeferredAsyncActive"|>]];
+    maxRuns = OptionValue["MaxRuns"];
+    (* cheap pre-scan BEFORE loading anything heavy: is there actually an
+       eligible pending CatalogWorkflow job for this machine? *)
+    completed = iSVATCompletedSlots[];
+    eligible = Select[iSVATReadJobs[],
+      Lookup[#, "Status", ""] === "Built" &&
+        iSVATCatalogTargetQ[#] && iSVATJobEligibleHereQ[#] &&
+        !MemberQ[completed, Lookup[#, "DispatchSlotKey", Null]] &];
+    active = eligible =!= {} || $iSVATCatalogRunsPending =!= <||>;
+    If[eligible =!= {},
+      iSVATHeadlessStage["EnsureStack"];
+      stack = iSVATEnsureHeadlessExecStack[];
+      If[Lookup[stack, "Status", ""] === "Ready",
+        iSVATHeadlessStage["Dispatch"];
+        disp = SourceVaultAutoTriggerDispatchCatalogRuns["MaxRuns" -> maxRuns];
+        iSVATHeadlessStage["Quiesce"];
+        iSVATQuiesceExternalPollTicks[],
+        disp = <|"Status" -> "ExecStackUnavailable", "Detail" -> stack|>]];
+    (* bookkeeping every tick: engine net GC, in-memory finalize/publish,
+       stateless orphan recovery (none of these need the exec stack). Each
+       phase gets its own TimeConstrained so one slow phase cannot eat the
+       whole tick budget (non-abortable I/O can still block -- the stage
+       marker above is the post-mortem for that case). *)
+    If[active, iSVATHeadlessStage["PumpEnginePoll"]];
+    Quiet @ TimeConstrained[iSVATPumpExternalJobPoll[], 30, Null];
+    If[active, iSVATHeadlessStage["PollCatalogRuns"]];
+    Quiet @ TimeConstrained[Check[iSVATPollCatalogRuns[], Null], 60, Null];
+    If[active, iSVATHeadlessStage["Publish"]];
+    pub = Quiet @ TimeConstrained[
+      Check[SourceVaultAutoTriggerPublishCatalogRuns[], $Failed], 60, $Failed];
+    If[active, iSVATHeadlessStage["Done"]];
+    r = <|"Status" -> "Ticked", "AtUTC" -> iSVATUTCNow[],
+      "MachineTag" -> iSVATMachineTag[],
+      "EligibleJobs" -> Length[eligible],
+      "ExecStack" -> If[AssociationQ[stack],
+        Lookup[stack, "Status", "?"], stack],
+      "Dispatch" -> If[AssociationQ[disp],
+        KeyTake[disp, {"Status", "Submitted", "Results"}], disp],
+      "PendingRuns" -> Keys[$iSVATCatalogRunsPending],
+      "Publish" -> If[AssociationQ[pub],
+        KeyTake[pub, {"Orphans", "Finalized"}], pub]|>;
+    $iSVATLastHeadlessDispatchResult = r;
+    r];
 
 (* ============================================================
    Prompt -> TriggerSpec (spec 10). Deterministic-first: a small

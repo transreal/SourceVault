@@ -47,7 +47,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_simrun.wl` — シミュレーション実行との連携
 - `SourceVault_searchindex.wl` — 検索インデックス・公開ポリシー
 - `SourceVault_searchview.wl` — 検索結果ビュー
-- `SourceVault_servicemanager.wl` — サービス管理・Python proxy
+- `SourceVault_servicemanager.wl` — サービス管理・Python proxy・headless dispatch
 - `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得
 - `SourceVault_mcp.wl` — MCP tool schema / dispatch ＋ sv:// オブジェクト解決
 - `SourceVault_llmlog.wl` — Claude Code セッションログの取り込み・検索・共有（llmlog）
@@ -104,13 +104,13 @@ $packageDirectory\
   SourceVault_simrun.wl          ← シミュレーション実行連携（本体ロード時に自動ロード）
   SourceVault_searchindex.wl     ← 検索インデックス（本体ロード時に自動ロード）
   SourceVault_searchview.wl      ← 検索結果ビュー（本体ロード時に自動ロード）
-  SourceVault_servicemanager.wl  ← サービス管理（本体ロード時に自動ロード）
+  SourceVault_servicemanager.wl  ← サービス管理・headless dispatch（本体ロード時に自動ロード）
   SourceVault_webingest.wl       ← SearXNG/Web 検索（本体ロード時に自動ロード）
   SourceVault_mcp.wl             ← MCP + sv:// オブジェクト解決（本体ロード時に自動ロード）
   SourceVault_llmlog.wl          ← Claude Code セッションログ（本体ロード時に自動ロード）
   SourceVault_workflowregistry.wl ← ワークフローレジストリ（本体ロード時に自動ロード）
   SourceVault_autotrigger.wl     ← 自動トリガスケジューラ（本体ロード時に自動ロード）
-  SourceVault_promptrouter.wl    ← PromptRouter 拡張（本体ロード時に自動ロード）
+  SourceVault_promptrouter.wl    ← PromptRouter 拡張
   NBAccess.wl
   claudecode.wl
   ...
@@ -228,6 +228,17 @@ SourceVault`Private`$iSVDisableAutoTriggerScheduler = True;
 ```mathematica
 SourceVault`SourceVaultAutoTriggerStartScheduler[]
 ```
+
+### FE レス compute ノードでの headless dispatch（任意）
+
+対話 FE を一切持たない compute 専用ノード（例: GPU 演算専用機など）は、上記の自動起動スケジューラの対象外です（`$FrontEnd === Null` のため `NotFrontEndKernel` として自動的に skip されます）。このようなマシンでもジョブ dispatch だけを拾わせたい場合は、`SourceVault_servicemanager.wl` が提供する **headless dispatch モード**（スケジューラ本体ではなく dispatch のみを行う軽量モード）をマシンごとに opt-in できます。
+
+```mathematica
+SourceVault`SourceVaultEnableHeadlessDispatch[]
+```
+
+- 既定は無効（opt-in）です。対話 FE 側のスケジューラ（1 マシン 1 か所）とは役割が異なり、こちらは dispatch 専用でスケジューラ自体は起動しません。
+- 同一マシンで対話 FE のスケジューラと headless dispatch が同時に存在しても、スロット単位の atomic dispatch claim（内部的に `SourceVaultAutoTriggerDispatchCatalogRuns` が二重実行を防止）により、同じジョブが二重にディスパッチされることはありません。
 
 ---
 
@@ -519,7 +530,7 @@ docker compose up -d
 curl "http://127.0.0.1:8888/search?q=test&format=json"   # JSON が返れば OK
 ```
 
-> `settings.yml` を編集したら `docker compose restart` で反映します。SearXNG が `403` / 空結果を返す場合は、`search.formats` に `json` が含まれているか、`limiter` がローカルアクセスをブロックしていないかを確認してください（`SourceVaultSearXNGSearch` のエラーメッセージにもヒントが出ます）。
+> `settings.yml` を編集したら `docker compose restart` で反映します。SearXNG が `403` / 空結果を返す場合は、`search.formats` に `json` が含まれているか、`limiter`/`botdetection` がローカルアクセスをブロックしていないかを確認してください（`SourceVaultSearXNGSearch` のエラーメッセージにもヒントが出ます）。
 >
 > 公式の新しい導入手順（compose instancing）は [SearXNG ドキュメント](https://docs.searxng.org/admin/installation-docker.html) を参照。どうしても旧 `searxng-docker` の compose を使いたい場合は deprecated 直前の commit を checkout します（`git checkout 0c7875a`）。ただし既定では SearXNG が `127.0.0.1:8080` 公開・Caddy 同梱なので、`$SourceVaultSearXNGEndpoint` を `:8080` にするか、`docker-compose.yaml` の `searxng` のポートを `127.0.0.1:8888:8080` に変更してください。
 
@@ -823,7 +834,7 @@ SourceVault`SourceVaultReclassifyPublicPrivacy[]
 
 ### Claude Code セッションログ（llmlog）の動作確認
 
-`SourceVault_llmlog.wl`（本体ロード時に自動ロード）は、Claude Code のセッションログ（実行ログ・作業ログ）を PrivateVault に取り込み、検索・共有するサブシステムです。「Claude Code のログ」を GitHub のコミット履歴（`GitHubCommitLog`）や GitHub リポジトリ検索と混同させないよう、専用のルーティングキーワード（`"Claude Code"` / `"セッションログ"` / `"実行ログ"` / `"作業ログ"` / `"過去のセッション"` / `"svcclog"` 等）で扱われます。
+`SourceVault_llmlog.wl`（本体ロード時に自動ロード）は、Claude Code のセッションログ（実行ログ・作業ログ）を PrivateVault に取り込み、検索・共有するサブシステムです。「Claude Code のログ」を GitHub のコミット履歴（`GitHubCommitLog`）や GitHub リポジトリ検索と混同させないよう、専用のルーティングキーワード（`"Claude Code"` / `"セッションログ"` / `"実行ログ"` / `"作業ログ"` / `"過去のセッション"` / `"svcclog"` 等）で扱われます（過剰マッチを避けるため、単独の「ログ」だけではルーティングされません）。
 
 ```mathematica
 (* Claude Code のセッションログを PrivateVault に取り込む *)
@@ -833,7 +844,7 @@ SourceVault`SourceVaultIngestClaudeCodeLogs[]
 SourceVault`SourceVaultClaudeCode["検索語"]
 ```
 
-> セッションログの取り込みは、前述の「自動トリガスケジューラ」からも自動的にトリガされ得ます（`claudecode_sessions` タスク）。
+> セッションログの取り込みは、前述の「自動トリガスケジューラ」からも自動的にトリガされ得ます（`claudecode_sessions` タスク）。対話 FE を持たない compute ノードでは、前述の headless dispatch（`SourceVaultEnableHeadlessDispatch[]`）を opt-in しておくと、そのマシン上でも取り込みタスクが拾われます。
 
 ### メールサブシステムの動作確認（IMAP アカウント登録済みが前提）
 
@@ -891,6 +902,7 @@ SourceVaultNotebookSummary[nbPath]
 | パレットの「実行中／停止中」が実態と食い違う | 旧実装は proxy 到達性のみで判定していた。`healthState=="OK"` 判定に修正済み（2026-06）。稼働中カーネルで `Get["SourceVault_servicemanager.wl"]` 再読込すると反映される |
 | パレットの「MCP実行」を押したのに起動しない／`SourceVaultSvc_<id>` タスクが消えている | 上記の状態誤判定で、トグルが「実行中」と誤認して逆に Stop（Svc タスク削除）した名残。RunningQ 修正で再発防止済み。当座は service の `launch_hidden.vbs` を直接起動するか `SourceVaultStartMCP[]` を再実行（タスクは再生成される） |
 | 自動トリガスケジューラが動かない／二重に動く | 自動起動は対話 FE カーネル（`$FrontEnd =!= Null`）に限定。`SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult` の `Status`/`Reason` を確認（`NotFrontEndKernel` = headless、`DisabledByUser` = `$iSVDisableAutoTriggerScheduler` が `True`、`AutoTriggerUnavailable` = claudecode 未ロード）。手動起動は `SourceVaultAutoTriggerStartScheduler[]`（冪等）。無効化は SourceVault ロード前に `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True` |
+| FE レス compute ノード（対話 FE なし）でジョブが自動的に拾われない | 対話 FE 限定の自動トリガスケジューラの対象外（`NotFrontEndKernel`）。そのマシン上だけでジョブ dispatch を拾わせたい場合は `SourceVaultEnableHeadlessDispatch[]` で headless dispatch を opt-in する。対話 FE のスケジューラと併用しても atomic dispatch claim により二重実行はされない |
 | 「Claude Code のログ」検索が GitHub コミット履歴やリポジトリ検索に誤ルートする | llmlog 専用キーワード（`"セッションログ"` / `"実行ログ"` / `"svcclog"` 等）を使う。取り込みは `SourceVaultIngestClaudeCodeLogs[]`、検索は `SourceVaultClaudeCode[...]`。`SourceVault_llmlog.wl` がロードされているか確認 |
 
 ---

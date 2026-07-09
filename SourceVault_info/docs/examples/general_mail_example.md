@@ -405,6 +405,6 @@ maildb snapshot ─▶ SourceVaultMailRecordsForStructuring   (release gate → 
          ── 本層の session/topic/digest を土台に新着取得・返信下書きを生成
 ```
 
-> **姉妹モジュール `SourceVault_mailsuggest.wl`**: 本構造化層の出力（session・topic・digest）を入力に、新着メールの取得（`SourceVaultMailFetchNew`）と返信下書きの生成（`SourceVaultMailComposeReply`）を担います。構造化を前提に動くため、本ドキュメントのフロー（構造化 → index / digest）を先に通してから利用します。
+> **姉妹モジュール `SourceVault_mailsuggest.wl`**: 本構造化層の出力（session・topic・digest）を入力に、新着メールの取得（`SourceVaultMailFetchNew`）と返信下書きの生成（`SourceVaultMailComposeReply`）を担います。構造化を前提に動くため、本ドキュメントのフロー（構造化 → index / digest）を先に通してから利用します。このモジュールは常時ロード（auto-trigger catalog に登録済み）で、SourceVault ロード時に自動で使えます。
 
 参照: [../api_mailstructure.md](../api_mailstructure.md)（本層の全 API）/ [../api_searchview.md](../api_searchview.md)（SearchView / episode / context profile / agentic）/ [../api_searchindex.md](../api_searchindex.md)（BM25 / release gate）。

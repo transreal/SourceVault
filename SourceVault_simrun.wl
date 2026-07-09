@@ -341,6 +341,72 @@ SourceVaultCUDARequire[] := Module[{gpus = iSRGPUs[], known},
         "targets" -> If[known === {}, "(no GPU machine recorded yet)",
           StringRiffle[Lookup[#, "MachineTag", "?"] & /@ known, ", "]]|>|>]]];
 
+(* ---- MSVC host compiler discovery (Windows) ----
+   nvcc は Windows では MSVC の cl.exe をホストコンパイラとして要求する。
+   ヘッドレス実行 (service 配車の外部 wolframscript / 素の FE カーネル) は
+   Developer Command Prompt の環境変数 (PATH/INCLUDE/LIB) を持たないため、
+   素の RunProcess[nvcc, ...] は "Cannot find compiler 'cl.exe' in PATH" で
+   失敗する (rapterlake4t 実機 2026-07-08)。cl が PATH に無いときは
+   vcvars64.bat (vswhere -> 既定パス glob の順で探索; memoize) を call して
+   から nvcc を実行する .bat ラッパーで包む。 *)
+
+iSRClInPathQ[] := TrueQ @ Quiet @ Check[
+  TimeConstrained[RunProcess[{"where", "cl"}, "ExitCode"], 10, $Failed] === 0,
+  False];
+
+iSRFindVcvars64[] := Module[{pf86, vswhere, inst, cands},
+  pf86 = With[{e = Environment["ProgramFiles(x86)"]},
+    If[StringQ[e], e, "C:\\Program Files (x86)"]];
+  vswhere = FileNameJoin[{pf86, "Microsoft Visual Studio", "Installer", "vswhere.exe"}];
+  inst = If[FileExistsQ[vswhere],
+    Module[{r = Quiet @ Check[TimeConstrained[
+        RunProcess[{vswhere, "-latest", "-products", "*",
+          "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+          "-property", "installationPath"}, All], 15, $Failed], $Failed]},
+      If[AssociationQ[r] && r["ExitCode"] === 0,
+        SelectFirst[StringTrim /@ StringSplit[Lookup[r, "StandardOutput", ""], "\n"],
+          # =!= "" && DirectoryQ[#] &, $Failed],
+        $Failed]],
+    $Failed];
+  cands = Flatten[{
+    If[StringQ[inst],
+      {FileNameJoin[{inst, "VC", "Auxiliary", "Build", "vcvars64.bat"}]}, {}],
+    (* vswhere 不在/失敗時: VS2022+ は Program Files、2019 以前は (x86) 側 *)
+    Quiet @ Check[Reverse @ Sort @ FileNames["vcvars64.bat",
+      {"C:\\Program Files\\Microsoft Visual Studio",
+       FileNameJoin[{pf86, "Microsoft Visual Studio"}]}, 6], {}]}];
+  SelectFirst[cands, StringQ[#] && FileExistsQ[#] &, Missing["NotFound"]]];
+
+If[! ValueQ[$iSRVcvarsPath], $iSRVcvarsPath = None];
+iSRVcvars64[] := ($iSRVcvarsPath =
+  If[$iSRVcvarsPath === None, iSRFindVcvars64[], $iSRVcvarsPath]);
+
+(* nvcc 実行 (必要なら vcvars64 環境で包む)。戻り値は RunProcess[..., All] の
+   Association または $Failed。bat の終了コード = 最終コマンド (nvcc) のもの。 *)
+iSRRunNvcc[nvcc_String, args_List, binDir_String, tag_String] := Module[
+  {vc, q, bat, batText, strm, res},
+  vc = If[$OperatingSystem === "Windows" && ! iSRClInPathQ[],
+    iSRVcvars64[], Missing["NotNeeded"]];
+  If[! StringQ[vc],
+    (* cl が PATH にある / 非 Windows / vcvars 不在 -> 従来どおり直接実行 *)
+    Return[Quiet @ Check[
+      TimeConstrained[RunProcess[Join[{nvcc}, args], All], 600, $Failed],
+      $Failed]]];
+  (* 空白を含む引数のみ引用 (フラグまで引用すると cmd 系 host が誤動作する) *)
+  q[s_String] := If[StringContainsQ[s, " " | "\t"], "\"" <> s <> "\"", s];
+  bat = FileNameJoin[{binDir, "nvcc-" <> tag <> ".bat"}];
+  batText = "@echo off\r\ncall \"" <> vc <> "\" >nul 2>&1\r\n" <>
+    StringRiffle[q /@ Join[{nvcc}, args], " "] <> "\r\n";
+  Quiet @ Check[
+    strm = OpenWrite[bat, BinaryFormat -> True];
+    BinaryWrite[strm, StringToByteArray[batText, "UTF-8"]];
+    Close[strm], Null];
+  res = Quiet @ Check[
+    TimeConstrained[RunProcess[{"cmd", "/c", bat}, All], 600, $Failed],
+    $Failed];
+  Quiet @ Check[DeleteFile[bat], Null];
+  res];
+
 Options[SourceVaultCUDACompile] = {"ExtraArgs" -> {}, "Force" -> False};
 
 SourceVaultCUDACompile[cuFile_String, OptionsPattern[]] := Module[
@@ -364,17 +430,22 @@ SourceVaultCUDACompile[cuFile_String, OptionsPattern[]] := Module[
   exe = FileNameJoin[{binDir, FileBaseName[cuFile] <> "-" <> hash8 <>
     If[$OperatingSystem === "Windows", ".exe", ""]}];
   If[FileExistsQ[exe] && ! TrueQ[OptionValue["Force"]], Return[exe]];
-  res = Quiet @ Check[
-    TimeConstrained[
-      RunProcess[Join[{nvcc, "-O3", "-o", exe, cuFile}, OptionValue["ExtraArgs"]], All],
-      600, $Failed],
-    $Failed];
+  res = iSRRunNvcc[nvcc,
+    Join[{"-O3", "-o", exe, cuFile}, OptionValue["ExtraArgs"]], binDir, hash8];
   If[AssociationQ[res] && res["ExitCode"] === 0 && FileExistsQ[exe],
     exe,
     errText = If[AssociationQ[res],
       StringTake[Lookup[res, "StandardError", ""] <> "\n" <> Lookup[res, "StandardOutput", ""],
         UpTo[1500]],
       "nvcc did not run (timeout or launch failure)"];
+    (* cl.exe 起因なら対処法を添える (VS C++ Build Tools 不在 or wrap 後も失敗) *)
+    If[StringQ[errText] && StringContainsQ[errText, "cl.exe"],
+      errText = errText <> "\n[hint] nvcc requires MSVC cl.exe. " <>
+        If[MatchQ[iSRVcvars64[], _Missing],
+          "Visual Studio C++ Build Tools was NOT found on this machine; " <>
+            "install it (workload: 'Desktop development with C++').",
+          "vcvars64.bat was found (" <> ToString[iSRVcvars64[]] <>
+            ") but the wrapped compile still failed."]];
     Failure["CompileFailed", <|
       "MessageTemplate" -> "nvcc failed for `f`: `err`",
       "MessageParameters" -> <|"f" -> cuFile, "err" -> errText|>|>]]];

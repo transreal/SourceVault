@@ -108,7 +108,16 @@ stop してから同プロファイルで start する。root 設定が異なる
 `pid.json` / `status.json` / `heartbeat.json` から状態 association を返す。
 
 ### SourceVaultServiceHealth[serviceId] → String
-heartbeat の鮮度から `"OK"` / `"Degraded"` / `"Failing"` を返す。閾値は `$SourceVaultHealthThresholds` を参照。
+heartbeat の鮮度から `"OK"` / `"Degraded"` / `"Failing"` を返す。閾値は `$SourceVaultHealthThresholds` を参照。`$SourceVaultHealthRequireL2` が True なら `"OK"` は L2(Ping 応答)必須になる。
+
+### SourceVaultServiceHealthDetail[serviceId] → Association
+health 判定の内訳を返す (hardening 02 Inc3)。
+→ `<|"Health", "Layer" -> "L2"|"L3"|"L1", "Ping" -> <|"L2", "RTTms", ...|>, "Base"|>`
+L2 = command queue が実際に応答(真の生存証明)。L3 = heartbeat 進行のみ。L1 = base health のみ。ping は `PingIntervalSeconds` キャッシュ (health 連打で queue を叩かない)。
+
+### $SourceVaultHealthRequireL2
+型: True | False, 初期値: False
+True にすると `SourceVaultServiceHealth` の `"OK"` は L2(Ping 応答)必須になる。heartbeat が進むのに queue 不応答(busy/wedge)なら `"Degraded"`。移行期は False で L3 OK を許す(spec 02 §3.2)。
 
 ### $SourceVaultHealthThresholds
 型: Association, 初期値: `<|"OKSeconds"->15, "DegradedSeconds"->60, "WatchdogStaleSeconds"->90, "EvalTimeoutSeconds"->5, "EvalCacheSeconds"->30, "PingTimeoutSeconds"->10, "PingIntervalSeconds"->60|>`

@@ -42,13 +42,14 @@ Block[{$CharacterEncoding = "UTF-8"},
   Get[FileNameJoin[{$packageDirectory, "NBAccess.wl"}]]];      (* LLM トークン *)
 ```
 
-> **自動ロード**: `Get["SourceVault.wl"]` 単体で、`SourceVault_core.wl` を起点に多数のサブモジュールが自動でロードされます。現在の自動ロード対象には、従来の `SourceVault_core.wl` / `SourceVault_searchindex.wl` / `SourceVault_servicemanager.wl` / `SourceVault_mcp.wl` / `SourceVault_objectview.wl` に加えて、`SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_simrun.wl` / `SourceVault_searchview.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / **`SourceVault_llmlog.wl`**（Claude Code セッションログ）/ `SourceVault_workflowregistry.wl` などが含まれます。`$CharacterEncoding` を UTF-8 に固定することで、日本語リテラルが正しくロードされます。
+> **自動ロード**: `Get["SourceVault.wl"]` 単体で、`SourceVault_core.wl` を起点に多数のサブモジュールが自動でロードされます。現在の自動ロード対象には、従来の `SourceVault_core.wl` / `SourceVault_searchindex.wl` / `SourceVault_servicemanager.wl` / `SourceVault_mcp.wl` / `SourceVault_objectview.wl` に加えて、`SourceVault_simrun.wl` / `SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_searchview.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / **`SourceVault_llmlog.wl`**（Claude Code セッションログ）/ `SourceVault_workflowregistry.wl` などが含まれます。`$CharacterEncoding` を UTF-8 に固定することで、日本語リテラルが正しくロードされます。
 
 ### auto-trigger scheduler の自動起動（対話 FE カーネルのみ）
 
-`SourceVault.wl` をロードすると、そのマシンで**対話フロントエンド（FE）カーネル**の場合に限り、auto-trigger scheduler が自動的に起動されます（他 PC から「この PC でこのワークフローを実行」といったジョブを、この PC が常に拾えるようにするためです）。
+`SourceVault.wl` をロードすると、そのマシンで**対話フロントエンド（FE）カーネル**の場合に限り、auto-trigger scheduler が自動的に起動されます（他 PC から「この PC でこのワークフローを実行」といったジョブを、この PC が常に拾えるようにするためです）。これは ClaudeOrchestrator（[ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator)）＋ SourceVault が常に両方ロードされる運用規約に沿った動作です。
 
-- **FE メインカーネル限定ガード**: `$FrontEnd =!= Null` の対話カーネルでのみ起動します。headless カーネル（`$FrontEnd === Null`）・サブカーネル・サービスカーネル・MCP ゲートウェイカーネル・外部ジョブ用 wolframscript 等では起動しません。scheduler はマシンあたり 1 か所（対話 FE）でのみ動くべき、という設計です。
+- **FE メインカーネル限定ガード**: `$FrontEnd =!= Null` の対話カーネルでのみ起動します。headless カーネル（`$FrontEnd === Null`）・サブカーネル・サービスカーネル・MCP ゲートウェイカーネル・外部ジョブ用 wolframscript 等では起動しません。scheduler はマシンあたり 1 か所（対話 FE）でのみ動くべき、という設計です（各 headless カーネルが独自に scheduler ＋サブカーネルプールを起動すると、ライセンスシート数が膨れ上がり dispatch も多重化してしまうためです）。
+- **FE-less 計算ノード（headless）の扱い**: フロントエンドを持たない計算専用ノード（例: `rapterlake4t`。`$FrontEnd === Null`）は上記 scheduler の対象外ですが、代わりに**サービス側の HEADLESS DISPATCH モード**でジョブを拾えます。これはマシンごとの**オプトイン**で、`SourceVaultEnableHeadlessDispatch` で有効化します（dispatch 専用。詳細は `SourceVault_autotrigger.wl`（[SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger)）/ `SourceVault_servicemanager.wl`（[SourceVault_servicemanager](https://github.com/transreal/SourceVault_servicemanager)）を参照）。対話 FE の scheduler と headless dispatch は**同一マシン上で共存可能**で、`SourceVaultAutoTriggerDispatchCatalogRuns` のスロット単位アトミック dispatch claim が二重実行を防ぎます。
 - **冪等**: 既に起動済みなら同じ tick を再登録するだけの no-op です。`SourceVault_autotrigger.wl`（[SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger)）がまだロードされていない場合は、`ClaudeCodeAbsent` を返す安価な no-op となり、次回 (再)ロード時に自動起動を試みます。
 - **オプトアウト**: 自動起動を抑止したい場合は、ロード前に次を設定します。
 
@@ -478,7 +479,7 @@ SourceVaultStartHTTPProxy["handbook-web-svc",
   "Port" -> 8080, "SearchTimeoutMs" -> 30000];
 ```
 
-> サービスカーネルは対話 FE カーネルではない（`$FrontEnd === Null`）ため、§0 の auto-trigger scheduler 自動起動の対象外です。scheduler はマシン内の対話 FE カーネル 1 か所でのみ動きます。
+> サービスカーネルは対話 FE カーネルではない（`$FrontEnd === Null`）ため、§0 の auto-trigger scheduler 自動起動の対象外です。scheduler はマシン内の対話 FE カーネル 1 か所でのみ動きます。ただし FE-less 計算ノードは、サービス側の HEADLESS DISPATCH モード（`SourceVaultEnableHeadlessDispatch` でオプトイン）でジョブを拾えます（§0 参照）。
 
 ブラウザで:
 - `http://127.0.0.1:8080/sv/pdfsearch?q=履修登録` — gate 済み検索（LLM 非使用・即時）
@@ -527,14 +528,14 @@ SourceVaultStartHTTPProxy["research-web-svc", "PDFGroupProfile" -> "research-web
 | ClaudeEval 検索 | 上記 + `ClaudeCode\`ClaudeQuery` / `ClaudeQueryBg` / `PDFIndex\`pdfAskLLM`（簡易） |
 | Web 公開 | `SourceVaultCreatePDFGroupSearchProfile` / `ClonePDFGroupSearchProfile` / `StartService` / `StartHTTPProxy` |
 | グローバル設定 | `$SourceVaultDefaultNotebookFolder`（ノートブック保存先。Automatic → `$onWork` → `$packageDirectory` の順に解決） |
-| 自動起動 | auto-trigger scheduler（対話 FE カーネルのみ自動起動。`SourceVaultAutoTriggerStartScheduler` / opt-out は `SourceVault\`Private\`$iSVDisableAutoTriggerScheduler = True`） |
+| 自動起動 | auto-trigger scheduler（対話 FE カーネルのみ自動起動。`SourceVaultAutoTriggerStartScheduler` / opt-out は `SourceVault\`Private\`$iSVDisableAutoTriggerScheduler = True`）。FE-less 計算ノードは HEADLESS DISPATCH モード（`SourceVaultEnableHeadlessDispatch` でオプトイン） |
 | メール（関連） | `SourceVaultMailEnsureLoaded` / `SourceVaultMailView` / `SourceVaultMailDataset` / `SourceVaultMailFetchNew` / `SourceVaultMailComposeReply` / `SourceVaultSearchMailSnapshots` / `SourceVaultInferMailDerivedBatch`（[SourceVault_maildb](https://github.com/transreal/SourceVault_maildb) サブシステム） |
 
 要点:
 
 - **グループ = コレクション ＋ release context ＋ profile ＋ migration rule ＋ 補足知識**。release context でグループごとに公開範囲を制御。
-- **`Get["SourceVault.wl"]` で多数のサブモジュールが自動ロード**されます（従来の core / searchindex / servicemanager / mcp / objectview に加えて、`SourceVault_contracts` / `SourceVault_wiring` / `SourceVault_simrun` / `SourceVault_searchview` / `SourceVault_mailstructure` / `SourceVault_mailsuggest` / **`SourceVault_llmlog`** / `SourceVault_workflowregistry` 等）。
-- **auto-trigger scheduler は対話 FE カーネルでのみ自動起動**します（`$FrontEnd =!= Null` ガード。headless / サービス / サブカーネルは対象外）。冪等で、opt-out は `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True`。
+- **`Get["SourceVault.wl"]` で多数のサブモジュールが自動ロード**されます（従来の core / searchindex / servicemanager / mcp / objectview に加えて、`SourceVault_simrun` / `SourceVault_contracts` / `SourceVault_wiring` / `SourceVault_searchview` / `SourceVault_mailstructure` / `SourceVault_mailsuggest` / **`SourceVault_llmlog`** / `SourceVault_workflowregistry` 等）。
+- **auto-trigger scheduler は対話 FE カーネルでのみ自動起動**します（`$FrontEnd =!= Null` ガード。headless / サービス / サブカーネルは対象外）。冪等で、opt-out は `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True`。**FE-less 計算ノード**はサービス側の **HEADLESS DISPATCH モード**（`SourceVaultEnableHeadlessDispatch` でオプトイン）でジョブを拾い、対話 FE の scheduler と同一マシン上で共存できます（`SourceVaultAutoTriggerDispatchCatalogRuns` のアトミック dispatch claim が二重実行を防止）。
 - **Claude Code セッションログの取り込み・検索**は `SourceVaultIngestClaudeCodeLogs`（llmlog サブシステム）。「Claude Code のログ」「実行ログ」「セッションログ」等のキーワードでプロンプトルーターが自動注入し、GitHubCommitLog（コミット履歴）とは区別されます。
 - **不変スナップショット**（URI: `snapshot:class:hex` / `sv://snapshot/..`）は content-addressed で本体不変。プライバシーレベルの変更は `SourceVaultSetImmutableSnapshotPrivacyLevel` でサイドレコードに委譲されます。存在確認は `SourceVaultImmutableSnapshotExistsQ`。
 - **provider 横断の一覧・検索**は `SourceVaultSources` / `SourceVaultSummaries`。`"FetchMetadata" -> Automatic` で arXiv 論文のタイトル・著者・出版日・アブストラクトを自動取得してキャッシュします。`"On"` / `"Since"` / `"Until"` / `"Author"` / `"Kind"` でさらに絞り込めます。横断 provider は `SourceVaultRegisterSummaryProvider` で追加登録できます。

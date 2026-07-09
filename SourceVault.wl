@@ -14983,6 +14983,13 @@ Quiet @ Check[
    scheduler must run in exactly ONE place per machine: the interactive FE.
    Headless kernels have $FrontEnd === Null and are excluded.
 
+   FE-less compute nodes (e.g. rapterlake4t) are NOT covered by this
+   scheduler; they use the service-side HEADLESS DISPATCH mode instead
+   (dispatch-only, per-machine opt-in via SourceVaultEnableHeadlessDispatch;
+   see SourceVault_autotrigger.wl / SourceVault_servicemanager.wl). Both may
+   run concurrently on one machine: the per-slot atomic dispatch claim in
+   SourceVaultAutoTriggerDispatchCatalogRuns prevents double execution.
+
    The scheduler rides claudecode's shared polling tick; if that base is not
    loaded yet, StartScheduler is a cheap no-op returning ClaudeCodeAbsent
    (recorded below) and starts on the next SourceVault (re)load once the

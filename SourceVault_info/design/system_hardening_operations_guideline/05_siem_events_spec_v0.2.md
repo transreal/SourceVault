@@ -112,11 +112,13 @@ iClaudeDiagEmit[class_String, payload_Association, severity_String: "warn", opts
 | LLMEscalated | claudecode | info | From, To, Reason, TaskClass | 04 §4 |
 | LLMCall | claudecode/RunTurn | info | Provider, Model, TaskClass, InTokens, OutTokens, CostUSD, DurationMs, Outcome | 04 §5（ClaudeRunTurn 普遍フック = Phase J §17.22 の頭金） |
 | SpendLimitHit | claudecode | warn | LimitUSD, SpentUSD | 04 §5.2 |
-| ConversationCompacted | claudecode | info | BeforeTokens, AfterTokens | 04 §6 |
+| ConversationCompacted | claudecode | info | SessionTag, SummarizedEntries, TotalEntries, BeforeBytes, AfterBytes, BeforeTokens, AfterTokens | 04 §6（bytes/4 のトークン概算） |
 | WatchdogDead | diagnostics | error | ServiceId, LastLogAge | 02 §6 probe |
 | SpoolLineCorrupt | servicemanager | warn | SpoolFile, LineNo | §3.3 |
 | UnknownTaskClass | claudecode | warn | TaskClass | 04 §2.1: 表に無い class 申告 (general 降格時) |
 | FEBusyDeferred | claudecode | info | HandlerKey, Count | P1-5: FE 不応答で runInline handler を延期 (デッドロック回避。20 回毎に 1 emit) |
+| ValidatorMissing | claudecode | warn | TaskClass | 04 §4.1: RequiresValidator class に validator 未指定 (移行期は実行許可) |
+| ValidatorCrashed | claudecode | warn | Note | 04 §4.1: validator 自体の例外 (応答の罪ではないので True 扱い) |
 
 新クラス追加規約: 本表への追記 + Payload キー固定 + Severity 既定を仕様に書いてから実装する（schema drift 防止）。
 

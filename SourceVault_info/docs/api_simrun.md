@@ -19,7 +19,7 @@
 ## マシンプロファイル
 
 ### SourceVaultMachineProfile[opts] → Association
-現在のマシンの実測プロファイル (セッション内 memoize)。キー: `MachineName`, `MachineTag`, `OS`, `ProcessorCount`, `MemoryGB`, `WolframVersion`, `GPUs` (`{<|Name, MemoryMB|>...}`; nvidia-smi 実測), `GPUAvailable`, `NvccPath`, `NvccAvailable`, `SubkernelTarget`, `ProbedAtUTC`。
+現在のマシンの実測プロファイル (セッション内 memoize)。キー: `MachineName`, `MachineTag`, `OS`, `ProcessorCount`, `MemoryGB`, `WolframVersion`, `GPUs` (`{<|Name, MemoryMB|>...}`; nvidia-smi 実測、Nvidia のみ), `GPUAvailable`, `NvccPath`, `NvccAvailable`, `SubkernelTarget`, `ProbedAtUTC`。
 Options: `"Refresh" -> False` (True で再実測)。
 
 ### SourceVaultMachineProfileRefresh[] → Association
@@ -32,7 +32,7 @@ Options: `"Refresh" -> False` (True で再実測)。
 一覧表示版 (Machine / OS / Cores / MemGB / GPU / GPUMemMB / nvcc / Subkernels / ProbedAtUTC)。
 
 ### SourceVaultMachineSpecsText[] → String
-仕様生成プロンプト注入用の compact テキスト表。spec-review が自動で使う。
+仕様生成プロンプト注入用の compact テキスト表。spec-review が自動で使う。記録が無ければその旨の 1 行を返す。
 
 ## GPU / CUDA
 
@@ -46,19 +46,20 @@ nvcc を PATH → CUDA_PATH → 既定インストール場所の順で探索 (m
 CUDA 実行ゲート。GPU があれば `<|"OK" -> True, "GPUs" -> ...|>`、無ければ `Failure["NoNvidiaGPU", ...]` (メッセージに GPU を持つ既知マシン一覧)。**CUDA ワークフローは "run" の冒頭でこれを呼び、Failure ならそのまま返す。**
 
 ### SourceVaultCUDACompile[cuFile, opts] → String | Failure
-nvcc -O3 でコンパイルし実行ファイルパスを返す。出力は `<LocalState>/cudabin/<name>-<srchash8>.exe` (ソース内容ハッシュでキャッシュ)。Failure タグ: `"NvccUnavailable"` | `"CompileFailed"` (stderr 抜粋つき)。
-Options: `"ExtraArgs" -> {}`, `"Force" -> False`。
+nvcc -O3 でコンパイルし実行ファイルパスを返す。出力は `<LocalState>/cudabin/<name>-<srchash8>.exe` (ソース内容ハッシュでキャッシュ; 同一ソースは再利用)。Windows ではヘッドレス実行時に MSVC cl.exe が PATH に無い場合、vcvars64.bat (vswhere → 既定パス glob で探索) を call する .bat ラッパー経由で nvcc を実行する。Failure タグ: `"NvccUnavailable"` | `"CompileFailed"` (stderr 抜粋つき、cl.exe 起因なら対処ヒント付与)。
+Options: `"ExtraArgs" -> {}` (nvcc 追加引数), `"Force" -> False`。
 
 ## サブカーネル burst
 
-### $SourceVaultSubkernelMax (既定 16)
-ライセンスの subkernel 席実測に基づく上限。
+### $SourceVaultSubkernelMax
+型: Integer, 初期値: 16
+ライセンスの subkernel 席実測に基づく burst 上限。
 
 ### SourceVaultSubkernelTarget[] → Integer
-`Min[$ProcessorCount, $SourceVaultSubkernelMax]`。
+`Max[1, Min[$ProcessorCount, $SourceVaultSubkernelMax]]`。
 
 ### SourceVaultWithSubkernels[body] / SourceVaultWithSubkernels[n, body] → body の値
-HoldAll。目標数 (既定 = SourceVaultSubkernelTarget[]) までサブカーネルを起動して body を評価し、**body 実行中に増えたカーネル (自分の launch + ParallelMap の暗黙起動を含む) を必ず停止**して license 席を standby に返す。元からあったカーネルは残す。body 内では `ParallelMap` / `ParallelTable` / `DistributeDefinitions` / `ParallelEvaluate` がそのまま使える。
+HoldAll。目標数 (既定 = SourceVaultSubkernelTarget[]) までサブカーネルを起動して body を評価し、**body 実行中に増えたカーネル (自分の launch + ParallelMap の暗黙起動を含む) を必ず停止**して license 席を standby に返す。元からあったカーネルは残す。body 内では `ParallelMap` / `ParallelTable` / `DistributeDefinitions` / `ParallelEvaluate` がそのまま使える。n が Automatic または非整数なら SourceVaultSubkernelTarget[] を用いる。
 
 ```mathematica
 rows = SourceVaultWithSubkernels[
@@ -67,25 +68,27 @@ rows = SourceVaultWithSubkernels[
 
 ## 参照ベース実行フォルダ (SimulationRun)
 
-### $SourceVaultSimRunRoot (既定 Automatic)
-Automatic で `<Dropbox>/udb/simruns` (= PrivateVault の親 udb 直下)。テストでは temp パスに上書きする。
+### $SourceVaultSimRunRoot
+型: String | Automatic, 初期値: Automatic
+Automatic で `<Dropbox>/udb/simruns` (= PrivateVault の親 udb 直下)。文字列で明示上書き可 (テストでは temp パスに上書き)。udb root 解決不可なら `<Temp>/simruns` に fallback。
 
 ### SourceVaultSimRunRoot[] → String
+解決済みの simrun root パス (未作成でも返す)。
 
 ### SourceVaultSimRunCreate[slug] / [slug, params] → Association
-`<root>/<yyyymmddHHmm>-<machinetag>-<slug>/` を作成し `<|"RunId", "Folder", "Slug", "Machine", "Params", "StartedAtUTC"|>` を返す (フォルダ内 `run.wl` にも記録)。**バルク出力はすべて `Folder` 配下に書く。**
+`<root>/<yyyymmddHHmm>-<machinetag>-<slug>/` を作成し `<|"RunId", "Folder", "Slug", "Machine", "Params", "StartedAtUTC"|>` を返す (フォルダ内 `run.wl` にも記録)。RunId 衝突時は `-2`, `-3`... と suffix。**バルク出力はすべて `Folder` 配下に書く。**
 
 ### SourceVaultSimRunFinalize[run] / [run, extra] → Association | Failure
-フォルダのファイル一覧 (相対パス+バイト数) を採取し、メタデータのみを snapshot 化して `<|"Status", "URI", "Ref", "RunId", "Folder", "Files", "TotalBytes"|>` を返す。`extra` は小さな要約のみ (`"Status" -> "Done"|"Failed"`, `"Summary" -> <小assoc>`)。**バルクデータ・画像を extra に入れない。**
+フォルダのファイル一覧 (相対パス+バイト数) を採取し、メタデータのみを snapshot 化 (class "SimulationRun") して pointer `simrun/<slug>/latest` を更新、event を append して `<|"Status", "URI", "Ref", "RunId", "Folder", "Files", "TotalBytes"|>` を返す。`extra` は小さな要約のみ (`"Status" -> "Done"|"Failed"`, `"Summary" -> <小assoc>`)。**バルクデータ・画像・巨大リストを extra に入れない。** フォルダ不在なら `Failure["NoRunFolder", ...]`、snapshot 保存失敗なら `Failure["SaveFailed", ...]`。
 
 ### SourceVaultSimRunRecord[uriOrRef] → Association | Missing
-SimulationRun snapshot を読む (Params / Files / Machine / FolderSymbolic ...)。
+SimulationRun snapshot を読み Ref/URI を補って返す (Params / Files / Machine / FolderSymbolic ...)。無ければ `Missing["NotFound", uriOrRef]`。
 
 ### SourceVaultSimRunFolder[uriOrRefOrRunId] → String | Missing
-実行フォルダを現在のマシンの絶対パスへ解決 (udb 相対 `FolderSymbolic` を各 PC の Dropbox root で復元)。未同期なら `Missing["NotSynced", path]`。
+実行フォルダを現在のマシンの絶対パスへ解決 (udb 相対 `FolderSymbolic` を各 PC の Dropbox root で復元; RunId 直指定は simrun root 配下)。未同期なら `Missing["NotSynced", path]`、解決不能なら `Missing["NotFound", arg]`。
 
 ### SourceVaultSimRuns[slug] → {uri...}
-slug の実行履歴 (新しい順)。
+slug の実行履歴 (pointer `simrun/<slug>/latest` の履歴を新しい順の URI リストで)。
 
 ## 典型フロー (ワークフロー "run" 実装の contract)
 

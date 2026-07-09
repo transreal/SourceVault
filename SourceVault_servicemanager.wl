@@ -117,6 +117,17 @@ SourceVaultServiceRootHealth::usage =
   "RootHashMismatch は root 変更後の未再起動、UserMismatch は %LOCALAPPDATA% 分裂の恐れを示す。";
 SourceVaultServicePing::usage =
   "SourceVaultServicePing[serviceId, opts] は Ping command を送り、command queue 経由で Pong を待つ。";
+
+SourceVaultServiceHealthDetail::usage =
+  "SourceVaultServiceHealthDetail[serviceId] は health の判定内訳を返す (hardening 02 Inc3)。\n" <>
+  "<|\"Health\", \"Layer\"->\"L2\"|\"L3\"|\"L1\", \"Ping\"-><|\"L2\",\"RTTms\"...|>, \"Base\"|>。\n" <>
+  "L2 = command queue が実際に応答 (真の生存証明)。L3 = heartbeat 進行のみ。\n" <>
+  "ping は " <> "PingIntervalSeconds キャッシュ (health 連打で queue を叩かない)。";
+
+$SourceVaultHealthRequireL2::usage =
+  "$SourceVaultHealthRequireL2 (既定 False) — True にすると SourceVaultServiceHealth の \"OK\" は\n" <>
+  "L2 (Ping 応答) 必須になる。heartbeat が進むのに queue 不応答 (busy/wedge) は \"Degraded\"。\n" <>
+  "移行期は False で L3 OK を許す (spec 02 §3.2)。";
 SourceVaultListServices::usage =
   "SourceVaultListServices[] は runtime/services 配下の service とその状態を返す。";
 SourceVaultListRuntimeMachines::usage =
@@ -1715,7 +1726,8 @@ iProcessServiceCommands[dir_String] := Module[{cmdDir, doneDir, files, stop = Fa
 Options[SourceVaultServiceMain] = {"HeartbeatIntervalSeconds" -> 1, "MaxSeconds" -> Automatic};
 SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Module[
   {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath,
-   lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs},
+   lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs,
+   lastDispatchAbs = 0, dispatchCounter = 0, dispatchState = None},
   dir = iServiceRuntimeDir[serviceId];
   If[FailureQ[dir], Return[dir]];
   iSMEnsureDir[dir];
@@ -1734,6 +1746,19 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
      待たせない)。失敗しても fail-soft (Ready=False で明示エラー応答)。 *)
   If[iSMWLMCPEnabledQ[serviceId],
     Quiet @ TimeConstrained[Check[iSMWLMCPEnsure[dir], Null], 300, Null]];
+  (* headless dispatch (配車専用モード): opt-in マシンでは実行 stack
+     (workflowregistry + ClaudeOrchestrator workflow engine) を起動時に温める。
+     ループ内での初回長時間 Get は heartbeat を止め watchdog の誤再起動を招く
+     ので、WLMCP warm と同じ「ループ前の安全地帯」で行う。fail-soft。 *)
+  If[Length[DownValues[SourceVault`SourceVaultAutoTriggerHeadlessDispatchTick]] > 0 &&
+     TrueQ[Quiet @ Check[SourceVault`SourceVaultHeadlessDispatchEnabledQ[], False]],
+    Module[{stackR},
+      stackR = Quiet @ TimeConstrained[
+        Check[SourceVault`Private`iSVATEnsureHeadlessExecStack[], $Failed],
+        300, $Failed];
+      iServiceLog[dir, "HeadlessDispatchStackPreload",
+        <|"Result" -> If[AssociationQ[stackR],
+            Lookup[stackR, "Status", "?"], ToString[stackR]]|>]]];
   lastRollupAbs = AbsoluteTime[];
   lastCCIngestAbs = AbsoluteTime[];
   lastDiagIngestAbs = 0;   (* hardening 05 Inc2: 初回 tick で即 ingest *)
@@ -1755,7 +1780,12 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
   CheckAbort[
     While[! stop,
       counter++;
-      iSMWriteJSON[hbPath, <|"Counter" -> counter, "UpdatedAtUTC" -> iSMUTCNow[], "PID" -> $ProcessID|>];
+      (* liveness: 配車専用モードの tick 記録を heartbeat に同乗させる (要件:
+         「配車が死んだ」を health で検知可能に)。Dispatch.LastTickAtUTC の
+         鮮度を SourceVaultServiceStatus が判定する。 *)
+      iSMWriteJSON[hbPath, Join[
+        <|"Counter" -> counter, "UpdatedAtUTC" -> iSMUTCNow[], "PID" -> $ProcessID|>,
+        If[AssociationQ[dispatchState], <|"Dispatch" -> dispatchState|>, <||>]]];
       stop = iProcessServiceCommands[dir];
       If[stop, Break[]];
       (* WLMCP: サブカーネルの完了結果を回収して done を書く。pending がある間は
@@ -1790,6 +1820,44 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
         Quiet @ TimeConstrained[
           Check[SourceVault`SourceVaultDiagnosticsIngestSpool[], Null], 30, Null];
         lastDiagIngestAbs = AbsoluteTime[]];
+      (* headless dispatch (配車専用): opt-in マシンでのみ、enqueue された
+         CatalogWorkflow ジョブを拾い SourceVaultRunWorkflowAsync (外部プロセス)
+         へ委譲する。サブカーネルプールなし・トリガー評価なし。opt-in 判定は
+         tick 側 (SourceVaultHeadlessDispatchEnabledQ) が毎回行うので、共有 vault
+         のフラグ変更が再起動なしで効く (無効時 tick は即 "Disabled" を返す)。
+         TimeConstrained 120s: 通常は数秒 (jsonl 読取+StartProcess)。実行 stack
+         未ロード時の初回 Get だけ長いが、それは起動時 preload 済みが正常経路。 *)
+      If[Length[DownValues[SourceVault`SourceVaultAutoTriggerHeadlessDispatchTick]] > 0 &&
+         (AbsoluteTime[] - lastDispatchAbs) >
+           If[NumericQ[SourceVault`$SourceVaultHeadlessDispatchIntervalSeconds],
+             SourceVault`$SourceVaultHeadlessDispatchIntervalSeconds, 60],
+        Module[{tickR},
+          tickR = Quiet @ TimeConstrained[
+            Check[SourceVault`SourceVaultAutoTriggerHeadlessDispatchTick[],
+              <|"Status" -> "Error"|>],
+            120, <|"Status" -> "TimedOut"|>];
+          lastDispatchAbs = AbsoluteTime[];
+          If[AssociationQ[tickR] && Lookup[tickR, "Status", ""] =!= "Disabled",
+            dispatchCounter++;
+            dispatchState = <|
+              "Enabled" -> True,
+              "LastTickAtUTC" -> iSMUTCNow[],
+              "Counter" -> dispatchCounter,
+              "IntervalSeconds" ->
+                If[NumericQ[SourceVault`$SourceVaultHeadlessDispatchIntervalSeconds],
+                  SourceVault`$SourceVaultHeadlessDispatchIntervalSeconds, 60],
+              "LastStatus" -> Lookup[tickR, "Status", "?"],
+              "EligibleJobs" -> Lookup[tickR, "EligibleJobs", 0]|>;
+            If[MemberQ[{"Error", "TimedOut", "ExecStackUnavailable"},
+                Lookup[tickR, "Status", ""]] ||
+               Lookup[tickR, "EligibleJobs", 0] > 0,
+              iServiceLog[dir, "HeadlessDispatchTick",
+                <|"Result" -> Quiet @ Check[
+                    ToString[KeyTake[tickR,
+                      {"Status", "EligibleJobs", "ExecStack", "Dispatch"}],
+                      InputForm], "?"]|>]],
+            (* opt-in が外れた: heartbeat から Dispatch を落とす (stall 誤検知防止) *)
+            dispatchState = None]]];
       If[NumericQ[maxSec] && (AbsoluteTime[] - startAbs) > maxSec, stop = True; Break[]];
       Pause[interval]],
     stop = True];
@@ -1819,7 +1887,7 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
         "Packages" -> {"SourceVault_core.wl", "SourceVault_crypto.wl", "SourceVault_searchindex.wl",
           "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
           "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl",
-          "SourceVault_llmlog.wl"},
+          "SourceVault_llmlog.wl", "SourceVault_autotrigger.wl"},
         "InjectedRootHash" -> rootHash,
         "HasPrelude" -> (StringLength[prelude] > 0), "CreatedAtUTC" -> iSMUTCNow[]|>];
     Module[{strm = OpenWrite[path, BinaryFormat -> True], text},
@@ -1842,6 +1910,11 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
         (* llmlog は mcp より後に load (adapter 登録が mcp の registry を要するため)。
            存在ガードで fail-soft。 *)
         "  With[{lpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_llmlog.wl\"}]}, If[FileExistsQ[lpath], Get[lpath]]];\n",
+        (* autotrigger: headless dispatch mode (配車専用) の tick 本体。ロード自体は
+           side-effect free (レジストリ基盤のみ; scheduler auto-start は SourceVault.wl
+           の FE ガード側にあり service kernel では走らない)。存在ガードで fail-soft。
+           実行 stack (workflowregistry/engine) は opt-in マシンでのみ遅延ロードされる。 *)
+        "  With[{tpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_autotrigger.wl\"}]}, If[FileExistsQ[tpath], Get[tpath]]];\n",
         "];\n",
         "SourceVault`$SourceVaultCoreRoot = ", q[root], ";\n",
         (* root snapshot 注入 (spec v6 §3.7): service kernel は注入値を最優先する。
@@ -1975,7 +2048,8 @@ iHeartbeatAgeSeconds[dir_String] := Module[{hb = iSMReadJSON[FileNameJoin[{dir, 
   QuantityMagnitude[DateDifference[t, Now, "Second"]]];
 
 SourceVaultServiceStatus[serviceId_String, opts___] := Module[
-  {dir, status, hb, pidRec, pid, alive, age, health},
+  {dir, status, hb, pidRec, pid, alive, age, health,
+   dispatch, dispatchAge, dispatchStalled = False},
   dir = iServiceRuntimeDir[serviceId];
   If[FailureQ[dir], Return[dir]];
   If[! DirectoryQ[dir], Return[<|"ServiceId" -> serviceId, "State" -> "Unknown", "Exists" -> False|>]];
@@ -1994,15 +2068,79 @@ SourceVaultServiceStatus[serviceId_String, opts___] := Module[
     NumericQ[age] && age <= iSMHealthThreshold["OKSeconds", 15], "OK",
     NumericQ[age] && age <= iSMHealthThreshold["DegradedSeconds", 60], "Degraded",
     True, "Failing"];
+  (* headless dispatch liveness: heartbeat が進んでいても配車 tick が止まって
+     いれば (LastTickAtUTC が interval x3+30s より古い / 直近 tick が Error 系)
+     「緑のまま配車死亡」なので Degraded に落とす。Dispatch field が無い =
+     配車無効サービスは従来どおり (影響なし)。 *)
+  dispatch = If[AssociationQ[hb], Lookup[hb, "Dispatch", Missing[]], Missing[]];
+  dispatchAge = If[AssociationQ[dispatch],
+    Module[{t = Quiet @ DateObject[Lookup[dispatch, "LastTickAtUTC", ""], TimeZone -> 0]},
+      If[Head[t] =!= DateObject, Missing["BadTimestamp"],
+        QuantityMagnitude[DateDifference[t, Now, "Second"]]]],
+    Missing[]];
+  If[AssociationQ[dispatch] && TrueQ[Lookup[dispatch, "Enabled", False]],
+    Module[{iv = Lookup[dispatch, "IntervalSeconds", 60]},
+      If[! NumericQ[iv], iv = 60];
+      dispatchStalled =
+        ! NumericQ[dispatchAge] || dispatchAge > 3 iv + 30 ||
+          MemberQ[{"Error", "TimedOut", "ExecStackUnavailable"},
+            Lookup[dispatch, "LastStatus", ""]];
+      If[dispatchStalled && health === "OK", health = "Degraded"]]];
   <|"ServiceId" -> serviceId,
     "State" -> If[AssociationQ[status], Lookup[status, "State", "Unknown"], "Unknown"],
     "PID" -> pid, "PidAlive" -> alive,
     "HeartbeatCounter" -> If[AssociationQ[hb], Lookup[hb, "Counter"], Missing[]],
     "HeartbeatAgeSeconds" -> age, "Health" -> health,
+    "Dispatch" -> dispatch, "DispatchTickAgeSeconds" -> dispatchAge,
+    "DispatchStalled" -> dispatchStalled,
     "RuntimeDir" -> dir, "Exists" -> True|>];
 
+(* hardening 02 Inc3 (2026-07-08): L2 (command queue 応答) を health に統合。
+   heartbeat counter の進行は「メインループ生存」しか証明しない (L3)。
+   Ping が done/ に落ちてくること = 公開処理系そのものの生存証明 (L2)。
+   ping はキャッシュ (PingIntervalSeconds) 経由で、health 連打でも
+   queue を 1 分に 1 回しか叩かない。 *)
+If[! ValueQ[$SourceVaultHealthRequireL2], $SourceVaultHealthRequireL2 = False];
+If[! AssociationQ[$iSMPingCache], $iSMPingCache = <||>];
+
+iSMPingCached[serviceId_String] := Module[
+  {now = AbsoluteTime[], c, interval, timeout, r, t0},
+  interval = iSMHealthThreshold["PingIntervalSeconds", 60];
+  timeout = iSMHealthThreshold["PingTimeoutSeconds", 10];
+  c = Lookup[$iSMPingCache, serviceId, Missing[]];
+  If[AssociationQ[c] && now - Lookup[c, "t", 0] < interval,
+    Return[c["r"], Module]];
+  t0 = AbsoluteTime[];
+  r = Quiet @ Check[
+    SourceVaultServicePing[serviceId, "TimeoutSeconds" -> timeout], $Failed];
+  r = If[AssociationQ[r] && TrueQ[Lookup[r, "Pong"]],
+    <|"L2" -> True, "RTTms" -> Round[1000 (AbsoluteTime[] - t0)]|>,
+    <|"L2" -> False,
+      "Detail" -> If[FailureQ[r], First[r, "?"], "NoPong"]|>];
+  $iSMPingCache[serviceId] = <|"t" -> now, "r" -> r|>;
+  r];
+
+SourceVaultServiceHealthDetail[serviceId_String] := Module[
+  {st, base, ping},
+  st = SourceVaultServiceStatus[serviceId];
+  base = Lookup[st, "Health", "Unknown"];
+  (* L1/L3 の時点で非 OK なら queue はカーネルごと死んでいる: ping 不要 *)
+  If[base =!= "OK",
+    Return[<|"Health" -> base, "Layer" -> "L1", "Base" -> base|>]];
+  ping = iSMPingCached[serviceId];
+  Which[
+    TrueQ[ping["L2"]],
+      <|"Health" -> "OK", "Layer" -> "L2", "Ping" -> ping, "Base" -> base|>,
+    TrueQ[$SourceVaultHealthRequireL2],
+      (* heartbeat は進むのに queue 不応答 = busy (長時間ジョブ) か wedge *)
+      <|"Health" -> "Degraded", "Layer" -> "L3", "Ping" -> ping,
+        "Base" -> base, "Note" -> "QueueUnresponsive"|>,
+    True,
+      (* 移行期: L3 OK を許すが Layer で識別可能にする *)
+      <|"Health" -> "OK", "Layer" -> "L3", "Ping" -> ping, "Base" -> base|>]];
+
 SourceVaultServiceHealth[serviceId_String, opts___] :=
-  Lookup[SourceVaultServiceStatus[serviceId], "Health", "Unknown"];
+  Lookup[SourceVaultServiceHealthDetail[serviceId], "Health", "Unknown"];
 
 (* spec v6 §3.6/§3.10: service kernel の root/ユーザが main kernel と整合しているか検証する。
    - RootHashMismatch: service の injected root hash ≠ main の現在 hash → root 変更後に未再起動。
@@ -2549,6 +2687,31 @@ def rj(path):
     except Exception:
         return {}
 
+PINGIV = CFG.get('pingIntervalSeconds', 60)
+PINGTO = CFG.get('pingTimeoutSeconds', 10)
+REQL2 = bool(CFG.get('requireL2', False))
+_ping_cache = {'t': 0.0, 'ok': None, 'rtt': None}
+
+# hardening 02 Inc3b: queue ping (L2)。heartbeat は「ループ生存」しか
+# 証明しないため、Ping command が done/ に落ちること (=公開処理系の生存)
+# を確認する。PINGIV キャッシュで /health 連打でも queue は 1 分に 1 回。
+def queue_ping():
+    now = time.time()
+    if _ping_cache['ok'] is not None and now - _ping_cache['t'] < PINGIV:
+        return _ping_cache
+    t0 = time.time()
+    r = None
+    try:
+        r = run_cmd({'CommandId': 'ping:' + str(uuid.uuid4()),
+                     'Command': 'Ping'}, timeout=PINGTO)
+    except Exception:
+        r = None
+    _ping_cache['t'] = now
+    _ping_cache['ok'] = bool(r and r.get('Pong'))
+    _ping_cache['rtt'] = (round((time.time() - t0) * 1000)
+                          if _ping_cache['ok'] else None)
+    return _ping_cache
+
 def health():
     st = rj(os.path.join(SVC, 'status.json'))
     hb = rj(os.path.join(SVC, 'heartbeat.json'))
@@ -2567,10 +2730,24 @@ def health():
         hstate = 'Degraded'
     else:
         hstate = 'Stale'
+    ping = None
+    layer = 'L1'
+    if hstate in ('OK', 'Degraded') and st.get('State') == 'Running':
+        p = queue_ping()
+        ping = {'l2': p['ok'], 'rttMs': p['rtt']}
+        if p['ok']:
+            layer = 'L2'
+        else:
+            layer = 'L3'
+            # requireL2: heartbeat が進むのに queue 不応答 → OK を剥奪
+            # (healthState=='OK' を見る MCPRunningQ が False になり、
+            #  パレットの誤「実行中」→逆 Stop 連鎖を防ぐ)
+            if REQL2 and hstate == 'OK':
+                hstate = 'Degraded'
     return {'ok': hstate in ('OK', 'Degraded'), 'service': st.get('ServiceId'), 'state': st.get('State'),
             'pid': st.get('PID'), 'heartbeatCounter': hb.get('Counter'),
             'heartbeatAgeSeconds': (round(age, 1) if age is not None else None),
-            'healthState': hstate,
+            'healthState': hstate, 'layer': layer, 'ping': ping,
             'atUTC': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
 
 def run_cmd(cmd, timeout=None):
@@ -2846,7 +3023,11 @@ SourceVaultStartHTTPProxy[serviceId_String, OptionsPattern[]] := Module[
     "mcpToken" -> (OptionValue["MCPToken"] /. (None | Automatic) -> Null),
     "mcpTimeoutMs" -> OptionValue["MCPTimeoutMs"],
     "healthOkSeconds" -> iSMHealthThreshold["OKSeconds", 15],
-    "healthDegradedSeconds" -> iSMHealthThreshold["DegradedSeconds", 60]|>];
+    "healthDegradedSeconds" -> iSMHealthThreshold["DegradedSeconds", 60],
+    (* hardening 02 Inc3b: /health の queue ping (L2) 設定 *)
+    "pingIntervalSeconds" -> iSMHealthThreshold["PingIntervalSeconds", 60],
+    "pingTimeoutSeconds" -> iSMHealthThreshold["PingTimeoutSeconds", 10],
+    "requireL2" -> TrueQ[$SourceVaultHealthRequireL2]|>];
   py = iResolvePython[];
   batPath = FileNameJoin[{proxyDir, "launch.bat"}];
   iRotateLog[FileNameJoin[{proxyDir, "stdout.log"}]];  (* #1: proxy ログも世代退避 *)

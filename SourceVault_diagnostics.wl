@@ -1472,20 +1472,39 @@ iSVDiagIngestSeenPath[] :=
     If[dir === $Failed, $Failed,
       FileNameJoin[{dir, "ingest-seen.json"}]]];
 
+(* hardening 05 Inc4: watchdog.log.jsonl (PS watchdog が書く DiagnosticsEvent
+   schema 行) も ingest 対象にする。列挙は servicemanager の machine root へ
+   弱結合 (service kernel は常に servicemanager を積んでいる)。単体テストから
+   差し替えられるよう独立ヘルパにする。 *)
+iSVDiagWatchdogLogFiles[] := Module[{root, mroot},
+  If[Names["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"] === {} ||
+     Length[DownValues[
+       Symbol["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"]]] === 0,
+    Return[{}]];
+  root = Quiet @ Check[SourceVault`SourceVaultCoreRoot[], $Failed];
+  If[! StringQ[root], Return[{}]];
+  mroot = Quiet @ Check[
+    Symbol["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"][root],
+    $Failed];
+  If[! StringQ[mroot] || ! DirectoryQ[mroot], Return[{}]];
+  Quiet @ Check[
+    FileNames["watchdog.log.jsonl", FileNameJoin[{mroot, "services"}], 2],
+    {}]];
+
 SourceVaultDiagnosticsIngestSpool[] := Module[
-  {dir = iSVDiagSpoolDir[], files, seenPath, seen, nowU,
-   ingested = 0, corrupt = 0, pruned = 0, today},
-  If[! DirectoryQ[dir],
-    Return[<|"Ingested" -> 0, "Corrupt" -> 0, "PrunedSpools" -> 0,
-      "Files" -> 0|>]];
+  {dir = iSVDiagSpoolDir[], files, wdFiles, seenPath, seen, nowU,
+   ingested = 0, corrupt = 0, pruned = 0, foreign = 0, today, ingestOne},
   seenPath = iSVDiagIngestSeenPath[];
   seen = If[StringQ[seenPath] && FileExistsQ[seenPath],
     Quiet @ Check[Import[seenPath, "RawJSON"], <||>], <||>];
   If[! AssociationQ[seen], seen = <||>];
   nowU = UnixTime[];
   today = DateString[TimeZoneConvert[Now, 0], {"Year", "Month", "Day"}];
-  files = Quiet @ Check[FileNames["*.jsonl", dir], {}];
-  Scan[Function[f, Module[
+  (* per-file 取り込み。pruneQ: 消化済み過去日 shard を削除してよいか
+     (producer spool のみ)。requireTypeQ: Type=="DiagnosticsEvent" の行だけ
+     取り込む (watchdog log は旧形式行が混在し得るため。旧形式は corrupt
+     ではなく foreign として静かにスキップ)。 *)
+  ingestOne = Function[{f, pruneQ, requireTypeQ}, Module[
       {sc = f <> ".ingest.json", off, size, strm, ba, bytes, lastNL = 0,
        text, lines, newOff, dateTag},
       off = Quiet @ Check[
@@ -1512,25 +1531,36 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
               Scan[Function[ln, Module[{rec, eid},
                   rec = Quiet @ Check[ImportByteArray[
                     StringToByteArray[ln, "UTF-8"], "RawJSON"], $Failed];
-                  If[! AssociationQ[rec],
-                    corrupt++,
-                    eid = Lookup[rec, "EventId", None];
-                    If[! (StringQ[eid] && KeyExistsQ[seen, eid]),
-                      Quiet @ Check[
-                        SourceVaultDiagnosticsLog[Join[rec,
-                          <|"IngestedAtUTC" -> iSVDiagUTCNow[]|>]], Null];
-                      If[StringQ[eid], seen[eid] = nowU];
-                      ingested++]]]],
+                  Which[
+                    ! AssociationQ[rec],
+                      If[requireTypeQ, foreign++, corrupt++],
+                    requireTypeQ &&
+                      Lookup[rec, "Type", ""] =!= "DiagnosticsEvent",
+                      foreign++,
+                    True,
+                      eid = Lookup[rec, "EventId", None];
+                      If[! (StringQ[eid] && KeyExistsQ[seen, eid]),
+                        Quiet @ Check[
+                          SourceVaultDiagnosticsLog[Join[rec,
+                            <|"IngestedAtUTC" -> iSVDiagUTCNow[]|>]], Null];
+                        If[StringQ[eid], seen[eid] = nowU];
+                        ingested++]]]],
                 lines];
               newOff = off + lastNL;
               iSVDiagAtomicWriteJSON[sc, <|"Offset" -> newOff|>]]]]];
-      (* 消化済みの過去日 shard は削除 (producer 名-<pid>-<yyyymmdd>.jsonl) *)
-      dateTag = Last[StringCases[FileBaseName[f],
-        RegularExpression["(\\d{8})$"] -> "$1"], ""];
-      If[newOff >= size && size === Quiet @ Check[FileByteCount[f], -1] &&
-         dateTag =!= "" && dateTag =!= today,
-        Quiet @ DeleteFile[f]; Quiet @ DeleteFile[sc]; pruned++]]],
-    files];
+      (* 消化済みの過去日 shard は削除 (producer 名-<pid>-<yyyymmdd>.jsonl)。
+         watchdog log は長寿命ファイルなので prune しない (pruneQ=False)。 *)
+      If[pruneQ,
+        dateTag = Last[StringCases[FileBaseName[f],
+          RegularExpression["(\\d{8})$"] -> "$1"], ""];
+        If[newOff >= size && size === Quiet @ Check[FileByteCount[f], -1] &&
+           dateTag =!= "" && dateTag =!= today,
+          Quiet @ DeleteFile[f]; Quiet @ DeleteFile[sc]; pruned++]]]];
+  files = If[DirectoryQ[dir],
+    Quiet @ Check[FileNames["*.jsonl", dir], {}], {}];
+  Scan[ingestOne[#, True, False] &, files];
+  wdFiles = iSVDiagWatchdogLogFiles[];
+  Scan[ingestOne[#, False, True] &, wdFiles];
   If[Length[seen] > 20000,
     seen = Association @ Take[SortBy[Normal[seen], Last], -20000]];
   If[StringQ[seenPath], iSVDiagAtomicWriteJSON[seenPath, seen]];
@@ -1540,8 +1570,9 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
       "EventClass" -> "SpoolLineCorrupt", "Producer" -> "servicemanager",
       "ProducerPid" -> $ProcessID, "Severity" -> "warn",
       "Payload" -> <|"Count" -> corrupt|>|>], Null]];
-  <|"Ingested" -> ingested, "Corrupt" -> corrupt,
-    "PrunedSpools" -> pruned, "Files" -> Length[files]|>];
+  <|"Ingested" -> ingested, "Corrupt" -> corrupt, "Foreign" -> foreign,
+    "PrunedSpools" -> pruned,
+    "Files" -> Length[files] + Length[wdFiles]|>];
 
 End[];
 
