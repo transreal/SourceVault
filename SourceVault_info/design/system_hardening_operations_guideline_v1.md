@@ -2,6 +2,44 @@
 
 対象: NBAccess / claudecode / ClaudeRuntime / ClaudeOrchestrator / SourceVault 一式
 作成: 2026-07-06（4 観点並列監査 — 非同期安全性 / ライセンス・カーネル運用 / LLM 統合 / サービス・MCP 安定性 — の統合）
+**実装完了: 2026-07-09（本指針の全項目を実装・検証。下記「実装完了ステータス」参照）**
+
+---
+
+## ★ 実装完了ステータス（2026-07-09 更新）
+
+**本指針プロジェクトは完遂した。** 2026-07-06 の監査から起票した中期 5 案・P0 全 8 項目・P1 全項目・02 全 Inc をすべて実装し、各増分を wolframscript 単体テスト + ユーザー NB 実機検証で green 確認した。
+
+| 項目 | 状態 | 実装物 / 検証 |
+|---|---|---|
+| **01 SeatBroker** | ✅ 完了 | `ClaudeRuntime_seatbroker.wl` 新規 + spawn 5 点配線 + P0-2 フリーズループ修正。実 4/4 席枯渇環境で実証 |
+| **02 Health v2** | ✅ 完了 | 閾値統一 / battery 3 経路 / watchdog backoff + 成否実測 / **service Ping L2** / proxy L2 / **旧 gateway eval L2**（Inc4）。本番 service ライブ検証 |
+| **03 ProcessSupervisor** | ✅ 完了 | `ClaudeRuntime_processsupervisor.wl` 新規（2 相 manifest + 孤児回収 + PID 再利用ガード + 起動時 reap + 自己解除 tick）。クラッシュ注入テスト込み |
+| **04 LLM Router** | ✅ 完了 | preflight / ティア表 / escalate + validator / usage 会計 + `ClaudeUsageReport` / `$ClaudeSpendLimit` / 履歴自動 compaction。LM Studio ライブ E2E |
+| **05 SIEM** | ✅ 完了 | per-process spool + `iClaudeDiagEmit` + service ingest hook + watchdog log 取込。日本語二重エンコード既存バグも修正 |
+| **P0-7a**（tick 安全化）| ✅ 完了 | FE probe gate + handler 個別 timeout。本番 autotrigger tick で `FEBusyDeferred` 発火を確認（デッドロック直接対策）|
+| **P1-4**（UNTRUSTED 既定化）| ✅ 完了 | `SourceVaultWrapUntrustedText` 新規 + `SummarizeText` 既定 on。injection 検出 + quarantine |
+| **P1-6**（fallback backoff）| ✅ 完了 | 実試行失敗後の次候補に指数バックオフ（1s→2s→4s）。FE 実機で遅延起動確認 |
+
+### 監査が誤検出だった 2 項目（実測で「対応不要」確定）
+
+- **P0-7 本体（`$claudeProgress` 単一書き手化）→ 対応不要**。実測（`test codes/claudecode_progress_concurrency_test.wls`, 4/4 green）で WL カーネルの協調並行モデルを実証し、メモリレースが構造的に存在しないことを確認。詳細は末尾 §P0-7 再評価。
+- **#19（ClearAll 文脈ワート／両文脈 {1,1} 二重定義）→ 無害と確定**。過去の「{1,1}」は壊れた `DownValues[Symbol[...]]` プローブ（HoldAll で常に 1 を返す）による**測定アーティファクト**だった。正しい測定では各関数は単一定義。dispatch バグではないため load 構造は変更しない。
+
+いずれも「静的解析の警告 < 実測の証拠」の原則に従い、**危険な大改修を回避**した判断。P0-7 は回帰テストを残し、将来 WL に preemption が入れば自動 FAIL で警告する。
+
+### 副産物（監査対象外だが本プロジェクトで修正）
+
+- **`DownValues[Symbol["ctx`name"]]` の HoldAll バグを 4 ファイルで修正**（webingest / diagnostics / processsupervisor / claudecode）。`DownValues` は HoldAll なので引数の `Symbol[...]` が評価されず `DownValues::sym` を出し、`Length` が常に 1 になり弱結合ガードが機能しない。正しい idiom = `With[{sym = Symbol["..."]}, Length[DownValues[sym]]]` または同一文脈なら短縮名直接参照。
+- WL 単一カーネルの並行モデルを実証・文書化（協調実行、SessionSubmit/ScheduledTask は preempt しない）。
+
+### 各案の実装仕様と対応
+
+実装仕様は `system_hardening_operations_guideline/`（00_overview + 01〜05）。各ファイル冒頭に実装完了マーカーを付した。増分単位の詳細な実装ログ・検証結果・落とし穴は auto-memory `system-hardening-guideline-v1.md` に記録。
+
+### 未コミット状態（2026-07-09 時点）
+
+全実装が検証 green だが GitHub 未反映。対象: claudecode.wl / SourceVault_webingest.wl / SourceVault_diagnostics.wl / SourceVault_servicemanager.wl / ClaudeRuntime_seatbroker.wl（新規）/ ClaudeRuntime_processsupervisor.wl（新規）/ ClaudeRuntime_externalrunner.wl / wlmcp-gateway/bridge.py + 本指針一式 + 新規テスト（`test codes/claudecode_progress_concurrency_test.wls` 等）。**原則 9（green 即コミット）に従い早期反映を推奨。**
 
 ---
 
@@ -67,7 +105,7 @@ watchdog・自動復旧・retry は必ず「バックオフ + 連続失敗上限
 | P0-4 | **green-but-dead 残存**: gateway health が `KERNEL.alive()`（プロセス生存）のみで wedge を検知できない | wlmcp-gateway/bridge.py:161-163 | health で短 timeout の eval round-trip を実施。servicemanager 側 iMCPHealthyQ 判定と統一 |
 | P0-5 | **health 閾値の不一致**: Python proxy は 15s/60s、WL 側は 5s/15s で OK/Degraded の意味が食い違う | servicemanager.wl:2179-2184 vs 1672-1676 | 閾値を一本化（推奨: 15s=OK / 60s=Degraded / 超=Stale）し定数を単一定義に |
 | P0-6 | **JSONL 非アトミック追記 × Dropbox**: 複数 async コンテキストからロック無しで OpenAppend | claudecode.wl:2631,4776 / servicemanager.wl:537-543 | 状態ファイルは write-temp-rename 化（heartbeat.json:1483 が最優先）。ログ追記はローカル書き + rollup 集約 |
-| P0-7 | **`$claudeProgress` の無ロック並行変更**: 60 箇所超の変更点が polling tick と job 初期化から同時に走る | claudecode.wl:5440,5605-5667,6619-6673 ほか | 書き手を tick 側に一本化（他コンテキストは「更新要求 queue」に積み tick が適用）。tickInFlightAt/tickStaleCount(5644-5666) も同時に単一書き手化で解決 |
+| P0-7 | **`$claudeProgress` の無ロック並行変更**: 60 箇所超の変更点が polling tick と job 初期化から同時に走る | claudecode.wl:5440,5605-5667,6619-6673 ほか | ~~書き手を tick 側に一本化~~ → **[2026-07-09 実測により再評価: 対応不要と判定]** 下記 §P0-7 追記参照 |
 | P0-8 | **watchdog restart storm**: バックオフ無し・`schtasks /Run` の結果破棄で失敗しても「restarted」と記録 | servicemanager.wl:1820-1862, 1852 | 連続失敗カウンタ + 指数バックオフ + N 回で停止&通報。exit code をログへ |
 
 ### P1 — 安定運用のために早期に対処
@@ -158,12 +196,35 @@ SourceVaultDiagnosticsLicenseProbe[]      (* ProcessSlotsFree を確認 *)
 
 ---
 
-## 5. 推奨着手順序
+## 5. 推奨着手順序 ✅ 全て実装完了（2026-07-09）
 
-1. **即日級（小変更・大効果)**: P0-3（battery 制限を service/proxy にも）、P0-2（LaunchKernels 失敗フラグ）、P0-5（health 閾値統一）、P0-6 の heartbeat.json temp-rename、P1-8（SessionSubmit 失敗可視化）。
-2. **週内級**: P0-1（spawn 点 3 箇所に席ゲート）、P0-4（gateway eval round-trip health）、P0-8（watchdog バックオフ）、P1-2（LM Studio preflight）、P1-7（未コミット反映）。
-3. **設計を伴う**: P0-7（$claudeProgress 単一書き手化）、P1-1（ProcessSupervisor）、P1-3（履歴自動 compaction）、P1-4（UNTRUSTED 既定化）。
-4. **中期**: §3.1 SeatBroker 本体、§3.4 ティア表 + 会計、§3.5 SIEM イベント拡充。
+> 当初の推奨順序（下記）どおりに着手し、全て完了した。冒頭「実装完了ステータス」参照。
+
+1. ✅ **即日級（小変更・大効果)**: P0-3（battery 制限を service/proxy にも）、P0-2（LaunchKernels 失敗フラグ）、P0-5（health 閾値統一）、P0-6 の heartbeat.json temp-rename、P1-8（SessionSubmit 失敗可視化）。
+2. ✅ **週内級**: P0-1（spawn 点 3 箇所に席ゲート）、P0-4（gateway eval round-trip health）、P0-8（watchdog バックオフ）、P1-2（LM Studio preflight）、P1-7（未コミット反映）。
+3. ✅ **設計を伴う**: ~~P0-7（$claudeProgress 単一書き手化）→ 実測で対応不要と確定~~、P1-1（ProcessSupervisor）、P1-3（履歴自動 compaction）、P1-4（UNTRUSTED 既定化）。
+4. ✅ **中期**: §3.1 SeatBroker 本体、§3.4 ティア表 + 会計、§3.5 SIEM イベント拡充。
+
+---
+
+## §P0-7 再評価: `$claudeProgress` 単一書き手化は不要（2026-07-09 実測確定）
+
+**結論: 対応不要。** 監査（静的解析）は 60 箇所超の変更点を見て「無ロック並行変更＝メモリレース」と判定したが、これは **WL の並行モデルに対する false positive** だった。
+
+**実測（`test codes/claudecode_progress_concurrency_test.wls`, 4/4 green）:**
+- WL カーネルはメイン評価ループが**単一スレッド**。`$claudeProgress` を触る全経路（共有 tick = `CreateScheduledTask`、tick インスタンス = `SessionSubmit[ScheduledTask]`、job 初期化、登録）はすべて**協調実行**で、別 OS スレッドでは走らない。
+- SessionSubmit は実行中評価を **preempt しない**（T1）。
+- 2 並行タスクの read-modify-write 各 1000 回 → **lost update ゼロ**（T2, 期待 2000 = 実測 2000）。
+- **`Pause`（event loop を pump）を read と write の間に挟んでも interleave しない**（T3, 期待 60 = 実測 60）。
+- 連想フィールドの多タスク並行更新も破損なし（T4）。
+
+**では監査が捉えた本当の問題は何だったか:**
+1. **FE デッドロック**（tick 内 FE 書き込みが Dynamic/対話評価と相互待ち）— これは**メモリレースではなく blocking 待ち**。**P0-7a（tick 安全化: FE probe gate + handler timeout）で対策済み**。実運用で `FEBusyDeferred` 発火を確認。
+2. **tick 論理再入 / stale 二重スケジュール** — tickInFlightAt ガード + staleness 処理で対処済み。read（entry スナップショット）→ write の間に pump は無く、あっても上記 T3 より無害。
+
+**なぜ refactor しないか:** 60 箇所の単一書き手 queue 化は、(a) 実測でゼロの安全利益、(b) 今セッションでようやく安定させた繊細な tick 経路を触る高リスク（デッドロック再発の恐れ）。**「静的解析の警告 < 実測の証拠」**の原則に従い、危険な大改修を避ける。回帰テストを残し、将来 WL に preemption が入れば FAIL で警告する。
+
+**教訓（今後の監査に適用）:** WL 単一カーネル内の「無ロック共有状態」は、SessionSubmit/ScheduledTask 経由でも協調実行なのでメモリレースにならない。真の非同期危険は ①FE デッドロック（blocking 待ち）②クロスカーネル/クロスプロセス共有（ファイル・ledger）③外部プロセス孤児 — であり、これらは本プロジェクトで個別対応済み。
 
 ---
 

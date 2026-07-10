@@ -3,6 +3,11 @@
 親文書: `../system_hardening_operations_guideline_v1.md`（2026-07-06 監査統合指針）
 本フォルダは指針 §3「中期アーキテクチャ提案」5 案の実装仕様案を収める。
 
+> ## ★ 実装完了（2026-07-09）
+> **本フォルダの 5 案（01〜05）はすべて実装・検証完了した。** 各仕様ファイル冒頭に実装完了マーカーと実物ファイル名を付した。増分単位の詳細ログ・落とし穴は auto-memory `system-hardening-guideline-v1.md` に記録。親文書「実装完了ステータス」節に全体総括あり。
+> - 実測により対応不要と確定した項目: **P0-7 本体（$claudeProgress 単一書き手化）**、**#19（ClearAll 文脈ワート）** — いずれも静的解析/壊れたプローブの false positive で、危険な大改修を回避した（「静的警告 < 実測証拠」）。
+> - 新規ファイル: `ClaudeRuntime_seatbroker.wl`、`ClaudeRuntime_processsupervisor.wl`。テスト: `test codes/claudecode_progress_concurrency_test.wls` 他。
+
 改訂: v0.2（2026-07-06）— レビュー `../system_hardening_operations_guideline_review_v1.md` の全指摘（P0×2 / P1×4 / P2×2）を反映。主変更: SIEM を per-process spool + service 単一書き手 ingest に（P0-1）、ProcessSupervisor を 2 相 manifest に（P0-2）、SeatBroker に固定 acquire lock（P1-1）、service L2 を Ping コマンドに（P1-2）、producer/schema 境界の明確化（P1-3）、release 失敗処理と emit 対応表（P1-4）、TaskClass/validator 契約の固定（P2-1）、typo（P2-2）。
 
 | # | 仕様 | 新規/変更ファイル | 依存 |

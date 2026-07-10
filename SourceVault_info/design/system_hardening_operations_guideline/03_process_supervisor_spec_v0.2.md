@@ -1,5 +1,7 @@
 # ProcessSupervisor 実装仕様案 v0.2 — 2 相 spawn manifest + 孤児回収
 
+> **✅ 実装完了（2026-07-09）**。実物: `ClaudeRuntime_processsupervisor.wl`（新規）。2 相 manifest（PendingSpawn→Running + Phase C）/ 状態機械 6 種 / **PID 再利用ガード**（StartTime 照合、誤殺防止）/ 起動時 reap + 自己解除 tick / SystemDoctor probe。mail 2 経路 + external runner を移行、`ClaudeSupervisedStartProcess` 経由に。クラッシュ注入・PID 再利用テスト green。**重要知見: PID/StartTime は `ProcessInformation` でなく `First[proc]["PID"]`/`"StartTime"` から取る**（externalrunner の PID=-1 の真因も同じで併せて修正）。詳細は auto-memory 参照。
+
 目的: 「poll tick が死ぬと spawn 済みプロセスが漏れる」構造(mail jobs / `$iExternalProcs`)を閉じる。すべての外部プロセス spawn を manifest 記録付きヘルパ経由にし、期限切れ・親不在プロセスを決定論的に回収する。
 
 指針対応: P1-1（orphan プロセス）。01 SeatBroker の token 返却漏れ対策とも連動。

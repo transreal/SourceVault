@@ -1477,9 +1477,11 @@ iSVDiagIngestSeenPath[] :=
    弱結合 (service kernel は常に servicemanager を積んでいる)。単体テストから
    差し替えられるよう独立ヘルパにする。 *)
 iSVDiagWatchdogLogFiles[] := Module[{root, mroot},
+  (* 2026-07-09 fix: DownValues[Symbol["..."]] は HoldAll で機能しない
+     (DownValues::sym)。With でシンボルを束縛してから DownValues を取る。 *)
   If[Names["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"] === {} ||
-     Length[DownValues[
-       Symbol["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"]]] === 0,
+     With[{sym = Symbol["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"]},
+       Length[DownValues[sym]]] === 0,
     Return[{}]];
   root = Quiet @ Check[SourceVault`SourceVaultCoreRoot[], $Failed];
   If[! StringQ[root], Return[{}]];

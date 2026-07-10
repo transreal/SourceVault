@@ -1,5 +1,7 @@
 # SIEM イベント拡充 実装仕様案 v0.2 — 「静かな失敗」の可視化
 
+> **✅ 実装完了（2026-07-09）**。実物: `claudecode.wl`（`iClaudeDiagEmit` + per-process spool `diag-spool/<producer>-<pid>-<yyyymmdd>.jsonl` + shard/rotate/collapse）、`SourceVault_diagnostics.wl`（`SourceVaultDiagnosticsIngestSpool` = service 単一書き手 ingest + EventId dedup + watchdog log 取込[Inc4]）。全案の emit 基盤として最初に実装。**既存バグ修正: `SourceVaultDiagnosticsLog` の日本語二重エンコード**（`WriteRawJSONString` の byte-string を `WriteString` が再エンコード）を `ExportByteArray` 単一エンコード化。実 service で日本語イベントの正準ログ転記をライブ確認。詳細は auto-memory 参照。
+
 目的: spawn 失敗・席拒否・restart・tick 超過などの運用イベントを標準 schema で diagnostics（SIEM 層）へ集約し、「静かに諦める」コードパスを検出可能にする。他 4 案（01-04）の emit 基盤。
 
 指針対応: P1-8（SessionSubmit 失敗の握り潰し）、原則 6（失敗可視化）、SIEM 方針メモ（producer 所有 probe / 弱結合 emit / メール通報別トラストクラス）。

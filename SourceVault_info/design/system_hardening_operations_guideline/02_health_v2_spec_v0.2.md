@@ -1,5 +1,7 @@
 # Health v2 実装仕様案 v0.2 — 3 層 liveness + watchdog 相互監視
 
+> **✅ 実装完了（2026-07-09）**。実物: `SourceVault_servicemanager.wl`（閾値統一 `$SourceVaultHealthThresholds` / parse失敗=Stale 反転 / heartbeat temp-rename / battery 3 経路 / watchdog backoff + GivenUp + 成否実測 + `-Once` / **service Ping L2** `SourceVaultServiceHealthDetail` + `$SourceVaultHealthRequireL2`）、`wlmcp-gateway/bridge.py`（proxy `/health` L2 = queue ping + 旧 gateway eval round-trip[Inc4]）。本番 service ライブ検証済（Layer L2 / RTT ~450ms）。詳細は auto-memory 参照。
+
 目的: 「緑のまま死亡（green-but-dead）」を撲滅する。health 判定を到達性から「評価が返ること」へ引き上げ、閾値をスタック全体で統一し、watchdog を storm-safe にする。
 
 指針対応: P0-3（battery）、P0-4（gateway health）、P0-5（閾値不一致）、P0-6 の heartbeat 部分、P0-8（restart storm）、P2-3（watchdog 相互監視）。

@@ -1,5 +1,7 @@
 # SeatBroker 実装仕様案 v0.2
 
+> **✅ 実装完了（2026-07-09）**。実物: `ClaudeRuntime_seatbroker.wl`（新規、claudecode.wl から自動ロード）+ spawn 5 点配線（mail summary/fetch・external runner・LaunchKernels[P0-2 修正込み]・service start）。Inc1（broker skeleton, 固定 acquire lock）+ Inc2（spawn 点 Acquire/Release）green、実 4/4 席枯渇環境で実証。mail は Priority 90（capacity=1 トポロジー対応, §3.3 errata）。詳細は auto-memory 参照。
+
 目的: Wolfram ライセンス席（controller 4 / subkernel 16、strixhalo128 実測）を単一のアロケータで管理し、席枯渇による「wolframscript 起動不能」「サービスカーネル silent 死」「ParallelSubmit 30 秒フリーズ」を構造的に排除する。
 
 指針対応: P0-1（席ゲート不在の spawn 点）、P0-2（LaunchKernels 失敗フリーズループ）。

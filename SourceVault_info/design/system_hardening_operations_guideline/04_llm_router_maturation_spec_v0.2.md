@@ -1,5 +1,7 @@
 # LLM Router 成熟化 実装仕様案 v0.2 — preflight / ティア表 / 会計 / 履歴圧縮
 
+> **✅ 実装完了（2026-07-09）**。実物: `claudecode.wl`。Inc1（`ClaudeBackendAvailableQ` preflight + `$ClaudeLMStudioBaseURL` + 未ロードは 0.2s で即エラー）/ Inc2（`$ClaudeLLMTierTable` + TaskClass 属性 + query 系 `"TaskClass"` 配線 + 未ロード Automatic を実モデル名に具体化）/ Inc3（escalate 1 回 + validator 純関数契約 + securityjudge 非昇格）/ Inc4（`LLMCall` emit + `ClaudeUsageReport`、CLI/API/LM Studio の usage 抽出）/ Inc5（`$ClaudeSpendLimit` 執行 + `SpendLimitHit`）/ Inc6=P1-3（`$ClaudeAutoCompactThresholdTokens` + `ConversationCompacted` emit）。LM Studio ライブ E2E green。**重要バグ修正: tier の {"lmstudio", Automatic} が既定モデル(CLI)へ静かに転落していた**。詳細は auto-memory 参照。
+
 目的: クラウド・ローカル LLM を「宣言的なティア表 + 呼び出し前 preflight + 使用量会計」で統合し、ローカルの 20 分タイムアウト待ち・履歴無制限成長・コスト不可視を解消する。
 
 指針対応: P1-2（LM Studio preflight）、P1-3（ConversationState 成長）、P1-6（fallback バックオフ）、P2-1（会計）、P2-2（ティアリング）。
