@@ -197,7 +197,7 @@ Options: "Channel" -> All, "IncludeSeed" -> False
 ### SourceVaultSetPrimaryPromptRoute[routeId_String, opts]
 ルートをPromptGroupId内のプライマリバージョンとしてマークし、兄弟ルートのPrimaryをクリアする(チャンネル横断)。AutoExecute -> TrueのときClaudeEvalは確認ダイアログなしにルートの凍結式をリリース評価できる(ReplaySafety "EnvironmentIndependent"のルートのみ有効)。可逆なメタデータトグルのためDryRunデフォルトFalse。
 → <|"Status"->_, "RouteId"->_, "Channel"->_, "ClearedSiblings"->_|>
-Options: "AutoExecute" -> False
+Options: "AutoExecute" -> False, "DryRun" -> False
 
 ### SourceVaultRunPrimaryRoute[groupId_String, opts]
 プライマリルートの凍結式のゲート付きエグゼキュータ。TargetExprStringを評価なしにパースし、(a)headがReadOnly/SafeCreate SourceVault callableで(b)ReplaySafety "EnvironmentIndependent"のときのみ評価する。Set/SetDelayed/AppendTo/ClaudeAttach/SystemCredentialおよび未分類headは拒否(AutoEvaluate禁止rule準拠)。ClaudeEvalはHoldComplete[SourceVaultRunPrimaryRoute[..]]提案経由でのみ到達する(ClaudeEvalが保存式を直接リリースすることはない)。

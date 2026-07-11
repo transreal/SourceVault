@@ -1,9 +1,3 @@
-# SourceVault API リファレンス
-
-パッケージ: `SourceVault` (依存: [NBAccess](https://github.com/transreal/NBAccess))
-ロード: `Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault.wl"]]`
-バージョン: `2026-05-29-stage-9-p1.5-model-registry-autoupdate` (`$SourceVaultVersion`)
-
 ## ブートストラップ / 設定
 
 ### $SourceVaultVersion
@@ -668,11 +662,3 @@ HarnessMaterialization bundle の元になった Claude Directives snapshot が 
 
 ### SourceVaultHarnessRuntimeEnvironmentChangedQ[bundle, currentEnv] → Association
 HarnessMaterialization bundle の runtime environment (permission profile / temp project path / attachments) が変化したかを報告する。currentEnv は事前計算済み PermissionProfileHash / RuntimeEnvironmentHash か、ハッシュ対象の生 PermissionProfile / RuntimeEnvironment association を持てる。runtime environment 変化は config.toml 再生成を要するが canonical snapshot を stale にはしない。
-
----
-
-ソースコード全体 (15,017 行) を精査し、既存ドキュメントとの差分を確認した。変更点は2つ:
-1. `SourceVaultOCREnable` の `"TextRecognize"` backend の実効 DPI 既定値を 300 → **150** に修正 (`iOCRViaTextRecognize` の `Lookup[params, "DPI", 150]` が実装上の真実で、共有 Options プールの 300 はユーザー未指定時には適用されない)。あわせて「backend ごとの個別既定値の切替はない」という誤った記述を削除。
-2. 新規公開関数 `SourceVaultComfyUIEnsureLoaded` (ComfyUI アダプタの on-demand load stub) を新セクションとして追加。
-
-その他の全 Options 定義・関数シグネチャ・デフォルト値は現行ソースと一致していることを確認済み。

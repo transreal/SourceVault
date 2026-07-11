@@ -3412,7 +3412,13 @@ iClassifyProviderTrustDomain[_] :=
 (* resolve a TrustDomain from a host-resolver result: an explicit
    TrustDomain wins; otherwise fall back to label classification *)
 iResolveRawTrustDomain[raw_Association] :=
-  Module[{td, cls, label},
+  Module[{itd, td, cls, label},
+    (* conductor v0.2 §13.2 / Inc0A: canonical key は InferenceTrustDomain
+       (推論本体がどこで行われ、データがどこへ送られるか)。
+       ExecutionLocation (プロセスの実行場所) は trust の根拠にしない —
+       claudecode は ExecutionLocation=Local でも InferenceTrustDomain=Cloud。 *)
+    itd = Lookup[raw, "InferenceTrustDomain", Missing["NotProvided"]];
+    If[StringQ[itd], Return[itd]];
     td = Lookup[raw, "TrustDomain", Missing["NotProvided"]];
     If[StringQ[td], Return[td]];
     (* the registry Class encodes the trust domain asserted at registration
