@@ -1437,21 +1437,34 @@ iSVMDefaultUncertaintyMA[rec_Association] :=
         "EvidenceSufficiency" -> 0.7]]];
 
 Options[SourceVaultRunMiningPipeline] = {"TextFn" -> Automatic, "ExtractorFn" -> Automatic,
-  "AssessUncertainty" -> True, "UncertaintyFn" -> Automatic};
+  "AssessUncertainty" -> True, "UncertaintyFn" -> Automatic,
+  (* 1H-S P0-02: RequiresLLMIsolation を execution contract 化。warning object は
+     isolation 宣言("IsolatedLocal"=toolなしローカル | "DeterministicOnly")の無い
+     ExtractorFn に渡さない(fail-closed)。 *)
+  "ExtractorIsolation" -> "Unknown"};
 SourceVaultRunMiningPipeline[objects_List, opts : OptionsPattern[]] :=
-  Module[{textFn, extractorFn, assessQ, uncFn, results},
+  Module[{textFn, extractorFn, assessQ, uncFn, results, isoOK},
     textFn = OptionValue["TextFn"];
     extractorFn = OptionValue["ExtractorFn"];
     assessQ = TrueQ[OptionValue["AssessUncertainty"]];
     uncFn = OptionValue["UncertaintyFn"]; If[uncFn === Automatic, uncFn = iSVMDefaultUncertaintyMA];
+    isoOK = MemberQ[{"IsolatedLocal", "DeterministicOnly"}, OptionValue["ExtractorIsolation"]];
     results = Map[Function[obj,
       Module[{text, assessment, quarantined, base, ma},
         text = If[textFn === Automatic, Lookup[obj, "Text", ""], textFn[obj]];
         assessment = SourceVaultSecurityPreScan[text];
         quarantined = SourceVaultSafetyQuarantinedQ[assessment];
-        base = If[quarantined,
+        base = Which[
+          quarantined,
           <|"Object" -> obj, "Quarantined" -> True, "SafetyState" -> assessment["SafetyState"],
             "Extracted" -> Missing["Quarantined"]|>,
+          (* warning: isolation 契約を満たさない executor には渡さない(P0-02) *)
+          TrueQ[Lookup[assessment, "RequiresLLMIsolation", False]] && ! isoOK &&
+            extractorFn =!= Automatic,
+          <|"Object" -> obj, "Quarantined" -> False, "SafetyState" -> assessment["SafetyState"],
+            "IsolationEnforced" -> True,
+            "Extracted" -> Missing["RequiresLLMIsolation"]|>,
+          True,
           <|"Object" -> obj, "Quarantined" -> False, "SafetyState" -> assessment["SafetyState"],
             "Extracted" -> If[extractorFn === Automatic, Missing["NoExtractor"], extractorFn[obj]]|>];
         If[! assessQ, base,

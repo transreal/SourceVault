@@ -307,7 +307,9 @@ PinnedFact を ConstraintKind=PreserveFact の CompilationConstraint に変換�
 ### SourceVaultRunMiningPipeline[objects, opts]
 mining workflow の骨格。各 object を SecurityPreScan し、quarantined object は後続 extractor に渡さない (safety gate)。deterministic でも LLM でも ExtractorFn に注入可。
 → `<|"Processed", "Quarantined", "Extracted", "Results"|>`
-Options: "TextFn" -> Automatic (object["Text"]), "ExtractorFn" -> Automatic, "AssessUncertainty" -> True, "UncertaintyFn" -> Automatic
+Options: "TextFn" -> Automatic (object["Text"]), "ExtractorFn" -> Automatic, "AssessUncertainty" -> True, "UncertaintyFn" -> Automatic, "ExtractorIsolation" -> "Unknown"
+
+**1H-S security (v0.5 P0-02)**: `RequiresLLMIsolation` を execution contract 化。pre-scan が warning(RequiresLLMIsolation->True)を返した object は、`"ExtractorIsolation"` が `"IsolatedLocal"`(tool なしローカル LLM)か `"DeterministicOnly"` を宣言しない限り ExtractorFn に渡さない(`Extracted->Missing["RequiresLLMIsolation"]`, `IsolationEnforced->True`。fail-closed)。quarantined は従来どおり不可。
 
 ### SourceVaultIterateUntilStable[fn, init, opts]
 compile-refine/reasoning retrieval の反復骨格 (§9.4.1/§9.4.3)。fn[state, i] を反復し、MaxIterations 到達か NoProgressTermination (同一署名再掲) で停止する。

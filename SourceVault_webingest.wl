@@ -1252,22 +1252,52 @@ Options[SourceVaultSummarizeText] = {
   "MaxTokens" -> 800, "Temperature" -> 0.2, "Endpoint" -> Automatic, "Model" -> Automatic,
   "TimeoutSeconds" -> 180, "MaxInputChars" -> 6000,
   "UntrustedInput" -> True,   (* hardening P1-4: 既定で外部テキストを UNTRUSTED 扱い *)
+  (* 1H-S P0-01: quarantined 入力の扱い。既定 Block=raw を LLM に渡さない(mail/mining 経路と統一) *)
+  "QuarantinePolicy" -> "Block",   (* "Block" | "MetadataOnly" | "SafeInspection" *)
+  (* 1H-S P0-05: UntrustedInput->False は trusted provenance 必須 *)
+  "TrustedOrigin" -> Missing[],    (* "OwnerTypedInstruction" | "SystemPolicy" | "VerifiedDirective" *)
+  "LLMFn" -> Automatic,            (* 依存注入(テスト/差替え)。既定 Automatic=iWebLLMComplete *)
   (* #3: 要約を DerivedArtifact 不変 snapshot として保存する (provenance 付き) *)
   "Persist" -> False, "SourceRefs" -> {}, "SourceUrls" -> Missing[], "Query" -> Missing[],
   "Provenance" -> <||>};
 SourceVaultSummarizeText[text_String, OptionsPattern[]] := Module[
-  {prompt, clip, r, sum, res, art, wrap, preScan = Missing["NotChecked"]},
+  {prompt, clip, r, sum, res, art, wrap, preScan = Missing["NotChecked"],
+   qpol = OptionValue["QuarantinePolicy"], tainted = False, preScanUnavailable = False},
   clip = StringTake[text, UpTo[OptionValue["MaxInputChars"]]];
+  (* 1H-S P0-05: untrusted 境界の無効化は trusted provenance が無ければ拒否(I-14) *)
+  If[! TrueQ[OptionValue["UntrustedInput"]] &&
+      ! MemberQ[{"OwnerTypedInstruction", "SystemPolicy", "VerifiedDirective"},
+        OptionValue["TrustedOrigin"]],
+    Return[Failure["UntrustedBypassDenied", <|"MessageTemplate" ->
+      "UntrustedInput->False には TrustedOrigin(OwnerTypedInstruction|SystemPolicy|VerifiedDirective)が必要です(I-14)。"|>]]];
   If[TrueQ[OptionValue["UntrustedInput"]],
     wrap = SourceVaultWrapUntrustedText[clip];
     preScan = wrap["PreScan"];
+    preScanUnavailable = ! AssociationQ[preScan];  (* P0-03: 不達を fail-open にしない *)
+    (* 1H-S P0-01: quarantined は raw を通常 LLM へ渡さない(既定 Block) *)
+    If[TrueQ[wrap["Quarantined"]],
+      Switch[qpol,
+        "Block",
+          Return[Failure["QuarantinedInput", <|"MessageTemplate" ->
+              "入力が quarantined です(QuarantinePolicy->Block)。MetadataOnly か SafeInspection を明示してください。",
+            "SafetyState" -> Lookup[preScan, "SafetyState", "quarantined"],
+            "MatchedRules" -> Lookup[preScan, "MatchedRules", {}]|>]],
+        "MetadataOnly",
+          Return[<|"Summary" -> "(quarantined: 本文は LLM に渡していません)",
+            "Status" -> "QuarantinedMetadataOnly", "Model" -> Missing[],
+            "InputTrust" -> <|"SafetyState" -> Lookup[preScan, "SafetyState", "quarantined"],
+              "MatchedRules" -> Lookup[preScan, "MatchedRules", {}], "Quarantined" -> True|>|>],
+        "SafeInspection", tainted = True,  (* 続行するが出力は tainted・永続禁止 *)
+        _, Return[Failure["BadQuarantinePolicy", <|"MessageTemplate" -> ToString[qpol]|>]]]];
     prompt = wrap["Preamble"] <> "\n\n" <> OptionValue["Instruction"] <>
       "\n\n" <> wrap["Wrapped"],
     prompt = OptionValue["Instruction"] <> "\n\n----\n" <> clip];
-  r = iWebLLMComplete[prompt,
-    "Endpoint" -> OptionValue["Endpoint"], "Model" -> OptionValue["Model"],
-    "MaxTokens" -> OptionValue["MaxTokens"], "Temperature" -> OptionValue["Temperature"],
-    "TimeoutSeconds" -> OptionValue["TimeoutSeconds"]];
+  r = If[OptionValue["LLMFn"] === Automatic,
+    iWebLLMComplete[prompt,
+      "Endpoint" -> OptionValue["Endpoint"], "Model" -> OptionValue["Model"],
+      "MaxTokens" -> OptionValue["MaxTokens"], "Temperature" -> OptionValue["Temperature"],
+      "TimeoutSeconds" -> OptionValue["TimeoutSeconds"]],
+    OptionValue["LLMFn"][prompt]];
   If[FailureQ[r], Return[r]];
   sum = iWebStripThink[r["Text"]];
   (* reasoning モデルが思考で token を使い切ると本文が空になる。空を Succeeded と偽らない。 *)
@@ -1282,8 +1312,15 @@ SourceVaultSummarizeText[text_String, OptionsPattern[]] := Module[
         "MatchedRules" -> Lookup[preScan, "MatchedRules", {}],
         "Quarantined" -> (Lookup[preScan, "SafetyState", "active"] === "quarantined")|>,
       preScan]|>;
-  (* Succeeded のときだけ保存する (空/失敗を成果物として保存しない; rule90 の精神)。 *)
-  If[TrueQ[OptionValue["Persist"]] && res["Status"] === "Succeeded",
+  (* 1H-S: SafeInspection 出力は tainted、pre-scan 不達は unknown を明示(P0-03。
+     実行系は tool なしローカル LLM=許容 degrade だが、silent にしない) *)
+  If[tainted, res = Join[res, <|"Tainted" -> True|>]];
+  If[TrueQ[OptionValue["UntrustedInput"]] && preScanUnavailable,
+    res = Join[res, <|"PreScanUnavailable" -> True, "NeedsSecurityScan" -> True|>]];
+  (* Succeeded のときだけ保存する (空/失敗を成果物として保存しない; rule90 の精神)。
+     1H-S: tainted(SafeInspection)と pre-scan 不達分は永続しない(taint 非降下/NeedsSecurityScan 保留) *)
+  If[TrueQ[OptionValue["Persist"]] && res["Status"] === "Succeeded" &&
+      ! TrueQ[tainted] && ! (TrueQ[OptionValue["UntrustedInput"]] && preScanUnavailable),
     art = SourceVaultSaveDerivedArtifact[<|
       "ArtifactType" -> "Summary", "Text" -> sum, "Model" -> r["Model"],
       "Instruction" -> OptionValue["Instruction"],
