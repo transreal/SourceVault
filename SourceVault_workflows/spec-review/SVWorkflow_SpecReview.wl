@@ -109,28 +109,33 @@ iMaxRounds[b_Association] := Lookup[iPayload[b], "MaxRounds", $DefaultMaxRounds]
    GiveUp -- it must NOT loop, and must NOT let an empty spec be Approved. *)
 iDraftEmpty[b_Association] := TrueQ[Lookup[iPayload[b], "DraftEmpty", False]];
 
-(* ---- vault contract (mirror of orch_vault.wls) ---- *)
-iSaveSpec[project_, round_, text_, parentRef_] := Module[{snap, ref},
+(* ---- vault contract (mirror of orch_vault.wls) ----
+   作成者 LLM の記録: CreatedBy は role 名 (codex/claude)、GeneratedBy は
+   実モデルラベル (iModelLabel。メール/NB 要約 sidecar・llmlog・spec-impl と
+   同じ規約)。snapshot と OrchHandoff event の両方に載せる。 *)
+iSaveSpec[project_, round_, text_, parentRef_, genBy_:""] := Module[{snap, ref},
   snap = SourceVaultSaveImmutableSnapshot["OrchSpec", <|
     "Project" -> project, "Round" -> round, "Role" -> "spec",
-    "Text" -> text, "ParentReviewRef" -> parentRef, "CreatedBy" -> "codex"|>];
+    "Text" -> text, "ParentReviewRef" -> parentRef,
+    "CreatedBy" -> "codex", "GeneratedBy" -> genBy|>];
   ref = Lookup[snap, "Ref"];
   SourceVaultAtomicUpdatePointer["orch/" <> project <> "/spec", ref];
   SourceVaultAppendEvent[<|"EventClass" -> "OrchHandoff", "Project" -> project,
     "Round" -> round, "Role" -> "spec", "From" -> "codex", "To" -> "claude",
-    "Value" -> ref, "ParentReviewRef" -> parentRef|>];
+    "GeneratedBy" -> genBy, "Value" -> ref, "ParentReviewRef" -> parentRef|>];
   ref];
 
-iSaveReview[project_, round_, verdict_, findings_, targetSpecRef_, text_] := Module[{snap, ref},
+iSaveReview[project_, round_, verdict_, findings_, targetSpecRef_, text_, genBy_:""] := Module[{snap, ref},
   snap = SourceVaultSaveImmutableSnapshot["OrchReview", <|
     "Project" -> project, "Round" -> round, "Role" -> "review",
     "Verdict" -> verdict, "Findings" -> findings, "TargetSpecRef" -> targetSpecRef,
-    "Text" -> text, "CreatedBy" -> "claude"|>];
+    "Text" -> text, "CreatedBy" -> "claude", "GeneratedBy" -> genBy|>];
   ref = Lookup[snap, "Ref"];
   SourceVaultAtomicUpdatePointer["orch/" <> project <> "/review", ref];
   SourceVaultAppendEvent[<|"EventClass" -> "OrchHandoff", "Project" -> project,
     "Round" -> round, "Role" -> "review", "From" -> "claude", "To" -> "codex",
-    "Verdict" -> verdict, "Value" -> ref, "TargetSpecRef" -> targetSpecRef|>];
+    "Verdict" -> verdict, "GeneratedBy" -> genBy, "Value" -> ref,
+    "TargetSpecRef" -> targetSpecRef|>];
   ref];
 
 iRefToURI[ref_String] := Module[{p = StringSplit[ref, ":"]},
@@ -443,7 +448,7 @@ iDraftHandler[model_, draftFn_, progressFile_:None] := Function[binding,
       iProg[progressFile, pl, "Draft", "codex", model,
         "EMPTY draft response (likely usage limit / overload) -- giving up"]];
     ref = iSaveSpec[Lookup[pl, "Project", "proj"], Lookup[pl, "Round", 1], text,
-      Lookup[pl, "LastReviewRef", "none"]];
+      Lookup[pl, "LastReviewRef", "none"], iModelLabel[model]];
     <|"Payload" -> Join[pl, <|"SpecRef" -> ref, "SpecURI" -> iRefToURI[ref],
         "SpecText" -> text, "DraftModel" -> model, "DraftEmpty" -> emptyDraft,
         "GiveUpReason" -> If[emptyDraft,
@@ -466,7 +471,8 @@ iReviewHandler[model_, reviewFn_, progressFile_:None] := Function[binding,
       findings = Lookup[res, "Findings", "[]"];
       rtext = Lookup[res, "ReviewText", ""]];
     ref = iSaveReview[Lookup[pl, "Project", "proj"], Lookup[pl, "Round", 1],
-      verdict, findings, Lookup[pl, "SpecRef", "none"], rtext];
+      verdict, findings, Lookup[pl, "SpecRef", "none"], rtext,
+      iModelLabel[model]];
     <|"Payload" -> Join[pl, <|"Verdict" -> verdict, "ReviewRef" -> ref,
         "ReviewURI" -> iRefToURI[ref], "LastReviewRef" -> ref,
         "LastReviewText" -> rtext, "ReviewModel" -> model|>]|>]];

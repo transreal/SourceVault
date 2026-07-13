@@ -251,50 +251,58 @@ iModelLabel[model_] := Which[
    Vault contract
    ============================================================ *)
 
-iSavePlan[name_, round_, multi_, stages_, text_] := Module[{snap, ref},
+(* 作成者 LLM の記録: CreatedBy は role 名 (implementer/verifier)、
+   GeneratedBy は実モデルラベル (iModelLabel。メール/NB 要約 sidecar や
+   llmlog と同じ規約)。snapshot と ImplHandoff event の両方に載せる。 *)
+iSavePlan[name_, round_, multi_, stages_, text_, genBy_:""] := Module[{snap, ref},
   snap = SourceVaultSaveImmutableSnapshot["ImplPlan", <|
     "Project" -> name, "Round" -> round, "Role" -> "plan",
-    "Multi" -> multi, "Stages" -> stages, "Text" -> text, "CreatedBy" -> "implementer"|>];
+    "Multi" -> multi, "Stages" -> stages, "Text" -> text,
+    "CreatedBy" -> "implementer", "GeneratedBy" -> genBy|>];
   ref = Lookup[snap, "Ref"];
   SourceVaultAtomicUpdatePointer["impl/" <> name <> "/plan", ref];
   SourceVaultAppendEvent[<|"EventClass" -> "ImplHandoff", "Project" -> name,
-    "Round" -> round, "Role" -> "plan", "From" -> "implementer", "To" -> "verifier", "Value" -> ref|>];
+    "Round" -> round, "Role" -> "plan", "From" -> "implementer", "To" -> "verifier",
+    "GeneratedBy" -> genBy, "Value" -> ref|>];
   ref];
 
-iSavePlanReview[name_, round_, verdict_, findings_, targetRef_, text_] := Module[{snap, ref},
+iSavePlanReview[name_, round_, verdict_, findings_, targetRef_, text_, genBy_:""] := Module[{snap, ref},
   snap = SourceVaultSaveImmutableSnapshot["ImplPlanReview", <|
     "Project" -> name, "Round" -> round, "Role" -> "planreview",
     "Verdict" -> verdict, "Findings" -> findings, "TargetPlanRef" -> targetRef,
-    "Text" -> text, "CreatedBy" -> "verifier"|>];
+    "Text" -> text, "CreatedBy" -> "verifier", "GeneratedBy" -> genBy|>];
   ref = Lookup[snap, "Ref"];
   SourceVaultAtomicUpdatePointer["impl/" <> name <> "/planreview", ref];
   SourceVaultAppendEvent[<|"EventClass" -> "ImplHandoff", "Project" -> name,
     "Round" -> round, "Role" -> "planreview", "From" -> "verifier", "To" -> "implementer",
-    "Verdict" -> verdict, "Value" -> ref|>];
+    "Verdict" -> verdict, "GeneratedBy" -> genBy, "Value" -> ref|>];
   ref];
 
-iSaveArtifact[name_, stage_, round_, files_, testFiles_, steps_, manifestText_] := Module[{snap, ref},
+iSaveArtifact[name_, stage_, round_, files_, testFiles_, steps_, manifestText_, genBy_:""] := Module[{snap, ref},
   snap = SourceVaultSaveImmutableSnapshot["ImplArtifact", <|
     "Project" -> name, "Stage" -> stage, "Round" -> round, "Role" -> "artifact",
     "Files" -> files, "TestFiles" -> testFiles, "Steps" -> steps,
-    "Text" -> manifestText, "CreatedBy" -> "implementer"|>];
+    "Text" -> manifestText, "CreatedBy" -> "implementer",
+    "GeneratedBy" -> genBy|>];
   ref = Lookup[snap, "Ref"];
   SourceVaultAtomicUpdatePointer["impl/" <> name <> "/artifact", ref];
   SourceVaultAppendEvent[<|"EventClass" -> "ImplHandoff", "Project" -> name,
     "Stage" -> stage, "Round" -> round, "Role" -> "artifact",
-    "From" -> "implementer", "To" -> "verifier", "Value" -> ref|>];
+    "From" -> "implementer", "To" -> "verifier",
+    "GeneratedBy" -> genBy, "Value" -> ref|>];
   ref];
 
-iSaveVerify[name_, stage_, round_, verdict_, findings_, targetRef_, text_] := Module[{snap, ref},
+iSaveVerify[name_, stage_, round_, verdict_, findings_, targetRef_, text_, genBy_:""] := Module[{snap, ref},
   snap = SourceVaultSaveImmutableSnapshot["ImplVerify", <|
     "Project" -> name, "Stage" -> stage, "Round" -> round, "Role" -> "verify",
     "Verdict" -> verdict, "Findings" -> findings, "TargetArtifactRef" -> targetRef,
-    "Text" -> text, "CreatedBy" -> "verifier"|>];
+    "Text" -> text, "CreatedBy" -> "verifier", "GeneratedBy" -> genBy|>];
   ref = Lookup[snap, "Ref"];
   SourceVaultAtomicUpdatePointer["impl/" <> name <> "/verify", ref];
   SourceVaultAppendEvent[<|"EventClass" -> "ImplHandoff", "Project" -> name,
     "Stage" -> stage, "Round" -> round, "Role" -> "verify",
-    "From" -> "verifier", "To" -> "implementer", "Verdict" -> verdict, "Value" -> ref|>];
+    "From" -> "verifier", "To" -> "implementer", "Verdict" -> verdict,
+    "GeneratedBy" -> genBy, "Value" -> ref|>];
   ref];
 
 (* ============================================================
@@ -738,8 +746,27 @@ iReadGenerated[targetDir_, rels_List] := iManifestText[
    second wolframscript (a nested kernel cannot acquire a license, and an
    in-kernel Get would leave sticky contexts that falsely pass later rounds).
    ToExpression decodes \\:XXXX so the parsed context matches the Unicode ctx. *)
+(* 文字列リテラル中の桁不足 \:escape (\:2b 等。4桁 hex 必須) を行番号つきで
+   列挙する。parse は「完結」しても Syntax::snthex 警告が出て
+   Quiet@Check が $Failed になるため、「parse できない」と誤報せず
+   実装者が直せる具体位置を返すのに使う。 *)
+iSmokeBadEscapes[s_String] := Module[{hits},
+  hits = Select[StringPosition[s, "\\:"],
+    Function[p,
+      Module[{nxt = StringTake[s,
+          {p[[2]] + 1, Min[StringLength[s], p[[2]] + 4]}]},
+        StringLength[nxt] < 4 ||
+        ! StringMatchQ[nxt, RegularExpression["[0-9a-fA-F]{4}"]]]]];
+  Map[
+    Function[p,
+      "line " <> ToString[
+        Length[StringSplit[StringTake[s, p[[1]]], "\n"]]] <> ": ..." <>
+      StringTake[s, {Max[1, p[[1]] - 30],
+        Min[StringLength[s], p[[2]] + 30]}] <> "..."],
+    Take[hits, UpTo[5]]]];
+
 iSmokeTestPackage[targetDir_, pkgRoot_, ctx_] := Module[
-  {mains, mainFile, s, held, beginCtxs, emptyLists, hasWFInfo},
+  {mains, mainFile, s, held, beginCtxs, emptyLists, hasWFInfo, badEsc},
   mains = FileNames["SVWorkflow_*.wl", targetDir];
   If[mains === {}, mains = FileNames["*.wl", targetDir]];
   If[mains === {}, Return[<|"OK" -> False, "Output" -> "no .wl file was generated"|>]];
@@ -747,6 +774,21 @@ iSmokeTestPackage[targetDir_, pkgRoot_, ctx_] := Module[
   s = iReadUTF8[mainFile];
   held = Quiet @ Check[ToExpression[s, InputForm, HoldComplete], $Failed];
   If[! MatchQ[held, _HoldComplete],
+    (* SyntaxQ が True なら「構文は完結しているが parse 中に警告 message が
+       出た」ケース (典型: \:XXXX の桁不足 → Syntax::snthex)。
+       "does not parse" と誤報すると実装者が原因に到達できず round を
+       浪費する (20260622-株価推移WF3-v2 で実測) ので、具体位置を返す *)
+    If[TrueQ[Quiet @ SyntaxQ[s]],
+      badEsc = iSmokeBadEscapes[s];
+      Return[<|"OK" -> False,
+        "Output" -> "the main .wl parses ONLY WITH SYNTAX WARNINGS " <>
+          "(the loader treats these as fatal). " <>
+          If[badEsc =!= {},
+            "Malformed \\:XXXX escapes (need EXACTLY 4 hex digits, e.g. " <>
+            "\\:002b not \\:2b; plain ASCII like + needs no escape): " <>
+            StringRiffle[badEsc, " | "],
+            "Fix whatever emits Syntax:: warnings at parse time."],
+        "MainFile" -> mainFile|>]];
     Return[<|"OK" -> False, "Output" -> "syntax error: the main .wl does not parse", "MainFile" -> mainFile|>]];
   (* :> forms avoid evaluating the held BeginPackage[...] when extracting *)
   beginCtxs = Quiet @ Cases[held, BeginPackage[c_String, ___] :> c, Infinity];
@@ -877,7 +919,8 @@ iPlanHandler[model_, planFn_, progressFile_] := Function[binding,
     stages = Lookup[res, "Stages", {"(single)"}];
     aux = Lookup[res, "AuxSpec", ""];
     ref = If[multi && StringQ[aux] && aux =!= "",
-      iSavePlan[Lookup[pl, "Name", "wf"], 1, multi, stages, aux], "none"];
+      iSavePlan[Lookup[pl, "Name", "wf"], 1, multi, stages, aux,
+        iModelLabel[model]], "none"];
     <|"Payload" -> Join[pl, <|
       "Multi" -> multi, "Stages" -> stages, "StageIndex" -> 1,
       "AuxSpec" -> aux, "AuxApproved" -> ! multi, "AuxRound" -> 0,
@@ -893,7 +936,8 @@ iAuxReviewHandler[vmodel_, imodel_, reviewFn_, reviseFn_, progressFile_] := Func
     rev = reviewFn[vmodel, pl, aux];
     verdict = Lookup[rev, "Verdict", "NeedsRevision"];
     ref = iSavePlanReview[Lookup[pl, "Name", "wf"], auxRound, verdict,
-      Lookup[rev, "Findings", "[]"], Lookup[pl, "PlanRef", "none"], Lookup[rev, "ReviewText", ""]];
+      Lookup[rev, "Findings", "[]"], Lookup[pl, "PlanRef", "none"],
+      Lookup[rev, "ReviewText", ""], iModelLabel[vmodel]];
     If[verdict === "Approved",
       <|"Payload" -> Join[pl, <|"AuxApproved" -> True, "AuxRound" -> auxRound,
           "PlanReviewRef" -> ref, "PlanReviewURI" -> iRefToURI[ref]|>]|>,
@@ -901,7 +945,8 @@ iAuxReviewHandler[vmodel_, imodel_, reviewFn_, reviseFn_, progressFile_] := Func
       iProg[progressFile, pl, "AuxRevise", "implementer", imodel, "revising staged plan"];
       rr = reviseFn[imodel, pl, aux, Lookup[rev, "ReviewText", ""]];
       With[{newAux = Lookup[rr, "AuxSpec", aux], newStages = Lookup[rr, "Stages", Lookup[pl, "Stages", {"(single)"}]]},
-        Module[{pref = iSavePlan[Lookup[pl, "Name", "wf"], auxRound + 1, True, newStages, newAux]},
+        Module[{pref = iSavePlan[Lookup[pl, "Name", "wf"], auxRound + 1,
+            True, newStages, newAux, iModelLabel[imodel]]},
           <|"Payload" -> Join[pl, <|"AuxApproved" -> False, "AuxRound" -> auxRound,
               "AuxSpec" -> newAux, "Stages" -> newStages,
               "PlanRef" -> pref, "PlanURI" -> iRefToURI[pref],
@@ -964,7 +1009,7 @@ iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[bindin
           "stage " <> ToString[idx] <> " run: " <> iStepsRunStatus[steps] <>
           " (" <> ToString[Length[written]] <> " files, " <> ToString[Length[testFiles]] <> " test)"]];
     ref = iSaveArtifact[Lookup[pl, "Name", "wf"], idx, Lookup[pl, "Round", 1],
-      written, testFiles, steps, artifactText];
+      written, testFiles, steps, artifactText, iModelLabel[model]];
     <|"Payload" -> Join[pl, <|"GeneratedFiles" -> allFiles, "StageFiles" -> written,
         "TestFiles" -> testFiles, "LastSteps" -> steps, "ImplEmpty" -> emptyImpl,
         (* L2: carry the fail-closed flag + reason so the net routes to Blocked *)
@@ -1036,7 +1081,8 @@ iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True] := Fu
         findings = Lookup[res, "Findings", "[]"];
         rtext = Lookup[res, "ReviewText", ""]]];
     ref = iSaveVerify[Lookup[pl, "Name", "wf"], idx, Lookup[pl, "Round", 1],
-      verdict, findings, Lookup[pl, "ArtifactRef", "none"], rtext];
+      verdict, findings, Lookup[pl, "ArtifactRef", "none"], rtext,
+      iModelLabel[model]];
     <|"Payload" -> Join[pl, <|"Verdict" -> verdict, "VerifyRef" -> ref,
         "VerifyURI" -> iRefToURI[ref], "LastVerifyText" -> rtext,
         "VerifyModel" -> iModelLabel[model], "SmokeOK" -> TrueQ[Lookup[smoke, "OK", False]]|>]|>]];

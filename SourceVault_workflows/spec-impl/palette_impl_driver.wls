@@ -29,7 +29,7 @@ Block[{$CharacterEncoding = "UTF-8"},
           mockPlan, mockReview, mockRevise, mockImpl, mockVerify,
           planFn, reviewFn, reviseFn, implFn, verifyFn,
           pkgRoot, slug, loadRes, runFn, langInstr, targetDir, summary, progressFile,
-          wfSummary, specForSum},
+          wfSummary, specForSum, netStruct, wfNetStruct, iNetFromWid},
 
     cfgFile = If[Length[$ScriptCommandLine] >= 2, $ScriptCommandLine[[2]], ""];
     cfg = Quiet @ Check[Get[cfgFile], $Failed];
@@ -109,14 +109,17 @@ Block[{$CharacterEncoding = "UTF-8"},
       <|"Verdict" -> "Approved", "Findings" -> "[]", "ReviewText" -> "mock plan ok"|>];
     mockRevise = Function[{model, pl, aux, fb},
       <|"AuxSpec" -> aux, "Stages" -> Lookup[pl, "Stages", {"(single)"}]|>];
+    (* launch 名は System`Run と衝突させない (Run[]:=42 は System`Run に
+       DownValue が付き、Symbol[ctx<>"Run"] が未定義→動的ゲート blocker)。
+       session_impl_worker.wls の mock と同一に保つ *)
     mockImpl = Function[{model, pl},
       With[{canon = Lookup[pl, "Canon", "Mock"], idx = Lookup[pl, "StageIndex", 1]},
         <|"Files" -> <|
             "SVWorkflow_" <> canon <> ".wl" ->
               "(* mock *)\nBeginPackage[\"SourceVaultWorkflow`" <> canon <> "`\"]\n" <>
-              "WorkflowInfo::usage=\"x\";\nBegin[\"`Private`\"]\n" <>
-              "WorkflowInfo[]:=<|\"Slug\"->\"mock\",\"Launch\"->\"Run\",\"Stage\"->" <> ToString[idx] <> "|>;\n" <>
-              "Run[]:=42;\nEnd[]\nEndPackage[]\n",
+              "WorkflowInfo::usage=\"x\";\nLaunchMock::usage=\"x\";\nBegin[\"`Private`\"]\n" <>
+              "WorkflowInfo[]:=<|\"Slug\"->\"mock\",\"Launch\"->\"LaunchMock\",\"Stage\"->" <> ToString[idx] <> "|>;\n" <>
+              "LaunchMock[]:=42;\nEnd[]\nEndPackage[]\n",
             "SVWorkflow_" <> canon <> "_info/docs/examples/example.md" ->
               "# mock example stage " <> ToString[idx] <> "\n"|>|>]];
     mockVerify = Function[{model, pl, filesText},
@@ -164,9 +167,72 @@ Block[{$CharacterEncoding = "UTF-8"},
             "Language" -> Lookup[cfg, "Language", "Japanese"]],
           <|"Summary" -> "", "Keywords" -> {}, "Method" -> ""|>]]];
 
+    (* net 構造の抽出 (session_impl_worker.wls の iNetStructureFromWid と
+       同一ロジック。token 本文は載せず件数のみ)。 *)
+    iNetFromWid[wid_String] := Module[{net, marking},
+      net = Quiet[ClaudeOrchestrator`Workflow`Private`$iWorkflowNets[wid]];
+      If[! (AssociationQ[net] && KeyExistsQ[net, "Places"]), Return[None]];
+      marking = Quiet @ Check[
+        Lookup[ClaudeOrchestrator`Workflow`ClaudeWorkflowState[wid],
+          "Marking", <||>], <||>];
+      If[! AssociationQ[marking], marking = <||>];
+      <|"Places" -> Keys @ Lookup[net, "Places", <||>],
+        "SourcePlace" -> Lookup[net, "SourcePlace", ""],
+        "FinalPlaces" -> Cases[Lookup[net, "FinalPlaces", {}], _String],
+        "Transitions" -> Map[
+          Function[tdef, <|
+            "In" -> Cases[
+              Map[Lookup[#, "Place"] &, Lookup[tdef, "InputArcs", {}]],
+              _String],
+            "Out" -> Cases[
+              Map[Lookup[#, "Place"] &, Lookup[tdef, "OutputArcs", {}]],
+              _String]|>],
+          Lookup[net, "Transitions", <||>]],
+        "Marking" -> Select[
+          Map[If[ListQ[#], Length[#], 0] &, marking], # > 0 &]|>];
+    iNetFromWid[___] := None;
+
+    (* 実行した implement<->verify net (データのみ。FE は表示しない) *)
+    netStruct = Quiet @ Check[
+      If[AssociationQ[summary],
+        iNetFromWid[Lookup[summary, "WorkflowId", ""]], None], None];
+
+    (* 生成ワークフロー自身の net (net 型 layer-2 = 公開 BuildNet を持つ
+       場合のみ。普通の関数パッケージは None → FE は図を出さない)。 *)
+    wfNetStruct = Quiet @ Check[
+      Module[{lr, wctx, bn, wwid},
+        lr = Quiet @ Check[SourceVault`SourceVaultLoadWorkflow[name],
+          $Failed];
+        If[! (AssociationQ[lr] &&
+              MemberQ[{"Loaded", "AlreadyLoaded"},
+                Lookup[lr, "Status", ""]]), None,
+          wctx = Lookup[lr, "Context", ""];
+          If[! StringQ[wctx] || wctx === "" ||
+             Names[wctx <> "BuildNet"] === {}, None,
+            bn = Symbol[wctx <> "BuildNet"];
+            If[! (MatchQ[bn, _Symbol] &&
+                  With[{s = bn}, DownValues[s]] =!= {}), None,
+              wwid = Quiet @ Check[
+                TimeConstrained[bn[name], 30, $Failed], $Failed];
+              If[! StringQ[wwid], None, iNetFromWid[wwid]]]]]],
+      None];
+
+    (* FinalStatus "Unknown" = ループが最終 place に到達しないまま
+       ClaudeRunWorkflow が戻った (典型は MaxWait 時間切れ)。抜け殻 summary
+       を Done と報告しない (fail-closed。session_impl_worker.wls と同一)。 *)
+    If[AssociationQ[summary] && summary =!= <||> &&
+       Lookup[summary, "FinalStatus", "Unknown"] === "Unknown" && err === "",
+      err = "implement<->verify loop did not reach a final state" <>
+        " (RunStatus: " <> ToString @ Lookup[summary, "RunStatus", "?"] <>
+        ", Termination: " <> ToString @ Lookup[summary, "Termination", "?"] <>
+        "). Likely MaxWait (" <>
+        ToString @ Lookup[cfg, "MaxWaitSeconds", 2400] <>
+        "s) exhausted; raise MaxWaitSeconds or reduce rounds."];
+
     (* result file written LAST = completion signal for the FE poller *)
     Put[<|
-      "Status" -> If[AssociationQ[summary] && summary =!= <||>, "Done", "Error"],
+      "Status" -> If[AssociationQ[summary] && summary =!= <||> && err === "",
+        "Done", "Error"],
       "Error" -> err,
       "Name" -> name,
       "TargetDir" -> targetDir,
@@ -187,7 +253,9 @@ Block[{$CharacterEncoding = "UTF-8"},
       "VerifyURI" -> ToString @ Lookup[summary, "VerifyURI", ""],
       "PlanChain" -> Lookup[summary, "PlanChain", {}],
       "ArtifactChain" -> Lookup[summary, "ArtifactChain", {}],
-      "VerifyChain" -> Lookup[summary, "VerifyChain", {}]
+      "VerifyChain" -> Lookup[summary, "VerifyChain", {}],
+      "NetStructure" -> netStruct,
+      "WorkflowNetStructure" -> If[err === "", wfNetStruct, None]
     |>, Lookup[cfg, "ResultFile", "result.wl"]];
 
     Print["IMPL DRIVER DONE: ", Lookup[summary, "FinalStatus", "?"]];
