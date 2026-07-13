@@ -593,3 +593,598 @@ ClaudeSetAPIKey["sk-ant-..."]
 ```
 
 キーはノートブックにハードコードしないでください。詳細は [claudecode](https://github.com/transreal/claudecode) の `api-key-handling` ドキュメントを参照してください。
+
+### クイックスタート
+
+以下はテキストファイルを ingest して context を抽出する最小構成の例です。
+
+```mathematica
+(* 1. パッケージのロード *)
+Block[{$CharacterEncoding = "UTF-8"},
+  Needs["NBAccess`",    "NBAccess.wl"];
+  Needs["SourceVault`", "SourceVault.wl"]
+]
+
+(* 2. テキストファイルを準備 *)
+testPath = FileNameJoin[{$TemporaryDirectory, "memo.txt"}];
+Export[testPath,
+  "斜方投射の最高到達点は v0^2 / (2g) で与えられる。" <>
+  "射程は v0^2 sin(2θ) / g である。", "Text"];
+
+(* 3. ingest *)
+r = SourceVaultIngest[testPath];
+sid = r["SnapshotId"]
+(* "snap-sha256-..." *)
+
+(* 4. context 抽出 *)
+SourceVaultContext[sid, {1, 200}]
+
+(* 5. snapshot 情報の確認 *)
+SourceVaultStatus[sid]
+
+(* 6. source の一覧 *)
+Dataset[SourceVaultListSources[]]
+```
+
+**Notebook の場合:**
+
+```mathematica
+nbPath = "C:\\path\\to\\your\\notebook.nb";
+
+(* index (deterministic、LLM 不要) *)
+r = SourceVaultIndexNotebook[nbPath]
+
+(* Header / Todo を semantic API 経由で読む *)
+NBReadHeader[nbPath]
+NBReadTodos[nbPath]
+
+(* Todo の状態を変更 (DryRun = True なのでファイル変更なし) *)
+SourceVaultMarkTodo[nbPath, 1, "Done"]
+
+(* 実行 (atomic write) *)
+SourceVaultMarkTodo[nbPath, 1, "Done", "DryRun" -> False]
+```
+
+**スケジュールの問い合わせ（PromptRouter）:**
+
+ClaudeOrchestrator をロードしておくと、`ClaudeEval` のスケジュール系プロンプトが PromptRouter 経由で deterministic に処理されます。
+
+```mathematica
+(* 3 日間のスケジュール: SourceVaultUpcomingSchedule の装飾付き Grid が返る *)
+ClaudeEval["今日から3日間のスケジュールを"]
+
+(* 絞り込み付き: FilterSpec で OpenTodoCount > 0 のものだけ *)
+ClaudeEval["7日間のスケジュールのうちTodoが残っているものを"]
+
+(* 実行履歴を名前付き PromptRoute として保存 *)
+SaveLastPrompt["3日スケジュール表示"]
+```
+
+**Gate 付き PDF 検索（SearchIndex + ServiceManager）:**
+
+```mathematica
+(* release context を登録してコレクションを公開 *)
+SourceVaultRegisterReleaseContext["handbook-web", <|
+  "MaxPrivacyLevel" -> 0.5, "RequiredTags" -> {"released"}|>]
+
+(* gate を通過した chunk のみ返す検索 *)
+SourceVaultSearch["履修登録の手順",
+  "ReleaseContext" -> "handbook-web", "Limit" -> 5]
+```
+
+**LLM 要約（ClaudeRuntime 必須）:**
+
+```mathematica
+SourceVaultNotebookSummary[nbPath]
+```
+
+### 主な機能
+
+| 関数 / 変数 | 説明 |
+|------------|------|
+| `SourceVaultIngest[path, opts]` | テキスト / PDF / URL / arXiv ID を ingest し、source レコード + snapshot を生成。重複検知あり。 |
+| `SourceVaultStatus[snapshotId]` | snapshot のメタ情報（hash / lifecycle / page count 等）を返す。 |
+| `SourceVaultSpan[snapshotId, range]` | snapshot 内の span を構築。後続の context 抽出の単位。 |
+| `SourceVaultContext[snapshotId, range]` | snapshot から抜粋テキストを取得。 |
+| `SourceVaultContextAssemble[spans]` | 複数 span を 1 つの context に結合。 |
+| `SourceVaultExtract[snapshotId, schema, opts]` | LLM (ClaudeRuntime 経由) で構造化 claim を抽出。2 段階 authorization 経由。 |
+| `SourceVaultBundleCreate[name, claims, opts]` | Evidence Bundle を作成。snapshot/claim 依存を記録。 |
+| `SourceVaultMarkSnapshotStale[snapshotId]` | snapshot を Stale 化し、依存 bundle の自動再評価を促す。 |
+| `SourceVaultIndexNotebook[path, opts]` | notebook を index。Header / Todo / Snapshot / Lint を一括で生成。mtime ベース cache あり。 |
+| `SourceVaultExtractNotebookHeader[path]` | Header Association を whitelist 経由で safe parse。`Source` フィールドで取得経路を明示。 |
+| `SourceVaultExtractNotebookTodos[path]` | TodoItem cell を 3 値判定 (Open/Done/Pass) で抽出。 |
+| `SourceVaultMarkTodo[path, target, newStatus, opts]` | Todo の Status を変更（NBAccess `NBWriteTodoStatus` への薄いラッパー）。DryRun デフォルト。 |
+| `SourceVaultUpcomingSchedule[opts]` | 期限・レビュー予定の表を生成。`FilterSpec` / `Period` / `OpenTodos` / `DateField` / `OutputFormat` オプション対応。 |
+| `SourceVaultNotebookSummary[path, opts]` | LLM で notebook の要約を生成。ClaudeRuntime 必須。 |
+| `SourceVaultFindNotebooks[opts]` | deterministic クエリ（OpenTodos / NextReview / Deadline / Keywords / Status）。 |
+| `SourceVaultNotebookLint[record \| path]` | 7 種 lint (HeaderStatusTodoButNoOpenTodos / DeadlinePast / NextReviewPast / TodoCellStatusHeuristicOnly 等) を検出。 |
+| `SourceVaultProposePromptRoute[prompt, opts]` | `ClaudeEval` 接続用。プロンプトを未評価の提案式 `HoldComplete[...]` に解決し、`PromptRouteProposal` 連想で返す。式は評価しない。 |
+| `SourceVaultExecutePromptRoute[prompt, opts]` | PromptRoute の手動 / テスト / 診断用 API。route を解決し、診断 `Association` を返す。 |
+| `SaveLastPrompt[memo, opts]` | 最新の ClaudeEval 実行を名前付き PromptRoute として保存。`"Channel"` / `"DryRun"` オプション対応。 |
+| `SourceVaultSearchPromptRoutes[query, opts]` | 保存済み PromptRoute をプロンプト例・Memo の部分一致で検索。`"Channel"` / 日時範囲フィルタ対応。 |
+| `SourceVaultPromptReprocessPlan[opts]` | 古くなったルート（schema/version 不一致）を検出し再処理プランを返す（読み取り専用）。 |
+| `$SourceVaultContextPlannerEnabled` | ClaudeEval コンテキストプランナーの有効/無効（既定 True）。 |
+| `$SourceVaultPromptBypassOnce` | ワンショット PromptRouter バイパスキー（「LLM に再度聞く」機能用）。 |
+| `SourceVaultLookup[topic, key]` | Compiled Registry から値を取得。 |
+| `SourceVaultResolve[topic, intent]` | Compiled Registry + Seed fallback で最適な値を返す。Availability / Freshness / Class 優先順位。 |
+| `SourceVaultListModels[provider]` | 指定 provider の選択可能な全モデル ID を列挙（Compiled Registry 優先、Seed fallback）。 |
+| `SourceVaultRefreshModelRegistry[opts]` | クラウド (anthropic/openai)・ローカル (LM Studio)・ChatGPT Codex CLI のエンドポイントからモデル一覧を取得し Compiled Model Registry を更新。 |
+| `ClaudeResolveModel[provider, intent]` | `SourceVaultResolve["Model", ...]` の互換 wrapper。provider と intent から具体的なモデルを解決。 |
+| `SourceVaultClaimStoreCompact[]` | claim JSONL を dedup + 圧縮。 |
+| `$SourceVaultVersion` | パッケージバージョン文字列。 |
+| `$SourceVaultRoots` | PrivateVault のルートパス（Association）。 |
+| `$SourceVaultDefaultNotebookFolder` | SourceVault が管理する notebook のデフォルト保存フォルダ（`Automatic` で `$onWork` → `$packageDirectory` に解決）。 |
+| **コア基盤 (SourceVault_core)** | |
+| `SourceVaultWithLock[name, body, opts]` | 排他 lock を取得して body を評価し確実に解放（`HoldRest`）。`"TimeoutSeconds"` / `"TTLSeconds"` オプション。 |
+| `SourceVaultAppendEvent[event, opts]` | append-only event log に 1 event / 1 file で commit。同一 EventID の再 commit は digest 照合で冪等処理。 |
+| `SourceVaultTransactionLog[opts]` | event directory の全 event を新しい順で返す。`"Limit"` / `"EventClass"` オプション。 |
+| `SourceVaultCommitBlob[data, opts]` | ByteArray / String をコンテントアドレス blob として create-only 保存。 |
+| `SourceVaultSaveImmutableSnapshot[class, assoc, opts]` | assoc を class 別 immutable snapshot として保存。同一内容の再保存は idempotent。`"Alias"` オプション対応。 |
+| `SourceVaultLoadImmutableSnapshot[ref]` | snapshot ref または `"class/alias"` を読み、検証済み assoc を返す。 |
+| `SourceVaultAtomicUpdatePointer[name, value, opts]` | pointer を排他更新（Sequence 単調増加）。 |
+| `SourceVaultPointerReplay[name, opts]` | pointer event を replay し最大 Sequence の検証済み値を返す。 |
+| **検索基盤 (SourceVault_searchindex)** | |
+| `SourceVaultRegisterReleaseContext[name, spec]` | 公開ポリシー（`MaxPrivacyLevel` / `RequiredTags` / `DenyTags` 等）を登録。 |
+| `SourceVaultEvaluateReleasePolicy[source, context]` | source が release context で公開可能か評価し `Permit` / `Deny` / `NeedsReview` を返す。 |
+| `SourceVaultRegisterPDFIndexProfile[name, spec]` | PDFIndex profile を登録（`CollectionRoot` 等）。 |
+| `SourceVaultRegisterSearchBackend[name, spec]` | embedding / keyword 検索バックエンドを登録。 |
+| `SourceVaultListProfiles[kind]` | 指定 kind（ReleaseContext / SearchIndexProfile / PDFIndexProfile / SearchBackend / OCRBackend）の登録名を返す。 |
+| `SourceVaultRevokeObject[objectId, opts]` | ObjectRevoked event を event log に記録。`"Reason"` / `"State"` オプション対応。 |
+| `SourceVaultBuildRevocationSet[]` | revocation 系 event を replay して HotRevocationSet を構築。 |
+| `SourceVaultSaveRetrievalWorkflowSnapshot[name, spec, opts]` | retrieval ワークフロー設定を immutable 保存（credential / 実パスは含めない）。 |
+| `SourceVaultFreezeCorpusSnapshot[corpusId, opts]` | 検索対象集合を immutable CorpusSnapshot に固定。 |
+| `SourceVaultSearch[query, opts]` | release context gate 付き検索。`"ReleaseContext"` / `"PDFIndexProfile"` / `"Limit"` / `"Index"`（native projection。`IndexKind` で KeywordBigram/KeywordBM25V1 を dispatch）対応。 |
+| `SourceVaultBuildProjectionIndex[ctx, opts]` | chunk を build-time gate して projection index 化。`"IndexKind"`（KeywordBigram/KeywordBM25V1）/ `"EntityDictionary"` 対応。 |
+| `SourceVaultBuildPrimerIndex[ctx, opts]` / `…LoadPrimerIndex` | §6.1 mining サマリー由来 primer item を gate して index 化（summary/title/tags/authors を BM25）。 |
+| `SourceVaultPrimerSearch[query, opts]` | §6.2 primer 検索。BM25 + bounded MiningBoost + EffectiveImportance·weight − StalePrimerPenalty、EvidenceKind=SummaryPrimer。 |
+| **日本語 lexical (SourceVault_lexical)** | |
+| `SourceVaultNormalizeSearchText[text]` | ja-nfkc-v1 正規化（NFKC / 全半角 / 半角カナ / 数値桁区切り / 空白）。 |
+| `SourceVaultSearchTerms[normText]` | token / unigram(CJK・かな) / bigram の term stream。 |
+| `SourceVaultBuildLexicalStats[chunks, opts]` | BM25 用 LexicalStats（N/DF/AvgDL/Postings/ChunkTerms）。`"EntityDictionary"` で entity stream を追加。 |
+| `SourceVaultLexicalRank[query, stats, opts]` | 転置 index で BM25 採点。`"Limit"` / `"Breakdown"`。entity OR-match で表記非一致/OOV 回復。 |
+| `SourceVaultBuildSurfaceIndex[dict]` | seed entity dictionary → `<\|正規化 surface form -> {topicRef...}\|>`（owner union）。 |
+| `SourceVaultExplainSearchScore[query, chunk, stats]` | 1 chunk の BM25 score breakdown（デバッグ用）。 |
+| **OOPS seed / auto-tag (SourceVault_oopsseed)** | |
+| `SourceVaultImportOOPSSeedDictionary[path, opts]` | `item-name.index` から owner-scoped seed entity dictionary を build。 |
+| `SourceVaultImportOOPSMailToItem[path]` / `…MailInfo[path]` | mail→topic gold / mail メタ（list/author/offset）を読む。 |
+| `SourceVaultParseOOPSMailFile[path]` | UTF-8 mbox を parse（X-Ml-Counter で gold join）。 |
+| `SourceVaultStripOOPSMarkers[text]` | topic ID ref / ◎○・ / brace を除去（label は残す）。 |
+| `SourceVaultParseMailParagraphs[body]` | RAW 本文を段落（Prose/Quote/Signature/Footer）に分割。各段落は RawText（マーカー保持）＋Text（strip 済）。 |
+| `SourceVaultExtractExplicitTopics[text]` | 明示トピック ◎Primary/○Secondary/・Mentioned `<label>[ns id]`・`{label[ns id]}` を抽出（人手付与の最高品質、§6.5 点1）。 |
+| `SourceVaultAssignParagraphTopics[paras, surfaceIndex, opts]` | 各 prose 段落に seed 辞書 OR-match で topic 自動付与（auto-tag）。`"RelationGraph"` で `RelationExpanded`、`"ExtractCandidates"` で seed 非該当の `AutoExtracted` 候補を追加。 |
+| `SourceVaultExtractCandidateTopics[text, opts]` | seed 非該当の新トピック候補（katakana/漢字熟語/Latin/引用語）を抽出（語彙外対応、要 owner 確認）。 |
+| `SourceVaultTopicEnrichment[text, surfaceIndex, opts]` | auto-tag の topic を検索 index へ注入する `topics` フィールド文字列を生成（seed→検索の接続。本文に無い関連/正準トピックでヒット可に）。 |
+| `SourceVaultImportOOPSItemRelations[path, opts]` | `item-relation(-up).index` を S式 parse→重み付き有向 relation。 |
+| `SourceVaultBuildOOPSRelationGraph[tableDir]` | Down+Up を結合した relation graph（約 2875 ノード）。 |
+| `SourceVaultExpandTopicsByRelation[refs, graph, opts]` | seed topic を重み付き 1-hop 近傍へ拡張（auto-tag の RelationExpanded 用）。 |
+| `SourceVaultExpandSearchGraph[seeds, opts]` | §6.3 KG 局所探索。weighted topic relation を multi-hop BFS 展開（MaxHops/MaxNodes/top-k/MinEdgeWeight、edges+trace、cycle 安全）。 |
+| `SourceVaultConfirmCandidateTopics[candidates, opts]` | owner 確認済の AutoExtracted 候補を seed 同形の新 topic entry にして dict に merge（候補→確認済 topic→検索可能）。 |
+| `SourceVaultSaveExtractedTopics` / `…LoadExtractedTopics` | 確認済 extracted topic を WXF で永続化・読み戻し（owner store、seed 編入用）。 |
+| `SourceVaultBuildMailChunks[mail, surfaceIndex, opts]` | parse 済 mail を §7.2 検索 chunk（topics 注入済）に。Granularity=Paragraph/Mail。seed→検索 pipeline の入口。 |
+| `SourceVaultImportOOPSQuoteTable[path]` | `quote-table.index` を読み `mail#→{引用元mail, standard-quote id}`（authoritative 引用グラフ）。 |
+| `SourceVaultExtractMailQuoteMarkers[mail]` / `…BuildMailQuoteEdges[mails, opts]` | 本文 `-*- Quote (from N) -*-` 抽出／`SourceVaultMailQuoteEdge`（SeedStandardQuote/ExplicitMarker/ExternalURL）を構築。 |
+| `SourceVaultBuildMailSessions[mails, quoteEdges, opts]` | quote edge 連結成分＋Subject Re:/Fwd: でメールをスレッド（`SourceVaultMailSession`）に。 |
+| `SourceVaultBuildTopicItemGraph[mails, opts]` | 段落 topic をノード、CoParagraph/QuoteTransition/SeedRelation を辺にした `SourceVaultTopicItemGraph`（§6.5）。 |
+| `SourceVaultBuildSessionChunks[mails, sessions, opts]` | session（スレッド）単位の検索 chunk。query がスレッド全体を引ける。private list（Under Ground）は §6.5.3 で PrivateML/NoCloudLLM 付与。 |
+| `SourceVaultBuildSessionDigest` / `…BuildSessionPrimerItems` | LLM 非依存の決定的スレッド要約と、その primer item 化（`SourceVaultPrimerSearch` で「スレッドの結論」を引く、§6.5）。 |
+| `SourceVaultOOPSEnsureLoaded[opts]` | OOPS コーパスの単一初期化（seed/quote/session を1発ロード、冪等）。`SourceVaultMailEnsureLoaded` 相当。 |
+| `SourceVaultOOPSSearchThreads` / `…Sessions` / `…Thread` / `…Status` | 初期化済みコーパスに対するスレッド検索・一覧・詳細（digest 付き）・状態。ClaudeEval 操作の土台。 |
+| `SourceVaultOOPSThreadGraph` / `…TopicGraphPlot` / `…ThreadView` / `…ThreadList` | 可視化（notebook）: topic graph 描画（色分け）・スレッド詳細（digest）・一覧（クリックで詳細）。 |
+| **サービス管理 (SourceVault_servicemanager)** | |
+| `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
+| `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |
+| `SourceVaultRegisterWebServiceEndpoint[name, spec]` | Web サービスエンドポイントを登録（`BindAddress` / `Port` 必須）。 |
+| `SourceVaultCreatePDFGroupSearchProfile[alias, spec]` | PDF グループ検索プロファイルを登録（QueryScopeResolver / ポリシー等をまとめた data object）。 |
+| `SourceVaultClonePDFGroupSearchProfile[src, new, overrides]` | 既存 profile を複製して差分登録。 |
+| `SourceVaultStartService[serviceId, opts]` | detached WolframScript サービスを起動（メインカーネル終了後も継続）。`"PreludeCode"` / `"HeartbeatIntervalSeconds"` オプション。 |
+| `SourceVaultStopService[serviceId, opts]` | サービスを停止する。 |
+| `SourceVaultServiceStatus[serviceId]` | サービスの状態（Running/Stopped 等）を返す。 |
+| `SourceVaultStartHTTPProxy[serviceId, opts]` | Python reverse proxy を起動して Web 検索サービスを公開。`"Port"` / `"ReleaseContext"` / `"PDFIndexProfile"` / `"AppTitle"` / `"AskPrompt"` / `"ChatModel"` / `"MCPToken"` オプション対応。 |
+| `SourceVaultStartMCP[opts]` | MCP サーバ（WL service + `/sv/mcp` proxy）を一括起動。`"ServiceId"` / `"Port"` / `"MCPToken"`（既定 Automatic = `proxy.config.json` から解決）。 |
+| `SourceVaultStopMCP[opts]` / `SourceVaultMCPRunningQ[opts]` / `SourceVaultMCPStatus[opts]` | MCP の停止 / 稼働判定 / 状態と公開 URL。 |
+| `SourceVaultNoPersonalConfigDoctor[filesOrDirs, opts]` | 配布ファイルへの個人情報・環境依存値（IP / パス / credential / メールアドレス）の混入を検査。 |
+| **Web 検索 / MCP ゲートウェイ (SourceVault_webingest / SourceVault_mcp)** | |
+| `SourceVaultSearXNGSearch[query, opts]` | SearXNG JSON API を叩き候補 URL を正規化（記録しない生クライアント）。 |
+| `SourceVaultWebSearch[query, opts]` | provenance + 監査記録つき検索。`"FetchPages"` で本文取得、`"StoreSearchRun"`（既定 True）で WebSearchRun snapshot + Searched イベント。 |
+| `SourceVaultWebSearchSubmit[query, opts]` / `SourceVaultWebJobStatus` / `SourceVaultWebJobResult` | 非同期検索 job（長時間 fetch をブロックしない）。 |
+| `SourceVaultWebFetch[url, opts]` | URL 本文取得 + HTML clean-text → WebDocument 不変 snapshot（非 2xx は FetchFailed）。 |
+| `SourceVaultWebComputePriority` / `SourceVaultWebPriority` / `SourceVaultWebImportance` / `SourceVaultWebRecomputePriorities` | 構造 Priority（mail 整合）と使用 importance の計算・合成・再計算。 |
+| `SourceVaultSetWebDomainWeight[domain, w]` / `SourceVaultWebDomainWeights[]` | ソースドメイン重み（mail のグループ重みに対応。サブドメインは親継承）。 |
+| `SourceVaultRollupReferenceEvents[]` / `SourceVaultReferenceEventStoreStatus[]` / `SourceVaultPruneRolledReferenceEvents[]` | 参照イベントのクロスマシン rollup（Dropbox 集約）・状態・剪定。 |
+| `SourceVaultSummarizeText` / `SourceVaultSummarizeResults` | ローカル LLM 要約。`"Persist" -> True` で DerivedArtifact 保存 + Summarized イベント。 |
+| `SourceVaultSaveDerivedArtifact` / `SourceVaultDerivedArtifactList` / `SourceVaultDerivedArtifactsForSource` | 派生成果物（要約等）の保存・一覧・逆引き。 |
+| `SourceVaultWebSearchIntegration[]` / `SourceVaultSearXNGAvailableQ[]` | SearXNG 可用判定と exa ⇄ SourceVault backend の後方互換切替（claudecode 無変更）。 |
+| **Eagle 統合 (SourceVault_eagle)** | |
+| `SourceVaultEagleRegisterLibrary[name, path]` | Eagle ライブラリを名前付きで登録（シンボリックパスで永続化、別 PC でも使用可）。 |
+| `SourceVaultEagleSetLibrary[nameOrPath]` | 現在の Eagle ライブラリを切り替える。 |
+| `SourceVaultEagleStatus[]` | 現在ライブラリ・item 数・API 状態・サマリー/ingest 件数の概要を返す。 |
+| `SourceVaultEagleSearch[query, opts]` | name / annotation / tags / url + サマリー本文の部分一致で item を検索。`"Folder"` / `"Tags"` / `"Ext"` / `"DateFrom"` 等のフィルタ対応。 |
+| `SourceVaultEagleItems[]` | 全 item の metadata リストを返す（mtime.json による増分キャッシュ）。 |
+| `SourceVaultEagleItemsInFolder[folder, opts]` | フォルダ（通常・スマートフォルダ）内 item を返す。 |
+| `SourceVaultEagleFolderList[]` | フォルダ一覧をノートブックリスト風の表で返す。フォルダ名クリックでビューを開く。 |
+| `SourceVaultEagleShowFolder[folder, opts]` | フォルダビューを新規ノートブックで開く。 |
+| `SourceVaultEagleRefresh[]` | item / メタ / オンライン判定のメモリキャッシュを破棄して再読込させる。 |
+| `SourceVaultEagleLibraryOnlineQ[]` | 現在ライブラリへの到達可否（NAS オフライン検知）。結果はキャッシュされる。 |
+| `$SourceVaultEagleLibrary` | 現在の Eagle ライブラリパス。 |
+| `$SourceVaultEagleCloudPublishableTag` | クラウド LLM サマリーを許可するタグ名（既定 `"Cloud-Publishable"`）。 |
+| `$SourceVaultEaglePrivacyLevel` | Eagle 出力セルの既定 PrivacyLevel（数値またはライブラリ別 Association）。 |
+| **暗号化基盤** | |
+| `SourceVaultInitializeEncryption[]` | 冪等な鍵 bootstrap。欠落した標準鍵だけ生成。鍵材料は返さない。 |
+| `SourceVaultEncryptionKeyStatus[]` | 標準 KeyRef ごとの存在・種別・指紋（鍵材料なし）。 |
+| `SourceVaultEncryptedPut/Get[...]` | encrypt-then-MAC で機密 record を保存/取得（plaintext は返さない）。 |
+| `SourceVaultDecryptRecord[record]` | MAC 検証後に復号。改ざんは `AuthenticationFailed` で拒否。 |
+| `SourceVaultExportKeyBundle[passphrase]` | 標準鍵を scrypt + AES256 でパスフレーズ保護した可搬バンドルを書き出す（Dropbox 外）。 |
+| `SourceVaultImportKeyBundle[passphrase]` | 鍵バンドルを別マシンの credential store に取り込む。 |
+| **identity / 送信者認証** | |
+| `SourceVaultIdentityInitialize[]` | identity の load + self(EntityUid=1) bootstrap（冪等）。 |
+| `SourceVaultPutEntity / LinkIdentifierToEntity[...]` | 2層アドレス帳の実体登録・識別子マージ。 |
+| `SourceVaultEntityEditUI[idOrUid]` | 実体1件の編集フォーム（種別/Group/Weight/プライマリメール/LLMプロフィール等）。 |
+| `SourceVaultIdentityBackfillFromMail[]` | ロード済みメール snapshot の From/To/Cc から識別子を一括生成（再取込不要）。 |
+| `SourceVaultSenderAuthentication[record, opts]` | メール record から SenderAuthentication 判定 metadata を作る（信頼 authserv-id pinning）。 |
+| `SourceVaultSenderAuthenticatedQ[auth]` | DMARC/DKIM 認証が成立しているか（loosening 可否）を返す。 |
+| `$SourceVaultTrustedAuthservIds` | 受信側が信頼する authserv-id のリスト（未登録は fail-closed）。 |
+| **メール管理** | |
+| `SourceVaultRegisterMailAccount[<\|...\|>]` | IMAP アカウントを vault config に登録（パスワードは保存せず CredKey のみ）。 |
+| `SourceVaultGetMailAccount[mbox]` | 登録済み IMAP アカウント設定を返す。 |
+| `SourceVaultMailAccounts[]` | 登録済み IMAP アカウント設定を Dataset で返す（パスワード除外）。 |
+| `SourceVaultRemoveMailAccount[mbox, opts]` | アカウント登録を削除する。 |
+| `SourceVaultMailFetchNew[mbox, opts]` | IMAP 新着のみ取得（既定 LLM なし、RecordId で重複排除）。 |
+| `SourceVaultInferMailDerivedBatch[opts]` | PL/優先度/概要/カテゴリ/締切をローカル LLM で増分派生（中断耐性）。`"Refresh" -> "MissingCategory"` で後埋め対応。 |
+| `SourceVaultMailComputePriority[snap, wr]` | 重要度を決定的に計算（グループ重み + To/Cc 位置 + bulk + 依頼度）。 |
+| `SourceVaultMailSnapshotDecryptBody[snapshot]` | snapshot の暗号化 body を MAC 検証後に復号。 |
+| `SourceVaultMailParseEmails[headerValue]` | ヘッダ文字列からメールアドレスリストを抽出。 |
+| `SourceVaultSearchMailSnapshots[query, opts]` | 件名/概要 + Priority/Privacy/From/添付フィルタで検索。 |
+| `SourceVaultMailView[query, opts]` | 本文✉/添付📎/返信↩ を備えた対話的メール一覧。 |
+| `SourceVaultMailComposeReply[rid, opts]` | 返信ドラフトを生成（DraftOnly、自動送信しない）。 |
+| `$SourceVaultMailCategories` | メール派生カテゴリトークン一覧（InfoProvision / AttendanceRequest / TaskRequest / Confirmation / Report / Notice / Other）。 |
+| `$SourceVaultDefaultImportedMailPL` | import 時のメール本文 PL 既定（`0.85`、fail-safe）。 |
+| **マイニング (SourceVault_mining)** | |
+| `SourceVaultMakeTagAssertion[targetURI, tag, opts]` | 由来つき TagAssertion を作る（`SourceKind` / `TagClass` / `Confidence` / `AccessImpact`）。 |
+| `SourceVaultObjectTags[assertions, targetURI, opts]` | TagAssertion list からタグ projection を作る。緩和 AccessTag は `PendingAccessTags` に隔離。 |
+| `SourceVaultAssertTag[targetURI, tag, opts]` | TagAssertion を `TagAsserted` event として正準ストアに追加。 |
+| `SourceVaultEagleRowToAssertions[row, objectURI, opts]` | Eagle row（Tags / Authors）をタグ + 著者 assertion に投影（LLM 不要）。 |
+| `SourceVaultMailToAuthorship[snapshot, objectURI, opts]` | メール snapshot の From を Sender authorship に投影（暗号化/欠落は Missing）。 |
+| `SourceVaultMakeAuthorshipAssertion[objectURI, opts]` | 著者/送信者/作成者の関係を作る。確定 entity のみ `EntityRef` を補完。 |
+| `SourceVaultMakeEntityLinkProposal[idRef, entRef, opts]` | Identifier↔Entity の候補リンク（既定 pending、確定とは分離）。 |
+| `SourceVaultEntityLinkAutoConfirmEligibleQ[...]` | 自動確定可否。既定 off、blocking ErrorBook / audit suspension で停止。 |
+| `SourceVaultSecurityPreScan[text]` | LLM 不使用の injection / credential / 難読化検査（SafetyState / RiskVector）。 |
+| `SourceVaultSafetyQuarantinedQ[assessment]` | pre-scan 結果が quarantined か（後続 LLM mining から除外）。 |
+| `SourceVaultMiningRerank[searchResults, opts]` | 既存検索結果に tag/author/importance の bounded boost を足して並べ替え。 |
+| `SourceVaultMiningBoost[tags, authorships, opts]` | relevance と salience の Max を `MaxBoost`（既定 0.2）で bounded した boost。 |
+| `SourceVaultReplayObjectSignals[events, targetURI]` | owner/LLM 操作観測から importance を再生成（LLM 寄与 ×0.7 抑制）。 |
+| `SourceVaultMakeDiagnosticProbe[targetURI, q, opts]` | compiled wiki が保持すべき情報の検査 probe。 |
+| `SourceVaultProbeRunToPinnedFact[run, kind, uri, fact]` | 失敗 probe で失われた fact を MustPreserve の PinnedFact に昇格。 |
+| `SourceVaultReplayErrorBook[events]` | ErrorBook の Added/Closed/Reopened を replay（open→fixed→open）。 |
+| `SourceVaultMemoryVitalityScore[scopeRef, opts]` | 記憶の健全性指標（dashboard 専用・近似、ranking には使わない）。 |
+| `SourceVaultRunMiningPipeline[objects, opts]` | pre-scan → quarantine 除外 → `ExtractorFn` 適用の mining 骨格。 |
+| `SourceVaultLLMExtractAuthors[text, objectURI, opts]` | LLM で著者抽出（UNTRUSTED data 隔離・tool 無し・JSON 限定・local 既定）。 |
+| `SourceVaultRunIdentityTagMining[objects, opts]` | mining 公開 API。Orchestrator WorkflowNet / RunMiningPipeline 直接を自動選択。 |
+| `$SourceVaultLocalLLMKey` | local LLM（LM Studio）の API token override（既定 Automatic）。 |
+
+### ドキュメント一覧
+
+| ファイル | 内容 |
+|---------|------|
+| `setup.md` | インストール手順・トラブルシューティング |
+| `user_manual.md` | カテゴリ別ユーザーマニュアル（Notebook Management・PromptRouter・暗号化基盤・鍵バンドル・identity・メール管理・Eagle 統合を含む） |
+| `example.md` | 代表的な使用パターン集（基本機能・ClaudeOrchestrator 統合・暗号化・identity・メールの例を含む） |
+| `api_core.md` | コア基盤 API（排他制御・immutable snapshot・append-only event log・blob store・pointer） |
+| `api_crypto.md` | 暗号基盤 API（鍵 bootstrap・encrypt-then-MAC record・鍵バンドル・cloud materialization ゲート） |
+| `api_identity.md` | identity API（2層アドレス帳・送信者認証・release planning） |
+| `api_maildb.md` | メール API（snapshot 変換・検索・IMAP 取得・派生・FE 操作） |
+| `api_mining.md` | マイニング API（タグ/著者/実体リンクの由来つき抽出・security pre-scan・検索 boost・記憶代謝・ObjectSignals） |
+| `api_promptrouter.md` | PromptRouter API（ルート解決・PromptRun 履歴・レジストリ・プロンプトキャプチャ） |
+| `api_searchindex.md` | 検索基盤 API（release context・profiles・revocation・versioned snapshot） |
+| `api_servicemanager.md` | サービス管理 API（Web サービス・HTTP proxy・detached service・PDF グループ検索 profile） |
+| `api_eagle.md` | Eagle 統合 API（ライブラリ管理・読み取り・検索・変更・LLM サマリー） |
+| `api_workflowregistry.md` | コード化ワークフローのオンデマンドロード API（`SourceVaultWorkflows` / `SourceVaultLoadWorkflow` ほか） |
+| `examples/workflow_spec_review_example.md` | コード化ワークフロー spec-review の実行例（MOCK / 実 LLM / パレット連携） |
+| `examples/mining_example.md` | マイニングの実行例（基本: タグ projection / Eagle 抽出 / pre-scan、中級: 検索 rerank / 著者同定 / ObjectSignals、応用: 記憶代謝 / safety gate / 実 vault 一巡 / 実 LLM・Orchestrator） |
+| `design/` | SourceVault 仕様書・PromptRouter 統合仕様書・物理ストレージレイアウト |
+
+---
+
+## 使用例・デモ
+
+### Source の ingest と context 抽出
+
+`SourceVaultIngest` は、テキスト / PDF / URL / arXiv ID などを 1 つの first-class source として登録する関数です。重複は内容ハッシュ単位で自動的に検知されます。
+
+#### `$SourceVaultRoots` の確認
+
+SourceVault をロードすると `$SourceVaultRoots["PrivateVault"]` が自動初期化されます。
+
+```mathematica
+<< SourceVault`
+$SourceVaultRoots["PrivateVault"]
+```
+
+PrivateVault のパスを変更する場合は手動で設定します。
+
+```mathematica
+$SourceVaultRoots = <|"PrivateVault" -> "D:\\my-vault"|>;
+Needs["SourceVault`", "SourceVault.wl"]
+```
+
+#### 例 1 — URL から ingest
+
+```mathematica
+r = SourceVaultIngest["https://arxiv.org/abs/2401.12345"];
+r["SnapshotId"]
+```
+
+公式 URL の場合、`iCanonicalizeURL` が `https://arxiv.org/abs/<id>` 形式に正規化し、`arXiv:<id>` の shorthand とも同一視されます。
+
+#### 例 2 — arXiv ID で ingest（shorthand）
+
+```mathematica
+SourceVaultIngest["arXiv:2401.12345"]
+(* 既存と内容が同じなら "AlreadyCurrent" が返る *)
+```
+
+#### 例 3 — context 抽出と複数 span の結合
+
+```mathematica
+spans = {
+  SourceVaultSpan[sid1, {1, 500}],
+  SourceVaultSpan[sid2, {200, 800}]
+};
+SourceVaultContextAssemble[spans]
+```
+
+### Notebook Management
+
+Mathematica notebook を first-class source として扱う機能群です。
+
+#### 例 4 — Notebook の index（deterministic、LLM 不要）
+
+```mathematica
+nbPath = "C:\\Users\\me\\Documents\\research.nb";
+r = SourceVaultIndexNotebook[nbPath]
+(* → <|"Status" -> "OK",
+       "NotebookRef" -> "nb-src-...",
+       "SnapshotId" -> "snap-sha256-...",
+       "Cached" -> False,
+       "SourceMTime" -> 1779243606,
+       "Header" -> <|..., "Source" -> "MakeExpression"|>,
+       "TodoCount" -> 5,
+       "OpenTodoCount" -> 2,
+       "DoneTodoCount" -> 2,
+       "PassTodoCount" -> 1,
+       "ReviewState" -> "Current",
+       "DeadlineState" -> "Future",
+       "Lint" -> {...}|> *)
+```
+
+2 回目以降は mtime ベース cache で高速になります。
+
+```mathematica
+r2 = SourceVaultIndexNotebook[nbPath];
+r2["Cached"]
+(* True (ファイル未変更) *)
+```
+
+#### 例 5 — Todo の状態を変更（DryRun → 実行）
+
+```mathematica
+(* DryRun = True (default) で Before / After をプレビュー *)
+SourceVaultMarkTodo[nbPath, 1, "Done"]
+
+(* 実行 *)
+SourceVaultMarkTodo[nbPath, 1, "Done", "DryRun" -> False]
+(* → atomic write 発生、AutoReindex で SourceVaultIndexNotebook が自動呼び出し *)
+```
+
+target は Integer (Index) / String (TodoId) / Association を受け付けます。
+
+```mathematica
+(* Association で Index + Text 両方一致を要求（最安全） *)
+SourceVaultMarkTodo[nbPath,
+  <|"Index" -> 1, "Text" -> "参加登録"|>, "Done"]
+```
+
+### Notebook Management — Header の 3 経路 fallback
+
+`NBReadHeader` は Header を 3 つの経路で探索します。
+
+```mathematica
+h = NBReadHeader[nbPath];
+h["Source"]
+(* "TaggingRules" / "HeaderCell" / "BoxData" / "None" *)
+```
+
+| Source | 取得経路 |
+|---|---|
+| `"TaggingRules"` | Notebook 全体の `TaggingRules -> <\|"SourceVault" -> <\|...\|>\|>` |
+| `"HeaderCell"` | 個別 Cell の TaggingRules（Header フィルタを通過したもの） |
+| `"BoxData"` | Input cell の BoxData を `MakeExpression` で Association 化（whitelist なし） |
+| `"None"` | どれにも該当せず |
+
+### スケジュールの問い合わせ（PromptRouter / TabularQuery）
+
+`ClaudeEval` のスケジュール系プロンプトは、PromptRouter が `SourceVaultUpcomingSchedule` の呼び出し式に変換します。
+
+```mathematica
+(* 単純な期間指定 *)
+ClaudeEval["今日から3日間のスケジュールを"]
+
+(* 絞り込み付き *)
+ClaudeEval["7日間のスケジュールのうちTodoが残っているものを"]
+```
+
+`SourceVaultUpcomingSchedule` を直接呼ぶこともできます。
+
+```mathematica
+(* Todo が残っていて、かつ NextReview がある notebook だけ *)
+SourceVaultUpcomingSchedule[
+  "Period" -> Quantity[14, "Days"],
+  "FilterSpec" -> <|
+    "Kind" -> "And",
+    "Clauses" -> {
+      <|"Kind" -> "Field", "Field" -> "OpenTodoCount",
+        "Op" -> "Greater", "Value" -> 0|>,
+      <|"Kind" -> "Field", "Field" -> "NextReview",
+        "Op" -> "NonEmpty"|>
+    }
+  |>]
+
+(* 生レコードの List が欲しい場合 *)
+SourceVaultUpcomingSchedule[
+  "Period" -> Quantity[7, "Days"],
+  "OutputFormat" -> "Records"]
+```
+
+PromptRoute の保存と検索：
+
+```mathematica
+(* 最新の ClaudeEval 実行を PromptRoute として保存 *)
+SaveLastPrompt["週次スケジュール確認"]
+
+(* 保存済みルートを検索 *)
+SourceVaultSearchPromptRoutes["スケジュール"]
+```
+
+### Gate 付き PDF 検索と Web サービス公開
+
+PDF コレクションを取り込み、release context で公開範囲を制御し、Web 検索サービスとして公開する流れです。
+
+```mathematica
+(* release context とプロファイルを登録 *)
+SourceVaultRegisterReleaseContext["handbook-web", <|
+  "MaxPrivacyLevel" -> 0.5,
+  "RequiredTags" -> {"ReleaseContext:Campus:Handbook:Web"},
+  "DenyTags" -> {"NoWeb", "Draft"}|>];
+SourceVaultRegisterPDFIndexProfile["student-handbook", <||>];
+
+(* gate 付き検索 *)
+res = SourceVaultSearch["履修登録の手順",
+  "ReleaseContext" -> "handbook-web",
+  "PDFIndexProfile" -> "student-handbook",
+  "Limit" -> 5];
+Dataset[<|"Title" -> Lookup[#Citation, "Title"], "Score" -> #Score|> & /@ res]
+
+(* detached サービスを起動して Web で公開 *)
+SourceVaultStartService["handbook-svc", "Kind" -> "websearch"];
+SourceVaultStartHTTPProxy["handbook-svc",
+  "Port" -> 8080,
+  "ReleaseContext" -> "handbook-web",
+  "PDFIndexProfile" -> "student-handbook",
+  "AppTitle" -> "学生便覧 検索",
+  "ChatModel" -> "cloud"]
+```
+
+### Eagle ライブラリの検索と表示
+
+```mathematica
+(* Eagle ライブラリを登録 *)
+SourceVaultEagleRegisterLibrary["main",
+  {"$dropbox", "Eagle", "My Library.library"}]
+
+(* 全 item 検索 *)
+SourceVaultEagleSearch["自然計算",
+  "Folder" -> "論文", "Ext" -> "pdf", "Limit" -> 20]
+
+(* フォルダビューをノートブックで開く *)
+SourceVaultEagleShowFolder["論文"]
+```
+
+### LLM 要約（ClaudeRuntime 経由）
+
+```mathematica
+(* ClaudeRuntime をロードしておく *)
+SourceVaultNotebookSummary[nbPath]
+(* → <|"Status" -> "OK", "Summary" -> "...", 
+       "Source" -> "LLM", "Model" -> {"claudecode", ...}|> *)
+```
+
+`Source: "Cached"` が返る場合は前回の要約が `SemanticHash` と一致しており、LLM を再呼び出ししていないことを意味します。
+
+### snapshot lifecycle と Evidence Bundle
+
+```mathematica
+(* snapshot を stale 化 *)
+SourceVaultMarkSnapshotStale[sid]
+
+(* 依存している bundle はその場では変更されないが、
+   bundle status を取得すると "Stale" になる (lazy passive consumer) *)
+SourceVaultBundleStatus[bundleId]
+(* → "Stale" *)
+
+(* 手動 invalidate *)
+SourceVaultInvalidateBundle[bundleId, "Reason" -> "outdated"]
+```
+
+### 全 source / snapshot の一覧
+
+```mathematica
+Dataset[SourceVaultListSources[]]
+Dataset[SourceVaultListSnapshots[]]
+```
+
+**出力例（Dataset）:**
+
+| SourceId | Type | Title | CurrentSnapshotId | Status |
+|---|---|---|---|---|
+| src-... | URL | "Quantum Computing Review" | snap-sha256-... | Current |
+| nb-src-... | Notebook | "research.nb" | snap-sha256-... | Current |
+| src-... | arXiv:2401.12345 | "..." | snap-sha256-... | Stale |
+
+### Notebook lint と FindNotebooks
+
+```mathematica
+(* lint 検出 *)
+SourceVaultNotebookLint[nbPath]
+(* → {"DeadlinePast", "TodoCellStatusHeuristicOnly", ...} *)
+
+(* 期限切れ Todo を含む notebook を一覧 *)
+SourceVaultFindNotebooks["DeadlineState" -> "Overdue"]
+
+(* 特定キーワードを持つ notebook *)
+SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
+```
+
+### リポジトリ
+
+- [SourceVault](https://github.com/transreal/SourceVault)
+- [SourceVault_core](https://github.com/transreal/SourceVault_core)
+- [SourceVault_searchindex](https://github.com/transreal/SourceVault_searchindex)
+- [SourceVault_servicemanager](https://github.com/transreal/SourceVault_servicemanager)
+- [SourceVault_promptrouter](https://github.com/transreal/SourceVault_promptrouter)
+- [SourceVault_crypto](https://github.com/transreal/SourceVault_crypto)
+- [SourceVault_identity](https://github.com/transreal/SourceVault_identity)
+- [SourceVault_maildb](https://github.com/transreal/SourceVault_maildb)
+- [SourceVault_eagle](https://github.com/transreal/SourceVault_eagle)
+- [NBAccess](https://github.com/transreal/NBAccess)
+- [claudecode](https://github.com/transreal/claudecode)
+- [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)
+- [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator)
+- [ClaudeTestKit](https://github.com/transreal/ClaudeTestKit)
+- [PDFIndex](https://github.com/transreal/PDFIndex)
+- [github](https://github.com/transreal/github)
+
+---
+
+## 免責事項
+
+本ソフトウェアは "as is"（現状有姿）で提供されており、明示・黙示を問わずいかなる保証もありません。
+本ソフトウェアの使用または使用不能から生じるいかなる損害についても責任を負いません。
+今後の動作保証のための更新が行われるとは限りません。
+本ソフトウェアとドキュメントはほぼすべてが生成AIによって生成されたものです。
+Windows 11上での実行を想定しており、MacOS, LinuxのMathematicaでの動作検証は一切していません(生成AIの処理で対応可能と想定されます)。
+
+---
+
+## ライセンス
+
+```
+MIT License
+
+Copyright (c) 2026 Katsunobu Imai
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
