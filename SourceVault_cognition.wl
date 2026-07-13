@@ -61,6 +61,30 @@ SourceVaultCognitionPruneExpired::usage =
 SourceVaultCognitionSetEnabled::usage =
   "SourceVaultCognitionSetEnabled[True|False] はマスタースイッチを切り替える(即時)。";
 
+(* ---- Phase 1D: OperationalSupportSignal v0(観測専用 shadow。§4.5.2) ---- *)
+$SourceVaultCognitionMinBaselineDays::usage =
+  "$SourceVaultCognitionMinBaselineDays は SupportNeedTier 算出に必要な最小ベースライン日数(既定 14)。" <>
+  "未満は Missing[\"InsufficientBaseline\"] で tier を出さない(cold start 不変条件)。";
+SourceVaultOperationalSignalEstimate::usage =
+  "SourceVaultOperationalSignalEstimate[opts] は Claude Code セッション digest から owner の操作支援 signal を" <>
+  "決定的に推定する(**観測専用 shadow**。LLM prompt/下流 action へ接続しない=I-13。返信遅延・締切は入力に使わない=循環回避)。" <>
+  "日次特徴: Sessions / UserMessages / LateHourRate(深夜開始率) / RetrySimilarityRate(連続プロンプト類似率=やり直し proxy)。" <>
+  "個人内ベースライン(median+MAD)からの偏差で SupportNeedTier(Low|Medium|High=支援必要度。能力ではない)。" <>
+  "ベースライン不足は Missing[\"InsufficientBaseline\"]。日次 sample を SensitiveLocalVault に冪等追記(当日は partial のため永続しない)。" <>
+  "オプション \"Digests\"(Automatic=SourceVaultClaudeCodeSessions[])、\"Subject\"(\"ent-owner\")、\"WindowDays\"(30)、" <>
+  "\"TimeZoneOffsetHours\"(9)、\"Persist\"(True)、\"Root\"。戻り値 <|Days, PersistedDates, Baseline, Status|>。";
+SourceVaultHumanSupportProfile::usage =
+  "SourceVaultHumanSupportProfile[subjectRef, opts] は保存済み OperationalSignalSampled + CognitiveSelfReported から" <>
+  "typed projection(§4.5.2)を返す: <|ObservableSignalsLatest, SupportNeedEstimate(<|SupportNeedTier, Confidence->\"Low\"|>" <>
+  "| Missing[\"InsufficientBaseline\"]), SelfReports, Window, BaselineVersion, ShadowOnly->True|>。" <>
+  "共通 Tier は存在しない(SupportNeedTier のみ。ExecutionRiskTier と相互変換しない)。オプション \"WindowDays\"(90)、\"Root\"。";
+SourceVaultRecordCognitiveSelfReport::usage =
+  "SourceVaultRecordCognitiveSelfReport[score, opts] は owner の自己申告(1..5)を SensitiveLocalVault に記録する" <>
+  "(shadow 比較のアンカー。資料 p15 'Just ask me directly!')。オプション \"Subject\"、\"OccurredAtUTC\"(Automatic)、\"Note\"、\"Root\"。";
+SourceVaultCognitionCompareView::usage =
+  "SourceVaultCognitionCompareView[opts] は日次の signal 偏差と自己申告を並べる local 専用 Dataset(shadow 評価面。" <>
+  "SensitiveLocalVault 外へ出さない)。オプション \"Subject\"、\"WindowDays\"(30)、\"Root\"。";
+
 Begin["`Private`"];
 
 If[! BooleanQ[SourceVault`$SourceVaultCognitionEnabled], SourceVault`$SourceVaultCognitionEnabled = True];
@@ -200,7 +224,7 @@ SourceVaultCognitionAppendEvent[event_Association, OptionsPattern[]] := Module[
       subjRec = Lookup[idx["Subjects"], subj, <|"Token" -> token, "Shards" -> {}|>];
       If[! MemberQ[Lookup[#, "Period", ""] & /@ subjRec["Shards"], period],
         (* 新 shard: 鍵を発行(crypto-shred の単位) *)
-        If[MissingQ[NBAccess`NBKeyStatus[keyRef]],
+        If[! TrueQ[NBAccess`NBKeyMaterialExistsQ[keyRef]],
           NBAccess`NBGenerateSymmetricKeyRef[keyRef, <|"Purpose" -> "SVCognitionShard"|>]];
         subjRec["Shards"] = Append[subjRec["Shards"],
           <|"Period" -> period, "File" -> token <> "-" <> period <> ".cogx",
@@ -231,7 +255,7 @@ SourceVaultCognitionEvents[subj_String, OptionsPattern[]] := Module[
     Module[{f = FileNameJoin[{iCogShardDir[root], sh["File"]}], lines, dec},
       Which[
         ! FileExistsQ[f], AppendTo[notes, "MissingFile:" <> sh["Period"]],
-        MissingQ[NBAccess`NBKeyStatus[sh["KeyRef"]]], AppendTo[notes, "Shredded:" <> sh["Period"]],
+        ! TrueQ[NBAccess`NBKeyMaterialExistsQ[sh["KeyRef"]]], AppendTo[notes, "Shredded:" <> sh["Period"]],
         True,
         lines = Select[SequenceSplit[BinaryReadList[f, "Byte"], {10}], # =!= {} &];
         Scan[Function[lb,
@@ -290,7 +314,7 @@ SourceVaultCognitionErase[subjOrAll_, OptionsPattern[]] := Module[
     (* 4) 削除後検査(r5 P1-02: manifest 全項目の不存在確認) *)
     inspection = <|
       "FilesGone" -> AllTrue[manifest, ! FileExistsQ[#["File"]] &],
-      "KeysGone" -> AllTrue[manifest, MissingQ[NBAccess`NBKeyStatus[#["KeyRef"]]] &],
+      "KeysGone" -> AllTrue[manifest, ! TrueQ[NBAccess`NBKeyMaterialExistsQ[#["KeyRef"]]] &],
       "ReplayEmpty" -> AllTrue[DeleteDuplicates[#["SubjectRef"] & /@ manifest],
         Function[s, Module[{r = SourceVaultCognitionEvents[s, "Root" -> root,
             "Period" -> OptionValue["Period"]]},
@@ -325,6 +349,177 @@ SourceVaultCognitionPruneExpired[OptionsPattern[]] := Module[
       "Period" -> pair[[2]], "DryRun" -> OptionValue["DryRun"]]]],
     expired];
   <|"Cutoff" -> cutoff, "ExpiredShards" -> Length[expired], "Results" -> results|>];
+
+(* ============================================================
+   Phase 1D: OperationalSupportSignal v0(観測専用 shadow)
+   決定的・LLM 不使用。入力は Claude Code digest のみ(返信遅延/締切は使わない=循環回避 P0-04)。
+   出力は SensitiveLocalVault のみ。下流(prompt/action/authorization)へ接続しない(I-12/I-13)。
+   ============================================================ *)
+
+If[! IntegerQ[SourceVault`$SourceVaultCognitionMinBaselineDays],
+  SourceVault`$SourceVaultCognitionMinBaselineDays = 14];
+
+$svCogSignalMethod = "opsig-v0";
+$svCogISOFmt = {"Year", "-", "Month", "-", "Day", "T", "Hour", ":", "Minute", ":", "Second"};
+
+(* UTC ISO -> {localDay "yyyy-mm-dd", localHour, weekday}。offset 演算は同一 $TimeZone 解釈内で厳密。
+   非 String(旧スキーマの Null 等)は Missing(未評価で Part されると Day->Null 汚染行になるため
+   catch-all 必須。result7.nb で実データ検出)。 *)
+iCogLocalDayHour[utc_String, offH_] := Module[{s, dl, la, ldl},
+  s = StringDelete[utc, "Z"];
+  s = StringReplace[s, "." ~~ DigitCharacter .. -> ""];  (* 実 digest はミリ秒付き ISO(result7 実データ) *)
+  dl = Quiet@Check[DateList[{s, $svCogISOFmt}], $Failed];
+  If[dl === $Failed, Return[Missing["BadTime"]]];
+  la = AbsoluteTime[dl] + offH*3600;
+  ldl = DateList[la];
+  {DateString[ldl, {"Year", "-", "Month", "-", "Day"}], ldl[[4]],
+   DateString[ldl, {"DayName"}]}];
+iCogLocalDayHour[_, _] := Missing["BadTime"];
+
+(* digest の活動 timestamp: StartedAtUTC -> LastAtUTC。DigestAtUTC(=ingest 時刻)は使わない
+   (活動履歴が ingest 日に潰れるため)。両方 Null/欠落の digest は skip。 *)
+iCogDigestTime[d_Association] := SelectFirst[
+  {Lookup[d, "StartedAtUTC", Missing[]], Lookup[d, "LastAtUTC", Missing[]]},
+  StringQ, Missing["NoTime"]];
+
+iCogSimilarity[a_String, b_String] := Module[{m = Max[StringLength[a], StringLength[b]]},
+  If[m === 0, 0., 1. - EditDistance[a, b]/m]];
+
+(* 1 セッションの「やり直し proxy」: 連続 user preview の高類似ペア率 *)
+iCogRetryPairs[previews_List] := Module[{ps, pairs},
+  ps = Select[Cases[previews, _String], StringLength[#] >= 8 &];
+  If[Length[ps] < 2, Return[{0, 0}]];
+  pairs = Partition[ps, 2, 1];
+  {Count[pairs, p_ /; iCogSimilarity[p[[1]], p[[2]]] > 0.6], Length[pairs]}];
+
+(* digests -> 日次特徴(local day 毎)。決定的 *)
+iCogDailyFeatures[digests_List, offH_] := Module[{rows},
+  rows = DeleteCases[Map[Function[d,
+    Module[{dh = iCogLocalDayHour[iCogDigestTime[d], offH], rp},
+      If[MissingQ[dh], Nothing,
+        rp = iCogRetryPairs[Lookup[d, "UserPreviews", {}]];
+        <|"Day" -> dh[[1]], "Hour" -> dh[[2]], "Weekday" -> dh[[3]],
+          "UserMessages" -> Lookup[d, "UserMessageCount", 0],
+          "RetryHits" -> rp[[1]], "RetryPairs" -> rp[[2]]|>]]],
+    digests], Nothing];
+  Association@Map[Function[grp,
+    grp[[1, "Day"]] -> <|
+      "Sessions" -> Length[grp],
+      "UserMessages" -> Total[Lookup[grp, "UserMessages", 0]],
+      "LateHourRate" -> N[Count[grp, r_ /; r["Hour"] < 6]/Length[grp]],
+      "RetrySimilarityRate" -> Module[{h = Total[Lookup[grp, "RetryHits", 0]],
+          p = Total[Lookup[grp, "RetryPairs", 0]]}, If[p === 0, 0., N[h/p]]],
+      "Weekday" -> grp[[1, "Weekday"]]|>],
+    GatherBy[rows, #["Day"] &]]];
+
+iCogRobustZ[x_, vals_List] := Module[{med, mad},
+  If[Length[vals] < 2, Return[0.]];
+  med = Median[vals]; mad = Median[Abs[vals - med]];
+  Clip[(x - med)/(1.4826*mad + 0.05), {-4., 4.}]];
+
+(* 偏差スコア: 深夜率/やり直し率は「悪化方向のみ」、量は絶対偏差(重み 0.5) *)
+iCogDeviationScore[f_Association, baseline_Association] := Module[{zLate, zRetry, zVol},
+  zLate = Max[0., iCogRobustZ[f["LateHourRate"], baseline["LateHourRate"]]];
+  zRetry = Max[0., iCogRobustZ[f["RetrySimilarityRate"], baseline["RetrySimilarityRate"]]];
+  zVol = Abs[iCogRobustZ[f["UserMessages"], baseline["UserMessages"]]];
+  Round[Mean[{zLate, zRetry, 0.5*zVol}], 0.001]];
+
+iCogTierOf[score_?NumberQ] := Which[score < 0.8, "Low", score < 1.6, "Medium", True, "High"];
+
+Options[SourceVaultOperationalSignalEstimate] = {"Digests" -> Automatic, "Subject" -> "ent-owner",
+  "WindowDays" -> 30, "TimeZoneOffsetHours" -> 9, "Persist" -> True, "Root" -> Automatic};
+SourceVaultOperationalSignalEstimate[OptionsPattern[]] := Module[
+  {digests, subj, offH, daily, days, todayLocal, existing, existingDates, results = {}, persisted = {},
+   baselineOf, minDays = SourceVault`$SourceVaultCognitionMinBaselineDays},
+  digests = OptionValue["Digests"] /. Automatic :>
+    Quiet@Check[SourceVault`SourceVaultClaudeCodeSessions[], {}];
+  If[! ListQ[digests], digests = {}];
+  subj = OptionValue["Subject"]; offH = OptionValue["TimeZoneOffsetHours"];
+  daily = iCogDailyFeatures[digests, offH];
+  days = Sort[Keys[daily]];
+  If[Length[days] > OptionValue["WindowDays"] + minDays,
+    days = Take[days, -(OptionValue["WindowDays"] + minDays)]];
+  todayLocal = First[iCogLocalDayHour[iCogNowUTC[], offH]];
+  (* 冪等: 既存 sample 日はスキップ *)
+  existing = If[TrueQ[OptionValue["Persist"]],
+    Select[SourceVaultCognitionEvents[subj, "Root" -> OptionValue["Root"]]["Events"],
+      Lookup[#, "EventClass", ""] === "OperationalSignalSampled" &], {}];
+  existingDates = If[existing === {}, {},
+    DeleteDuplicates[DeleteCases[Lookup[existing, "SignalDate", Nothing], Nothing]]];
+  baselineOf = Function[day,
+    Module[{prior = Select[days, Order[#, day] === 1 &]},
+      If[Length[prior] < minDays, Missing["InsufficientBaseline"],
+        Association@Map[# -> Lookup[Lookup[daily, prior], #, 0] &,
+          {"LateHourRate", "RetrySimilarityRate", "UserMessages"}]]]];
+  Scan[Function[day,
+    Module[{f = daily[day], bl = baselineOf[day], score, tier, sample},
+      If[MissingQ[bl],
+        score = Missing["InsufficientBaseline"]; tier = Missing["InsufficientBaseline"],
+        score = iCogDeviationScore[f, bl]; tier = iCogTierOf[score]];
+      sample = <|"Day" -> day, "Features" -> KeyDrop[f, "Weekday"],
+        "Covariates" -> <|"Weekday" -> f["Weekday"]|>,
+        "DeviationScore" -> score, "SupportNeedTier" -> tier,
+        "Partial" -> (day === todayLocal)|>;
+      AppendTo[results, sample];
+      (* 当日は partial のため永続しない。既存日もスキップ(冪等) *)
+      If[TrueQ[OptionValue["Persist"]] && day =!= todayLocal && ! MemberQ[existingDates, day] &&
+          ! MissingQ[bl],
+        Module[{ev = SourceVaultCognitionAppendEvent[<|
+            "EventClass" -> "OperationalSignalSampled", "SubjectRef" -> subj,
+            "OccurredAtUTC" -> day <> "T00:00:00Z", "SignalDate" -> day,
+            "Features" -> KeyDrop[f, "Weekday"], "Covariates" -> <|"Weekday" -> f["Weekday"]|>,
+            "DeviationScore" -> score, "SupportNeedTier" -> tier,
+            "Method" -> $svCogSignalMethod, "BaselineDays" -> Length[Select[days, Order[#, day] === 1 &]],
+            "ShadowOnly" -> True|>, "Root" -> OptionValue["Root"]]},
+          If[AssociationQ[ev], AppendTo[persisted, day]]]]]],
+    days];
+  <|"Days" -> results, "PersistedDates" -> persisted,
+    "MinBaselineDays" -> minDays, "Method" -> $svCogSignalMethod,
+    "Status" -> If[digests === {}, "NoDigests", "OK"]|>];
+
+Options[SourceVaultHumanSupportProfile] = {"WindowDays" -> 90, "Root" -> Automatic};
+SourceVaultHumanSupportProfile[subj_String, OptionsPattern[]] := Module[
+  {evs, sigs, reports, latest, est},
+  evs = SourceVaultCognitionEvents[subj, "Root" -> OptionValue["Root"]]["Events"];
+  sigs = Select[evs, Lookup[#, "EventClass", ""] === "OperationalSignalSampled" &];
+  reports = Select[evs, Lookup[#, "EventClass", ""] === "CognitiveSelfReported" &];
+  latest = If[sigs === {}, Missing["NoSignals"], Last[SortBy[sigs, Lookup[#, "SignalDate", ""] &]]];
+  est = Which[
+    MissingQ[latest], Missing["NoSignals"],
+    ! StringQ[Lookup[latest, "SupportNeedTier", Missing[]]], Missing["InsufficientBaseline"],
+    True, <|"SupportNeedTier" -> latest["SupportNeedTier"], "Confidence" -> "Low",
+      "AsOfDate" -> Lookup[latest, "SignalDate", ""]|>];
+  <|"SubjectRef" -> subj,
+    "ObservableSignalsLatest" -> If[MissingQ[latest], Missing[], Lookup[latest, "Features", <||>]],
+    "SupportNeedEstimate" -> est,
+    "SelfReports" -> Length[reports], "SignalSamples" -> Length[sigs],
+    "Window" -> OptionValue["WindowDays"], "BaselineVersion" -> $svCogSignalMethod,
+    "ShadowOnly" -> True|>];  (* 下流接続禁止(I-12/I-13)。表示は local のみ *)
+
+Options[SourceVaultRecordCognitiveSelfReport] = {"Subject" -> "ent-owner",
+  "OccurredAtUTC" -> Automatic, "Note" -> "", "Root" -> Automatic};
+SourceVaultRecordCognitiveSelfReport[score_Integer /; 1 <= score <= 5, OptionsPattern[]] :=
+  SourceVaultCognitionAppendEvent[<|"EventClass" -> "CognitiveSelfReported",
+    "SubjectRef" -> OptionValue["Subject"],
+    "OccurredAtUTC" -> (OptionValue["OccurredAtUTC"] /. Automatic :> iCogNowUTC[]),
+    "Score" -> score, "Note" -> OptionValue["Note"]|>, "Root" -> OptionValue["Root"]];
+
+Options[SourceVaultCognitionCompareView] = {"Subject" -> "ent-owner", "WindowDays" -> 30,
+  "Root" -> Automatic};
+SourceVaultCognitionCompareView[OptionsPattern[]] := Module[
+  {evs, sigs, reports, byDay},
+  evs = SourceVaultCognitionEvents[OptionValue["Subject"], "Root" -> OptionValue["Root"]]["Events"];
+  sigs = Select[evs, Lookup[#, "EventClass", ""] === "OperationalSignalSampled" &];
+  reports = Select[evs, Lookup[#, "EventClass", ""] === "CognitiveSelfReported" &];
+  byDay = Association@Map[Function[r,
+    StringTake[ToString@Lookup[r, "OccurredAtUTC", ""], UpTo[10]] -> Lookup[r, "Score", Missing[]]],
+    reports];
+  Dataset[Map[Function[s,
+    <|"Date" -> Lookup[s, "SignalDate", ""],
+      "DeviationScore" -> Lookup[s, "DeviationScore", Missing[]],
+      "SupportNeedTier" -> Lookup[s, "SupportNeedTier", Missing[]],
+      "SelfReport" -> Lookup[byDay, Lookup[s, "SignalDate", ""], Missing[]]|>],
+    Take[SortBy[sigs, Lookup[#, "SignalDate", ""] &], -Min[OptionValue["WindowDays"], Length[sigs]]]]]];
 
 End[];
 

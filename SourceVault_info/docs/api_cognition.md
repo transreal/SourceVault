@@ -54,6 +54,37 @@ Options: `"DryRun"`(True)、`"Root"`。
 ### SourceVaultCognitionSetEnabled[True|False]
 マスタースイッチ切替(即時)。
 
+## Phase 1D: OperationalSupportSignal v0(観測専用 shadow)
+
+決定的・LLM 不使用。入力は Claude Code セッション digest のみ(返信遅延・締切見落としは使わない=循環回避)。
+出力は SensitiveLocalVault のみで、**LLM prompt / 下流 action / authorization へ一切接続しない**(ShadowOnly)。
+SupportNeedTier は「操作支援を増やす必要性」であり能力・認知レベルではない。共通 Tier は存在しない。
+
+### $SourceVaultCognitionMinBaselineDays
+型: Integer, 既定 14。tier 算出に必要な最小ベースライン日数。未満は `Missing["InsufficientBaseline"]`
+(cold start 不変条件: 通知・下流利用なし)。
+
+### SourceVaultOperationalSignalEstimate[opts]
+日次特徴(Sessions / UserMessages / LateHourRate / RetrySimilarityRate=連続プロンプト類似率)を
+個人内ベースライン(median+MAD、悪化方向のみ+量は絶対偏差 0.5 重み)と比較し DeviationScore と
+SupportNeedTier(Low<0.8 / Medium<1.6 / High)を出す。日次 sample を冪等に永続(当日 partial は永続しない)。
+→ `<|Days, PersistedDates, MinBaselineDays, Method="opsig-v0", Status|>`
+Options: `"Digests"`(Automatic=`SourceVaultClaudeCodeSessions[]`)、`"Subject"`("ent-owner")、
+`"WindowDays"`(30)、`"TimeZoneOffsetHours"`(9)、`"Persist"`(True)、`"Root"`。
+
+### SourceVaultHumanSupportProfile[subjectRef, opts]
+typed projection(§4.5.2)。→ `<|ObservableSignalsLatest, SupportNeedEstimate(<|SupportNeedTier,
+Confidence->"Low", AsOfDate|> | Missing["InsufficientBaseline"]), SelfReports, SignalSamples,
+Window, BaselineVersion, ShadowOnly->True|>`
+Options: `"WindowDays"`(90)、`"Root"`。
+
+### SourceVaultRecordCognitiveSelfReport[score, opts]
+自己申告(1..5)を記録(shadow 比較のアンカー)。Options: `"Subject"`、`"OccurredAtUTC"`(Automatic)、`"Note"`、`"Root"`。
+
+### SourceVaultCognitionCompareView[opts]
+日次 DeviationScore/SupportNeedTier と self-report を並べる local 専用 Dataset(shadow 評価面)。
+Options: `"Subject"`、`"WindowDays"`(30)、`"Root"`。
+
 ## 不変条件(実装で担保)
 
 - I-1: 書込み先は SensitiveLocalVault のみ。PrivateVault/CoreRoot 配下 root は実行時拒否。
