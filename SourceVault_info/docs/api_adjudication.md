@@ -29,3 +29,11 @@ IndependentGroups|>。MultiModelDecisionRecorded(内容最小化)を event 化("
 
 ### SourceVaultDecisionCase[caseId]
 case の現在状態(Candidates/ClaimEvaluations/Decision)。
+
+### SourceVaultRunMultiModelDecision[inputRef, proposerFns, opts]
+裁定を end-to-end 実行する runnable driver。**proposer/verifier LLM の実走は proposerFns/VerifierFn に注入**
+(orchestrator 結線点。mock 可。本 driver は LLM を直接呼ばない)。proposerFns: {inputRef->candidate assoc...}
+(欠落候補は driver で除外し ExcludedProposers に記録)。open→addCandidate→evaluateClaims(VerifierFn を
+claim ごとに blind 判定して VerifierVerdicts に注入)→decideCase を実行。
+→ decision fields + `<|DecisionCaseId, ExcludedProposers, CandidateCount|>`
+Options: "VerifierFn"(None)、"TaskDomain"、"ActionRiskClass"(Low)、"OwnerConfirmed"(False)、"RiskPriors"、"Persist"(True)。

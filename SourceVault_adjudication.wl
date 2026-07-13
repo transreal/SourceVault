@@ -41,6 +41,14 @@ SourceVaultDecideCase::usage =
   "最終判定は MultiModelDecisionRecorded(内容最小化)として event 化(\"Persist\"->True 既定)。";
 SourceVaultDecisionCase::usage =
   "SourceVaultDecisionCase[caseId] は case の現在状態(Candidates/ClaimEvaluations/Decision)を返す。";
+SourceVaultRunMultiModelDecision::usage =
+  "SourceVaultRunMultiModelDecision[inputRef, proposerFns, opts] は裁定を end-to-end 実行する runnable driver。" <>
+  "proposerFns: {fn...}(各 fn: inputRef -> candidate assoc。**proposer/verifier LLM の実走はここに注入**=" <>
+  "orchestrator 結線点。mock も可)。opts \"VerifierFn\"(claim(assoc)->\"Supported\"|\"Refuted\"|Missing。独立検証。" <>
+  "各 claim を blind に判定)、\"TaskDomain\"、\"ActionRiskClass\"(Low)、\"OwnerConfirmed\"(False)、\"RiskPriors\"、\"Persist\"(True)。" <>
+  "open→addCandidate(欠落候補は除外し ExcludedProposers に記録)→evaluateClaims(VerifierFn を VerifierVerdicts に注入)→" <>
+  "decideCase を実行。戻り値 <|DecisionCaseId, Decision, ...decision fields, ExcludedProposers|>。" <>
+  "**本 driver は LLM を直接呼ばない**(proposerFns/VerifierFn が実行主体)。";
 
 Begin["`Private`"];
 
@@ -174,6 +182,35 @@ SourceVaultDecideCase[cid_String, OptionsPattern[]] := Module[
   final];
 
 SourceVaultDecisionCase[cid_String] := Lookup[SourceVault`$svDecisionCases, cid, Missing["NoSuchCase"]];
+
+(* ---- runnable driver(orchestrator 結線点。proposer/verifier は injectable)---- *)
+Options[SourceVaultRunMultiModelDecision] = {"VerifierFn" -> None, "TaskDomain" -> "General",
+  "ActionRiskClass" -> "Low", "OwnerConfirmed" -> False, "RiskPriors" -> <||>, "Persist" -> True};
+SourceVaultRunMultiModelDecision[inputRef_, proposerFns_List, OptionsPattern[]] := Module[
+  {cid, excludedProposers = {}, cand, added, evals, vv = <||>, decision},
+  cid = SourceVaultOpenDecisionCase[inputRef, "TaskDomain" -> OptionValue["TaskDomain"],
+    "ActionRiskClass" -> OptionValue["ActionRiskClass"]];
+  (* 各 proposer を実行して候補登録(欠落候補は driver で除外・記録) *)
+  MapIndexed[Function[{fn, ix},
+    Module[{c = Quiet@Check[fn[inputRef], $Failed]},
+      If[! AssociationQ[c],
+        AppendTo[excludedProposers, <|"ProposerIndex" -> ix[[1]], "Reason" -> "ProposerFailed"|>],
+        added = SourceVaultAddCandidate[cid, c];
+        If[FailureQ[added],
+          AppendTo[excludedProposers, <|"ProposerIndex" -> ix[[1]], "Reason" -> "CandidateIncomplete"|>]]]]],
+    proposerFns];
+  (* verifier(independent。各 claim を blind に判定)を VerifierVerdicts へ *)
+  If[OptionValue["VerifierFn"] =!= None,
+    evals = SourceVaultEvaluateClaims[cid];  (* まず claim 群を得る *)
+    vv = Association@DeleteCases[Map[Function[e,
+        Module[{v = Quiet@Check[OptionValue["VerifierFn"][e], Missing[]]},
+          If[MemberQ[{"Supported", "Refuted"}, v], e["NormalizedClaim"] -> v, Nothing]]],
+        evals], Nothing]];
+  evals = SourceVaultEvaluateClaims[cid, "VerifierVerdicts" -> vv];
+  decision = SourceVaultDecideCase[cid, "RiskPriors" -> OptionValue["RiskPriors"],
+    "OwnerConfirmed" -> OptionValue["OwnerConfirmed"], "Persist" -> OptionValue["Persist"]];
+  Join[<|"DecisionCaseId" -> cid, "ExcludedProposers" -> excludedProposers,
+    "CandidateCount" -> Length[SourceVaultDecisionCase[cid]["Candidates"]]|>, decision]];
 
 End[];
 
