@@ -120,6 +120,23 @@ SourceVaultGuardShadowStats::usage =
   "action class 別の decision 分布と gate/shadow 一致率(false intervention 評価の材料。§8)を返す。" <>
   "オプション \"Limit\"(既定 2000)。";
 
+(* ---- Phase 1G: owner 入力支援(§4.15/4.16/§5.12。決定的・SupportNeedTier 不使用=I-12) ---- *)
+SourceVaultOwnerInputRiskAssess::usage =
+  "SourceVaultOwnerInputRiskAssess[input] は owner 入力の **input 固有** リスクを決定的に評価する(§4.15。" <>
+  "SupportNeedTier は使わない=I-12: 状態から prompt error を推定しない)。InputSegments(OwnerInstruction|QuotedData=" <>
+  "引用/貼付は untrusted data、v0.5 authority 分離)、AmbiguitySignals(指示語)、MissingArgumentSignals(宛先未指定等)、" <>
+  "IrreversibleActionRequested、PrivacyMismatch(QuotedData+送信/公開)。" <>
+  "戻り値 <|InputSegments, Signals, PromptInterpretationRisk(Low|Medium|High), IrreversibleActionRequested, OriginalPromptDigest|>。";
+SourceVaultAssistOwnerInput::usage =
+  "SourceVaultAssistOwnerInput[input, opts] は支援 case(§4.16)を開く: 評価→AssistanceMode " <>
+  "(Normal|ReviewEnhanced|DraftOnly|ConfirmBeforeCommit。不可逆は常に commit 前 owner 確認=権限は広がらない)を決定し、" <>
+  "必要なら**結果を分ける最小の一問**(ClarificationQuestion)を付ける。case は SensitiveLocalVault に永続" <>
+  "(original prompt は immutable=I-12)。**ModelFacingPolicy には mode のみ**(支援状態・理由を LLM に渡さない=I-13)。" <>
+  "オプション \"Persist\"(True)、\"Root\"、\"Subject\"(\"ent-owner\")。";
+SourceVaultAssistanceRecordOutcome::usage =
+  "SourceVaultAssistanceRecordOutcome[assistanceCaseId, outcome, opts] は ChosenIntentRef/OwnerCorrection/" <>
+  "IntentPreserved(True|False)を記録する(intent preservation 測定=§8)。SensitiveLocalVault。";
+
 Begin["`Private`"];
 
 If[! BooleanQ[SourceVault`$SourceVaultCognitionEnabled], SourceVault`$SourceVaultCognitionEnabled = True];
@@ -678,6 +695,91 @@ SourceVaultGuardShadowStats[OptionsPattern[]] := Module[{evs, shadowEvs, parEvs}
             Lookup[#, "ShadowDecision", ""] === "Standard") ||
           (Lookup[#, "GateDecision", ""] === "Deny" &&
             Lookup[#, "ShadowDecision", ""] =!= "Standard")) &], UpTo[20]]]|>];
+
+(* ============================================================
+   Phase 1G: owner 入力支援(決定的コア。LLM 不使用)
+   I-12: SupportNeedTier を入力に使わない/authorization は広がらない/original 不変。
+   I-13: ModelFacingPolicy に支援状態・理由を含めない。
+   ============================================================ *)
+
+$svAsstIrreversibleWords = {"送信", "送って", "メールして", "send ", "公開", "publish",
+  "削除", "delete", "支払", "pay ", "デプロイ", "deploy"};
+$svAsstDemonstratives = {"あれ", "それを", "例の", "いつもの", "that thing", "the usual", "those ones"};
+
+iAsstSegments[input_String] := Module[{blocks},
+  blocks = Select[StringTrim /@ StringSplit[StringReplace[input, "\r" -> "\n"],
+    RegularExpression["\\n[ \\t]*\\n+"]], # =!= "" &];
+  Map[Function[b,
+    <|"Text" -> b, "Role" -> If[
+      StringStartsQ[b, ">"] || StringContainsQ[b, "-*- Quote"] ||
+        StringContainsQ[b, RegularExpression["(?m)^(From|Subject|To|Date):"]] ||
+        StringMatchQ[b, RegularExpression["https?://\\S+"]],
+      "QuotedData", "OwnerInstruction"]|>], blocks]];
+
+SourceVaultOwnerInputRiskAssess[input_String] := Module[
+  {segs, instr, signals = {}, irrevQ, risk},
+  segs = iAsstSegments[input];
+  instr = StringRiffle[Lookup[Select[segs, #["Role"] === "OwnerInstruction" &], "Text", {}], "\n"];
+  irrevQ = AnyTrue[$svAsstIrreversibleWords, StringContainsQ[instr, #, IgnoreCase -> True] &];
+  If[AnyTrue[$svAsstDemonstratives, StringContainsQ[instr, #, IgnoreCase -> True] &],
+    AppendTo[signals, "AmbiguousReferent"]];
+  If[irrevQ && ! StringContainsQ[instr, "@"] &&
+      StringContainsQ[instr, RegularExpression["送信|送って|メールして|send "], IgnoreCase -> True],
+    AppendTo[signals, "RecipientUnspecified"]];
+  If[irrevQ && AnyTrue[segs, #["Role"] === "QuotedData" &],
+    AppendTo[signals, "PotentialQuotedDataRelease"]];  (* 貼付 data を外へ出す可能性 *)
+  If[irrevQ, AppendTo[signals, "IrreversibleActionRequested"]];
+  risk = Which[
+    Length[DeleteCases[signals, "IrreversibleActionRequested"]] >= 2, "High",
+    Length[DeleteCases[signals, "IrreversibleActionRequested"]] >= 1, "Medium",
+    True, "Low"];
+  <|"InputSegments" -> segs, "Signals" -> signals,
+    "PromptInterpretationRisk" -> risk, "IrreversibleActionRequested" -> irrevQ,
+    "OriginalPromptDigest" -> IntegerString[Hash[input], 36]|>];
+
+iAsstQuestion[signals_List] := Which[
+  MemberQ[signals, "RecipientUnspecified"],
+    "確認(1問): 宛先が未指定です。A: 下書きのまま保存 / B: 宛先を指定して続行 — どちらにしますか。",
+  MemberQ[signals, "AmbiguousReferent"],
+    "確認(1問): 対象(『あれ/例の…』)が特定できません。A: 直近の作業対象 / B: 別途指定 — どちらですか。",
+  MemberQ[signals, "PotentialQuotedDataRelease"],
+    "確認(1問): 貼付内容を外部へ送る可能性があります。A: 送らず要約のみ / B: 送信を続行 — どちらですか。",
+  True, Missing["NoQuestion"]];
+
+Options[SourceVaultAssistOwnerInput] = {"Persist" -> True, "Root" -> Automatic,
+  "Subject" -> "ent-owner"};
+SourceVaultAssistOwnerInput[input_String, OptionsPattern[]] := Module[
+  {assess, mode, q, caseId, ev},
+  assess = SourceVaultOwnerInputRiskAssess[input];
+  mode = Which[
+    assess["IrreversibleActionRequested"] && assess["PromptInterpretationRisk"] === "High", "DraftOnly",
+    assess["IrreversibleActionRequested"], "ConfirmBeforeCommit",  (* 不可逆は常に owner 確認(I-12) *)
+    assess["PromptInterpretationRisk"] =!= "Low", "ReviewEnhanced",
+    True, "Normal"];
+  q = If[mode === "Normal", Missing["NoQuestion"], iAsstQuestion[assess["Signals"]]];
+  caseId = "svassist:" <> iCogULID[];
+  ev = <|"EventClass" -> "OwnerInputAssistanceCase", "SubjectRef" -> OptionValue["Subject"],
+    "OccurredAtUTC" -> iCogNowUTC[], "AssistanceCaseId" -> caseId,
+    "OriginalInput" -> input,  (* immutable(I-12)。SensitiveLocalVault のみ *)
+    "InputRiskAssessment" -> KeyDrop[assess, "InputSegments"],
+    "AssistanceMode" -> mode, "ClarificationQuestion" -> q|>;
+  If[TrueQ[OptionValue["Persist"]],
+    Quiet@Check[SourceVaultCognitionAppendEvent[ev, "Root" -> OptionValue["Root"]], Null]];
+  <|"AssistanceCaseId" -> caseId, "AssistanceMode" -> mode,
+    "ClarificationQuestion" -> q, "Assessment" -> assess,
+    (* I-13: LLM/実行系に渡してよいのは mode 指示のみ。理由・signal・支援状態は含めない *)
+    "ModelFacingPolicy" -> <|"Mode" -> mode,
+      "CommitRequiresOwnerConfirm" -> assess["IrreversibleActionRequested"]|>|>];
+
+Options[SourceVaultAssistanceRecordOutcome] = {"Root" -> Automatic, "Subject" -> "ent-owner"};
+SourceVaultAssistanceRecordOutcome[caseId_String, outcome_Association, OptionsPattern[]] :=
+  SourceVaultCognitionAppendEvent[<|"EventClass" -> "OwnerInputAssistanceOutcome",
+    "SubjectRef" -> OptionValue["Subject"], "OccurredAtUTC" -> iCogNowUTC[],
+    "AssistanceCaseId" -> caseId,
+    "ChosenIntentRef" -> Lookup[outcome, "ChosenIntentRef", Missing[]],
+    "OwnerCorrection" -> Lookup[outcome, "OwnerCorrection", Missing[]],
+    "IntentPreserved" -> Lookup[outcome, "IntentPreserved", Missing[]]|>,
+    "Root" -> OptionValue["Root"]];
 
 End[];
 

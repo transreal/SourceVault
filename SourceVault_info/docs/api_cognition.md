@@ -116,3 +116,23 @@ event replay で最新状態を返す。
 
 ### SourceVaultGuardShadowStats[opts]
 記録の集計: action 別 decision 分布・gate/shadow 一致率・不一致リスト(false intervention 評価=§8 昇格材料)。
+
+## Phase 1G: owner 入力支援(決定的コア)
+
+I-12: SupportNeedTier を prompt error 判定に使わない(input 固有 signal のみ)。original prompt は
+SensitiveLocalVault に immutable 保存。不可逆 action は常に commit 前 owner 確認(権限は広がらない)。
+無応答は承認ではない。I-13: ModelFacingPolicy には mode 指示のみ(支援状態・理由・signal を LLM に渡さない)。
+
+### SourceVaultOwnerInputRiskAssess[input]
+決定的評価: InputSegments(OwnerInstruction|QuotedData=引用/貼付/メールヘッダは untrusted data)、
+Signals(AmbiguousReferent/RecipientUnspecified/PotentialQuotedDataRelease/IrreversibleActionRequested)、
+PromptInterpretationRisk(Low|Medium|High)。→ assoc(OriginalPromptDigest 付き)。
+
+### SourceVaultAssistOwnerInput[input, opts]
+支援 case を開く。AssistanceMode: 不可逆+High→DraftOnly(+結果を分ける最小の一問)/不可逆→
+ConfirmBeforeCommit/不明瞭→ReviewEnhanced/明確+可逆→Normal。case は SensitiveLocalVault に永続。
+→ `<|AssistanceCaseId, AssistanceMode, ClarificationQuestion, Assessment, ModelFacingPolicy(<|Mode,
+CommitRequiresOwnerConfirm|> のみ)|>`。Options: "Persist"(True)、"Root"、"Subject"。
+
+### SourceVaultAssistanceRecordOutcome[caseId, outcome, opts]
+ChosenIntentRef/OwnerCorrection/IntentPreserved を記録(intent preservation 測定=§8)。
