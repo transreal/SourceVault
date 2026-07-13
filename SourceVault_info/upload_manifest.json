@@ -27,6 +27,7 @@
 		"SourceVault_adjudication.wl",
 		"SourceVault_capbroker.wl",
 		"SourceVault_taint.wl",
+		"SourceVault_anomaly.wl",
 		"SourceVault_contracts.wl",
 		"SourceVault_wiring.wl",
 		"SourceVault_mailsuggest.wl",
