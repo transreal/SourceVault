@@ -116,9 +116,14 @@ SourceVaultGuardRecordParallel::usage =
   "gateResult: 既存 release/action gate の戻り(Decision 等)。内容最小化 GuardParallelRecorded を通常 store へ。" <>
   "戻り値 <|GateDecision, ShadowDecision, RiskLevel, Agreement|>。";
 SourceVaultGuardShadowStats::usage =
-  "SourceVaultGuardShadowStats[opts] は記録済み GuardDecisionRecorded/GuardParallelRecorded を集計し、" <>
-  "action class 別の decision 分布と gate/shadow 一致率(false intervention 評価の材料。§8)を返す。" <>
+  "SourceVaultGuardShadowStats[opts] は記録済み GuardDecisionRecorded/GuardParallelRecorded/GuardMailParallelRecorded を集計し、" <>
+  "action class 別の decision 分布・gate/shadow 一致率・メール送信の caution alignment(false intervention 評価の材料。§8)を返す。" <>
   "オプション \"Limit\"(既定 2000)。";
+SourceVaultPlanMessageReleaseWithGuardShadow::usage =
+  "SourceVaultPlanMessageReleaseWithGuardShadow[spec, opts] は既存 SourceVaultPlanMessageRelease(正準ゲート)を" <>
+  "**一切変えずに**呼び、同じ action に対する Guard shadow 推奨を並走記録する(1E: shadow mode。enforce しない)。" <>
+  "既存 plan に \"GuardShadow\" キーを additive に付けて返す(既存 caller は無影響)。GuardMailParallelRecorded を" <>
+  "内容最小化して通常 store に記録。Aligned=ゲートと shadow がともに慎重か(mail は常に確認要=Medium+)。オプション \"Persist\"(True)。";
 
 (* ---- Phase 1G: owner 入力支援(§4.15/4.16/§5.12。決定的・SupportNeedTier 不使用=I-12) ---- *)
 SourceVaultOwnerInputRiskAssess::usage =
@@ -675,11 +680,12 @@ SourceVaultGuardRecordParallel[gateResult_, actionSpec_Association, OptionsPatte
   out];
 
 Options[SourceVaultGuardShadowStats] = {"Limit" -> 2000};
-SourceVaultGuardShadowStats[OptionsPattern[]] := Module[{evs, shadowEvs, parEvs},
+SourceVaultGuardShadowStats[OptionsPattern[]] := Module[{evs, shadowEvs, parEvs, mailEvs},
   evs = Quiet@Check[SourceVaultTransactionLog["Limit" -> OptionValue["Limit"]], {}];
   If[! ListQ[evs], evs = {}];
   shadowEvs = Select[evs, Lookup[#, "EventClass", ""] === "GuardDecisionRecorded" &];
   parEvs = Select[evs, Lookup[#, "EventClass", ""] === "GuardParallelRecorded" &];
+  mailEvs = Select[evs, Lookup[#, "EventClass", ""] === "GuardMailParallelRecorded" &];
   <|"ShadowCount" -> Length[shadowEvs],
     "DecisionByAction" -> If[shadowEvs === {}, <||>,
       GroupBy[shadowEvs, Lookup[#, "ActionKind", "?"] &,
@@ -694,7 +700,52 @@ SourceVaultGuardShadowStats[OptionsPattern[]] := Module[{evs, shadowEvs, parEvs}
       Take[Select[parEvs, ! ((Lookup[#, "GateDecision", ""] === "Permit" &&
             Lookup[#, "ShadowDecision", ""] === "Standard") ||
           (Lookup[#, "GateDecision", ""] === "Deny" &&
-            Lookup[#, "ShadowDecision", ""] =!= "Standard")) &], UpTo[20]]]|>];
+            Lookup[#, "ShadowDecision", ""] =!= "Standard")) &], UpTo[20]]],
+    (* mail release parallel(caution alignment): gate は常に確認要、shadow が Standard=非慎重なら不一致 *)
+    "MailParallelCount" -> Length[mailEvs],
+    "MailAlignmentRate" -> If[mailEvs === {}, Missing["NoData"],
+      N[Count[mailEvs, e_ /; TrueQ[Lookup[e, "Aligned", False]]]/Length[mailEvs]]],
+    "MailMisaligned" -> If[mailEvs === {}, {},
+      Take[Select[mailEvs, ! TrueQ[Lookup[#, "Aligned", False]] &], UpTo[20]]]|>];
+
+(* ---- 実送信経路への shadow 並走結線(1E 結線。既存 gate は不変・enforce しない) ---- *)
+(* release plan と spec から action risk taxonomy を導く *)
+iGuardActionFromRelease[spec_Association, plan_Association] := Module[{recips, redacted, capsules, reach, gap},
+  recips = Lookup[spec, "Recipients", {}];
+  redacted = Lookup[plan, "RedactedMaterials", {}];
+  capsules = Lookup[plan, "EncryptedCapsules", {}];
+  (* list-like 宛先(ml/announce 等)があれば Organization、それ以外は KnownRecipients *)
+  reach = If[AnyTrue[recips, StringQ[#] && StringContainsQ[#,
+      RegularExpression["(?i)(^|[._\\-])(ml|mailing|list|announce|all|team|staff)([._\\-]|@)"]] &],
+    "Organization", "KnownRecipients"];
+  (* redaction/capsule 発生 = content PL が宛先許可を超えた=privacy 降下の緊張が表面化 *)
+  gap = If[redacted =!= {} || (capsules =!= {} && AnyTrue[capsules, Lookup[#, "Materials", {}] =!= {} &]), 0.3, 0.];
+  <|"ActionKind" -> "MailSend", "Reversibility" -> "Irreversible", "Reach" -> reach,
+    "SensitivityGap" -> gap, "ImpactDomains" -> {}, "RecipientCount" -> Length[recips]|>];
+
+Options[SourceVaultPlanMessageReleaseWithGuardShadow] = {"Persist" -> True};
+SourceVaultPlanMessageReleaseWithGuardShadow[spec_Association, OptionsPattern[]] := Module[
+  {plan, actionSpec, shadow, gateCautious, shadowCautious, aligned},
+  plan = SourceVaultPlanMessageRelease[spec];   (* 正準ゲート。一切変更しない *)
+  If[! AssociationQ[plan], Return[plan]];
+  actionSpec = iGuardActionFromRelease[spec, plan];
+  shadow = SourceVaultGuardEvaluate[actionSpec, "Persist" -> False];
+  (* ゲートは常に DraftOnly/AutoSend False=慎重。shadow が Standard(非慎重)なら不一致=要注目 *)
+  gateCautious = (! TrueQ[Lookup[Lookup[plan, "Audit", <||>], "AutoSendAllowed", False]]) ||
+    Lookup[plan, "RedactedMaterials", {}] =!= {};
+  shadowCautious = shadow["Decision"] =!= "Standard";
+  aligned = (gateCautious === shadowCautious);
+  If[TrueQ[OptionValue["Persist"]],
+    Quiet@Check[SourceVaultAppendEvent[<|"EventClass" -> "GuardMailParallelRecorded",
+      "GateDecision" -> Lookup[plan, "Decision", "?"],
+      "GateAutoSend" -> Lookup[Lookup[plan, "Audit", <||>], "AutoSendAllowed", False],
+      "GateRedactedCount" -> Length[Lookup[plan, "RedactedMaterials", {}]],
+      "ShadowDecision" -> shadow["Decision"], "RiskLevel" -> shadow["RiskLevel"],
+      "Reach" -> actionSpec["Reach"], "RecipientCount" -> actionSpec["RecipientCount"],
+      "Aligned" -> aligned, "ShadowMode" -> True, "PolicyVersion" -> "guard-shadow-v0"|>], Null]];
+  (* 既存 plan に additive にだけ付与(既存 caller は無影響) *)
+  Append[plan, "GuardShadow" -> <|"Decision" -> shadow["Decision"], "RiskLevel" -> shadow["RiskLevel"],
+    "ReasonCodes" -> shadow["ReasonCodes"], "Aligned" -> aligned, "ShadowMode" -> True|>]];
 
 (* ============================================================
    Phase 1G: owner 入力支援(決定的コア。LLM 不使用)

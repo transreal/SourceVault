@@ -136,3 +136,11 @@ CommitRequiresOwnerConfirm|> のみ)|>`。Options: "Persist"(True)、"Root"、"S
 
 ### SourceVaultAssistanceRecordOutcome[caseId, outcome, opts]
 ChosenIntentRef/OwnerCorrection/IntentPreserved を記録(intent preservation 測定=§8)。
+
+### SourceVaultPlanMessageReleaseWithGuardShadow[spec, opts]
+1E 結線。既存 `SourceVaultPlanMessageRelease`(正準ゲート)を**一切変えずに**呼び、同じ action の
+Guard shadow 推奨(action risk taxonomy: MailSend/Irreversible/Reach(list-like 宛先で Organization)/
+SensitivityGap(redaction/capsule 発生で 0.3))を並走記録する(enforce しない)。既存 plan に `"GuardShadow"`
+キーを additive に付与(既存 caller 無影響)。`GuardMailParallelRecorded`(内容最小)を記録。Aligned=ゲート
+(常に確認要)と shadow がともに慎重か。`SourceVaultGuardShadowStats` に MailParallelCount/MailAlignmentRate/
+MailMisaligned を追加(false intervention 評価)。Options: "Persist"(True)。
