@@ -91,3 +91,28 @@ Options: `"Subject"`、`"WindowDays"`(30)、`"Root"`。
   平文は vault 内にも残らない(行単位暗号化)。監査行は metadata のみ。
 - I-3b: retention 上限+owner による停止/消去。消去後の replay で復活しない(検査で保証)。
 - I-9: bitemporal(OccurredAtUTC 必須・ObservedAtUTC 自動)。欠落 fail-closed。
+
+## Phase 1E: action risk taxonomy + Guard shadow(enforce しない)
+
+決定的。認知系推定は入力に含まれない(1D の §8 昇格ゲート前)。Deny という decision class は存在しない(I-2)。
+Commitment は認知推定の入力に使わない(循環回避)。event は通常 store・内容最小化(本文/宛先/認知数値なし)。
+
+### SourceVaultActionRiskClassify[actionSpec]
+taxonomy(Reversibility/Reach/SensitivityGap=privacy降下量/ImpactDomains/TimeConstraint/RecipientCount)から
+RiskLevel を決定的に分類。→ `<|RiskLevel(Low|Medium|High), Taxonomy, ReasonCodes|>`
+
+### SourceVaultGuardEvaluate[actionSpec, opts]
+shadow 評価: High→TimedDefer / Medium→Confirm / Low→Standard の**推奨のみ**。
+`GuardDecisionRecorded`(ShadowMode→True, guard-shadow-v0)を記録。Options: `"Persist"`(True)。
+
+### SourceVaultCommitmentObserve[spec] / SourceVaultCommitmentSetStatus[cid, status, opts] / SourceVaultCommitments[opts]
+Commitment 最小モデル(§4.8): Kind(MailReply|Todo|EventPreparation|Deadline|Recurring)、
+Status 遷移(Done|NotNeeded|HandledElsewhere|Delegated|Snoozed)、`"OwnerCorrection"`/`"FalseAlarm"`=ground truth。
+event replay で最新状態を返す。
+
+### SourceVaultGuardRecordParallel[gateResult, actionSpec, opts]
+既存 gate の判定と shadow 推奨の**並走記録**(enforce しない)。`GuardParallelRecorded` を記録し
+`<|GateDecision, ShadowDecision, RiskLevel, Agreement|>` を返す。
+
+### SourceVaultGuardShadowStats[opts]
+記録の集計: action 別 decision 分布・gate/shadow 一致率・不一致リスト(false intervention 評価=§8 昇格材料)。

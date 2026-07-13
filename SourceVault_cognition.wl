@@ -85,6 +85,41 @@ SourceVaultCognitionCompareView::usage =
   "SourceVaultCognitionCompareView[opts] は日次の signal 偏差と自己申告を並べる local 専用 Dataset(shadow 評価面。" <>
   "SensitiveLocalVault 外へ出さない)。オプション \"Subject\"、\"WindowDays\"(30)、\"Root\"。";
 
+(* ---- Phase 1E(第一増分): action risk taxonomy + Guard shadow(§5.7) ---- *)
+SourceVaultActionRiskClassify::usage =
+  "SourceVaultActionRiskClassify[actionSpec] は action の客観リスクを決定的に分類する(§5.7 taxonomy。Guard の主入力)。" <>
+  "actionSpec: <|ActionKind, Reversibility(Draft|Undoable|Irreversible), Reach(Self|KnownRecipients|Organization|Public), " <>
+  "SensitivityGap(content PL−宛先許可 PL。既定 0), ImpactDomains({Financial,Legal,Health,Safety}), TimeConstraint, RecipientCount|>。" <>
+  "戻り値 <|RiskLevel(Low|Medium|High), Taxonomy, ReasonCodes|>。認知系推定は入力に含まれない(1D 昇格前)。";
+SourceVaultGuardEvaluate::usage =
+  "SourceVaultGuardEvaluate[actionSpec, opts] は Guard の **shadow 評価**: risk 分類から decision class " <>
+  "(Standard|Confirm|TimedDefer)の推奨を計算し、内容最小化した GuardDecisionRecorded(ShadowMode->True)を通常 event store に" <>
+  "記録するだけで**一切 enforce しない**(1E shadow。昇格は §8 評価ゲート後)。認知系単独 Deny は存在しない(I-2)。" <>
+  "オプション \"Persist\"(True)。戻り値 <|Decision, RiskLevel, ReasonCodes, ShadowMode->True|>。";
+
+(* ---- Phase 1E(第二増分): Commitment 最小 + shadow 並走記録(§4.8/§5.7) ---- *)
+SourceVaultCommitmentObserve::usage =
+  "SourceVaultCommitmentObserve[spec] は Commitment(返信すべきメール/締切/準備)を観測記録する(§4.8。" <>
+  "**cognition の特徴量には使わない=循環回避**。本人支援と Guard 評価の ground truth 用)。" <>
+  "spec: <|Kind(MailReply|Todo|EventPreparation|Deadline|Recurring), SourceRefs, Deadline, DetectionBasis|>。" <>
+  "CommitmentId(ULID)/Status->Open を補完し CommitmentObserved を通常 store に記録。";
+SourceVaultCommitmentSetStatus::usage =
+  "SourceVaultCommitmentSetStatus[commitmentId, status, opts] は状態遷移を記録する。" <>
+  "status: Done|NotNeeded|HandledElsewhere|Delegated|Snoozed|Open。\"OwnerCorrection\"(owner 訂正=ground truth)、" <>
+  "\"FalseAlarm\"(検出誤り)。CommitmentStatusChanged を記録。";
+SourceVaultCommitments::usage =
+  "SourceVaultCommitments[opts] は event replay で Commitment 一覧(最新状態)を返す。" <>
+  "オプション \"Status\"(All|_String)、\"Limit\"(既定 200)。";
+SourceVaultGuardRecordParallel::usage =
+  "SourceVaultGuardRecordParallel[gateResult, actionSpec, opts] は既存 gate の判定と Guard shadow 推奨を" <>
+  "**並走記録**する(1E: 既存 gate の結果と並行して decision を記録するだけ。enforce しない)。" <>
+  "gateResult: 既存 release/action gate の戻り(Decision 等)。内容最小化 GuardParallelRecorded を通常 store へ。" <>
+  "戻り値 <|GateDecision, ShadowDecision, RiskLevel, Agreement|>。";
+SourceVaultGuardShadowStats::usage =
+  "SourceVaultGuardShadowStats[opts] は記録済み GuardDecisionRecorded/GuardParallelRecorded を集計し、" <>
+  "action class 別の decision 分布と gate/shadow 一致率(false intervention 評価の材料。§8)を返す。" <>
+  "オプション \"Limit\"(既定 2000)。";
+
 Begin["`Private`"];
 
 If[! BooleanQ[SourceVault`$SourceVaultCognitionEnabled], SourceVault`$SourceVaultCognitionEnabled = True];
@@ -520,6 +555,129 @@ SourceVaultCognitionCompareView[OptionsPattern[]] := Module[
       "SupportNeedTier" -> Lookup[s, "SupportNeedTier", Missing[]],
       "SelfReport" -> Lookup[byDay, Lookup[s, "SignalDate", ""], Missing[]]|>],
     Take[SortBy[sigs, Lookup[#, "SignalDate", ""] &], -Min[OptionValue["WindowDays"], Length[sigs]]]]]];
+
+(* ============================================================
+   Phase 1E(第一増分): action risk taxonomy + Guard shadow
+   決定的。認知系入力なし(1D 昇格前)。enforce しない(記録のみ)。
+   ============================================================ *)
+
+SourceVaultActionRiskClassify[spec_Association] := Module[
+  {rev, reach, gap, domains, reasons = {}, level},
+  rev = Lookup[spec, "Reversibility", "Undoable"];
+  reach = Lookup[spec, "Reach", "Self"];
+  gap = Lookup[spec, "SensitivityGap", 0.];
+  domains = Lookup[spec, "ImpactDomains", {}];
+  If[rev === "Irreversible", AppendTo[reasons, "Irreversible"]];
+  If[MemberQ[{"Organization", "Public"}, reach], AppendTo[reasons, "WideReach:" <> reach]];
+  If[gap > 0., AppendTo[reasons, "PrivacyDowngrade"]];  (* content PL > 宛先許可 = privacy 降下 *)
+  If[domains =!= {}, AppendTo[reasons, "Impact:" <> StringRiffle[ToString /@ domains, ","]]];
+  level = Which[
+    (* High: 不可逆×(広い到達 or privacy 降下 or 重大領域) *)
+    rev === "Irreversible" && (MemberQ[{"Organization", "Public"}, reach] || gap > 0. || domains =!= {}), "High",
+    gap > 0. || rev === "Irreversible" || MemberQ[{"Organization", "Public"}, reach] || domains =!= {}, "Medium",
+    True, "Low"];
+  <|"RiskLevel" -> level, "Taxonomy" -> KeyTake[spec,
+      {"ActionKind", "Reversibility", "Reach", "SensitivityGap", "ImpactDomains",
+       "TimeConstraint", "RecipientCount"}],
+    "ReasonCodes" -> reasons|>];
+
+Options[SourceVaultGuardEvaluate] = {"Persist" -> True};
+SourceVaultGuardEvaluate[spec_Association, OptionsPattern[]] := Module[
+  {cls, decision, out},
+  cls = SourceVaultActionRiskClassify[spec];
+  decision = Switch[cls["RiskLevel"],
+    "High", "TimedDefer",     (* 推奨のみ。期限+即時override+緊急経路は enforcement 実装(昇格後)の契約 *)
+    "Medium", "Confirm",
+    _, "Standard"];
+  out = <|"Decision" -> decision, "RiskLevel" -> cls["RiskLevel"],
+    "ReasonCodes" -> cls["ReasonCodes"], "ShadowMode" -> True|>;
+  If[TrueQ[OptionValue["Persist"]],
+    (* 内容最小化: action の本文・宛先・認知数値は含めない(I-3b) *)
+    Quiet@Check[SourceVaultAppendEvent[<|"EventClass" -> "GuardDecisionRecorded",
+      "ActionKind" -> Lookup[spec, "ActionKind", "Unknown"],
+      "RiskLevel" -> cls["RiskLevel"], "Decision" -> decision,
+      "ReasonCodes" -> cls["ReasonCodes"], "ShadowMode" -> True,
+      "PolicyVersion" -> "guard-shadow-v0"|>], Null]];
+  out];
+
+(* ============================================================
+   Phase 1E(第二増分): Commitment 最小 + shadow 並走記録
+   Commitment は認知推定の入力に使わない(P0-04 循環回避)。通常 event store(内容最小・本文なし)。
+   ============================================================ *)
+
+SourceVaultCommitmentObserve[spec_Association] := Module[{ev},
+  ev = Join[<|"CommitmentId" -> "svcommit:" <> iCogULID[], "Status" -> "Open",
+    "ObservedAtUTC" -> iCogNowUTC[]|>, KeyTake[spec,
+    {"Kind", "SourceRefs", "Deadline", "ReminderAt", "PreparationLeadTime",
+     "GracePeriod", "DetectionBasis", "Title"}]];
+  Quiet@Check[SourceVaultAppendEvent[Append[ev, "EventClass" -> "CommitmentObserved"]], Null];
+  ev];
+
+Options[SourceVaultCommitmentSetStatus] = {"OwnerCorrection" -> Missing[], "FalseAlarm" -> False};
+SourceVaultCommitmentSetStatus[cid_String, status_String, OptionsPattern[]] := Module[{ev},
+  ev = <|"EventClass" -> "CommitmentStatusChanged", "CommitmentId" -> cid,
+    "Status" -> status, "OwnerCorrection" -> OptionValue["OwnerCorrection"],
+    "FalseAlarm" -> TrueQ[OptionValue["FalseAlarm"]], "ChangedAtUTC" -> iCogNowUTC[]|>;
+  Quiet@Check[SourceVaultAppendEvent[ev], Null];
+  ev];
+
+Options[SourceVaultCommitments] = {"Status" -> All, "Limit" -> 200};
+SourceVaultCommitments[OptionsPattern[]] := Module[{evs, base, changes, merged},
+  evs = Quiet@Check[SourceVaultTransactionLog["Limit" -> 5000], {}];
+  If[! ListQ[evs], evs = {}];
+  base = Association@Map[(#["CommitmentId"] -> #) &,
+    Select[evs, Lookup[#, "EventClass", ""] === "CommitmentObserved" &]];
+  changes = Select[evs, Lookup[#, "EventClass", ""] === "CommitmentStatusChanged" &];
+  (* TransactionLog は新しい順 → 逆順で適用し最新状態に *)
+  Scan[Function[ch, Module[{cid = Lookup[ch, "CommitmentId", ""]},
+    If[KeyExistsQ[base, cid],
+      base[cid] = Join[base[cid], KeyTake[ch, {"Status", "OwnerCorrection", "FalseAlarm"}]]]]],
+    Reverse[changes]];
+  merged = Values[base];
+  If[OptionValue["Status"] =!= All,
+    merged = Select[merged, Lookup[#, "Status", ""] === OptionValue["Status"] &]];
+  Take[merged, UpTo[OptionValue["Limit"]]]];
+
+Options[SourceVaultGuardRecordParallel] = {"Persist" -> True};
+SourceVaultGuardRecordParallel[gateResult_, actionSpec_Association, OptionsPattern[]] := Module[
+  {shadow, gateDec, out},
+  shadow = SourceVaultGuardEvaluate[actionSpec, "Persist" -> False];
+  gateDec = Which[
+    AssociationQ[gateResult], ToString@Lookup[gateResult, "Decision", "Unknown"],
+    StringQ[gateResult], gateResult, True, ToString[gateResult]];
+  out = <|"GateDecision" -> gateDec, "ShadowDecision" -> shadow["Decision"],
+    "RiskLevel" -> shadow["RiskLevel"],
+    "Agreement" -> ((gateDec === "Permit" && shadow["Decision"] === "Standard") ||
+      (gateDec === "Deny" && shadow["Decision"] =!= "Standard"))|>;
+  If[TrueQ[OptionValue["Persist"]],
+    Quiet@Check[SourceVaultAppendEvent[<|"EventClass" -> "GuardParallelRecorded",
+      "ActionKind" -> Lookup[actionSpec, "ActionKind", "Unknown"],
+      "GateDecision" -> gateDec, "ShadowDecision" -> shadow["Decision"],
+      "RiskLevel" -> shadow["RiskLevel"], "ReasonCodes" -> shadow["ReasonCodes"],
+      "ShadowMode" -> True, "PolicyVersion" -> "guard-shadow-v0"|>], Null]];
+  out];
+
+Options[SourceVaultGuardShadowStats] = {"Limit" -> 2000};
+SourceVaultGuardShadowStats[OptionsPattern[]] := Module[{evs, shadowEvs, parEvs},
+  evs = Quiet@Check[SourceVaultTransactionLog["Limit" -> OptionValue["Limit"]], {}];
+  If[! ListQ[evs], evs = {}];
+  shadowEvs = Select[evs, Lookup[#, "EventClass", ""] === "GuardDecisionRecorded" &];
+  parEvs = Select[evs, Lookup[#, "EventClass", ""] === "GuardParallelRecorded" &];
+  <|"ShadowCount" -> Length[shadowEvs],
+    "DecisionByAction" -> If[shadowEvs === {}, <||>,
+      GroupBy[shadowEvs, Lookup[#, "ActionKind", "?"] &,
+        Tally[Lookup[#, "Decision", "?"] & /@ #] &]],
+    "ParallelCount" -> Length[parEvs],
+    "ParallelAgreementRate" -> If[parEvs === {}, Missing["NoData"],
+      N[Count[parEvs, e_ /; (Lookup[e, "GateDecision", ""] === "Permit" &&
+            Lookup[e, "ShadowDecision", ""] === "Standard") ||
+          (Lookup[e, "GateDecision", ""] === "Deny" &&
+            Lookup[e, "ShadowDecision", ""] =!= "Standard")]/Length[parEvs]]],
+    "ParallelDisagreements" -> If[parEvs === {}, {},
+      Take[Select[parEvs, ! ((Lookup[#, "GateDecision", ""] === "Permit" &&
+            Lookup[#, "ShadowDecision", ""] === "Standard") ||
+          (Lookup[#, "GateDecision", ""] === "Deny" &&
+            Lookup[#, "ShadowDecision", ""] =!= "Standard")) &], UpTo[20]]]|>];
 
 End[];
 
