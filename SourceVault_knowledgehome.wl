@@ -108,6 +108,32 @@ SourceVaultKnowledgeHomeMergeExtensions::usage =
   "SourceVaultKnowledgeHomeMergeExtensions[eventLists, opts] は複数デバイスの event 列を合流して replay する(offline merge)。" <>
   "正準 ULID は衝突しないので paragraph は無傷。alias(ki n)衝突は正準 ID を保ったまま alias を振り直し AliasHistory に記録。" <>
   "戻り値 <|Projection, AliasReassignments|>。";
+(* ---- Phase 1C: 位置づけ(KnowledgeHomeTopicPosition)/ 近傍検索 / 3リング提案 ---- *)
+SourceVaultKnowledgeHomeTopicPosition::usage =
+  "SourceVaultKnowledgeHomeTopicPosition[entry, opts] は object(mail Counter | \"sv://mail/N\" | svkhpara: | 生テキスト)の" <>
+  "topic 空間座標を返す(§4.1。決定的・再生成可能な projection)。TopicEvidence は重みごとの根拠" <>
+  "(TopicRef/Weight/Method=OwnerConfirmed|SeedMatched|RelationExpanded/SourceSegmentRef/Confidence)。" <>
+  "UnknownMass はどの topic にも帰属しない質量(無理に押し込まない)。Space=OOPSSeed|KHExtension|Mixed。" <>
+  "mail が gate で deny なら Released->False のみ(low-leak)。" <>
+  "オプション \"ReleaseContext\"(既定 \"oops-corpus\")、\"State\"(Automatic)、\"RelationGraph\"(Automatic=state)、" <>
+  "\"IncludeRelation\"(既定 True)、\"MaxRelationTopics\"(6)。";
+SourceVaultKnowledgeHomeNeighborhoodSearch::usage =
+  "SourceVaultKnowledgeHomeNeighborhoodSearch[entry, opts] は位置(または entry から即時計算)の近傍 object " <>
+  "(mail + KH パラグラフ)を topic 重なりで返す(Neighbor Hopping の基盤)。gate で deny された object は返さない。" <>
+  "戻り値 {<|Ref, Kind, Subject, Score, SharedTopicLabels, Date|>...}(Score 降順)。" <>
+  "オプション \"ReleaseContext\"、\"State\"、\"Limit\"(10)、\"ExcludeRefs\"({})、\"IncludeKH\"(True)。";
+SourceVaultKnowledgeHomeSuggestNextNodes::usage =
+  "SourceVaultKnowledgeHomeSuggestNextNodes[entry, opts] は資料 p11 の 3 リング提案: " <>
+  "Ring1=similar topics and newer(前進バイアス。newer は bounded な一特徴)、Ring2=direct neighborhood(引用/被引用)、" <>
+  "Ring3=neighborhood(relation graph 経由の周辺)。各提案は Ring と Reasons(理由表示)を持つ。" <>
+  "dismiss は \"ExcludeRefs\" と SourceVaultKnowledgeHomeDismissSuggestion[ref](セッション内)。" <>
+  "オプション \"ReleaseContext\"、\"State\"、\"RelationGraph\"(Automatic)、\"LimitPerRing\"(5)、\"ExcludeRefs\"({})。";
+SourceVaultKnowledgeHomeDismissSuggestion::usage =
+  "SourceVaultKnowledgeHomeDismissSuggestion[ref] は提案 dismiss をセッション内リスト($SourceVaultKnowledgeHomeDismissed)に" <>
+  "追加する(以後の SuggestNextNodes から除外。永続化は後続 Phase)。";
+SourceVaultKnowledgeHomeSuggestView::usage =
+  "SourceVaultKnowledgeHomeSuggestView[entry, opts] は SuggestNextNodes の Dataset 版(Ring/Score/理由付き)。";
+
 SourceVaultKnowledgeHomeSearch::usage =
   "SourceVaultKnowledgeHomeSearch[query, opts] は追記済 KH パラグラフを BM25(SourceVaultBuildLexicalStats/LexicalRank)で検索する。" <>
   "ReleaseContext gate を経由し、deny パラグラフは返さない。オプション \"ReleaseContext\"(既定 \"oops-corpus\")、\"Extension\"(Automatic)、" <>
@@ -155,16 +181,25 @@ iKHEnsureReleaseContexts[] := (
     SourceVaultRegisterReleaseContext["oops-corpus-cloud",
       <|"MaxPrivacyLevel" -> 1.0, "DenyTags" -> {"NoCloudLLM", "NoPublicExport", "PrivateML"}|>]];);
 
-(* mail の topic refs(明示 ◎○・ 最高品質 ＋ seed-matched)。ラベルも収集 *)
-iKHMailTopics[mail_Association, sidx_] := Module[{body, expl, assignRows, seedm, explRefs, seedRefs, refs, labels},
+(* mail の topic refs。mode:
+   "Auto"     = 明示 ◎○・ ＋ seed-matched(4548 surface × 段落照合。単一 mail 向け。全コーパスでは重い)
+   "Explicit" = 明示マーカーのみ(regex。高速)
+   "Gold"     = 明示 ∪ 人手付与 gold(mail-to-item.index。全コーパス構築の既定=速く・高品質) *)
+iKHMailTopics[mail_Association, sidx_] := iKHMailTopics[mail, sidx, "Auto", None];
+iKHMailTopics[mail_Association, sidx_, mode_String, goldEntries_] := Module[
+  {body, expl, assignRows, seedm, goldRefs, explRefs, seedRefs, refs, labels},
   body = ToString@Lookup[mail, "Body", ""];
   expl = Quiet@Check[SourceVaultExtractExplicitTopics[body], {}];
-  assignRows = If[sidx === None || MissingQ[sidx] || ! AssociationQ[sidx], {},
-    Quiet@Check[SourceVaultAssignParagraphTopics[SourceVaultParseMailParagraphs[body], sidx], {}]];
-  seedm = Flatten[Lookup[#, "Assignments", {}] & /@ assignRows];  (* 各 <|TopicItemRef, CanonicalLabel, ...|> *)
+  seedm = If[mode === "Auto" && AssociationQ[sidx],
+    assignRows = Quiet@Check[SourceVaultAssignParagraphTopics[SourceVaultParseMailParagraphs[body], sidx], {}];
+    Flatten[Lookup[#, "Assignments", {}] & /@ assignRows],
+    {}];
+  goldRefs = If[mode === "Gold" && ListQ[goldEntries],
+    ("svtopic:oops:" <> #["Namespace"] <> ":" <> ToString[#["LocalId"]]) & /@ goldEntries,
+    {}];
   explRefs = #["TopicItemRef"] & /@ expl;
   seedRefs = Lookup[#, "TopicItemRef", Nothing] & /@ seedm;
-  refs = DeleteDuplicates@DeleteMissing@DeleteCases[Join[explRefs, seedRefs], Nothing];
+  refs = DeleteDuplicates@DeleteMissing@DeleteCases[Join[explRefs, goldRefs, seedRefs], Nothing];
   (* 空ラベル・Missing は落とす(seed 辞書の正準ラベルを BuildState で shadow しないため)。
      Select は Association に適用して値を見る(rule のリストに適用しない)。 *)
   labels = Association@DeleteCases[
@@ -179,18 +214,28 @@ iKHMailRef[counter_] := "sv://mail/" <> ToString[counter];
 iKHCounterOfRef[ref_] := Module[{m = StringCases[ToString[ref], "sv://mail/" ~~ n : DigitCharacter .. :> FromDigits[n]]},
   If[m === {}, Missing["NotMailRef"], First[m]]];
 
+$svKHAutoTagMailLimit = 300;  (* これ以上の corpus は Auto(全 surface 照合)を既定にしない=初回構築の重量化防止 *)
+
 Options[SourceVaultKnowledgeHomeBuildState] = {"SurfaceIndex" -> None, "RefLabel" -> <||>,
-  "QuoteEdges" -> Automatic, "ExtensionEntries" -> {}, "Extension" -> None};
+  "QuoteEdges" -> Automatic, "ExtensionEntries" -> {}, "Extension" -> None, "RelationGraph" -> None,
+  "MailToItem" -> None, "TopicAssign" -> Automatic};
 SourceVaultKnowledgeHomeBuildState[mails_List, OptionsPattern[]] := Module[
   {sidx, refLabel, edges, byCounter, counters, mailTopics, topicTimeline, topicLabel, quoteOut, quoteIn,
-   ext, khTimeline},
+   ext, khTimeline, gold, mode},
   sidx = OptionValue["SurfaceIndex"];
   refLabel = OptionValue["RefLabel"];
+  gold = OptionValue["MailToItem"];
+  (* TopicAssign 解決: gold があれば Gold(速く・人手品質)、大 corpus は Explicit、小 corpus は Auto *)
+  mode = OptionValue["TopicAssign"] /. Automatic :> Which[
+    AssociationQ[gold] && Length[gold] > 0, "Gold",
+    Length[mails] > $svKHAutoTagMailLimit, "Explicit",
+    True, "Auto"];
   edges = OptionValue["QuoteEdges"] /. Automatic :> Quiet@Check[SourceVaultBuildMailQuoteEdges[mails], {}];
   byCounter = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ mails];
   KeyDropFrom[byCounter, {Missing[]}];
   counters = Sort[Keys[byCounter]];
-  mailTopics = Association[(# -> iKHMailTopics[byCounter[#], sidx]) & /@ counters];
+  mailTopics = Association[(# -> iKHMailTopics[byCounter[#], sidx, mode,
+    If[AssociationQ[gold], Lookup[gold, #, {}], None]]) & /@ counters];
   (* topic -> 時系列 counters(昇順)＋ラベル *)
   topicTimeline = <||>; topicLabel = <||>;
   Scan[Function[c,
@@ -236,27 +281,38 @@ SourceVaultKnowledgeHomeBuildState[mails_List, OptionsPattern[]] := Module[
     Scan[Function[ref, If[! KeyExistsQ[topicLabel, ref], topicLabel[ref] = ToString[ref]]],
       Keys[khTimeline]]];
   <|"Loaded" -> True, "MailByCounter" -> byCounter, "Counters" -> counters,
-    "SurfaceIndex" -> sidx, "RefLabel" -> refLabel,
+    "SurfaceIndex" -> sidx, "RefLabel" -> refLabel, "RelationGraph" -> OptionValue["RelationGraph"],
     "MailTopics" -> mailTopics, "TopicTimeline" -> topicTimeline, "TopicLabel" -> topicLabel,
     "QuoteOut" -> quoteOut, "QuoteIn" -> quoteIn, "ExtensionEntries" -> OptionValue["ExtensionEntries"],
-    "Extension" -> ext, "TopicKHTimeline" -> khTimeline|>];
+    "Extension" -> ext, "TopicKHTimeline" -> khTimeline,
+    "MailToItem" -> gold, "TopicAssignMode" -> mode|>];
 
 Options[SourceVaultKnowledgeHomeEnsureLoaded] = {"Force" -> False, "MailFiles" -> All,
   "TableDir" -> Automatic, "MailDir" -> Automatic};
 SourceVaultKnowledgeHomeEnsureLoaded[OptionsPattern[]] := Module[
-  {oopsStatus, st},
+  {oopsStatus, st, gold},
   If[TrueQ[SourceVault`$svKHState["Loaded"]] && ! TrueQ[OptionValue["Force"]],
     Return[SourceVaultKnowledgeHomeStatus[]]];
+  Print["[KnowledgeHome] OOPS archive 読み込み中 (初回のみ。全 corpus は数分かかることがあります)..."];
   oopsStatus = SourceVaultOOPSEnsureLoaded["Force" -> OptionValue["Force"],
     "MailFiles" -> OptionValue["MailFiles"], "TableDir" -> OptionValue["TableDir"],
     "MailDir" -> OptionValue["MailDir"]];
   If[FailureQ[oopsStatus], Return[oopsStatus]];
   iKHEnsureReleaseContexts[];
   st = SourceVault`$svOOPSState;
+  (* gold(人手付与 mail-to-item)を読み込み: 全 corpus timeline を高速・高品質に構築する土台 *)
+  gold = Quiet@Check[
+    Lookup[SourceVaultImportOOPSMailToItem[
+      FileNameJoin[{Lookup[st, "TableDir", ""], "mail-to-item.index"}]], "MailToItem", None], None];
+  Print["[KnowledgeHome] 閲覧インデックス構築中 (mails=", Length[Lookup[st, "Mails", {}]],
+    ", gold=", If[AssociationQ[gold], Length[gold], 0], ")..."];
   SourceVault`$svKHState = SourceVaultKnowledgeHomeBuildState[Lookup[st, "Mails", {}],
     "SurfaceIndex" -> Lookup[st, "SurfaceIndex", None], "RefLabel" -> Lookup[st, "RefLabel", <||>],
     "QuoteEdges" -> Lookup[st, "QuoteEdges", Automatic],
+    "RelationGraph" -> Lookup[st, "RelationGraph", None],
+    "MailToItem" -> gold,
     "Extension" -> Quiet@Check[SourceVaultKnowledgeHomeExtension[], None]];  (* 追記分を合流 *)
+  Print["[KnowledgeHome] 構築完了 (TopicAssign=", SourceVault`$svKHState["TopicAssignMode"], ")"];
   SourceVaultKnowledgeHomeStatus[]];
 
 SourceVaultKnowledgeHomeStatus[] := If[! TrueQ[SourceVault`$svKHState["Loaded"]],
@@ -719,6 +775,265 @@ SourceVaultKnowledgeHomeSearch[query_String, OptionsPattern[]] := Module[
         "Snippet" -> StringTake[StringReplace[Lookup[p, "Body", ""], {"\n" -> " ", "\r" -> ""}], UpTo[80]],
         "TopicRefs" -> Lookup[p, "TopicRefs", {}]|>]],
     ranked]];
+
+(* ============================================================
+   Phase 1C: 位置づけ(TopicPosition)/ 近傍検索 / 3リング提案
+   決定的・LLM 不使用・再生成可能。gate は candidate 側に適用(I-4)。
+   ============================================================ *)
+
+$svKHPositionPipelineVersion = "kh-pos-v1";
+
+(* entry の本文と meta を解決: mail counter / sv://mail/N / svkhpara: / 生テキスト *)
+iKHResolveEntry[st_Association, entry_, ctx_] := Module[{c, para, ext},
+  Which[
+    IntegerQ[entry] || (StringQ[entry] && StringMatchQ[entry, "sv://mail/" ~~ ___]),
+      c = If[IntegerQ[entry], entry, iKHCounterOfRef[entry]];
+      If[MissingQ[c] || ! KeyExistsQ[st["MailByCounter"], c],
+        Missing["MailNotFound"],
+        Module[{mail = st["MailByCounter"][c], gate},
+          gate = iKHGate[mail, ctx];
+          <|"Kind" -> "Mail", "URI" -> iKHMailRef[c], "Counter" -> c,
+            "Body" -> Lookup[mail, "Body", ""], "Released" -> gate["Permit"], "Why" -> gate["Why"],
+            "PrivacyLevel" -> iKHMailSource[mail]["PrivacyLevel"]|>]],
+    StringQ[entry] && StringMatchQ[entry, "svkhpara:" ~~ ___],
+      ext = Lookup[st, "Extension", None];
+      para = If[AssociationQ[ext],
+        SelectFirst[ext["Paragraphs"], #["ParagraphRef"] === entry &, Missing["ParagraphNotFound"]],
+        Missing["NoExtension"]];
+      If[MissingQ[para], para,
+        Module[{gate = iKHGateSource[iKHParaSource[para], ctx]},
+          <|"Kind" -> "KHPara", "URI" -> entry, "Counter" -> Missing[],
+            "Body" -> Lookup[para, "Body", ""], "Released" -> gate["Permit"], "Why" -> gate["Why"],
+            "PrivacyLevel" -> Lookup[para, "PrivacyLevel", 0.6]|>]],
+    StringQ[entry],
+      (* 生テキスト(owner の query/思考文脈)。gate 対象外(candidate 側で gate) *)
+      <|"Kind" -> "Text", "URI" -> "svtext:" <> IntegerString[Hash[entry], 36],
+        "Counter" -> Missing[], "Body" -> entry, "Released" -> True, "Why" -> {},
+        "PrivacyLevel" -> 0.0|>,
+    True, Missing["UnresolvableEntry"]]];
+
+iKHSpaceOf[refs_List] := Which[
+  refs === {}, Missing["NoTopics"],
+  AllTrue[refs, StringMatchQ[#, "svtopic:oops:" ~~ ___] &], "OOPSSeed",
+  AllTrue[refs, StringMatchQ[#, "svtopic:kh:" ~~ ___] || StringMatchQ[#, "svtopic:extracted:" ~~ ___] &], "KHExtension",
+  True, "Mixed"];
+
+Options[SourceVaultKnowledgeHomeTopicPosition] = {"ReleaseContext" -> "oops-corpus", "State" -> Automatic,
+  "RelationGraph" -> Automatic, "IncludeRelation" -> True, "MaxRelationTopics" -> 6};
+SourceVaultKnowledgeHomeTopicPosition[entry_, OptionsPattern[]] := Module[
+  {st, ctx, res, relGraph, paras, assignRows, evid, prose, unknownMass, weights, anchors, refs},
+  st = iKHState[OptionValue["State"]];
+  ctx = OptionValue["ReleaseContext"];
+  iKHEnsureReleaseContexts[];
+  res = iKHResolveEntry[st, entry, ctx];
+  If[MissingQ[res], Return[res]];
+  If[! TrueQ[res["Released"]],
+    Return[<|"ObjectClass" -> "SourceVaultKnowledgeHomeTopicPosition", "ObjectURI" -> res["URI"],
+      "Released" -> False, "Why" -> res["Why"]|>]];  (* low-leak: evidence/weights を出さない *)
+  relGraph = OptionValue["RelationGraph"] /. Automatic :> Lookup[st, "RelationGraph", None];
+  If[! TrueQ[OptionValue["IncludeRelation"]], relGraph = None];
+  paras = Quiet@Check[SourceVaultParseMailParagraphs[ToString@res["Body"]], {}];
+  assignRows = If[AssociationQ[st["SurfaceIndex"]],
+    Quiet@Check[SourceVaultAssignParagraphTopics[paras, st["SurfaceIndex"],
+      "RelationGraph" -> relGraph, "MaxRelationTopics" -> OptionValue["MaxRelationTopics"]], {}],
+    (* surface index 無し: 明示マーカーのみ *)
+    Module[{expl = Quiet@Check[SourceVaultExtractExplicitTopics[ToString@res["Body"]], {}]},
+      {<|"ParagraphIndex" -> 1, "Kind" -> "Prose",
+         "Assignments" -> (Append[#, "AssignmentKind" -> "ExplicitOOPS"] & /@ expl)|>}]];
+  (* TopicEvidence: 段落×assignment を根拠として保持(P1-02 provenance) *)
+  evid = Flatten@Map[Function[row,
+    Map[Function[a,
+      <|"TopicRef" -> a["TopicItemRef"],
+        "Weight" -> Lookup[a, "Confidence", 0.5],
+        "Method" -> Switch[Lookup[a, "AssignmentKind", ""],
+          "ExplicitOOPS", "OwnerConfirmed", "SeedMatched", "SeedMatched",
+          "RelationExpanded", "RelationExpanded", _, "SeedMatched"],
+        "SourceSegmentRef" -> res["URI"] <> "#p" <> ToString[Lookup[row, "ParagraphIndex", 0]],
+        "Confidence" -> Lookup[a, "Confidence", 0.5],
+        "PrivacyLevel" -> res["PrivacyLevel"]|>],
+      Lookup[row, "Assignments", {}]]],
+    assignRows];
+  (* gold(mail-to-item の人手付与)も OwnerConfirmed evidence として合流(mail entry のみ) *)
+  If[! MissingQ[res["Counter"]] && AssociationQ[Lookup[st, "MailToItem", None]],
+    evid = Join[evid, Map[Function[g,
+      <|"TopicRef" -> "svtopic:oops:" <> g["Namespace"] <> ":" <> ToString[g["LocalId"]],
+        "Weight" -> 1.0, "Method" -> "OwnerConfirmed",
+        "SourceSegmentRef" -> res["URI"] <> "#gold:" <> ToString@Lookup[g, "Role", ""],
+        "Confidence" -> 1.0, "PrivacyLevel" -> res["PrivacyLevel"]|>],
+      Lookup[st["MailToItem"], res["Counter"], {}]]]];
+  (* UnknownMass: topic の付かない prose 段落の割合(無理に押し込まない。P1-01) *)
+  prose = Select[assignRows, Lookup[#, "Kind", "Prose"] === "Prose" &];
+  unknownMass = If[prose === {}, 1.0,
+    N[Count[prose, row_ /; Lookup[row, "Assignments", {}] === {}] / Length[prose]]];
+  weights = Merge[(#["TopicRef"] -> #["Weight"]) & /@ evid, Total];
+  If[Length[weights] > 0,
+    weights = weights / Sqrt[Total[Values[weights]^2]]];  (* L2 正規化 *)
+  anchors = DeleteDuplicates[#["TopicRef"] & /@ Select[evid, #["Method"] === "OwnerConfirmed" &]];
+  refs = Keys[weights];
+  <|"ObjectClass" -> "SourceVaultKnowledgeHomeTopicPosition", "ObjectURI" -> res["URI"],
+    "Released" -> True,
+    "TopicWeights" -> weights, "TopicEvidence" -> evid,
+    "AnchorTopicRefs" -> anchors, "UnknownMass" -> unknownMass,
+    "Space" -> iKHSpaceOf[refs], "MaxInputPrivacyLevel" -> res["PrivacyLevel"],
+    "VocabularyVersion" -> "sidx:" <> ToString[Length[Lookup[st, "SurfaceIndex", <||>] /. None -> <||>]] <>
+      ":lbl:" <> ToString[Length[Lookup[st, "RefLabel", <||>]]],
+    "PipelineVersion" -> $svKHPositionPipelineVersion,
+    "InputDigest" -> IntegerString[Hash[ToString@res["Body"]], 36],
+    "DerivedAtUTC" -> iKHNowUTC[]|>];
+
+(* candidate(mail/KH para)の重なりスコア: query 位置の重みを共有 topic 上で合算(決定的・軽量) *)
+iKHOverlapScore[weights_Association, candRefs_List] :=
+  Total[Lookup[weights, #, 0.] & /@ candRefs];
+
+Options[SourceVaultKnowledgeHomeNeighborhoodSearch] = {"ReleaseContext" -> "oops-corpus",
+  "State" -> Automatic, "Limit" -> 10, "ExcludeRefs" -> {}, "IncludeKH" -> True};
+SourceVaultKnowledgeHomeNeighborhoodSearch[entry_, OptionsPattern[]] := Module[
+  {st, ctx, pos, weights, selfURI, rows, khRows, excl},
+  st = iKHState[OptionValue["State"]];
+  ctx = OptionValue["ReleaseContext"];
+  pos = If[AssociationQ[entry] && KeyExistsQ[entry, "TopicWeights"], entry,
+    SourceVaultKnowledgeHomeTopicPosition[entry, "ReleaseContext" -> ctx, "State" -> st]];
+  If[MissingQ[pos] || ! TrueQ[Lookup[pos, "Released", False]], Return[{}]];
+  weights = pos["TopicWeights"];
+  selfURI = Lookup[pos, "ObjectURI", ""];
+  excl = OptionValue["ExcludeRefs"];
+  (* mail candidates(gate 経由: deny は除外) *)
+  rows = Map[Function[c,
+    Module[{mt = st["MailTopics"][c], score, mail},
+      score = iKHOverlapScore[weights, mt["Refs"]];
+      If[score <= 0. || MemberQ[excl, iKHMailRef[c]] || iKHMailRef[c] === selfURI, Nothing,
+        mail = st["MailByCounter"][c];
+        If[! iKHGate[mail, ctx]["Permit"], Nothing,
+          <|"Ref" -> iKHMailRef[c], "Kind" -> "Mail", "Counter" -> c,
+            "Subject" -> Lookup[mail, "Subject", ""], "Date" -> Lookup[mail, "Date", ""],
+            "Score" -> Round[score, 0.001],
+            "SharedTopicLabels" -> (Lookup[st["TopicLabel"], #, #] & /@
+              Select[mt["Refs"], Lookup[weights, #, 0.] > 0. &])|>]]]],
+    st["Counters"]];
+  (* KH paragraph candidates *)
+  khRows = If[! TrueQ[OptionValue["IncludeKH"]] || ! AssociationQ[Lookup[st, "Extension", None]], {},
+    Map[Function[p,
+      Module[{score = iKHOverlapScore[weights, Lookup[p, "TopicRefs", {}]], ref = p["ParagraphRef"]},
+        If[score <= 0. || MemberQ[excl, ref] || ref === selfURI ||
+            ! iKHGateSource[iKHParaSource[p], ctx]["Permit"], Nothing,
+          <|"Ref" -> ref, "Kind" -> "KHPara", "Counter" -> Missing[],
+            "Subject" -> StringTake[StringReplace[Lookup[p, "Body", ""], "\n" -> " "], UpTo[60]],
+            "Date" -> Lookup[p, "CreatedAtUTC", ""], "Score" -> Round[score, 0.001],
+            "SharedTopicLabels" -> (Lookup[st["TopicLabel"], #, #] & /@
+              Select[Lookup[p, "TopicRefs", {}], Lookup[weights, #, 0.] > 0. &])|>]]],
+      st["Extension"]["Paragraphs"]]];
+  Take[ReverseSortBy[Join[rows, khRows], #["Score"] &], UpTo[OptionValue["Limit"]]]];
+
+(* ---- 3 リング提案(資料 p11)。newer は bounded な一特徴(I-5 / P1-04) ---- *)
+If[! ListQ[SourceVault`$SourceVaultKnowledgeHomeDismissed],
+  SourceVault`$SourceVaultKnowledgeHomeDismissed = {}];
+SourceVaultKnowledgeHomeDismissSuggestion[ref_String] :=
+  (AppendTo[SourceVault`$SourceVaultKnowledgeHomeDismissed, ref];
+   SourceVault`$SourceVaultKnowledgeHomeDismissed);
+
+$svKHNewerBoost = 0.2;  (* bounded: 類似度が主、newer は加点上限 0.2 *)
+
+Options[SourceVaultKnowledgeHomeSuggestNextNodes] = {"ReleaseContext" -> "oops-corpus",
+  "State" -> Automatic, "RelationGraph" -> Automatic, "LimitPerRing" -> 5, "ExcludeRefs" -> {}};
+SourceVaultKnowledgeHomeSuggestNextNodes[entry_, OptionsPattern[]] := Module[
+  {st, ctx, pos, refC, excl, nbrs, ring1, ring2, ring3, relGraph, expanded, expRefs, viaOf},
+  st = iKHState[OptionValue["State"]];
+  ctx = OptionValue["ReleaseContext"];
+  (* リング意味論: ring1/近傍 = core(OwnerConfirmed+SeedMatched)の類似。
+     relation 展開は ring3 の役割なので、query 位置は core のみで作る。 *)
+  pos = SourceVaultKnowledgeHomeTopicPosition[entry, "ReleaseContext" -> ctx, "State" -> st,
+    "IncludeRelation" -> False];
+  If[MissingQ[pos] || ! TrueQ[Lookup[pos, "Released", False]], Return[{}]];
+  refC = If[IntegerQ[entry], entry, iKHCounterOfRef[ToString[entry]]];  (* 参照時点(mail のみ) *)
+  excl = Join[OptionValue["ExcludeRefs"], SourceVault`$SourceVaultKnowledgeHomeDismissed];
+  nbrs = SourceVaultKnowledgeHomeNeighborhoodSearch[pos, "ReleaseContext" -> ctx, "State" -> st,
+    "Limit" -> 4*OptionValue["LimitPerRing"], "ExcludeRefs" -> excl];
+  (* Ring1: similar topics and newer(前進バイアス。newer 加点は bounded) *)
+  ring1 = Map[Function[row,
+    Module[{newer = ! MissingQ[refC] && IntegerQ[row["Counter"]] && row["Counter"] > refC},
+      Join[row, <|"Ring" -> 1,
+        "RankScore" -> row["Score"] + If[newer, $svKHNewerBoost, 0.],
+        "Reasons" -> DeleteCases[{"SimilarTopics: " <> StringRiffle[Take[row["SharedTopicLabels"], UpTo[3]], ", "],
+          If[newer, "Newer", Nothing]}, Nothing]|>]]],
+    nbrs];
+  ring1 = Take[ReverseSortBy[ring1, #["RankScore"] &], UpTo[OptionValue["LimitPerRing"]]];
+  (* Ring2: direct neighborhood(引用/被引用。mail entry のみ) *)
+  ring2 = If[MissingQ[refC], {},
+    Module[{links = Join[
+        Lookup[Lookup[st, "QuoteOut", <||>], refC, {}][[All, "ToCounter"]],
+        Lookup[Lookup[st, "QuoteIn", <||>], refC, {}][[All, "FromCounter"]]]},
+      Map[Function[c2,
+        If[MissingQ[c2] || ! KeyExistsQ[st["MailByCounter"], c2] ||
+            MemberQ[excl, iKHMailRef[c2]] || ! iKHGate[st["MailByCounter"][c2], ctx]["Permit"], Nothing,
+          <|"Ref" -> iKHMailRef[c2], "Kind" -> "Mail", "Counter" -> c2,
+            "Subject" -> st["MailByCounter"][c2]["Subject"], "Date" -> st["MailByCounter"][c2]["Date"],
+            "Score" -> 1., "Ring" -> 2, "RankScore" -> 1.,
+            "SharedTopicLabels" -> {}, "Reasons" -> {"QuoteEdge"}|>]],
+        Take[DeleteDuplicates[DeleteMissing[links]], UpTo[OptionValue["LimitPerRing"]]]]]];
+  (* Ring3: relation graph 経由の周辺(query topic の 1-hop 先を担う object) *)
+  relGraph = OptionValue["RelationGraph"] /. Automatic :> Lookup[st, "RelationGraph", None];
+  ring3 = If[! AssociationQ[relGraph], {},
+    Module[{seedRefs = Keys[pos["TopicWeights"]]},
+      expanded = Quiet@Check[SourceVaultExpandTopicsByRelation[seedRefs, relGraph,
+        "MaxTotal" -> 3*OptionValue["LimitPerRing"]], {}];
+      expRefs = Lookup[#, "To", Missing[]] & /@ expanded;
+      viaOf = Association[(Lookup[#, "To", ""] -> Lookup[#, "ViaSeed", ""]) & /@ expanded];
+      Map[Function[c3,
+        Module[{mt = st["MailTopics"][c3], hits},
+          hits = Intersection[mt["Refs"], DeleteMissing[expRefs]];
+          If[hits === {} || MemberQ[excl, iKHMailRef[c3]] ||
+              iKHOverlapScore[pos["TopicWeights"], mt["Refs"]] > 0. ||  (* ring1 と重複する直接共有は除外 *)
+              ! iKHGate[st["MailByCounter"][c3], ctx]["Permit"], Nothing,
+            <|"Ref" -> iKHMailRef[c3], "Kind" -> "Mail", "Counter" -> c3,
+              "Subject" -> st["MailByCounter"][c3]["Subject"], "Date" -> st["MailByCounter"][c3]["Date"],
+              "Score" -> 0.5, "Ring" -> 3, "RankScore" -> 0.5,
+              "SharedTopicLabels" -> (Lookup[st["TopicLabel"], #, #] & /@ hits),
+              "Reasons" -> {"RelatedTopic via " <>
+                StringRiffle[DeleteDuplicates[Lookup[st["TopicLabel"], Lookup[viaOf, #, ""], ""] & /@ hits], ", "]}|>]]],
+        st["Counters"]]]];
+  ring3 = Take[ring3, UpTo[OptionValue["LimitPerRing"]]];
+  Join[ring1, ring2, ring3]];
+
+Options[SourceVaultKnowledgeHomeSuggestView] = Options[SourceVaultKnowledgeHomeSuggestNextNodes];
+SourceVaultKnowledgeHomeSuggestView[entry_, opts : OptionsPattern[]] := Module[
+  {rows = SourceVaultKnowledgeHomeSuggestNextNodes[entry, opts]},
+  If[rows =!= {},
+    Dataset[<|"Ring" -> #["Ring"], "Ref" -> #["Ref"], "Subject" -> #["Subject"],
+        "Score" -> #["RankScore"], "Reasons" -> StringRiffle[#["Reasons"], " / "]|> & /@ rows],
+    (* 提案なし: 黙って空にせず理由を明示(P1-01: Unknown を明示・無理に押し込まない) *)
+    iKHSuggestEmptyExplain[entry,
+      FilterRules[{opts}, Options[SourceVaultKnowledgeHomeTopicPosition]]]]];
+
+(* 位置推定不能/gate deny の説明パネル。語彙外候補(ExtractCandidateTopics)と mint 手順を提示 *)
+iKHSuggestEmptyExplain[entry_, posOpts_List] := Module[
+  {st, pos, cands, candLabels},
+  st = iKHState[Automatic];
+  pos = Quiet@Check[SourceVaultKnowledgeHomeTopicPosition[entry, Sequence @@ posOpts], Missing["PositionError"]];
+  Which[
+    MissingQ[pos],
+      Column[{Style["提案なし: entry を解決できません。", Bold], Style[ToString[pos], GrayLevel[0.5], 10]}],
+    ! TrueQ[Lookup[pos, "Released", False]],
+      Column[{Style["提案なし: この object は現在の release context では非公開です。", Bold],
+        Style[StringRiffle[Lookup[pos, "Why", {}], ", "], GrayLevel[0.5], 10]}],
+    Length[Lookup[pos, "TopicWeights", <||>]] === 0,
+      cands = If[StringQ[entry],
+        Quiet@Check[SourceVaultExtractCandidateTopics[entry,
+          "KnownSurfaceIndex" -> Lookup[st, "SurfaceIndex", None], "Limit" -> 5], {}], {}];
+      candLabels = Lookup[#, "Surface", ""] & /@ cands;
+      Column[Flatten@{
+        Style["提案なし: topic 空間で位置を推定できません(UnknownMass = 1)。", Bold],
+        Style["この表現は Knowledge Home の語彙(seed 辞書+KH 拡張)に無い未マップ領域です。誤った topic へは押し込みません。", 11],
+        If[candLabels =!= {},
+          {Style["新トピック候補(語彙外抽出):", Bold, 11],
+           Style["  " <> StringRiffle[candLabels, " / "], 11, RGBColor[0.1, 0.3, 0.7]],
+           Style["  → SourceVaultKnowledgeHomeMintItem[\"" <> First[candLabels] <>
+             "\"] で正規 topic 化し、Append で追記すると次回から位置が付きます。", 10, GrayLevel[0.35]]},
+          {}],
+        Style["全文検索: SourceVaultOOPSSearchThreads[query] / KH 追記検索: SourceVaultKnowledgeHomeSearch[query]", 10, GrayLevel[0.5]]},
+        Spacings -> 0.6],
+    True,
+      Column[{Style["提案なし: 位置は推定できましたが、共有 topic を持つ object が見つかりません。", Bold],
+        Style["topics: " <> StringRiffle[Take[Keys[pos["TopicWeights"]], UpTo[5]], ", "], GrayLevel[0.5], 10]}]]];
 
 End[];
 
