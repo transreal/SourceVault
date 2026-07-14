@@ -897,11 +897,11 @@ iWebChatModel[override_:Automatic] := Module[
    model="" で既定モデル、それ以外は $ClaudeModel を一時切替。 *)
 iWebChatCloud[prompt_String, model_String] := Module[{r},
   If[Length[Names["ClaudeCode`ClaudeQueryBg"]] === 0, Return[$Failed]];
-  (* 1H-S shadow: LLM boundary shadow(observe-only。トグル off 時ゼロコスト) *)
-  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-    Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["servicemanager:iWebChatCloud",
+  (* 1H-S boundary gate(Shadow=記録 / Warn=Message / Enforce=拒否。capbroker 不在は fail-open) *)
+  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["servicemanager:iWebChatCloud",
       <|"Provider" -> "claudecode", "Model" -> If[model === "", Missing["Default"], model],
-        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+    Return[$Failed]];
   r = Quiet @ Check[
     If[model === "", ClaudeCode`ClaudeQueryBg[prompt],
       Block[{ClaudeCode`$ClaudeModel = model}, ClaudeCode`ClaudeQueryBg[prompt]]],
@@ -916,12 +916,12 @@ iWebChatBilledAPI[prompt_String, model_String] := Module[{key, m, body, resp, j,
   m = If[model === "", SourceVault`$SourceVaultWebBilledModel, model];
   body = ExportByteArray[<|"model" -> m, "max_tokens" -> 1500,
     "messages" -> {<|"role" -> "user", "content" -> prompt|>}|>, "RawJSON"];
-  (* 1H-S shadow: LLM boundary shadow(observe-only。鍵は envelope に含めない) *)
-  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-    Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["servicemanager:iWebChatBilledAPI",
+  (* 1H-S boundary gate(鍵は envelope に含めない。capbroker 不在は fail-open) *)
+  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["servicemanager:iWebChatBilledAPI",
       <|"Provider" -> "anthropic", "Model" -> m,
         "Deployment" -> "https://api.anthropic.com/v1/messages",
-        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+    Return[$Failed]];
   resp = Quiet @ Check[URLRead[HTTPRequest["https://api.anthropic.com/v1/messages",
     <|"Method" -> "POST", "Headers" -> {"x-api-key" -> key,
        "anthropic-version" -> "2023-06-01", "content-type" -> "application/json"},
@@ -939,12 +939,12 @@ iWebChatLocal[prompt_String, modelOverride_] := Module[{key, model, body, resp, 
   body = ExportByteArray[<|"model" -> model,
     "messages" -> {<|"role" -> "user", "content" -> prompt|>},
     "temperature" -> 0.2, "stream" -> False, "max_tokens" -> 1500|>, "RawJSON"];
-  (* 1H-S shadow: LLM boundary shadow(observe-only) *)
-  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-    Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["servicemanager:iWebChatLocal",
+  (* 1H-S boundary gate(capbroker 不在は fail-open) *)
+  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["servicemanager:iWebChatLocal",
       <|"Provider" -> "openai-compat", "Model" -> model,
         "Deployment" -> SourceVault`$SourceVaultWebLLMBase <> "/v1/chat/completions",
-        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+    Return[$Failed]];
   (* chat モデルが未ロードだと JIT で長時間ハングしコマンドループを塞ぐので、短めの
      TimeConstraint で早期失敗させる (失敗時は /pdfask が evidence のみへ degrade)。 *)
   resp = Quiet @ Check[URLRead[HTTPRequest[SourceVault`$SourceVaultWebLLMBase <> "/v1/chat/completions",
@@ -1744,7 +1744,8 @@ Options[SourceVaultServiceMain] = {"HeartbeatIntervalSeconds" -> 1, "MaxSeconds"
 SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Module[
   {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath,
    lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs,
-   lastDispatchAbs = 0, dispatchCounter = 0, dispatchState = None},
+   lastDispatchAbs = 0, dispatchCounter = 0, dispatchState = None,
+   lastCaneAnomalyAbs = 0},
   dir = iServiceRuntimeDir[serviceId];
   If[FailureQ[dir], Return[dir]];
   iSMEnsureDir[dir];
@@ -1837,6 +1838,24 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
         Quiet @ TimeConstrained[
           Check[SourceVault`SourceVaultDiagnosticsIngestSpool[], Null], 30, Null];
         lastDiagIngestAbs = AbsoluteTime[]];
+      (* Cane 1H-A: anomaly ワークフローの schedule tick (owner 登録の ScheduleSpec が
+         Enabled のときだけ実行。observe-only・冪等・enforcement なし=I-16。
+         due 判定は tick 内 (profile の IntervalSeconds)。ここの間隔は判定周期のみ。 *)
+      If[Length[DownValues[SourceVault`SourceVaultCaneAnomalyScheduleTick]] > 0 &&
+         (AbsoluteTime[] - lastCaneAnomalyAbs) >
+           If[NumericQ[SourceVault`$SourceVaultCaneAnomalyTickIntervalSeconds],
+             SourceVault`$SourceVaultCaneAnomalyTickIntervalSeconds, 600],
+        Module[{caneR},
+          caneR = Quiet @ TimeConstrained[
+            Check[SourceVault`SourceVaultCaneAnomalyScheduleTick[], <|"Status" -> "Error"|>],
+            300, <|"Status" -> "TimedOut"|>];
+          lastCaneAnomalyAbs = AbsoluteTime[];
+          (* Disabled/NotDue はログしない (量の配慮)。実行・失敗のみ記録 *)
+          If[AssociationQ[caneR] && MemberQ[{"Ran", "Reused", "RunFailed", "Error", "TimedOut"},
+              Lookup[caneR, "Status", ""]],
+            iServiceLog[dir, "CaneAnomalyScheduleTick",
+              <|"Result" -> Lookup[caneR, "Status", "?"],
+                "RunId" -> Lookup[caneR, "RunId", Null]|>]]]];
       (* headless dispatch (配車専用): opt-in マシンでのみ、enqueue された
          CatalogWorkflow ジョブを拾い SourceVaultRunWorkflowAsync (外部プロセス)
          へ委譲する。サブカーネルプールなし・トリガー評価なし。opt-in 判定は

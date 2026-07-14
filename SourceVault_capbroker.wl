@@ -73,8 +73,28 @@ SourceVaultLLMBoundaryShadowCheck::usage =
   "の結果を内容最小化 event(LLMBoundaryShadowRecorded。本文・token/MAC は記録しない)として記録する。" <>
   "決して Failure を返さず送信をブロックしない。トグル off 時は即 <|Status->Disabled|>。";
 SourceVaultLLMBoundaryShadowStats::usage =
-  "SourceVaultLLMBoundaryShadowStats[opts] は LLMBoundaryShadowRecorded event を集計し、CallCount/" <>
-  "NoTokenCount/VerifiedCount/MismatchCount/TokenCoverageRate/ByEntrypoint 等を返す(昇格判断の材料)。";
+  "SourceVaultLLMBoundaryShadowStats[opts] は LLMBoundaryShadowRecorded/LLMBoundaryGateRecorded event を" <>
+  "集計し、CallCount/NoTokenCount/VerifiedCount/MismatchCount/RefusedCount/TokenCoverageRate/ByEntrypoint/" <>
+  "ByMode 等を返す(昇格判断の材料)。";
+
+$SourceVaultLLMBoundaryMode::usage =
+  "$SourceVaultLLMBoundaryMode は LLM boundary の段階(\"Shadow\"|\"Warn\"|\"Enforce\")。既定 \"Shadow\"" <>
+  "(観測のみ)。\"Warn\"=非 Verified に Message を出すが送信続行。\"Enforce\"=Verified token 無しの送信を拒否" <>
+  "(破壊的。全入口の token 配線後に owner 判断で昇格)。";
+$SourceVaultLLMBoundaryEnforceList::usage =
+  "$SourceVaultLLMBoundaryEnforceList は entrypoint 単位の段階昇格リスト(EntrypointId のリスト。既定 {})。" <>
+  "記載された entrypoint はグローバル mode に関わらず Enforce 扱い(token 配線済み入口から順に昇格する用)。";
+SourceVaultLLMBoundaryGate::usage =
+  "SourceVaultLLMBoundaryGate[entrypointId, envelope] / [entrypointId, envelope, token] は LLM 送信直前の" <>
+  "段階ゲート。実効 mode(EnforceList 優先→$SourceVaultLLMBoundaryMode)に従い、Shadow=記録のみ/" <>
+  "Warn=Message+続行/Enforce=非 Verified を拒否(Proceed->False。verify は one-shot consume)。" <>
+  "戻り値 <|Proceed, Status, Mode, EntrypointId, HasToken|>。event=LLMBoundaryGateRecorded(内容最小化)。";
+SourceVaultLLMBoundaryGateRefusedQ::usage =
+  "SourceVaultLLMBoundaryGateRefusedQ[entrypointId, envelope] / [.., token] は boundary hook 用の述語。" <>
+  "gate を実行し、Enforce で拒否されたときのみ True。capbroker 不在・非 active 時は False(fail-open)。";
+SourceVaultLLMBoundaryActiveQ::usage =
+  "SourceVaultLLMBoundaryActiveQ[entrypointId] は当該 entrypoint で boundary 観測/検証が有効かを返す" <>
+  "(shadow トグル on または実効 mode が Shadow 以外)。呼び出し元の token 発行(PrepareLLMInput)条件に使う。";
 
 Begin["`Private`"];
 
@@ -414,23 +434,113 @@ SourceVaultLLMBoundaryShadowCheck[___] := <|"Status" -> "BadArguments", "ShadowM
 
 Options[SourceVaultLLMBoundaryShadowStats] = {"Limit" -> 2000};
 SourceVaultLLMBoundaryShadowStats[OptionsPattern[]] := Module[{evs},
-  evs = Quiet @ Check[SourceVaultTransactionLog["Limit" -> OptionValue["Limit"],
-    "EventClass" -> "LLMBoundaryShadowRecorded"], {}];
-  If[! ListQ[evs], evs = {}];
+  evs = Join[
+    Replace[Quiet @ Check[SourceVaultTransactionLog["Limit" -> OptionValue["Limit"],
+      "EventClass" -> "LLMBoundaryShadowRecorded"], {}], Except[_List] -> {}],
+    Replace[Quiet @ Check[SourceVaultTransactionLog["Limit" -> OptionValue["Limit"],
+      "EventClass" -> "LLMBoundaryGateRecorded"], {}], Except[_List] -> {}]];
   <|"CallCount" -> Length[evs],
     "NoTokenCount" -> Count[evs, e_ /; Lookup[e, "Status", ""] === "NoToken"],
     "VerifiedCount" -> Count[evs, e_ /; Lookup[e, "Status", ""] === "Verified"],
     "MismatchCount" -> Count[evs, e_ /; MemberQ[{"RequestMismatch", "TokenExpired",
-      "BadMAC", "TokenAlreadyUsed", "NoLedgerRecord", "BadToken", "ShadowVerifyError"},
-      Lookup[e, "Status", ""]]],
+      "BadMAC", "TokenAlreadyUsed", "NoLedgerRecord", "BadToken", "ShadowVerifyError",
+      "VerifyError"}, Lookup[e, "Status", ""]]],
+    "RefusedCount" -> Count[evs, e_ /; Lookup[e, "Proceed", True] === False],
     "TokenCoverageRate" -> If[evs === {}, Missing["NoData"],
       N[Count[evs, e_ /; TrueQ[Lookup[e, "HasToken", False]]]/Length[evs]]],
     "ByEntrypoint" -> If[evs === {}, <||>,
       GroupBy[evs, Lookup[#, "EntrypointId", "?"] &,
         Tally[Lookup[#, "Status", "?"] & /@ #] &]],
+    "ByMode" -> If[evs === {}, <||>,
+      Counts[Lookup[#, "Mode", "Shadow"] & /@ evs]],
     "UnregisteredSeen" -> Union[Lookup[#, "EntrypointId", "?"] & /@
       Select[evs, ! TrueQ[Lookup[#, "Registered", False]] &]],
     "RegisteredEntrypoints" -> Keys[$svLLMEntrypoints]|>];
+
+(* ============================================================
+   1H-S 移行第二段: warn / enforce 段階ゲート(2026-07-14)
+   - 実効 mode: EnforceList(entrypoint 単位の段階昇格)→ グローバル mode。
+   - Shadow: 記録のみ(shadow トグル on のときだけ)。Warn: 非 Verified に
+     Message を出すが送信続行+常時記録。Enforce: 非 Verified の送信を拒否
+     (Proceed->False)+常時記録。verify は Enforce のみ one-shot consume
+     (正規 SourceVaultVerifyPreparedRequest)、Shadow/Warn は非消費。
+   - RunRef/StepRef は token 側から envelope へ補完(env 側の値が優先)=
+     呼び出し元で mint した token を境界 env(RunRef を知らない)で照合可能に。
+   - gate は総関数(決して throw しない)。hook は RefusedQ 述語で結線し、
+     capbroker 不在時は If 条件が非 Boolean のまま=fail-open。
+   ============================================================ *)
+
+If[! ValueQ[$SourceVaultLLMBoundaryMode], $SourceVaultLLMBoundaryMode = "Shadow"];
+If[! ValueQ[$SourceVaultLLMBoundaryEnforceList], $SourceVaultLLMBoundaryEnforceList = {}];
+
+iCapBoundaryEffectiveMode[epId_] := Which[
+  ListQ[$SourceVaultLLMBoundaryEnforceList] &&
+    MemberQ[$SourceVaultLLMBoundaryEnforceList, epId], "Enforce",
+  MemberQ[{"Shadow", "Warn", "Enforce"}, $SourceVaultLLMBoundaryMode],
+    $SourceVaultLLMBoundaryMode,
+  True, "Shadow"];
+
+SourceVaultLLMBoundaryActiveQ[epId_String] :=
+  TrueQ[$SourceVaultLLMBoundaryShadow] || iCapBoundaryEffectiveMode[epId] =!= "Shadow";
+SourceVaultLLMBoundaryActiveQ[___] := False;
+
+(* token の RunRef/StepRef を envelope に補完(env 側が優先)。mint 時 env と一致させる *)
+iCapAdoptTokenRefs[env_Association, token_Association] :=
+  Join[DeleteMissing @ KeyTake[token, {"RunRef", "StepRef"}], env];
+iCapAdoptTokenRefs[env_, _] := env;
+
+SourceVaultLLMBoundaryGate::refused =
+  "LLM boundary enforce: entrypoint `1` の送信を拒否しました(status: `2`)。";
+SourceVaultLLMBoundaryGate::warn =
+  "LLM boundary warn: entrypoint `1` status `2`(送信は続行)。";
+
+SourceVaultLLMBoundaryGate[epId_String, env_Association] :=
+  SourceVaultLLMBoundaryGate[epId, env, Missing["NoToken"]];
+SourceVaultLLMBoundaryGate[epId_String, env_Association, token_] := Module[
+  {mode, recording, hasToken, envN, status, verified, proceed},
+  mode = iCapBoundaryEffectiveMode[epId];
+  recording = TrueQ[$SourceVaultLLMBoundaryShadow] || mode =!= "Shadow";
+  If[! recording, Return[<|"Proceed" -> True, "Status" -> "Disabled", "Mode" -> mode|>]];
+  hasToken = AssociationQ[token];
+  envN = If[hasToken, iCapAdoptTokenRefs[env, token], env];
+  status = Which[
+    ! hasToken, "NoToken",
+    mode === "Enforce",
+      Module[{v = Quiet @ Check[SourceVaultVerifyPreparedRequest[token, envN], $Failed]},
+        Which[
+          AssociationQ[v] && Lookup[v, "Status", ""] === "Verified", "Verified",
+          FailureQ[v], ToString[v[[1]]],
+          True, "VerifyError"]],
+    True, Quiet @ Check[iCapShadowVerifyPrepared[token, envN], "ShadowVerifyError"]];
+  verified = status === "Verified";
+  proceed = verified || mode =!= "Enforce";
+  Quiet @ Check[SourceVaultAppendEvent[<|"EventClass" -> "LLMBoundaryGateRecorded",
+    "EntrypointId" -> epId, "Mode" -> mode, "Proceed" -> proceed,
+    "Provider" -> Lookup[env, "Provider", Missing[]],
+    "Model" -> Lookup[env, "Model", Missing[]],
+    "Deployment" -> Lookup[env, "Deployment", Missing[]],
+    "RunRef" -> Lookup[envN, "RunRef", Missing[]],
+    "StepRef" -> Lookup[envN, "StepRef", Missing[]],
+    "EnvelopeDigest" -> Quiet @ Check[iCapEnvelopeDigest[envN], Missing["DigestFailed"]],
+    "MessagesChars" -> Quiet @ Check[StringLength[ToString[Lookup[env, "Messages", {}]]], Missing[]],
+    "HasToken" -> hasToken, "Status" -> status,
+    "Registered" -> KeyExistsQ[$svLLMEntrypoints, epId],
+    "ShadowMode" -> (mode === "Shadow"), "PolicyVersion" -> "prepllm-gate-v0"|>], Null];
+  Which[
+    mode === "Warn" && ! verified, Message[SourceVaultLLMBoundaryGate::warn, epId, status],
+    mode === "Enforce" && ! verified, Message[SourceVaultLLMBoundaryGate::refused, epId, status]];
+  <|"Proceed" -> proceed, "Status" -> status, "Mode" -> mode,
+    "EntrypointId" -> epId, "HasToken" -> hasToken|>];
+SourceVaultLLMBoundaryGate[___] := <|"Proceed" -> True, "Status" -> "BadArguments"|>;
+
+SourceVaultLLMBoundaryGateRefusedQ[epId_String, env_Association] :=
+  SourceVaultLLMBoundaryGateRefusedQ[epId, env, Missing["NoToken"]];
+SourceVaultLLMBoundaryGateRefusedQ[epId_String, env_Association, token_] := Module[{g},
+  (* gate は総関数(内部でリスク箇所を全て Quiet@Check 済み)なので素呼び。
+     Quiet/Check で包むと warn/refused の Message が抑止される・fallback を誤発火するので不可 *)
+  g = SourceVaultLLMBoundaryGate[epId, env, token];
+  AssociationQ[g] && Lookup[g, "Proceed", True] === False];
+SourceVaultLLMBoundaryGateRefusedQ[___] := False;
 
 End[];
 

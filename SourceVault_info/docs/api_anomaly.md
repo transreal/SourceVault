@@ -58,6 +58,17 @@ enforcement 権限なし**、OS ScheduledTask は作らない)。
 UnexpectedToolRequestRate)のみ。owner 状態 pair(MailSenderNovelty×OwnerOperationalSignal)は `Active->False,
 ResearchOnly->True`(§5.14 追補)。
 
+### SourceVaultCaneAnomalyScheduleTick[opts](2026-07-14 追加)
+service 低頻度 hook 用の due 判定+実行 tick(servicemanager の service ループから弱結合で定期呼び出し。
+判定周期は `$SourceVaultCaneAnomalyTickIntervalSeconds`(既定 600s)、実行間隔は profile 内 ScheduleSpec の
+IntervalSeconds)。Enabled/Scheduled/非 Paused かつ前回 run から IntervalSeconds 経過のときだけ
+`SourceVaultRunCaneAnomalyWorkflow[]` を **1 回**実行(catch-up は遅延分を多重実行しない)。多重 tick は
+run の idempotency(同一 idemKey→Reused)で安全。**Reused でも pipeline-status の liveness を更新**
+(LastScheduleOutcome 付き。空 streams の縮退で probe が偽 PipelineStale にならない)。決して throw せず
+`<|Status: Disabled|NotDue|Ran|Reused|RunFailed|ProfileUnavailable|>`。Options: "RunFn"(注入シーム=テスト用)。
+有効化手順: owner が `SourceVaultRegisterCaneAnomalySchedule[<|"IntervalSeconds"->86400|>,
+"OwnerAuthorization"->True]` → service 再起動(rule105 §8)で反映。
+
 ### SourceVaultRunCaneAnomalyWorkflow[input, opts] / SourceVaultCaneAnomalyWorkflowRuns[opts]
 観測専用ワークフロー本体。`input=<|"Streams"-><|streamKind->streamData...|>, ("Window")|>`。段階: baseline 維持 →
 stream 別逸脱検知 → lineage 分類 → 事前登録 active pair のみ相関 → hypothesis → report。**owner 状態ストリームは

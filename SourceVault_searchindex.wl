@@ -1086,11 +1086,11 @@ iSVHTTPEmbed[url_String, model_String, auth_, norm_, timeout_, texts_List] := Mo
     {"Content-Type" -> "application/json"}];
   body = Quiet@Check[ExportByteArray[<|"model" -> model, "input" -> texts|>, "RawJSON"], $Failed];
   If[! ByteArrayQ[body], Return[Failure["EmbedEncodeFailed", <||>]]];
-  (* 1H-S shadow: 埋め込み text egress の最終境界(observe-only) *)
-  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-    Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["searchindex:iSVHTTPEmbed",
+  (* 1H-S boundary gate: 埋め込み text egress の最終境界(capbroker 不在は fail-open) *)
+  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["searchindex:iSVHTTPEmbed",
       <|"Provider" -> "openai-compat-embeddings", "Model" -> model, "Deployment" -> url,
-        "Messages" -> texts|>], Null]];
+        "Messages" -> texts|>]],
+    Return[Failure["LLMBoundaryRefused", <|"Entrypoint" -> "searchindex:iSVHTTPEmbed"|>]]];
   (* URLRead[req, {props..}] は props をキーにした Association を返す (リストではない) *)
   resp = TimeConstrained[
     Quiet@Check[URLRead[HTTPRequest[url, <|"Method" -> "POST", "Headers" -> headers, "Body" -> body|>],

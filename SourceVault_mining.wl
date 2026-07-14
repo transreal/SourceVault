@@ -1555,11 +1555,11 @@ SourceVaultQueryLocalLLM[prompt_String, timeout_, temp_ : 0, sys_ : Automatic] :
       If[llm["Model"] =!= "", <|"model" -> llm["Model"]|>, <||>]];
     body = Quiet@Check[StringToByteArray[Developer`WriteRawJSONString[req], "UTF-8"], $Failed];
     If[body === $Failed, Return[Missing["EncodeFailed"]]];
-    (* 1H-S shadow: LLM boundary shadow(observe-only。トグル off 時ゼロコスト) *)
-    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-      Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["mining:SourceVaultQueryLocalLLM",
+    (* 1H-S boundary gate(Shadow=記録 / Warn=Message / Enforce=拒否。capbroker 不在は fail-open) *)
+    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["mining:SourceVaultQueryLocalLLM",
         <|"Provider" -> "openai-compat", "Model" -> llm["Model"], "Deployment" -> llm["URL"],
-          "Messages" -> req["messages"]|>], Null]];
+          "Messages" -> req["messages"]|>]],
+      Return[Missing["LLMBoundaryRefused"]]];
     resp = Quiet@Check[URLRead[HTTPRequest[llm["URL"],
       <|"Method" -> "POST",
         "Headers" -> {"Content-Type" -> "application/json",
@@ -1752,12 +1752,12 @@ iSVMBuildLLMHTTPRequest[prompt_String, temp_, sys_] :=
       If[llm["Model"] =!= "", <|"model" -> llm["Model"]|>, <||>]];
     body = Quiet@Check[StringToByteArray[Developer`WriteRawJSONString[req], "UTF-8"], $Failed];
     If[body === $Failed, Return[$Failed]];
-    (* 1H-S shadow: 非同期 URLSubmit 経路の最終境界(同期経路とは別。observe-only。
-       本関数は iSVMSubmitLLMAsync 専用なのでここが送信直前) *)
-    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-      Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["mining:iSVMSubmitLLMAsync",
+    (* 1H-S boundary gate: 非同期 URLSubmit 経路の最終境界(同期経路とは別。
+       本関数は iSVMSubmitLLMAsync 専用なのでここが送信直前。拒否は $Failed=呼び出し側で callback[$Failed]) *)
+    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["mining:iSVMSubmitLLMAsync",
         <|"Provider" -> "openai-compat", "Model" -> llm["Model"], "Deployment" -> llm["URL"],
-          "Messages" -> req["messages"]|>], Null]];
+          "Messages" -> req["messages"]|>]],
+      Return[$Failed]];
     HTTPRequest[llm["URL"], <|"Method" -> "POST",
       "Headers" -> {"Content-Type" -> "application/json",
         "Authorization" -> "Bearer " <> iSVMLocalLLMKey[llm["URL"]]}, "Body" -> body|>]];

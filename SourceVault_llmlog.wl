@@ -830,11 +830,12 @@ iSVLLCallSummaryModel[prompt_String, model_] := Module[{resp, gnames, guard},
   If[StringQ[guard],
     Return[<|"Status" -> "Failed", "Reason" -> "PaidAPIBlocked",
       "Detail" -> StringTake[guard, UpTo[200]], "Model" -> model|>]];
-  (* 1H-S shadow: ClaudeQuerySync 委譲の最終境界 (observe-only。paid guard 通過後) *)
-  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-    Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["llmlog:iSVLLCallSummaryModel",
+  (* 1H-S boundary gate: ClaudeQuerySync 委譲の最終境界 (paid guard 通過後。
+     capbroker 不在は fail-open) *)
+  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["llmlog:iSVLLCallSummaryModel",
       <|"Provider" -> "claudecode", "Model" -> ToString[model],
-        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+    Return[<|"Status" -> "Failed", "Reason" -> "LLMBoundaryRefused", "Model" -> model|>]];
   resp = Quiet @ ClaudeCode`ClaudeQuerySync[prompt, ClaudeCode`Model -> model];
   Which[
     ! StringQ[resp],

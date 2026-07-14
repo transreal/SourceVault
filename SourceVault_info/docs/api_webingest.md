@@ -154,7 +154,9 @@ Options: "MaxHighlights" -> 5, "MinChars" -> 20
 ### SourceVaultSummarizeText[text_String, opts]
 ローカル LLM (LM Studio OpenAI 互換) で text を要約する。MCP 経路から自動では呼ばない (再入回避)。`"Persist" -> True` で Succeeded 時に DerivedArtifact 不変 snapshot を保存し `"ArtifactRef"` を戻り値に付加する。
 → `<|"Summary","Model","Status"|>` または `Failure`; Persist 時は `"ArtifactRef"` を追加
-Options: "Instruction" -> (モデル既定), "MaxTokens" -> (モデル既定), "Temperature" -> (モデル既定), "Endpoint" -> Automatic, "Model" -> Automatic, "TimeoutSeconds" -> (既定), "Persist" -> False, "SourceRefs" -> {}, "SourceUrls" -> {}, "Query" -> None, "Provenance" -> `<||>`, "QuarantinePolicy" -> "Block", "TrustedOrigin" -> Missing[], "LLMFn" -> Automatic
+Options: "Instruction" -> (モデル既定), "MaxTokens" -> (モデル既定), "Temperature" -> (モデル既定), "Endpoint" -> Automatic, "Model" -> Automatic, "TimeoutSeconds" -> (既定), "Persist" -> False, "SourceRefs" -> {}, "SourceUrls" -> {}, "Query" -> None, "Provenance" -> `<||>`, "QuarantinePolicy" -> "Block", "TrustedOrigin" -> Missing[], "LLMFn" -> Automatic, "PrepareToken" -> Automatic, "RunRef" -> Automatic
+
+**1H-S token 配線(パイロット・2026-07-14)**: `"PrepareToken"`(Automatic=LLM boundary が active(`SourceVaultLLMBoundaryActiveQ["webingest:iWebLLMComplete"]`)のときのみ、最終 envelope(model 先解決済み)を `SourceVaultPrepareLLMInput` で mint して境界へ渡す / True=常に / False=しない)。`"RunRef"`(Automatic="svrun:webingest:SummarizeText")。boundary を Enforce に昇格した場合、token 無し送信は `Failure["LLMBoundaryRefused"]`。
 
 **1H-S security (v0.5 P0-01/03/05)**: 入力が pre-scan で quarantined のとき `"QuarantinePolicy"`(既定 `"Block"`)で raw を LLM に渡さない — `"Block"`=Failure、`"MetadataOnly"`=本文を渡さず metadata のみ返す、`"SafeInspection"`=続行するが出力を `Tainted->True` にし永続しない。pre-scan 不達(mining 未ロード等)は `"PreScanUnavailable"/"NeedsSecurityScan"` を付与し永続保留(fail-open にしない)。`"UntrustedInput" -> False`(untrusted 境界の無効化)は `"TrustedOrigin"`(OwnerTypedInstruction|SystemPolicy|VerifiedDirective)が無ければ Failure(I-14)。`"LLMFn"` は依存注入シーム(既定 Automatic=`iWebLLMComplete`)。
 

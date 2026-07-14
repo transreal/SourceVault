@@ -244,11 +244,11 @@ iSVWFQueryLocal[prompt_String, modelSpec_, timeout_] :=
       If[model =!= "", <|"model" -> model|>, <||>]];
     bodyBytes = iSVWFJSONBytes[reqData];
     If[bodyBytes === $Failed, Return[""]];
-    (* 1H-S shadow: LLM boundary shadow(observe-only。トグル off 時ゼロコスト) *)
-    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-      Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["workflowcatalog:iSVWFQueryLocal",
+    (* 1H-S boundary gate(Shadow=記録 / Warn=Message / Enforce=拒否。capbroker 不在は fail-open) *)
+    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["workflowcatalog:iSVWFQueryLocal",
         <|"Provider" -> "openai-compat", "Model" -> If[model === "", Missing["AutoDetect"], model],
-          "Deployment" -> url, "Messages" -> reqData["messages"]|>], Null]];
+          "Deployment" -> url, "Messages" -> reqData["messages"]|>]],
+      Return[""]];
     resp = Quiet @ Check[URLRead[HTTPRequest[url, <|
         "Method" -> "POST",
         "Headers" -> {"Content-Type" -> "application/json; charset=utf-8",
@@ -264,12 +264,12 @@ iSVWFQueryLocal[prompt_String, modelSpec_, timeout_] :=
 
 (* クラウド: claudecode の ClaudeQueryBg があれば使用、無ければローカル既定へ退避。 *)
 iSVWFQueryCloudOrLocal[prompt_String, timeout_] := Module[{r},
-  If[Length[Names["ClaudeCode`ClaudeQueryBg"]] > 0,
-    (* 1H-S shadow: ClaudeQueryBg 委譲の最終境界(observe-only) *)
-    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-      Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["workflowcatalog:iSVWFQueryCloudOrLocal",
+  (* 1H-S boundary gate: cloud 委譲が拒否されたら cloud 試行だけ跳ばしローカル既定へ退避
+     (関数全体を抜けない=ローカル側は自身の gate を持つ) *)
+  If[Length[Names["ClaudeCode`ClaudeQueryBg"]] > 0 &&
+      ! TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["workflowcatalog:iSVWFQueryCloudOrLocal",
         <|"Provider" -> "claudecode", "Model" -> Missing["Default"],
-          "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
+          "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
     r = Quiet @ Check[
       ClaudeCode`ClaudeQueryBg[prompt, "NonBlocking" -> True, "Timeout" -> timeout],
       $Failed];

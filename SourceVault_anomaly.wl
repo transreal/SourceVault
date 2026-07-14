@@ -108,6 +108,12 @@ SourceVaultRegisterCaneAnomalySchedule::usage =
   "SourceVaultRegisterCaneAnomalySchedule[spec, opts] は owner 登録の ScheduleSpec(分析権限のみ)を profile に保存する。" <>
   "spec=<|(\"Enabled\"),(\"Paused\"),(\"IntervalSeconds\"),(\"MaxCatchupWindows\")|>。opts \"OwnerAuthorization\"->True 必須。" <>
   "OS の ScheduledTask は作らない(rule 95)。schedule は enforcement 権限を持たない(I-16)。";
+SourceVaultCaneAnomalyScheduleTick::usage =
+  "SourceVaultCaneAnomalyScheduleTick[opts] は service 低頻度 hook 用の due 判定+実行 tick。owner 登録の " <>
+  "ScheduleSpec(profile 内)が Enabled/Scheduled/非 Paused かつ前回 run から IntervalSeconds 経過のときだけ " <>
+  "SourceVaultRunCaneAnomalyWorkflow[](observe-only・冪等)を 1 回実行する(catch-up は遅延分を多重実行しない=1 回)。" <>
+  "Reused(同一 idemKey)でも pipeline-status の liveness を更新(LastScheduleOutcome 付き)。決して throw せず " <>
+  "<|Status: Disabled|NotDue|Ran|Reused|RunFailed|ProfileUnavailable|> を返す。opts \"RunFn\"(注入シーム=テスト用)。";
 
 SourceVaultCaneDiagnosticsProbe::usage =
   "SourceVaultCaneDiagnosticsProbe[] は通常 SystemDoctor 向けの sanitized probe。<|Health, ReasonCode|> のみを返す" <>
@@ -771,6 +777,49 @@ SourceVaultRunCaneAnomalyWorkflow[input_Association, OptionsPattern[]] := Module
 
 (* 入力なしの簡便形(空 streams。OptionsPattern と Association の曖昧回避のため bare 引数のみ) *)
 SourceVaultRunCaneAnomalyWorkflow[] := SourceVaultRunCaneAnomalyWorkflow[<|"Streams" -> <||>|>];
+
+(* ============================================================
+   schedule tick(service 低頻度 hook 結線。2026-07-14)
+   - due 判定は profile 内 ScheduleSpec(owner 登録)× pipeline-status の LastRunEpoch。
+   - catch-up: どれだけ遅延していても実行は 1 回(run は idempotent。backlog の多重実行なし)。
+   - 排他は run 自身の idempotency(同一 idemKey は Reused)に依拠=多重 tick 安全。
+   - Reused でも pipeline-status の liveness を touch(空 streams の縮退で idemKey が
+     不変=毎回 Reused でも、probe の staleness 判定が偽 Degraded にならないように)。
+   - enforcement なし(I-16)。OS ScheduledTask は作らない(rule 95。呼び手は service ループ)。
+   ============================================================ *)
+Options[SourceVaultCaneAnomalyScheduleTick] = {"RunFn" -> Automatic};
+SourceVaultCaneAnomalyScheduleTick[OptionsPattern[]] := Module[
+  {prof, sched, interval, st, lastEpoch, now, runFn, r, outcome, runId},
+  prof = Quiet@Check[SourceVaultAnomalyWorkflowProfile[], $Failed];
+  If[! AssociationQ[prof], Return[<|"Status" -> "ProfileUnavailable"|>]];
+  sched = Lookup[prof, "Schedule", <||>];
+  If[! (AssociationQ[sched] && TrueQ[Lookup[sched, "Enabled", False]] &&
+        Lookup[sched, "Mode", ""] === "Scheduled" && ! TrueQ[Lookup[sched, "Paused", False]]),
+    Return[<|"Status" -> "Disabled"|>]];
+  interval = Lookup[sched, "IntervalSeconds", 86400];
+  If[! (NumericQ[interval] && interval >= 60), interval = 86400];
+  now = iAnomEpoch[];
+  st = iAnomRead[iAnomPipelineStatusPath[]];
+  lastEpoch = If[AssociationQ[st], Lookup[st, "LastRunEpoch", 0], 0];
+  If[! NumericQ[lastEpoch], lastEpoch = 0];
+  If[(now - lastEpoch) < interval,
+    Return[<|"Status" -> "NotDue",
+      "NextDueInSeconds" -> Ceiling[interval - (now - lastEpoch)]|>]];
+  runFn = Replace[OptionValue["RunFn"], Automatic :> (SourceVaultRunCaneAnomalyWorkflow[] &)];
+  r = Quiet@Check[runFn[], $Failed];
+  If[! AssociationQ[r] || Lookup[r, "Status", ""] =!= "Completed",
+    Return[<|"Status" -> "RunFailed",
+      "Detail" -> If[FailureQ[r], ToString[r[[1]]], Head[r]]|>]];
+  outcome = If[TrueQ[Lookup[r, "Reused", False]], "Reused", "Ran"];
+  runId = Lookup[r, "WorkflowRunId", Missing[]];
+  (* liveness touch(Reused でも schedule としては正常に評価済み) *)
+  Quiet@Check[SourceVaultWithLock[iAnomLock,
+    iAnomWrite[iAnomPipelineStatusPath[], <|"LastRunAtUTC" -> iAnomNow[],
+      "LastRunEpoch" -> iAnomEpoch[], "LastRunStatus" -> "Completed",
+      "LastRunId" -> runId, "LastScheduleOutcome" -> outcome|>]], Null];
+  <|"Status" -> outcome, "RunId" -> runId,
+    "AnomalyCount" -> Lookup[r, "AnomalyCount", 0],
+    "HypothesisCount" -> Lookup[r, "HypothesisCount", 0]|>];
 
 iAnomOwnerStateHypQ[h_Association] := iAnomOwnerStateQ[Lookup[h, "StreamA", ""]] ||
   iAnomOwnerStateQ[Lookup[h, "StreamB", ""]];

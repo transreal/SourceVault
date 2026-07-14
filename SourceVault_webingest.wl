@@ -1202,12 +1202,12 @@ iWebLLMComplete[prompt_String, OptionsPattern[]] := Module[
   body = <|"model" -> model, "stream" -> False,
     "temperature" -> OptionValue["Temperature"], "max_tokens" -> OptionValue["MaxTokens"],
     "messages" -> {<|"role" -> "user", "content" -> prompt|>}|>;
-  (* 1H-S shadow: LLM boundary shadow(トグル off 時ゼロコスト。決して送信を妨げない) *)
-  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow] &&
-      Length[DownValues[SourceVaultLLMBoundaryShadowCheck]] > 0,
-    Quiet @ Check[SourceVaultLLMBoundaryShadowCheck[OptionValue["ShadowEntrypoint"],
+  (* 1H-S boundary gate: Shadow=記録のみ / Warn=Message+続行 / Enforce=非 Verified 拒否。
+     capbroker 不在時は条件が非 Boolean のまま=fail-open(送信続行) *)
+  If[TrueQ[SourceVaultLLMBoundaryGateRefusedQ[OptionValue["ShadowEntrypoint"],
       <|"Provider" -> "openai-compat", "Model" -> model, "Deployment" -> endpoint,
-        "Messages" -> body["messages"]|>, OptionValue["PreparedToken"]], Null]];
+        "Messages" -> body["messages"]|>, OptionValue["PreparedToken"]]],
+    Return[Failure["LLMBoundaryRefused", <|"Entrypoint" -> OptionValue["ShadowEntrypoint"]|>]]];
   req = HTTPRequest[endpoint, <|"Method" -> "POST", "ContentType" -> "application/json",
     "Headers" -> iWebLLMHeaders[],
     "Body" -> ExportByteArray[body, "RawJSON"]|>];
@@ -1265,6 +1265,8 @@ Options[SourceVaultSummarizeText] = {
   (* 1H-S P0-05: UntrustedInput->False は trusted provenance 必須 *)
   "TrustedOrigin" -> Missing[],    (* "OwnerTypedInstruction" | "SystemPolicy" | "VerifiedDirective" *)
   "LLMFn" -> Automatic,            (* 依存注入(テスト/差替え)。既定 Automatic=iWebLLMComplete *)
+  (* 1H-S token 配線(パイロット): Automatic=boundary active 時のみ mint / True=常に / False=しない *)
+  "PrepareToken" -> Automatic, "RunRef" -> Automatic,
   (* #3: 要約を DerivedArtifact 不変 snapshot として保存する (provenance 付き) *)
   "Persist" -> False, "SourceRefs" -> {}, "SourceUrls" -> Missing[], "Query" -> Missing[],
   "Provenance" -> <||>};
@@ -1300,18 +1302,35 @@ SourceVaultSummarizeText[text_String, OptionsPattern[]] := Module[
     prompt = wrap["Preamble"] <> "\n\n" <> OptionValue["Instruction"] <>
       "\n\n" <> wrap["Wrapped"],
     prompt = OptionValue["Instruction"] <> "\n\n----\n" <> clip];
-  (* 1H-S shadow: LLMFn 注入経路は iWebLLMComplete を通らないため、この seam が最終境界 *)
+  (* 1H-S boundary gate: LLMFn 注入経路は iWebLLMComplete を通らないため、この seam が最終境界 *)
   If[OptionValue["LLMFn"] =!= Automatic &&
-      TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow] &&
-      Length[DownValues[SourceVaultLLMBoundaryShadowCheck]] > 0,
-    Quiet @ Check[SourceVaultLLMBoundaryShadowCheck["webingest:SummarizeText:LLMFn",
-      <|"Provider" -> "injected", "Model" -> Replace[OptionValue["Model"], Automatic -> Missing["Injected"]],
-        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
+      TrueQ[SourceVaultLLMBoundaryGateRefusedQ["webingest:SummarizeText:LLMFn",
+        <|"Provider" -> "injected", "Model" -> Replace[OptionValue["Model"], Automatic -> Missing["Injected"]],
+          "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+    Return[Failure["LLMBoundaryRefused", <|"Entrypoint" -> "webingest:SummarizeText:LLMFn"|>]]];
+  (* 1H-S token 配線(パイロット): boundary active 時は最終 envelope を呼び出し元で確定して
+     PrepareLLMInput で mint し、iWebLLMComplete へ Model/PreparedToken として渡す
+     (モデルは先解決して明示指定=解決 HTTP の二重発行なし)。off 時は従来どおり。 *)
   r = If[OptionValue["LLMFn"] === Automatic,
-    iWebLLMComplete[prompt,
-      "Endpoint" -> OptionValue["Endpoint"], "Model" -> OptionValue["Model"],
-      "MaxTokens" -> OptionValue["MaxTokens"], "Temperature" -> OptionValue["Temperature"],
-      "TimeoutSeconds" -> OptionValue["TimeoutSeconds"]],
+    Module[{ep2, model2, ptok = Missing["NoToken"], wantTok},
+      ep2 = Replace[OptionValue["Endpoint"], Automatic -> SourceVault`$SourceVaultSummaryEndpoint];
+      model2 = OptionValue["Model"];
+      wantTok = Switch[OptionValue["PrepareToken"],
+        True, True, False, False,
+        _, TrueQ @ Quiet @ Check[
+          SourceVaultLLMBoundaryActiveQ["webingest:iWebLLMComplete"], False]];
+      If[wantTok,
+        model2 = Replace[model2, Automatic -> iWebLLMResolveModel[ep2]];
+        If[StringQ[model2],
+          ptok = Quiet @ Check[SourceVaultPrepareLLMInput[
+            <|"Provider" -> "openai-compat", "Model" -> model2, "Deployment" -> ep2,
+              "Messages" -> {<|"role" -> "user", "content" -> prompt|>},
+              "RunRef" -> Replace[OptionValue["RunRef"],
+                Automatic -> "svrun:webingest:SummarizeText"]|>], Missing["PrepareFailed"]]]];
+      iWebLLMComplete[prompt,
+        "Endpoint" -> ep2, "Model" -> model2,
+        "MaxTokens" -> OptionValue["MaxTokens"], "Temperature" -> OptionValue["Temperature"],
+        "TimeoutSeconds" -> OptionValue["TimeoutSeconds"], "PreparedToken" -> ptok]],
     OptionValue["LLMFn"][prompt]];
   If[FailureQ[r], Return[r]];
   sum = iWebStripThink[r["Text"]];

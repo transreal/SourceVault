@@ -375,3 +375,10 @@ Web UI チャット用のデフォルトモデル名。Automatic で LM Studio `
 
 ### SourceVaultSetBillingAllowed[b] → True | False
 `$SourceVaultBillingAllowed` を設定する。引数は `True` または `False`。
+### $SourceVaultCaneAnomalyTickIntervalSeconds(2026-07-14 追加)
+型: Number, 初期値: 未設定(既定 600)
+service ループが `SourceVaultCaneAnomalyScheduleTick`(SourceVault_anomaly.wl)を呼ぶ判定周期。
+実行間隔そのものは anomaly profile 内の ScheduleSpec(owner 登録・既定 off)が決める。tick は
+observe-only・enforcement なし(I-16)で、TimeConstrained 300s で打ち切り。Disabled/NotDue は
+service log に記録しない(Ran/Reused/RunFailed/Error/TimedOut のみ CaneAnomalyScheduleTick として記録)。
+反映には service 再起動が必要(rule105 §8)。

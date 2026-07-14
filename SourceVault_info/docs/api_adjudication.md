@@ -37,3 +37,33 @@ case の現在状態(Candidates/ClaimEvaluations/Decision)。
 claim ごとに blind 判定して VerifierVerdicts に注入)→decideCase を実行。
 → decision fields + `<|DecisionCaseId, ExcludedProposers, CandidateCount|>`
 Options: "VerifierFn"(None)、"TaskDomain"、"ActionRiskClass"(Low)、"OwnerConfirmed"(False)、"RiskPriors"、"Persist"(True)。
+
+## 実 proposer 供給(orchestrator 結線。2026-07-14)
+
+driver は LLM 非依存のまま、実 LLM を closure(QueryFn/SubmitFn シーム)として供給する層。
+既定バックエンドは全て 1H-S boundary gate 済みの経路(SourceVaultQueryLocalLLM / iSVMSubmitLLMAsync /
+iCallSummaryLLM)。プロンプトは JSON claims 構造指定のみの短文で、入力を UNTRUSTED data として包む(I-14)。
+
+### SourceVaultMakeLLMProposer[modelSpec, opts]
+proposerFns 用の実 LLM closure(inputRef -> candidate)を作る。modelSpec: Automatic|"local"=ローカル
+LLM、その他({provider, model} 等)=iCallSummaryLLM 経由。Options: "QueryFn"(Automatic。prompt->
+response String の注入シーム=mock 可)、"AgentLabel"(**同一 label は同一 CorrelationGroup**=I-11)、
+"InputText"(Automatic=ToString[inputRef])。JSON パース不能・空 claims・応答失敗は $Failed
+(driver が ExcludedProposers に記録)。コードフェンス・<think> ブロックは除去して解釈。
+
+### SourceVaultMakeLLMVerifier[modelSpec, opts]
+"VerifierFn" 用 blind verifier closure(claim eval -> "Supported"|"Refuted"|Missing)。
+SUPPORTED/REFUTED の単語応答のみ採用(UNSUPPORTED や曖昧応答は Missing=verdict 不注入)。Options: "QueryFn"。
+
+### SourceVaultSubmitMultiModelDecision[inputRef, k, opts]
+k proposer の裁定を ClaudeOrchestrator へ非同期投入(AwaitingLLM=HTTP 飛行中カーネル解放)し即返す。
+net: ToPropose →[Propose(AwaitingLLM: k fan-out→fan-in)]→ Proposed →[Decide(sync: driver 実行)]→ Decided。
+Options: "SubmitFn"(Automatic=mining iSVMSubmitLLMAsync。fn か fn リスト(長さ k)。契約 fn[prompt,
+callback]=必ず 1 回 callback)、"Labels"(長さ k。既定全て "local"=同一 CorrelationGroup。**異 backend を
+注入するときは異 label を付けること**)、"InputText"、"VerifierFn"(同期。Decide 段で実行)、driver
+オプション、"MaxWaitSeconds"(3600)。→ <|WorkflowId, Kind, Mode, Status|>。
+
+### SourceVaultDecisionJobStatus[wid] / SourceVaultDecisionJobResult[wid] / SourceVaultAwaitDecisionJob[wid, opts]
+status: <|WorkflowId, Kind, Status, WorkflowStatus, Done, Steps|>(完了判定は終端 place marking=closure
+非依存)。result: 完了後は decision(driver の戻り値)+WorkflowId、未完了は <|Status->Running|>。
+await: await 中は tick せず Pause(二重駆動防止)、await 無しの間のみ自前 tick。Options: "MaxWait"(600s)。

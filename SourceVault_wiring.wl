@@ -1015,12 +1015,13 @@ iSVWResolveLLMEngine[] :=
       With[{f = Symbol["ClaudeCode`ClaudeQuerySync"],
             plOpt = Symbol["ClaudeCode`PrivacyLevel"]},
         Function[prompt,
-          (* 1H-S shadow: wiring LLM エンジンの最終境界(observe-only。ローカル強制経路) *)
-          If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
-            Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["wiring:FillUnresolvedWithLLM",
+          (* 1H-S boundary gate: wiring LLM エンジンの最終境界(ローカル強制経路。
+             拒否は $Failed=呼び出し側の非文字列失敗系。capbroker 不在は fail-open) *)
+          If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["wiring:FillUnresolvedWithLLM",
               <|"Provider" -> "claudecode", "Model" -> Missing["LocalForced"],
-                "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
-          f[prompt, plOpt -> 1.0]]],
+                "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+            $Failed,
+            f[prompt, plOpt -> 1.0]]]],
     True, None];
 
 (* 候補 1 件を LLM 提示用 1 行に (identity のみ、本文なし、Redacted 除外 §6.5) *)
