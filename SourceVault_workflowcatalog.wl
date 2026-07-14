@@ -244,6 +244,11 @@ iSVWFQueryLocal[prompt_String, modelSpec_, timeout_] :=
       If[model =!= "", <|"model" -> model|>, <||>]];
     bodyBytes = iSVWFJSONBytes[reqData];
     If[bodyBytes === $Failed, Return[""]];
+    (* 1H-S shadow: LLM boundary shadow(observe-only。トグル off 時ゼロコスト) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["workflowcatalog:iSVWFQueryLocal",
+        <|"Provider" -> "openai-compat", "Model" -> If[model === "", Missing["AutoDetect"], model],
+          "Deployment" -> url, "Messages" -> reqData["messages"]|>], Null]];
     resp = Quiet @ Check[URLRead[HTTPRequest[url, <|
         "Method" -> "POST",
         "Headers" -> {"Content-Type" -> "application/json; charset=utf-8",
@@ -260,6 +265,11 @@ iSVWFQueryLocal[prompt_String, modelSpec_, timeout_] :=
 (* クラウド: claudecode の ClaudeQueryBg があれば使用、無ければローカル既定へ退避。 *)
 iSVWFQueryCloudOrLocal[prompt_String, timeout_] := Module[{r},
   If[Length[Names["ClaudeCode`ClaudeQueryBg"]] > 0,
+    (* 1H-S shadow: ClaudeQueryBg 委譲の最終境界(observe-only) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["workflowcatalog:iSVWFQueryCloudOrLocal",
+        <|"Provider" -> "claudecode", "Model" -> Missing["Default"],
+          "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
     r = Quiet @ Check[
       ClaudeCode`ClaudeQueryBg[prompt, "NonBlocking" -> True, "Timeout" -> timeout],
       $Failed];

@@ -897,6 +897,11 @@ iWebChatModel[override_:Automatic] := Module[
    model="" で既定モデル、それ以外は $ClaudeModel を一時切替。 *)
 iWebChatCloud[prompt_String, model_String] := Module[{r},
   If[Length[Names["ClaudeCode`ClaudeQueryBg"]] === 0, Return[$Failed]];
+  (* 1H-S shadow: LLM boundary shadow(observe-only。トグル off 時ゼロコスト) *)
+  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+    Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["servicemanager:iWebChatCloud",
+      <|"Provider" -> "claudecode", "Model" -> If[model === "", Missing["Default"], model],
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
   r = Quiet @ Check[
     If[model === "", ClaudeCode`ClaudeQueryBg[prompt],
       Block[{ClaudeCode`$ClaudeModel = model}, ClaudeCode`ClaudeQueryBg[prompt]]],
@@ -911,6 +916,12 @@ iWebChatBilledAPI[prompt_String, model_String] := Module[{key, m, body, resp, j,
   m = If[model === "", SourceVault`$SourceVaultWebBilledModel, model];
   body = ExportByteArray[<|"model" -> m, "max_tokens" -> 1500,
     "messages" -> {<|"role" -> "user", "content" -> prompt|>}|>, "RawJSON"];
+  (* 1H-S shadow: LLM boundary shadow(observe-only。鍵は envelope に含めない) *)
+  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+    Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["servicemanager:iWebChatBilledAPI",
+      <|"Provider" -> "anthropic", "Model" -> m,
+        "Deployment" -> "https://api.anthropic.com/v1/messages",
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
   resp = Quiet @ Check[URLRead[HTTPRequest["https://api.anthropic.com/v1/messages",
     <|"Method" -> "POST", "Headers" -> {"x-api-key" -> key,
        "anthropic-version" -> "2023-06-01", "content-type" -> "application/json"},
@@ -928,6 +939,12 @@ iWebChatLocal[prompt_String, modelOverride_] := Module[{key, model, body, resp, 
   body = ExportByteArray[<|"model" -> model,
     "messages" -> {<|"role" -> "user", "content" -> prompt|>},
     "temperature" -> 0.2, "stream" -> False, "max_tokens" -> 1500|>, "RawJSON"];
+  (* 1H-S shadow: LLM boundary shadow(observe-only) *)
+  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+    Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["servicemanager:iWebChatLocal",
+      <|"Provider" -> "openai-compat", "Model" -> model,
+        "Deployment" -> SourceVault`$SourceVaultWebLLMBase <> "/v1/chat/completions",
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
   (* chat モデルが未ロードだと JIT で長時間ハングしコマンドループを塞ぐので、短めの
      TimeConstraint で早期失敗させる (失敗時は /pdfask が evidence のみへ degrade)。 *)
   resp = Quiet @ Check[URLRead[HTTPRequest[SourceVault`$SourceVaultWebLLMBase <> "/v1/chat/completions",

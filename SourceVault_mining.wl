@@ -1555,6 +1555,11 @@ SourceVaultQueryLocalLLM[prompt_String, timeout_, temp_ : 0, sys_ : Automatic] :
       If[llm["Model"] =!= "", <|"model" -> llm["Model"]|>, <||>]];
     body = Quiet@Check[StringToByteArray[Developer`WriteRawJSONString[req], "UTF-8"], $Failed];
     If[body === $Failed, Return[Missing["EncodeFailed"]]];
+    (* 1H-S shadow: LLM boundary shadow(observe-only。トグル off 時ゼロコスト) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["mining:SourceVaultQueryLocalLLM",
+        <|"Provider" -> "openai-compat", "Model" -> llm["Model"], "Deployment" -> llm["URL"],
+          "Messages" -> req["messages"]|>], Null]];
     resp = Quiet@Check[URLRead[HTTPRequest[llm["URL"],
       <|"Method" -> "POST",
         "Headers" -> {"Content-Type" -> "application/json",
@@ -1747,6 +1752,12 @@ iSVMBuildLLMHTTPRequest[prompt_String, temp_, sys_] :=
       If[llm["Model"] =!= "", <|"model" -> llm["Model"]|>, <||>]];
     body = Quiet@Check[StringToByteArray[Developer`WriteRawJSONString[req], "UTF-8"], $Failed];
     If[body === $Failed, Return[$Failed]];
+    (* 1H-S shadow: 非同期 URLSubmit 経路の最終境界(同期経路とは別。observe-only。
+       本関数は iSVMSubmitLLMAsync 専用なのでここが送信直前) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["mining:iSVMSubmitLLMAsync",
+        <|"Provider" -> "openai-compat", "Model" -> llm["Model"], "Deployment" -> llm["URL"],
+          "Messages" -> req["messages"]|>], Null]];
     HTTPRequest[llm["URL"], <|"Method" -> "POST",
       "Headers" -> {"Content-Type" -> "application/json",
         "Authorization" -> "Bearer " <> iSVMLocalLLMKey[llm["URL"]]}, "Body" -> body|>]];

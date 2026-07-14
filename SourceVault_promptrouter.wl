@@ -1578,6 +1578,12 @@ iSVPRExtractSlotValuesDiag[route_Association, newPrompt_String, opts : OptionsPa
        Model symbol parsed here becomes SourceVault`Private`Model and is
        silently ignored by ClaudeQueryBg. Pass the option by its string
        name instead (OptionValue resolves string names by symbol name). *)
+    (* 1H-S shadow: ClaudeQueryBg delegate boundary (observe-only) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["promptrouter:iSVPRExtractSlotValues",
+        <|"Provider" -> "claudecode",
+          "Model" -> If[model === Automatic, Missing["Default"], ToString[model]],
+          "Messages" -> {<|"role" -> "user", "content" -> fullPrompt|>}|>], Null]];
     resp = Quiet @ Check[
       If[model === Automatic,
         queryBg[fullPrompt],

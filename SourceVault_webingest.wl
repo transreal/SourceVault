@@ -1191,7 +1191,9 @@ iWebLLMResolveModel[endpoint_String] := Module[{m = SourceVault`$SourceVaultSumm
   If[StringQ[pick], pick, Missing["NoModel"]]];
 
 Options[iWebLLMComplete] = {"Endpoint" -> Automatic, "Model" -> Automatic,
-  "MaxTokens" -> 400, "Temperature" -> 0.2, "TimeoutSeconds" -> 120};
+  "MaxTokens" -> 400, "Temperature" -> 0.2, "TimeoutSeconds" -> 120,
+  (* 1H-S shadow 第一段: 送信直前 shadow チェック用(observe-only。挙動不変) *)
+  "PreparedToken" -> Missing["NoToken"], "ShadowEntrypoint" -> "webingest:iWebLLMComplete"};
 iWebLLMComplete[prompt_String, OptionsPattern[]] := Module[
   {endpoint, model, body, req, resp, status, rbody, json},
   endpoint = Replace[OptionValue["Endpoint"], Automatic -> SourceVault`$SourceVaultSummaryEndpoint];
@@ -1200,6 +1202,12 @@ iWebLLMComplete[prompt_String, OptionsPattern[]] := Module[
   body = <|"model" -> model, "stream" -> False,
     "temperature" -> OptionValue["Temperature"], "max_tokens" -> OptionValue["MaxTokens"],
     "messages" -> {<|"role" -> "user", "content" -> prompt|>}|>;
+  (* 1H-S shadow: LLM boundary shadow(トグル off 時ゼロコスト。決して送信を妨げない) *)
+  If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow] &&
+      Length[DownValues[SourceVaultLLMBoundaryShadowCheck]] > 0,
+    Quiet @ Check[SourceVaultLLMBoundaryShadowCheck[OptionValue["ShadowEntrypoint"],
+      <|"Provider" -> "openai-compat", "Model" -> model, "Deployment" -> endpoint,
+        "Messages" -> body["messages"]|>, OptionValue["PreparedToken"]], Null]];
   req = HTTPRequest[endpoint, <|"Method" -> "POST", "ContentType" -> "application/json",
     "Headers" -> iWebLLMHeaders[],
     "Body" -> ExportByteArray[body, "RawJSON"]|>];
@@ -1292,6 +1300,13 @@ SourceVaultSummarizeText[text_String, OptionsPattern[]] := Module[
     prompt = wrap["Preamble"] <> "\n\n" <> OptionValue["Instruction"] <>
       "\n\n" <> wrap["Wrapped"],
     prompt = OptionValue["Instruction"] <> "\n\n----\n" <> clip];
+  (* 1H-S shadow: LLMFn 注入経路は iWebLLMComplete を通らないため、この seam が最終境界 *)
+  If[OptionValue["LLMFn"] =!= Automatic &&
+      TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow] &&
+      Length[DownValues[SourceVaultLLMBoundaryShadowCheck]] > 0,
+    Quiet @ Check[SourceVaultLLMBoundaryShadowCheck["webingest:SummarizeText:LLMFn",
+      <|"Provider" -> "injected", "Model" -> Replace[OptionValue["Model"], Automatic -> Missing["Injected"]],
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
   r = If[OptionValue["LLMFn"] === Automatic,
     iWebLLMComplete[prompt,
       "Endpoint" -> OptionValue["Endpoint"], "Model" -> OptionValue["Model"],

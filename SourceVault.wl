@@ -9841,6 +9841,11 @@ iCallSummaryLLM[prompt_String, model_, privacyLevel_] :=
       True, Automatic
     ];
 
+    (* 1H-S shadow: ClaudeQuerySync 委譲の最終境界 (observe-only; maildb/llmlog 共有ハブ) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["sourcevault:iCallSummaryLLM",
+        <|"Provider" -> "claudecode", "Model" -> ToString[effectiveModel],
+          "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
     response = Quiet @ ClaudeCode`ClaudeQuerySync[prompt,
       ClaudeCode`Model -> effectiveModel];
     (* Stage 9 P1 Step 9: \:30a8\:30e9\:30fc\:6587\:5b57\:5217\:691c\:51fa\:3002

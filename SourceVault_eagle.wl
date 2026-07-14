@@ -1901,6 +1901,11 @@ iSVEGQueryLocalLLMMessages[messages_List, timeout_] :=
       If[llm["Model"] =!= "", <|"model" -> llm["Model"]|>, <||>];
     bodyBytes = iSVEGJSONBytes[reqData];
     If[bodyBytes === $Failed, Return[""]];
+    (* 1H-S shadow: LLM boundary shadow(observe-only。text/vision 共通の最終境界) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["eagle:iSVEGQueryLocalLLMMessages",
+        <|"Provider" -> "openai-compat", "Model" -> llm["Model"], "Deployment" -> llm["URL"],
+          "Messages" -> messages|>], Null]];
     resp = Quiet@Check[URLRead[HTTPRequest[llm["URL"], <|
         "Method" -> "POST",
         "Headers" -> {"Content-Type" -> "application/json; charset=utf-8",
@@ -1956,6 +1961,11 @@ iSVEGQueryCodex[prompt_String] :=
   Module[{raw, dec},
     If[Length[DownValues[ClaudeCode`Private`iRunChatgptCodexCLI]] === 0,
       Return["Error: Codex CLI runner (iRunChatgptCodexCLI) not available"]];
+    (* 1H-S shadow: Codex CLI 委譲の最終境界(observe-only) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["eagle:iSVEGQueryCodex",
+        <|"Provider" -> "codex", "Model" -> Missing["CLI"],
+          "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
     raw = Quiet@Check[ClaudeCode`Private`iRunChatgptCodexCLI[prompt], $Failed];
     dec = Quiet@Check[ClaudeCode`Private`iDecodeProviderResult[raw], $Failed];
     Which[
@@ -1973,6 +1983,11 @@ iSVEGQueryClaude[parts_List, timeout_] :=
     If[iSVEGCodexQ[prov] && AllTrue[parts, StringQ],
       (* Codex 指定 + テキスト: 必ず Codex CLI *)
       Return[iSVEGQueryCodex[StringRiffle[parts, "\n"]]]];
+    (* 1H-S shadow: ClaudeQueryBg 委譲の最終境界(observe-only) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["eagle:iSVEGQueryClaude",
+        <|"Provider" -> "claudecode", "Model" -> Missing["Routed"],
+          "Messages" -> {<|"role" -> "user", "content" -> Select[parts, StringQ]|>}|>], Null]];
     r = Quiet[Block[{ClaudeCode`$iMediaMaxImageSize = 1568},
       If[iSVEGCodexQ[prov],
         (* Codex 指定 + 画像/動画: Codex CLI に画像配線が無いため

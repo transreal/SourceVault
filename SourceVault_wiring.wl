@@ -1014,7 +1014,13 @@ iSVWResolveLLMEngine[] :=
       Length[DownValues[Evaluate @ Symbol["ClaudeCode`ClaudeQuerySync"]]] > 0,
       With[{f = Symbol["ClaudeCode`ClaudeQuerySync"],
             plOpt = Symbol["ClaudeCode`PrivacyLevel"]},
-        Function[prompt, f[prompt, plOpt -> 1.0]]],
+        Function[prompt,
+          (* 1H-S shadow: wiring LLM エンジンの最終境界(observe-only。ローカル強制経路) *)
+          If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+            Quiet @ Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["wiring:FillUnresolvedWithLLM",
+              <|"Provider" -> "claudecode", "Model" -> Missing["LocalForced"],
+                "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>], Null]];
+          f[prompt, plOpt -> 1.0]]],
     True, None];
 
 (* 候補 1 件を LLM 提示用 1 行に (identity のみ、本文なし、Redacted 除外 §6.5) *)

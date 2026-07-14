@@ -38,3 +38,33 @@ prepare: request envelope 全体(Provider/Model/Deployment/Messages/ToolSchemas/
 IsolationProfile/PrivacyDecisionRef/CapabilityCeiling/OutputSchema/RunRef/StepRef)の canonical digest に
 bind した one-shot token 発行。verify: 送信直前に digest 再計算照合(prepare 後の model/messages/tool
 schema/endpoint 差し替えを拒否)+MAC/期限検証+one-shot consume(replay 拒否)。Options: "TTLSeconds"(300)。
+
+## LLM boundary shadow(1H-S 移行第一段=observe-only。2026-07-14)
+
+PrepareLLMInput 全入口移行(shadow → warn → enforce)の shadow 段。SourceVault 内の全 LLM 送信境界
+(直接 HTTP=LM Studio/Anthropic/embeddings、claudecode 委譲=ClaudeQueryBg/ClaudeQuerySync/Codex、
+注入シーム)計 18 箇所に観測フックが挿入済み。**enforce しない**: フックは決して送信をブロックせず、
+Failure も返さない。event は内容最小化(prompt 本文・token/MAC を記録しない。digest/provider/model/
+文字数のみ)。
+
+### $SourceVaultLLMBoundaryShadow
+トグル。**既定 False(opt-in)**。off 時は各境界で TrueQ 1 回のみ=ゼロコスト。True で
+`LLMBoundaryShadowRecorded` event を記録(SourceVaultAppendEvent 経由、PrivateVault の event store)。
+
+### SourceVaultRegisterLLMEntrypoint[descriptor] / SourceVaultLLMEntrypointInventory[]
+LLM 入口 inventory。必須: EntrypointId。任意: Package/Function/Kind(HTTP|Delegate|Seam|Embedding)/
+Description。冪等(同 Id は上書き)。正準 inventory は broker が静的登録(`$svLLMEntrypointStaticInventory`
+18 entrypoint: webingest 2 / servicemanager 3 / mining 2 / maildb 1 / eagle 3 / workflowcatalog 2 /
+searchindex 1 / sourcevault 本体 1 / llmlog 1 / wiring 1 / promptrouter 1)。新しい LLM 入口を作る際は
+このテーブルに追記し、送信直前に SourceVaultLLMBoundaryShadowCheck を挿す。
+
+### SourceVaultLLMBoundaryShadowCheck[entrypointId, envelope] / [entrypointId, envelope, token]
+送信直前の shadow チェック。token 無し=Status "NoToken"、有り=**非消費** verify(digest/MAC/期限/ledger
+照合。ledger を書かないので再 verify 可。one-shot consume は enforce 用 SourceVaultVerifyPreparedRequest
+が担う)。戻り値 `<|Status, EntrypointId, HasToken, Registered, ShadowMode->True|>`。トグル off 時は即
+`<|Status->"Disabled"|>`。未登録 entrypoint は Registered->False で記録(coverage gap 検出)。
+
+### SourceVaultLLMBoundaryShadowStats[opts]
+`LLMBoundaryShadowRecorded` の集計: CallCount/NoTokenCount/VerifiedCount/MismatchCount/
+TokenCoverageRate/ByEntrypoint(Status tally)/UnregisteredSeen/RegisteredEntrypoints。
+warn/enforce 昇格判断の材料(§8)。Options: "Limit"(2000)。

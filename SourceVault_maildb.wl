@@ -1262,6 +1262,11 @@ iSVQueryLMStudio[prompt_String, url_String, model_String] :=
     bodyBytes = Quiet@Check[ByteArray[BinaryReadList[reqFile]], $Failed];
     Quiet@DeleteFile[reqFile];
     If[Head[bodyBytes] =!= ByteArray, Return[""]];
+    (* 1H-S shadow: LLM boundary shadow (observe-only; zero cost when toggle off) *)
+    If[TrueQ[SourceVault`$SourceVaultLLMBoundaryShadow],
+      Quiet@Check[SourceVault`SourceVaultLLMBoundaryShadowCheck["maildb:iSVQueryLMStudio",
+        <|"Provider" -> "openai-compat", "Model" -> If[model === "", Missing["AutoDetect"], model],
+          "Deployment" -> url, "Messages" -> reqData["messages"]|>], Null]];
     resp = Quiet@Check[URLRead[HTTPRequest[url, <|
         "Method" -> "POST",
         "Headers" -> {"Content-Type" -> "application/json; charset=utf-8",
