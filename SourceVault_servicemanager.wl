@@ -898,7 +898,7 @@ iWebChatModel[override_:Automatic] := Module[
 iWebChatCloud[prompt_String, model_String] := Module[{r},
   If[Length[Names["ClaudeCode`ClaudeQueryBg"]] === 0, Return[$Failed]];
   (* 1H-S boundary gate(Shadow=記録 / Warn=Message / Enforce=拒否。capbroker 不在は fail-open) *)
-  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["servicemanager:iWebChatCloud",
+  If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["servicemanager:iWebChatCloud",
       <|"Provider" -> "claudecode", "Model" -> If[model === "", Missing["Default"], model],
         "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
     Return[$Failed]];
@@ -917,7 +917,7 @@ iWebChatBilledAPI[prompt_String, model_String] := Module[{key, m, body, resp, j,
   body = ExportByteArray[<|"model" -> m, "max_tokens" -> 1500,
     "messages" -> {<|"role" -> "user", "content" -> prompt|>}|>, "RawJSON"];
   (* 1H-S boundary gate(鍵は envelope に含めない。capbroker 不在は fail-open) *)
-  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["servicemanager:iWebChatBilledAPI",
+  If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["servicemanager:iWebChatBilledAPI",
       <|"Provider" -> "anthropic", "Model" -> m,
         "Deployment" -> "https://api.anthropic.com/v1/messages",
         "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
@@ -940,7 +940,7 @@ iWebChatLocal[prompt_String, modelOverride_] := Module[{key, model, body, resp, 
     "messages" -> {<|"role" -> "user", "content" -> prompt|>},
     "temperature" -> 0.2, "stream" -> False, "max_tokens" -> 1500|>, "RawJSON"];
   (* 1H-S boundary gate(capbroker 不在は fail-open) *)
-  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["servicemanager:iWebChatLocal",
+  If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["servicemanager:iWebChatLocal",
       <|"Provider" -> "openai-compat", "Model" -> model,
         "Deployment" -> SourceVault`$SourceVaultWebLLMBase <> "/v1/chat/completions",
         "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],

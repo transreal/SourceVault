@@ -1263,7 +1263,7 @@ iSVQueryLMStudio[prompt_String, url_String, model_String] :=
     Quiet@DeleteFile[reqFile];
     If[Head[bodyBytes] =!= ByteArray, Return[""]];
     (* 1H-S boundary gate (Shadow=record / Warn=Message / Enforce=refuse; fail-open without capbroker) *)
-    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["maildb:iSVQueryLMStudio",
+    If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["maildb:iSVQueryLMStudio",
         <|"Provider" -> "openai-compat", "Model" -> If[model === "", Missing["AutoDetect"], model],
           "Deployment" -> url, "Messages" -> reqData["messages"]|>]],
       Return[""]];

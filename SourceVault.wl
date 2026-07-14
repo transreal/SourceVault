@@ -9843,7 +9843,7 @@ iCallSummaryLLM[prompt_String, model_, privacyLevel_] :=
 
     (* 1H-S boundary gate: ClaudeQuerySync 委譲の最終境界 (maildb/llmlog 共有ハブ。
        capbroker 不在は fail-open) *)
-    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["sourcevault:iCallSummaryLLM",
+    If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["sourcevault:iCallSummaryLLM",
         <|"Provider" -> "claudecode", "Model" -> ToString[effectiveModel],
           "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
       Return[<|"Status" -> "Failed", "Reason" -> "LLMBoundaryRefused",

@@ -91,6 +91,16 @@ SourceVaultVerifyPreparedRequest(**one-shot consume**)。token の RunRef/StepRe
 boundary hook 用述語。gate を実行し Enforce 拒否時のみ True。capbroker 不在・非 active は
 False(fail-open)。**Quiet/Check で包まないこと**(Warn の Message が抑止される)。
 
+### SourceVaultLLMBoundarySelfGateRefusedQ[entrypointId, envelope](2026-07-14 追加)
+self-prepare 付き hook 述語(envelope 確定と送信が同一関数内で隣接する入口向け。**iWebLLMComplete
+以外の 17 入口は全てこれに配線済み**=全入口が EnforceList 昇格可能)。boundary active 時のみ
+envelope を PrepareLLMInput で mint(RunRef 未指定なら "svrun:boundary:<entrypointId>" を付与=
+event の RunRef から self-prepare を識別可能)して gate に通す。**mint 失敗(broker 不調)は
+NoToken=Enforce では拒否(fail-close)**。非 active はゼロコスト(mint も ledger 書き込みもなし)。
+注: shadow/warn では verify が非消費のため prepared ledger のレコードは issued のまま残る
+(短命 TTL 付き・容量は小。将来の prune 対象)。上流で mint できる入口は caller 配線を優先
+(webingest SummarizeText→iWebLLMComplete が先行例)。
+
 ### SourceVaultLLMBoundaryActiveQ[entrypointId]
 当該入口で観測/検証が有効か(shadow トグル on または実効 mode 非 Shadow)。呼び出し元の
 token 発行(PrepareLLMInput)の条件に使う(webingest SummarizeText の "PrepareToken"->Automatic が先行例)。

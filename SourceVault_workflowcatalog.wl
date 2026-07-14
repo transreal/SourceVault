@@ -245,7 +245,7 @@ iSVWFQueryLocal[prompt_String, modelSpec_, timeout_] :=
     bodyBytes = iSVWFJSONBytes[reqData];
     If[bodyBytes === $Failed, Return[""]];
     (* 1H-S boundary gate(Shadow=記録 / Warn=Message / Enforce=拒否。capbroker 不在は fail-open) *)
-    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["workflowcatalog:iSVWFQueryLocal",
+    If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["workflowcatalog:iSVWFQueryLocal",
         <|"Provider" -> "openai-compat", "Model" -> If[model === "", Missing["AutoDetect"], model],
           "Deployment" -> url, "Messages" -> reqData["messages"]|>]],
       Return[""]];
@@ -267,7 +267,7 @@ iSVWFQueryCloudOrLocal[prompt_String, timeout_] := Module[{r},
   (* 1H-S boundary gate: cloud 委譲が拒否されたら cloud 試行だけ跳ばしローカル既定へ退避
      (関数全体を抜けない=ローカル側は自身の gate を持つ) *)
   If[Length[Names["ClaudeCode`ClaudeQueryBg"]] > 0 &&
-      ! TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["workflowcatalog:iSVWFQueryCloudOrLocal",
+      ! TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["workflowcatalog:iSVWFQueryCloudOrLocal",
         <|"Provider" -> "claudecode", "Model" -> Missing["Default"],
           "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
     r = Quiet @ Check[

@@ -832,7 +832,7 @@ iSVLLCallSummaryModel[prompt_String, model_] := Module[{resp, gnames, guard},
       "Detail" -> StringTake[guard, UpTo[200]], "Model" -> model|>]];
   (* 1H-S boundary gate: ClaudeQuerySync 委譲の最終境界 (paid guard 通過後。
      capbroker 不在は fail-open) *)
-  If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["llmlog:iSVLLCallSummaryModel",
+  If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["llmlog:iSVLLCallSummaryModel",
       <|"Provider" -> "claudecode", "Model" -> ToString[model],
         "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
     Return[<|"Status" -> "Failed", "Reason" -> "LLMBoundaryRefused", "Model" -> model|>]];

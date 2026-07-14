@@ -1579,7 +1579,7 @@ iSVPRExtractSlotValuesDiag[route_Association, newPrompt_String, opts : OptionsPa
        silently ignored by ClaudeQueryBg. Pass the option by its string
        name instead (OptionValue resolves string names by symbol name). *)
     (* 1H-S boundary gate: ClaudeQueryBg delegate boundary (fail-open without capbroker) *)
-    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["promptrouter:iSVPRExtractSlotValues",
+    If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["promptrouter:iSVPRExtractSlotValues",
         <|"Provider" -> "claudecode",
           "Model" -> If[model === Automatic, Missing["Default"], ToString[model]],
           "Messages" -> {<|"role" -> "user", "content" -> fullPrompt|>}|>]],

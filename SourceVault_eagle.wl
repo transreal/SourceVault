@@ -1902,7 +1902,7 @@ iSVEGQueryLocalLLMMessages[messages_List, timeout_] :=
     bodyBytes = iSVEGJSONBytes[reqData];
     If[bodyBytes === $Failed, Return[""]];
     (* 1H-S boundary gate(text/vision 共通の最終境界。capbroker 不在は fail-open) *)
-    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["eagle:iSVEGQueryLocalLLMMessages",
+    If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["eagle:iSVEGQueryLocalLLMMessages",
         <|"Provider" -> "openai-compat", "Model" -> llm["Model"], "Deployment" -> llm["URL"],
           "Messages" -> messages|>]],
       Return[""]];
@@ -1962,7 +1962,7 @@ iSVEGQueryCodex[prompt_String] :=
     If[Length[DownValues[ClaudeCode`Private`iRunChatgptCodexCLI]] === 0,
       Return["Error: Codex CLI runner (iRunChatgptCodexCLI) not available"]];
     (* 1H-S boundary gate: Codex CLI 委譲の最終境界(capbroker 不在は fail-open) *)
-    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["eagle:iSVEGQueryCodex",
+    If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["eagle:iSVEGQueryCodex",
         <|"Provider" -> "codex", "Model" -> Missing["CLI"],
           "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
       Return["Error: LLM boundary refused (enforce)"]];
@@ -1984,7 +1984,7 @@ iSVEGQueryClaude[parts_List, timeout_] :=
       (* Codex 指定 + テキスト: 必ず Codex CLI *)
       Return[iSVEGQueryCodex[StringRiffle[parts, "\n"]]]];
     (* 1H-S boundary gate: ClaudeQueryBg 委譲の最終境界(capbroker 不在は fail-open) *)
-    If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["eagle:iSVEGQueryClaude",
+    If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["eagle:iSVEGQueryClaude",
         <|"Provider" -> "claudecode", "Model" -> Missing["Routed"],
           "Messages" -> {<|"role" -> "user", "content" -> Select[parts, StringQ]|>}|>]],
       Return["Error: LLM boundary refused (enforce)"]];

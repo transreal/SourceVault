@@ -1017,7 +1017,7 @@ iSVWResolveLLMEngine[] :=
         Function[prompt,
           (* 1H-S boundary gate: wiring LLM エンジンの最終境界(ローカル強制経路。
              拒否は $Failed=呼び出し側の非文字列失敗系。capbroker 不在は fail-open) *)
-          If[TrueQ[SourceVault`SourceVaultLLMBoundaryGateRefusedQ["wiring:FillUnresolvedWithLLM",
+          If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["wiring:FillUnresolvedWithLLM",
               <|"Provider" -> "claudecode", "Model" -> Missing["LocalForced"],
                 "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
             $Failed,

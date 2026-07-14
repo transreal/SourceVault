@@ -92,6 +92,13 @@ SourceVaultLLMBoundaryGate::usage =
 SourceVaultLLMBoundaryGateRefusedQ::usage =
   "SourceVaultLLMBoundaryGateRefusedQ[entrypointId, envelope] / [.., token] は boundary hook 用の述語。" <>
   "gate を実行し、Enforce で拒否されたときのみ True。capbroker 不在・非 active 時は False(fail-open)。";
+SourceVaultLLMBoundarySelfGateRefusedQ::usage =
+  "SourceVaultLLMBoundarySelfGateRefusedQ[entrypointId, envelope] は self-prepare 付き hook 述語" <>
+  "(envelope 確定と送信が同一関数内で隣接する入口向け)。boundary active 時のみ envelope を " <>
+  "SourceVaultPrepareLLMInput で mint(RunRef 未指定なら \"svrun:boundary:<entrypointId>\" を付与=" <>
+  "event から self-prepare を識別可能)して gate に通す。mint 失敗(broker 不調)は NoToken=" <>
+  "Enforce では拒否(fail-close)。非 active はゼロコスト。呼び出し元で mint できる入口" <>
+  "(webingest SummarizeText→iWebLLMComplete が先行例)は上流 mint を優先すること。";
 SourceVaultLLMBoundaryActiveQ::usage =
   "SourceVaultLLMBoundaryActiveQ[entrypointId] は当該 entrypoint で boundary 観測/検証が有効かを返す" <>
   "(shadow トグル on または実効 mode が Shadow 以外)。呼び出し元の token 発行(PrepareLLMInput)条件に使う。";
@@ -541,6 +548,20 @@ SourceVaultLLMBoundaryGateRefusedQ[epId_String, env_Association, token_] := Modu
   g = SourceVaultLLMBoundaryGate[epId, env, token];
   AssociationQ[g] && Lookup[g, "Proceed", True] === False];
 SourceVaultLLMBoundaryGateRefusedQ[___] := False;
+
+(* self-prepare 付き述語: envelope 確定と送信が同一関数内で隣接する入口向け。
+   active 時のみ mint(off 時は mint も ledger 書き込みもなし=ゼロコスト)。
+   mint 失敗(root 未解決/鍵不調)は NoToken に縮退=Enforce では拒否(fail-close)。
+   PrepareLLMInput が Failure を返した場合も AssociationQ False → NoToken 扱い。 *)
+SourceVaultLLMBoundarySelfGateRefusedQ[epId_String, env_Association] := Module[{tok},
+  tok = If[TrueQ[Quiet @ Check[SourceVaultLLMBoundaryActiveQ[epId], False]],
+    Quiet @ Check[SourceVaultPrepareLLMInput[
+      If[KeyExistsQ[env, "RunRef"], env,
+        Append[env, "RunRef" -> "svrun:boundary:" <> epId]]],
+      Missing["PrepareFailed"]],
+    Missing["NoToken"]];
+  SourceVaultLLMBoundaryGateRefusedQ[epId, env, tok]];
+SourceVaultLLMBoundarySelfGateRefusedQ[___] := False;
 
 End[];
 

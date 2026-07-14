@@ -325,6 +325,7 @@ Options: "LLMFn" -> Automatic (SourceVaultQueryLocalLLM), "Confidence" -> 0.7
 
 ### SourceVaultQueryLocalLLM[prompt, timeout]
 local LM Studio (OpenAI 互換 chat.completions, $ClaudePrivateModel) に temperature 0・tool 無しで問い合わせ、応答文字列を返す。接続不可は Missing。Authorization Bearer token は $SourceVaultLocalLLMKey -> NBAccess`NBGetLocalLLMAPIKey -> "lm-studio" の順で解決。
+2026-07-14: request に `chat_template_kwargs: enable_thinking->False` を追加(同期・非同期両経路)。JSON 抽出用途に thinking は不要で、Qwen3 系 reasoning モデルが思考を reasoning_content に出力して content が空/JSON 不遵守になる事故(1F 実機で proposer 2/3 落ち)を抑止する(maildb/eagle と同じ。非対応モデルは無害に無視)。
 → String | Missing
 
 ### $SourceVaultLocalLLMKey

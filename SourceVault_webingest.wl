@@ -1304,7 +1304,7 @@ SourceVaultSummarizeText[text_String, OptionsPattern[]] := Module[
     prompt = OptionValue["Instruction"] <> "\n\n----\n" <> clip];
   (* 1H-S boundary gate: LLMFn 注入経路は iWebLLMComplete を通らないため、この seam が最終境界 *)
   If[OptionValue["LLMFn"] =!= Automatic &&
-      TrueQ[SourceVaultLLMBoundaryGateRefusedQ["webingest:SummarizeText:LLMFn",
+      TrueQ[SourceVaultLLMBoundarySelfGateRefusedQ["webingest:SummarizeText:LLMFn",
         <|"Provider" -> "injected", "Model" -> Replace[OptionValue["Model"], Automatic -> Missing["Injected"]],
           "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
     Return[Failure["LLMBoundaryRefused", <|"Entrypoint" -> "webingest:SummarizeText:LLMFn"|>]]];
