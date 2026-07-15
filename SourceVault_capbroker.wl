@@ -103,6 +103,19 @@ SourceVaultLLMBoundaryActiveQ::usage =
   "SourceVaultLLMBoundaryActiveQ[entrypointId] は当該 entrypoint で boundary 観測/検証が有効かを返す" <>
   "(shadow トグル on または実効 mode が Shadow 以外)。呼び出し元の token 発行(PrepareLLMInput)条件に使う。";
 
+SourceVaultSetBoundaryObservation::usage =
+  "SourceVaultSetBoundaryObservation[spec, opts] は**観測の常時化**設定を機械ローカルに永続化する" <>
+  "(owner 操作。<LocalState>/capbroker/config)。spec=<|\"Shadow\"->True|False(LLM boundary 観測), " <>
+  "\"OwnerInputShadow\"->True|False(1G ClaudeEval shadow recorder)|>。以後は SourceVault ロード時に" <>
+  "全カーネル(FE/service/headless)へ自動適用される。**観測のみ**(Mode/EnforceList は永続化しない=" <>
+  "enforce の常時化は trusted config が必要なため別段)。オプション \"Apply\"(True=即適用)。";
+SourceVaultBoundaryObservationConfig::usage =
+  "SourceVaultBoundaryObservationConfig[] は永続観測設定(Config)と現セッションの実状態(Live)を返す。";
+SourceVaultApplyBoundaryObservation::usage =
+  "SourceVaultApplyBoundaryObservation[] は永続観測設定を現セッションへ適用する(設定が正=双方向: " <>
+  "Shadow は設定値に合わせ、OwnerInputShadow は True で Enable(claudecode 未ロードなら Skip)/False で " <>
+  "Disable)。SourceVault.wl がロード末尾で自動実行する。設定なしは <|Status->NoConfig|>(何も変えない)。";
+
 Begin["`Private`"];
 
 $svCapMacKeyRef = "svcap:mac:v1";
@@ -568,6 +581,60 @@ SourceVaultLLMBoundarySelfGateRefusedQ[epId_String, env_Association, callerTok_]
     SourceVaultLLMBoundaryGateRefusedQ[epId, env, callerTok],
     SourceVaultLLMBoundarySelfGateRefusedQ[epId, env]];
 SourceVaultLLMBoundarySelfGateRefusedQ[___] := False;
+
+(* ============================================================
+   観測の常時化(2026-07-15): owner が一度設定すれば全カーネルのロード時に
+   自動適用される永続観測設定。**観測のみ**(Shadow / OwnerInputShadow)。
+   Mode/EnforceList の永続化は改ざん耐性(trusted config=MAC 署名)が必要な
+   ため本設定には含めない(enforce はセッション内で owner が明示設定)。
+   ============================================================ *)
+
+iCapObsPath[] := Module[{d = iCapDir["config"]},
+  If[d === $Failed, $Failed, iCapFile[d, "observation"]]];
+
+Options[SourceVaultSetBoundaryObservation] = {"Apply" -> True};
+SourceVaultSetBoundaryObservation[spec_Association, OptionsPattern[]] := Module[{path, cfg},
+  path = iCapObsPath[];
+  If[path === $Failed, Return[Failure["CapRootUnresolved", <||>]]];
+  cfg = <|"Shadow" -> TrueQ[Lookup[spec, "Shadow", False]],
+    "OwnerInputShadow" -> TrueQ[Lookup[spec, "OwnerInputShadow", False]],
+    "UpdatedAtUTC" -> DateString[Now, {"ISODateTime"}, TimeZone -> 0] <> "Z",
+    "UpdatedBy" -> ToString[$UserName], "ConfigVersion" -> 1|>;
+  SourceVaultWithLock["svcapledger", iCapWrite[path, cfg]];
+  If[TrueQ[OptionValue["Apply"]],
+    Append[cfg, "Applied" -> SourceVaultApplyBoundaryObservation[]], cfg]];
+SourceVaultSetBoundaryObservation[___] := Failure["BadObservationSpec", <||>];
+
+SourceVaultBoundaryObservationConfig[] := <|
+  "Config" -> Module[{p = iCapObsPath[]}, If[p === $Failed, Missing["RootUnresolved"], iCapRead[p]]],
+  "Live" -> <|"Shadow" -> TrueQ[$SourceVaultLLMBoundaryShadow],
+    "Mode" -> $SourceVaultLLMBoundaryMode,
+    "EnforceList" -> $SourceVaultLLMBoundaryEnforceList,
+    "OwnerInputShadow" -> Quiet @ Check[
+      TrueQ[SourceVaultOwnerInputShadowStatus[]["Enabled"]], False]|>|>;
+
+SourceVaultApplyBoundaryObservation[] := Module[{path, cfg, applied = {}, r},
+  path = iCapObsPath[];
+  If[path === $Failed, Return[<|"Status" -> "NoConfig", "Reason" -> "RootUnresolved"|>]];
+  cfg = iCapRead[path];
+  If[! AssociationQ[cfg], Return[<|"Status" -> "NoConfig"|>]];
+  (* 設定が正(双方向)。観測のみなので適用は常に安全=挙動不変 *)
+  $SourceVaultLLMBoundaryShadow = TrueQ[Lookup[cfg, "Shadow", False]];
+  AppendTo[applied, "Shadow" -> $SourceVaultLLMBoundaryShadow];
+  If[TrueQ[Lookup[cfg, "OwnerInputShadow", False]],
+    (* on: cognition(1G hook)があれば Enable(冪等) *)
+    If[Length[DownValues[SourceVaultEnableOwnerInputShadow]] > 0,
+      (r = Quiet @ Check[SourceVaultEnableOwnerInputShadow[], $Failed];
+       AppendTo[applied, "OwnerInputShadow" ->
+         If[AssociationQ[r] && MemberQ[{"Enabled", "AlreadyEnabled"}, Lookup[r, "Status", ""]],
+           True,
+           "Skipped:" <> ToString[If[AssociationQ[r], Lookup[r, "Status", "?"], "Error"]]]]),
+      AppendTo[applied, "OwnerInputShadow" -> "Skipped:CognitionUnavailable"]],
+    (* off: Disable(未装着なら AlreadyDisabled=noop) *)
+    (If[Length[DownValues[SourceVaultDisableOwnerInputShadow]] > 0,
+       Quiet @ Check[SourceVaultDisableOwnerInputShadow[], Null]];
+     AppendTo[applied, "OwnerInputShadow" -> False])];
+  <|"Status" -> "Applied", "Applied" -> Association[applied]|>];
 
 End[];
 

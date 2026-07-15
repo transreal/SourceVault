@@ -108,3 +108,22 @@ RunRef "svrun:pdfask:iWebChat"。fallback local は self-prepare に委ねる)**
 ### SourceVaultLLMBoundaryActiveQ[entrypointId]
 当該入口で観測/検証が有効か(shadow トグル on または実効 mode 非 Shadow)。呼び出し元の
 token 発行(PrepareLLMInput)の条件に使う(webingest SummarizeText の "PrepareToken"->Automatic が先行例)。
+
+## 観測の常時化(2026-07-15)
+
+owner が一度設定すれば **SourceVault ロード時に全カーネル(FE/service/headless)へ自動適用**される
+永続観測設定(`<LocalState>/capbroker/config/observation.json`=機械ローカル)。**観測のみ**
+(Mode/EnforceList は永続化しない=enforce の常時化は trusted config(MAC 署名)が必要なため別段。
+セッション内で owner が明示設定する)。
+
+### SourceVaultSetBoundaryObservation[spec, opts]
+`<|"Shadow"->True|False, "OwnerInputShadow"->True|False|>` を永続化(+既定で即適用)。
+常時観測の開始は `SourceVaultSetBoundaryObservation[<|"Shadow"->True, "OwnerInputShadow"->True|>]` の
+1 回だけ。解除は両方 False で Set。Options: "Apply"(True)。
+
+### SourceVaultBoundaryObservationConfig[] / SourceVaultApplyBoundaryObservation[]
+Config(永続設定)+Live(現セッション実状態)の照会/設定のセッション適用(**設定が正=双方向**:
+Shadow は設定値へ、OwnerInputShadow True→Enable(claudecode 未ロードは Skipped 報告)/False→Disable)。
+Apply は SourceVault.wl がロード末尾で自動実行(結果は `SourceVault`Private`$iSVBoundaryObsApplyResult`)。
+設定なしは NoConfig=何も変えない。テスト作法: 観測 config を持つ機械でも決定的に走るよう、boundary 系
+テストはロード直後に toggle/hook をリセットする(llmshadow/ownershadow テスト冒頭が例)。

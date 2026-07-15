@@ -15022,3 +15022,18 @@ Quiet @ Check[
           If[AssociationQ[r], r, <|"Status" -> "Failed"|>]]],
   SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult =
     <|"Status" -> "Failed", "Reason" -> "AutoStartException"|>];
+
+(* ============================================================
+   観測の常時化 (Cane 1H-S/1G): owner が SourceVaultSetBoundaryObservation で
+   永続化した観測設定 (LLM boundary shadow / 1G ClaudeEval shadow recorder) を
+   全カーネル (FE / service / headless) のロード時に適用する。
+   観測のみ (observe-only) なので挙動不変・設定なしは NoConfig で何もしない。
+   enforce (Mode/EnforceList) はここでは適用しない (セッション内 owner 明示のみ)。
+   ============================================================ *)
+Quiet @ Check[
+  SourceVault`Private`$iSVBoundaryObsApplyResult =
+    If[Length[DownValues[SourceVault`SourceVaultApplyBoundaryObservation]] > 0,
+      SourceVault`SourceVaultApplyBoundaryObservation[],
+      <|"Status" -> "Skipped", "Reason" -> "CapBrokerUnavailable"|>],
+  SourceVault`Private`$iSVBoundaryObsApplyResult =
+    <|"Status" -> "Failed", "Reason" -> "ApplyException"|>];
