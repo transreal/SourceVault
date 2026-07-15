@@ -58,6 +58,17 @@ enforcement 権限なし**、OS ScheduledTask は作らない)。
 UnexpectedToolRequestRate)のみ。owner 状態 pair(MailSenderNovelty×OwnerOperationalSignal)は `Active->False,
 ResearchOnly->True`(§5.14 追補)。
 
+### SourceVaultCollectCaneAnomalyStreams[opts](2026-07-15 追加)
+既存の observe-only event store から**決定的に**(LLM 不使用)rate stream(CreatedAtUTC 日次ビン化)を
+構築する。既定 stream: `LLMBoundaryMismatchRate`(LLMBoundaryGate/Shadow の非 Verified/mismatch 率)、
+`GuardMailMisalignedRate`(GuardMailParallelRecorded の非 aligned 率)。**owner 状態系は opt-in**:
+`"IncludeOwnerState"->True` で `OwnerInputHighRiskRate`(OwnerInputShadowRecorded の High 率)を追加。
+Options: "WindowDays"(14)、"Limit"(5000)。→ RunCaneAnomalyWorkflow の "Streams" にそのまま渡せる
+Association。**実データが無い stream は含めない**(空捏造しない=I-15)。分子/分母を数え Wilson CI と
+baseline は DetectStreamAnomalies が付ける(cold start=MinBaselineSamples 未満は InsufficientBaseline)。
+schedule tick の既定 RunFn がこれを呼んで実 stream を供給する(owner 状態は profile の OwnerStateOptIn に従う)。
+罠: 文字列の日付比較は `>=` でなく `OrderedQ`(WL の `>=` は文字列を評価しない)。
+
 ### SourceVaultCaneAnomalyScheduleTick[opts](2026-07-14 追加)
 service 低頻度 hook 用の due 判定+実行 tick(servicemanager の service ループから弱結合で定期呼び出し。
 判定周期は `$SourceVaultCaneAnomalyTickIntervalSeconds`(既定 600s)、実行間隔は profile 内 ScheduleSpec の

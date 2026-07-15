@@ -1779,7 +1779,7 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
   {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath,
    lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs,
    lastDispatchAbs = 0, dispatchCounter = 0, dispatchState = None,
-   lastCaneAnomalyAbs = 0},
+   lastCaneAnomalyAbs = 0, lastCapPruneAbs = 0},
   dir = iServiceRuntimeDir[serviceId];
   If[FailureQ[dir], Return[dir]];
   iSMEnsureDir[dir];
@@ -1890,6 +1890,23 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
             iServiceLog[dir, "CaneAnomalyScheduleTick",
               <|"Result" -> Lookup[caneR, "Status", "?"],
                 "RunId" -> Lookup[caneR, "RunId", Null]|>]]]];
+      (* capbroker GC: 観測常時化で溜まる prepared/lease の用済みレコードを低頻度で掃除。
+         安全範囲(prepared=consumed/期限切れ、lease=consumed|revoked かつ期限切れ。issued 未期限は残す)
+         なので service では DryRun->False で自動実行。GraceSeconds で余裕を持たせる。 *)
+      If[Length[DownValues[SourceVault`SourceVaultPruneCapBroker]] > 0 &&
+         (AbsoluteTime[] - lastCapPruneAbs) >
+           If[NumericQ[SourceVault`$SourceVaultCapBrokerPruneIntervalSeconds],
+             SourceVault`$SourceVaultCapBrokerPruneIntervalSeconds, 3600],
+        Module[{pruneR},
+          pruneR = Quiet @ TimeConstrained[
+            Check[SourceVault`SourceVaultPruneCapBroker["DryRun" -> False, "GraceSeconds" -> 300],
+              <|"Status" -> "Error"|>],
+            60, <|"Status" -> "TimedOut"|>];
+          lastCapPruneAbs = AbsoluteTime[];
+          If[AssociationQ[pruneR] && Lookup[pruneR, "TotalPruned", 0] > 0,
+            iServiceLog[dir, "CapBrokerPruned",
+              <|"Prepared" -> Lookup[pruneR, "PreparedPruned", 0],
+                "Leases" -> Lookup[pruneR, "LeasesPruned", 0]|>]]]];
       (* headless dispatch (配車専用): opt-in マシンでのみ、enqueue された
          CatalogWorkflow ジョブを拾い SourceVaultRunWorkflowAsync (外部プロセス)
          へ委譲する。サブカーネルプールなし・トリガー評価なし。opt-in 判定は

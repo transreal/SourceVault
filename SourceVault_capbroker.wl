@@ -48,6 +48,13 @@ SourceVaultRevokeCapabilityLeases::usage =
   "SourceVaultRevokeCapabilityLeases[runRef|All] は run の未消費 lease を一括失効する(containment)。";
 SourceVaultCapabilityLeaseLedger::usage =
   "SourceVaultCapabilityLeaseLedger[leaseId] は ledger record(state/UsesConsumed 等。鍵材料なし)を返す。";
+SourceVaultPruneCapBroker::usage =
+  "SourceVaultPruneCapBroker[opts] は capbroker ledger の**用済みレコードを掃除**する(観測常時化で" <>
+  "溜まる prepared/lease の GC)。prepared: consumed または期限切れ(ExpiresAt<now)を削除。lease: " <>
+  "consumed|revoked かつ ExpiresAt<now を削除(**issued の未期限 lease は残す**=実行中権限を消さない)。" <>
+  "**DryRun 既定 True**(rule 103。実削除は DryRun->False)。オプション \"DryRun\"(True)、" <>
+  "\"GraceSeconds\"(0=期限ちょうどで対象。余裕を持たせるなら正値)、\"PreparedOnly\"(False)。" <>
+  "戻り値 <|DryRun, PreparedScanned/Pruned, LeasesScanned/Pruned, ...|>。atomic(lock 下)。";
 
 SourceVaultPrepareLLMInput::usage =
   "SourceVaultPrepareLLMInput[envelope, opts] は LLM request envelope 全体(model/deployment/messages/" <>
@@ -279,6 +286,45 @@ SourceVaultRevokeCapabilityLeases[runRefOrAll_] :=
           iCapWrite[f, Join[rec, <|"State" -> "revoked", "Version" -> rec["Version"] + 1|>]]; n++]]],
         files];
       <|"Revoked" -> n|>]];
+
+(* ---- ledger GC(観測常時化で溜まる用済みレコードの掃除。§103 datastore safety)---- *)
+Options[SourceVaultPruneCapBroker] = {"DryRun" -> True, "GraceSeconds" -> 0, "PreparedOnly" -> False};
+SourceVaultPruneCapBroker[OptionsPattern[]] := Module[
+  {dry = TrueQ[OptionValue["DryRun"]], grace = OptionValue["GraceSeconds"], now, cutoff,
+   pScanned = 0, pPruned = 0, lScanned = 0, lPruned = 0, pruned = {}},
+  If[! NumericQ[grace], grace = 0];
+  now = iCapNow[]; cutoff = now - grace;
+  SourceVaultWithLock["svcapledger",
+    Module[{pdir = iCapDir["prepared"], ldir},
+      (* prepared: consumed または期限切れ *)
+      If[StringQ[pdir] && DirectoryQ[pdir],
+        Scan[Function[f, Module[{rec = iCapRead[f]},
+          pScanned++;
+          If[AssociationQ[rec] &&
+              (Lookup[rec, "State", ""] === "consumed" ||
+               (NumericQ[Lookup[rec, "ExpiresAt", Missing[]]] && rec["ExpiresAt"] < cutoff)),
+            AppendTo[pruned, <|"Kind" -> "prepared", "Id" -> Lookup[rec, "PreparedInputId", "?"],
+              "State" -> Lookup[rec, "State", "?"]|>];
+            If[! dry, Quiet@DeleteFile[f]]; pPruned++]]],
+          FileNames["*.json", pdir]]];
+      (* lease: consumed|revoked かつ期限切れ。issued の未期限 lease は絶対に消さない *)
+      If[! TrueQ[OptionValue["PreparedOnly"]],
+        ldir = iCapDir["leases"];
+        If[StringQ[ldir] && DirectoryQ[ldir],
+          Scan[Function[f, Module[{rec = iCapRead[f]},
+            lScanned++;
+            If[AssociationQ[rec] &&
+                MemberQ[{"consumed", "revoked"}, Lookup[rec, "State", ""]] &&
+                NumericQ[Lookup[rec, "ExpiresAt", Missing[]]] && rec["ExpiresAt"] < cutoff,
+              AppendTo[pruned, <|"Kind" -> "lease", "Id" -> Lookup[rec, "LeaseId", "?"],
+                "State" -> Lookup[rec, "State", "?"]|>];
+              If[! dry, Quiet@DeleteFile[f]]; lPruned++]]],
+            FileNames["*.json", ldir]]]]]];
+  <|"DryRun" -> dry, "GraceSeconds" -> grace,
+    "PreparedScanned" -> pScanned, "PreparedPruned" -> pPruned,
+    "LeasesScanned" -> lScanned, "LeasesPruned" -> lPruned,
+    "TotalPruned" -> pPruned + lPruned,
+    "Sample" -> Take[pruned, UpTo[20]]|>];
 
 (* ---- PreparedInputToken(§4.22/4.22b)---- *)
 $svCapEnvelopeKeys = {"Provider", "Model", "Deployment", "Messages", "ToolSchemas",

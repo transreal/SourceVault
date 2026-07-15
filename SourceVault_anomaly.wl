@@ -108,6 +108,14 @@ SourceVaultRegisterCaneAnomalySchedule::usage =
   "SourceVaultRegisterCaneAnomalySchedule[spec, opts] は owner 登録の ScheduleSpec(分析権限のみ)を profile に保存する。" <>
   "spec=<|(\"Enabled\"),(\"Paused\"),(\"IntervalSeconds\"),(\"MaxCatchupWindows\")|>。opts \"OwnerAuthorization\"->True 必須。" <>
   "OS の ScheduledTask は作らない(rule 95)。schedule は enforcement 権限を持たない(I-16)。";
+SourceVaultCollectCaneAnomalyStreams::usage =
+  "SourceVaultCollectCaneAnomalyStreams[opts] は既存の observe-only event store から**決定的に**" <>
+  "rate stream(CreatedAtUTC 日次ビン化)を構築する(LLM 不使用)。既定 stream: " <>
+  "\"LLMBoundaryMismatchRate\"(LLMBoundaryGate/Shadow の非 Verified/mismatch 率)、" <>
+  "\"GuardMailMisalignedRate\"(GuardMailParallelRecorded の非 aligned 率)。**owner 状態系は opt-in**: " <>
+  "\"IncludeOwnerState\"->True で \"OwnerInputHighRiskRate\"(OwnerInputShadowRecorded の High 率)を追加。" <>
+  "オプション \"WindowDays\"(14)、\"Limit\"(5000)。戻り値は RunCaneAnomalyWorkflow の \"Streams\" にそのまま" <>
+  "渡せる Association。実データが無い stream は含めない(空捏造しない=I-15)。";
 SourceVaultCaneAnomalyScheduleTick::usage =
   "SourceVaultCaneAnomalyScheduleTick[opts] は service 低頻度 hook 用の due 判定+実行 tick。owner 登録の " <>
   "ScheduleSpec(profile 内)が Enabled/Scheduled/非 Paused かつ前回 run から IntervalSeconds 経過のときだけ " <>
@@ -779,6 +787,58 @@ SourceVaultRunCaneAnomalyWorkflow[input_Association, OptionsPattern[]] := Module
 SourceVaultRunCaneAnomalyWorkflow[] := SourceVaultRunCaneAnomalyWorkflow[<|"Streams" -> <||>|>];
 
 (* ============================================================
+   実 stream collector(observe-only event store → rate stream。2026-07-15)
+   決定的・LLM 不使用。CreatedAtUTC を日次 window にビン化し、rate 分子/分母を数える。
+   実データが無い stream は含めない(空捏造しない=I-15)。owner 状態系は opt-in。
+   ============================================================ *)
+$svAnomMismatchStatuses = {"RequestMismatch", "TokenExpired", "BadMAC", "TokenAlreadyUsed",
+  "NoLedgerRecord", "BadToken", "ShadowVerifyError", "VerifyError"};
+
+(* CreatedAtUTC(...T...Z / ミリ秒可)→ 日付キー "YYYY-MM-DD"。パース不能は Missing *)
+iAnomDayKey[e_Association] := Module[{s = Lookup[e, "CreatedAtUTC", Missing[]]},
+  If[StringQ[s] && StringLength[s] >= 10, StringTake[s, 10], Missing[]]];
+
+(* events を日次ビン化して rate stream の Points を作る。numPred=分子述語 *)
+iAnomBinStream[events_List, numPred_] := Module[{byDay, days},
+  byDay = GroupBy[Select[events, StringQ[iAnomDayKey[#]] &], iAnomDayKey];
+  days = Sort[Keys[byDay]];
+  Function[d, Module[{grp = byDay[d]},
+    <|"WindowStart" -> d <> "T00:00:00Z", "WindowEnd" -> d <> "T00:00:00Z",
+      "EventCount" -> Count[grp, e_ /; TrueQ[numPred[e]]],
+      "ExposureCount" -> Length[grp], "MissingCount" -> 0|>]] /@ days];
+
+iAnomReadEvents[cls_String, limit_] :=
+  Replace[Quiet @ Check[SourceVaultTransactionLog["Limit" -> limit, "EventClass" -> cls], {}],
+    Except[_List] -> {}];
+
+Options[SourceVaultCollectCaneAnomalyStreams] = {"WindowDays" -> 14, "Limit" -> 5000,
+  "IncludeOwnerState" -> False};
+SourceVaultCollectCaneAnomalyStreams[OptionsPattern[]] := Module[
+  {lim = OptionValue["Limit"], wd = OptionValue["WindowDays"], streams = <||>, cut, keepRecent, bpts, gpts, opts2},
+  cut = If[IntegerQ[wd] && wd > 0,
+    DateString[DatePlus[Now, {-wd, "Day"}], {"Year", "-", "Month", "-", "Day"}, TimeZone -> 0], ""];
+  (* 罠: 文字列に対する >= は評価されない(GreaterEqual のまま)→ OrderedQ で日付順比較。
+     OrderedQ[{cut, day}] は cut<=day(ISO 文字列の辞書順=日付順)のとき True *)
+  keepRecent = Function[pts, Select[pts,
+    OrderedQ[{cut, StringTake[Lookup[#, "WindowStart", ""], UpTo[10]]}] &]];
+  (* LLMBoundaryMismatchRate: gate + shadow 合算、非 Verified(mismatch 系)率 *)
+  bpts = keepRecent @ iAnomBinStream[
+    Join[iAnomReadEvents["LLMBoundaryGateRecorded", lim],
+         iAnomReadEvents["LLMBoundaryShadowRecorded", lim]],
+    Function[e, MemberQ[$svAnomMismatchStatuses, Lookup[e, "Status", ""]]]];
+  If[bpts =!= {}, streams["LLMBoundaryMismatchRate"] = <|"Points" -> bpts|>];
+  (* GuardMailMisalignedRate: mail release 並走の非 aligned 率 *)
+  gpts = keepRecent @ iAnomBinStream[iAnomReadEvents["GuardMailParallelRecorded", lim],
+    Function[e, ! TrueQ[Lookup[e, "Aligned", False]]]];
+  If[gpts =!= {}, streams["GuardMailMisalignedRate"] = <|"Points" -> gpts|>];
+  (* OwnerInputHighRiskRate: owner 状態=opt-in のみ *)
+  If[TrueQ[OptionValue["IncludeOwnerState"]],
+    opts2 = keepRecent @ iAnomBinStream[iAnomReadEvents["OwnerInputShadowRecorded", lim],
+      Function[e, Lookup[e, "Risk", ""] === "High"]];
+    If[opts2 =!= {}, streams["OwnerInputHighRiskRate"] = <|"Points" -> opts2|>]];
+  streams];
+
+(* ============================================================
    schedule tick(service 低頻度 hook 結線。2026-07-14)
    - due 判定は profile 内 ScheduleSpec(owner 登録)× pipeline-status の LastRunEpoch。
    - catch-up: どれだけ遅延していても実行は 1 回(run は idempotent。backlog の多重実行なし)。
@@ -805,7 +865,13 @@ SourceVaultCaneAnomalyScheduleTick[OptionsPattern[]] := Module[
   If[(now - lastEpoch) < interval,
     Return[<|"Status" -> "NotDue",
       "NextDueInSeconds" -> Ceiling[interval - (now - lastEpoch)]|>]];
-  runFn = Replace[OptionValue["RunFn"], Automatic :> (SourceVaultRunCaneAnomalyWorkflow[] &)];
+  (* RunFn 既定: collector で実 event から stream を供給して実行(空捏造しない=無データなら空 streams)。
+     owner 状態 stream は profile の OwnerStateOptIn に従う。RunFn 注入時はそれを尊重(テスト用) *)
+  runFn = Replace[OptionValue["RunFn"], Automatic :> Function[Module[{streams},
+    streams = Quiet @ Check[SourceVaultCollectCaneAnomalyStreams[
+      "IncludeOwnerState" -> TrueQ[Lookup[prof, "OwnerStateOptIn", False]]], <||>];
+    If[! AssociationQ[streams], streams = <||>];
+    SourceVaultRunCaneAnomalyWorkflow[<|"Streams" -> streams|>]]]];
   r = Quiet@Check[runFn[], $Failed];
   If[! AssociationQ[r] || Lookup[r, "Status", ""] =!= "Completed",
     Return[<|"Status" -> "RunFailed",

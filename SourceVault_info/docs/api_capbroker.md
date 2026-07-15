@@ -33,6 +33,14 @@ run の未消費 lease を一括失効(containment)。→ `<|Revoked|>`。
 ### SourceVaultCapabilityLeaseLedger[leaseId]
 ledger record(state/UsesConsumed 等。鍵材料なし)。
 
+### SourceVaultPruneCapBroker[opts](2026-07-15 追加)
+観測常時化で溜まる prepared/lease の**用済みレコード GC**。prepared: consumed または期限切れ
+(ExpiresAt<now)を削除。lease: consumed|revoked かつ期限切れを削除(**issued の未期限 lease は残す**
+=実行中権限を消さない)。**DryRun 既定 True**(rule 103)。Options: "DryRun"(True)、"GraceSeconds"(0)、
+"PreparedOnly"(False)。→ `<|DryRun, PreparedScanned/Pruned, LeasesScanned/Pruned, TotalPruned, Sample|>`。
+atomic(lock 下)。service が `$SourceVaultCapBrokerPruneIntervalSeconds`(既定 3600)ごとに
+DryRun->False+GraceSeconds->300 で自動実行(安全範囲のみ)。
+
 ### SourceVaultPrepareLLMInput[envelope, opts] / SourceVaultVerifyPreparedRequest[token, envelope]
 prepare: request envelope 全体(Provider/Model/Deployment/Messages/ToolSchemas/RetrievalRefs/
 IsolationProfile/PrivacyDecisionRef/CapabilityCeiling/OutputSchema/RunRef/StepRef)の canonical digest に
