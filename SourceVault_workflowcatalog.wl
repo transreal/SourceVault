@@ -708,10 +708,21 @@ iSVWFExampleFile[slug_String] := Module[{folder, exs},
 iSVWFCodeLangInputQ[lang_String] :=
   MemberQ[{"wl", "wolfram", "mathematica", "wolframlanguage"}, ToLowerCase[StringTrim[lang]]];
 
-(* markdown (example.md) -> notebook セル列。見出し->Subsection/Subsubsection、
-   ```wl/wolfram/mathematica``` -> Input セル (実行可能・自動評価しない)、他コード->Program、
-   本文->Text。 *)
-iSVWFMarkdownToCells[md_String] := Module[
+(* markdown (example.md) -> notebook セル列。
+   2026-07-15: 正本は claudecode.wl の ClaudeCode`MarkdownToCells に統合
+   (見出し/箇条書き/コード fence/```mermaid 図の canonical 変換)。
+   claudecode 未ロード環境 (headless service 等) でのみ従来実装に fallback。
+   既定 (bare ``` -> Program, # -> Subsection, ## -> Subsubsection) は
+   従来挙動と互換。 *)
+iSVWFMarkdownToCells[md_String] := If[
+  Length[Names["ClaudeCode`MarkdownToCells"]] > 0,
+  ClaudeCode`MarkdownToCells[md],
+  iSVWFMarkdownToCellsFallback[md]];
+
+(* 従来実装 (fallback 専用): 見出し->Subsection/Subsubsection、
+   ```wl/wolfram/mathematica``` -> Input セル (実行可能・自動評価しない)、
+   他コード->Program、本文->Text。 *)
+iSVWFMarkdownToCellsFallback[md_String] := Module[
   {lines, cells = {}, inCode = False, codeBuf = {}, lang = "", textBuf = {}, flush},
   flush[] := (
     If[textBuf =!= {},
