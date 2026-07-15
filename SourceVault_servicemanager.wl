@@ -895,12 +895,13 @@ iWebChatModel[override_:Automatic] := Module[
 
 (* クラウド LLM (ClaudeQueryBg, 同期・コンテキスト安全)。公開コンテンツ用に高速。
    model="" で既定モデル、それ以外は $ClaudeModel を一時切替。 *)
-iWebChatCloud[prompt_String, model_String] := Module[{r},
+iWebChatCloud[prompt_String, model_String, tok_ : Missing["NoToken"]] := Module[{r},
   If[Length[Names["ClaudeCode`ClaudeQueryBg"]] === 0, Return[$Failed]];
-  (* 1H-S boundary gate(Shadow=記録 / Warn=Message / Enforce=拒否。capbroker 不在は fail-open) *)
+  (* 1H-S boundary gate(Shadow=記録 / Warn=Message / Enforce=拒否。capbroker 不在は fail-open。
+     tok=iWebChat の上流 mint token(無ければ self-prepare)) *)
   If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["servicemanager:iWebChatCloud",
       <|"Provider" -> "claudecode", "Model" -> If[model === "", Missing["Default"], model],
-        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>, tok]],
     Return[$Failed]];
   r = Quiet @ Check[
     If[model === "", ClaudeCode`ClaudeQueryBg[prompt],
@@ -910,17 +911,19 @@ iWebChatCloud[prompt_String, model_String] := Module[{r},
 
 (* 課金API (Anthropic Messages API, 従量課金=サービス提供可)。サブスク CLI とは別ライセンス。
    鍵は NBAccess`NBGetAPIKey 経由 (直接 SystemCredential は使わない)。 *)
-iWebChatBilledAPI[prompt_String, model_String] := Module[{key, m, body, resp, j, content},
+iWebChatBilledAPI[prompt_String, model_String, tok_ : Missing["NoToken"]] := Module[
+  {key, m, body, resp, j, content},
   key = Quiet @ Check[NBAccess`NBGetAPIKey["anthropic"], $Failed];
   If[! (StringQ[key] && key =!= ""), Return[$Failed]];
   m = If[model === "", SourceVault`$SourceVaultWebBilledModel, model];
   body = ExportByteArray[<|"model" -> m, "max_tokens" -> 1500,
     "messages" -> {<|"role" -> "user", "content" -> prompt|>}|>, "RawJSON"];
-  (* 1H-S boundary gate(鍵は envelope に含めない。capbroker 不在は fail-open) *)
+  (* 1H-S boundary gate(鍵は envelope に含めない。capbroker 不在は fail-open。
+     tok=iWebChat の上流 mint token(無ければ self-prepare)) *)
   If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["servicemanager:iWebChatBilledAPI",
       <|"Provider" -> "anthropic", "Model" -> m,
         "Deployment" -> "https://api.anthropic.com/v1/messages",
-        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>, tok]],
     Return[$Failed]];
   resp = Quiet @ Check[URLRead[HTTPRequest["https://api.anthropic.com/v1/messages",
     <|"Method" -> "POST", "Headers" -> {"x-api-key" -> key,
@@ -934,16 +937,17 @@ iWebChatBilledAPI[prompt_String, model_String] := Module[{key, m, body, resp, j,
     If[StringQ[t] && StringTrim[t] =!= "", t, $Failed]]];
 
 (* ローカル LLM (LM Studio, OpenAI 互換)。誰でも利用可 (ローカル処理=課金もライセンスも無関係)。 *)
-iWebChatLocal[prompt_String, modelOverride_] := Module[{key, model, body, resp, j},
+iWebChatLocal[prompt_String, modelOverride_, tok_ : Missing["NoToken"]] := Module[
+  {key, model, body, resp, j},
   key = iWebLLMAPIKey[]; model = iWebChatModel[modelOverride];
   body = ExportByteArray[<|"model" -> model,
     "messages" -> {<|"role" -> "user", "content" -> prompt|>},
     "temperature" -> 0.2, "stream" -> False, "max_tokens" -> 1500|>, "RawJSON"];
-  (* 1H-S boundary gate(capbroker 不在は fail-open) *)
+  (* 1H-S boundary gate(capbroker 不在は fail-open。tok=iWebChat の上流 mint token) *)
   If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["servicemanager:iWebChatLocal",
       <|"Provider" -> "openai-compat", "Model" -> model,
         "Deployment" -> SourceVault`$SourceVaultWebLLMBase <> "/v1/chat/completions",
-        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>]],
+        "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>, tok]],
     Return[$Failed]];
   (* chat モデルが未ロードだと JIT で長時間ハングしコマンドループを塞ぐので、短めの
      TimeConstraint で早期失敗させる (失敗時は /pdfask が evidence のみへ degrade)。 *)
@@ -986,15 +990,45 @@ iWebResolveChatPlan[spec_, policy_Association] := Module[{isOwner, billingOK, su
 
 (* /pdfask の回答合成 LLM。policy(ClientIP/OwnerIPs/BillingAllowed) でバックエンドを gate。
    policy 省略 (直接呼び出し=オーナー自身) は従来どおりオーナー扱い。 *)
-iWebChat[prompt_String, modelOverride_ : Automatic, policy_ : <||>] := Module[{plan, r},
+iWebChat[prompt_String, modelOverride_ : Automatic, policy_ : <||>] := Module[
+  {plan, backend, planModel, localModel, epId, env, tok = Missing["NoToken"], r},
   plan = iWebResolveChatPlan[modelOverride, If[AssociationQ[policy], policy, <||>]];
-  r = Switch[Lookup[plan, "Backend"],
-    "subscription", iWebChatCloud[prompt, Lookup[plan, "Model", ""]],
-    "api", iWebChatBilledAPI[prompt, Lookup[plan, "Model", ""]],
-    _, iWebChatLocal[prompt, Lookup[plan, "Model", Automatic]]];
+  backend = Lookup[plan, "Backend"];
+  (* 1H-S 上流 mint: plan 確定後・dispatch 前に最終 envelope を確定して mint(active 時のみ)。
+     self-prepare(境界内 mint)より早い束縛点=plan→dispatch 間の改変も検出対象になる。
+     envelope は各 backend の boundary gate env と一致させること(不一致は RequestMismatch)。 *)
+  {epId, env} = Switch[backend,
+    "subscription",
+      planModel = Lookup[plan, "Model", ""];
+      {"servicemanager:iWebChatCloud",
+       <|"Provider" -> "claudecode",
+         "Model" -> If[planModel === "", Missing["Default"], planModel],
+         "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>},
+    "api",
+      planModel = Lookup[plan, "Model", ""];
+      {"servicemanager:iWebChatBilledAPI",
+       <|"Provider" -> "anthropic",
+         "Model" -> If[planModel === "", SourceVault`$SourceVaultWebBilledModel, planModel],
+         "Deployment" -> "https://api.anthropic.com/v1/messages",
+         "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>},
+    _,
+      (* local: model を先解決して渡す(iWebChatModel は解決済み文字列を素通し=二重解決なし) *)
+      localModel = iWebChatModel[Lookup[plan, "Model", Automatic]];
+      {"servicemanager:iWebChatLocal",
+       <|"Provider" -> "openai-compat", "Model" -> localModel,
+         "Deployment" -> SourceVault`$SourceVaultWebLLMBase <> "/v1/chat/completions",
+         "Messages" -> {<|"role" -> "user", "content" -> prompt|>}|>}];
+  If[TrueQ[Quiet @ Check[SourceVault`SourceVaultLLMBoundaryActiveQ[epId], False]],
+    tok = Quiet @ Check[SourceVault`SourceVaultPrepareLLMInput[
+      Append[env, "RunRef" -> "svrun:pdfask:iWebChat"]], Missing["PrepareFailed"]]];
+  r = Switch[backend,
+    "subscription", iWebChatCloud[prompt, Lookup[plan, "Model", ""], tok],
+    "api", iWebChatBilledAPI[prompt, Lookup[plan, "Model", ""], tok],
+    _, iWebChatLocal[prompt, localModel, tok]];
   (* サブスク/課金API が失敗したら LM Studio へフォールバック (回答を出すため)。
-     フォールバック先は常に local=非オーナーがサブスクに昇格することはない。 *)
-  If[! StringQ[r] && MemberQ[{"subscription", "api"}, Lookup[plan, "Backend"]],
+     フォールバック先は常に local=非オーナーがサブスクに昇格することはない。
+     fallback は上流 token の対象外(backend が変わる)=boundary の self-prepare に委ねる。 *)
+  If[! StringQ[r] && MemberQ[{"subscription", "api"}, backend],
     r = iWebChatLocal[prompt, Automatic]];
   r];
 

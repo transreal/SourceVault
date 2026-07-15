@@ -142,6 +142,22 @@ SourceVaultAssistanceRecordOutcome::usage =
   "SourceVaultAssistanceRecordOutcome[assistanceCaseId, outcome, opts] は ChosenIntentRef/OwnerCorrection/" <>
   "IntentPreserved(True|False)を記録する(intent preservation 測定=§8)。SensitiveLocalVault。";
 
+(* ---- 1G ClaudeEval 入口 shadow recorder(非侵襲 hook。opt-in。2026-07-15) ---- *)
+SourceVaultEnableOwnerInputShadow::usage =
+  "SourceVaultEnableOwnerInputShadow[opts] は ClaudeCode`ClaudeEval に **非侵襲 shadow hook** を装着する" <>
+  "(opt-in。claudecode.wl は無改変=DownValues swap、Disable で完全復元)。hook は owner prompt を " <>
+  "AssistOwnerInput(\"Persist\"->False=純関数・LLM 不使用)で評価し、内容最小化 event " <>
+  "OwnerInputShadowRecorded(mode/risk/signal 名/文字数のみ。**prompt 本文は記録しない**=I-13)を残して" <>
+  "から必ず原本を無変更引数で呼ぶ(TimeConstrained 2s+Quiet=hot path 影響ゼロ)。判定は一切 enforce しない。" <>
+  "オプション \"PersistCases\"(False。True で 1G の SensitiveLocalVault case も併record=要 cognition 初期化)。";
+SourceVaultDisableOwnerInputShadow::usage =
+  "SourceVaultDisableOwnerInputShadow[] は shadow hook を外し ClaudeEval の DownValues を原状復元する(冪等)。";
+SourceVaultOwnerInputShadowStatus::usage =
+  "SourceVaultOwnerInputShadowStatus[] は hook の状態 <|Enabled, HookTarget, OriginalDVCount, PersistCases|> を返す。";
+SourceVaultOwnerInputShadowStats::usage =
+  "SourceVaultOwnerInputShadowStats[opts] は OwnerInputShadowRecorded event を集計し、CallCount/ByMode/" <>
+  "ByRisk/SignalCounts/IrreversibleRate を返す(1G 本結線の昇格判断材料=§8)。Options: \"Limit\"(2000)。";
+
 Begin["`Private`"];
 
 If[! BooleanQ[SourceVault`$SourceVaultCognitionEnabled], SourceVault`$SourceVaultCognitionEnabled = True];
@@ -831,6 +847,98 @@ SourceVaultAssistanceRecordOutcome[caseId_String, outcome_Association, OptionsPa
     "OwnerCorrection" -> Lookup[outcome, "OwnerCorrection", Missing[]],
     "IntentPreserved" -> Lookup[outcome, "IntentPreserved", Missing[]]|>,
     "Root" -> OptionValue["Root"]];
+
+(* ============================================================
+   1G ClaudeEval 入口 shadow recorder(2026-07-15)
+   - 非侵襲: claudecode.wl は無改変。skill package-hook-installation-patterns の
+     「DownValues swap + CheckAbort」テンプレに従う(Block 不使用=罠18回避、
+     opts___ pass-through、Enable/Disable 冪等、Abort 時復元)。
+   - opt-in: 自動 enable しない(課金・対話ホットパスの安全側)。
+   - hook は評価(AssistOwnerInput Persist->False=決定的・LLM 不使用)と内容最小化
+     event 記録のみ。**enforce しない・戻り値/引数を一切変えない**。
+     side 処理は TimeConstrained 2s + Quiet@Check で hot path を守る。
+   - event に prompt 本文を入れない(I-13。digest/文字数/mode/risk/signal 名のみ)。
+   ============================================================ *)
+
+If[! ValueQ[$svOwnerShadowEnabled], $svOwnerShadowEnabled = False];
+If[! ValueQ[$svOwnerShadowOriginalDV], $svOwnerShadowOriginalDV = Null];
+If[! ValueQ[$svOwnerShadowPersistCases], $svOwnerShadowPersistCases = False];
+
+(* original を一時復元して呼ぶ(Block 不使用。Abort 時も hook DV を復元) *)
+iCogOwnerShadowOriginalCall[args___] := Module[
+  {savedDV = DownValues[ClaudeCode`ClaudeEval], result},
+  DownValues[ClaudeCode`ClaudeEval] = $svOwnerShadowOriginalDV;
+  result = CheckAbort[
+    ClaudeCode`ClaudeEval[args],
+    (DownValues[ClaudeCode`ClaudeEval] = savedDV; Abort[])];
+  DownValues[ClaudeCode`ClaudeEval] = savedDV;
+  result];
+
+iCogOwnerShadowRecord[prompt_String] := Module[{a, assess, segs},
+  a = SourceVaultAssistOwnerInput[prompt, "Persist" -> TrueQ[$svOwnerShadowPersistCases]];
+  If[! AssociationQ[a], Return[Null]];
+  assess = Lookup[a, "Assessment", <||>];
+  segs = Lookup[assess, "InputSegments", {}];
+  Quiet@Check[SourceVaultAppendEvent[<|"EventClass" -> "OwnerInputShadowRecorded",
+    "AssistanceMode" -> Lookup[a, "AssistanceMode", "?"],
+    "Risk" -> Lookup[assess, "PromptInterpretationRisk", "?"],
+    "Signals" -> Lookup[assess, "Signals", {}],   (* enum 名のみ=本文なし *)
+    "IrreversibleActionRequested" -> Lookup[assess, "IrreversibleActionRequested", False],
+    "HasClarificationQuestion" -> StringQ[Lookup[a, "ClarificationQuestion", Missing[]]],
+    "SegmentCount" -> Length[segs],
+    "QuotedSegments" -> Count[segs, s_ /; Lookup[s, "Role", ""] === "QuotedData"],
+    "PromptChars" -> StringLength[prompt],
+    "PromptDigest" -> Lookup[assess, "OriginalPromptDigest", Missing[]],
+    "ShadowMode" -> True, "PolicyVersion" -> "ownerinput-shadow-v0"|>], Null];
+  Null];
+
+Options[SourceVaultEnableOwnerInputShadow] = {"PersistCases" -> False};
+SourceVaultEnableOwnerInputShadow[OptionsPattern[]] := Module[{},
+  If[TrueQ[$svOwnerShadowEnabled], Return[<|"Status" -> "AlreadyEnabled"|>]];
+  (* 依存チェックは DownValues で(本ファイルのパースで symbol 自体は生成されるため Names 不可) *)
+  If[Length[DownValues[ClaudeCode`ClaudeEval]] === 0,
+    Return[<|"Status" -> "MissingDependency", "Detail" -> "ClaudeCode`ClaudeEval not loaded"|>]];
+  $svOwnerShadowPersistCases = TrueQ[OptionValue["PersistCases"]];
+  $svOwnerShadowOriginalDV = DownValues[ClaudeCode`ClaudeEval];
+  DownValues[ClaudeCode`ClaudeEval] = {
+    HoldPattern[ClaudeCode`ClaudeEval[prompt_String, opts___]] :>
+      Module[{},
+        (* side 処理: 決して throw させない・2s で打ち切り・enforce しない *)
+        TimeConstrained[
+          Quiet@Check[SourceVault`Private`iCogOwnerShadowRecord[prompt], Null], 2, Null];
+        SourceVault`Private`iCogOwnerShadowOriginalCall[prompt, opts]],
+    (* 非 String 形(将来 signature)も原本へ素通し *)
+    HoldPattern[ClaudeCode`ClaudeEval[args___]] :>
+      SourceVault`Private`iCogOwnerShadowOriginalCall[args]};
+  $svOwnerShadowEnabled = True;
+  <|"Status" -> "Enabled", "HookTarget" -> "ClaudeCode`ClaudeEval",
+    "PersistCases" -> $svOwnerShadowPersistCases|>];
+
+SourceVaultDisableOwnerInputShadow[] := Module[{},
+  If[! TrueQ[$svOwnerShadowEnabled], Return[<|"Status" -> "AlreadyDisabled"|>]];
+  DownValues[ClaudeCode`ClaudeEval] = $svOwnerShadowOriginalDV;
+  $svOwnerShadowOriginalDV = Null;
+  $svOwnerShadowEnabled = False;
+  <|"Status" -> "Disabled"|>];
+
+SourceVaultOwnerInputShadowStatus[] :=
+  <|"Enabled" -> TrueQ[$svOwnerShadowEnabled],
+    "HookTarget" -> "ClaudeCode`ClaudeEval",
+    "OriginalDVCount" -> If[ListQ[$svOwnerShadowOriginalDV],
+      Length[$svOwnerShadowOriginalDV], 0],
+    "PersistCases" -> TrueQ[$svOwnerShadowPersistCases]|>;
+
+Options[SourceVaultOwnerInputShadowStats] = {"Limit" -> 2000};
+SourceVaultOwnerInputShadowStats[OptionsPattern[]] := Module[{evs},
+  evs = Replace[Quiet@Check[SourceVaultTransactionLog["Limit" -> OptionValue["Limit"],
+    "EventClass" -> "OwnerInputShadowRecorded"], {}], Except[_List] -> {}];
+  <|"CallCount" -> Length[evs],
+    "ByMode" -> If[evs === {}, <||>, Counts[Lookup[#, "AssistanceMode", "?"] & /@ evs]],
+    "ByRisk" -> If[evs === {}, <||>, Counts[Lookup[#, "Risk", "?"] & /@ evs]],
+    "SignalCounts" -> If[evs === {}, <||>,
+      Counts[Flatten[Replace[Lookup[#, "Signals", {}], Except[_List] -> {}] & /@ evs]]],
+    "IrreversibleRate" -> If[evs === {}, Missing["NoData"],
+      N[Count[evs, e_ /; TrueQ[Lookup[e, "IrreversibleActionRequested", False]]]/Length[evs]]]|>];
 
 End[];
 

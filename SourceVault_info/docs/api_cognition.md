@@ -137,6 +137,18 @@ CommitRequiresOwnerConfirm|> のみ)|>`。Options: "Persist"(True)、"Root"、"S
 ### SourceVaultAssistanceRecordOutcome[caseId, outcome, opts]
 ChosenIntentRef/OwnerCorrection/IntentPreserved を記録(intent preservation 測定=§8)。
 
+### 1G ClaudeEval 入口 shadow recorder(非侵襲 hook・opt-in。2026-07-15)
+`SourceVaultEnableOwnerInputShadow[opts]` / `SourceVaultDisableOwnerInputShadow[]` /
+`SourceVaultOwnerInputShadowStatus[]` / `SourceVaultOwnerInputShadowStats[opts]`。
+ClaudeCode`ClaudeEval に **DownValues swap hook**(skill package-hook-installation-patterns 準拠:
+Block 不使用/opts___ pass-through/CheckAbort 復元/Enable-Disable 冪等/非 String 形は素通し)を装着し、
+owner prompt を `AssistOwnerInput["Persist"->False]`(決定的・LLM 不使用)で評価して内容最小化 event
+`OwnerInputShadowRecorded`(AssistanceMode/Risk/Signal 名/文字数/digest のみ。**prompt 本文は記録しない**=I-13)
+を残してから必ず原本を無変更引数で呼ぶ。side 処理は TimeConstrained 2s+Quiet=hot path 影響ゼロ、
+判定は一切 enforce しない。**自動 enable しない**(課金・対話ホットパスの安全側=owner が FE で明示的に
+Enable する opt-in)。"PersistCases"->True で 1G の SensitiveLocalVault case も併 record(要 cognition 初期化)。
+Stats: CallCount/ByMode/ByRisk/SignalCounts/IrreversibleRate(1G 本結線の昇格判断材料)。
+
 ### SourceVaultPlanMessageReleaseWithGuardShadow[spec, opts]
 1E 結線。既存 `SourceVaultPlanMessageRelease`(正準ゲート)を**一切変えずに**呼び、同じ action の
 Guard shadow 推奨(action risk taxonomy: MailSend/Irreversible/Reach(list-like 宛先で Organization)/

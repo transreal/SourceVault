@@ -48,6 +48,9 @@
 | 1H-S⑤ | **移行第二段=warn/enforce 段階ゲート**(mode+EnforceList+token 配線パイロット) | capbroker.wl+12ファイル | 60/60 | result2.nb ✅ |
 | 1F'' | **実 proposer 供給**(MakeLLMProposer/Verifier+非同期 SubmitMultiModelDecision) | adjudication.wl | 28/28 | result2.nb ✅ |
 | 1H-A' | **anomaly schedule 配線**(ScheduleTick+service 低頻度 hook 結線・既定 off) | anomaly.wl+servicemanager.wl | 14/14 | result2.nb ✅ |
+| 1H-S⑥ | **全18入口 self-prepare token 配線+mining thinking 抑止**(§1.12) | capbroker.wl+13ファイル | 64/64 | result3.nb ✅ |
+| 1H-S⑦ | **/pdfask 上流 mint**(iWebChat=plan 確定後 mint→backend へ caller token)(§1.13) | capbroker.wl+servicemanager.wl | 67/67 | — |
+| 1G' | **ClaudeEval 入口 shadow recorder**(非侵襲 hook・opt-in)(§1.13) | cognition.wl | 26/26 | — |
 
 **新規パッケージ6本**: knowledgehome / cognition / adjudication / capbroker / taint / anomaly。
 全て umbrella loader(`SourceVault.wl` の auto-load リスト)と `SourceVault_info/upload_manifest.json` に登録済み。
@@ -140,6 +143,14 @@ service 再起動で有効化。新テスト `SourceVault_anomaly_schedule_test.
 
 ### 1.12 全入口 token 配線(self-prepare)+mining thinking 抑止(2026-07-14 追補)
 
+**GitHub コミット済み(f1b0fb0、blob 16)+ NB 実機済み(result3.nb)**: shadow on で SummarizeText →
+上流 mint 経路が iWebLLMComplete で **Verified** 記録、Stats がセッション横断の永続 event を正しく集計
+(Coverage 0.5=旧 NoToken 込み/RefusedCount 1/ByMode Shadow+Enforce/Registered 18)。
+**1F 再実験済み(2026-07-15 FE 実機)**: thinking 抑止後、`ExcludedProposers -> {}`・`CandidateCount -> 3`
+(抑止前は 2/3 落ち)=**候補化率 3/3 に改善**。3 claim は文言差("word/term"・"(jikken)" 有無)で
+NormalizedClaim が別扱い→各 Unresolved→NeedMoreEvidence(仕様どおりの abstain。VerifierFn を付ければ
+blind 判定で Supported へ解決される形。同一 label=IndependentGroups 1 も I-11 どおり)。
+
 - **全 18 入口が token-carrying に**: capbroker に `SourceVaultLLMBoundarySelfGateRefusedQ[epId, env]`
   (boundary active 時のみ envelope を self-mint(RunRef="svrun:boundary:<epId>" で event から識別可)して
   gate に通す。**mint 失敗=NoToken=Enforce では fail-close**。非 active はゼロコスト)を追加し、
@@ -155,10 +166,35 @@ service 再起動で有効化。新テスト `SourceVault_anomaly_schedule_test.
 - テスト: llmshadow_test 60→**64/64**(seam self-mint で enforce 通過/broker 破損 fail-close/
   self-prepare の RunRef マーカー/直接 HTTP 境界の e2e)。回帰 green(§6)。
 
+### 1.13 /pdfask 上流 mint+1G ClaudeEval shadow recorder(2026-07-15)
+
+**(1) /pdfask 上流 mint(1H-S⑦)**: `SourceVaultLLMBoundarySelfGateRefusedQ` に 3 引数形(caller token
+優先・無ければ self-prepare)を追加。servicemanager の iWebChat が **backend plan 確定後・dispatch 前**に
+最終 envelope を確定して mint(active 時のみ。RunRef "svrun:pdfask:iWebChat")し、
+iWebChatLocal/BilledAPI/Cloud(いずれも第 3 引数 token を追加。既存 2 引数呼びは既定 Missing で不変)へ
+渡す。local は model を先解決して渡す(iWebChatModel は解決済み文字列を素通し=二重解決なし)。
+**envelope は各 backend の gate env と一致必須**(不一致=RequestMismatch)。fallback local は backend が
+変わるため上流 token 対象外=self-prepare に委ねる。外部公開経路(非 owner IP 可)の plan→dispatch 間
+改変が検出対象になった。llmshadow_test 64→**67/67**(G8=死にポート e2e で Verified+RunRef マーカー確認)。
+
+**(2) 1G ClaudeEval 入口 shadow recorder(1G')**: cognition.wl に
+`SourceVaultEnableOwnerInputShadow[opts]` / `Disable` / `Status` / `Stats`。skill
+package-hook-installation-patterns の「DownValues swap+CheckAbort」テンプレ準拠で ClaudeCode`ClaudeEval に
+非侵襲 hook(claudecode.wl 無改変・**opt-in=自動 enable しない**・Enable/Disable 冪等・非 String 形は
+素通し)。hook は AssistOwnerInput("Persist"->False=決定的・LLM 不使用)で評価し、内容最小化 event
+`OwnerInputShadowRecorded`(mode/risk/signal 名/文字数/digest。**prompt 本文なし**=I-13)を記録してから
+必ず原本を無変更引数で呼ぶ(TimeConstrained 2s+Quiet)。enforce なし。新テスト
+`SourceVault_cognition_ownershadow_test.wls` **26/26**(依存 gate/結果不変/非 String 素通し/復元/統計。
+**罠21: umbrella は claudecode をロードするので test は実 ClaudeEval の DV を退避→ClearAll→stub 化**)。
+有効化(owner・FE): `SourceVaultEnableOwnerInputShadow[]` → `SourceVaultOwnerInputShadowStats[]` で観測。
+1F 再実験も §1.12 に記録済み(thinking 抑止で候補化 3/3)。
+回帰: servicemanager 22/22・cognition 4 suites・capbroker 24/24 green。
+
 ## 2. 未実装(次セッションの選択肢。優先度順)
 
 (旧 1=warn/enforce は §1.11(1)、旧 3=1F 結線は §1.11(2)、旧 4=anomaly schedule は §1.11(3)、
-残り入口の token 配線は §1.12(self-prepare 方式)で実装済み)
+残り入口の token 配線は §1.12(self-prepare)+§1.13(上流 mint 2 chain)、1G 入口結線(shadow)は
+§1.13(2) で実装済み)
 
 1. **boundary の実運用昇格(運用タスク・owner 判断)**
    (a) `$SourceVaultLLMBoundaryShadow = True` を FE init に置いて coverage/mismatch データ収集

@@ -382,3 +382,10 @@ service ループが `SourceVaultCaneAnomalyScheduleTick`(SourceVault_anomaly.wl
 observe-only・enforcement なし(I-16)で、TimeConstrained 300s で打ち切り。Disabled/NotDue は
 service log に記録しない(Ran/Reused/RunFailed/Error/TimedOut のみ CaneAnomalyScheduleTick として記録)。
 反映には service 再起動が必要(rule105 §8)。
+
+### /pdfask チェーンの上流 mint(2026-07-15 追加・内部動作)
+/pdfask の回答合成(内部 iWebChat)は、backend plan(subscription/api/local)確定後・dispatch 前に
+LLM boundary が active なら最終 envelope を `SourceVaultPrepareLLMInput` で mint し、各 backend の
+boundary gate へ caller token として渡す(event の RunRef "svrun:pdfask:iWebChat" で識別)。
+plan→dispatch 間の request 改変も検出対象になる。サブスク/課金 API 失敗時の local fallback は
+backend が変わるため上流 token の対象外(境界の self-prepare に委ねる)。off 時は挙動不変。

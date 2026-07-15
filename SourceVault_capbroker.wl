@@ -561,6 +561,12 @@ SourceVaultLLMBoundarySelfGateRefusedQ[epId_String, env_Association] := Module[{
       Missing["PrepareFailed"]],
     Missing["NoToken"]];
   SourceVaultLLMBoundaryGateRefusedQ[epId, env, tok]];
+(* 3 引数形: 呼び出し元 mint token があればそれを優先(上流配線)、無ければ self-prepare。
+   上流 token は self-prepare より早い束縛点=plan/fallback 分岐を跨ぐ改変も検出できる *)
+SourceVaultLLMBoundarySelfGateRefusedQ[epId_String, env_Association, callerTok_] :=
+  If[AssociationQ[callerTok],
+    SourceVaultLLMBoundaryGateRefusedQ[epId, env, callerTok],
+    SourceVaultLLMBoundarySelfGateRefusedQ[epId, env]];
 SourceVaultLLMBoundarySelfGateRefusedQ[___] := False;
 
 End[];

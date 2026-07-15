@@ -100,6 +100,10 @@ NoToken=Enforce では拒否(fail-close)**。非 active はゼロコスト(mint 
 注: shadow/warn では verify が非消費のため prepared ledger のレコードは issued のまま残る
 (短命 TTL 付き・容量は小。将来の prune 対象)。上流で mint できる入口は caller 配線を優先
 (webingest SummarizeText→iWebLLMComplete が先行例)。
+3 引数形 `[entrypointId, envelope, callerToken]`(2026-07-15 追加): 呼び出し元 mint token があれば
+それを優先(self-prepare しない)、無ければ 2 引数形へ縮退。上流配線済み chain:
+SummarizeText→iWebLLMComplete、**servicemanager /pdfask(iWebChat が plan 確定後に mint、
+RunRef "svrun:pdfask:iWebChat"。fallback local は self-prepare に委ねる)**。
 
 ### SourceVaultLLMBoundaryActiveQ[entrypointId]
 当該入口で観測/検証が有効か(shadow トグル on または実効 mode 非 Shadow)。呼び出し元の
