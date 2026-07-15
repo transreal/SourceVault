@@ -207,6 +207,143 @@ Fulfillment and Attention (spec 2.8). Precedence for Fulfillment: Waive > Resolu
 > ManualMark; Attention: an unexpired Snooze sets Snoozed(+NextEligibleAtUTC), else \
 Ack sets Acknowledged. WasOverdue is OR-preserved (never cleared, AC-025). Pure.";
 
+(* === R3: ActionGate -- capability-class router for UI clicks (spec 7 / P0-7) === *)
+
+SourceVaultRoutineActionClass::usage =
+  "SourceVaultRoutineActionClass[kind] maps a UI action kind to its capability class \
+(spec 7): \"Select\" (ShowDetail/Select/JumpTo -- effect-free), \"LocalNavigation\" \
+(OpenNotebook/OpenDirectory), \"LocalMutation\" (Pin/Waive/Ack/Snooze/CreatePrepNote/\
+CandidateToOpen/FalseAlarm), \"WorkflowDispatch\" (RunNow/StartReplyDraft), \
+\"ExternalNavigation\" (OpenURL). Unknown kinds -> \"Unknown\".";
+
+SourceVaultRoutineActionGate::usage =
+  "SourceVaultRoutineActionGate[action, context] decides whether a UI click may \
+proceed and under what conditions (spec 7 / P0-7). It performs NO side effects: it \
+classifies, validates, and returns a decision the caller then acts on. action = \
+<|\"Kind\", (\"Target\" path), (\"OccurrenceKey\"), (\"ExpectedSemanticDigest\"), \
+(\"URL\"), (\"MutationFact\" for LocalMutation), (\"Reason\")|>. context = \
+<|(\"AllowedRoots\"->{dirs}), (\"URLSchemes\"->{\"https\"}), (\"URLDomains\"->All|\
+{domains}), (\"Occurrences\"-><|key->occurrence|> current snapshot), \
+(\"OwnerPermit\"->Bool)|>. Rules: Select always allowed (effect-free). \
+LocalNavigation requires the Target path be contained in an AllowedRoot (no \"..\", \
+rejects escapes) and, when an OccurrenceKey is given, that the occurrence still \
+exists in the current snapshot. WorkflowDispatch RE-VALIDATES the current \
+SemanticDigest against action[\"ExpectedSemanticDigest\"] and Blocks a stale view \
+(AC-028), otherwise returns Effect \"DelegateToAutoTrigger\". ExternalNavigation \
+enforces a scheme allowlist (default https only) and optional domain allowlist, \
+rejecting file:/custom-scheme/disallowed-domain URLs (AC-029) and always \
+RequiresConfirm. LocalMutation requires OwnerPermit->True, sets RequiresPreview, and \
+returns the durable \"AuditFact\" for the caller to append via the ledger. Returns \
+<|\"Allowed\"->Bool, \"Class\", \"Reason\", \"RequiresConfirm\"->Bool, \
+\"RequiresPreview\"->Bool, \"Effect\"->_, \"AuditFact\"->_|Missing|>.";
+
+SourceVaultRoutineBoardData::usage =
+  "SourceVaultRoutineBoardData[occurrences, now, opts] builds the Board's row data \
+(spec 5.1) from a list of ObligationOccurrences (already durable-overlaid). Each row: \
+<|\"Key\", \"Kind\", \"Importance\", \"Temporal\", \"FulfillmentState\", \
+\"AttentionState\", \"DueAtUTC\", \"Resolution\", \"ExpectedSemanticDigest\", \
+\"Actions\"->{kinds}, \"FreshnessState\"|>. Rows are filtered to what needs attention \
+(Overdue/DueSoon and not Satisfied/Waived/expired-window, excluding unexpired-Snoozed) \
+and sorted Mandatory/overdue first, then by DueAtUTC. Options \"IncludeResolved\"-> \
+False, \"IncludeSnoozed\"->False, \"SoonWindow\"->86400. Pure; the applicable action \
+kinds are gated per click by SourceVaultRoutineActionGate.";
+
+SourceVaultRoutineBoardView::usage =
+  "SourceVaultRoutineBoardView[occurrences, opts] renders the Board (FE): a Dataset of \
+SourceVaultRoutineBoardData rows with an action menu per row whose buttons route \
+through SourceVaultRoutineActionGate before doing anything (spec 5.1/7). Requires a \
+Front End; the row data and gating are headless-tested via SourceVaultRoutineBoardData \
+and SourceVaultRoutineActionGate. Options forwarded to BoardData plus \"ActionHandler\" \
+(a function decision -> _ the buttons call after the gate approves; default a no-op \
+that returns the decision).";
+
+(* === R4a: AttentionContext gate + envelope + ladder + coverage (spec 5 / P0-1) === *)
+
+SourceVaultRoutineDefaultAttentionPolicy::usage =
+  "SourceVaultRoutineDefaultAttentionPolicy[] returns the default AttentionPolicy \
+(spec 4.2): MeetingGate (Enabled/DeferDuringBusy/FlushAfterMeetingMinutes/\
+MandatoryLeadMinutes {1440,120,15}), QuietHours (Missing), Channels defaults.";
+SourceVaultRoutineSetAttentionPolicy::usage =
+  "SourceVaultRoutineSetAttentionPolicy[policy, \"OwnerAuthorization\"->True] persists \
+the owner-signed AttentionPolicy to the ledger root config (spec 4.2). \
+OwnerAuthorization is required (LLM/external content cannot reach it). Returns status.";
+SourceVaultRoutineAttentionPolicy::usage =
+  "SourceVaultRoutineAttentionPolicy[] returns the persisted AttentionPolicy, or the \
+default when unset/unreadable.";
+
+SourceVaultRoutineNotificationEnvelope::usage =
+  "SourceVaultRoutineNotificationEnvelope[kind, opts] builds a normalized notification \
+envelope (spec 5.1 / P0-1): <|\"Kind\",\"Stage\",\"Urgency\"->\"Normal\"|\"Critical\", \
+\"MeetingBypass\"->Bool, \"QuietHoursBypass\"->Bool, \"Channel\", \"OccurrenceKey\", \
+\"EpisodeId\"|>. MeetingBypass and QuietHoursBypass are INDEPENDENT (a 15-minute \
+mandatory reminder pierces a meeting but NOT quiet hours). Options set each field.";
+
+SourceVaultRoutineInQuietHours::usage =
+  "SourceVaultRoutineInQuietHours[policy, now] returns whether `now` falls in the \
+policy's QuietHours window (StartHour..EndHour in the local time zone, wrapping past \
+midnight). False when QuietHours is unset.";
+
+SourceVaultRoutineAttentionGate::usage =
+  "SourceVaultRoutineAttentionGate[envelope, context] decides \"Deliver\"/\"Defer\" for \
+a notification (spec 5 / 7.2 / P0-1). context = <|\"BusyQ\"->Bool, \"InQuietHours\"-> \
+Bool|>. The meeting gate and the quiet-hours gate are evaluated INDEPENDENTLY: it \
+defers if (BusyQ and not MeetingBypass) OR (InQuietHours and not QuietHoursBypass). \
+Returns <|\"Decision\", \"Reason\"|>. So MeetingBypass alone pierces a meeting but \
+still defers in quiet hours (AC-003/AC-004).";
+
+SourceVaultRoutineMandatoryLadderStage::usage =
+  "SourceVaultRoutineMandatoryLadderStage[eventStart, now, policy] returns the current \
+mandatory-reminder ladder stage for an attendance-required event (spec 5.3): the \
+TIGHTEST lead-minutes window (from policy MandatoryLeadMinutes) that `now` has entered \
+before the event start. Only the tightest configured stage sets MeetingBypass->True \
+(and Urgency Critical); wider stages are Board/badge only. Returns <|\"Stage\"->_| \
+Missing, \"LeadMinutes\", \"MeetingBypass\", \"Urgency\", \"MinutesUntil\"|>; Stage is \
+Missing before any window or once the event has started.";
+
+SourceVaultRoutineCoverageDegradedQ::usage =
+  "SourceVaultRoutineCoverageDegradedQ[freshnessState] is True when a source's \
+FreshnessState is Stale/Unavailable/Partial, i.e. Mandatory-reminder coverage may be \
+degraded and the owner should be told once per episode (spec 3.4/5.5 / AC-008).";
+
+(* === R4b: durable notification queue (spec 5.2/5.3 / P0-5) === *)
+
+SourceVaultRoutineEnqueueNotification::usage =
+  "SourceVaultRoutineEnqueueNotification[envelope, opts] appends a notification to the \
+durable queue (machine-local, regenerable; NOT the shared ledger) in state Pending \
+(spec 5.2). A stable EnvelopeId is derived from (OccurrenceKey, Kind, Stage, Channel, \
+EpisodeId) so re-enqueuing the same logical notification is idempotent (hysteresis / \
+AC-014): the existing record is returned. Option \"EnvelopeId\" overrides the derived \
+id. Returns the queue record.";
+
+SourceVaultRoutineQueueRecords::usage =
+  "SourceVaultRoutineQueueRecords[opts] returns the durable queue records. Option \
+\"State\"->All filters by state (Pending/Deferred/Claimed/Delivered/Superseded/Expired).";
+
+SourceVaultRoutineSupersedeNotifications::usage =
+  "SourceVaultRoutineSupersedeNotifications[occurrenceKey, opts] marks all not-yet-\
+delivered notifications for an occurrence Superseded (spec 5.2: an occurrence moved / \
+cancelled / SemanticDigest changed supersedes its pending reminders, AC-002/AC-033). \
+Option \"Reason\" (default \"Superseded\"). Returns a summary.";
+
+SourceVaultRoutineQueueTick::usage =
+  "SourceVaultRoutineQueueTick[context, opts] advances the durable queue once (spec \
+5.2/5.3). For each Pending/Deferred record it RE-EVALUATES SourceVaultRoutineAttentionGate \
+against the CURRENT context (context = <|\"BusyQ\", \"InQuietHours\", \"Now\"|>; so a \
+notification deferred during a meeting is re-checked and re-deferred while a NEXT \
+meeting is still on) and either delivers it (via the injected \"ChannelFn\", recording \
+a fresh DeliveryAttemptId and moving to Delivered) or leaves it Deferred. A record \
+deferred past \"MaxDeferSeconds\" (default 86400) is delivered to the Board channel as \
+a fallback (never lost, spec 5.2). Delivery guarantees are per channel (spec 5.3 / \
+P0-5): Board/internal are effectively-once (EnvelopeId upsert), external mail/OS are \
+at-least-once (a fresh DeliveryAttemptId per attempt; a crash between channel success \
+and the Delivered write yields a bounded duplicate, NOT exactly-once). \"ChannelFn\" \
+(envelope, attemptId) -> receipt|$Failed is the injection seam (default: Board-only \
+in-record delivery). Options \"MaxDeferSeconds\", \"MaxRecords\". Returns a tick summary.";
+
+SourceVaultRoutineQueueReset::usage =
+  "SourceVaultRoutineQueueReset[] clears this machine's durable notification queue \
+(regenerable derived state). Returns a status.";
+
 Begin["`Private`"];
 
 (* ---- time helpers (absolute seconds, TZ-independent) ---- *)
@@ -525,10 +662,11 @@ iSVRtnCacheRoot[] := If[StringQ[SourceVault`$SourceVaultRoutineCacheRoot] &&
 iSVRtnCacheFile[] := FileNameJoin[{iSVRtnCacheRoot[], "watermark.json"}];
 
 (* --- JSONL append / read (single UTF-8 encoding; no double-encode) --- *)
-iSVRtnAppendLine[file_, assoc_] := Module[{json},
+iSVRtnAppendLine[file_, assoc_] := Module[{json, clean},
+  clean = assoc /. m_Missing :> Null;   (* JSON has no Missing; store as null *)
   json = StringReplace[
-    Quiet@Check[Developer`WriteRawJSONString[assoc, "Compact" -> True],
-      Developer`WriteRawJSONString[assoc]], {"\n" -> " ", "\r" -> " "}];
+    Quiet@Check[Developer`WriteRawJSONString[clean, "Compact" -> True],
+      Developer`WriteRawJSONString[clean]], {"\n" -> " ", "\r" -> " "}];
   iSVRtnEnsureDir[DirectoryName[file]];
   Module[{s = OpenAppend[file, BinaryFormat -> True]},
     BinaryWrite[s, StringToByteArray[json <> "\n", "UTF-8"]]; Close[s]];
@@ -803,6 +941,454 @@ SourceVault`SourceVaultRoutineApplyDurable[occ_Association, replay_Association] 
     True, att];
   Join[occ, <|"Fulfillment" -> ful, "Attention" -> att|>]];
 SourceVault`SourceVaultRoutineApplyDurable[occ_, _] := occ;
+
+(* ============================================================
+   R3: ActionGate -- capability-class router for UI clicks (spec 7 / P0-7).
+   Pure decision logic; performs no side effects. Board/View calls this before
+   acting, and executes only what the gate returns.
+   ============================================================ *)
+
+$svRtnActionClassMap = <|
+  "ShowDetail" -> "Select", "Select" -> "Select", "JumpTo" -> "Select",
+  "Inspect" -> "Select",
+  "OpenNotebook" -> "LocalNavigation", "OpenDirectory" -> "LocalNavigation",
+  "Pin" -> "LocalMutation", "Waive" -> "LocalMutation", "Ack" -> "LocalMutation",
+  "Snooze" -> "LocalMutation", "CreatePrepNote" -> "LocalMutation",
+  "CandidateToOpen" -> "LocalMutation", "FalseAlarm" -> "LocalMutation",
+  "Unpin" -> "LocalMutation",
+  "RunNow" -> "WorkflowDispatch", "StartReplyDraft" -> "WorkflowDispatch",
+  "OpenURL" -> "ExternalNavigation"|>;
+SourceVault`SourceVaultRoutineActionClass[kind_String] :=
+  Lookup[$svRtnActionClassMap, kind, "Unknown"];
+SourceVault`SourceVaultRoutineActionClass[___] := "Unknown";
+
+(* case-insensitive path containment: target must be under root, no ".." escape *)
+iSVRtnPathContained[path_String, root_String] := Module[
+  {pp = FileNameSplit[path], rp = FileNameSplit[root], lc},
+  lc = ToLowerCase;
+  If[MemberQ[pp, ".."] || rp === {} || Length[pp] < Length[rp], False,
+    (lc /@ Take[pp, Length[rp]]) === (lc /@ rp)]];
+iSVRtnPathContained[___] := False;
+
+iSVRtnAnyRootContains[path_, roots_List] :=
+  AnyTrue[roots, StringQ[#] && iSVRtnPathContained[path, #] &];
+
+(* the durable fact a LocalMutation should append (built, not appended, by the gate) *)
+iSVRtnMutationFact[action_] := Module[
+  {kind = Lookup[action, "Kind", ""], sid, tok, base},
+  {sid, tok} = With[{k = Lookup[action, "OccurrenceKey", Missing["None"]]},
+    If[StringQ[k] && StringContainsQ[k, "|"],
+      With[{sp = StringSplit[k, "|", 2]}, {sp[[1]], sp[[2]]}], {Missing["None"], Missing["None"]}]];
+  base = <|"StableId" -> sid, "OccurrenceToken" -> tok|>;
+  Switch[kind,
+    "Waive", Join[base, <|"FactKind" -> "Waive",
+      "WaiveReason" -> Lookup[action, "Reason", "OwnerDecision"]|>],
+    "Ack", Join[base, <|"FactKind" -> "Ack"|>],
+    "Snooze", Join[base, <|"FactKind" -> "Snooze",
+      "UntilAbs" -> N[iSVRtnAbs[Lookup[action, "UntilAbs", Missing["None"]]] /.
+        Except[_?NumberQ] -> 0]|>],
+    "Pin", Join[base, <|"FactKind" -> "ManualMark", "MarkState" -> "Pinned"|>],
+    _, Join[base, <|"FactKind" -> "AuditAction", "ActionKind" -> kind|>]]];
+
+iSVRtnDecision[allowed_, class_, reason_, opts_ : <||>] :=
+  Join[<|"Allowed" -> allowed, "Class" -> class, "Reason" -> reason,
+    "RequiresConfirm" -> False, "RequiresPreview" -> False,
+    "Effect" -> Missing["None"], "AuditFact" -> Missing["None"]|>, opts];
+
+SourceVault`SourceVaultRoutineActionGate[action_Association, context_ : <||>] := Module[
+  {kind = Lookup[action, "Kind", ""], class, ctx = If[AssociationQ[context], context, <||>],
+   target, url, roots, schemes, domains, occs, key, occ, curDigest, expDigest, parsed,
+   scheme, domain},
+  class = SourceVault`SourceVaultRoutineActionClass[kind];
+  Switch[class,
+    "Select",
+      iSVRtnDecision[True, class, "EffectFree", <|"Effect" -> "ShowInline"|>],
+    "LocalNavigation",
+      target = Lookup[action, "Target", Missing["None"]];
+      roots = Lookup[ctx, "AllowedRoots", {}];
+      occs = Lookup[ctx, "Occurrences", <||>];
+      key = Lookup[action, "OccurrenceKey", Missing["None"]];
+      Which[
+        !StringQ[target],
+          iSVRtnDecision[False, class, "NoTarget"],
+        !iSVRtnAnyRootContains[target, roots],
+          iSVRtnDecision[False, class, "PathNotContained"],
+        StringQ[key] && AssociationQ[occs] && !KeyExistsQ[occs, key],
+          iSVRtnDecision[False, class, "OccurrenceGone"],
+        True,
+          iSVRtnDecision[True, class, "Contained",
+            <|"Effect" -> "OpenLocal"|>]],
+    "WorkflowDispatch",
+      occs = Lookup[ctx, "Occurrences", <||>];
+      key = Lookup[action, "OccurrenceKey", Missing["None"]];
+      occ = If[StringQ[key] && AssociationQ[occs], Lookup[occs, key, Missing["None"]],
+        Missing["None"]];
+      expDigest = Lookup[action, "ExpectedSemanticDigest", Missing["None"]];
+      curDigest = If[AssociationQ[occ],
+        Lookup[Lookup[occ, "Revision", <||>], "SemanticDigest", Missing["None"]],
+        Missing["None"]];
+      Which[
+        !AssociationQ[occ],
+          iSVRtnDecision[False, class, "OccurrenceGone"],
+        expDigest =!= Missing["None"] && curDigest =!= Missing["None"] &&
+          expDigest =!= curDigest,
+          iSVRtnDecision[False, class, "StaleRevision"],   (* AC-028 *)
+        True,
+          iSVRtnDecision[True, class, "RevisionOK",
+            <|"Effect" -> "DelegateToAutoTrigger"|>]],
+    "ExternalNavigation",
+      url = Lookup[action, "URL", Missing["None"]];
+      schemes = ToLowerCase /@ Lookup[ctx, "URLSchemes", {"https"}];
+      domains = Lookup[ctx, "URLDomains", All];
+      If[!StringQ[url], Return[iSVRtnDecision[False, class, "NoURL"]]];
+      parsed = Quiet@Check[URLParse[url], $Failed];
+      scheme = If[AssociationQ[parsed], ToLowerCase[ToString[Lookup[parsed, "Scheme", ""]]], ""];
+      domain = If[AssociationQ[parsed], ToString[Lookup[parsed, "Domain", ""]], ""];
+      Which[
+        !MemberQ[schemes, scheme],
+          iSVRtnDecision[False, class, "SchemeNotAllowed"],   (* AC-029 *)
+        ListQ[domains] && !MemberQ[domains, domain],
+          iSVRtnDecision[False, class, "DomainNotAllowed"],   (* AC-029 *)
+        True,
+          iSVRtnDecision[True, class, "URLAllowed",
+            <|"RequiresConfirm" -> True, "Effect" -> "OpenExternal"|>]],
+    "LocalMutation",
+      If[!TrueQ[Lookup[ctx, "OwnerPermit", False]],
+        iSVRtnDecision[False, class, "OwnerPermitRequired"],
+        iSVRtnDecision[True, class, "OwnerAuthorized",
+          <|"RequiresPreview" -> True, "Effect" -> "AppendLedgerFact",
+            "AuditFact" -> iSVRtnMutationFact[action]|>]],
+    _,
+      iSVRtnDecision[False, "Unknown", "UnknownActionKind"]]];
+SourceVault`SourceVaultRoutineActionGate[___] :=
+  iSVRtnDecision[False, "Unknown", "BadArguments"];
+
+(* ============================================================
+   R3: Board -- attention list (spec 5.1). BoardData is the pure, headless-tested
+   row builder; BoardView is the FE renderer (needs a Front End) wired to ActionGate.
+   ============================================================ *)
+
+iSVRtnBoardActions[occ_] := Module[
+  {kind = Lookup[occ, "Kind", ""], ful = Lookup[occ, "Fulfillment", <||>],
+   imp = Lookup[occ, "Importance", "Normal"], acts},
+  acts = Switch[kind,
+    "OnWorkTask", {"ShowDetail", "OpenNotebook", "Ack", "Snooze"},
+    "Commitment", {"ShowDetail", "StartReplyDraft", "Waive", "Ack", "Snooze"},
+    "Routine", {"ShowDetail", "RunNow", "Ack", "Snooze", "Waive"},
+    "CalendarEvent", {"ShowDetail", "Ack"},
+    "PrepTask", {"ShowDetail", "OpenNotebook", "Ack", "Snooze"},
+    _, {"ShowDetail", "Ack"}];
+  (* Low-importance items are waivable everywhere *)
+  If[imp === "Low" && !MemberQ[acts, "Waive"], acts = Append[acts, "Waive"]];
+  acts];
+
+$svRtnTemporalRank = <|"Overdue" -> 0, "DueSoon" -> 1, "Upcoming" -> 2, "Unknown" -> 3|>;
+$svRtnImpRank = <|"Mandatory" -> 0, "High" -> 1, "Normal" -> 2, "Low" -> 3|>;
+
+Options[SourceVault`SourceVaultRoutineBoardData] = {
+  "IncludeResolved" -> False, "IncludeSnoozed" -> False, "SoonWindow" -> 86400};
+SourceVault`SourceVaultRoutineBoardData[occs_List, now_, OptionsPattern[]] := Module[
+  {sw = OptionValue["SoonWindow"], nowAbs = iSVRtnAbs[now], rows},
+  rows = Map[Function[occ, Module[
+    {sched = Lookup[occ, "Schedule", <||>], ful = Lookup[occ, "Fulfillment", <||>],
+     att = Lookup[occ, "Attention", <||>], temporal, key},
+    key = Quiet@Check[SourceVault`SourceVaultRoutineKeyString[Lookup[occ, "Identity", <||>]],
+      "?"];
+    temporal = SourceVault`SourceVaultRoutineTemporalState[sched, now, "SoonWindow" -> sw];
+    <|"Key" -> key, "Kind" -> Lookup[occ, "Kind", ""],
+      "Importance" -> Lookup[occ, "Importance", "Normal"],
+      "Temporal" -> temporal,
+      "FulfillmentState" -> Lookup[ful, "State", "Unknown"],
+      "Resolution" -> Lookup[ful, "Resolution", Missing["None"]],
+      "AttentionState" -> Lookup[att, "State", "Eligible"],
+      "NextEligibleAtUTC" -> Lookup[att, "NextEligibleAtUTC", Missing["None"]],
+      "DueAtUTC" -> Lookup[sched, "DueAtUTC", Missing["None"]],
+      "ExpectedSemanticDigest" ->
+        Lookup[Lookup[occ, "Revision", <||>], "SemanticDigest", Missing["None"]],
+      "FreshnessState" -> Lookup[Lookup[occ, "Source", <||>], "FreshnessState", "Fresh"],
+      "Actions" -> iSVRtnBoardActions[occ]|>]], occs];
+  (* filter to what needs attention *)
+  rows = Select[rows, Function[r,
+    Module[{resolved = MemberQ[{"Satisfied", "Waived", "Cancelled"}, r["FulfillmentState"]],
+       snoozed = r["AttentionState"] === "Snoozed" &&
+         NumberQ[iSVRtnAbs[r["NextEligibleAtUTC"]]] &&
+         iSVRtnAbs[r["NextEligibleAtUTC"]] > nowAbs},
+      And[
+        Or[TrueQ[OptionValue["IncludeResolved"]], !resolved],
+        Or[TrueQ[OptionValue["IncludeSnoozed"]], !snoozed],
+        MemberQ[{"Overdue", "DueSoon"}, r["Temporal"]] ||
+          TrueQ[OptionValue["IncludeResolved"]]]]]];
+  (* sort: importance (Mandatory first) then temporal (overdue first) then due asc *)
+  SortBy[rows, {
+    Lookup[$svRtnImpRank, #["Importance"], 2] &,
+    Lookup[$svRtnTemporalRank, #["Temporal"], 3] &,
+    With[{d = iSVRtnAbs[#["DueAtUTC"]]}, If[NumberQ[d], d, Infinity]] &}]];
+SourceVault`SourceVaultRoutineBoardData[___] := {};
+
+(* FE renderer -- needs a Front End; NB-verified. Logic is in BoardData/ActionGate. *)
+Options[SourceVault`SourceVaultRoutineBoardView] = Join[
+  Options[SourceVault`SourceVaultRoutineBoardData],
+  {"ActionHandler" -> Automatic, "Occurrences" -> <||>, "OwnerPermit" -> False,
+   "AllowedRoots" -> {}}];
+SourceVault`SourceVaultRoutineBoardView[occs_List, opts : OptionsPattern[]] := Module[
+  {rows, handler = OptionValue["ActionHandler"], snapKeyed, gateCtx},
+  rows = SourceVault`SourceVaultRoutineBoardData[occs, Now,
+    "IncludeResolved" -> OptionValue["IncludeResolved"],
+    "IncludeSnoozed" -> OptionValue["IncludeSnoozed"],
+    "SoonWindow" -> OptionValue["SoonWindow"]];
+  snapKeyed = Association[Map[
+    (Quiet@Check[SourceVault`SourceVaultRoutineKeyString[Lookup[#, "Identity", <||>]], "?"] -> #) &,
+    occs]];
+  gateCtx = <|"Occurrences" -> snapKeyed, "OwnerPermit" -> OptionValue["OwnerPermit"],
+    "AllowedRoots" -> OptionValue["AllowedRoots"], "URLSchemes" -> {"https"}|>;
+  If[handler === Automatic, handler = Function[dec, dec]];
+  If[rows === {},
+    Style["No routines or commitments need attention.", Italic],
+    Dataset[Map[Function[r,
+      <|"\:671f\:9650" -> r["DueAtUTC"], "\:7a2e\:5225" -> r["Kind"],
+        "\:91cd\:8981\:5ea6" -> r["Importance"], "\:72b6\:614b" -> r["Temporal"],
+        "\:5c65\:884c" -> r["FulfillmentState"], "\:6ce8\:610f" -> r["AttentionState"],
+        "\:64cd\:4f5c" -> Row[Riffle[Map[Function[k,
+          Button[k, handler[SourceVault`SourceVaultRoutineActionGate[
+            <|"Kind" -> k, "OccurrenceKey" -> r["Key"],
+              "ExpectedSemanticDigest" -> r["ExpectedSemanticDigest"]|>, gateCtx]],
+            ImageSize -> Automatic]], r["Actions"]], " "]]|>], rows]]]];
+SourceVault`SourceVaultRoutineBoardView[___] :=
+  Style["SourceVaultRoutineBoardView: expected a list of occurrences.", Red];
+
+(* ============================================================
+   R4a: AttentionContext gate + envelope + mandatory ladder + coverage.
+   Pure gate logic (P0-1: meeting gate and quiet gate are independent) plus a small
+   owner-signed policy store. The durable notification queue is R4b.
+   ============================================================ *)
+
+SourceVault`SourceVaultRoutineDefaultAttentionPolicy[] := <|
+  "MeetingGate" -> <|"Enabled" -> True, "DeferDuringBusy" -> True,
+    "FlushAfterMeetingMinutes" -> 5, "MandatoryLeadMinutes" -> {1440, 120, 15}|>,
+  "QuietHours" -> Missing["None"],
+  "Channels" -> <|"Board" -> True, "Badge" -> False, "Digest" -> False, "Mail" -> False|>|>;
+
+iSVRtnAttnPolicyFile[] := If[iSVRtnLedgerRootQ[],
+  FileNameJoin[{SourceVault`$SourceVaultRoutineLedgerRoot, "config", "attention_policy.json"}],
+  $Failed];
+
+Options[SourceVault`SourceVaultRoutineSetAttentionPolicy] = {"OwnerAuthorization" -> False};
+SourceVault`SourceVaultRoutineSetAttentionPolicy[policy_Association, OptionsPattern[]] := Module[
+  {f = iSVRtnAttnPolicyFile[]},
+  If[!TrueQ[OptionValue["OwnerAuthorization"]],
+    Return[Failure["NBRoutineOwnerAuthRequired",
+      <|"MessageTemplate" -> "OwnerAuthorization->True is required."|>]]];
+  If[f === $Failed,
+    Return[Failure["NBRoutineNoLedgerRoot",
+      <|"MessageTemplate" -> "$SourceVaultRoutineLedgerRoot is not set."|>]]];
+  iSVRtnEnsureDir[DirectoryName[f]];
+  Export[f, Developer`WriteRawJSONString[Join[policy,
+    <|"UpdatedAt" -> iSVRtnNowIso[]|>]], "Text"];
+  <|"Status" -> "OK"|>];
+SourceVault`SourceVaultRoutineSetAttentionPolicy[___] :=
+  Failure["NBRoutineBadArgs", <|"MessageTemplate" -> "policy must be an Association."|>];
+
+SourceVault`SourceVaultRoutineAttentionPolicy[] := Module[{f = iSVRtnAttnPolicyFile[], j},
+  If[f === $Failed || !FileExistsQ[f],
+    Return[SourceVault`SourceVaultRoutineDefaultAttentionPolicy[]]];
+  j = Quiet@Check[Developer`ReadRawJSONString[Import[f, "Text"]], $Failed];
+  If[AssociationQ[j], j, SourceVault`SourceVaultRoutineDefaultAttentionPolicy[]]];
+
+Options[SourceVault`SourceVaultRoutineNotificationEnvelope] = {
+  "Stage" -> "Default", "Urgency" -> "Normal", "MeetingBypass" -> False,
+  "QuietHoursBypass" -> False, "Channel" -> "Board", "OccurrenceKey" -> Missing["None"],
+  "EpisodeId" -> Missing["None"]};
+SourceVault`SourceVaultRoutineNotificationEnvelope[kind_String, OptionsPattern[]] := <|
+  "Kind" -> kind, "Stage" -> OptionValue["Stage"], "Urgency" -> OptionValue["Urgency"],
+  "MeetingBypass" -> TrueQ[OptionValue["MeetingBypass"]],
+  "QuietHoursBypass" -> TrueQ[OptionValue["QuietHoursBypass"]],
+  "Channel" -> OptionValue["Channel"],
+  "OccurrenceKey" -> OptionValue["OccurrenceKey"],
+  "EpisodeId" -> OptionValue["EpisodeId"]|>;
+
+SourceVault`SourceVaultRoutineInQuietHours[policy_Association, now_] := Module[
+  {qh = Lookup[policy, "QuietHours", Missing["None"]], hr, sh, eh},
+  If[!AssociationQ[qh], Return[False]];
+  sh = Lookup[qh, "StartHour", Missing["None"]];
+  eh = Lookup[qh, "EndHour", Missing["None"]];
+  If[!IntegerQ[sh] || !IntegerQ[eh], Return[False]];
+  (* a DateObject is read in its OWN time zone; an absolute number in local time *)
+  hr = Which[
+    DateObjectQ[now], Quiet@Check[DateValue[now, "Hour"], $Failed],
+    NumberQ[now], Quiet@Check[DateValue[FromAbsoluteTime[now], "Hour"], $Failed],
+    True, $Failed];
+  If[!IntegerQ[hr] && !NumberQ[hr], Return[False]];
+  hr = Floor[hr];
+  If[sh <= eh, sh <= hr < eh, hr >= sh || hr < eh]];  (* wraps past midnight *)
+SourceVault`SourceVaultRoutineInQuietHours[___] := False;
+
+SourceVault`SourceVaultRoutineAttentionGate[env_Association, context_ : <||>] := Module[
+  {ctx = If[AssociationQ[context], context, <||>], busyQ, quietQ, mb, qb, deferM, deferQ},
+  busyQ = TrueQ[Lookup[ctx, "BusyQ", False]];
+  quietQ = TrueQ[Lookup[ctx, "InQuietHours", False]];
+  mb = TrueQ[Lookup[env, "MeetingBypass", False]];
+  qb = TrueQ[Lookup[env, "QuietHoursBypass", False]];
+  deferM = busyQ && !mb;
+  deferQ = quietQ && !qb;
+  If[deferM || deferQ,
+    <|"Decision" -> "Defer",
+      "Reason" -> Which[deferM && deferQ, "BusyAndQuiet", deferM, "Busy", True, "Quiet"]|>,
+    <|"Decision" -> "Deliver", "Reason" -> "Eligible"|>]];
+SourceVault`SourceVaultRoutineAttentionGate[___] :=
+  <|"Decision" -> "Defer", "Reason" -> "BadArguments"|>;
+
+SourceVault`SourceVaultRoutineMandatoryLadderStage[eventStart_, now_, policy_Association] := Module[
+  {es = iSVRtnAbs[eventStart], n = iSVRtnAbs[now], leads, minutesUntil, entered, tightest, minLead},
+  leads = Lookup[Lookup[policy, "MeetingGate", <||>], "MandatoryLeadMinutes", {1440, 120, 15}];
+  If[!MatchQ[leads, {__?NumberQ}], leads = {1440, 120, 15}];
+  If[!NumberQ[es] || !NumberQ[n] || n >= es,
+    Return[<|"Stage" -> Missing["None"], "LeadMinutes" -> Missing["None"],
+      "MeetingBypass" -> False, "Urgency" -> "Normal", "MinutesUntil" -> Missing["None"]|>]];
+  minutesUntil = (es - n)/60.;
+  entered = Select[leads, minutesUntil <= # &];   (* windows we have entered *)
+  If[entered === {},
+    Return[<|"Stage" -> Missing["None"], "LeadMinutes" -> Missing["None"],
+      "MeetingBypass" -> False, "Urgency" -> "Normal", "MinutesUntil" -> minutesUntil|>]];
+  tightest = Min[entered];   (* tightest window entered = current stage *)
+  minLead = Min[leads];      (* tightest configured stage pierces meetings *)
+  <|"Stage" -> "Lead" <> ToString[Round[tightest]] <> "Minutes",
+    "LeadMinutes" -> tightest,
+    "MeetingBypass" -> (tightest == minLead),
+    "Urgency" -> If[tightest == minLead, "Critical", "Normal"],
+    "MinutesUntil" -> minutesUntil|>];
+SourceVault`SourceVaultRoutineMandatoryLadderStage[___] :=
+  <|"Stage" -> Missing["None"], "MeetingBypass" -> False, "Urgency" -> "Normal"|>;
+
+SourceVault`SourceVaultRoutineCoverageDegradedQ[fresh_] :=
+  MemberQ[{"Stale", "Unavailable", "Partial"}, fresh];
+SourceVault`SourceVaultRoutineCoverageDegradedQ[___] := False;
+
+(* ============================================================
+   R4b: durable notification queue (spec 5.2/5.3 / P0-5).
+   Machine-local (derived, regenerable). Append-only JSONL, replay-latest per
+   EnvelopeId. State: Pending -> Deferred -> Delivered | Superseded | Expired.
+   ============================================================ *)
+
+$svRtnTerminalStates = {"Delivered", "Superseded", "Expired"};
+
+iSVRtnQueueFile[] := If[iSVRtnLedgerRootQ[] ||
+    (StringQ[SourceVault`$SourceVaultRoutineCacheRoot] &&
+      SourceVault`$SourceVaultRoutineCacheRoot =!= ""),
+  FileNameJoin[{iSVRtnCacheRoot[], "queue", "notifications.jsonl"}], $Failed];
+
+iSVRtnQueueReadLatest[] := Module[{f = iSVRtnQueueFile[], evs, latest = <||>},
+  If[f === $Failed || !FileExistsQ[f], Return[{}]];
+  evs = iSVRtnReadEvents[f];
+  Do[If[StringQ[Lookup[r, "EnvelopeId", Missing[]]],
+    latest[r["EnvelopeId"]] = r], {r, evs}];
+  Values[latest]];
+
+iSVRtnEnvelopeId[env_] := iSVRtnDigest[StringRiffle[{
+  ToString[Lookup[env, "OccurrenceKey", ""]], ToString[Lookup[env, "Kind", ""]],
+  ToString[Lookup[env, "Stage", ""]], ToString[Lookup[env, "Channel", ""]],
+  ToString[Lookup[env, "EpisodeId", ""]]}, "|"]];
+
+Options[SourceVault`SourceVaultRoutineEnqueueNotification] = {"EnvelopeId" -> Automatic};
+SourceVault`SourceVaultRoutineEnqueueNotification[env_Association, OptionsPattern[]] := Module[
+  {f = iSVRtnQueueFile[], envId, existing, rec},
+  If[f === $Failed,
+    Return[Failure["NBRoutineNoQueueRoot",
+      <|"MessageTemplate" -> "No ledger/cache root for the notification queue."|>]]];
+  envId = With[{o = OptionValue["EnvelopeId"]},
+    If[StringQ[o], o, iSVRtnEnvelopeId[env]]];
+  existing = SelectFirst[iSVRtnQueueReadLatest[],
+    Lookup[#, "EnvelopeId", Missing[]] === envId &, Missing["None"]];
+  (* idempotent hysteresis: same logical notification is enqueued once *)
+  If[AssociationQ[existing], Return[existing]];
+  rec = <|"EnvelopeId" -> envId, "State" -> "Pending",
+    "Kind" -> Lookup[env, "Kind", ""], "Stage" -> Lookup[env, "Stage", "Default"],
+    "Channel" -> Lookup[env, "Channel", "Board"],
+    "OccurrenceKey" -> Lookup[env, "OccurrenceKey", Missing["None"]],
+    "EpisodeId" -> Lookup[env, "EpisodeId", Missing["None"]],
+    "MeetingBypass" -> TrueQ[Lookup[env, "MeetingBypass", False]],
+    "QuietHoursBypass" -> TrueQ[Lookup[env, "QuietHoursBypass", False]],
+    "Urgency" -> Lookup[env, "Urgency", "Normal"],
+    "EnqueuedAtAbs" -> N[AbsoluteTime[]], "UpdatedAtAbs" -> N[AbsoluteTime[]],
+    "DeferCount" -> 0, "DeliveryAttemptId" -> Missing["None"],
+    "ChannelReceipt" -> Missing["None"], "Reason" -> "Enqueued"|>;
+  iSVRtnAppendLine[f, rec];
+  rec];
+SourceVault`SourceVaultRoutineEnqueueNotification[___] :=
+  Failure["NBRoutineBadArgs", <|"MessageTemplate" -> "envelope must be an Association."|>];
+
+Options[SourceVault`SourceVaultRoutineQueueRecords] = {"State" -> All};
+SourceVault`SourceVaultRoutineQueueRecords[OptionsPattern[]] := Module[
+  {recs = iSVRtnQueueReadLatest[], st = OptionValue["State"]},
+  If[StringQ[st], Select[recs, Lookup[#, "State", ""] === st &], recs]];
+
+iSVRtnQueueUpdate[rec_, changes_] := Module[{f = iSVRtnQueueFile[], nr},
+  nr = Join[rec, changes, <|"UpdatedAtAbs" -> N[AbsoluteTime[]]|>];
+  If[f =!= $Failed, iSVRtnAppendLine[f, nr]];
+  nr];
+
+Options[SourceVault`SourceVaultRoutineSupersedeNotifications] = {"Reason" -> "Superseded"};
+SourceVault`SourceVaultRoutineSupersedeNotifications[occKey_String, OptionsPattern[]] := Module[
+  {targets, n = 0},
+  targets = Select[iSVRtnQueueReadLatest[],
+    Lookup[#, "OccurrenceKey", Missing[]] === occKey &&
+      !MemberQ[$svRtnTerminalStates, Lookup[#, "State", ""]] &];
+  Do[iSVRtnQueueUpdate[r, <|"State" -> "Superseded",
+    "Reason" -> OptionValue["Reason"]|>]; n++, {r, targets}];
+  <|"Status" -> "OK", "Superseded" -> n|>];
+SourceVault`SourceVaultRoutineSupersedeNotifications[___] :=
+  Failure["NBRoutineBadArgs", <|"MessageTemplate" -> "occurrenceKey must be a string."|>];
+
+(* default channel: Board / internal -> effectively-once in-record delivery *)
+iSVRtnDefaultChannelFn[env_, attemptId_] := <|"Channel" -> Lookup[env, "Channel", "Board"],
+  "DeliveredAtAbs" -> N[AbsoluteTime[]], "AttemptId" -> attemptId|>;
+
+Options[SourceVault`SourceVaultRoutineQueueTick] = {
+  "ChannelFn" -> Automatic, "MaxDeferSeconds" -> 86400, "MaxRecords" -> 500};
+SourceVault`SourceVaultRoutineQueueTick[context_ : <||>, OptionsPattern[]] := Module[
+  {ctx = If[AssociationQ[context], context, <||>], chFn = OptionValue["ChannelFn"],
+   maxDefer = OptionValue["MaxDeferSeconds"], now, active, delivered = 0, deferred = 0,
+   fellBack = 0},
+  If[iSVRtnQueueFile[] === $Failed,
+    Return[<|"Status" -> "NoQueueRoot", "Delivered" -> 0, "Deferred" -> 0|>]];
+  If[chFn === Automatic, chFn = iSVRtnDefaultChannelFn];
+  now = With[{c = iSVRtnAbs[Lookup[ctx, "Now", Missing[]]]},
+    If[NumberQ[c], c, N[AbsoluteTime[]]]];
+  active = Select[iSVRtnQueueReadLatest[],
+    MemberQ[{"Pending", "Deferred"}, Lookup[#, "State", ""]] &];
+  If[IntegerQ[OptionValue["MaxRecords"]],
+    active = Take[active, UpTo[OptionValue["MaxRecords"]]]];
+  Do[Module[{rec = r, env, decision, attemptId, receipt, agedOut},
+    env = <|"Kind" -> rec["Kind"], "Stage" -> rec["Stage"], "Channel" -> rec["Channel"],
+      "MeetingBypass" -> rec["MeetingBypass"],
+      "QuietHoursBypass" -> rec["QuietHoursBypass"]|>;
+    agedOut = NumberQ[maxDefer] && (now - Lookup[rec, "EnqueuedAtAbs", now]) > maxDefer;
+    decision = If[agedOut, "Deliver",
+      SourceVault`SourceVaultRoutineAttentionGate[env, ctx]["Decision"]];
+    If[decision === "Deliver",
+      (* fresh DeliveryAttemptId per attempt (at-least-once for external channels) *)
+      attemptId = iSVRtnULID[];
+      receipt = Quiet@Check[chFn[
+        If[agedOut, Append[env, "Channel" -> "Board"], env], attemptId], $Failed];
+      If[receipt === $Failed,
+        (iSVRtnQueueUpdate[rec, <|"State" -> "Deferred",
+          "DeferCount" -> Lookup[rec, "DeferCount", 0] + 1,
+          "Reason" -> "ChannelFailedRetry"|>]; deferred++),
+        (iSVRtnQueueUpdate[rec, <|"State" -> "Delivered",
+          "Channel" -> If[agedOut, "Board", rec["Channel"]],
+          "DeliveryAttemptId" -> attemptId, "ChannelReceipt" -> receipt,
+          "Reason" -> If[agedOut, "MaxDeferFallbackToBoard", "Delivered"]|>];
+         delivered++; If[agedOut, fellBack++])],
+      (* Defer: re-evaluated next tick against current context *)
+      (iSVRtnQueueUpdate[rec, <|"State" -> "Deferred",
+        "DeferCount" -> Lookup[rec, "DeferCount", 0] + 1,
+        "Reason" -> "DeferredByGate"|>]; deferred++)]],
+    {r, active}];
+  <|"Status" -> "OK", "Delivered" -> delivered, "Deferred" -> deferred,
+    "FellBackToBoard" -> fellBack|>];
+
+SourceVault`SourceVaultRoutineQueueReset[] := Module[{f = iSVRtnQueueFile[]},
+  If[f =!= $Failed && FileExistsQ[f], Quiet@DeleteFile[f]];
+  <|"Status" -> "Reset"|>];
 
 End[];
 

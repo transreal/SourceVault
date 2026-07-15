@@ -101,14 +101,68 @@ mark/waive/ack/snooze/Resolution/identity mapping 等の **owner の意思表示
   `SourceVaultRoutineTickGuard[]`(**cache watermark==ledger tail のときだけ Ready**。handoff 直後の新 machine は
   未 ingest=NotReady→Rebuild 必須。attention tick を不完全な durable state で走らせない=AC-026)。
 
+## adapter -> ObligationOccurrence + freshness(R2-3・§2.1/3.1/3.4)
+
+- `SourceVaultRoutineFreshness[observedAt, now, opts]` — Fresh/Stale/Unavailable(FreshSeconds/StaleSeconds)。
+- `SourceVaultRoutineStaleUsePolicy[fresh, use]` — §3.4 用途別 policy(Board/ActiveReminder/BusyGating/Plan)。
+  Unavailable+BusyGating→FailOpen、Stale+Plan→Freeze 等。
+- `SourceVaultRoutineBuildOccurrence[kind, d, srcMeta]` — source→統一 ObligationOccurrence(§2.1)。
+- `SourceVaultRoutineApplyDurable[occ, replay]` — ledger fact overlay(Waive>Resolution>ManualMark・
+  Snooze/Ack で Attention・WasOverdue OR 保持=AC-025)。
+
+## ActionGate — capability-class router(R3・§7/P0-7)
+
+UI クリックを class で分離し、副作用ゼロで**判定のみ**返す(実行は呼び出し側)。
+
+- `SourceVaultRoutineActionClass[kind]` — Select/LocalNavigation/LocalMutation/WorkflowDispatch/
+  ExternalNavigation/Unknown。
+- `SourceVaultRoutineActionGate[action, context]` — Select=常に許可(effect-free) / LocalNavigation=path
+  containment(".." 拒否)+occurrence 存在確認 / **WorkflowDispatch=current SemanticDigest 再検証**(stale は
+  Blocked=AC-028、一致で DelegateToAutoTrigger) / **ExternalNavigation=scheme allowlist(既定 https のみ)+
+  domain allowlist**(file:/custom/不許可 domain は拒否=AC-029・RequiresConfirm) / LocalMutation=OwnerPermit
+  必須+RequiresPreview+**AuditFact**(呼び出し側が ledger へ append。内容最小化キーのみ)。
+
+## Board — attention list(R3・§5.1)
+
+- `SourceVaultRoutineBoardData[occs, now, opts]`(**pure・headless**) — 注意が必要な行(Overdue/DueSoon かつ
+  未 Satisfied/Waived・未失効 Snooze 除外)を Mandatory/overdue 優先→due 昇順でソート。各行に kind 別の適用可能
+  action kind 一覧。opts IncludeResolved/IncludeSnoozed/SoonWindow。
+- `SourceVaultRoutineBoardView[occs, opts]`(**FE**) — BoardData を Dataset 描画し、各 action ボタンが
+  ActionGate 経由で発火。**要 Front End(NB 実機検証)**。ActionHandler/OwnerPermit/AllowedRoots を受ける。
+
+## AttentionContext gate + envelope + ladder(R4a・§5/P0-1)
+
+- `SourceVaultRoutineNotificationEnvelope[kind, opts]` — Stage/Urgency/**MeetingBypass/QuietHoursBypass 独立**/
+  Channel/OccurrenceKey/EpisodeId。
+- `SourceVaultRoutineAttentionGate[env, ctx]` — **会議ゲートと静音ゲートを独立評価**: defer iff
+  (BusyQ&&!MeetingBypass)||(InQuietHours&&!QuietHoursBypass)。Lead15 は会議貫通するが静音は貫通しない
+  (AC-003/AC-004)。
+- `SourceVaultRoutineInQuietHours[policy, now]`(StartHour..EndHour・日跨ぎ wrap・DateObject は自 TZ)。
+- `SourceVaultRoutineMandatoryLadderStage[eventStart, now, policy]` — 入場した tightest lead window=現ステージ・
+  最小 lead のみ MeetingBypass+Critical(§5.3)。
+- `SourceVaultRoutineCoverageDegradedQ[fresh]`(Stale/Unavailable/Partial=AC-008)。
+- `DefaultAttentionPolicy`/`SetAttentionPolicy`(OwnerAuthorization 必須)/`AttentionPolicy`。
+
+## durable notification queue(R4b・§5.2/5.3/P0-5・machine-local 再生成可)
+
+append-only JSONL・replay-latest per EnvelopeId・Pending→Deferred→Delivered|Superseded|Expired。
+
+- `SourceVaultRoutineEnqueueNotification[env, opts]` — EnvelopeId=(OccKey,Kind,Stage,Channel,EpisodeId) digest で
+  **冪等**(hysteresis)。
+- `SourceVaultRoutineQueueTick[ctx, opts]` — 各 Pending/Deferred を**現 context で AttentionGate 再評価**
+  (連続会議で re-defer・busy 解消で deliver)。**MaxDeferSeconds 超過は Board fallback で必ず送達**。毎回 fresh
+  DeliveryAttemptId=**外部チャネル at-least-once/Board effectively-once**(P0-5)。ChannelFn 注入。
+- `SourceVaultRoutineSupersedeNotifications[occKey]`(occurrence 移動/取消で未送達 Superseded=AC-002/033)/
+  `SourceVaultRoutineQueueRecords`/`SourceVaultRoutineQueueReset`。
+- **罠**: WriteRawJSONString は Missing で失敗→iSVRtnAppendLine で Missing→Null サニタイズ。
+
 ## 検証
 
-- `test codes/SourceVault_routine_test.wls`(R1・65/65 green・IO なし)。
-- `test codes/SourceVault_routine_ledger_test.wls`(R2-2・32/32 green・temp dir)。append/dedup/内容最小化/
-  冪等/watermark/replay latest-wins/single-writer/OwnerMachine handoff(NeverIngested→Rebuild→Ready・
-  history 保持)を網羅。全 headless・FE 非依存。
+全 headless(BoardView のみ FE=NB 実機済み)。**routine 累計 245 green**:
+- R1 65 / R2-2 ledger 32 / R2-3 adapter 42 / R3 actiongate 32・board 16 / R4a attention 33 / R4b queue 25。
+- `SourceVaultRoutineBoardView` は result.nb で実機確認済み(BoardData 一致・ActionGate 配線ボタン描画)。
 
 ## 未実装(次以降)
 
-R2 残=adapter 4種→ObligationOccurrence+freshness/StaleUsePolicy、R3=Board+ActionGate、
-R4=policy+durable queue+送達保証、AT-1=AutoTrigger permit 増分、R8=自動化。extension=Plan/可視化。
+AT-1=AutoTrigger permit 増分(R8 前提)、R7=統計 stream(RoutineExecutionRate/OverdueRate→anomaly)、
+R8=自動化、R9=mail。extension=Plan/可視化。
