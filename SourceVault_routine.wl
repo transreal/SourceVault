@@ -344,6 +344,100 @@ SourceVaultRoutineQueueReset::usage =
   "SourceVaultRoutineQueueReset[] clears this machine's durable notification queue \
 (regenerable derived state). Returns a status.";
 
+(* === R7: statistical streams -> anomaly (spec 4.3) === *)
+
+SourceVaultRoutineExecutionStreams::usage =
+  "SourceVaultRoutineExecutionStreams[occurrences, opts] builds daily rate streams from \
+resolved ObligationOccurrences for the anomaly workflow (spec 4.3): this is how \
+\"routine not run for a while\" becomes a first-class STATE ANOMALY. Returns an \
+Association of streams, each <|\"Points\"->{<|\"WindowStart\",\"WindowEnd\", \
+\"EventCount\",\"ExposureCount\"|>...}|>, ready to pass as the \"Streams\" of \
+SourceVaultRunCaneAnomalyWorkflow. Streams: \"RoutineExecutionRate\" (per day \
+ExposureCount = occurrences due that day, EventCount = those Satisfied) and \
+\"RoutineOverdueRate\" (EventCount = those overdue/missed). A stream with no data is \
+OMITTED (never fabricate an empty stream, I-15). Each occurrence contributes via its \
+Schedule.DueAtUTC (binned in option \"TimeZone\", default \"Asia/Tokyo\") and its \
+Fulfillment State/WasOverdue. Options \"TimeZone\", \"Kinds\"->All (restrict to some \
+Kind list, e.g. {\"Routine\"}). Pure; the anomaly detection/baselines/correlation are \
+the existing 1H-A workflow.";
+
+SourceVaultRoutineOverdueSecondsByDay::usage =
+  "SourceVaultRoutineOverdueSecondsByDay[occurrences, opts] returns per-day total \
+OverdueContractSeconds (spec 4.3 / P1-11): for each day, the sum over occurrences of \
+the within-day overdue dwell (SourceVaultRoutineOverdueSeconds), using each \
+occurrence's GraceUntilUTC and resolved time (EvidenceAtUTC when Satisfied, else \
+unresolved). SourceUnavailable dwell is not counted here. Returns <|dayKey-> \
+seconds...|>. Options \"TimeZone\", \"Now\" (upper bound for unresolved, default now).";
+
+(* === R8a: automation decision core (spec 8.1 / 9 / P1-4) === *)
+
+SourceVaultRoutineFormulaicScore::usage =
+  "SourceVaultRoutineFormulaicScore[traces, opts] measures how FORMULAIC a routine's \
+executions are (spec 8.1), DETERMINISTICALLY (no LLM): high when the procedure \
+signature is consistent, with no owner interventions and no failures. traces is a \
+list of <|\"Signature\"->_ (a hashable step-sequence), \"OwnerInterventions\"->_Integer \
+(default 0), \"Failed\"->_ (default False)|>. Returns <|\"Score\"->0..1, \
+\"SampleSize\", \"Candidate\"->Bool, \"SignatureConsistency\", \"CleanRate\", \
+\"FailureRate\"|>. Candidate requires Score >= \"Threshold\" (0.85) AND SampleSize >= \
+\"MinSample\" (10): a small sample is NEVER a candidate (P1-4). Score = \
+SignatureConsistency * (1-FailureRate) * CleanRate.";
+
+SourceVaultRoutineAutomationEligibility::usage =
+  "SourceVaultRoutineAutomationEligibility[spec, opts] is the eligibility GATE that runs \
+BEFORE the formulaic score (spec 8.1 / P1-4): a high similarity score does NOT make an \
+action safe to automate. spec is an Association describing the action: \
+\"ActionRef\" (Missing blocks), \"AutoRunCapability\" (\"HeadlessAsync\"/\"FrontendRequired\"/\
+...; FrontendRequired blocks), \"Idempotent\"->Bool, \"Reversible\"->Bool, \
+\"RollbackPlan\"->Bool, \"HasPostcondition\"->Bool, \"CredentialScope\" (\"All\" blocks), \
+\"TestedRuns\"->Integer. Returns <|\"Eligible\"->Bool, \"MaxState\"->\"None\"|\
+\"Supervised\"|\"Unattended\", \"Blockers\"->{...}|>. Unattended is only reachable when \
+option \"IP5Wired\"->True (the no-duplicate-execution condition is configured); \
+otherwise MaxState caps at Supervised (AC-011).";
+
+SourceVaultRoutineRecertificationClass::usage =
+  "SourceVaultRoutineRecertificationClass[spec] classifies an automation for TTL / \
+receipt cadence (spec 9): Class A (external send/delete/irreversible: 30-day TTL, \
+weekly receipt, sampled outcome audit), B (reversible local mutation: 90-day, \
+biweekly), C (read-only fetch: 180-day, monthly/exception). spec keys \"ActionRisk\" \
+(\"High\"/\"Medium\"/\"Low\"), \"Reversible\"->Bool, \"Importance\", \"CredentialScope\". \
+Importance High escalates one step stricter (C->B, B->A). Returns <|\"Class\", \
+\"TTLDays\", \"ReceiptEvery\", \"OutcomeAudit\"->Bool|>.";
+
+(* === R8b: automation proposal / approval flow (spec 8.2) === *)
+
+SourceVaultRoutineProposeAutomation::usage =
+  "SourceVaultRoutineProposeAutomation[routineId, automationSpec, traces, opts] proposes \
+automating a routine (spec 8.2). It runs the eligibility GATE and the formulaic score; \
+only when the spec is Eligible AND the traces make it a Candidate does it append an \
+AutomationProposal fact to the durable ledger as state \"PendingReview\" (never \
+auto-applied, I-16) and return the proposal. Otherwise it returns a rejection \
+Association with the reason (no ledger write). The fact is content-minimized (routineId/\
+score/MaxState/RecertClass only; the automationSpec stays owner-local). Options are \
+forwarded to the score/eligibility (\"Threshold\",\"MinSample\",\"IP5Wired\").";
+
+SourceVaultRoutineAutomationProposals::usage =
+  "SourceVaultRoutineAutomationProposals[opts] replays the ledger and returns the \
+current state of each automation proposal (PendingReview / Approved / Rejected). \
+Option \"State\"->All filters.";
+
+SourceVaultRoutineApproveAutomation::usage =
+  "SourceVaultRoutineApproveAutomation[proposalId, automationSpec, \
+\"OwnerAuthorization\"->True] approves a PendingReview proposal (spec 8.2). It builds a \
+TriggerSpec DRAFT (Enabled->False, provenance CreatedBy->\"RoutineAutomationProposal\" \
++ ProposalId/ApprovedBy/AuthorizationId, ExpiresAt = now + the RecertificationClass \
+TTL), MINTS a one-shot AT-1 Register permit bound to that draft (via \
+SourceVaultAutoTriggerMintPermit when autotrigger is loaded; option \"PermitMintFn\" is \
+the injection seam), and records an AutomationReviewed(Approved) fact. Returns \
+<|\"Draft\", \"Permit\", \"ProposalId\", \"AuthorizationId\"|>; the owner then calls \
+SourceVaultRegisterAutoTrigger[Draft, \"DryRun\"->False, \"Permit\"->Permit]. \
+OwnerAuthorization is required; the draft starts Enabled->False so a separate owner \
+Enable (with its own permit + EnabledAudit) is still needed to arm it (AC-011: no path \
+reaches Unattended without owner action).";
+
+SourceVaultRoutineRejectAutomation::usage =
+  "SourceVaultRoutineRejectAutomation[proposalId, opts] records an \
+AutomationReviewed(Rejected) fact for a proposal. Option \"Reason\".";
+
 Begin["`Private`"];
 
 (* ---- time helpers (absolute seconds, TZ-independent) ---- *)
@@ -1389,6 +1483,278 @@ SourceVault`SourceVaultRoutineQueueTick[context_ : <||>, OptionsPattern[]] := Mo
 SourceVault`SourceVaultRoutineQueueReset[] := Module[{f = iSVRtnQueueFile[]},
   If[f =!= $Failed && FileExistsQ[f], Quiet@DeleteFile[f]];
   <|"Status" -> "Reset"|>];
+
+(* ============================================================
+   R7: statistical streams (spec 4.3). Pure daily binning of resolved occurrences
+   into rate streams for the existing anomaly (1H-A) workflow. This is where
+   "routine not run for a while" becomes a state anomaly. IO-free.
+   ============================================================ *)
+
+iSVRtnDayBin[abs_, tz_] := Module[{d, y, mo, day, ds, de},
+  d = Quiet@Check[DateObject[FromAbsoluteTime[abs], TimeZone -> tz], $Failed];
+  If[!DateObjectQ[d], Return[$Failed]];
+  {y, mo, day} = Round /@ DateValue[d, {"Year", "Month", "Day"}];
+  ds = AbsoluteTime[DateObject[{y, mo, day, 0, 0, 0}, TimeZone -> tz]];
+  de = ds + 86400;
+  <|"Key" -> StringJoin[ToString[y], "-", IntegerString[mo, 10, 2], "-",
+      IntegerString[day, 10, 2]],
+    "StartAbs" -> ds, "EndAbs" -> de|>];
+
+iSVRtnStreamPoints[byDay_] := Map[Function[k,
+  <|"WindowStart" -> DateString[FromAbsoluteTime[byDay[k]["StartAbs"]],
+      "ISODateTime", TimeZone -> 0] <> "Z",
+    "WindowEnd" -> DateString[FromAbsoluteTime[byDay[k]["EndAbs"]],
+      "ISODateTime", TimeZone -> 0] <> "Z",
+    "EventCount" -> byDay[k]["Event"], "ExposureCount" -> byDay[k]["Exposure"]|>],
+  Sort[Keys[byDay]]];
+
+Options[SourceVault`SourceVaultRoutineExecutionStreams] = {
+  "TimeZone" -> "Asia/Tokyo", "Kinds" -> All};
+SourceVault`SourceVaultRoutineExecutionStreams[occs_List, OptionsPattern[]] := Module[
+  {tz = OptionValue["TimeZone"], kinds = OptionValue["Kinds"], sel,
+   execDay = <||>, ovDay = <||>, streams = <||>},
+  sel = If[ListQ[kinds], Select[occs, MemberQ[kinds, Lookup[#, "Kind", ""]] &], occs];
+  Do[Module[{due = iSVRtnAbs[Lookup[Lookup[o, "Schedule", <||>], "DueAtUTC", Missing[]]],
+      ful = Lookup[o, "Fulfillment", <||>], bin, satisfied, overdue},
+    If[NumberQ[due],
+      bin = iSVRtnDayBin[due, tz];
+      If[bin =!= $Failed,
+        satisfied = Lookup[ful, "State", "Unknown"] === "Satisfied";
+        overdue = TrueQ[Lookup[ful, "WasOverdue", False]] ||
+          Lookup[ful, "Resolution", ""] === "Missed" ||
+          Lookup[ful, "State", ""] === "Unfulfilled";
+        execDay[bin["Key"]] = <|"StartAbs" -> bin["StartAbs"], "EndAbs" -> bin["EndAbs"],
+          "Exposure" -> Lookup[execDay, bin["Key"], <|"Exposure" -> 0|>]["Exposure"] + 1,
+          "Event" -> Lookup[execDay, bin["Key"], <|"Event" -> 0|>]["Event"] +
+            If[satisfied, 1, 0]|>;
+        ovDay[bin["Key"]] = <|"StartAbs" -> bin["StartAbs"], "EndAbs" -> bin["EndAbs"],
+          "Exposure" -> Lookup[ovDay, bin["Key"], <|"Exposure" -> 0|>]["Exposure"] + 1,
+          "Event" -> Lookup[ovDay, bin["Key"], <|"Event" -> 0|>]["Event"] +
+            If[overdue, 1, 0]|>]]],
+    {o, sel}];
+  (* omit empty streams (I-15) *)
+  If[execDay =!= <||>,
+    streams["RoutineExecutionRate"] = <|"Points" -> iSVRtnStreamPoints[execDay]|>];
+  If[ovDay =!= <||> && AnyTrue[Values[ovDay], #["Event"] > 0 &],
+    streams["RoutineOverdueRate"] = <|"Points" -> iSVRtnStreamPoints[ovDay]|>];
+  streams];
+SourceVault`SourceVaultRoutineExecutionStreams[___] := <||>;
+
+Options[SourceVault`SourceVaultRoutineOverdueSecondsByDay] = {
+  "TimeZone" -> "Asia/Tokyo", "Now" -> Automatic};
+SourceVault`SourceVaultRoutineOverdueSecondsByDay[occs_List, OptionsPattern[]] := Module[
+  {tz = OptionValue["TimeZone"], nowAbs, byDay = <||>},
+  nowAbs = With[{n = OptionValue["Now"]},
+    If[n === Automatic, N[AbsoluteTime[]], iSVRtnAbs[n]]];
+  Do[Module[{sched = Lookup[o, "Schedule", <||>], ful = Lookup[o, "Fulfillment", <||>],
+      grace, resolved, bin, secs},
+    grace = iSVRtnAbs[Lookup[sched, "GraceUntilUTC", Missing[]]];
+    If[NumberQ[grace],
+      resolved = If[Lookup[ful, "State", ""] === "Satisfied",
+        iSVRtnAbs[Lookup[ful, "EvidenceAtUTC", Missing["None"]]], Missing["None"]];
+      bin = iSVRtnDayBin[grace, tz];
+      If[bin =!= $Failed,
+        secs = SourceVault`SourceVaultRoutineOverdueSeconds[grace,
+          If[NumberQ[resolved], resolved, Missing["None"]],
+          bin["StartAbs"], Min[bin["EndAbs"], nowAbs]];
+        byDay[bin["Key"]] = Lookup[byDay, bin["Key"], 0] + secs]]],
+    {o, occs}];
+  byDay];
+SourceVault`SourceVaultRoutineOverdueSecondsByDay[___] := <||>;
+
+(* ============================================================
+   R8a: automation decision core (spec 8.1/9). Pure. The eligibility GATE is
+   independent from (and precedes) the formulaic score: high similarity does not
+   make an action safe. IO-free.
+   ============================================================ *)
+
+Options[SourceVault`SourceVaultRoutineFormulaicScore] = {"Threshold" -> 0.85, "MinSample" -> 10};
+SourceVault`SourceVaultRoutineFormulaicScore[traces_List, OptionsPattern[]] := Module[
+  {n = Length[traces], sigs, modalCount, sigConsistency, cleanRate, failureRate, score},
+  If[n == 0,
+    Return[<|"Score" -> 0., "SampleSize" -> 0, "Candidate" -> False,
+      "SignatureConsistency" -> 0., "CleanRate" -> 0., "FailureRate" -> 0.|>]];
+  sigs = Lookup[#, "Signature", Missing["None"]] & /@ traces;
+  modalCount = Max[Values[Counts[sigs]]];
+  sigConsistency = N[modalCount/n];
+  cleanRate = N[Count[traces, t_ /; Lookup[t, "OwnerInterventions", 0] == 0]/n];
+  failureRate = N[Count[traces, t_ /; TrueQ[Lookup[t, "Failed", False]]]/n];
+  score = sigConsistency*(1 - failureRate)*cleanRate;
+  <|"Score" -> score, "SampleSize" -> n,
+    "Candidate" -> (score >= OptionValue["Threshold"] && n >= OptionValue["MinSample"]),
+    "SignatureConsistency" -> sigConsistency, "CleanRate" -> cleanRate,
+    "FailureRate" -> failureRate|>];
+SourceVault`SourceVaultRoutineFormulaicScore[___] :=
+  <|"Score" -> 0., "SampleSize" -> 0, "Candidate" -> False|>;
+
+Options[SourceVault`SourceVaultRoutineAutomationEligibility] = {"IP5Wired" -> False};
+SourceVault`SourceVaultRoutineAutomationEligibility[spec_Association, OptionsPattern[]] := Module[
+  {blockers = {}, softBlocks = {}, maxState, ip5 = TrueQ[OptionValue["IP5Wired"]]},
+  If[MissingQ[Lookup[spec, "ActionRef", Missing["None"]]] ||
+      Lookup[spec, "ActionRef", Missing["None"]] === Missing["None"],
+    AppendTo[blockers, "NoActionRef"]];
+  If[Lookup[spec, "AutoRunCapability", ""] === "FrontendRequired",
+    AppendTo[blockers, "FrontendRequired"]];
+  If[Lookup[spec, "CredentialScope", ""] === "All",
+    AppendTo[blockers, "UnboundedCredentialScope"]];
+  (* not reversible AND no rollback plan is a hard blocker *)
+  If[!TrueQ[Lookup[spec, "Reversible", False]] && !TrueQ[Lookup[spec, "RollbackPlan", False]],
+    AppendTo[blockers, "IrreversibleNoRollback"]];
+  (* soft: non-idempotent / no postcondition cap the state but do not fully block *)
+  If[!TrueQ[Lookup[spec, "Idempotent", False]], AppendTo[softBlocks, "NonIdempotent"]];
+  If[!TrueQ[Lookup[spec, "HasPostcondition", False]], AppendTo[softBlocks, "NoPostcondition"]];
+  maxState = Which[
+    blockers =!= {}, "None",
+    (* Unattended needs IP-5 wired AND idempotent AND a checkable postcondition *)
+    ip5 && softBlocks === {}, "Unattended",
+    True, "Supervised"];
+  <|"Eligible" -> (blockers === {}), "MaxState" -> maxState,
+    "Blockers" -> blockers, "SoftBlocks" -> softBlocks|>];
+SourceVault`SourceVaultRoutineAutomationEligibility[___] :=
+  <|"Eligible" -> False, "MaxState" -> "None", "Blockers" -> {"BadSpec"}|>;
+
+SourceVault`SourceVaultRoutineRecertificationClass[spec_Association] := Module[
+  {risk = Lookup[spec, "ActionRisk", "Medium"], rev = TrueQ[Lookup[spec, "Reversible", True]],
+   imp = Lookup[spec, "Importance", "Normal"], baseRank, rank, class, ttl, receipt, audit},
+  (* base class rank: 1=A(strictest) .. 3=C(loosest) *)
+  baseRank = Which[
+    risk === "High" || !rev, 1,          (* external / irreversible -> A *)
+    risk === "Medium", 2,                (* reversible local mutation -> B *)
+    True, 3];                            (* read-only -> C *)
+  rank = If[imp === "High", Max[1, baseRank - 1], baseRank];   (* escalate one step *)
+  class = rank /. {1 -> "A", 2 -> "B", 3 -> "C"};
+  {ttl, receipt, audit} = Switch[class,
+    "A", {30, "Weekly", True},
+    "B", {90, "Biweekly", False},
+    _, {180, "Monthly", False}];
+  <|"Class" -> class, "TTLDays" -> ttl, "ReceiptEvery" -> receipt, "OutcomeAudit" -> audit|>];
+SourceVault`SourceVaultRoutineRecertificationClass[___] :=
+  <|"Class" -> "A", "TTLDays" -> 30, "ReceiptEvery" -> "Weekly", "OutcomeAudit" -> True|>;
+
+(* ============================================================
+   R8b: automation proposal / approval flow (spec 8.2). Ties R8a (score/eligibility/
+   class) + the durable ledger + AT-1 (permit) into propose -> PendingReview ->
+   owner-approve -> TriggerSpec draft + one-shot Register permit. Nothing is
+   auto-applied (I-16); the draft starts Enabled->False.
+   ============================================================ *)
+
+Options[SourceVault`SourceVaultRoutineProposeAutomation] = {
+  "Threshold" -> 0.85, "MinSample" -> 10, "IP5Wired" -> False};
+SourceVault`SourceVaultRoutineProposeAutomation[routineId_String, spec_Association,
+    traces_List, OptionsPattern[]] := Module[
+  {elig, score, recert, propId, fact},
+  elig = SourceVault`SourceVaultRoutineAutomationEligibility[spec,
+    "IP5Wired" -> OptionValue["IP5Wired"]];
+  If[!TrueQ[elig["Eligible"]],
+    Return[<|"Status" -> "Rejected", "Reason" -> "NotEligible",
+      "Blockers" -> elig["Blockers"]|>]];
+  score = SourceVault`SourceVaultRoutineFormulaicScore[traces,
+    "Threshold" -> OptionValue["Threshold"], "MinSample" -> OptionValue["MinSample"]];
+  If[!TrueQ[score["Candidate"]],
+    Return[<|"Status" -> "Rejected", "Reason" -> "NotCandidate",
+      "Score" -> score["Score"], "SampleSize" -> score["SampleSize"]|>]];
+  recert = SourceVault`SourceVaultRoutineRecertificationClass[spec];
+  propId = "prop-" <> iSVRtnULID[];
+  fact = <|"FactKind" -> "AutomationProposal", "ProposalId" -> propId,
+    "RoutineId" -> routineId, "StableId" -> "rtn:" <> routineId,
+    "Score" -> N[score["Score"]], "SampleSize" -> score["SampleSize"],
+    "MaxState" -> elig["MaxState"], "RecertClass" -> recert["Class"],
+    "TTLDays" -> recert["TTLDays"], "State" -> "PendingReview"|>;
+  With[{r = SourceVault`SourceVaultRoutineLedgerAppend[fact]},
+    If[MatchQ[r, _Failure], Return[r]]];
+  <|"Status" -> "PendingReview", "ProposalId" -> propId, "Score" -> N[score["Score"]],
+    "MaxState" -> elig["MaxState"], "RecertClass" -> recert["Class"]|>];
+SourceVault`SourceVaultRoutineProposeAutomation[___] :=
+  Failure["NBRoutineBadArgs", <|"MessageTemplate" -> "Bad ProposeAutomation args."|>];
+
+Options[SourceVault`SourceVaultRoutineAutomationProposals] = {"State" -> All};
+SourceVault`SourceVaultRoutineAutomationProposals[OptionsPattern[]] := Module[
+  {evs, byId = <||>, st = OptionValue["State"], out},
+  evs = SourceVault`SourceVaultRoutineLedgerEvents[];
+  Do[Module[{fk = Lookup[e, "FactKind", ""], pid = Lookup[e, "ProposalId", Missing[]]},
+    If[StringQ[pid],
+      Which[
+        fk === "AutomationProposal", byId[pid] = e,
+        fk === "AutomationReviewed" && KeyExistsQ[byId, pid],
+          byId[pid] = Join[byId[pid], <|"State" -> Lookup[e, "Verdict", "Reviewed"],
+            "ReviewedAt" -> Lookup[e, "At", Missing["None"]],
+            "AuthorizationId" -> Lookup[e, "AuthorizationId", Missing["None"]]|>]]]],
+    {e, evs}];
+  out = Values[byId];
+  If[StringQ[st], Select[out, Lookup[#, "State", ""] === st &], out]];
+
+(* build a TriggerSpec draft from an owner-local automation spec (pure) *)
+iSVRtnTriggerDraft[spec_, propId_, authId_, ttlDays_] := Module[{tid, expIso},
+  tid = "autotrg-" <> StringTake[iSVRtnULID[], 12];
+  expIso = DateString[DatePlus[Now, {ttlDays, "Day"}],
+    "ISODateTime", TimeZone -> 0] <> "Z";
+  <|"Type" -> "AutoTrigger", "SchemaVersion" -> "0.1", "TriggerId" -> tid,
+    "Target" -> Lookup[spec, "Target",
+      <|"TargetType" -> "PureComputation", "TargetId" -> Lookup[spec, "RoutineId", "noop"]|>],
+    "Enabled" -> False,   (* owner must separately Enable (own permit + EnabledAudit) *)
+    "Schedule" -> Lookup[spec, "Schedule", <|"Kind" -> "Alarm"|>],
+    "Condition" -> Lookup[spec, "Condition", <||>],   (* IP-5 predicate wired here later *)
+    "Owner" -> <|"Mode" -> "OwnerMachine"|>,
+    "ExecutionPlacement" -> Lookup[spec, "ExecutionPlacement",
+      <|"Mode" -> "EnvironmentIndependent"|>],
+    "ExpiresAt" -> expIso,
+    "CreatedBy" -> "RoutineAutomationProposal",
+    "PromptSource" -> <|"ProposalId" -> propId, "ApprovedBy" -> "Owner",
+      "AuthorizationId" -> authId|>,
+    "EnabledAudit" -> {}|>];
+
+Options[SourceVault`SourceVaultRoutineApproveAutomation] = {
+  "OwnerAuthorization" -> False, "PermitMintFn" -> Automatic};
+SourceVault`SourceVaultRoutineApproveAutomation[proposalId_String, spec_Association,
+    OptionsPattern[]] := Module[
+  {prop, recert, authId, draft, mintFn, permit, specHash, fact},
+  If[!TrueQ[OptionValue["OwnerAuthorization"]],
+    Return[Failure["NBRoutineOwnerAuthRequired",
+      <|"MessageTemplate" -> "OwnerAuthorization->True is required to approve."|>]]];
+  prop = SelectFirst[SourceVault`SourceVaultRoutineAutomationProposals[],
+    Lookup[#, "ProposalId", ""] === proposalId &, Missing["None"]];
+  If[!AssociationQ[prop],
+    Return[Failure["NBRoutineNoProposal",
+      <|"MessageTemplate" -> "Proposal not found.", "ProposalId" -> proposalId|>]]];
+  If[Lookup[prop, "State", ""] =!= "PendingReview",
+    Return[Failure["NBRoutineProposalNotPending",
+      <|"MessageTemplate" -> "Proposal is not PendingReview.",
+        "State" -> Lookup[prop, "State", ""]|>]]];
+  recert = SourceVault`SourceVaultRoutineRecertificationClass[spec];
+  authId = "auth-" <> iSVRtnULID[];
+  draft = iSVRtnTriggerDraft[spec, proposalId, authId, recert["TTLDays"]];
+  (* mint a one-shot AT-1 Register permit bound to the draft (weak autotrigger dep) *)
+  mintFn = OptionValue["PermitMintFn"];
+  If[mintFn === Automatic,
+    mintFn = If[Length[Names["SourceVault`SourceVaultAutoTriggerMintPermit"]] > 0 &&
+        Length[Names["SourceVault`SourceVaultAutoTriggerSpecHash"]] > 0,
+      Function[dr, Module[{sh = SourceVault`SourceVaultAutoTriggerSpecHash[dr]},
+        SourceVault`SourceVaultAutoTriggerMintPermit[
+          <|"SpecHash" -> sh, "ProposalId" -> proposalId, "Action" -> "Register"|>,
+          "OwnerAuthorization" -> True]]],
+      Missing["NoAutoTrigger"]]];
+  permit = If[MissingQ[mintFn], Missing["NoAutoTrigger"],
+    Quiet@Check[mintFn[draft], Missing["MintFailed"]]];
+  fact = <|"FactKind" -> "AutomationReviewed", "ProposalId" -> proposalId,
+    "Verdict" -> "Approved", "AuthorizationId" -> authId,
+    "TriggerId" -> draft["TriggerId"]|>;
+  With[{r = SourceVault`SourceVaultRoutineLedgerAppend[fact]},
+    If[MatchQ[r, _Failure], Return[r]]];
+  <|"Status" -> "Approved", "ProposalId" -> proposalId, "AuthorizationId" -> authId,
+    "Draft" -> draft, "Permit" -> permit|>];
+SourceVault`SourceVaultRoutineApproveAutomation[___] :=
+  Failure["NBRoutineBadArgs", <|"MessageTemplate" -> "Bad ApproveAutomation args."|>];
+
+Options[SourceVault`SourceVaultRoutineRejectAutomation] = {"Reason" -> "OwnerRejected"};
+SourceVault`SourceVaultRoutineRejectAutomation[proposalId_String, OptionsPattern[]] := Module[
+  {fact},
+  fact = <|"FactKind" -> "AutomationReviewed", "ProposalId" -> proposalId,
+    "Verdict" -> "Rejected", "Reason" -> OptionValue["Reason"]|>;
+  With[{r = SourceVault`SourceVaultRoutineLedgerAppend[fact]},
+    If[MatchQ[r, _Failure], Return[r]]];
+  <|"Status" -> "Rejected", "ProposalId" -> proposalId|>];
+SourceVault`SourceVaultRoutineRejectAutomation[___] :=
+  Failure["NBRoutineBadArgs", <|"MessageTemplate" -> "Bad RejectAutomation args."|>];
 
 End[];
 

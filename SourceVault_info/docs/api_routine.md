@@ -156,13 +156,38 @@ append-only JSONL・replay-latest per EnvelopeId・Pending→Deferred→Delivere
   `SourceVaultRoutineQueueRecords`/`SourceVaultRoutineQueueReset`。
 - **罠**: WriteRawJSONString は Missing で失敗→iSVRtnAppendLine で Missing→Null サニタイズ。
 
+## 統計 stream -> anomaly(R7・§4.3・**「未実行=状態異常」の配線**)
+
+- `SourceVaultRoutineExecutionStreams[occs, opts]` — resolved ObligationOccurrence を日次ビン化し
+  `RoutineExecutionRate`(Exposure=その日 due 数/Event=Satisfied 数)+`RoutineOverdueRate`(Event=overdue/
+  missed)を返す。**空 stream は omit(I-15)**。Points は WindowStart/End(ISO Z)+EventCount/ExposureCount で
+  `SourceVaultRunCaneAnomalyWorkflow[<|"Streams"->...|>]` にそのまま渡せる。opts TimeZone/Kinds。
+- `SourceVaultRoutineOverdueSecondsByDay[occs, opts]` — 日次 OverdueContractSeconds 積分(P1-11)。
+- anomaly の baseline/逸脱検知/相関は既存 1H-A ワークフローが処理(observe-only=EnforcementActions {})。
+
 ## 検証
 
-全 headless(BoardView のみ FE=NB 実機済み)。**routine 累計 245 green**:
-- R1 65 / R2-2 ledger 32 / R2-3 adapter 42 / R3 actiongate 32・board 16 / R4a attention 33 / R4b queue 25。
-- `SourceVaultRoutineBoardView` は result.nb で実機確認済み(BoardData 一致・ActionGate 配線ボタン描画)。
+全 headless(BoardView のみ FE=NB 実機済み)。**routine 累計 262 green**:
+- R1 65 / R2-2 ledger 32 / R2-3 adapter 42 / R3 actiongate 32・board 16 / R4a attention 33 / R4b queue 25 /
+  R7 streams 17。
+- `SourceVaultRoutineBoardView` は result.nb で実機確認済み。R7 は umbrella で anomaly ワークフロー実接続を確認。
+
+## 自動化提案(R8・§8）
+
+判定核(R8a):`SourceVaultRoutineFormulaicScore[traces]`(**決定的**・小標本は非候補=P1-4)+
+`SourceVaultRoutineAutomationEligibility[spec]`(スコアより先の独立 gate・Unattended は IP5Wired かつ冪等+
+postcondition のみ=AC-011)+`SourceVaultRoutineRecertificationClass[spec]`(§9 TTL/receipt A/B/C）。
+
+提案フロー(R8b):`ProposeAutomation[routineId,spec,traces]`(Eligible+Candidate のみ AutomationProposal を
+ledger に PendingReview・内容最小化・**自動適用しない**I-16)→`ApproveAutomation[propId,spec,OwnerAuth]`
+(TriggerSpec draft=Enabled->False+provenance+ExpiresAt、**AT-1 の MintPermit で draft に紐づく one-shot
+Register permit 発行**)→ owner が `SourceVaultRegisterAutoTrigger[draft,"Permit"->permit]`。`RejectAutomation`/
+`AutomationProposals`。テスト=`SourceVault_routine_automation_test.wls` 29+`..._proposal_test.wls` 24。
+
+AT-1(autotrigger.wl・§8.3/P0-6）: `$SourceVaultAutoTriggerEnforcePermit`(既定 off）で Register/Enable 境界に
+one-shot 署名 permit(SpecHash/Action/ExpiresAt/Nonce）+ExpiresAt 執行+EnabledAudit を additive 付与。
+テスト=`SourceVault_autotrigger_permit_test.wls` 25。
 
 ## 未実装(次以降)
 
-AT-1=AutoTrigger permit 増分(R8 前提)、R7=統計 stream(RoutineExecutionRate/OverdueRate→anomaly)、
-R8=自動化、R9=mail。extension=Plan/可視化。
+R9=mail。extension 残=CapacityModel/daily replan/FocusRequest/可視化 RX-1(→api_routineplan.md）。

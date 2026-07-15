@@ -488,6 +488,59 @@ SourceVaultAutoTriggerWorkflowResolver::usage =
 (wid_String | spec_Association | $Failed) used to resolve a WorkflowTemplate \
 TargetId to something ClaudeRunWorkflow can run. Defaults to a catalog lookup.";
 
+(* === AT-1: one-shot permit + ExpiresAt enforcement + EnabledAudit
+   (routine spec v0.4 8.3 / P0-6). ADDITIVE: default OFF so existing behaviour is
+   unchanged; the routine automation layer (R8) mints an owner-signed permit that the
+   Register/Enable mutation boundary verifies and consumes exactly once. === *)
+
+$SourceVaultAutoTriggerEnforcePermit::usage =
+  "$SourceVaultAutoTriggerEnforcePermit (default False) turns on the AT-1 permit gate: \
+when True, SourceVaultRegisterAutoTrigger with \"DryRun\"->False requires a valid, \
+unexpired, matching, not-yet-consumed one-shot permit (option \"Permit\"), and \
+enabling a trigger (Enabled->True) additionally requires a non-empty EnabledAudit. \
+Leaving it False preserves the pre-AT-1 behaviour.";
+
+$SourceVaultAutoTriggerPermitKeyRef::usage =
+  "$SourceVaultAutoTriggerPermitKeyRef is the SystemCredential key holding the HMAC key \
+that signs AT-1 permits (kept separate from other keys). Default Missing[\"None\"]: \
+unset -> an \"unkeyed\" deterministic signature (dev/test only; production MUST set a \
+real key so permits cannot be forged).";
+
+$SourceVaultAutoTriggerPermitStore::usage =
+  "$SourceVaultAutoTriggerPermitStore is the path to the consumed-nonce store that \
+makes permits one-shot. Default Automatic -> <registry>/permits/consumed.jsonl. Tests \
+point it at a temp file.";
+
+SourceVaultAutoTriggerSpecHash::usage =
+  "SourceVaultAutoTriggerSpecHash[spec] returns a stable hash of the meaningful parts \
+of a TriggerSpec (excluding volatile fields UpdatedAt/CreatedAt/LastSeen/LastError/\
+LastDoctor/Validation/EnabledAudit), so a permit can bind to exactly this spec (AC-027 \
+SpecHash mismatch is rejected).";
+
+SourceVaultAutoTriggerMintPermit::usage =
+  "SourceVaultAutoTriggerMintPermit[<|\"SpecHash\",\"ProposalId\",\"Action\"->\
+\"Register\"|\"Enable\",\"ExpiresInSeconds\"(300)|>, \"OwnerAuthorization\"->True] mints \
+and signs a one-shot permit (owner only; LLM/external content cannot reach it). Adds a \
+Nonce (ULID) and ExpiresAtAbs and an HMAC Sig. Returns the permit Association to hand \
+to SourceVaultRegisterAutoTrigger.";
+
+SourceVaultAutoTriggerVerifyPermit::usage =
+  "SourceVaultAutoTriggerVerifyPermit[permit, action, specHash] returns <|\"Valid\"-> \
+Bool, \"Reason\"|> after checking: HMAC signature, ExpiresAtAbs>now, Action===action, \
+SpecHash===specHash, and Nonce not already consumed. Does NOT consume (see \
+ConsumePermit). Rejects a forged/expired/replayed/mismatched permit (AC-027).";
+
+SourceVaultAutoTriggerConsumePermit::usage =
+  "SourceVaultAutoTriggerConsumePermit[permit] records the permit's Nonce as consumed \
+(append-only) so it can never be reused (one-shot). Returns True on first consume, \
+False if already consumed or signature-invalid.";
+
+SourceVaultAutoTriggerExpiredQ::usage =
+  "SourceVaultAutoTriggerExpiredQ[spec, now] is True when the spec's ExpiresAt is a \
+timestamp in the past (Missing/None = never expires). iSVATLoadEnabledSpecs excludes \
+expired specs so an expired trigger is not dispatched even with Enabled->True \
+(AC-031); the pre-AT-1 default (no ExpiresAt) is unaffected.";
+
 Begin["`Private`"];
 
 (* ---- local helpers ---- *)
@@ -645,12 +698,143 @@ SourceVaultValidateAutoTrigger[_] :=
   <|"Valid" -> False, "Issues" -> {"SpecNotAssociation"}, "Warnings" -> {},
     "TriggerId" -> Missing["NotProvided"]|>;
 
+(* ---- AT-1: one-shot permit + ExpiresAt + EnabledAudit (spec 8.3 / P0-6) ---- *)
+
+If[!MatchQ[$SourceVaultAutoTriggerEnforcePermit, True | False],
+  $SourceVaultAutoTriggerEnforcePermit = False];
+If[!MatchQ[$SourceVaultAutoTriggerPermitKeyRef, _String],
+  $SourceVaultAutoTriggerPermitKeyRef = Missing["None"]];
+If[!MatchQ[$SourceVaultAutoTriggerPermitStore, _String],
+  $SourceVaultAutoTriggerPermitStore = Automatic];
+
+(* HMAC-SHA256 (RFC 2104), hex *)
+iSVATHMAC[key_String, msg_String] := Module[{b = 64, kb, k0, ipad, opad, inner},
+  kb = Normal[StringToByteArray[key, "UTF-8"]];
+  If[Length[kb] > b, kb = Normal[Hash[StringToByteArray[key, "UTF-8"], "SHA256", "ByteArray"]]];
+  k0 = PadRight[kb, b, 0];
+  ipad = BitXor[k0, ConstantArray[16^^36, b]];
+  opad = BitXor[k0, ConstantArray[16^^5C, b]];
+  inner = Normal[Hash[ByteArray[Join[ipad, Normal[StringToByteArray[msg, "UTF-8"]]]],
+    "SHA256", "ByteArray"]];
+  IntegerString[Hash[ByteArray[Join[opad, inner]], "SHA256"], 16]];
+
+iSVATPermitKey[] := Module[
+  {ref = $SourceVaultAutoTriggerPermitKeyRef, cred},
+  If[!StringQ[ref] || ref === "", Return["unkeyed-at-permit-key"]];
+  cred = Quiet @ Check[SystemCredential[ref], $Failed];
+  Which[
+    StringQ[cred] && cred =!= "", cred,
+    True, With[{s = Quiet @ Check[cred["Secret"], $Failed]},
+      If[StringQ[s] && s =!= "", s, "unkeyed-at-permit-key"]]]];
+
+iSVATPermitPayload[p_] := StringRiffle[{
+  ToString[Lookup[p, "SpecHash", ""]], ToString[Lookup[p, "ProposalId", ""]],
+  ToString[Lookup[p, "Action", ""]], ToString[Lookup[p, "ExpiresAtAbs", ""]],
+  ToString[Lookup[p, "Nonce", ""]]}, "\n"];
+iSVATPermitSig[p_] := iSVATHMAC[iSVATPermitKey[], iSVATPermitPayload[p]];
+
+iSVATPermitStoreFile[] := Module[{s = $SourceVaultAutoTriggerPermitStore, dir},
+  If[StringQ[s] && s =!= "", Return[s]];
+  dir = iSVATRegistryDir[];
+  If[dir === $Failed, $Failed, FileNameJoin[{dir, "permits", "consumed.jsonl"}]]];
+
+iSVATConsumedNonces[] := Module[{f = iSVATPermitStoreFile[], txt},
+  If[f === $Failed || !FileExistsQ[f], Return[{}]];
+  txt = Quiet @ Check[ByteArrayToString[ReadByteArray[f], "UTF-8"], ""];
+  Select[StringTrim /@ StringSplit[txt, "\n"], # =!= "" &]];
+
+iSVATNonceConsumedQ[nonce_] := MemberQ[iSVATConsumedNonces[], nonce];
+
+iSVATRecordConsumed[nonce_String] := Module[{f = iSVATPermitStoreFile[]},
+  If[f === $Failed, Return[$Failed]];
+  iSVATEnsureDir[DirectoryName[f]];
+  Module[{s = OpenAppend[f, BinaryFormat -> True]},
+    BinaryWrite[s, StringToByteArray[nonce <> "\n", "UTF-8"]]; Close[s]];
+  nonce];
+
+iSVATCrock = Characters["0123456789ABCDEFGHJKMNPQRSTVWXYZ"];
+iSVATNonce[] := StringJoin[iSVATCrock[[RandomInteger[{1, 32}, 26]]]];
+
+SourceVaultAutoTriggerSpecHash[spec_Association] := IntegerString[Hash[
+  KeyDrop[spec, {"UpdatedAt", "CreatedAt", "LastSeen", "LastError", "LastDoctor",
+    "Validation", "EnabledAudit"}], "SHA256"], 36];
+SourceVaultAutoTriggerSpecHash[___] := Missing["BadSpec"];
+
+Options[SourceVaultAutoTriggerMintPermit] = {"OwnerAuthorization" -> False};
+SourceVaultAutoTriggerMintPermit[req_Association, OptionsPattern[]] := Module[
+  {p, exp},
+  If[!TrueQ[OptionValue["OwnerAuthorization"]],
+    Return[Failure["NBATOwnerAuthRequired",
+      <|"MessageTemplate" -> "OwnerAuthorization->True is required to mint a permit."|>]]];
+  exp = With[{e = Lookup[req, "ExpiresInSeconds", 300]}, If[NumberQ[e], e, 300]];
+  p = <|"SpecHash" -> ToString[Lookup[req, "SpecHash", ""]],
+    "ProposalId" -> ToString[Lookup[req, "ProposalId", ""]],
+    "Action" -> ToString[Lookup[req, "Action", "Register"]],
+    "ExpiresAtAbs" -> N[AbsoluteTime[] + exp], "Nonce" -> iSVATNonce[]|>;
+  Append[p, "Sig" -> iSVATPermitSig[p]]];
+SourceVaultAutoTriggerMintPermit[___] :=
+  Failure["NBATBadArgs", <|"MessageTemplate" -> "req must be an Association."|>];
+
+SourceVaultAutoTriggerVerifyPermit[permit_Association, action_String, specHash_] := Module[
+  {sigOk, notExpired, actionOk, hashOk, notConsumed, expAbs},
+  sigOk = StringQ[Lookup[permit, "Sig", Missing[]]] &&
+    permit["Sig"] === iSVATPermitSig[KeyDrop[permit, "Sig"]];
+  expAbs = Lookup[permit, "ExpiresAtAbs", 0];
+  notExpired = NumberQ[expAbs] && expAbs > AbsoluteTime[];
+  actionOk = ToString[Lookup[permit, "Action", ""]] === action;
+  hashOk = ToString[Lookup[permit, "SpecHash", ""]] === ToString[specHash];
+  notConsumed = !iSVATNonceConsumedQ[Lookup[permit, "Nonce", ""]];
+  Which[
+    !sigOk, <|"Valid" -> False, "Reason" -> "BadSignature"|>,
+    !notExpired, <|"Valid" -> False, "Reason" -> "Expired"|>,
+    !actionOk, <|"Valid" -> False, "Reason" -> "ActionMismatch"|>,
+    !hashOk, <|"Valid" -> False, "Reason" -> "SpecHashMismatch"|>,
+    !notConsumed, <|"Valid" -> False, "Reason" -> "AlreadyConsumed"|>,
+    True, <|"Valid" -> True, "Reason" -> "OK"|>]];
+SourceVaultAutoTriggerVerifyPermit[___] :=
+  <|"Valid" -> False, "Reason" -> "BadArguments"|>;
+
+SourceVaultAutoTriggerConsumePermit[permit_Association] := Module[
+  {sigOk, nonce = Lookup[permit, "Nonce", ""]},
+  sigOk = StringQ[Lookup[permit, "Sig", Missing[]]] &&
+    permit["Sig"] === iSVATPermitSig[KeyDrop[permit, "Sig"]];
+  Which[
+    !sigOk || !StringQ[nonce] || nonce === "", False,
+    iSVATNonceConsumedQ[nonce], False,
+    True, iSVATRecordConsumed[nonce]; True]];
+SourceVaultAutoTriggerConsumePermit[___] := False;
+
+SourceVaultAutoTriggerExpiredQ[spec_Association, now_] := Module[
+  {exp = Lookup[spec, "ExpiresAt", Missing["None"]], expAbs, nowAbs},
+  If[MissingQ[exp] || exp === None || exp === Null, Return[False]];
+  expAbs = Quiet @ Check[AbsoluteTime[exp], $Failed];
+  nowAbs = Quiet @ Check[AbsoluteTime[now], AbsoluteTime[]];
+  NumberQ[expAbs] && NumberQ[nowAbs] && expAbs <= nowAbs];
+SourceVaultAutoTriggerExpiredQ[___] := False;
+
+(* the additive Register/Enable gate; returns Missing[] to proceed or a Failure to block *)
+iSVATPermitGate[spec_, permit_] := Module[{action, specHash, ver},
+  If[!TrueQ[$SourceVaultAutoTriggerEnforcePermit], Return[Missing["NotEnforced"]]];
+  action = If[TrueQ[Lookup[spec, "Enabled", False]], "Enable", "Register"];
+  specHash = SourceVaultAutoTriggerSpecHash[spec];
+  If[!AssociationQ[permit],
+    Return[<|"Status" -> "PermitRequired", "Reason" -> "NoPermit"|>]];
+  ver = SourceVaultAutoTriggerVerifyPermit[permit, action, specHash];
+  If[!TrueQ[ver["Valid"]],
+    Return[<|"Status" -> "PermitInvalid", "Reason" -> ver["Reason"], "Action" -> action|>]];
+  If[action === "Enable" &&
+      !MatchQ[Lookup[spec, "EnabledAudit", {}], {__}],
+    Return[<|"Status" -> "EnabledAuditRequired", "Reason" -> "EmptyEnabledAudit"|>]];
+  If[!SourceVaultAutoTriggerConsumePermit[permit],
+    Return[<|"Status" -> "PermitInvalid", "Reason" -> "ConsumeFailed"|>]];
+  Missing["Consumed"]];
+
 (* ---- register ---- *)
 
-Options[SourceVaultRegisterAutoTrigger] = {"DryRun" -> True};
+Options[SourceVaultRegisterAutoTrigger] = {"DryRun" -> True, "Permit" -> Missing["None"]};
 
 SourceVaultRegisterAutoTrigger[spec_Association, opts : OptionsPattern[]] :=
-  Module[{v, dryRun, tid, path, toWrite, w},
+  Module[{v, dryRun, tid, path, toWrite, w, gate},
     v = SourceVaultValidateAutoTrigger[spec];
     dryRun = TrueQ[OptionValue["DryRun"]];
     If[!TrueQ[v["Valid"]],
@@ -661,6 +845,9 @@ SourceVaultRegisterAutoTrigger[spec_Association, opts : OptionsPattern[]] :=
       Return[<|"Status" -> "DryRun", "Validation" -> v,
         "WouldWriteTo" -> If[path === $Failed, Missing["VaultRootUnresolved"], path],
         "Exists" -> If[path === $Failed, False, FileExistsQ[path]]|>]];
+    (* AT-1 permit gate (additive; no-op unless $SourceVaultAutoTriggerEnforcePermit) *)
+    gate = iSVATPermitGate[spec, OptionValue["Permit"]];
+    If[AssociationQ[gate], Return[Append[gate, "Validation" -> v]]];
     If[path === $Failed,
       Return[<|"Status" -> "VaultRootUnresolved", "Validation" -> v|>]];
     toWrite = Append[spec, "UpdatedAt" -> iSVATUTCNow[]];
@@ -1182,11 +1369,15 @@ iSVATLiveEvents[] :=
     {}];
 
 iSVATLoadEnabledSpecs[] :=
-  Module[{dir = iSVATRegistryDir[], files},
+  Module[{dir = iSVATRegistryDir[], files, now = iSVATUTCNow[]},
     If[dir === $Failed || !DirectoryQ[dir], Return[{}]];
     files = FileNames["*.wxf", dir];
+    (* AT-1: an Enabled trigger past its ExpiresAt is NOT dispatched (AC-031).
+       ExpiresAt Missing/None (the pre-AT-1 default) never expires, so existing
+       triggers are unaffected. *)
     Select[(Quiet @ Check[Import[#, "WXF"], $Failed] &) /@ files,
-      AssociationQ[#] && TrueQ[Lookup[#, "Enabled", False]] &]];
+      AssociationQ[#] && TrueQ[Lookup[#, "Enabled", False]] &&
+        !SourceVaultAutoTriggerExpiredQ[#, now] &]];
 
 (* per-trigger state under a subdir (excluded from the *.wxf registry glob) *)
 iSVATStatePath[id_String] :=

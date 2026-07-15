@@ -1,5 +1,5 @@
 {
-	"autotrigger":"1eu3oypthuzhj",
+	"autotrigger":"1ux49p1ey4d60",
 	"comfyui":"11cw4ho19ldoc",
 	"contracts":"1jhmdce3hq07y",
 	"core":"1vfn49cavjwqr",
@@ -25,12 +25,13 @@
 	"maildb":"1o4j7bb1q6oxj",
 	"simrun":"19rfzbb4u4vb4",
 	"llmlog":"f06ln5c41i7d",
-	"@main":"1crbospktd2vy",
+	"@main":"1iegttsja2xa9",
 	"knowledgehome":"pxgjwgip4yc1",
 	"cognition":"wopb9w6eo5fd",
 	"adjudication":"2pnc7a77ze2q",
 	"capbroker":"57et56fgf5sn",
 	"taint":"4uoxt76mxxge",
 	"anomaly":"g9u9hhtut3du",
-	"routine":"3cse4405xq20"
+	"routine":"ohb6y10fu2mi",
+	"routineplan":"1gurjamzop7rl"
 }
