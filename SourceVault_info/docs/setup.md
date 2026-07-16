@@ -47,6 +47,14 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_simrun.wl` — シミュレーション実行との連携
 - `SourceVault_searchindex.wl` — 検索インデックス・公開ポリシー
 - `SourceVault_searchview.wl` — 検索結果ビュー
+- `SourceVault_knowledgehome.wl` — ナレッジホーム（登録済み知識の集約・ホーム表示）
+- `SourceVault_cognition.wl` — 認知レイヤー（cognition）処理
+- `SourceVault_adjudication.wl` — 裁定・判定（adjudication）処理
+- `SourceVault_capbroker.wl` — Capability broker（機能可用性の仲介。境界観測の自動適用などが参照する）
+- `SourceVault_taint.wl` — taint 追跡（機密度・伝播管理）
+- `SourceVault_anomaly.wl` — 異常検知（anomaly detection）
+- `SourceVault_routine.wl` — ルーティン管理
+- `SourceVault_routineplan.wl` — ルーティン計画（routine plan）
 - `SourceVault_servicemanager.wl` — サービス管理・Python proxy・headless dispatch
 - `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得
 - `SourceVault_mcp.wl` — MCP tool schema / dispatch ＋ sv:// オブジェクト解決
@@ -104,6 +112,14 @@ $packageDirectory\
   SourceVault_simrun.wl          ← シミュレーション実行連携（本体ロード時に自動ロード）
   SourceVault_searchindex.wl     ← 検索インデックス（本体ロード時に自動ロード）
   SourceVault_searchview.wl      ← 検索結果ビュー（本体ロード時に自動ロード）
+  SourceVault_knowledgehome.wl   ← ナレッジホーム（本体ロード時に自動ロード）
+  SourceVault_cognition.wl       ← 認知レイヤー（本体ロード時に自動ロード）
+  SourceVault_adjudication.wl    ← 裁定・判定（本体ロード時に自動ロード）
+  SourceVault_capbroker.wl       ← Capability broker（本体ロード時に自動ロード）
+  SourceVault_taint.wl           ← taint 追跡（本体ロード時に自動ロード）
+  SourceVault_anomaly.wl         ← 異常検知（本体ロード時に自動ロード）
+  SourceVault_routine.wl         ← ルーティン管理（本体ロード時に自動ロード）
+  SourceVault_routineplan.wl     ← ルーティン計画（本体ロード時に自動ロード）
   SourceVault_servicemanager.wl  ← サービス管理・headless dispatch（本体ロード時に自動ロード）
   SourceVault_webingest.wl       ← SearXNG/Web 検索（本体ロード時に自動ロード）
   SourceVault_mcp.wl             ← MCP + sv:// オブジェクト解決（本体ロード時に自動ロード）
@@ -239,6 +255,20 @@ SourceVault`SourceVaultEnableHeadlessDispatch[]
 
 - 既定は無効（opt-in）です。対話 FE 側のスケジューラ（1 マシン 1 か所）とは役割が異なり、こちらは dispatch 専用でスケジューラ自体は起動しません。
 - 同一マシンで対話 FE のスケジューラと headless dispatch が同時に存在しても、スロット単位の atomic dispatch claim（内部的に `SourceVaultAutoTriggerDispatchCatalogRuns` が二重実行を防止）により、同じジョブが二重にディスパッチされることはありません。
+
+---
+
+## 境界観測 (Boundary Observation) の自動適用（任意）
+
+SourceVault は、LLM 呼び出しの境界を監視する **境界観測 (Boundary Observation)** の設定（LLM boundary shadow / 1G ClaudeEval shadow recorder 等の観測記録）を持ちます。オーナーが `SourceVaultSetBoundaryObservation` で設定を一度永続化しておくと、以降は SourceVault の (再)ロードのたびに `SourceVaultApplyBoundaryObservation[]` が内部的に呼ばれ、**全カーネル（対話 FE / service / headless）** へ自動的に適用されます。
+
+- 観測のみ (observe-only) の設定であれば挙動は変わりません。設定が無ければ `NoConfig` として何もしない no-op です。
+- enforce 系の設定（Mode / EnforceList）はロード時の自動適用では反映されません。安全のため、enforce はセッション内でオーナーが明示的に設定した場合のみ有効になります。
+- capbroker（`SourceVault_capbroker.wl` が提供する capability broker）が利用できない環境では、境界観測の自動適用は `CapBrokerUnavailable` として fail-open します（適用せず既存動作を継続）。
+- 適用結果は `SourceVault`Private`$iSVBoundaryObsApplyResult` に記録されます。`Status` は次のいずれかです。
+  - `OK`（適用成功）
+  - `Skipped`（`Reason`: `CapBrokerUnavailable`）
+  - `Failed`（`Reason`: `ApplyException`。または、要約 LLM 呼び出し等（例: `sourcevault:iCallSummaryLLM`）が境界観測の self-gate によって拒否された場合は `LLMBoundaryRefused`）
 
 ---
 
@@ -752,6 +782,8 @@ NBReadHeader[nbPath]
 NBReadTodos[nbPath]
 ```
 
+> 巨大なファイル（`$SourceVaultMaxFileSizeMB` 超）は index 時に `"SkipReason" -> "FileTooLarge"` の skip 済み (`snap-toolarge-*`) snapshot として扱われ、Header/Todos は保持されません（サイズ判定のための軽量な `SourceSize` フィールドを持つ最新形式の snapshot に自動アップグレードされます）。
+
 ### ソース一覧・横断検索の動作確認（SourceVaultSources / SourceVaultArXiv / SourceVaultSummaries）
 
 登録済みのすべてのソースを一覧表示する `SourceVaultSources`、arXiv ソースだけを表示する `SourceVaultArXiv`、Eagle 保存済みサマリー等の登録プロバイダ横断で検索・統合表示する `SourceVaultSummaries` が利用できます。arXiv 論文ソースについては、タイトル・著者・出版日が arXiv API（export.arxiv.org）から自動取得され、メタデータとしてキャッシュされます。ingest 時には arXiv アブストラクトを取得して `$Language` へ翻訳したものが Summary として自動付与されます。各行には URL リンク（▶ URL）と、ingest 済みファイルを現在の PC で開くリンク（▶ 開く）が付きます。
@@ -806,7 +838,7 @@ SourceVaultArXiv["reversible", "Author" -> "Bennett"]
 
 > 横断検索 provider を自分で増やす場合は `SourceVaultRegisterSummaryProvider[name, fn]` で登録します。`fn[query_String, opts_Association]` は共通スキーマ行（`SourceVaultSourceRow` 参照）のリストを返してください。`SourceVaultSourceRow[sourceId]` が返す行は `<|"Kind", "Id", "URI", "Title", "Authors", "Published", "Summary", "URL", "File", "Date", "PrivacyLevel"|>` のキーを持ち、`"URI"` は正準 `sv://snapshot/..`（混在データセットの join / 参照キー）です。登録済み provider は `$SourceVaultSummaryProviders` で確認できます。
 
-表でタイトルまたはサマリーをクリックすると、`SourceVaultShowSourceSummary` が呼ばれ、そのソース（arXiv / web / local 共通）のサマリーが**編集可能なノートブックで開きます**。保存済みのユーザー追記版があればそれが開き（追記が正本）、無ければ Title・著者・出版・URL・要約から生成されます。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が開きます。`"Fresh" -> True` を渡すと保存版を無視し、record から新規生成して開きます。開くノートのスタイルは `$SourceVaultSummaryNotebookStyle`（既定 `"SourceVault default.nb"`）で変更できます。
+表でタイトルまたはサマリーをクリックすると、`SourceVaultShowSourceSummary` が呼ばれ、そのソース（arXiv / web / local 共通）のサマリーが**編集可能なノートブックで開きます**。保存済みのユーザー追記版があればそれが開き（追記が正本）、無ければ Title・著者・出版・URL・要約から生成されます。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が開きます。`"Fresh" -> True` を渡すと保存版を無視し、record から新規生成して開きます。開くノートのスタイルは `$SourceVaultSummaryNotebookStyle`(既定 `"SourceVault default.nb"`) で変更できます。
 
 「▶ 開く」リンクは `SourceVaultOpenSourceFile` の実体で、保存時の絶対パスではなく ContentHash から現在の PC の vault パスを再算出して開くため、別 PC（Dropbox 同期）でも開けます。
 
@@ -882,6 +914,8 @@ SourceVaultNotebookSummary[nbPath]
 | `NBReadHeader` の `Source` が `"None"` になる | TodoItem cell の TaggingRules を Header と誤認していないか。`step8-nbreadheader-boxdata-filter` 以降では `iNBIsHeaderLikeAssoc` フィルタで解決済み |
 | `iLoadJSONFromFile` が `Null` を返す | 罠 #28 (`ImportString[..., "RawJSON"]` が Windows path のバックスラッシュで失敗)。3 段階 fallback を使う実装か確認 |
 | `SourceVaultNotebookSummary` が失敗する | ClaudeRuntime がロードされているか、API キーまたはローカル LLM が利用可能か確認 |
+| `SourceVaultNotebookSummary` 等の LLM 呼び出しが `LLMBoundaryRefused` で失敗する | 境界観測 (Boundary Observation) の self-gate により、その呼び出し元（例: `sourcevault:iCallSummaryLLM`）が拒否されています。`SourceVault`Private`$iSVBoundaryObsApplyResult` と `SourceVaultSetBoundaryObservation` の設定を確認してください |
+| 大きい notebook（`SkipReason` -> `"FileTooLarge"`）の Header/Todo が再 index しても復元されない | skip 済み (too-large) snapshot は Header/Todos を保持しない仕様（再生成不可）。旧形式 (`SourceSize` フィールド無しの `snap-toolarge-*`) は最新形式へ自動アップグレードされ、以後は毎回ではなく 1 度だけ ForceReindex すれば済みます |
 | `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |
 | `ReadList` が空配列を返す | 罠 #20 (Windows JSONL/UTF-8)。`ReadByteArray` + `ByteArrayToString` + `StringSplit` 経路を使うこと |
 | パッケージロード時に `Syntax::stresc` が大量に出る | 罠 #11 (`\uXXXX` エスケープ混入)。`\:XXXX` に書き直す必要あり |

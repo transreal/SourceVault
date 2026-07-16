@@ -8535,6 +8535,18 @@ SourceVaultExtractNotebookTodos[path_String, opts:OptionsPattern[]] :=
    \:65e2\:5b58 snapshot \:306e SourceMTime \:3068\:73fe\:5728\:306e mtime \:3092\:6bd4\:8f03\:3057\:3001
    \:4e00\:81f4\:3057\:305f\:3089\:5b8c\:5168\:306a Index \:7d50\:679c\:3092\:8fd4\:3059 (\:6700\:5c0f\:9650\:306e\:30c7\:30a3\:30b9\:30af\:30a2\:30af\:30bb\:30b9)\:3002
    \:4e0d\:4e00\:81f4 / \:65e2\:5b58 snapshot \:7121\:3057 / \:30d5\:30a3\:30fc\:30eb\:30c9\:6b20\:5982 \:306a\:3089 None \:3092\:8fd4\:3059\:3002 *)
+(* coerce a possibly-malformed restored header into a valid Association.
+   Notebook metadata authored with a bare value (no key), e.g.
+   <|"Keywords"->{...}, DateObject[{2025,11,12}], "Status"->"Todo"|>, uncompresses
+   to an Association[...] that is NOT AssociationQ; keep only the proper rules so
+   downstream Lookup works and we avoid re-indexing (which would churn the snapshot). *)
+iSVSafeHeaderAssoc[h_] := Which[
+  AssociationQ[h], h,
+  Head[h] === Association,
+    Quiet @ Check[
+      Association @@ Cases[Apply[List, h], (Rule | RuleDelayed)[_, _]], <||>],
+  True, <||>];
+
 iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
   Module[{sourcePath, sourceRec, sourceRawBytes, sourceRawString,
           sourceImportTry, snapshotId, snapshotPath, snapshotRec,
@@ -8626,9 +8638,11 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
           "CurrentSize" -> curSize|>]],
       (* \:30b5\:30a4\:30ba\:672a\:4fdd\:5b58\:306e\:65e7 snapshot: \:5f93\:6765\:306e\:30cf\:30c3\:30b7\:30e5\:5224\:5b9a\:3067\:5f8c\:65b9\:4e92\:63db *)
       If[StringQ[cachedHash],
-        curHash = Quiet @ Check[
-          "sha256-" <> Hash[Import[abs, "Text"], "SHA256", "HexString"],
-          Missing["HashFailed"]];
+        (* perf: mtime \:306f\:65e2\:306b\:4e00\:81f4\:6e08\:307f\:3002\:305d\:308c\:3092\:4fe1\:983c\:3057\:3001\:30d5\:30a1\:30a4\:30eb\:5168\:8aad\:307f\:8fbc\:307f
+           (Import[abs,"Text"] \:306f Dropbox \:4e0a ~255ms/file) \:306b\:3088\:308b hash \:518d\:8a08\:7b97\:3092
+           hot path \:304b\:3089\:9664\:53bb\:3059\:308b\:3002\:7de8\:96c6\:306f\:5fc5\:305a mtime \:3092\:66f4\:65b0\:3059\:308b\:305f\:3081\:5b89\:5168\:3002
+           SourceSize \:3092\:6301\:3064\:65b0\:5f62\:5f0f snapshot \:306f\:4e0a\:306e\:8efd\:91cf\:30b5\:30a4\:30ba\:5224\:5b9a\:3092\:4f7f\:3046\:3002 *)
+        curHash = cachedHash;
         If[StringQ[curHash] && curHash =!= cachedHash,
           Return[<|"Cached" -> False,
             "CacheMissReason" -> "ContentHashMismatch",
@@ -8655,19 +8669,39 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
          \:3053\:306e\:95a2\:6570\:306e fast path \:306b\:4e57\:308b
        \:518d\:5e30\:306e\:5fc3\:914d\:306f\:7121\:3044: SourceVaultIndexNotebook \:306f forceReindex=True
        \:306e\:3068\:304d iSVCheckMTimeCache \:3092\:547c\:3070\:306a\:3044\:3002 *)
+      (* skip \:6e08\:307f (too-large) snapshot \:306f Header/Todos \:3092\:6301\:305f\:306a\:3044\:305f\:3081\:5fa9\:5143\:3067\:304d\:305a\:3001
+         \:5f93\:6765\:306f\:6bce\:56de ForceReindex \[Rule] snap-toolarge \:3092 \:6bce\:56de\:66f8\:304d\:76f4\:3057\:3066\:3044\:305f
+         (mtime/size \:4e00\:81f4\:3067\:3082)\:3002skip snapshot \:306f\:305d\:306e\:307e\:307e cached \:3068\:3057\:3066\:8fd4\:3059\:3002 *)
+      If[TrueQ[Lookup[snapshotRec, "Skipped", False]] ||
+          StringMatchQ[snapshotId, "snap-toolarge-*"],
+        Return[<|"Status" -> "OK", "Cached" -> True, "Skipped" -> True,
+          "SkipReason" -> Lookup[snapshotRec, "SkipReason", "FileTooLarge"],
+          "FileSizeMB" -> Lookup[snapshotRec, "FileSizeMB", Missing["NotPresent"]],
+          "NotebookRef" -> nbRef, "SnapshotId" -> snapshotId, "Path" -> abs,
+          "Header" -> <|"ParseStatus" -> "SkippedTooLarge"|>, "Todos" -> {},
+          "TodoCount" -> 0, "OpenTodoCount" -> 0, "DoneTodoCount" -> 0,
+          "PassTodoCount" -> 0, "SourceMTime" -> currentMTime|>]];
       hdrC = Lookup[snapshotRec, "HeaderCompressed", Missing[]];
       todoC = Lookup[snapshotRec, "TodosCompressed", Missing[]];
       hdrRestored = If[StringQ[hdrC],
         Quiet @ Check[Uncompress[hdrC], $Failed], $Failed];
       todoRestored = If[StringQ[todoC],
         Quiet @ Check[Uncompress[todoC], $Failed], $Failed];
-      If[AssociationQ[hdrRestored] && ListQ[todoRestored],
+      Which[
+        AssociationQ[hdrRestored] && ListQ[todoRestored],
         (* snapshot \:304b\:3089\:5fa9\:5143\:6210\:529f: .nb Import \:4e0d\:8981 *)
         header = hdrRestored;
         todos = todoRestored,
-        (* \:5fa9\:5143\:5931\:6557 (\:65e7\:7248 snapshot \:7b49):
-           \:305d\:306e\:5834\:3067 .nb \:3092\:30d1\:30fc\:30b9\:305b\:305a\:3001ForceReindex \:3067 snapshot \:3092
-           \:6700\:65b0\:5f62\:5f0f\:3078\:66f4\:65b0\:3057\:3001\:305d\:306e\:7d50\:679c\:3092\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002 *)
+        (* \:5727\:7e2e\:30d5\:30a3\:30fc\:30eb\:30c9\:306f\:5b58\:5728\:3059\:308b\:304c\:5fa9\:5143\:304c\:4e0d\:5b8c\:5168 (\:4f8b: notebook \:306e metadata \:304c
+           \:30ad\:30fc\:7121\:3057\:306e\:88f8\:5024 DateObject[...] \:3092\:542b\:3080\:7834\:640d assoc \[Rule] AssociationQ False)\:3002
+           ForceReindex \:3057\:3066\:3082\:540c\:3058\:7834\:640d\:30c7\:30fc\:30bf\:3092\:518d\:751f\:3057 snapshot \:3092\:6bce\:56de\:66f8\:304d\:76f4\:3059
+           (churn) \:3060\:3051\:306a\:306e\:3067\:3001\:518d index \:305b\:305a sanitize \:3057\:3066\:4f7f\:3046\:3002 *)
+        StringQ[hdrC] || StringQ[todoC],
+        header = iSVSafeHeaderAssoc[hdrRestored];
+        todos = If[ListQ[todoRestored], todoRestored, {}],
+        (* \:5727\:7e2e\:30d5\:30a3\:30fc\:30eb\:30c9\:81ea\:4f53\:304c\:7121\:3044\:65e7\:5f62\:5f0f snapshot: \:4e00\:5ea6\:3060\:3051 ForceReindex \:3067
+           \:6700\:65b0\:5f62\:5f0f\:3078\:30a2\:30c3\:30d7\:30b0\:30ec\:30fc\:30c9\:3057\:3001\:305d\:306e\:7d50\:679c\:3092\:8fd4\:3059\:3002 *)
+        True,
         reindexed = Quiet @ Check[
           SourceVaultIndexNotebook[abs, "ForceReindex" -> True],
           $Failed];
