@@ -1984,9 +1984,11 @@ iSVAppendJSONL[path_String, assoc_] := Module[{dir = DirectoryName[path], ba},
      文字化けして見える。旧形式ファイルは iSVReadJSONLFile が fallback 復号する。 *)
   ba = Quiet @ Check[ExportByteArray[iSVJSONSafe[assoc], "RawJSON", "Compact" -> True], $Failed];
   If[! ByteArrayQ[ba], Return[$Failed]];
-  Quiet @ Check[With[{strm = OpenAppend[path, BinaryFormat -> True]},
-    BinaryWrite[strm, ba]; BinaryWrite[strm, StringToByteArray["\n", "UTF-8"]];
-    Close[strm]; path], $Failed]];
+  Quiet @ Check[Module[{strm = OpenAppend[path, BinaryFormat -> True]},
+    If[Head[strm] =!= OutputStream, $Failed,
+      WithCleanup[
+        BinaryWrite[strm, ba]; BinaryWrite[strm, StringToByteArray["\n", "UTF-8"]]; path,
+        Quiet @ Close[strm]]]], $Failed]];
 
 (* ---- 署名鍵 ---- *)
 iSVGrantKeyFile[] := With[{d = iSVSecretsDir[]},
@@ -2857,7 +2859,7 @@ iSVFSWriteFile[pathIn_String, contentIn_] := Module[
   existed = FileExistsQ[canon];
   strm = Quiet @ Check[OpenWrite[canon, BinaryFormat -> True], $Failed];
   If[Head[strm] =!= OutputStream, Return[<|"Status" -> "OpenFailed", "Path" -> canon|>]];
-  If[Quiet @ Check[BinaryWrite[strm, bytes]; Close[strm]; True, Quiet @ Close[strm]; False] =!= True,
+  If[Quiet @ Check[WithCleanup[BinaryWrite[strm, bytes]; True, Quiet @ Close[strm]], False] =!= True,
     Return[<|"Status" -> "WriteFailed", "Path" -> canon|>]];
   <|"Status" -> "OK", "Path" -> canon, "Bytes" -> Length[bytes],
     "Created" -> ! existed, "Overwritten" -> existed, "PrivacyLevel" -> 0.0|>];

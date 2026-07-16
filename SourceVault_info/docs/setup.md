@@ -55,6 +55,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_anomaly.wl` — 異常検知（anomaly detection）
 - `SourceVault_routine.wl` — ルーティン管理
 - `SourceVault_routineplan.wl` — ルーティン計画（routine plan）
+- `SourceVault_mailagenda.wl` — メールアジェンダ（オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層。maildb の既存派生 (Summary/Category/Priority/Deadline) を索引だけで読み、LLM/IMAP/シャード本体はロードしない。routineplan の日別カレンダー・「✉ 要対応メール」バンドに統合される）
 - `SourceVault_servicemanager.wl` — サービス管理・Python proxy・headless dispatch
 - `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得
 - `SourceVault_mcp.wl` — MCP tool schema / dispatch ＋ sv:// オブジェクト解決
@@ -120,6 +121,7 @@ $packageDirectory\
   SourceVault_anomaly.wl         ← 異常検知（本体ロード時に自動ロード）
   SourceVault_routine.wl         ← ルーティン管理（本体ロード時に自動ロード）
   SourceVault_routineplan.wl     ← ルーティン計画（本体ロード時に自動ロード）
+  SourceVault_mailagenda.wl      ← メールアジェンダ（本体ロード時に自動ロード）
   SourceVault_servicemanager.wl  ← サービス管理・headless dispatch（本体ロード時に自動ロード）
   SourceVault_webingest.wl       ← SearXNG/Web 検索（本体ロード時に自動ロード）
   SourceVault_mcp.wl             ← MCP + sv:// オブジェクト解決（本体ロード時に自動ロード）
@@ -894,6 +896,27 @@ SourceVault`SourceVaultMailFetchNew["work"]
 SourceVault`SourceVaultMailView[]
 ```
 
+### メールアジェンダ（要対応メール）の動作確認
+
+`SourceVault_mailagenda.wl`（本体ロード時に自動ロード）は、maildb の既存派生（Summary/Category/Priority/Deadline、`SourceVaultInferMailDerivedBatch` で事前計算）を索引だけで読み、**オーナー宛ての要対応メール**（返信が必要・作業/出席依頼）を routine アジェンダへ供給する薄い層です。アジェンダ経路では LLM / IMAP / メールシャード本体をロードしません。
+
+```mathematica
+(* 要対応メール候補を取得 *)
+SourceVault`SourceVaultMailAgendaItems[]
+(* → <|"Items" -> {item...}, "PendingCount" -> n|> *)
+
+(* 解決（返信済み以外の対応済みマーク: Dismissed | NotebookCreated） *)
+SourceVault`SourceVaultMailAgendaResolve[recordId, "Dismissed"]
+
+(* 対応ウィンドウを開く（返信する / ノートブックを作成して継承 / 確認のみ） *)
+SourceVault`SourceVaultMailAgendaOpen[recordId]
+
+(* 作業ノートブックを作成してメールを継承する *)
+SourceVault`SourceVaultMailAgendaInherit[recordId]
+```
+
+> 同一スレッド（Re/Fwd を剥いだ正規化件名 + MBox）は 1 項目に集約され、代表はオーナー宛て条件を満たす最新メールです。解決状態は `Pending → Done`（返信 / ノートブック作成 / 明示的な Dismissed）の一方向遷移で、返信は既存 maildb の返信送信時に自動記録されます。`SourceVaultRoutineAgendaData` に `"IncludeMail"` / `"MailItems"` / `"MailMaxPrivacyLevel"` オプションが追加され、`SourceVaultRoutineAgendaView` の表示に日別カレンダーの `"MailDeadline"` 種別および「✉ 要対応メール」バンドとして統合されます。PrivacyLevel ≥ 0.5 のメールを含む View 出力は既存 maildb と同じ機密規約（`ClaudeCode`Confidential`）でラップされます。個人アドレス（オーナー/組織アドレス・宛名パターン）はコードに焼き込まず `PrivateVault/config/mailagenda.json` で設定します。
+
 ### LLM 要約の動作確認（ClaudeRuntime 必須）
 
 ```mathematica
@@ -917,6 +940,8 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultNotebookSummary` 等の LLM 呼び出しが `LLMBoundaryRefused` で失敗する | 境界観測 (Boundary Observation) の self-gate により、その呼び出し元（例: `sourcevault:iCallSummaryLLM`）が拒否されています。`SourceVault`Private`$iSVBoundaryObsApplyResult` と `SourceVaultSetBoundaryObservation` の設定を確認してください |
 | 大きい notebook（`SkipReason` -> `"FileTooLarge"`）の Header/Todo が再 index しても復元されない | skip 済み (too-large) snapshot は Header/Todos を保持しない仕様（再生成不可）。旧形式 (`SourceSize` フィールド無しの `snap-toolarge-*`) は最新形式へ自動アップグレードされ、以後は毎回ではなく 1 度だけ ForceReindex すれば済みます |
 | `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |
+| `SourceVaultMailAgendaItems[]` が要対応メールを返さない・見逃す | Category/Priority/Deadline は `SourceVaultInferMailDerivedBatch[]` の事前計算に依存（未計算メールは除外せず `PendingCount` に計上されるだけ）。まず `SourceVaultMailAddSummaries[mbox]` で派生を計算する。オーナー宛て判定は `$SourceVaultMailAgendaDirectionThreshold`（既定 0.7）未満だと候補から外れるため、`PrivateVault/config/mailagenda.json` の OwnerAddresses/OrgAddresses/AddresseePatterns を確認 |
+| `SourceVaultMailAgendaResolve` したのに次回また表示される | スレッド集約に対応。解決後により新しい Re: が届くと再浮上する仕様（意図した挙動）。個別メールの取り消しは `SourceVaultMailAgendaReopen[recordId]` |
 | `ReadList` が空配列を返す | 罠 #20 (Windows JSONL/UTF-8)。`ReadByteArray` + `ByteArrayToString` + `StringSplit` 経路を使うこと |
 | パッケージロード時に `Syntax::stresc` が大量に出る | 罠 #11 (`\uXXXX` エスケープ混入)。`\:XXXX` に書き直す必要あり |
 | `$SourceVaultDefaultNotebookFolder` が正しいフォルダを返さない | `Global`$onWork`` が未定義で `$packageDirectory` にフォールバックしていないか確認。絶対パスを直接代入することで固定できます |

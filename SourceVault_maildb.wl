@@ -611,10 +611,17 @@ iSVMDWriteShard[shardKey_String, rids_List] :=
       If[FileExistsQ[ipath], Quiet@DeleteFile[ipath]];
       Return[0]];
     lines = (BaseEncode[BinarySerialize[$iSVMDStore[#]]] &) /@ keep;
+    (* 過去の Abort/TimeConstrained 打ち切りでこの shard に残った stray stream を先に解放
+       (開いた write ハンドルは Dropbox 同期を止め conflicted copy の原因になる) *)
+    If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0,
+      Quiet @ SourceVault`SourceVaultReleaseFileStreams[path]];
     res = Quiet@Check[
-      With[{strm = OpenWrite[path, BinaryFormat -> True]},
-        Scan[BinaryWrite[strm, StringToByteArray[# <> "\n", "ASCII"]] &, lines];
-        Close[strm]; Length[lines]],
+      Module[{strm = OpenWrite[path, BinaryFormat -> True]},
+        If[Head[strm] =!= OutputStream, $Failed,
+          WithCleanup[
+            Scan[BinaryWrite[strm, StringToByteArray[# <> "\n", "ASCII"]] &, lines];
+            Length[lines],
+            Quiet @ Close[strm]]]],
       $Failed];
     (* \:8efd\:91cf\:30e1\:30bf\:30c7\:30fc\:30bf\:7d22\:5f15 sidecar \:3082\:540c\:6642\:66f4\:65b0 (\:672c\:6587\:3092\:30ed\:30fc\:30c9\:305b\:305a\:691c\:7d22\:3059\:308b\:305f\:3081) *)
     iSVMDWriteIndexFile[ipath, (iSVMDIndexRow[$iSVMDStore[#]] &) /@ keep];
@@ -626,6 +633,10 @@ SourceVaultMailStoreSave[OptionsPattern[]] :=
     keys = If[TrueQ[OptionValue["All"]], Keys[$iSVMDShardMembers], Keys[$iSVMDDirtyShards]];
     written = (iSVMDWriteShard[#, Lookup[$iSVMDShardMembers, #, {}]]) & /@ keys;
     $iSVMDDirtyShards = <||>;
+    (* 書込み完了後、store 配下に残る stray stream を一括解放 (ハンドル保持は
+       Dropbox 同期を止めるため、保存の区切りで必ず開放する) *)
+    If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0,
+      Quiet @ SourceVault`SourceVaultReleaseFileStreams[SourceVaultMailStoreRoot[]]];
     <|"Status" -> "Saved", "Shards" -> Length[keys], "Count" -> Total[Select[written, IntegerQ]]|>];
 
 iSVMDReadShardFile[path_String] :=
@@ -662,10 +673,14 @@ iSVMDInteractionSave[] :=
     dir = DirectoryName[path];
     If[! DirectoryQ[dir], Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
     bytes = Quiet@Check[ExportByteArray[$iSVMDInteraction, "RawJSON"], $Failed];
+    If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0,
+      Quiet @ SourceVault`SourceVaultReleaseFileStreams[path]];
     If[ByteArrayQ[bytes],
       Quiet@Check[
-        With[{strm = OpenWrite[path, BinaryFormat -> True]},
-          BinaryWrite[strm, bytes]; Close[strm]; True], $Failed]]];
+        Module[{strm = OpenWrite[path, BinaryFormat -> True]},
+          If[Head[strm] =!= OutputStream, $Failed,
+            WithCleanup[BinaryWrite[strm, bytes]; True, Quiet @ Close[strm]]]],
+        $Failed]]];
 
 iSVMDInteractionGet[rid_String] :=
   (iSVMDInteractionEnsureLoaded[];
@@ -747,10 +762,15 @@ iSVMDWriteIndexFile[path_String, rows_List] :=
     If[rows === {}, If[FileExistsQ[path], Quiet@DeleteFile[path]]; Return[0]];
     If[! DirectoryQ[dir], Quiet@CreateDirectory[dir, CreateIntermediateDirectories -> True]];
     lines = (BaseEncode[BinarySerialize[#]] &) /@ rows;
+    If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0,
+      Quiet @ SourceVault`SourceVaultReleaseFileStreams[path]];
     Quiet@Check[
-      With[{strm = OpenWrite[path, BinaryFormat -> True]},
-        Scan[BinaryWrite[strm, StringToByteArray[# <> "\n", "ASCII"]] &, lines];
-        Close[strm]; Length[lines]],
+      Module[{strm = OpenWrite[path, BinaryFormat -> True]},
+        If[Head[strm] =!= OutputStream, $Failed,
+          WithCleanup[
+            Scan[BinaryWrite[strm, StringToByteArray[# <> "\n", "ASCII"]] &, lines];
+            Length[lines],
+            Quiet @ Close[strm]]]],
       $Failed]];
 
 iSVMDReadIndexFile[path_String] :=

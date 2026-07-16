@@ -41,6 +41,21 @@ storage class の絶対パスを返す。
 `class` の値: `"Raw"` (pv/raw/by-hash) / `"Meta"` (pv/raw/meta) / `"Parsed"` (pv/parsed) / `"Attachments"` (pv/attachments) / `"Compiled"` (pv/compiled/public) / `"LocalState"` (`SourceVaultRoot["LocalState"]`)。
 不明な class は `Failure["SourceVaultUnknownStorageClass", ...]`。
 
+## File Handles (Dropbox 競合対策)
+
+実測: WL のメッセージ系失敗は評価を止めないので Close まで到達するが、Abort / Throw / TimeConstrained 打ち切りが Open〜Close の間に当たると stream がカーネル終了まで残る。開いた write ハンドルは Dropbox 同期を止め、複数マシンが同じ shard を書く mail store 等で conflicted copy を生む (kernel kill で一斉同期する現象の正体)。
+
+### SourceVaultFileStreams[] → List[stream]
+vault 配下 (全 root + mail store) のファイルを指す開きっぱなしの stream (InputStream/OutputStream) を列挙する。正常時は常に `{}` (読み書き完了後に stream は残らない)。残っていれば handle リーク。
+### SourceVaultFileStreams[path] → List[stream]
+path (ファイルまたはディレクトリ) 配下の stream に限定する。
+
+### SourceVaultReleaseFileStreams[] → Association
+vault 配下の開きっぱなし stream を全て Close して OS ファイルハンドルを解放する。書込み操作の途中では呼ばないこと (呼び出し元が使用中の stream も閉じてしまうため、top-level / tick 境界でのみ呼ぶ)。
+→ `<|"Status" -> "OK", "Released" -> n, "Files" -> {path, ...}|>`
+### SourceVaultReleaseFileStreams[path] → Association
+対象を path (ファイル/ディレクトリ) 配下に限定して解放する。
+
 ## Digest / Canonicalization
 
 ### SourceVaultCanonicalizeForDigest[assoc, opts]
@@ -75,8 +90,9 @@ ref 形式: `"snapshot:class:hex"` または `"class/alias"`。
 → `<|"Status" -> "Valid"|"Mismatch", "Ref" -> ref, "StoredDigest" -> ..., "Recomputed" -> ..., "Valid" -> True|False|>`
 
 ### SourceVaultAllocateSnapshotAlias[class, alias, ref, opts] → Association | Failure
-alias → ref の割り当てを行う。同 alias に異なる ref を割り当てようとすると `Failure["NameCollision", ...]` で拒否する (idempotent: 同じ ref なら成功)。`"Overwrite" -> True` で既存 alias を新 ref に張り替える (immutable blob は残し alias ポインタのみ更新)。
+alias → ref の割り当てを行う。同 alias に異なる ref を割り当てようとすると `Failure["NameCollision", ...]` で拒否する (idempotent: 同じ ref なら成功)。
 → `<|"Status" -> "OK", "Alias" -> alias, "Ref" -> ref, "Existed" -> True|False, "Updated" -> True|False|>`
+Options: `"Overwrite" -> False` (`True` で既存 alias を新 ref に張り替える。immutable blob は残し alias ポインタのみ更新)
 
 ### SourceVaultImmutableSnapshotExistsQ[ref] → True | False
 不変スナップショット本体がストアに存在するか判定する。
@@ -230,3 +246,4 @@ Options: `"Processes" -> 2` (仮想プロセス数), `"PerProcessEvents" -> 100`
 - 異 host の stale lock は自動回収せず operator review が必要 (`NeedsOperatorRecovery`)。
 - root が未解決な場合、core API は fail-closed する (推測 fallback しない)。
 - blob 読み出し (`SourceVaultReadBlob`) / artifact 内容解決 (`SourceVaultResolveArtifactContent`) は main-kernel sanctioned reader であり、MCP / 低trust projection へは公開しない。生データは必ず PrivacyLevel を伴わせ、欠落時は既定 0.85 に fail-closed する。
+- 開いたままの write stream は Dropbox 同期を止め conflicted copy を生む。top-level / tick 境界で `SourceVaultReleaseFileStreams[]` を呼べる状態を保つこと (書込み操作の途中では呼ばない)。

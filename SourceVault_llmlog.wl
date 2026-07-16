@@ -156,9 +156,13 @@ iSVLLPutJSON[path_String, expr_] := Module[{bytes, tmp, strm},
   If[! ByteArrayQ[bytes], Return[$Failed]];
   iSVLLEnsureDir[DirectoryName[path]];
   tmp = path <> ".tmp." <> ToString[$ProcessID] <> "." <> StringTake[CreateUUID[], 6];
+  (* 過去の打ち切りで path に残った stray stream を先に解放 (開いたハンドルは
+     RenameFile 置換や Dropbox 同期を阻害する) *)
+  If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0,
+    Quiet @ SourceVault`SourceVaultReleaseFileStreams[path]];
   strm = Quiet @ OpenWrite[tmp, BinaryFormat -> True];
   If[Head[strm] =!= OutputStream, Return[$Failed]];
-  BinaryWrite[strm, bytes]; Close[strm];
+  WithCleanup[BinaryWrite[strm, bytes], Quiet @ Close[strm]];
   If[Quiet @ Check[RenameFile[tmp, path, OverwriteTarget -> True], $Failed] === $Failed,
     Quiet @ DeleteFile[tmp]; Return[$Failed]];
   path];
@@ -185,8 +189,9 @@ iSVLLAppendLines[path_String, lines_List] := Module[{strm},
   iSVLLEnsureDir[DirectoryName[path]];
   strm = Quiet @ OpenAppend[path, BinaryFormat -> True];
   If[Head[strm] =!= OutputStream, Return[$Failed]];
-  BinaryWrite[strm, StringToByteArray[StringRiffle[lines, "\n"] <> "\n", "UTF-8"]];
-  Close[strm];
+  WithCleanup[
+    BinaryWrite[strm, StringToByteArray[StringRiffle[lines, "\n"] <> "\n", "UTF-8"]],
+    Quiet @ Close[strm]];
   path];
 
 iSVLLEncodeJSONLine[rec_Association] := Quiet @ Check[
@@ -600,7 +605,7 @@ iSVLLCopyFile[src_String, dst_String] := Module[{ba, tmp, strm},
   tmp = dst <> ".tmp." <> ToString[$ProcessID];
   strm = Quiet @ OpenWrite[tmp, BinaryFormat -> True];
   If[Head[strm] =!= OutputStream, Return[$Failed]];
-  BinaryWrite[strm, ba]; Close[strm];
+  WithCleanup[BinaryWrite[strm, ba], Quiet @ Close[strm]];
   If[Quiet @ Check[RenameFile[tmp, dst, OverwriteTarget -> True], $Failed] === $Failed,
     Quiet @ DeleteFile[tmp]; Return[$Failed]];
   Length[ba]];

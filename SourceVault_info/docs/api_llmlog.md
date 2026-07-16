@@ -100,7 +100,7 @@ sessionId のダイジェスト全体。
 
 ### SourceVaultRegisterLLMLogMCPAdapter[]
 data adapter "llmlog" を登録 (冪等; 本ファイルロード時に自動試行)。kinds: `llmlog` / `claudecode`。URI は record namespace を間借り: `sv://record/svcclog-<sessionId>` (mail の svmail- と同型; URI namespace table 変更不要)。
-- search 行: URI / Title / Summary (LLM 要約があれば先頭 + machine|project|期間|件数) / Snippet (先頭 preview 500 字) / PrivacyLevel / PrivacyClass ("CodeWork" if privacy<=0.4, else "Unclassified") / Metadata (SessionKind, TopTools, FilesTouched 等)
+- search 行: URI / Title / Summary (LLM 要約があれば先頭 + machine|project|期間|件数) / Snippet (先頭 preview 500 字) / PrivacyLevel / PrivacyClass ("CodeWork" if privacy<=0.4, else "Unclassified") / Metadata (SessionId, SessionKind, MachineTag, Project, GitBranch, StartedAtUTC, LastAtUTC, Models, UserMessageCount, AssistantMessageCount, TopTools, FilesTouched)
 - filters: `machineTag`, `project`, `kind` ("interactive" で harness 除外)
 - body (digest 全文の整形テキスト) は grant 必須 (`RequireGrantFor` body/raw)。生 transcript は MCP に出さない。
 

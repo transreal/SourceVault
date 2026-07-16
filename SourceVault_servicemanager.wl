@@ -283,6 +283,11 @@ SourceVaultRollbackServiceVersion::usage =
 SourceVaultCompareServiceVersions::usage =
   "SourceVaultCompareServiceVersions[serviceId, v1, v2] は二つの service version snapshot の主要 ref 差分を返す。";
 
+$SourceVaultStreamSweepIntervalSeconds::usage =
+  "$SourceVaultStreamSweepIntervalSeconds は service loop が SourceVaultReleaseFileStreams[] で\n" <>
+  "vault 配下の開きっぱなし stream (Abort/TimeConstrained 打ち切りのリーク) を強制 Close する間隔秒\n" <>
+  "(既定 300)。開いたハンドルは Dropbox 同期を止め conflicted copy の原因になる。";
+
 Begin["`ServiceManagerPrivate`"]
 
 (* ============================================================
@@ -558,7 +563,7 @@ iSMWriteJSON[path_String, assoc_] := Module[{strm, ba, tmp, renamed},
   tmp = path <> ".tmp-" <> ToString[$ProcessID];
   strm = Quiet @ OpenWrite[tmp, BinaryFormat -> True];
   If[Head[strm] =!= OutputStream, Return[$Failed]];
-  BinaryWrite[strm, ba]; Close[strm];
+  WithCleanup[BinaryWrite[strm, ba], Quiet @ Close[strm]];
   renamed = Quiet @ Check[
     RenameFile[tmp, path, OverwriteTarget -> True]; True, False];
   If[! TrueQ[renamed],
@@ -569,7 +574,7 @@ iSMWriteJSON[path_String, assoc_] := Module[{strm, ba, tmp, renamed},
     (* fallback: 直接書き (旧挙動) *)
     strm = Quiet @ OpenWrite[path, BinaryFormat -> True];
     If[Head[strm] =!= OutputStream, Quiet @ DeleteFile[tmp]; Return[$Failed]];
-    BinaryWrite[strm, ba]; Close[strm];
+    WithCleanup[BinaryWrite[strm, ba], Quiet @ Close[strm]];
     Quiet @ DeleteFile[tmp]];
   path];
 
@@ -605,7 +610,10 @@ iSMAppendJSONL[path_String, assoc_] := Module[{strm, ba},
   iSMEnsureDir[DirectoryName[path]];
   strm = Quiet @ OpenAppend[path, BinaryFormat -> True];
   If[Head[strm] =!= OutputStream, Return[$Failed]];
-  BinaryWrite[strm, ba]; BinaryWrite[strm, StringToByteArray["\n", "UTF-8"]]; Close[strm]; path];
+  WithCleanup[
+    BinaryWrite[strm, ba]; BinaryWrite[strm, StringToByteArray["\n", "UTF-8"]],
+    Quiet @ Close[strm]];
+  path];
 
 iSMReadJSONL[path_String] := Module[{b, lines},
   If[! FileExistsQ[path], Return[{}]];
@@ -1779,7 +1787,7 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
   {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath,
    lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs,
    lastDispatchAbs = 0, dispatchCounter = 0, dispatchState = None,
-   lastCaneAnomalyAbs = 0, lastCapPruneAbs = 0},
+   lastCaneAnomalyAbs = 0, lastCapPruneAbs = 0, lastStreamSweepAbs = 0},
   dir = iServiceRuntimeDir[serviceId];
   If[FailureQ[dir], Return[dir]];
   iSMEnsureDir[dir];
@@ -1945,6 +1953,22 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
                       InputForm], "?"]|>]],
             (* opt-in が外れた: heartbeat から Dispatch を落とす (stall 誤検知防止) *)
             dispatchState = None]]];
+      (* handle sweep: ループ内の TimeConstrained 打ち切りや Abort が Open〜Close の間に
+         当たると stream がカーネル終了まで残り、開いた write ハンドルが Dropbox 同期を
+         止めて conflicted copy を作る (kernel kill で一斉同期が始まる現象の正体)。
+         tick 境界 (この時点で正当な保持者はいない) で vault 配下の stray stream を
+         定期的に強制 Close する。 *)
+      If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0 &&
+         (AbsoluteTime[] - lastStreamSweepAbs) >
+           If[NumericQ[SourceVault`$SourceVaultStreamSweepIntervalSeconds],
+             SourceVault`$SourceVaultStreamSweepIntervalSeconds, 300],
+        Module[{swR},
+          swR = Quiet @ Check[SourceVault`SourceVaultReleaseFileStreams[], <||>];
+          lastStreamSweepAbs = AbsoluteTime[];
+          If[AssociationQ[swR] && Lookup[swR, "Released", 0] > 0,
+            iServiceLog[dir, "VaultStreamsReleased",
+              <|"Released" -> Lookup[swR, "Released", 0],
+                "Files" -> Lookup[swR, "Files", {}]|>]]]];
       If[NumericQ[maxSec] && (AbsoluteTime[] - startAbs) > maxSec, stop = True; Break[]];
       Pause[interval]],
     stop = True];

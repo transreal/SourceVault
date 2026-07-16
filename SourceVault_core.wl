@@ -82,6 +82,20 @@ $SourceVaultInjectedRoots::usage =
 $SourceVaultInjectedRootHash::usage =
   "$SourceVaultInjectedRootHash は注入された root 構成の hash。health check で main kernel と比較する。";
 
+(* ---- 開きっぱなしファイルハンドルの列挙 / 明示解放 (Dropbox 競合コピー対策) ---- *)
+SourceVaultFileStreams::usage =
+  "SourceVaultFileStreams[] は vault 配下 (全 root + mail store) のファイルを指す開きっぱなしの\n" <>
+  "stream (InputStream/OutputStream) を列挙する。SourceVaultFileStreams[path] は path\n" <>
+  "(ファイルまたはディレクトリ) 配下に限定する。正常時は常に {} (読み書き完了後に stream は残らない)。\n" <>
+  "残っていれば Abort / Throw / TimeConstrained 打ち切りが Open〜Close の間に当たったリーク。";
+
+SourceVaultReleaseFileStreams::usage =
+  "SourceVaultReleaseFileStreams[] は vault 配下の開きっぱなし stream を全て Close して\n" <>
+  "OS ファイルハンドルを解放する (保持中は Dropbox が同期できず conflicted copy の原因になる)。\n" <>
+  "SourceVaultReleaseFileStreams[path] は対象をファイル/ディレクトリ配下に限定する。\n" <>
+  "戻り値 <|\"Status\",\"Released\",\"Files\"|>。書込み操作の途中では呼ばないこと\n" <>
+  "(呼び出し元が使用中の stream も閉じてしまうため、top-level / tick 境界でのみ呼ぶ)。";
+
 (* ---- digest / snapshot store (§8.2a) ---- *)
 SourceVaultCanonicalizeForDigest::usage =
   "SourceVaultCanonicalizeForDigest[assoc, opts] は assoc を digest 用 canonical JSON 文字列に正規化する。\n" <>
@@ -246,13 +260,15 @@ iEnsureDir[d_String] := (
   d
 );
 
-(* 文字列を UTF-8 bytes として書く (BOM / encoding 事故回避) *)
+(* 文字列を UTF-8 bytes として書く (BOM / encoding 事故回避)。
+   WithCleanup で Abort / TimeConstrained 打ち切り時も Close を保証 (handle リーク防止)。 *)
 iWriteStringUTF8[path_String, str_String] := Module[{strm},
   iEnsureDir[DirectoryName[path]];
   strm = Quiet @ OpenWrite[path, BinaryFormat -> True];
   If[Head[strm] =!= OutputStream, Return[$Failed]];
-  BinaryWrite[strm, StringToByteArray[str, "UTF-8"]];
-  Close[strm];
+  WithCleanup[
+    BinaryWrite[strm, StringToByteArray[str, "UTF-8"]],
+    Quiet @ Close[strm]];
   path
 ];
 
@@ -362,6 +378,48 @@ SourceVaultStorageDir[class_String] := Module[{pv},
     _,             Failure["SourceVaultUnknownStorageClass", <|"Class" -> class|>]
   ]
 ];
+
+(* ---- 開きっぱなしファイルハンドルの列挙 / 明示解放 ----
+   実測 (2026-07-16): WL のメッセージ系失敗は評価を止めないので Close まで到達するが、
+   Abort / Throw / TimeConstrained 打ち切りが Open〜Close の間に当たると stream が
+   カーネル終了まで残る。開いた write ハンドルは Dropbox 同期を止め、複数マシンが
+   同じ shard を書く mail store 等で conflicted copy を生む (kernel kill で一斉同期
+   する現象の正体)。ここで Streams[] を走査して vault 配下の stray stream を Close する。
+   呼び出しは top-level / tick 境界のみ (書込み中の呼び出し元 stream も閉じるため)。 *)
+
+iStreamPathCanon[p_String] := Module[{e},
+  e = Quiet @ Check[ExpandFileName[p], p];
+  If[! StringQ[e], e = p];
+  If[$OperatingSystem === "Windows",
+    ToLowerCase @ StringReplace[e, "/" -> "\\"], e]];
+
+iVaultStreamPrefixes[] := Module[{roots, extras},
+  roots = Values @ SourceVaultRootAssociation[];
+  extras = {SourceVault`$SourceVaultCoreRoot,
+    SourceVault`$SourceVaultMailStoreRoot,
+    If[Length[DownValues[SourceVault`SourceVaultMailStoreRoot]] > 0,
+      Quiet @ Check[SourceVault`SourceVaultMailStoreRoot[], $Failed], $Failed]};
+  DeleteDuplicates[iStreamPathCanon /@
+    Select[Join[roots, extras], StringQ[#] && StringLength[#] > 0 &]]];
+
+iStreamUnderQ[st_, prefixes_List] := Module[{n = First[st, ""], c},
+  If[! StringQ[n] || n === "" || MemberQ[{"stdout", "stderr"}, n], Return[False]];
+  c = iStreamPathCanon[n];
+  AnyTrue[prefixes, (c === # || StringStartsQ[c, # <> $PathnameSeparator]) &]];
+
+SourceVaultFileStreams[] :=
+  Select[Streams[], iStreamUnderQ[#, iVaultStreamPrefixes[]] &];
+SourceVaultFileStreams[prefix_String] :=
+  With[{p = iStreamPathCanon[prefix]}, Select[Streams[], iStreamUnderQ[#, {p}] &]];
+
+iReleaseStreams[sts_List] := (
+  Quiet[Close /@ sts];
+  <|"Status" -> "OK", "Released" -> Length[sts],
+    "Files" -> DeleteDuplicates[First[#, ""] & /@ sts]|>);
+
+SourceVaultReleaseFileStreams[] := iReleaseStreams[SourceVaultFileStreams[]];
+SourceVaultReleaseFileStreams[prefix_String] :=
+  iReleaseStreams[SourceVaultFileStreams[prefix]];
 
 iSub[parts__] := Module[{r = iResolveRoot[]},
   If[FailureQ[r], r, FileNameJoin[{r, parts}]]
@@ -895,7 +953,7 @@ SourceVaultCommitBlob[data_, OptionsPattern[]] := Module[
     iEnsureDir[DirectoryName[path]];
     Module[{strm = Quiet @ OpenWrite[tmp, BinaryFormat -> True]},
       If[Head[strm] =!= OutputStream, Return[Failure["BlobWriteFailed", <|"Path" -> tmp|>]]];
-      BinaryWrite[strm, bytes]; Close[strm]];
+      WithCleanup[BinaryWrite[strm, bytes], Quiet @ Close[strm]]];
     commit = iCommitCreateOnly[tmp, path];
     Quiet @ If[FileExistsQ[tmp], DeleteFile[tmp]];
     If[commit === "Failed", Return[Failure["BlobCommitFailed", <|"Path" -> path|>]]];
@@ -983,7 +1041,7 @@ iMaterializeArtifactBytes[hex_String, bytes_ByteArray, mt_, fname_] := Module[{e
     iEnsureDir[DirectoryName[path]];
     strm = Quiet @ OpenWrite[path, BinaryFormat -> True];
     If[Head[strm] =!= OutputStream, Return[Missing["MaterializeFailed"]]];
-    BinaryWrite[strm, bytes]; Close[strm]];
+    WithCleanup[BinaryWrite[strm, bytes], Quiet @ Close[strm]]];
   path];
 
 (* ArtifactId -> DerivedArtifact snapshot record (scan + セッション cache) *)

@@ -252,9 +252,11 @@ SourceVaultSystemDoctor[\"IncludeTopology\" -> False].";
 SourceVaultDiagnosticsTick::usage =
   "SourceVaultDiagnosticsTick[] is the lightweight body called by the shared \
 polling tick. Throttled (default 60s); each run writes a lightweight machine \
-heartbeat (no topology) and emits DoctorStale when the comprehensive doctor has \
-not run within its freshness window. Never spawns a kernel or touches the Front \
-End. Returns a short status. Safe to call manually.";
+heartbeat (no topology), releases stray vault file streams left open by \
+aborted writes (SourceVaultReleaseFileStreams; open handles block Dropbox sync \
+and cause conflicted copies), and emits DoctorStale when the comprehensive \
+doctor has not run within its freshness window. Never spawns a kernel or \
+touches the Front End. Returns a short status. Safe to call manually.";
 
 SourceVaultDiagnosticsStartTick::usage =
   "SourceVaultDiagnosticsStartTick[opts] registers SourceVaultDiagnosticsTick on \
@@ -1196,6 +1198,22 @@ SourceVaultDiagnosticsTick[opts : OptionsPattern[]] :=
     $iSVDiagLastTickTime = now;
     hb = Quiet @ Check[
       SourceVaultDiagnosticsMachineHeartbeat["IncludeTopology" -> False], $Failed];
+    (* stray stream release (weak coupling: core 不在なら no-op)。Abort/打ち切りで
+       Open〜Close の間に取り残された vault 配下 stream はカーネル終了まで残り、
+       開いた write ハンドルが Dropbox 同期を止め conflicted copy を作る。
+       tick 境界 (この時点で正当な保持者はいない) で強制 Close する。 *)
+    If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0,
+      Module[{swR = Quiet @ Check[SourceVault`SourceVaultReleaseFileStreams[], <||>]},
+        If[AssociationQ[swR] && Lookup[swR, "Released", 0] > 0,
+          Quiet @ Check[
+            SourceVaultDiagnosticsLog[<|
+              "Type" -> "DiagnosticsEvent",
+              "Component" -> "VaultFileStreams",
+              "Health" -> "OK",
+              "ReasonCode" -> "StrayStreamsReleased",
+              "Released" -> Lookup[swR, "Released", 0],
+              "Files" -> Lookup[swR, "Files", {}]|>],
+            Null]]]];
     stale = iSVDiagComprehensiveStaleQ[];
     If[stale,
       Quiet @ Check[

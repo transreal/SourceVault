@@ -135,7 +135,7 @@ workflow / saved-prompt リスト先頭用のコンパクトな framed status ba
 ## Polling Tick
 
 ### SourceVaultDiagnosticsTick[] → String
-共有 polling tick から呼ばれる軽量 body。throttle あり（default 60s）。各実行で軽量 machine heartbeat（topology なし）を書き、comprehensive doctor が freshness window 内に走っていなければ DoctorStale を emit する。kernel を spawn せず Front End にも触れない。短い status を返す。手動呼び出しも安全。
+共有 polling tick から呼ばれる軽量 body。throttle あり（default 60s）。各実行で軽量 machine heartbeat（topology なし）を書き、aborted write により開いたままの stray vault file stream を解放し（SourceVaultReleaseFileStreams; 開いたハンドルは Dropbox sync をブロックし conflicted copy を招くため）、comprehensive doctor が freshness window 内に走っていなければ DoctorStale を emit する。kernel を spawn せず Front End にも触れない。短い status を返す。手動呼び出しも安全。
 
 ### SourceVaultDiagnosticsStartTick[opts] → 登録結果
 claudecode の共有 polling base（ClaudeRegisterPollingTick）に SourceVaultDiagnosticsTick を弱く登録する。claudecode 不在時は no-op。opt-in（ロード時には start しない）。独自の ScheduledTask は作らない（rule 95）。

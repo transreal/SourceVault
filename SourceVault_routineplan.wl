@@ -160,6 +160,16 @@ calendar events in green) followed by timed calendar events. Notebook rows are c
 (SystemOpen, so Dropbox online-only files download and open too) to jump straight into the \
 work. Needs a Front End. Same options as SourceVaultRoutineAgendaData.";
 
+(* forward declarations: these are DEFINED by SourceVault_mailagenda.wl but
+   referenced below. Touching them here, in the package context BEFORE
+   Begin[`Private`], pins the references to the PUBLIC SourceVault` symbols
+   regardless of load order. Without this, loading routineplan before
+   mailagenda (the umbrella order) makes the bare references inside `Private`
+   resolve to fresh SourceVault`Private` symbols, and the mail band silently
+   stays empty (DownValues of the wrong symbol is 0). *)
+SourceVaultMailAgendaItems;
+SourceVaultMailAgendaOpen;
+
 Begin["`Private`"];
 
 iSVRPHours[e_?NumberQ] := N[e];
@@ -592,7 +602,8 @@ SourceVaultRoutineFabricTasks[from_, to_, OptionsPattern[]] := Module[
       tid = Lookup[t, "TaskId", Lookup[t, "FileDigest", Missing[]]],
       state = Lookup[t, "State", "Open"]},
     If[NumberQ[due] && fromAbs - $svRPDay <= due <= toAbs && StringQ[tid] &&
-        (TrueQ[OptionValue["IncludeDone"]] || !MemberQ[{"Done", "Pass"}, state]),
+        (TrueQ[OptionValue["IncludeDone"]] ||
+          !MemberQ[{"Done", "Pass", "Keep"}, state]),
       AppendTo[tasks, <|"Kind" -> "OnWorkTask",
         "TaskId" -> "nb:" <> ToString[tid],
         "Label" -> If[StringQ[title], title, "task"],
@@ -681,12 +692,13 @@ iSVRPTaskName[t_] := Module[
     True, "(untitled)"]];
 
 iSVRPAllDayRank[item_] := Switch[Lookup[item, "Kind", ""],
-  "Deadline", 1, "Review", 2, "AllDayEvent", 3, _, 4];
+  "Deadline", 1, "MailDeadline", 2, "Review", 3, "AllDayEvent", 4, _, 5];
 
 Options[SourceVaultRoutineAgendaData] = {
   PrivacySpec -> <|"AccessLevel" -> 1.0|>, "CalendarEvents" -> Automatic,
   "OnWorkTasks" -> Automatic, "ModifiedWithinDays" -> 120, "IncludeOverdue" -> True,
-  "TimeZone" -> Automatic};
+  "TimeZone" -> Automatic, "IncludeMail" -> Automatic, "MailItems" -> Automatic,
+  "MailMaxPrivacyLevel" -> 1.0};
 
 SourceVaultRoutineAgendaData[dur_Quantity, opts : OptionsPattern[]] :=
   SourceVaultRoutineAgendaData[N[AbsoluteTime[]],
@@ -698,7 +710,8 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
    fromDay, toDayEnd, byDay, dayKeys, days},
   If[tz === Automatic, tz = $TimeZone];
   If[!NumberQ[fromAbs] || !NumberQ[toAbs],
-    Return[<|"From" -> from, "To" -> to, "TimeZone" -> tz, "Overdue" -> {}, "Days" -> {}|>]];
+    Return[<|"From" -> from, "To" -> to, "TimeZone" -> tz, "Overdue" -> {},
+      "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}|>]];
   fromDay = iSVRPDayStart[fromAbs, tz];
   toDayEnd = iSVRPDayStart[toAbs, tz] + $svRPDay;
 
@@ -736,7 +749,9 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
   If[!ListQ[ow], ow = {}];
   Do[Module[{due = iSVRPAbs[Lookup[t, "Due", Missing[]]],
       kind = Lookup[t, "DueKind", Missing[]], state = Lookup[t, "State", "Open"], item, d},
-    If[NumberQ[due] && !MemberQ[{"Done", "Pass"}, state],
+    (* Keep = intentionally parked: no reminders, so neither the day list nor
+       the overdue band should nag about it *)
+    If[NumberQ[due] && !MemberQ[{"Done", "Pass", "Keep"}, state],
       d = iSVRPDayStart[due, tz];
       item = <|"Kind" -> Switch[kind, "NextReview", "Review", _, "Deadline"],
         "DueT" -> due, "Label" -> iSVRPTaskName[t], "Path" -> Lookup[t, "Path", Missing[]],
@@ -746,25 +761,70 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
         d < toDayEnd, AppendTo[items, item]]]],
     {t, ow}];
 
-  (* --- group by day --- *)
-  byDay = GroupBy[items, Round[#["DayAbs"]] &];
-  dayKeys = Sort[Keys[byDay]];
-  days = Map[Function[dk, Module[{grp = byDay[dk]},
-    <|"DayAbs" -> N[dk], "DayKey" -> iSVRPDayKey[dk, tz], "Weekday" -> iSVRPWeekdayJP[dk],
-      "AllDay" -> SortBy[Select[grp, MemberQ[{"Deadline", "Review", "AllDayEvent"}, #["Kind"]] &],
-        {iSVRPAllDayRank[#], Lookup[#, "Label", ""]} &],
-      "Timed" -> SortBy[Select[grp, #["Kind"] === "Event" &], #["StartT"] &]|>]], dayKeys];
   overdue = SortBy[overdue, #["DueT"] &];
-  <|"From" -> fromAbs, "To" -> toAbs, "TimeZone" -> tz, "Overdue" -> overdue, "Days" -> days|>];
+
+  (* --- actionable mails (R9, weak binding to SourceVault_mailagenda) --- *)
+  Module[{includeMail = OptionValue["IncludeMail"], mailRes, mailItems = {},
+      mailPending = 0, level},
+    level = Which[
+      AssociationQ[ps] && NumberQ[Lookup[ps, "AccessLevel", Missing[]]],
+        N[ps["AccessLevel"]],
+      NumberQ[ps], N[ps], True, 1.0];
+    If[includeMail === Automatic, includeMail = level >= 1.0];
+    If[TrueQ[includeMail],
+      mailRes = With[{m = OptionValue["MailItems"],
+          mpl = OptionValue["MailMaxPrivacyLevel"]},
+        If[m === Automatic,
+          If[Length[DownValues[SourceVaultMailAgendaItems]] > 0,
+            Quiet@Check[SourceVaultMailAgendaItems[
+              "MaxPrivacyLevel" -> mpl], <||>], <||>],
+          <|"Items" -> m, "PendingCount" -> 0|>]];
+      If[AssociationQ[mailRes],
+        mailItems = Lookup[mailRes, "Items", {}];
+        mailPending = Lookup[mailRes, "PendingCount", 0]];
+      If[!ListQ[mailItems], mailItems = {}];
+      (* privacy filter also on injected items (missing PL = 1.0, fail-safe) *)
+      With[{mpl = With[{m = OptionValue["MailMaxPrivacyLevel"]},
+          If[NumberQ[m], N[m], 1.0]]},
+        mailItems = Select[mailItems, iSVRPMailPL[#] <= mpl &]]];
+
+    (* mails with a definite deadline join the day calendar: an all-day item on
+       the deadline day, clickable through to the mail action window *)
+    Do[Module[{dl = iSVRPAbs[Lookup[mi, "Deadline", Missing[]]], d},
+      If[NumberQ[dl],
+        d = iSVRPDayStart[dl, tz];
+        If[NumberQ[d] && fromDay <= d < toDayEnd,
+          AppendTo[items, <|"Kind" -> "MailDeadline", "DueT" -> dl,
+            "Label" -> Lookup[mi, "Subject", "mail"],
+            "MailRecordId" -> Lookup[mi, "RecordId", Missing[]],
+            "DayAbs" -> d|>]]]],
+      {mi, mailItems}];
+
+    (* --- group by day (after mail deadlines joined) --- *)
+    byDay = GroupBy[items, Round[#["DayAbs"]] &];
+    dayKeys = Sort[Keys[byDay]];
+    days = Map[Function[dk, Module[{grp = byDay[dk]},
+      <|"DayAbs" -> N[dk], "DayKey" -> iSVRPDayKey[dk, tz],
+        "Weekday" -> iSVRPWeekdayJP[dk],
+        "AllDay" -> SortBy[Select[grp, MemberQ[
+            {"Deadline", "MailDeadline", "Review", "AllDayEvent"}, #["Kind"]] &],
+          {iSVRPAllDayRank[#], Lookup[#, "Label", ""]} &],
+        "Timed" -> SortBy[Select[grp, #["Kind"] === "Event" &],
+          #["StartT"] &]|>]], dayKeys];
+    <|"From" -> fromAbs, "To" -> toAbs, "TimeZone" -> tz, "Overdue" -> overdue,
+      "Mail" -> mailItems, "MailPendingCount" -> mailPending, "Days" -> days|>]];
 SourceVaultRoutineAgendaData[___] :=
-  <|"From" -> Missing[], "To" -> Missing[], "TimeZone" -> 0, "Overdue" -> {}, "Days" -> {}|>;
+  <|"From" -> Missing[], "To" -> Missing[], "TimeZone" -> 0, "Overdue" -> {},
+    "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}|>;
 
 (* ---- view ---- *)
 iSVRPAgendaColor["Deadline"] = RGBColor[0.85, 0.2, 0.2];
+iSVRPAgendaColor["MailDeadline"] = RGBColor[0.8, 0.3, 0.15];
 iSVRPAgendaColor["Review"] = RGBColor[0.2, 0.45, 0.8];
 iSVRPAgendaColor["AllDayEvent"] = RGBColor[0.2, 0.6, 0.3];
 iSVRPAgendaColor["Event"] = RGBColor[0.2, 0.55, 0.35];
 iSVRPAgendaColor[_] = GrayLevel[0.3];
+iSVRPAgendaKindTag["MailDeadline"] = "\:2709\:3006\:5207";
 iSVRPAgendaKindTag["Deadline"] = "\:3006\:5207";
 iSVRPAgendaKindTag["Review"] = "\:30ec\:30d3\:30e5\:30fc";
 iSVRPAgendaKindTag[_] = "";
@@ -786,18 +846,125 @@ iSVRPAgendaItemRow[item_, tz_] := Module[
      older/long-untouched notebooks failed while recent (local) ones opened; SystemOpen
      goes through the OS so Dropbox downloads the file first (matches the working
      NotebookExtensions dashboard, which also uses SystemOpen). Mouseover = link look. *)
-  nameCell = If[StringQ[path],
+  nameCell = Which[
+    StringQ[path],
     With[{p = path, lbl = label, c = col},
       Tooltip[
         Button[Mouseover[Style[lbl, c, 12], Style[lbl, c, 12, Underlined]],
           SystemOpen[p], Appearance -> None],
         "\:958b\:304f: " <> p]],
-    Style[label, col, 12]];
+    (* mail deadline on the calendar: click -> the mail action window *)
+    StringQ[Lookup[item, "MailRecordId", Missing[]]] &&
+      Length[DownValues[SourceVaultMailAgendaOpen]] > 0,
+    With[{r = item["MailRecordId"], lbl = label, c = col},
+      Tooltip[
+        Button[Mouseover[Style[lbl, c, 12], Style[lbl, c, 12, Underlined]],
+          SourceVaultMailAgendaOpen[r], Appearance -> None, Method -> "Queued"],
+        "\:958b\:304f: \:5bfe\:5fdc\:30a6\:30a3\:30f3\:30c9\:30a6 (\:8fd4\:4fe1/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)"]],
+    True, Style[label, col, 12]];
   Row[{
     Style[Pane[timepart, 74], GrayLevel[0.45], 10],
     If[tag =!= "", Style["\:3010" <> tag <> "\:3011", col, Bold, 10], ""],
     If[mand, Style["\:2605", RGBColor[0.85, 0.2, 0.2], 10], ""],
     " ", nameCell}]];
+
+(* --- mail band helpers (R9) --- *)
+
+(* fail-safe privacy read (missing derived PL counts as 1.0, maildb convention) *)
+iSVRPMailPL[item_] := With[{p = Lookup[item, "PrivacyLevel", Missing[]]},
+  If[NumberQ[p], N[p], 1.0]];
+
+(* a view containing even one PL >= 0.5 mail is confidential (maildb rule).
+   Wrap through ClaudeCode`Confidential when available (cell marking + secret
+   variable registration); else schedule SourceVaultMarkConfidentialViewCells
+   on the evaluation notebook (FE only) as the fallback. *)
+iSVRPAgendaConfidentialQ[mailItems_List] :=
+  mailItems =!= {} && AnyTrue[mailItems, iSVRPMailPL[#] >= 0.5 &];
+
+iSVRPWrapConfidential[result_, mailItems_List] := Which[
+  !iSVRPAgendaConfidentialQ[mailItems], result,
+  Length[DownValues[ClaudeCode`Confidential]] > 0,
+    ClaudeCode`Confidential[result],
+  True,
+    Quiet@Check[
+      If[TrueQ[$Notebooks] &&
+          Length[DownValues[SourceVaultMarkConfidentialViewCells]] > 0,
+        With[{nb = EvaluationNotebook[]},
+          If[Head[nb] === NotebookObject,
+            SessionSubmit[ScheduledTask[
+              Quiet@Check[SourceVaultMarkConfidentialViewCells[nb], Null],
+              {1.0}]]]]];
+      Null, Null];
+    result];
+
+iSVRPMailKind[cat_, deadline_] := Which[
+  cat === "TaskRequest", {"\:4f9d\:983c", RGBColor[0.75, 0.35, 0.1]},
+  cat === "AttendanceRequest", {"\:51fa\:5e2d", RGBColor[0.45, 0.3, 0.75]},
+  cat === "Confirmation", {"\:78ba\:8a8d", RGBColor[0.2, 0.5, 0.6]},
+  StringQ[deadline], {"\:3006\:5207", RGBColor[0.85, 0.2, 0.2]},
+  True, {"\:8981\:5bfe\:5fdc", GrayLevel[0.3]}];
+
+(* "2026-07-25T00:00:00" | DateObject | abs -> "07/25"; else "" *)
+iSVRPShortDate[d_] := Module[{abs = iSVRPAbs[d]},
+  If[NumberQ[abs],
+    DateString[FromAbsoluteTime[abs], {"Month", "/", "Day"}], ""]];
+
+(* due-date colour rule (matches the notebook dashboards): past -> red,
+   today/tomorrow (within 24h) -> blue, further future -> black. A date-only
+   deadline (midnight) on TODAY still counts as "due today" -> blue; a TIMED
+   deadline already passed today -> red. *)
+iSVRPDueColor[dueAbs_, nowAbs_, tz_] := Module[
+  {day0 = iSVRPDayStart[nowAbs, tz], dayD = iSVRPDayStart[dueAbs, tz]},
+  Which[
+    !NumberQ[dueAbs] || !NumberQ[day0] || !NumberQ[dayD], GrayLevel[0.1],
+    dayD < day0, RGBColor[0.85, 0.2, 0.2],
+    dayD == day0 && dueAbs < nowAbs && dueAbs > dayD, RGBColor[0.85, 0.2, 0.2],
+    dayD <= day0 + $svRPDay, RGBColor[0.2, 0.45, 0.8],
+    True, GrayLevel[0.1]]];
+
+iSVRPMailRow[item_Association, nowAbs_, tz_ : Automatic] := Module[
+  {rid = Lookup[item, "RecordId", ""], subject = Lookup[item, "Subject", "?"],
+   from = Lookup[item, "From", ""], summary = Lookup[item, "Summary", Missing[]],
+   dateAbs = Lookup[item, "Date", Missing[]],
+   deadline = Lookup[item, "Deadline", Missing[]],
+   tzv, kind, ageDays, recvStr, dlStr, subjCell},
+  tzv = If[tz === Automatic, $TimeZone, tz];
+  {kind, ageDays} = {iSVRPMailKind[Lookup[item, "Category", Missing[]], deadline],
+    If[NumberQ[dateAbs], Max[0, Round[(nowAbs - dateAbs)/86400.]], Missing[]]};
+  (* received date + age, e.g. "07/14 受信・2日前" *)
+  recvStr = If[NumberQ[dateAbs],
+    iSVRPShortDate[dateAbs] <> " \:53d7\:4fe1" <>
+      If[IntegerQ[ageDays],
+        "\:30fb" <> If[ageDays === 0, "\:4eca\:65e5",
+          ToString[ageDays] <> "\:65e5\:524d"], ""], ""];
+  dlStr = If[StringQ[deadline] || DateObjectQ[deadline],
+    iSVRPShortDate[deadline], ""];
+  If[!StringQ[subject], subject = ToString[subject]];
+  subjCell = If[StringQ[rid] && rid =!= "" &&
+      Length[DownValues[SourceVaultMailAgendaOpen]] > 0,
+    With[{r = rid, lbl = subject},
+      Tooltip[Button[
+        Mouseover[Style[lbl, GrayLevel[0.1], 12],
+          Style[lbl, GrayLevel[0.1], 12, Underlined]],
+        SourceVaultMailAgendaOpen[r], Appearance -> None, Method -> "Queued"],
+        "\:958b\:304f: \:5bfe\:5fdc\:30a6\:30a3\:30f3\:30c9\:30a6 (\:8fd4\:4fe1/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)"]],
+    Style[subject, GrayLevel[0.1], 12]];
+  Column[{
+    Row[{Style["\:3010" <> kind[[1]] <> "\:3011", kind[[2]], Bold, 10], " ",
+      subjCell,
+      With[{tc = Lookup[item, "ThreadCount", 1]},
+        If[IntegerQ[tc] && tc > 1,
+          Style["\:3000(\:30b9\:30ec\:30c3\:30c9 " <> ToString[tc] <> " \:901a)",
+            RGBColor[0.15, 0.35, 0.6], 9], Nothing]],
+      Style["\:3000\[Dash] " <> ToString[from], GrayLevel[0.45], 10],
+      If[recvStr =!= "",
+        Style["\:3000(" <> recvStr <> ")", GrayLevel[0.55], 9], Nothing],
+      If[dlStr =!= "",
+        Style["\:3000\:3006\:5207\[FilledRightTriangle]" <> dlStr,
+          iSVRPDueColor[iSVRPAbs[deadline], nowAbs, tzv], Bold, 10], Nothing]}],
+    If[StringQ[summary],
+      Style["\:3000\:3000" <> summary, GrayLevel[0.4], 10], Nothing]},
+    Spacings -> 0.1, Alignment -> Left]];
 
 Options[SourceVaultRoutineAgendaView] = Options[SourceVaultRoutineAgendaData];
 SourceVaultRoutineAgendaView[dur_Quantity, opts : OptionsPattern[]] :=
@@ -806,20 +973,16 @@ SourceVaultRoutineAgendaView[dur_Quantity, opts : OptionsPattern[]] :=
 SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
   {data = SourceVaultRoutineAgendaData[from, to,
      Sequence @@ FilterRules[{opts}, Options[SourceVaultRoutineAgendaData]]],
-   tz, overdue, days, sections = {}},
+   tz, overdue, days, mail, mailPending, sections = {}},
   tz = Lookup[data, "TimeZone", 0];
   overdue = Lookup[data, "Overdue", {}];
   days = Lookup[data, "Days", {}];
-  If[overdue === {} && days === {},
-    Return[Style["\:4e88\:5b9a\:30fb\:3006\:5207\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
+  mail = Lookup[data, "Mail", {}];
+  mailPending = Lookup[data, "MailPendingCount", 0];
+  If[overdue === {} && days === {} && mail === {},
+    Return[Style["\:4e88\:5b9a\:30fb\:3006\:5207\:30fb\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
       Italic, Gray]]];
-  If[overdue =!= {},
-    AppendTo[sections, Framed[Column[Prepend[
-        Map[iSVRPAgendaItemRow[#, tz] &, overdue],
-        Style["\:26a0 \:671f\:9650\:8d85\:904e\:30fb\:672a\:51e6\:7406", RGBColor[0.85, 0.2, 0.2],
-          Bold, 12]], Alignment -> Left, Spacings -> 0.35],
-      Background -> RGBColor[1, 0.95, 0.95], FrameStyle -> RGBColor[0.85, 0.55, 0.55],
-      RoundingRadius -> 5, FrameMargins -> 8]]];
+  (* order: day-by-day calendar FIRST, then overdue, then actionable mails *)
   Do[Module[{dayAbs = d["DayAbs"], wd = d["Weekday"], allday = d["AllDay"],
       timed = d["Timed"], hdr, rows, weekend},
     weekend = MemberQ[{"\:571f", "\:65e5"}, wd];
@@ -832,8 +995,32 @@ SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
       Column[rows, Spacings -> 0.4, Alignment -> Left]}, Spacings -> 0.3,
       Alignment -> Left]]],
     {d, days}];
-  Framed[Column[sections, Spacings -> 1.2, Alignment -> Left],
-    FrameStyle -> GrayLevel[0.85], FrameMargins -> 12, RoundingRadius -> 6]];
+  If[overdue =!= {},
+    AppendTo[sections, Framed[Column[Prepend[
+        Map[iSVRPAgendaItemRow[#, tz] &, overdue],
+        Style["\:26a0 \:671f\:9650\:8d85\:904e\:30fb\:672a\:51e6\:7406", RGBColor[0.85, 0.2, 0.2],
+          Bold, 12]], Alignment -> Left, Spacings -> 0.35],
+      Background -> RGBColor[1, 0.95, 0.95], FrameStyle -> RGBColor[0.85, 0.55, 0.55],
+      RoundingRadius -> 5, FrameMargins -> 8]]];
+  (* R9: actionable mails needing reply / owner-directed requests *)
+  If[mail =!= {} || mailPending > 0,
+    Module[{nowAbs = N[AbsoluteTime[]], rows},
+      rows = Map[iSVRPMailRow[#, nowAbs, tz] &, mail];
+      If[IntegerQ[mailPending] && mailPending > 0,
+        AppendTo[rows, Style[
+          "(\:672a\:5206\:985e " <> ToString[mailPending] <>
+          " \:4ef6 \[Dash] SourceVaultMailAddSummaries[mbox] \:3067\:8981\:7d04\:3092\:8a08\:7b97)",
+          Italic, GrayLevel[0.5], 9]]];
+      AppendTo[sections, Framed[Column[Prepend[rows,
+          Style["\:2709 \:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb (" <>
+            ToString[Length[mail]] <> ")", RGBColor[0.15, 0.35, 0.6], Bold, 12]],
+          Alignment -> Left, Spacings -> 0.4],
+        Background -> RGBColor[0.95, 0.97, 1], FrameStyle -> RGBColor[0.55, 0.65, 0.85],
+        RoundingRadius -> 5, FrameMargins -> 8]]]];
+  iSVRPWrapConfidential[
+    Framed[Column[sections, Spacings -> 1.2, Alignment -> Left],
+      FrameStyle -> GrayLevel[0.85], FrameMargins -> 12, RoundingRadius -> 6],
+    mail]];
 SourceVaultRoutineAgendaView[___] :=
   Style["SourceVaultRoutineAgendaView: bad args.", Red];
 

@@ -30,6 +30,7 @@
 		"SourceVault_anomaly.wl",
 		"SourceVault_routine.wl",
 		"SourceVault_routineplan.wl",
+		"SourceVault_mailagenda.wl",
 		"SourceVault_contracts.wl",
 		"SourceVault_wiring.wl",
 		"SourceVault_mailsuggest.wl",

@@ -1,6 +1,6 @@
 # SourceVault
 
-Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter**、release context に基づく公開ポリシー基盤と Web 検索サービス管理 (**SourceVault_searchindex** / **SourceVault_servicemanager**)、[Eagle](https://eagle.cool) デジタルアセットライブラリ統合 (**SourceVault_eagle**)、排他制御・immutable snapshot・append-only event log を提供するコア基盤 (**SourceVault_core**) を備えます。加えて、関数契約と型付き配線による API コンパイラ層 (**SourceVault_contracts** / **SourceVault_wiring**)、シミュレーション実行基盤 (**SourceVault_simrun**)、検索結果を「たどれる作業面」として扱う検索ビュー層 (**SourceVault_searchview**)、一般メールの構造化・スレッド提案 (**SourceVault_mailstructure** / **SourceVault_mailsuggest**)、Claude Code セッションログ統合 (**SourceVault_llmlog**)、コード化ワークフローのレジストリ・カタログ管理 (**SourceVault_workflowregistry** / **SourceVault_workflowcatalog**)、自動トリガスケジューラ (**SourceVault_autotrigger**)、クロスパッケージ診断層 (**SourceVault_diagnostics**)、関数粒度のパッケージ API 索引 (**SourceVault_packageapi**)、[ComfyUI](https://github.com/comfyanonymous/ComfyUI) 画像・動画生成統合 (**SourceVault_comfyui**) も備えます。さらに、oops メーリングリストのアーカイブを「ベース基準座標」とする認知支援・安全基盤 (Cane: **SourceVault_knowledgehome** / **SourceVault_cognition** / **SourceVault_adjudication** / **SourceVault_capbroker** / **SourceVault_taint** / **SourceVault_anomaly** / **SourceVault_routine** / **SourceVault_routineplan**) も統合しており、いずれも既定では判定を記録するだけの observe-only / shadow モードで動作します。
+Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter**、release context に基づく公開ポリシー基盤と Web 検索サービス管理 (**SourceVault_searchindex** / **SourceVault_servicemanager**)、[Eagle](https://eagle.cool) デジタルアセットライブラリ統合 (**SourceVault_eagle**)、排他制御・immutable snapshot・append-only event log を提供するコア基盤 (**SourceVault_core**) を備えます。加えて、関数契約と型付き配線による API コンパイラ層 (**SourceVault_contracts** / **SourceVault_wiring**)、シミュレーション実行基盤 (**SourceVault_simrun**)、検索結果を「たどれる作業面」として扱う検索ビュー層 (**SourceVault_searchview**)、一般メールの構造化・スレッド提案 (**SourceVault_mailstructure** / **SourceVault_mailsuggest**)、オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層 (**SourceVault_mailagenda**)、Claude Code セッションログ統合 (**SourceVault_llmlog**)、コード化ワークフローのレジストリ・カタログ管理 (**SourceVault_workflowregistry** / **SourceVault_workflowcatalog**)、自動トリガスケジューラ (**SourceVault_autotrigger**)、クロスパッケージ診断層 (**SourceVault_diagnostics**)、関数粒度のパッケージ API 索引 (**SourceVault_packageapi**)、[ComfyUI](https://github.com/comfyanonymous/ComfyUI) 画像・動画生成統合 (**SourceVault_comfyui**) も備えます。さらに、oops メーリングリストのアーカイブを「ベース基準座標」とする認知支援・安全基盤 (Cane: **SourceVault_knowledgehome** / **SourceVault_cognition** / **SourceVault_adjudication** / **SourceVault_capbroker** / **SourceVault_taint** / **SourceVault_anomaly** / **SourceVault_routine** / **SourceVault_routineplan**) も統合しており、いずれも既定では判定を記録するだけの observe-only / shadow モードで動作します。
 
 ## 設計思想と実装の概要
 
@@ -184,6 +184,10 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ W
 
 `SourceVault_mailsuggest.wl` はこの構造化結果を BM25・identity・mining 層と組み合わせ、状況テキスト（自然文）に近いメールスレッド候補を提案します（`SourceVaultMailSessionSuggest`）。`SourceVaultMailThreadWindow` はスレッドを新規ノートブックで開き、引用/返信 edge をハイパーリンクで辿れる閲覧 UI と（maildb の場合）返信ドラフト作成ボタンを提供します。
 
+### メールアジェンダ (SourceVault_mailagenda)
+
+`SourceVault_mailagenda.wl` は routine attention の一部 (R9) として、**オーナー宛ての要対応メール**（返信/出席/確認・作業依頼など）を routine アジェンダへ供給する薄い層です。`SourceVault_maildb` が事前計算済みの派生（Summary / Category / Priority / Deadline）を **索引だけで読み**、アジェンダ経路で LLM 呼び出し・IMAP 取得・シャード本体のロードを行いません。`SourceVaultMailAgendaItems` がカテゴリゲート → SPAM/無関係ゲート → オーナー宛て判定（To/Cc・宛名パターン）→ 解決済み除外の順に候補を絞り、同一スレッドは 1 項目に集約されます。解決は Pending → Done（Replied / NotebookCreated / Dismissed）の状態機械で管理され、`SourceVaultMailAgendaResolve` / `SourceVaultMailAgendaReopen` で記録・取り消しができます。`SourceVaultMailAgendaOpen` が返信・ノートブック継承・確認済みマークの対応 UI を開き、`SourceVaultMailAgendaInherit` はメールを継承した作業ノートブックを作成します（`SourceVaultRoutinePlacePlan` の日別カレンダーの「✉ 要対応メール」バンドに統合）。個人アドレス（オーナー/組織アドレス等）はコードに焼き込まず `PrivateVault/config/mailagenda.json` で環境設定します。
+
 ### Claude Code セッションログ統合 (SourceVault_llmlog)
 
 `SourceVault_llmlog.wl` は各 PC ローカルの Claude Code 実行ログ (`~/.claude/projects/*/*.jsonl`) をセッション毎のダイジェスト（メタデータ + bounded preview + ツール統計）に抽出し、`SourceVaultIngestClaudeCodeLogs` が Dropbox 経由で全マシンに共有される rollup shard へ append-only で追記します。生 transcript は SourceVault store の外にプレーンフォルダとしてミラーされ（MCP には露出しません）、`SourceVaultClaudeCodeSessionSearchView` で「過去のセッション・実装・作業ログ」を全マシン横断で検索・閲覧できます。これは **git のコミット履歴とは別種別**として扱われ、コミット履歴は `GitHubCommitLog` / MCP `sourcevault_commit_log` が担当します。
@@ -213,12 +217,13 @@ oops メーリングリストのアーカイブを「ベース基準座標」と
 - **SourceVault_knowledgehome** — `SourceVaultKnowledgeHomeEnsureLoaded[]` で oops corpus を読み取り専用 Knowledge Home ブラウザとして開き（topic item field・mail の prev/next・双方向引用リンク）、`SourceVaultKnowledgeHomeAppend` 等で非破壊な追記（ULID ベースの正準 ID・表示 alias `"ki N"`）ができます。
 - **SourceVault_cognition** — 操作支援シグナル・自己申告等の認知系イベントを、PrivateVault の外（`<LocalState>/sensitive/cognition/`、同期対象外）に crypto-shredding 対応で暗号化保存する SensitiveLocalVault 契約層です。`$SourceVaultCognitionEnabled` がマスタースイッチで、`SourceVaultGuardEvaluate` は操作支援の推奨（Confirm / TimedDefer 等）を shadow 記録するだけで enforcement しません。
 - **SourceVault_adjudication** — 複数 LLM の提案を多数決に依らず、決定的テスト・evidence・verifier 判定・calibrated 履歴・モデル間一致の優先順位で裁定するコア (`SourceVaultRunMultiModelDecision` 等)。abstain (NeedMoreEvidence / NeedOwnerClarification 等) も正規の裁定結果として扱います。
-- **SourceVault_capbroker** — CapabilityLease の原子台帳と、LLM 送信境界の shadow → warn → enforce 段階ゲート (`SourceVaultPrepareLLMInput` / `SourceVaultLLMBoundaryGate`)。全 LLM 送信経路に観測フックが配線済みですが、既定はすべて Shadow（挙動不変）です。
+- **SourceVault_capbroker** — CapabilityLease の原子台帳と、LLM 送信境界の shadow → warn → enforce 段階ゲート (`SourceVaultPrepareLLMInput` / `SourceVaultLLMBoundaryGate`)。全 LLM 送信経路に観測フックが配線済みですが、既定はすべて Shadow（挙動不変）です。用済みレコードの GC は `SourceVaultPruneCapBroker`（既定 DryRun）が担います。
 - **SourceVault_taint** — 入力の信頼度評価 (`SourceVaultAssessInputTrust`) と、派生物への SafetyState の非降下伝播 (`SourceVaultPropagateTaint`)。LLM を使わない決定的処理です。
-- **SourceVault_anomaly** — レート系ストリームの統計的な逸脱検知 (`SourceVaultDetectStreamAnomalies` 等)。**明示的に実行する observe-only ワークフロー**で、通知・isolation 変更・policy freeze などの enforcement は一切行いません。
+- **SourceVault_anomaly** — レート系ストリームの統計的な逸脱検知 (`SourceVaultDetectStreamAnomalies` 等)。**明示的に実行する observe-only ワークフロー**で、通知・isolation 変更・policy freeze などの enforcement は一切行いません。既存 event store から決定的にレートストリームを構築する `SourceVaultCollectCaneAnomalyStreams` と、service の低頻度 hook から呼ばれる `SourceVaultCaneAnomalyScheduleTick` により定期分析を owner 登録できます。
 - **SourceVault_routine** / **SourceVault_routineplan** — 予定・ルーチン・約束事の充足判定を担う obligation コア層（3値 Kleene 証拠論理・Resolution 状態機械）と、その拡張である準備タスク見積・容量ベースの日次配置・リスケジューリング。判定・提案のみを行い、実行権限は持ちません。
+- **SourceVault_mailagenda** — maildb の既存派生（Summary/Category/Priority/Deadline）を索引だけで読み、オーナー宛ての要対応メール（返信/出席/確認依頼など）を routine アジェンダへ供給する薄い層。スレッド集約・解決状態機械（Pending→Done: Replied/NotebookCreated/Dismissed）・メール継承による作業ノートブック作成 (`SourceVaultMailAgendaInherit`) を提供し、メール本文の LLM 再解析やシャード全体ロードは行いません。
 
-詳細な設計・不変条件は `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md` / `api_routine.md` / `api_routineplan.md`、および user_manual.md の該当節を参照してください。
+詳細な設計・不変条件は `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md` / `api_routine.md` / `api_routineplan.md` / `api_mailagenda.md`、および user_manual.md の該当節を参照してください。
 
 ### 経路統一
 
@@ -236,11 +241,12 @@ SourceVault_searchview.wl               検索ビュー (live hypertext view・i
 SourceVault_knowledgehome.wl            Knowledge Home (oops 基準座標の読み取り専用ブラウザ・非破壊追記、既定 observe-only)
 SourceVault_cognition.wl                認知レイヤー (認知系イベントの暗号化保存・Guard shadow・owner 入力支援、既定 shadow)
 SourceVault_adjudication.wl             複数 LLM 裁定コア (決定的裁定・runnable driver、多数決非依存)
-SourceVault_capbroker.wl                capability broker (CapabilityLease 原子台帳・LLM boundary shadow/gate、既定 Shadow)
+SourceVault_capbroker.wl                capability broker (CapabilityLease 原子台帳・LLM boundary shadow/gate・用済みレコード GC、既定 Shadow)
 SourceVault_taint.wl                    taint 追跡 (入力信頼度評価・非降下伝播)
 SourceVault_anomaly.wl                  異常検知 (observe-only ワークフロー、既定オフ)
 SourceVault_routine.wl                  ルーチン/義務(obligation) コア層 (3値証拠論理・Resolution 状態機械、実行権限なし)
 SourceVault_routineplan.wl              ルーチン計画拡張 (準備見積・容量配置・リスケジューリング)
+SourceVault_mailagenda.wl               ルーチン系メールアジェンダ (maildb 派生の索引だけを読み、要対応メールを routine アジェンダへ供給)
 SourceVault_oopsseed.wl                 OOPS seed オントロジ取り込み・一般メール topic auto-tag
 SourceVault_mailstructure.wl            一般メール構造化 (TopicVocabulary・mail relation graph mining)
 SourceVault_mailsuggest.wl              メールスレッド提案 (状況テキスト→session 候補・スレッド閲覧)
@@ -280,6 +286,7 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 - 提案式は `SourceVaultValidateCallExpression` / `SourceVaultCallContractValidatorHook` により実行前に契約検証され、未登録 option や未初期化依存の呼び出しは拒否・修復指示されます。
 - メール本文の PrivacyLevel は fail-safe 既定 0.85 で暗号化され、送信者由来の feature loosening は認証済み (DMARC/DKIM Pass) 送信者にのみ適用されます。
 - Cane 認知支援・安全基盤 (Knowledge Home / Cognition / Adjudication / Capability Broker / Taint / Anomaly / Routine) は既定で observe-only / shadow であり、明示的な owner 操作なしに送信のブロック・通知・isolation 変更などの enforcement を行いません。認知系の生データは PrivateVault の外 (`<LocalState>/sensitive/...` 等、同期対象外) に保存され、crypto-shredding で消去できます。
+- `SourceVault_mailagenda` はメールアジェンダ経路で **索引のみ**を読み、LLM 再解析・IMAP 取得・シャード全体ロードを行いません。個人アドレス（オーナー/組織アドレス等）はコードに焼き込まず `PrivateVault/config/mailagenda.json` の環境設定で解決します。
 
 ### 永続化レイアウト
 
@@ -323,6 +330,7 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
   comfyui/                             (ComfyUI workflow registry・job 状態・log)
   rollup/claudecode_sessions/<MachineTag>/YYYY-MM.jsonl  (Claude Code セッションログ rollup)
   config/local/SourceVaultLocalInit.wl (ローカル初期設定)
+  config/mailagenda.json               (メールアジェンダの個人アドレス設定)
   identity/identifiers.jsonl           (識別子 JSONL)
   identity/entities.jsonl              (実体 JSONL)
   mail/snapshots/<mbox>/<yyyymm>.svmail  (月次メールシャード)
@@ -334,7 +342,7 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 
 ## 暗号化・identity・メール管理
 
-SourceVault には、source 管理に加えて、**at-rest 暗号化基盤・可搬鍵バンドル・2層アドレス帳 (identity)・送信者認証・メール (MailDB/IMAP/Mail UI)** が統合されています。これらの機能は、本体 `SourceVault.wl` のローダが依存順に Get する **4 つのサブファイル**に集約されています: `NBAccess_crypto.wl` (鍵隔離層、`NBAccess\`` 文脈) → `SourceVault_crypto.wl` (crypto + keys + keybundle + encryptedstore + release) → `SourceVault_identity.wl` (addressbook + senderauth + identity + messagerelease) → `SourceVault_maildb.wl` (maildb + imap + mailui)。一般メールの構造化・スレッド提案には `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl`（前述）が追加で載ります。
+SourceVault には、source 管理に加えて、**at-rest 暗号化基盤・可搬鍵バンドル・2層アドレス帳 (identity)・送信者認証・メール (MailDB/IMAP/Mail UI)** が統合されています。これらの機能は、本体 `SourceVault.wl` のローダが依存順に Get する **4 つのサブファイル**に集約されています: `NBAccess_crypto.wl` (鍵隔離層、`NBAccess\`` 文脈) → `SourceVault_crypto.wl` (crypto + keys + keybundle + encryptedstore + release) → `SourceVault_identity.wl` (addressbook + senderauth + identity + messagerelease) → `SourceVault_maildb.wl` (maildb + imap + mailui)。一般メールの構造化・スレッド提案には `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl`（前述）が、オーナー宛て要対応メールのアジェンダ化には `SourceVault_mailagenda.wl`（前述）が追加で載ります。
 
 ### 初回セットアップ（オーナー登録・メールアカウント・鍵バックアップ）
 
@@ -380,7 +388,7 @@ SourceVaultImportKeyBundle["correct horse battery staple xyz"]   (* 新マシン
 
 ### メール管理 (MailDB / IMAP / Mail UI)
 
-旧 maildb レコードや IMAP 新着を `SourceVaultMailSnapshot` に正規化します。**本文は暗号化** (PL fail-safe 既定 0.85)、**ヘッダ (件名等) は既定で平文 + token** (Dropbox 前提の設計)。snapshot は mbox × 月のシャードに分割保存され、`SourceVaultMailEnsureLoaded` で必要分だけ遅延ロードします。**取り込み (IMAP) と派生 (ローカル LLM による PL/優先度/概要/カテゴリ/締切) は分離**され、`SourceVaultMailFetchNew` で高速取り込み → `SourceVaultInferMailDerivedBatch` で増分派生 (中断耐性あり)。派生カテゴリ (`$SourceVaultMailCategories`) は InfoProvision / AttendanceRequest / TaskRequest / Confirmation / Report / Notice / Other の 7 種です。`SourceVaultInferMailDerivedBatch["Refresh" -> "MissingCategory"]` でカテゴリ・締切未生成の処理済みメールだけを後埋めできます。`SourceVaultMailSnapshotDecryptBody[snapshot]` で MAC 検証後に本文を復号できます。重要度は `SourceVaultMailComputePriority` がグループ重み + To/Cc 位置 + bulk 判定 + 依頼度から決定的に計算します。IMAP アカウントは `SourceVaultRegisterMailAccount` で vault config に登録し (パスワードは保存せず CredKey のみ)、対話表示は `SourceVaultMailView` で行います。構造化されたスレッド単位の検索・提案は前述の `SourceVault_mailstructure` / `SourceVault_mailsuggest` が担います。
+旧 maildb レコードや IMAP 新着を `SourceVaultMailSnapshot` に正規化します。**本文は暗号化** (PL fail-safe 既定 0.85)、**ヘッダ (件名等) は既定で平文 + token** (Dropbox 前提の設計)。snapshot は mbox × 月のシャードに分割保存され、`SourceVaultMailEnsureLoaded` で必要分だけ遅延ロードします。**取り込み (IMAP) と派生 (ローカル LLM による PL/優先度/概要/カテゴリ/締切) は分離**され、`SourceVaultMailFetchNew` で高速取り込み → `SourceVaultInferMailDerivedBatch` で増分派生 (中断耐性あり)。派生カテゴリ (`$SourceVaultMailCategories`) は InfoProvision / AttendanceRequest / TaskRequest / Confirmation / Report / Notice / Other の 7 種です。`SourceVaultInferMailDerivedBatch["Refresh" -> "MissingCategory"]` でカテゴリ・締切未生成の処理済みメールだけを後埋めできます。`SourceVaultMailSnapshotDecryptBody[snapshot]` で MAC 検証後に本文を復号できます。重要度は `SourceVaultMailComputePriority` がグループ重み + To/Cc 位置 + bulk 判定 + 依頼度から決定的に計算します。IMAP アカウントは `SourceVaultRegisterMailAccount` で vault config に登録し (パスワードは保存せず CredKey のみ)、対話表示は `SourceVaultMailView` で行います。構造化されたスレッド単位の検索・提案は前述の `SourceVault_mailstructure` / `SourceVault_mailsuggest` が、要対応メールのアジェンダ化は `SourceVault_mailagenda` が担います。
 
 ```wolfram
 SourceVaultMailEnsureLoaded["work", 3];                 (* 直近3ヶ月だけロード *)
@@ -537,6 +545,7 @@ $packageDirectory\
   SourceVault_anomaly.wl         ← 異常検知 (本体ロード時に自動ロード)
   SourceVault_routine.wl         ← ルーチン/義務コア層 (本体ロード時に自動ロード)
   SourceVault_routineplan.wl     ← ルーチン計画拡張 (本体ロード時に自動ロード)
+  SourceVault_mailagenda.wl      ← メールアジェンダ (本体ロード時に自動ロード)
   SourceVault_servicemanager.wl  ← サービス管理 (本体ロード時に自動ロード)
   SourceVault_webingest.wl       ← Web 検索 (本体ロード時に自動ロード)
   SourceVault_mcp.wl             ← MCP + sv:// オブジェクト解決 (本体ロード時に自動ロード)
@@ -586,7 +595,7 @@ Block[{$CharacterEncoding = "UTF-8"},
 ]
 ```
 
-`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_contracts.wl`・`SourceVault_wiring.wl`・`SourceVault_searchindex.wl`・`SourceVault_searchview.wl`・`SourceVault_knowledgehome.wl`・`SourceVault_cognition.wl`・`SourceVault_adjudication.wl`・`SourceVault_capbroker.wl`・`SourceVault_taint.wl`・`SourceVault_anomaly.wl`・`SourceVault_routine.wl`・`SourceVault_routineplan.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl`・`SourceVault_mcp.wl`・`SourceVault_llmlog.wl`・`SourceVault_simrun.wl`・`SourceVault_packageapi.wl`・`SourceVault_workflowregistry.wl`・`SourceVault_autotrigger.wl`・`SourceVault_promptrouter.wl` などが順に自動的にロードされます。Cane 認知支援・安全基盤の各サブファイルは既定で observe-only / shadow のため、通常利用ではロードされていることを意識する必要はありません。
+`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_contracts.wl`・`SourceVault_wiring.wl`・`SourceVault_searchindex.wl`・`SourceVault_searchview.wl`・`SourceVault_knowledgehome.wl`・`SourceVault_cognition.wl`・`SourceVault_adjudication.wl`・`SourceVault_capbroker.wl`・`SourceVault_taint.wl`・`SourceVault_anomaly.wl`・`SourceVault_routine.wl`・`SourceVault_routineplan.wl`・`SourceVault_mailagenda.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl`・`SourceVault_mcp.wl`・`SourceVault_llmlog.wl`・`SourceVault_simrun.wl`・`SourceVault_packageapi.wl`・`SourceVault_workflowregistry.wl`・`SourceVault_autotrigger.wl`・`SourceVault_promptrouter.wl` などが順に自動的にロードされます。Cane 認知支援・安全基盤の各サブファイルは既定で observe-only / shadow のため、通常利用ではロードされていることを意識する必要はありません。
 
 LLM 要約・claim 抽出機能を使用する場合は、ClaudeRuntime もロードします。
 
@@ -871,6 +880,13 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultMailComposeReply[rid, opts]` | 返信ドラフトを生成（DraftOnly、自動送信しない）。 |
 | `$SourceVaultMailCategories` | メール派生カテゴリトークン一覧（InfoProvision / AttendanceRequest / TaskRequest / Confirmation / Report / Notice / Other）。 |
 | `$SourceVaultDefaultImportedMailPL` | import 時のメール本文 PL 既定（`0.85`、fail-safe）。 |
+| **メールアジェンダ (SourceVault_mailagenda)** | |
+| `SourceVaultMailAgendaItems[opts]` | maildb の既存派生（Summary/Category/Priority/Deadline）を索引だけで読み、オーナー宛ての要対応メール候補を返す（スレッド集約・解決済み除外・`"MaxPrivacyLevel"` フィルタ付き）。 |
+| `SourceVaultMailAgendaResolve[recordId, status, opts]` | 要対応メールの解決状態（`"Dismissed"` / `"NotebookCreated"`）を記録する。 |
+| `SourceVaultMailAgendaReopen[recordId]` / `…Resolutions[]` | 解決の取り消し、および解決一覧の取得。 |
+| `SourceVaultMailAgendaOpen[recordId \| item]` | 返信・ノートブック継承・確認済みマークの対応ウィンドウを開く。 |
+| `SourceVaultMailAgendaInherit[recordId, opts]` | メールを継承した作業ノートブックを `$onWork` に作成し、routine アジェンダから除外する。 |
+| `SourceVaultMailForNotebook[nbPath]` | 継承ノートブックのメタデータから元メールの RecordId を非評価で読む（逆参照）。 |
 | **マイニング (SourceVault_mining)** | |
 | `SourceVaultMakeTagAssertion[targetURI, tag, opts]` | 由来つき TagAssertion を作る（`SourceKind` / `TagClass` / `Confidence` / `AccessImpact`）。 |
 | `SourceVaultObjectTags[assertions, targetURI, opts]` | TagAssertion list からタグ projection を作る。緩和 AccessTag は `PendingAccessTags` に隔離。 |
@@ -900,6 +916,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultGuardEvaluate[actionSpec, opts]` | アクションのリスクを分類し操作支援を shadow 推奨する（enforce しない）。 |
 | `SourceVaultRunMultiModelDecision[inputRef, proposerFns, opts]` | 複数 LLM 提案を決定的テスト・evidence 優先で裁定する end-to-end driver。 |
 | `SourceVaultPrepareLLMInput[envelope, opts]` | LLM 送信境界で envelope 全体に bind した one-shot token を発行する capability broker API。 |
+| `SourceVaultPruneCapBroker[opts]` | 用済み prepared token / lease レコードを GC する（既定 DryRun、issued 未期限 lease は残す）。 |
 | `SourceVaultAssessInputTrust[input]` | 入力の信頼度・prompt injection 等の adversarial signal を評価する。 |
 | `SourceVaultDetectStreamAnomalies[streamData, opts]` | レート系ストリームの統計的逸脱を observe-only で検知する（cold start は無通知）。 |
 | `SourceVaultRoutineResolveSeries[occurrences, evidence, now, mode]` | ルーチン系列を 3値 Kleene 証拠論理で解決する（実行権限を持たない判定コア）。 |
@@ -921,6 +938,7 @@ SourceVaultNotebookSummary[nbPath]
 | `api_maildb.md` | メール API（snapshot 変換・検索・IMAP 取得・派生・FE 操作） |
 | `api_mailstructure.md` | 一般メール構造化 API（TopicVocabulary・mail relation graph mining） |
 | `api_mailsuggest.md` | メールスレッド提案 API（状況テキスト→session 候補・スレッド閲覧） |
+| `api_mailagenda.md` | メールアジェンダ API（routine attention R9・maildb 派生の索引読み・解決状態機械・継承ノートブック） |
 | `api_mining.md` | マイニング API（タグ/著者/実体リンクの由来つき抽出・security pre-scan・検索 boost・記憶代謝・ObjectSignals） |
 | `api_lexical.md` | 日本語 lexical 検索 API（正規化・n-gram・BM25・entity OR-match） |
 | `api_oopsseed.md` | OOPS seed オントロジ API（S式取り込み・段落分割・auto-tag・topic item graph） |
@@ -942,9 +960,9 @@ SourceVaultNotebookSummary[nbPath]
 | `api_knowledgehome.md` | Knowledge Home API（読み取り専用ブラウザ・非破壊追記・ULID/alias・offline merge） |
 | `api_cognition.md` | 認知レイヤー API（SensitiveLocalVault・操作支援シグナル・Guard shadow・owner 入力支援） |
 | `api_adjudication.md` | 複数 LLM 裁定 API（決定的裁定コア・runnable driver・LLM proposer/verifier 結線） |
-| `api_capbroker.md` | capability broker API（CapabilityLease 原子台帳・LLM boundary shadow/warn/enforce ゲート） |
+| `api_capbroker.md` | capability broker API（CapabilityLease 原子台帳・LLM boundary shadow/warn/enforce ゲート・用済みレコード GC） |
 | `api_taint.md` | taint 追跡 API（InputTrustAssessment・taint 伝播・RunIntegrityState） |
-| `api_anomaly.md` | 異常検知 API（ストリーム逸脱検知・相関仮説・baseline 更新、observe-only） |
+| `api_anomaly.md` | 異常検知 API（ストリーム逸脱検知・相関仮説・baseline 更新・決定的ストリーム収集、observe-only） |
 | `api_routine.md` | ルーチン/義務コア API（identity・3値証拠論理・Resolution 状態機械・長周期 due・overdue 積分） |
 | `api_routineplan.md` | ルーチン計画拡張 API（準備見積・容量配置・リスケジューリング・可視化 suite） |
 | `examples/workflow_spec_review_example.md` | コード化ワークフロー spec-review の実行例（MOCK / 実 LLM / パレット連携） |
@@ -1148,6 +1166,22 @@ SourceVaultStartHTTPProxy["handbook-svc",
   "ChatModel" -> "cloud"]
 ```
 
+### メールアジェンダ — 要対応メールの発見と処理
+
+`SourceVault_mailagenda` は maildb の既存派生（Category/Priority/Deadline）だけを索引で読み、「オーナー宛てで返信/確認が必要そうなメール」を候補化します。LLM の再解析やシャード全体のロードは行われません。
+
+```mathematica
+(* オーナー宛ての要対応メール候補（直近45日既定） *)
+agenda = SourceVaultMailAgendaItems[];
+agenda["Items"]
+
+(* 対応ウィンドウを開く（返信 / ノートブック継承 / 確認済みマーク） *)
+SourceVaultMailAgendaOpen[agenda["Items"][[1]]]
+
+(* メールを継承した作業ノートブックを作成し、アジェンダから除外 *)
+SourceVaultMailAgendaInherit[agenda["Items"][[1]]["RecordId"]]
+```
+
 ### Eagle ライブラリの検索と表示
 
 ```mathematica
@@ -1231,6 +1265,7 @@ SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
 - [SourceVault_crypto](https://github.com/transreal/SourceVault_crypto)
 - [SourceVault_identity](https://github.com/transreal/SourceVault_identity)
 - [SourceVault_maildb](https://github.com/transreal/SourceVault_maildb)
+- [SourceVault_mailagenda](https://github.com/transreal/SourceVault_mailagenda)
 - [SourceVault_eagle](https://github.com/transreal/SourceVault_eagle)
 - [SourceVault_comfyui](https://github.com/transreal/SourceVault_comfyui)
 - [SourceVault_knowledgehome](https://github.com/transreal/SourceVault_knowledgehome)
