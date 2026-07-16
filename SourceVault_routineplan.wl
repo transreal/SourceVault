@@ -157,8 +157,8 @@ SourceVaultRoutineAgendaView::usage =
 SourceVaultRoutineAgendaData as a readable vertical day-by-day timeline: an overdue banner, \
 then per day an all-day band (notebook Deadlines in red, NextReviews in blue, all-day \
 calendar events in green) followed by timed calendar events. Notebook rows are clickable \
-(NotebookOpen) to jump straight into the work. Needs a Front End. Same options as \
-SourceVaultRoutineAgendaData.";
+(SystemOpen, so Dropbox online-only files download and open too) to jump straight into the \
+work. Needs a Front End. Same options as SourceVaultRoutineAgendaData.";
 
 Begin["`Private`"];
 
@@ -780,10 +780,18 @@ iSVRPAgendaItemRow[item_, tz_] := Module[
       iSVRPHM[Lookup[item, "EndT", 0], tz],
     "AllDayEvent", "\:7d42\:65e5",
     _, "\:3000\:3000"];
+  (* clickable open. Two traps fixed: (1) BaseStyle "Hyperlink" OVERRODE the
+     ButtonFunction with hyperlink navigation, so clicks did nothing. (2) NotebookOpen
+     cannot open a Dropbox online-only (not-yet-downloaded) placeholder, which is why
+     older/long-untouched notebooks failed while recent (local) ones opened; SystemOpen
+     goes through the OS so Dropbox downloads the file first (matches the working
+     NotebookExtensions dashboard, which also uses SystemOpen). Mouseover = link look. *)
   nameCell = If[StringQ[path],
     With[{p = path, lbl = label, c = col},
-      Tooltip[Button[Style[lbl, c, 12], NotebookOpen[p], Appearance -> None,
-        Method -> "Queued", BaseStyle -> "Hyperlink"], "\:958b\:304f: " <> p]],
+      Tooltip[
+        Button[Mouseover[Style[lbl, c, 12], Style[lbl, c, 12, Underlined]],
+          SystemOpen[p], Appearance -> None],
+        "\:958b\:304f: " <> p]],
     Style[label, col, 12]];
   Row[{
     Style[Pane[timepart, 74], GrayLevel[0.45], 10],
