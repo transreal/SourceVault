@@ -308,6 +308,26 @@ SourceVaultAutoSaveLastPrompt::usage =
   "$SourceVaultPromptAutoSave. Options: \"Memo\" -> \"\", plus the SaveLastPrompt " <>
   "options. Returns the SaveLastPrompt result, or <|\"Status\"->\"Skipped\"|>.";
 
+SourceVaultAddSavedPrompt::usage =
+  "SourceVaultAddSavedPrompt[prompt_String, targetExprString_String, opts] " <>
+  "registers a saved PromptRoute DIRECTLY from a (prompt, expression) pair -- " <>
+  "no prior ClaudeEval run needed. Use it to (re)define what a prompt runs, " <>
+  "from code or from the panel's \:65b0\:898f\:8ffd\:52a0 row: e.g. " <>
+  "SourceVaultAddSavedPrompt[\"\:4eca\:65e5\:306e\:4e88\:5b9a\", " <>
+  "\"SourceVaultRoutineAgendaView[Quantity[3, \\\"Days\\\"]]\"]. The pair is " <>
+  "saved through the SaveLastPrompt machinery (same normalization, version " <>
+  "grouping, privacy, encryption) with the last-run context blanked so the " <>
+  "ReplaySafety classification sees only this pair. \"Primary\" -> True " <>
+  "(default) marks the new version primary for its group, so the Order-9 " <>
+  "saved-prompt proposer runs it on exact (normalized) prompt match; " <>
+  "\"AutoExecute\" -> True (default) lets it run without the confirmation " <>
+  "step. The expression string must parse as InputForm (checked, " <>
+  "non-evaluating); execution-time safety is still enforced by " <>
+  "SourceVaultRunPrimaryRoute's ReadOnly/SafeCreate + deny-list re-check. " <>
+  "Options: \"Primary\" (True), \"AutoExecute\" (True), \"Memo\" (\"\"), " <>
+  "\"Channel\" (Automatic), \"Encrypt\" (False), \"DryRun\" (False). " <>
+  "Returns the SaveLastPrompt result plus \"PrimaryResult\".";
+
 SourceVaultMatchSavedPromptVersions::usage =
   "SourceVaultMatchSavedPromptVersions[prompt_String, opts] returns the saved " <>
   "PromptRoutes whose normalized prompt exactly matches prompt (the same " <>
@@ -419,6 +439,13 @@ $SourceVaultPromptPanelMaxRows::usage =
   "long library opens quickly. A keyword search shows all matches and the " <>
   "\"\:5168\:4ef6\" button shows the full list regardless. Default 30; set to " <>
   "Infinity to always show every row.";
+
+(* forward declaration: SourceVaultRoutineAgendaView is DEFINED by
+   SourceVault_routineplan.wl, which the umbrella loads AFTER promptrouter.
+   Touching the name here, before Begin[`Private`], pins the bare references
+   below to the PUBLIC SourceVault` symbol (load-order safety; same pattern
+   as routineplan's own mailagenda forward declarations). *)
+SourceVaultRoutineAgendaView;
 
 Begin["`Private`"];
 
@@ -1195,6 +1222,14 @@ SourceVaultCallableAllowlistRegistry[] :=
          \:30e6\:30fc\:30b6\:304c\:660e\:793a\:7684\:306b\:300c\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:300d\:3068\:6307\:793a\:3057\:305f\:6642\:306b\:81ea\:52d5\:8d77\:52d5\:3055\:308c\:308b\:3002 *)
       "SideEffectClass"    -> "SafeCreate",
       "OwnerPackage"       -> "SourceVault"
+    |>,
+    "SourceVaultRoutineAgendaView" -> <|
+      "FunctionId"         -> "SourceVaultRoutineAgendaView",
+      "Symbol"             -> SourceVaultRoutineAgendaView,
+      "UseAsFunctionRoute" -> True,
+      "UseAsHandlerRef"    -> True,
+      "SideEffectClass"    -> "ReadOnly",
+      "OwnerPackage"       -> "SourceVault_routineplan"
     |>
   |>;
 
@@ -1777,11 +1812,31 @@ iSVPRSeedPromptRoutes[] :=
       "SchemaVersion"-> 1,
       "Matcher" -> <|
         "Kind"        -> "DeterministicPattern",
-        "KeywordsAny" -> {"\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb", "\:4e88\:5b9a", "schedule"}
+        (* \:300c\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30ea\:30b9\:30c8\:300d\:7cfb\:306f\:5f93\:6765\:306e\:30c0\:30c3\:30b7\:30e5\:30dc\:30fc\:30c9\:3002
+           \:7d20\:306e\:300c\:4e88\:5b9a/\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb\:300d\:306f Propose \:5074\:306e\:5206\:5c90\:3067
+           seed-sourcevault-routine-agenda-v1 (AgendaView) \:3078\:3002 *)
+        "KeywordsAny" -> {"\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb", "\:4e88\:5b9a", "schedule",
+          "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30ea\:30b9\:30c8", "notebook list"}
       |>,
       "Target" -> <|
         "Kind"       -> "TabularQuery",
         "DataSource" -> "schedule"
+      |>,
+      "Privacy" -> <|"PrivacyLevel" -> 0.0|>,
+      "Source"  -> "SeedBuiltIn"
+    |>,
+    <|
+      "Type"         -> "PromptRoute",
+      "RouteId"      -> "seed-sourcevault-routine-agenda-v1",
+      "RouteVersion" -> 1,
+      "SchemaVersion"-> 1,
+      "Matcher" -> <|
+        "Kind"        -> "DeterministicPattern",
+        "KeywordsAny" -> {"\:30a2\:30b8\:30a7\:30f3\:30c0", "agenda"}
+      |>,
+      "Target" -> <|
+        "Kind"       -> "Function",
+        "FunctionId" -> "SourceVaultRoutineAgendaView"
       |>,
       "Privacy" -> <|"PrivacyLevel" -> 0.0|>,
       "Source"  -> "SeedBuiltIn"
@@ -3311,15 +3366,39 @@ iSVPRProposeFunctionRoute[prompt_String] :=
   ];
 iSVPRProposeFunctionRoute[_] := Missing["BadPrompt"];
 
+(* ----- R9 agenda preference (2026-07-17) -----
+   A plain schedule prompt ("\:4eca\:65e5\:306e\:4e88\:5b9a" etc.) opens the unified daily
+   agenda (calendar + notebook deadlines + actionable mails,
+   SourceVaultRoutineAgendaView). The notebook-list dashboard
+   (SourceVaultUpcomingSchedule) stays in charge whenever the prompt names
+   notebooks ("\:30ce\:30fc\:30c8\:30d6\:30c3\:30af"/notebook), narrows with a FilterSpec, or
+   pins an explicit scope -- the agenda takes none of those. *)
+iSVPRNotebookListPromptQ[prompt_String] :=
+  StringContainsQ[prompt, "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af"] ||
+  StringContainsQ[ToLowerCase[prompt], "notebook"];
+
+iSVPRAgendaPreferredQ[prompt_String, filterSpec_, scopeSym_] :=
+  !iSVPRNotebookListPromptQ[prompt] &&
+  (filterSpec === None || MissingQ[filterSpec]) &&
+  scopeSym === Automatic &&
+  Length[DownValues[SourceVaultRoutineAgendaView]] > 0;
+
+iSVPRBuildAgendaProposal[periodDays_Integer] :=
+  With[{pd = periodDays},
+    HoldComplete[SourceVaultRoutineAgendaView[Quantity[pd, "Days"]]]];
+
 SourceVaultProposePromptRoute[prompt_String,
                               opts:OptionsPattern[]] :=
   Module[{isSchedule, periodInfo, periodDays, filterSpec,
           scopeSym, proposal, anchorNote, fnProposal},
-    (* schedule prompts: \:5f93\:6765\:901a\:308a SourceVaultUpcomingSchedule \:63d0\:6848 *)
+    (* schedule prompts. \:300c\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30ea\:30b9\:30c8\:300d\:5358\:72ec\:3067\:3082\:5165\:308b
+       (R9: \:5f93\:6765\:30c0\:30c3\:30b7\:30e5\:30dc\:30fc\:30c9\:3092\:4e00\:767a\:8d77\:52d5\:3059\:308b\:5206\:304b\:308a\:3084\:3059\:3044\:5165\:53e3) *)
     isSchedule = StringContainsQ[prompt,
       "\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb"] ||
       StringContainsQ[prompt, "\:4e88\:5b9a"] ||
-      StringContainsQ[prompt, "schedule"];
+      StringContainsQ[ToLowerCase[prompt], "schedule"] ||
+      StringContainsQ[prompt, "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30ea\:30b9\:30c8"] ||
+      StringContainsQ[ToLowerCase[prompt], "notebook list"];
     If[!isSchedule,
       (* \:30b9\:30b1\:30b8\:30e5\:30fc\:30eb\:4ee5\:5916\:306f seed route \:30c6\:30fc\:30d6\:30eb (SourceVaultResolvePromptRoute) \:3067
          \:89e3\:6c7a\:3092\:8a66\:307f\:308b\:3002Function route \:304c\:78ba\:5b9a\:3057\:3001\:305d\:306e FunctionId \:304c allowlist \:3067
@@ -3354,6 +3433,26 @@ SourceVaultProposePromptRoute[prompt_String,
       filterSpec = None];
 
     scopeSym = iSVPRParseScopeSymbol[prompt];
+
+    (* plain schedule prompt -> unified daily agenda (R9) *)
+    If[iSVPRAgendaPreferredQ[prompt, filterSpec, scopeSym],
+      Return[<|
+        "Type"     -> "PromptRouteProposal",
+        "Status"   -> "Proposed",
+        "Prompt"   -> prompt,
+        "Decision" -> <|
+          "RouteId" -> "seed-sourcevault-routine-agenda-v1",
+          "Method"  -> "DeterministicAgenda",
+          "PeriodDays" -> periodDays,
+          "AnchorNote" -> anchorNote,
+          "HasFilterSpec" -> False|>,
+        "ProposedExpression" -> iSVPRBuildAgendaProposal[periodDays],
+        "ValidationHints" -> <|
+          "ExpectedHeads" -> {SourceVaultRoutineAgendaView},
+          "SideEffectClass" -> "ReadOnly"|>,
+        "RouterPhase"   -> iSVPRImplementationPhase[],
+        "RouterVersion" -> $SourceVaultPromptRouterVersion
+      |>]];
 
     proposal = iSVPRBuildScheduleProposal[
       periodDays, filterSpec, scopeSym];
@@ -3821,6 +3920,52 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
 SaveLastPrompt[___] :=
   <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
     "Hint" -> "Expected SaveLastPrompt[memo_String, opts]."|>;
+
+(* ----- direct (prompt, expression) registration (2026-07-17) -----
+   The panel's manual-add row and code both come through here. This is a thin
+   wrapper over SaveLastPrompt: the explicit PromptText/TargetExprString
+   overrides make the save independent of any prior run, and blanking the
+   ClaudeEval notebook-context global for the call keeps the ReplaySafety
+   classifier from binding this pair to a stale captured context. *)
+Options[SourceVaultAddSavedPrompt] = {
+  "Primary" -> True, "AutoExecute" -> True, "Memo" -> "",
+  "Channel" -> Automatic, "Encrypt" -> False, "DryRun" -> False};
+
+SourceVaultAddSavedPrompt[prompt_String, exprString_String,
+    OptionsPattern[]] := Module[{memo, saveRes, rid, primRes},
+  If[StringTrim[prompt] === "",
+    Return[<|"Status" -> "Failed", "Reason" -> "EmptyPrompt"|>]];
+  (* the expression must at least parse (non-evaluating check) *)
+  If[!MatchQ[Quiet@Check[
+      ToExpression[exprString, InputForm, HoldComplete], $Failed],
+      _HoldComplete],
+    Return[<|"Status" -> "Failed", "Reason" -> "ExprParseFailed",
+      "Hint" -> "TargetExprString \:304c InputForm \:3068\:3057\:3066\:69cb\:6587\:89e3\:6790\:3067\:304d\:307e\:305b\:3093\:3002",
+      "TargetExprString" -> exprString|>]];
+  memo = OptionValue["Memo"]; If[!StringQ[memo], memo = ""];
+  saveRes = Block[{ClaudeCode`$ClaudeEvalNotebookContext = ""},
+    SaveLastPrompt[memo,
+      "PromptText" -> prompt,
+      "TargetExprString" -> exprString,
+      "ForceNewVersion" -> True,
+      "Channel" -> OptionValue["Channel"],
+      "Encrypt" -> TrueQ[OptionValue["Encrypt"]],
+      "DryRun" -> TrueQ[OptionValue["DryRun"]]]];
+  If[!AssociationQ[saveRes] ||
+     !MemberQ[{"OK", "DryRun"}, Lookup[saveRes, "Status", ""]],
+    Return[saveRes]];
+  rid = Lookup[saveRes, "RouteId", Missing[]];
+  primRes = If[TrueQ[OptionValue["Primary"]] && StringQ[rid] &&
+      Lookup[saveRes, "Status", ""] === "OK",
+    Quiet@Check[SourceVaultSetPrimaryPromptRoute[rid,
+      "AutoExecute" -> TrueQ[OptionValue["AutoExecute"]]], $Failed],
+    Missing["NotRequested"]];
+  Append[saveRes, "PrimaryResult" -> primRes]];
+
+SourceVaultAddSavedPrompt[___] :=
+  <|"Status" -> "Failed", "Reason" -> "InvalidArguments",
+    "Hint" -> "Expected SourceVaultAddSavedPrompt[prompt_String, " <>
+      "targetExprString_String, opts]."|>;
 
 (* ---------- search ---------- *)
 
@@ -4342,7 +4487,9 @@ SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
     (* showAll: \:6a19\:6e96\:8868\:793a=False\:ff08\:5148\:982d mr \:884c\:306e\:307f\:ff09\:3001\:691c\:7d22/\:5168\:4ef6=True\:ff08\:5168\:4ef6\:63cf\:753b\:ff09\:3002
        mr \:306f\:5916\:5074 Module \:3067\:6c7a\:307e\:308b\:6574\:6570\:306a\:306e\:3067 DynamicModule \:306b\:30ea\:30c6\:30e9\:30eb\:5316\:3055\:308c\:3066\:713c\:304d\:8fbc\:3080\:3002 *)
     DynamicModule[{query = "", channel = ch, routes = initRoutes,
-                   showAll = False, mr = maxRows},
+                   showAll = False, mr = maxRows,
+                   newPrompt = "", newExpr = "", newMemo = "",
+                   newAuto = True, addMsg = ""},
     Panel[Column[{
       Style["SourceVault \:4fdd\:5b58\:30d7\:30ed\:30f3\:30d7\:30c8\:4e00\:89a7", Bold, 15,
         FontFamily -> "Yu Gothic UI"],
@@ -4378,6 +4525,54 @@ SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
               iSVPRPanelRoutes[query, channel], {}],
             Method -> "Queued"],
           "\:5b9f\:884c\:30fbPrimary\:8a2d\:5b9a\:30fb\:524a\:9664\:306e\:5f8c\:306f\:518d\:8aad\:8fbc\:3067\:6700\:65b0\:72b6\:614b\:306b\:3057\:3066\:304f\:3060\:3055\:3044\:3002"]}],
+      (* \:65b0\:898f\:5b9a\:7fa9\:306e\:624b\:52d5\:8ffd\:52a0 (2026-07-17): (\:30d7\:30ed\:30f3\:30d7\:30c8, \:5f0f) \:3092\:76f4\:63a5\:767b\:9332\:3057\:3001
+         \:305d\:306e\:5834\:3067 PRIMARY/AUTO \:307e\:3067\:8a2d\:5b9a\:3059\:308b\:3002\:5b9f\:884c\:5c65\:6b74\:304c\:7121\:304f\:3066\:3082\:5b9a\:7fa9\:3067\:304d\:308b\:3002 *)
+      OpenerView[{
+        Style["\:65b0\:898f\:30d7\:30ed\:30f3\:30d7\:30c8\:5b9a\:7fa9\:3092\:8ffd\:52a0",
+          FontFamily -> "Yu Gothic UI", FontSize -> 11, Bold],
+        Column[{
+          InputField[Dynamic[newPrompt], String,
+            FieldHint -> "\:30d7\:30ed\:30f3\:30d7\:30c8(\:5b8c\:5168\:4e00\:81f4\:3067\:8d77\:52d5\:3002\:4f8b: \:4eca\:65e5\:306e\:4e88\:5b9a)",
+            ImageSize -> 460, BaseStyle -> {FontFamily -> "Yu Gothic UI"}],
+          InputField[Dynamic[newExpr], String,
+            FieldHint -> "\:5b9f\:884c\:3059\:308b\:5f0f (InputForm\:3002\:4f8b: SourceVaultRoutineAgendaView[Quantity[3, \"Days\"]])",
+            ImageSize -> 460, BaseStyle -> {FontFamily -> "Courier New"}],
+          Row[{
+            InputField[Dynamic[newMemo], String,
+              FieldHint -> "\:30e1\:30e2 (\:4efb\:610f)", ImageSize -> 220,
+              BaseStyle -> {FontFamily -> "Yu Gothic UI"}],
+            Spacer[8],
+            Checkbox[Dynamic[newAuto]],
+            Style[" AUTO(\:78ba\:8a8d\:306a\:3057\:3067\:81ea\:52d5\:5b9f\:884c)",
+              FontFamily -> "Yu Gothic UI", FontSize -> 10],
+            Spacer[8],
+            Button[Style["\:8ffd\:52a0\:3057\:3066 PRIMARY \:306b\:8a2d\:5b9a",
+                FontFamily -> "Yu Gothic UI", Bold],
+              Module[{res},
+                res = Quiet @ Check[
+                  SourceVault`SourceVaultAddSavedPrompt[newPrompt, newExpr,
+                    "Memo" -> newMemo, "AutoExecute" -> TrueQ[newAuto]],
+                  $Failed];
+                If[AssociationQ[res] && Lookup[res, "Status", ""] === "OK",
+                  addMsg = "\:8ffd\:52a0\:3057\:307e\:3057\:305f (PRIMARY" <>
+                    If[TrueQ[newAuto], "\:30fbAUTO", ""] <> "): " <>
+                    ToString[Lookup[res, "RouteId", ""]];
+                  newPrompt = ""; newExpr = ""; newMemo = "";
+                  routes = Quiet @ Check[
+                    iSVPRPanelRoutes[query, channel], {}],
+                  addMsg = "\:8ffd\:52a0\:5931\:6557: " <> If[AssociationQ[res],
+                    ToString[Lookup[res, "Reason", res], InputForm] <>
+                      With[{h = Lookup[res, "Hint", ""]},
+                        If[StringQ[h] && h =!= "", " \[Dash] " <> h, ""]],
+                    ToString[res, InputForm]]]],
+              Method -> "Queued"]}],
+          Dynamic[If[addMsg === "", Spacer[0],
+            Style[addMsg, FontFamily -> "Yu Gothic UI", FontSize -> 10,
+              If[StringStartsQ[addMsg, "\:8ffd\:52a0\:3057\:307e"],
+                Darker[Green], RGBColor[0.8, 0.2, 0.2]]]],
+            TrackedSymbols :> {addMsg}]},
+          Spacings -> 0.4]},
+        False],
       Dynamic[
         Row[{
           Style[ToString[Length[If[ListQ[routes], routes, {}]]] <> " \:4ef6",

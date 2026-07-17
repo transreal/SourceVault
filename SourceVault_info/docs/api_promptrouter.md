@@ -36,11 +36,23 @@ Options: "DryRun" -> False, "AllowLLMRouter" -> Automatic, "AllowWorkflow" -> Au
 → Association
 
 ### SourceVaultProposePromptRoute[prompt_String, opts]
-ClaudeEval向けPromptRouter API (spec v11 5.3)。スケジュールプロンプトをUNEVALUATEDな提案式に解決する。戻り値の"ProposedExpression"フィールドにHoldComplete[SourceVaultUpcomingSchedule["Scope"->$onWork, "Period"->Quantity[n,"Days"], "Refresh"->"Never", "FallbackToCloud"->"Deny", "FilterSpec"-><|...|>]]を格納。式は評価しない。ClaudeEvalブリッジはそのフィールドのみをRuntimeに渡しhead検証する。プロンプトの日付範囲がPeriod、他の絞り込みがFilterSpec(閉じたDSL: Kind And/Or/Not/Field、ホワイトリストOp、スキーマフィールド名のみ、任意コード不可)になる。スケジュール以外のプロンプトはStatus NotDispatched。
+ClaudeEval向けPromptRouter API (spec v11 5.3)。スケジュールプロンプトをUNEVALUATEDな提案式に解決する。**R9分岐 (2026-07-17)**: 素の予定/スケジュールプロンプト(「今日の予定」等)は統合日別アジェンダ HoldComplete[SourceVaultRoutineAgendaView[Quantity[n,"Days"]]] を提案(カレンダー+ノートブック〆切+要対応メール)。プロンプトが「ノートブック」/notebook を含む・FilterSpec の絞り込みがある・明示スコープ($onWork/仕事)がある場合は従来のノートブック一覧ダッシュボード HoldComplete[SourceVaultUpcomingSchedule["Scope"->..., "Period"->Quantity[n,"Days"], "Refresh"->"Never", "FallbackToCloud"->"Deny", "FilterSpec"-><|...|>]] を提案。式は評価しない。ClaudeEvalブリッジはそのフィールドのみをRuntimeに渡しhead検証する。プロンプトの日付範囲がPeriod、他の絞り込みがFilterSpec(閉じたDSL: Kind And/Or/Not/Field、ホワイトリストOp、スキーマフィールド名のみ、任意コード不可)になる。スケジュール以外のプロンプトはStatus NotDispatched。
 → PromptRouteProposal Association
 Options: opts
 
-例: SourceVaultProposePromptRoute["今週のスケジュールを見せて"] → <|"Status"->"Dispatched", "ProposedExpression"->HoldComplete[SourceVaultUpcomingSchedule["Period"->Quantity[7,"Days"],...]], ...|>
+例: SourceVaultProposePromptRoute["今日の予定"] → <|"Status"->"Proposed", "ProposedExpression"->HoldComplete[SourceVaultRoutineAgendaView[Quantity[3,"Days"]]], ...|>
+例: SourceVaultProposePromptRoute["今日のノートブックリスト"] → <|"Status"->"Proposed", "ProposedExpression"->HoldComplete[SourceVaultUpcomingSchedule["Period"->Quantity[3,"Days"],...]], ...|>
+
+### SourceVaultAddSavedPrompt[prompt_String, targetExprString_String, opts]
+(プロンプト, 式) ペアを**直接**保存 PromptRoute として登録する(事前の ClaudeEval 実行不要)。
+「特定プロンプトへの対応の再定義」を一覧パネルの「新規プロンプト定義を追加」行またはコードから行う正準入口。
+例: `SourceVaultAddSavedPrompt["今日の予定", "SourceVaultRoutineAgendaView[Quantity[3, \"Days\"]]"]`。
+SaveLastPrompt 機構(正規化/バージョングループ/privacy/暗号化)を通し、直近実行のノートブック
+コンテキストは遮断して ReplaySafety を汚染しない。既定で "Primary"->True(グループの PRIMARY 化=
+Order-9 完全一致で起動)+"AutoExecute"->True(確認なし自動実行)。式は InputForm 構文チェック
+(非評価)され、実行時安全は SourceVaultRunPrimaryRoute の ReadOnly/SafeCreate+deny-list 再チェックが担保。
+→ SaveLastPrompt の戻り値+ "PrimaryResult"
+Options: "Primary" -> True, "AutoExecute" -> True, "Memo" -> "", "Channel" -> Automatic, "Encrypt" -> False, "DryRun" -> False
 
 ## PromptRunログ（追記専用JSONLストア）
 
@@ -61,7 +73,7 @@ Options: "MaxResults" -> Automatic, "RouteId" -> Automatic, "Decision" -> Automa
 ## PromptRouteレジストリ
 
 ### SourceVaultCallableAllowlistRegistry[] → Association
-SourceVault所有の呼び出し許可リスト(コード常駐定数テーブル)。キー: FunctionId。値: Symbol(生シンボル), UseAsFunctionRoute/UseAsHandlerRefフラグ, SideEffectClass, OwnerPackage。生シンボルを持つためJSONレジストリには書かない(spec 7.3)。SourceVault.wlに実在するcallableのみ登録: SourceVaultUpcomingSchedule (ReadOnly), SourceVaultFindNotebooks (ReadOnly), SourceVaultNewNotebook (SafeCreate)。SourceVaultReviewQueue/SourceVaultOpenTodoListはIntentIdとして扱うため未登録(spec 7.3/25)。
+SourceVault所有の呼び出し許可リスト(コード常駐定数テーブル)。キー: FunctionId。値: Symbol(生シンボル), UseAsFunctionRoute/UseAsHandlerRefフラグ, SideEffectClass, OwnerPackage。生シンボルを持つためJSONレジストリには書かない(spec 7.3)。登録: SourceVaultUpcomingSchedule (ReadOnly), SourceVaultFindNotebooks (ReadOnly), SourceVaultNewNotebook (SafeCreate), SourceVaultRoutineAgendaView (ReadOnly, SourceVault_routineplan 所有・R9)。SourceVaultReviewQueue/SourceVaultOpenTodoListはIntentIdとして扱うため未登録(spec 7.3/25)。
 
 ### SourceVaultCallableAllowlistView[] → Association
 SourceVault所有許可リストとClaudeOrchestrator所有ハンドラー許可リスト(弱呼び出し)のマージビューを返す。FunctionRouteディスパッチとHandlerRef解決はこのビューを参照。キー衝突時はSourceVault所有エントリが優先。

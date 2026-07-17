@@ -813,6 +813,8 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
           #["StartT"] &]|>]], dayKeys];
     <|"From" -> fromAbs, "To" -> toAbs, "TimeZone" -> tz, "Overdue" -> overdue,
       "Mail" -> mailItems, "MailPendingCount" -> mailPending, "Days" -> days|>]];
+SourceVaultRoutineAgendaData[] :=
+  SourceVaultRoutineAgendaData[Quantity[7, "Days"]];
 SourceVaultRoutineAgendaData[___] :=
   <|"From" -> Missing[], "To" -> Missing[], "TimeZone" -> 0, "Overdue" -> {},
     "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}|>;
@@ -1021,6 +1023,8 @@ SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
     Framed[Column[sections, Spacings -> 1.2, Alignment -> Left],
       FrameStyle -> GrayLevel[0.85], FrameMargins -> 12, RoundingRadius -> 6],
     mail]];
+SourceVaultRoutineAgendaView[] :=
+  SourceVaultRoutineAgendaView[Quantity[7, "Days"]];
 SourceVaultRoutineAgendaView[___] :=
   Style["SourceVaultRoutineAgendaView: bad args.", Red];
 
