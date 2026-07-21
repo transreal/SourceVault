@@ -260,6 +260,29 @@ SourceVault`SourceVaultMailAgendaReopen[rid_String] := (
   <|"Status" -> "OK", "RecordId" -> rid|>);
 SourceVault`SourceVaultMailAgendaReopen[___] := <|"Status" -> "Failed"|>;
 
+(* ---------------- shard ensure (body access) ----------------
+   The agenda pipeline runs on the lightweight index only; snapshot BODIES
+   live in monthly shards that are NOT in memory. SourceVaultMailSnapshotGet
+   reads the in-memory store only, so body actions (\:8fd4\:4fe1/\:672c\:6587\:8868\:793a) and the
+   decrypt probe would fail with Reason NotFound (misleadingly hinting at
+   credentials) unless the record's shard is lazily loaded first. The index
+   row carries the ShardKey ("mbox/yyyymm"); SourceVaultMailEnsureLoaded is
+   idempotent, so this loads each needed shard exactly once. *)
+iSVMAEnsureShard[rid_String] := Module[{row, sk, parts},
+  If[Length[DownValues[SourceVault`SourceVaultMailIndexGet]] === 0 ||
+     Length[DownValues[SourceVault`SourceVaultMailEnsureLoaded]] === 0,
+    Return[False]];
+  row = Quiet@Check[SourceVault`SourceVaultMailIndexGet[rid], Missing[]];
+  If[!AssociationQ[row], Return[False]];
+  sk = Lookup[row, "ShardKey", Missing[]];
+  If[!StringQ[sk], Return[False]];
+  parts = StringSplit[sk, "/"];
+  If[Length[parts] =!= 2, Return[False]];
+  Quiet@Check[
+    SourceVault`SourceVaultMailEnsureLoaded[parts[[1]], parts[[2]]]; True,
+    False]];
+iSVMAEnsureShard[___] := False;
+
 (* ---------------- lazy snapshot probe (Cc / body addressee) ---------------- *)
 
 (* returns <|"CcOwner"->bool,"OrgTo"->bool,"BodyAddressee"->bool|> reading the
@@ -271,6 +294,7 @@ iSVMASnapshotProbe[rid_String] := Module[{cached, snap, md, cc, toAll, body, res
   If[AssociationQ[cached], Return[cached]];
   If[Length[DownValues[SourceVault`SourceVaultMailSnapshotGet]] === 0,
     Return[<|"CcOwner" -> False, "OrgTo" -> False, "BodyAddressee" -> False|>]];
+  iSVMAEnsureShard[rid];   (* snapshot bodies live in lazily-loaded shards *)
   snap = Quiet@Check[SourceVault`SourceVaultMailSnapshotGet[rid], $Failed];
   If[!AssociationQ[snap],
     Return[<|"CcOwner" -> False, "OrgTo" -> False, "BodyAddressee" -> False|>]];
@@ -457,7 +481,7 @@ SourceVault`SourceVaultMailAgendaItems[OptionsPattern[]] := Module[
       "DirectionScore" -> repDir["Score"],
       "DirectionEvidence" -> repDir["Evidence"],
       "MBox" -> Lookup[rep, "MBox", Missing[]],
-      "PrivacyLevel" -> Lookup[rep, "PrivacyLevel", Missing[]],
+      "PrivacyLevel" -> iSVMAPrivacyOf[rep],
       "ThreadCount" -> Length[g],
       "ThreadRecordIds" -> rids|>]],
     {grp, Values[groups]}];
@@ -519,7 +543,14 @@ SourceVault`SourceVaultMailAgendaInherit[rid_String, OptionsPattern[]] := Module
     Cell[ToString[Defer[Evaluate[meta]], InputForm], "Input",
       InitializationCell -> True],
     buttonCell};
-  res = Quiet@Check[Export[nbPath, Notebook[cells], "NB"], $Failed];
+  (* privacy inheritance: the note embeds mail content (subject + a body
+     link), so it explicitly declares itself non-publishable. Absent tagging
+     already means PL 1.0 fail-safe; writing it makes the inheritance
+     explicit and survives any future default change. *)
+  res = Quiet@Check[Export[nbPath,
+    Notebook[cells,
+      TaggingRules -> {"SourceVault" -> {"CloudPublishable" -> False}}],
+    "NB"], $Failed];
   If[res === $Failed,
     Return[<|"Status" -> "Failed", "Reason" -> "ExportFailed", "Path" -> nbPath|>]];
   SourceVault`SourceVaultMailAgendaResolve[rid, "NotebookCreated",
@@ -592,7 +623,8 @@ SourceVault`SourceVaultMailAgendaOpen[rid_String] := Module[
       Nothing],
     Cell[BoxData[ToBoxes[Row[{
       Button[Style["\:21a9 \:8fd4\:4fe1\:3059\:308b", Bold],
-        SourceVault`SourceVaultMailOpenReplyNotebook[rid], Method -> "Queued",
+        (iSVMAEnsureShard[rid];
+         SourceVault`SourceVaultMailOpenReplyNotebook[rid]), Method -> "Queued",
         ImageSize -> Automatic],
       "  ",
       Button[Style["\:1f4d3 \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:4f5c\:6210\:3057\:3066\:7d99\:627f", Bold],
@@ -608,7 +640,8 @@ SourceVault`SourceVaultMailAgendaOpen[rid_String] := Module[
         SourceVault`SourceVaultMailThreadNotebook[rid], Method -> "Queued"],
       "  ",
       Button["\:2709 \:672c\:6587\:3092\:8868\:793a",
-        SourceVault`SourceVaultMailShowBody[rid], Method -> "Queued"]}]]],
+        (iSVMAEnsureShard[rid];
+         SourceVault`SourceVaultMailShowBody[rid]), Method -> "Queued"]}]]],
       "Output"]},
     WindowTitle -> "\:8981\:5bfe\:5fdc: " <> If[StringQ[subject],
       StringTake[subject, UpTo[40]], rid],

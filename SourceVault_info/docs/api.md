@@ -50,7 +50,8 @@ vault 内の全 source ID リスト。
 ingest 済み全ソースをメタデータ付き表で表示する。arXiv は論文タイトル・著者・出版日を arXiv API から自動取得して meta にキャッシュ。Web ページは HTML `<title>`、ローカルファイルはファイル名を Title に出す。各行に URL リンク (▶ URL) と ingest 済みファイルを開くリンク (▶ 開く) が付く。query は Title/Authors/Summary/URL/Id 等の部分一致 (`""` または省略で全件)。
 → Grid | Dataset | List
 Options: `"Limit"` -> Automatic|n, `"Kind"` -> All|`"arxiv"`|`"web"`|`"local"`, `"FetchMetadata"` -> Automatic (未取得のみ取得)|False (network なし)|True (再取得), `"Since"`/`"Until"`/`"On"` -> ingest 日での絞り込み (日付文字列 `"yyyy-mm-dd"` / Today / DateObject。`"On"` は単日、`"Since"`/`"Until"` は範囲、両端含む), `"Author"` -> 著者名の部分一致, `"Format"` -> `"Grid"` (既定)|`"Dataset"`|`"Rows"`
-例: `SourceVaultSources["", "Kind" -> "arxiv", "On" -> Today]`
+例: `SourceVaultSources["", "Kind" -> "arxiv", "On" -> Today]` (今日 ingest した arXiv)
+注意: 対象は SourceVault ingest 済みソース (src-* record) のみ。PDF 検索索引 (PDFIndex collection。学生便覧等) は含まれない — それらの横断は SourceVaultSummaries (pdfindex provider)、本文検索は SourceVaultSearch[query, "Group" -> name] を使うこと。
 
 ### SourceVaultArXiv[query, opts]
 arXiv ソースだけを共通スキーマ表で表示する (`SourceVaultSources[query, "Kind" -> "arxiv", ...]` の薄ラッパ)。リンク開き・絞り込み検索を持ち、横断検索 SourceVaultSummaries にも相乗りする。
@@ -81,9 +82,11 @@ ingest 済みソースの raw ファイルを ContentHash から現 PC の vault
 Options: `"FetchMetadata"` -> Automatic
 
 ### SourceVaultSummaries[query, opts]
-SourceVault が抱えるデータ全体 (ingest 済みソース + Eagle 保存済みサマリー等、登録 provider 横断) を検索し統合表で表示する。
+SourceVault が抱えるデータ全体 (ingest 済みソース + Eagle 保存済みサマリー + PDF 検索索引ドキュメント (pdfindex provider。学生便覧等) 等、登録 provider 横断) を検索し統合表で表示する。
 → Grid | Dataset | List
-Options: `"Providers"` -> All|`{"sources", "eagle", ...}`, `"Limit"`, `"Kind"`, `"Since"`/`"Until"`/`"On"` -> 登録/生成日での絞り込み, `"Author"` -> 著者部分一致, `"FetchMetadata"`, `"Format"` -> `"Grid"` (既定)|`"Dataset"`|`"Rows"`
+Options: `"Providers"` -> All|`{"sources", "eagle", "pdfindex", ...}`, `"Limit"`, `"Kind"`, `"Since"`/`"Until"`/`"On"` -> 登録/生成日での絞り込み, `"Author"` -> 著者部分一致, `"FetchMetadata"`, `"Format"` -> `"Grid"` (既定)|`"Dataset"`|`"Rows"`
+例: `SourceVaultSummaries["可逆計算"]`、`SourceVaultSummaries["便覧", "Providers" -> {"pdfindex"}]`
+pdfindex 行の本文検索 (チャンク単位・gate 付き) は SourceVaultSearch[query, "Group" -> name] を使うこと。
 
 ### SourceVaultRegisterSummaryProvider[name, fn]
 `SourceVaultSummaries` の横断検索 provider を登録する。fn のシグネチャ: `fn[query_String, opts_Association]` → 共通スキーマ行 (SourceVaultSourceRow 参照) のリスト。
@@ -425,6 +428,15 @@ folder 配下の `.nb` 全てに UUID を付与する。
 Options: `"Recursive"` -> True, `"ExcludePatterns"` -> {...}, `"MaxFileSizeMB"` -> Automatic (既定 `$SourceVaultMaxFileSizeMB` を使用)
 
 ## 同期 / Relink / Privacy
+
+> **関数の出力に PrivacyLevel を伝えるしくみは `api_privacy.md` を参照。**
+> `SourceVault_privacy.wl` (`SourceVault.wl` の補助ロード列の先頭。maildb より前にロードされる) が
+> 評価スコープの透かし (`SourceVaultNotePrivacy` / `SourceVaultNotePrivacyOf`)、正準 exit
+> (View 系 `SourceVaultPrivateView` / Core 系 `SourceVaultPrivateResult`)、宣言レジストリ、
+> 呼び出しグラフ監査 (`SourceVaultPrivacyAudit`)、動的適合テスト
+> (`SourceVaultPrivacyConformanceTest`) を提供する。
+> 本節の `SourceVaultSetSnapshotPrivacyLevel` は「保存済み snapshot record の PL を書き換える」
+> 別レイヤ (ストレージ側) で、上記の「評価から出力への伝達」とは責務が異なる。
 
 ### SourceVaultSetSnapshotPrivacyLevel[snapshotId, level]
 snapshot record の PrivacyLevel フィールドを明示的に上書きする。`NBAccess`NBSetSnapshotPrivacyLevel` の委譲先で、承認ゲートは NBAccess 側の $NBApprovalHeads 登録で発火する。Notebook snapshot (notebooks/snapshots/) と PDF/URL snapshot (raw/meta/) の両系統をファイル存在で判別して処理する。level は 0.0-1.0 に clip される。既存値より低い値を指定した場合は `"Lowered" -> True` を返す (手動操作なので許可、Sync 経路の単調性制約とは別)。

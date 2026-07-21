@@ -181,7 +181,10 @@ SourceVaultSources::usage =
   "    \"On\" は単日、\"Since\"/\"Until\" は範囲。両端含む),\n" <>
   "  \"Author\" -> 著者名の部分一致,\n" <>
   "  \"Format\" -> \"Grid\" (既定)|\"Dataset\"|\"Rows\"\n" <>
-  "例: SourceVaultSources[\"\", \"Kind\" -> \"arxiv\", \"On\" -> Today]  (今日 ingest した arXiv)";
+  "例: SourceVaultSources[\"\", \"Kind\" -> \"arxiv\", \"On\" -> Today]  (今日 ingest した arXiv)\n" <>
+  "注意: 対象は SourceVault ingest 済みソース (src-* record) のみ。PDF 検索索引 (PDFIndex\n" <>
+  "collection。学生便覧等) は含まれない — それらの横断は SourceVaultSummaries (pdfindex provider)、\n" <>
+  "本文検索は SourceVaultSearch[query, \"Group\" -> name] を使うこと。";
 
 SourceVaultArXiv::usage =
   "SourceVaultArXiv[query] は arXiv ソースだけを共通スキーマ表で表示する\n" <>
@@ -229,11 +232,13 @@ SourceVaultSourceRow::usage =
 
 SourceVaultSummaries::usage =
   "SourceVaultSummaries[query] は SourceVault が抱えるデータ全体 (ingest 済みソース +\n" <>
-  "Eagle 保存済みサマリー等、登録 provider 横断) を検索し統合表で表示する。\n" <>
-  "例: SourceVaultSummaries[\"可逆計算\"]\n" <>
-  "Options: \"Providers\" -> All|{\"sources\", \"eagle\", ...}, \"Limit\", \"Kind\",\n" <>
+  "Eagle 保存済みサマリー + PDF 検索索引ドキュメント (pdfindex provider。学生便覧等) 等、\n" <>
+  "登録 provider 横断) を検索し統合表で表示する。\n" <>
+  "例: SourceVaultSummaries[\"可逆計算\"]、SourceVaultSummaries[\"便覧\", \"Providers\" -> {\"pdfindex\"}]\n" <>
+  "Options: \"Providers\" -> All|{\"sources\", \"eagle\", \"pdfindex\", ...}, \"Limit\", \"Kind\",\n" <>
   "  \"Since\"/\"Until\"/\"On\" -> 登録/生成日での絞り込み, \"Author\" -> 著者部分一致,\n" <>
-  "  \"FetchMetadata\", \"Format\" -> \"Grid\" (既定)|\"Dataset\"|\"Rows\"";
+  "  \"FetchMetadata\", \"Format\" -> \"Grid\" (既定)|\"Dataset\"|\"Rows\"\n" <>
+  "pdfindex 行の本文検索 (チャンク単位・gate 付き) は SourceVaultSearch[query, \"Group\" -> name]。";
 
 SourceVaultRegisterSummaryProvider::usage =
   "SourceVaultRegisterSummaryProvider[name, fn] は SourceVaultSummaries の横断検索 provider を登録する。\n" <>
@@ -276,6 +281,13 @@ SourceVaultIngest::usage =
   "    .nb \:4ee5\:5916\:3068\:5de8\:5927\:30d5\:30a1\:30a4\:30eb (>$SourceVaultMaxFileSizeMB) \:306f\:30b9\:30ad\:30c3\:30d7\:3002\:4ed8\:4e0e\:306b\:5931\:6557\:3057\:3066\:3082 ingest \:306f\:7d9a\:884c\:3059\:308b\n" <>
   "\:623b\:308a\:5024\:306b\:306f content-addressed \:306a\:6b63\:6e96 URI \"URI\" -> sv://snapshot/sha256/<hex> \:3092\:542b\:3080\n" <>
   "  (SourceVaultSources \:306e\:884c\:30fbSourceVaultParseURI/mcp \:3068\:5171\:901a\:306e join/\:53c2\:7167\:30ad\:30fc)\:3002";
+
+SourceVaultResolveReference::usage =
+  "SourceVaultResolveReference[ref] は ingest 済みソースを参照文字列から解決する。\n" <>
+  "ref: 正準 snapshot URI (sv://snapshot/sha256/<hex>) / SourceId (src-..) / ingest 済み URL。\n" <>
+  "戻り値: <|\"Status\" -> \"OK\"|\"NotFound\", \"SourceId\", \"URI\", \"File\" (現 PC で実在する\n" <>
+  "raw snapshot パス、無ければ \"\"), \"URL\", \"Title\", \"Authors\", \"Published\", \"Kind\",\n" <>
+  "\"PrivacyLevel\"|>。ClaudeAttach の sv URI アタッチ / documentation.wl の cite 解決が利用する。";
 
 SourceVaultIngestWait::usage =
   "SourceVaultIngestWait[ingestResult, timeoutSec] \:306f\:975e\:540c\:671f ingest \:306e\:5b8c\:4e86\:3092\:5f85\:3064\:3002\n" <>
@@ -3427,6 +3439,42 @@ iSVSourcesRows[query_String, opts_Association] :=
     rows
   ];
 iSVSourcesRows[query_String] := iSVSourcesRows[query, <||>];
+
+(* ============================================================
+   参照文字列 → ソース解決 (ClaudeAttach sv URI / documentation cite 用)
+   ref: sv://snapshot/sha256/<hex> URI / SourceId / ingest 済み URL。
+   enrichment (arXiv fetch 等) は行わない: レジストリ走査のみでオフライン安全。
+   ============================================================ *)
+SourceVaultResolveReference[ref_String] :=
+  Module[{ids, metas, rows, refCanon, hit},
+    iEnsureRoots[];
+    ids = SourceVaultList[];
+    metas = Select[iSourceMetaLoad /@ ids, AssociationQ];
+    rows = iSVSourceRowOf /@ metas;
+    (* URL 参照はカノニカル化して比較 (末尾スラッシュ等の揺れ吸収) *)
+    refCanon = If[StringMatchQ[ref, ("http://" | "https://") ~~ __],
+      Quiet @ Check[iCanonicalizeURL[ref], ref], ref];
+    hit = SelectFirst[rows,
+      Function[r,
+        Lookup[r, "URI", ""] === ref ||
+        Lookup[r, "Id", ""] === ref ||
+        With[{u = ToString @ Lookup[r, "URL", ""]},
+          u =!= "" && (u === ref || u === refCanon ||
+            Quiet @ Check[iCanonicalizeURL[u], u] === refCanon)]],
+      Missing[]];
+    If[!AssociationQ[hit],
+      Return[<|"Status" -> "NotFound", "Ref" -> ref|>]];
+    <|"Status" -> "OK",
+      "SourceId" -> Lookup[hit, "Id", ""],
+      "URI" -> Lookup[hit, "URI", Missing["NoSnapshot"]],
+      "File" -> ToString @ Lookup[hit, "File", ""],
+      "URL" -> ToString @ Lookup[hit, "URL", ""],
+      "Title" -> ToString @ Lookup[hit, "Title", ""],
+      "Authors" -> ToString @ Lookup[hit, "Authors", ""],
+      "Published" -> ToString @ Lookup[hit, "Published", ""],
+      "Kind" -> ToString @ Lookup[hit, "Kind", ""],
+      "PrivacyLevel" -> Lookup[hit, "PrivacyLevel", 1.0]|>
+  ];
 
 (* ソース 1 件の全メタ情報を別ウインドウで表示 (タイトルクリック既定動作) *)
 iSVSourceShowInfo[sourceId_String] :=
@@ -14909,7 +14957,12 @@ SourceVault`Private`iSVLoadPromptRouterExtension[] :=
       (* 集約済み: crypto=crypto+keys+keybundle+encryptedstore+release /
          identity=addressbook+senderauth+identity+messagerelease /
          maildb=maildb+imap+mailui。NBAccess_crypto は別文脈で分離。 *)
-      {"NBAccess_crypto.wl", "SourceVault_crypto.wl",
+      (* SourceVault_privacy.wl は maildb より先: View/Core の正準 exit
+         (SourceVaultPrivateView / SourceVaultNotePrivacyOf) を提供する。
+         弱結合なので未ロードでも maildb は動くが、その場合は旧テキスト走査
+         フォールバックに落ちる。 *)
+      {"SourceVault_privacy.wl",
+       "NBAccess_crypto.wl", "SourceVault_crypto.wl",
        "SourceVault_identity.wl", "SourceVault_maildb.wl",
        "SourceVault_diagnostics.wl", "SourceVault_autotrigger.wl"}];
 

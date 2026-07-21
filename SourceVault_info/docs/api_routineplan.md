@@ -79,6 +79,20 @@ Options: PriorPlan -> (none), + SourceVaultRoutinePlacePlan の全 opts
   FocusRequest/Conflict+escalation/immovable pin)。**合計 48 green**。
 - **罠**: `used` の日キーは Round[dayAbs] 整数化必須(浮動小数 bit 不一致で二重予約)。
 
+## プライバシー継承原則(全 view/data 共通)
+
+**出力のプライバシーレベル = 入力データの PrivacyLevel の最大値**。
+- item/task レベル: FabricTasks の OnWorkTask/PrepTask、AgendaData の day item(calendar/deadline/
+  review/MailDeadline)は全て `"PrivacyLevel"` を運ぶ(欠落/非数値は **1.0 扱い= fail-safe**。
+  prep task はラベルに event summary を埋め込むため event の PL を継承)。
+- 集約レベル: AgendaData は `"MaxPrivacyLevel"` = max(day items, overdue, mail items) を返す
+  (空= 0.0、計算失敗= 1.0)。
+- view レベル: AgendaView/GanttView/LoadView は集約 PL ≥ 0.5 で**秘匿 wrap**
+  (`iSVRPWrapConfidential`: L1 自己マーキング badge 付き Framed + L2 ClaudeCode`Confidential +
+  L3 NB スキャン予約 + L4 共有 registry)。wrap 時の返り値 Head は Graphics/Grid でなく Framed になる。
+- ProcessGraph は**合成用データ**(Graph)なので wrap しない。描画する caller が
+  `iSVRPMaxPL[tasks]` で wrap する責務を持つ。
+
 ## 可視化 suite(RX-1・§4・data=headless / view=FE)
 
 各可視化は pure な data 関数 + view renderer(Graphics/Graph・表示は要 FE)。TaskId は identity として保持、
@@ -91,7 +105,7 @@ Options: PriorPlan -> (none), + SourceVaultRoutinePlacePlan の全 opts
 ### SourceVaultRoutineGanttView[plan, tasks, opts]
 Gantt/timeline Graphics を描画(バー=スケジュール日・Due マーカー・バーは TaskId ツールチップ付き)。
 クリック導線は BoardView/ActionGate と同型。要 FE。
-→ Graphics
+→ Graphics(max task PL ≥ 0.5 なら秘匿 wrap で Framed)
 Options: TimeZone -> 0
 
 ### SourceVaultRoutineLoadData[plan, capacityFn, from, to, opts] → {day...}
@@ -103,7 +117,7 @@ Options: TimeZone -> 0, Tasks -> {} (ラベル解決用に元 tasks リストを
 ### SourceVaultRoutineLoadView[plan, capacityFn, from, to, opts]
 **負荷ヒートマップ**(日毎 planned/capacity 比のカレンダーグリッド・over 日を色分け・セルに task ラベル+
 ツールチップ)。要 FE。
-→ Grid
+→ Grid(max task PL ≥ 0.5 なら秘匿 wrap で Framed。"Tasks" 未指定は開示ラベルなし= plain)
 Options: TimeZone -> 0, Tasks -> {}
 
 ### SourceVaultRoutineProcessGraph[tasks, opts]
@@ -144,8 +158,10 @@ Options: CapacityModel -> Automatic (=SourceVaultRoutineDefaultCapacityModel[]),
 (NBAccess`NBOnWorkTasks)を日ごとにグループ化した統合アジェンダ。各 notebook item は "Path" を持ち、
 view からワンクリックで開ける。NBAccess 未ロード時は空結果。
 → `<|"From","To","TimeZone","Overdue"->{期限超過の deadline/review item...},
-"Days"->{<|"DayAbs","DayKey","Weekday","AllDay"->{deadline/review/all-day-event item...},
-"Timed"->{timed event...}|>...}|>`
+"Mail"->{mail agenda item...}, "MailPendingCount",
+"Days"->{<|"DayAbs","DayKey","Weekday","AllDay"->{deadline/review/all-day-event/MailDeadline item...},
+"Timed"->{timed event...}|>...}, "MaxPrivacyLevel"->Real|>`
+(各 item は "PrivacyLevel" を運ぶ。"MaxPrivacyLevel" = 全開示成分の max、空 0.0/失敗 1.0)
 Options: PrivacySpec -> `<|"AccessLevel"->1.0|>`, CalendarEvents -> Automatic, OnWorkTasks -> Automatic,
 ModifiedWithinDays -> 120 (task スキャン窓), IncludeOverdue -> True, TimeZone -> Automatic (=$TimeZone)
 

@@ -130,7 +130,10 @@ $SourceVaultPDFLegacySearchFunction::usage =
   "fn[query, n, collection] が pdfSearch 互換の Dataset / 連想リストを返すこと。test 差し替え用。";
 SourceVaultSearch::usage =
   "SourceVaultSearch[query, opts] は release context gate 付きで検索し SearchResult のリストを返す (§7.4)。\n" <>
-  "必須 opts \"ReleaseContext\"。任意 \"PDFIndexProfile\" / \"Collection\" / \"Limit\" (既定 20)。\n" <>
+  "必須 opts \"ReleaseContext\" (または \"Group\")。任意 \"PDFIndexProfile\" / \"Collection\" / \"Limit\" (既定 20)。\n" <>
+  "\"Group\" -> name を与えると登録済み search group (SourceVaultRegisterSearchGroup) から\n" <>
+  "ReleaseContext / PDFIndexProfile を自動解決する (例: SourceVaultSearch[\"必修科目\", \"Group\" -> \"student-handbook\"])。\n" <>
+  "PDFIndex 未ロードのカーネルでは PDFIndex.wl を自動ロードする ($SourceVaultPDFIndexAutoLoad)。\n" <>
   "各結果に request-time release gate を再評価し Permit のみ返す。raw local path は返さない。";
 SourceVaultPDFIndexLegacySearch::usage =
   "SourceVaultPDFIndexLegacySearch[query, opts] は legacy PDFIndex を呼び、正規化前の生結果リストを返す。\n" <>
@@ -146,6 +149,27 @@ SourceVaultPreviewPDFIndexMigration::usage =
   "opts \"SampleResults\" -> {row...}, \"ReleaseContext\"。";
 SourceVaultPDFIndexMigrationReport::usage =
   "SourceVaultPDFIndexMigrationReport[profile] は登録済み migration rule と human-review 要否を返す。";
+
+(* ---- search group (検索インデックスのオンデマンド自動ロード) ---- *)
+SourceVaultRegisterSearchGroup::usage =
+  "SourceVaultRegisterSearchGroup[name, spec] は PDFIndex collection を 1 呼び出しで検索可能グループにする\n" <>
+  "(ReleaseContext + PDFIndexProfile + migration rule を一括登録し PrivateVault/config へ自動永続化。\n" <>
+  "以後どのカーネルでもロード時に自動復元され SourceVaultSearch[query, \"Group\" -> name] で検索できる)。\n" <>
+  "spec キー (全て任意): \"Collection\" (既定 \"default\"), \"MaxPrivacyLevel\" (既定 0.5),\n" <>
+  "\"AssignPrivacyLevel\" (既定 0.3), \"Keywords\" -> {検索・発見用キーワード...}, \"Description\",\n" <>
+  "\"ReleaseContext\" -> 既存 release context 名 (省略時は name で新規作成)。\n" <>
+  "例: SourceVaultRegisterSearchGroup[\"student-handbook\", <|\"Collection\" -> \"default\",\n" <>
+  "  \"Keywords\" -> {\"便覧\", \"handbook\"}, \"Description\" -> \"福山大学 学生便覧\"|>]";
+SourceVaultListSearchGroups::usage =
+  "SourceVaultListSearchGroups[] は登録済み search group 名のリストを返す。";
+SourceVaultSearchGroupSpec::usage =
+  "SourceVaultSearchGroupSpec[name] は登録済み search group spec を返す。未登録なら Failure。";
+$SourceVaultPDFIndexAutoLoad::usage =
+  "$SourceVaultPDFIndexAutoLoad が True (既定) のとき、SourceVaultSearch / SourceVaultPDFIndexLegacySearch が\n" <>
+  "PDFIndex 未ロードのカーネルで PDFIndex.wl を一度だけ自動ロードする (オンデマンド検索用)。";
+$SourceVaultPDFIndexLoader::usage =
+  "$SourceVaultPDFIndexLoader は PDFIndex 自動ロードの loader override (test 差し替え用)。\n" <>
+  "Automatic で Block[{$CharacterEncoding=\"UTF-8\"}, Get[PDFIndex.wl]] を実行する。";
 
 (* ---- native projection index (PDFIndex 非依存。§6.3, §7.6。Phase 5) ---- *)
 SourceVaultBuildProjectionIndex::usage =
@@ -257,7 +281,7 @@ If[! AssociationQ[$registries], $registries = <||>];
    SearchBackend / OCRBackend / web service endpoint (= service endpoint 系) は永続化せず明示登録のまま。
    パッケージロード時に自動復元し、登録時に自動保存する (main / service kernel 双方で共有)。 ---- *)
 If[! BooleanQ[$SourceVaultPersistSearchProfiles], $SourceVaultPersistSearchProfiles = True];
-iPersistedRegKinds = {"ReleaseContext", "PDFIndexProfile", "SearchIndexProfile"};
+iPersistedRegKinds = {"ReleaseContext", "PDFIndexProfile", "SearchIndexProfile", "SearchGroup"};
 
 iRegistryFile[] := Module[{pv = Quiet @ Check[SourceVault`SourceVaultRoot["PrivateVault"], $Failed]},
   If[StringQ[pv], FileNameJoin[{pv, "config", "searchindex-profiles.wxf"}], $Failed]];
@@ -290,6 +314,7 @@ iRegistryLoad[] := Module[{path = iRegistryFile[], data, regs, rules},
     "ReleaseContexts" -> Length[Lookup[regs, "ReleaseContext", <||>]],
     "PDFIndexProfiles" -> Length[Lookup[regs, "PDFIndexProfile", <||>]],
     "SearchIndexProfiles" -> Length[Lookup[regs, "SearchIndexProfile", <||>]],
+    "SearchGroups" -> Length[Lookup[regs, "SearchGroup", <||>]],
     "MigrationRules" -> Length[rules]|>];
 
 SourceVaultSaveSearchProfiles[] := iRegistrySave[];
@@ -298,7 +323,7 @@ SourceVaultLoadSearchProfiles[] := iRegistryLoad[];
 iRevClasses = {"ObjectRevoked", "ObjectStateChanged", "RevocationTombstoneCompacted"};
 
 iRegKinds = {"ReleaseContext", "SearchIndexProfile", "PDFIndexProfile",
-   "SearchBackend", "OCRBackend"};
+   "SearchBackend", "OCRBackend", "SearchGroup"};
 
 iEnsureKind[kind_String] :=
   If[! KeyExistsQ[$registries, kind], $registries[kind] = <||>];
@@ -660,6 +685,38 @@ SourceVaultPDFIndexLegacyResultToSearchResult[row_Association, opts___] :=
       "DocId" -> ToString @ Lookup[row, "docId", ""]|>,
     "LegacyTags" -> iParseLegacyTags[row]|>;
 
+(* ---- PDFIndex 遅延自動ロード (オンデマンド検索) ----
+   FE / service / MCP gateway どのカーネルでも、検索要求が来た時点で PDFIndex.wl を
+   一度だけロードする。collection index 本体は PDFIndex`pdfLoadIndex が検索時に
+   遅延ロード+キャッシュするので、ここでは関数定義のロードのみ。
+   $SourceVaultPDFIndexLoader は test 差し替え seam (Automatic = 実 Get)。 *)
+If[! BooleanQ[SourceVault`$SourceVaultPDFIndexAutoLoad],
+  SourceVault`$SourceVaultPDFIndexAutoLoad = True];
+If[! ValueQ[SourceVault`$SourceVaultPDFIndexLoader],
+  SourceVault`$SourceVaultPDFIndexLoader = Automatic];
+$pdfIndexLoadTried = False;
+
+iPDFIndexReadyQ[] := Quiet[Length[DownValues[PDFIndex`pdfSearch]] > 0];
+
+iEnsurePDFIndexLoaded[] := Module[{loader, path},
+  If[iPDFIndexReadyQ[], Return[True]];
+  If[! TrueQ[SourceVault`$SourceVaultPDFIndexAutoLoad], Return[False]];
+  If[TrueQ[$pdfIndexLoadTried], Return[iPDFIndexReadyQ[]]];
+  $pdfIndexLoadTried = True;
+  loader = SourceVault`$SourceVaultPDFIndexLoader;
+  If[loader =!= Automatic,
+    Quiet @ Check[loader[], Null];
+    Return[iPDFIndexReadyQ[]]];
+  path = Quiet @ Check[FindFile["PDFIndex.wl"], $Failed];
+  If[! StringQ[path],
+    With[{pkg = Quiet @ Symbol["Global`$packageDirectory"]},
+      If[StringQ[pkg] && FileExistsQ[FileNameJoin[{pkg, "PDFIndex.wl"}]],
+        path = FileNameJoin[{pkg, "PDFIndex.wl"}]]]];
+  If[! StringQ[path], Return[False]];
+  Quiet @ Check[Block[{$CharacterEncoding = "UTF-8"}, Get[path]], Null];
+  iPDFIndexReadyQ[]
+];
+
 (* legacy 検索 (raw 行のリストを返す)。pdfAskLLM は呼ばない・Notebook も書かない。 *)
 Options[SourceVaultPDFIndexLegacySearch] = {"Collection" -> Automatic, "Limit" -> 20};
 SourceVaultPDFIndexLegacySearch[query_String, OptionsPattern[]] := Module[
@@ -667,11 +724,12 @@ SourceVaultPDFIndexLegacySearch[query_String, OptionsPattern[]] := Module[
   n = OptionValue["Limit"]; collection = OptionValue["Collection"];
   fn = SourceVault`$SourceVaultPDFLegacySearchFunction;
   If[fn === Automatic,
-    If[Quiet[Length[DownValues[PDFIndex`pdfSearch]] > 0],
+    If[! iPDFIndexReadyQ[], iEnsurePDFIndexLoaded[]];
+    If[iPDFIndexReadyQ[],
       fn = Function[{q, k, col}, If[col === Automatic,
         PDFIndex`pdfSearch[q, k], PDFIndex`pdfSearch[q, k, PDFIndex`Collection -> col]]],
       Return[Failure["PDFIndexUnavailable", <|
-        "MessageTemplate" -> "PDFIndex`pdfSearch が無く、$SourceVaultPDFLegacySearchFunction も未設定です。"|>]]]];
+        "MessageTemplate" -> "PDFIndex`pdfSearch が無く自動ロードにも失敗しました ($SourceVaultPDFLegacySearchFunction も未設定)。"|>]]]];
   raw = fn[query, n, collection];
   raw = Which[Head[raw] === Dataset, Normal[raw], ListQ[raw], raw, True, {}];
   Select[raw, AssociationQ]
@@ -682,6 +740,158 @@ SourceVaultRegisterPDFIndexMigrationRule[profile_String, rule_Association] :=
   ($pdfMigrationRules[profile] = rule;
    If[TrueQ[$SourceVaultPersistSearchProfiles], iRegistrySave[]];
    <|"Status" -> "OK", "Profile" -> profile|>);
+
+(* ============================================================
+   search group: PDFIndex collection を 1 呼び出しで検索可能グループにする。
+   ReleaseContext + PDFIndexProfile + migration rule を一括登録し、既存の
+   registry 永続化 (iPersistedRegKinds) に乗せる。以後どのカーネルでも
+   ロード時に自動復元され、SourceVaultSearch[q, "Group" -> name] +
+   PDFIndex 遅延ロードでオンデマンドに検索できる。
+   ============================================================ *)
+
+iSearchGroupTag[name_String] := "ReleaseContext:Group:" <> name;
+
+SourceVaultRegisterSearchGroup[name_String, spec_Association : <||>] := Module[
+  {coll, maxPL, assignPL, ctxName, ctxSpec, reg, assignTags, norm},
+  coll = Lookup[spec, "Collection", "default"];
+  If[! StringQ[coll] || coll === "",
+    Return[Failure["InvalidSpec", <|
+      "MessageTemplate" -> "SearchGroup `1`: \"Collection\" は非空文字列が必要です。",
+      "MessageParameters" -> {name}|>]]];
+  maxPL = Lookup[spec, "MaxPrivacyLevel", 0.5];
+  assignPL = Lookup[spec, "AssignPrivacyLevel", 0.3];
+  If[! (iRealQ[maxPL] && iRealQ[assignPL]),
+    Return[Failure["InvalidSpec", <|
+      "MessageTemplate" -> "SearchGroup `1`: MaxPrivacyLevel / AssignPrivacyLevel は数値が必要です。",
+      "MessageParameters" -> {name}|>]]];
+  (* release context: 既存名の再利用 (登録済みならその RequiredTags に合わせる) or name で新規作成 *)
+  ctxName = Lookup[spec, "ReleaseContext", name];
+  If[! StringQ[ctxName] || ctxName === "", ctxName = name];
+  ctxSpec = Quiet @ iResolve["ReleaseContext", ctxName];
+  If[FailureQ[ctxSpec],
+    assignTags = {iSearchGroupTag[name]};
+    reg = SourceVaultRegisterReleaseContext[ctxName, <|
+      "MaxPrivacyLevel" -> maxPL,
+      "RequiredTags" -> assignTags,
+      "DenyTags" -> Lookup[spec, "DenyTags", {}],
+      "DisplayName" -> Lookup[spec, "Description", name]|>];
+    If[FailureQ[reg], Return[reg]],
+    (* 既存 context 再利用: migration rule はその RequiredTags を全て assign する *)
+    assignTags = With[{req = Lookup[ctxSpec, "RequiredTags", {}]},
+      If[ListQ[req] && Length[req] > 0, req, {iSearchGroupTag[name]}]]];
+  (* PDFIndex profile + migration rule (assign が gate の RequiredTags を満たす) *)
+  SourceVaultRegisterPDFIndexProfile[name, <|"CollectionRoot" -> coll|>];
+  SourceVaultRegisterPDFIndexMigrationRule[name, <|
+    "AssignReleaseContexts" -> assignTags,
+    "AssignPrivacyLevel" -> assignPL,
+    "AssignState" -> "Published"|>];
+  (* group spec 本体を永続 registry へ (iDoRegister が自動保存) *)
+  norm = Join[<|"Collection" -> coll, "ReleaseContext" -> ctxName,
+    "MaxPrivacyLevel" -> maxPL, "AssignPrivacyLevel" -> assignPL,
+    "Keywords" -> Lookup[spec, "Keywords", {}],
+    "Description" -> Lookup[spec, "Description", ""]|>,
+    KeyDrop[spec, {"Collection", "ReleaseContext", "MaxPrivacyLevel",
+      "AssignPrivacyLevel", "Keywords", "Description"}]];
+  iDoRegister["SearchGroup", name, norm];
+  <|"Status" -> "OK", "Group" -> name, "Collection" -> coll,
+    "ReleaseContext" -> ctxName, "PDFIndexProfile" -> name|>
+];
+
+SourceVaultListSearchGroups[] := Keys @ Lookup[$registries, "SearchGroup", <||>];
+SourceVaultSearchGroupSpec[name_String] := iResolve["SearchGroup", name];
+
+(* ============================================================
+   pdfindex 横断 provider: SourceVaultSummaries から PDFIndex の
+   ドキュメント一覧を横断検索できるようにする (発見レイヤ)。
+   index-first: PDFIndex.wl はロードせず、ディスク上の doc_*.wl
+   メタ (数 KB) だけを読む (チャンク/埋め込みは読まない)。
+   mtime キャッシュで再読込を抑える。
+   ============================================================ *)
+
+If[! AssociationQ[$svPdfDocMetaCache], $svPdfDocMetaCache = <||>];
+
+(* collection ストア: PDFIndex ロード済みならその設定を、なければ
+   $packageDirectory 既定 (PDFIndex.wl と同じ規約) を使う。 *)
+iSVPdfIndexStoreDirs[] := Module[{base, attach, pkg, dirs = {}},
+  base = Quiet @ PDFIndex`$pdfIndexBaseDir;
+  attach = Quiet @ PDFIndex`$pdfIndexAttachDir;
+  pkg = Quiet @ Symbol["Global`$packageDirectory"];
+  If[! StringQ[base] && StringQ[pkg],
+    base = FileNameJoin[{pkg, "pdfindex_private"}]];
+  If[! StringQ[attach] && StringQ[pkg],
+    attach = FileNameJoin[{pkg, "claude_attachments"}]];
+  If[StringQ[base], AppendTo[dirs, base]];
+  If[StringQ[attach], AppendTo[dirs, FileNameJoin[{attach, "pdfindex"}]]];
+  Select[DeleteDuplicates[dirs], DirectoryQ]
+];
+
+(* {collection, docメタファイル} ペアの全列挙 *)
+iSVPdfIndexDocFiles[] := Module[{collDirs},
+  collDirs = Flatten[Function[d, Select[FileNames["*", d], DirectoryQ]] /@ iSVPdfIndexStoreDirs[]];
+  Flatten[Function[cd, {FileNameTake[cd], #} & /@ FileNames["doc_*.wl", cd]] /@ collDirs, 1]
+];
+
+iSVPdfIndexDocRow[coll_String, path_String] := Module[{mtime, cached, meta, row},
+  mtime = Quiet @ Check[UnixTime @ FileDate[path, "Modification"], 0];
+  cached = Lookup[$svPdfDocMetaCache, path, Missing[]];
+  If[AssociationQ[cached] && cached["MTime"] === mtime, Return[cached["Row"]]];
+  meta = Quiet @ Check[Block[{$CharacterEncoding = "UTF-8"}, Get[path]], $Failed];
+  If[! AssociationQ[meta], Return[Missing["BadDocMeta", path]]];
+  row = <|
+    "Kind" -> "pdfindex",
+    "Id" -> ToString @ Lookup[meta, "docId", FileBaseName[path]],
+    "URI" -> Missing["NotApplicable"],
+    "Title" -> ToString @ Lookup[meta, "title", FileBaseName[path]],
+    "Authors" -> ToString @ Lookup[meta, "author", ""],
+    "Published" -> "",
+    "Summary" -> "PDF 索引 collection 「" <> coll <> "」 " <>
+      ToString @ Lookup[meta, "pageCount", "?"] <> " ページ / " <>
+      ToString @ Lookup[meta, "chunkCount", "?"] <> " チャンク",
+    "URL" -> "",
+    "File" -> ToString @ Lookup[meta, "sourcePath", ""],
+    "Date" -> ToString @ Lookup[meta, "indexedAt", ""],
+    "PrivacyLevel" -> With[{p = Lookup[meta, "privacy", Missing[]]},
+      If[NumericQ[p], N[p], 1.0]],
+    "Collection" -> coll|>;
+  $svPdfDocMetaCache[path] = <|"MTime" -> mtime, "Row" -> row|>;
+  row
+];
+
+(* collection -> group 名/Keywords/Description を連結した検索用テキスト。
+   グループの Keywords が付いていれば、doc タイトルに現れない語でもヒットする。 *)
+iSVPdfIndexGroupKeywordText[] := Merge[
+  KeyValueMap[
+    Function[{gname, gspec},
+      ToString @ Lookup[gspec, "Collection", "default"] ->
+        StringRiffle[Flatten[{gname,
+          Lookup[gspec, "Keywords", {}],
+          Lookup[gspec, "Description", ""]}], " "]],
+    Lookup[$registries, "SearchGroup", <||>]],
+  StringRiffle[#, " "] &];
+
+(* SourceVaultSummaries provider 本体: fn[query, opts] -> 共通スキーマ行のリスト *)
+iSVPdfIndexRows[query_String, opts_Association : <||>] := Module[{rows, q, kws, kf},
+  kf = Lookup[opts, "Kind", All];
+  If[kf =!= All && kf =!= Automatic &&
+     ! MemberQ[ToLowerCase /@ (ToString /@ Flatten[{kf}]), "pdfindex"],
+    Return[{}]];
+  rows = Select[iSVPdfIndexDocRow @@@ Quiet @ Check[iSVPdfIndexDocFiles[], {}],
+    AssociationQ];
+  q = StringTrim[query];
+  If[q === "", Return[rows]];
+  kws = iSVPdfIndexGroupKeywordText[];
+  Select[rows, Function[r, AnyTrue[
+    {Lookup[r, "Title", ""], Lookup[r, "Authors", ""], Lookup[r, "File", ""],
+     Lookup[r, "Id", ""], Lookup[r, "Collection", ""],
+     Lookup[kws, ToString @ Lookup[r, "Collection", ""], ""]},
+    StringContainsQ[ToString[#], q, IgnoreCase -> True] &]]]
+];
+iSVPdfIndexRows[query_String] := iSVPdfIndexRows[query, <||>];
+
+(* SourceVault.wl 本体 (SourceVaultSummaries) がロード済みなら provider 登録。
+   standalone ロード時は登録関数が無いこともあるため guard する。 *)
+If[Quiet[Length[DownValues[SourceVault`SourceVaultRegisterSummaryProvider]] > 0],
+  SourceVault`SourceVaultRegisterSummaryProvider["pdfindex", iSVPdfIndexRows]];
 
 (* rule を 1 行に適用し release 判定用 source 連想を作る。
    rule 未登録なら release context を与えず State も Draft = gate で Deny (fail-closed §7.4.1-4)。 *)
@@ -703,20 +913,29 @@ iLegacySourceFromRow[profile_String, row_Association] := Module[{rule, baseTags}
 (* メイン検索 API: legacy → 正規化 → migration rule → request-time gate → Permit のみ *)
 Options[SourceVaultSearch] = {
   "ReleaseContext" -> None, "PDFIndexProfile" -> None, "Collection" -> Automatic,
-  "Limit" -> 20, "Index" -> None};
+  "Limit" -> 20, "Index" -> None, "Group" -> None};
 SourceVaultSearch[query_String, OptionsPattern[]] := Module[
-  {ctxName, profileName, collection, rawRows, results, ctxSpec, profile, indexId},
+  {ctxName, profileName, collection, rawRows, results, ctxSpec, profile, indexId,
+   groupName, groupSpec},
   ctxName = OptionValue["ReleaseContext"];
+  profileName = OptionValue["PDFIndexProfile"];
+  (* "Group": 登録済み search group から ReleaseContext / PDFIndexProfile を解決
+     (明示指定があればそちらを優先)。 *)
+  groupName = OptionValue["Group"];
+  If[StringQ[groupName],
+    groupSpec = iResolve["SearchGroup", groupName];
+    If[FailureQ[groupSpec], Return[groupSpec]];
+    If[! StringQ[ctxName], ctxName = Lookup[groupSpec, "ReleaseContext", groupName]];
+    If[! StringQ[profileName], profileName = groupName]];
   If[! StringQ[ctxName],
     Return[Failure["ReleaseContextRequired", <|
-      "MessageTemplate" -> "SourceVaultSearch には \"ReleaseContext\" が必須です (fail-closed)。"|>]]];
+      "MessageTemplate" -> "SourceVaultSearch には \"ReleaseContext\" (または \"Group\") が必須です (fail-closed)。"|>]]];
   ctxSpec = iResolve["ReleaseContext", ctxName];
   If[FailureQ[ctxSpec], Return[ctxSpec]];
   (* native projection index 指定時はそちらを使う (PDFIndex 非依存) *)
   indexId = OptionValue["Index"];
   If[StringQ[indexId],
     Return[iNativeSearch[query, ctxName, indexId, OptionValue["Limit"]]]];
-  profileName = OptionValue["PDFIndexProfile"];
   collection = OptionValue["Collection"];
   (* profile 指定時は CollectionRoot を解決 (fail-closed) *)
   If[StringQ[profileName],

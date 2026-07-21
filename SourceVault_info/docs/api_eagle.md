@@ -233,9 +233,9 @@ Options: "Name" -> Automatic, "Tags" -> {}, "Annotation" -> "", "URL" -> "", "Fo
 ## SourceVault 連携
 
 ### SourceVaultEagleIngest[item, opts]
-item を SourceVault ソースとして登録する (冪等)。既定 "Copy"->False: 原本はコピーせず SHA-256 ハッシュ付き参照記録のみを `PrivateVault/eagle/ingestmap.jsonl` に残す (Mode->"Reference")。"Copy"->True で `SourceVaultIngest` (TrustLevel LocalFile) により vault へ複製する (Mode->"Vault")。オフライン中でも "Online"->False 付きで登録可能。
+item を SourceVault ソースとして登録する (冪等)。既定 "Copy"->False: 原本はコピーせず SHA-256 ハッシュ付き参照記録のみを `PrivateVault/eagle/ingestmap.jsonl` に残す (Mode->"Reference")。"Copy"->True で `SourceVaultIngest` (TrustLevel LocalFile) により vault へ複製する (Mode->"Vault")。オフライン中でも "Online"->False 付きで登録可能 (Registered として記録)。
 → Association
-Options: "Copy" -> False, "Topic" -> Automatic, "PrivacyLabel" -> Automatic, "Library" -> Automatic
+Options: "Copy" -> False, "Topic" -> Automatic, "PrivacyLabel" -> Automatic, "Online" -> True, "Library" -> Automatic
 
 ### SourceVaultEagleIngestInfo[item] → Association | Missing
 ingest 記録 (Mode->"Reference"|"Vault", ContentHash, SourceId 等) を返す。未 ingest なら Missing。
@@ -248,10 +248,10 @@ Options: "Copy" -> False, "Topic" -> Automatic, "PrivacyLabel" -> Automatic, "Re
 ### SourceVaultEagleExtractText[item, opts]
 item 本文テキストを抽出する。PDF は原本から直接ページ抽出 (`PrivateVault/eagle/pages` にキャッシュ、テキスト層なしページは `$SourceVaultOCRHook` 設定時に OCR)。vault 複製済みなら `SourceVaultExtractPages` 経由。docx/pptx/txt/html/xlsx/csv はローカル抽出。
 → Association
-Options: "MaxPages" -> Automatic, "MaxChars" -> Automatic, "Library" -> Automatic
+Options: "MaxPages" -> 15 (整数 | All | Infinity), "MaxChars" -> 8000 (全文が要るときは明示的に大きく指定), "Library" -> Automatic
 
 ### SourceVaultEagleSummarize[item, opts]
-item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約し書誌情報 (Title/Authors/Published) も同時抽出する。画像はサムネイル優先 (原本フォールバック) で vision 要約する。動画は 2 段 pipeline: Stage 1 で n フレーム ("Frames" 個、nested dyadic 位置) を各 "FrameMaxLength" 文字で個別 vision 記述し record の `"Frames"[*]."Text"` に保存、Stage 2 でフレーム説明を時刻順統合して最終 summary を生成する。既定はローカル LLM (`$ClaudePrivateModel`)。`$SourceVaultEagleCloudPublishableTag` タグ付き item は Automatic でもクラウドへ切り替わる。PDF・画像・動画が混在するフォルダでも batch/summaries/search が一貫動作する (動画は vision 呼び出しが n 回になるためコスト増)。summary は `PrivateVault/eagle/summaries/<id>.json` に保存。
+item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約し書誌情報 (Title/Authors/Published) も同時抽出する (PDF は埋め込みメタデータをフォールバック)。画像はサムネイル優先 (原本フォールバック) で vision 要約する。動画は 2 段 pipeline: Stage 1 で n フレーム ("Frames" 個、nested dyadic 位置) を各 "FrameMaxLength" 文字で個別 vision 記述し record の `"Frames"[*]."Text"` に保存、Stage 2 でフレーム説明を時刻順統合して最終 summary を生成する。既定はローカル LLM (`$ClaudePrivateModel`)。`$SourceVaultEagleCloudPublishableTag` タグ付き item は Automatic でもクラウドへ切り替わる。PDF・画像・動画が混在するフォルダでも batch/summaries/search が一貫動作する (動画は vision 呼び出しが n 回になるためコスト増)。summary は `PrivateVault/eagle/summaries/<id>.json` に保存。
 → Association
 Options:
 "Method" -> Automatic ("Local"|"Claude"),
@@ -280,7 +280,7 @@ Options: "Library" -> Automatic
 Options: "Limit" -> Automatic
 
 ### SourceVaultEagleExtractBibMeta[item, opts]
-要約済み item の書誌情報 (Title/Authors/Published) を本文先頭から LLM で抽出し summary record に追記する (旧 record の backfill 用。新規要約は `SourceVaultEagleSummarize` が同時抽出)。PDF は埋め込みメタデータをフォールバックに使う。既に Title を持つ record はスキップ ("ForceRefresh"->True で再抽出)。
+要約済み item の書誌情報 (Title/Authors/Published) を本文先頭から LLM で抽出し summary record に追記する (旧 record の backfill 用。新規要約は `SourceVaultEagleSummarize` が同時抽出)。PDF は埋め込みメタデータをフォールバックに使う。既に Title を持つ record はスキップ ("ForceRefresh"->True で再抽出)。Method 解決は Summarize と同じ fail-safe (Cloud-Publishable タグ無しはローカル LLM)。
 → Association
 Options: "Method" -> Automatic, "MaxChars" -> 2500, "MaxPages" -> 2, "Timeout" -> 120, "ForceRefresh" -> False, "Library" -> Automatic
 
@@ -320,7 +320,7 @@ Options: SourceVaultEagleSearch と同じ全オプション + "ForceRefresh" -> 
 日付は DateObject。Exif は `SourceVaultEagleBuildExifIndex` 済み分のみ (未索引は Missing)。
 
 ### SourceVaultEagleIndexSearch[pred, opts]
-統合 record (`SourceVaultEagleIndexRecord`) に述語 pred を適用して検索する。pred 内で `&&` / `||` を使えば AND/OR 検索になる。
+統合 record (`SourceVaultEagleIndexRecord`) に述語 pred を適用して検索する。pred 内で `&&` / `||` を使えば AND/OR 検索になる。"Limit" は pred 適用後の結果に効く。
 → List
 Options: SourceVaultEagleSearch と同じ全オプション + "Query" -> Automatic (文字列部分一致、pred と AND 評価)
 例: `SourceVaultEagleIndexSearch[#Star >= 2 && (#Width >= 3000 || MemberQ[#Tags, "Lumix"]) &]`

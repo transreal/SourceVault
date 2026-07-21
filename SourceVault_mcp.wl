@@ -1253,8 +1253,16 @@ iSVSearchRowURI[r_Association, coll_String : "default"] := Module[{cid, oid, ci}
     True, Missing["NoURI"]]];
 
 iSVSearchAdapterSearch[spec_Association, accessRequest_Association] := Module[
-  {scope, rc, q, lim, prof, idx, coll, chunkColl, opts, rows, methods, bm25Idx},
+  {scope, rc, q, lim, prof, idx, coll, chunkColl, opts, rows, methods, bm25Idx, grp, gs},
   scope = Lookup[spec, "scope", <||>]; If[! AssociationQ[scope], scope = <||>];
+  (* scope.group: 登録済み search group (SourceVaultRegisterSearchGroup) から
+     releaseContext / pdfIndexProfile を解決する (明示指定があればそちら優先)。 *)
+  grp = Lookup[scope, "group", None];
+  If[StringQ[grp] && ! StringQ[Lookup[scope, "releaseContext", None]],
+    gs = Quiet @ Check[SourceVault`SourceVaultSearchGroupSpec[grp], $Failed];
+    If[AssociationQ[gs],
+      scope = Join[<|"pdfIndexProfile" -> grp|>, scope,
+        <|"releaseContext" -> Lookup[gs, "ReleaseContext", grp]|>]]];
   rc = Lookup[scope, "releaseContext", None];
   If[! StringQ[rc], Return[{}]];  (* §10.2: release context 必須。無ければ fail-closed で空。 *)
   chunkColl = iSVPdfCollectionForScope[scope];  (* chunk URI / 後続 pdfGetChunk 用 collection 名 *)
@@ -3238,7 +3246,9 @@ SourceVaultMCPTools[] := {
             "(Claude Code session/work logs from ALL machines: what was implemented/discussed " <>
             "in past coding sessions -- NOT git commit history), or [\"all\"] (default [\"all\"])."|>,
         "scope" -> <|"type" -> "object",
-          "description" -> "releaseContext (string), requireAccessTags, denyAccessTags, untagged."|>,
+          "description" -> "releaseContext (string), requireAccessTags, denyAccessTags, untagged. " <>
+            "For kinds [\"search\"] also: group (string) = registered search group name " <>
+            "(e.g. \"student-handbook\"); resolves releaseContext/pdfIndexProfile automatically."|>,
         "filters" -> <|"type" -> "object",
           "description" -> "accessLevelMax (number), dateFrom, dateTo, ext, tags, etc. " <>
             "For kinds [\"packageapi\"] also: packages (or package) = canonical package " <>

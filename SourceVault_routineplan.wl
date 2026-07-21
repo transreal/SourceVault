@@ -225,6 +225,8 @@ SourceVaultRoutinePreparationTasks[event_Association, prepSpec_Association] := M
       "Effort" -> Lookup[st, "Effort", Missing["None"]],
       "DependsOn" -> If[MemberQ[stepIdSet, dep], {prepIdOf[dep]}, {}],
       "Movable" -> True,
+      (* privacy inheritance: a prep task's label embeds the event summary *)
+      "PrivacyLevel" -> iSVRPItemPL[event],
       "ParentRef" -> <|"StableId" -> parentId, "OccurrenceToken" -> parentTok|>|>]],
     steps]]];
 SourceVaultRoutinePreparationTasks[___] := {};
@@ -483,13 +485,17 @@ SourceVaultRoutineGanttView[plan_Association, tasks_List, OptionsPattern[]] := M
     dueX = If[NumberQ[row["DueAtUTC"]], {RGBColor[0.85, 0.2, 0.2],
       Line[{{dayIdx[row["DueAtUTC"]], y}, {dayIdx[row["DueAtUTC"]], y + 1}}]}, {}];
     {bars, dueX}]], rows];
-  Graphics[prims,
-    Frame -> True, AspectRatio -> 1/GoldenRatio,
-    FrameTicks -> {{Table[{n - i + 0.5, rows[[i]]["Label"]}, {i, n}], None},
-      {Table[{dayIdx[d0 + k*$svRPDay] + 0.45,
-        DateString[FromAbsoluteTime[d0 + k*$svRPDay], {"Month", "/", "Day"}]},
-        {k, 0, dayIdx[d1]}], None}},
-    PlotRangePadding -> 0.5, ImageSize -> 520]];
+  (* privacy inheritance: the chart shows task labels, so it inherits the
+     max PL of the tasks it renders (unlabelled tasks are 1.0, fail-safe) *)
+  iSVRPWrapConfidential[
+    Graphics[prims,
+      Frame -> True, AspectRatio -> 1/GoldenRatio,
+      FrameTicks -> {{Table[{n - i + 0.5, rows[[i]]["Label"]}, {i, n}], None},
+        {Table[{dayIdx[d0 + k*$svRPDay] + 0.45,
+          DateString[FromAbsoluteTime[d0 + k*$svRPDay], {"Month", "/", "Day"}]},
+          {k, 0, dayIdx[d1]}], None}},
+      PlotRangePadding -> 0.5, ImageSize -> 520],
+    iSVRPMaxPL[tasks]]];
 SourceVaultRoutineGanttView[___] := Style["SourceVaultRoutineGanttView: bad args.", Red];
 
 Options[SourceVaultRoutineLoadData] = {"TimeZone" -> 0, "Tasks" -> {}};
@@ -552,9 +558,15 @@ SourceVaultRoutineLoadView[plan_Association, capacityFn_, from_, to_, OptionsPat
         Spacings -> 0.15],
         Background -> col, FrameStyle -> GrayLevel[0.7], ImageSize -> {78, 52}]],
       tipText]]], data];
-  Grid[Partition[cells, 7, 7, {1, 1}, ""], Spacings -> {0.3, 0.3}]];
+  (* privacy inheritance: day cells embed task labels via "Tasks" *)
+  iSVRPWrapConfidential[
+    Grid[Partition[cells, 7, 7, {1, 1}, ""], Spacings -> {0.3, 0.3}],
+    iSVRPMaxPL[OptionValue["Tasks"]]]];
 SourceVaultRoutineLoadView[___] := Style["SourceVaultRoutineLoadView: bad args.", Red];
 
+(* ProcessGraph is DATA, not a view: it returns a composable Graph (vertex
+   labels inherit the task PLs). Callers that RENDER it must wrap via
+   iSVRPWrapConfidential[..., iSVRPMaxPL[tasks]] like GanttView/LoadView. *)
 Options[SourceVaultRoutineProcessGraph] = {"VertexLabels" -> Automatic};
 SourceVaultRoutineProcessGraph[tasks_List, OptionsPattern[]] := Module[
   {ids, edges, byId, labelRules},
@@ -611,6 +623,7 @@ SourceVaultRoutineFabricTasks[from_, to_, OptionsPattern[]] := Module[
         "Effort" -> With[{e = Lookup[t, "Effort", Missing["None"]]},
           If[MissingQ[e], def, e]],
         "Movable" -> If[BooleanQ[Lookup[t, "Movable", Missing[]]], t["Movable"], True],
+        "PrivacyLevel" -> iSVRPItemPL[t],
         "DependsOn" -> {}|>]]],
     {t, ow}];
   (* --- preparation tasks for matching calendar meetings --- *)
@@ -711,7 +724,8 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
   If[tz === Automatic, tz = $TimeZone];
   If[!NumberQ[fromAbs] || !NumberQ[toAbs],
     Return[<|"From" -> from, "To" -> to, "TimeZone" -> tz, "Overdue" -> {},
-      "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}|>]];
+      "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {},
+      "MaxPrivacyLevel" -> 0.|>]];
   fromDay = iSVRPDayStart[fromAbs, tz];
   toDayEnd = iSVRPDayStart[toAbs, tz] + $svRPDay;
 
@@ -725,7 +739,7 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
   If[!ListQ[cal], cal = {}];
   Do[Module[{s = iSVRPAbs[Lookup[ev, "Start", Missing[]]],
       e = iSVRPAbs[Lookup[ev, "End", Missing[]]],
-      sum = Lookup[ev, "Summary", Lookup[ev, "Title", ""]], allday, d},
+      sum = Lookup[ev, "Summary", Lookup[ev, "Title", Missing[]]], allday, d},
     If[NumberQ[s],
       e = If[NumberQ[e], e, s];
       allday = If[BooleanQ[Lookup[ev, "AllDay", Missing[]]], TrueQ[ev["AllDay"]],
@@ -734,8 +748,12 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
       If[NumberQ[d] && fromDay <= d < toDayEnd,
         AppendTo[items, <|"Kind" -> If[allday, "AllDayEvent", "Event"],
           "StartT" -> s, "EndT" -> e,
-          "Label" -> If[StringQ[sum], sum, ToString[sum]],
+          (* a low-access read returns bare busy slots without Summary:
+             show them as occupied time rather than an empty label *)
+          "Label" -> If[StringQ[sum] && StringTrim[sum] =!= "", sum,
+            "(\:4e88\:5b9a\:3042\:308a)"],
           "Mandatory" -> TrueQ[Lookup[ev, "Mandatory", False]],
+          "PrivacyLevel" -> iSVRPItemPL[ev],
           "DayAbs" -> d|>]]]],
     {ev, cal}];
 
@@ -755,7 +773,7 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
       d = iSVRPDayStart[due, tz];
       item = <|"Kind" -> Switch[kind, "NextReview", "Review", _, "Deadline"],
         "DueT" -> due, "Label" -> iSVRPTaskName[t], "Path" -> Lookup[t, "Path", Missing[]],
-        "State" -> state, "DayAbs" -> d|>;
+        "State" -> state, "PrivacyLevel" -> iSVRPItemPL[t], "DayAbs" -> d|>;
       Which[
         d < fromDay, If[TrueQ[OptionValue["IncludeOverdue"]], AppendTo[overdue, item]],
         d < toDayEnd, AppendTo[items, item]]]],
@@ -763,30 +781,36 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
 
   overdue = SortBy[overdue, #["DueT"] &];
 
-  (* --- actionable mails (R9, weak binding to SourceVault_mailagenda) --- *)
+  (* --- actionable mails (R9, weak binding to SourceVault_mailagenda) ---
+     Per-mail privacy: the effective ceiling is Min[MailMaxPrivacyLevel,
+     AccessLevel], so an AccessLevel 0.7 agenda shows only mails whose derived
+     PrivacyLevel <= 0.7 (missing PL counts as 1.0, fail-safe) instead of
+     hiding the band wholesale. An explicit option can lower but never raise
+     the ceiling above the caller's AccessLevel. *)
   Module[{includeMail = OptionValue["IncludeMail"], mailRes, mailItems = {},
-      mailPending = 0, level},
+      mailPending = 0, level, effMpl},
     level = Which[
       AssociationQ[ps] && NumberQ[Lookup[ps, "AccessLevel", Missing[]]],
         N[ps["AccessLevel"]],
       NumberQ[ps], N[ps], True, 1.0];
-    If[includeMail === Automatic, includeMail = level >= 1.0];
+    effMpl = Min[
+      With[{m = OptionValue["MailMaxPrivacyLevel"]},
+        If[NumberQ[m], N[m], 1.0]],
+      level];
+    If[includeMail === Automatic, includeMail = True];
     If[TrueQ[includeMail],
-      mailRes = With[{m = OptionValue["MailItems"],
-          mpl = OptionValue["MailMaxPrivacyLevel"]},
+      mailRes = With[{m = OptionValue["MailItems"]},
         If[m === Automatic,
           If[Length[DownValues[SourceVaultMailAgendaItems]] > 0,
             Quiet@Check[SourceVaultMailAgendaItems[
-              "MaxPrivacyLevel" -> mpl], <||>], <||>],
+              "MaxPrivacyLevel" -> effMpl], <||>], <||>],
           <|"Items" -> m, "PendingCount" -> 0|>]];
       If[AssociationQ[mailRes],
         mailItems = Lookup[mailRes, "Items", {}];
         mailPending = Lookup[mailRes, "PendingCount", 0]];
       If[!ListQ[mailItems], mailItems = {}];
-      (* privacy filter also on injected items (missing PL = 1.0, fail-safe) *)
-      With[{mpl = With[{m = OptionValue["MailMaxPrivacyLevel"]},
-          If[NumberQ[m], N[m], 1.0]]},
-        mailItems = Select[mailItems, iSVRPMailPL[#] <= mpl &]]];
+      (* privacy ceiling also on injected items *)
+      mailItems = Select[mailItems, iSVRPMailPL[#] <= effMpl &]];
 
     (* mails with a definite deadline join the day calendar: an all-day item on
        the deadline day, clickable through to the mail action window *)
@@ -797,6 +821,7 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
           AppendTo[items, <|"Kind" -> "MailDeadline", "DueT" -> dl,
             "Label" -> Lookup[mi, "Subject", "mail"],
             "MailRecordId" -> Lookup[mi, "RecordId", Missing[]],
+            "PrivacyLevel" -> iSVRPItemPL[mi],
             "DayAbs" -> d|>]]]],
       {mi, mailItems}];
 
@@ -811,13 +836,20 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
           {iSVRPAllDayRank[#], Lookup[#, "Label", ""]} &],
         "Timed" -> SortBy[Select[grp, #["Kind"] === "Event" &],
           #["StartT"] &]|>]], dayKeys];
+    (* PRIVACY-INHERITANCE PRINCIPLE: the aggregate carries the max PL over
+       EVERY disclosed component (day items, overdue, mails) -- guarded so a
+       failure in any part degrades to 1.0, never to an unlabelled output *)
     <|"From" -> fromAbs, "To" -> toAbs, "TimeZone" -> tz, "Overdue" -> overdue,
-      "Mail" -> mailItems, "MailPendingCount" -> mailPending, "Days" -> days|>]];
+      "Mail" -> mailItems, "MailPendingCount" -> mailPending, "Days" -> days,
+      "MaxPrivacyLevel" -> Quiet@Check[
+        Max[0., iSVRPMaxPL[items], iSVRPMaxPL[overdue], iSVRPMaxPL[mailItems]],
+        1.0]|>]];
 SourceVaultRoutineAgendaData[] :=
   SourceVaultRoutineAgendaData[Quantity[7, "Days"]];
 SourceVaultRoutineAgendaData[___] :=
   <|"From" -> Missing[], "To" -> Missing[], "TimeZone" -> 0, "Overdue" -> {},
-    "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}|>;
+    "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {},
+    "MaxPrivacyLevel" -> 0.|>;
 
 (* ---- view ---- *)
 iSVRPAgendaColor["Deadline"] = RGBColor[0.85, 0.2, 0.2];
@@ -872,32 +904,111 @@ iSVRPAgendaItemRow[item_, tz_] := Module[
 
 (* --- mail band helpers (R9) --- *)
 
-(* fail-safe privacy read (missing derived PL counts as 1.0, maildb convention) *)
-iSVRPMailPL[item_] := With[{p = Lookup[item, "PrivacyLevel", Missing[]]},
+(* ============================================================
+   PRIVACY-INHERITANCE PRINCIPLE (2026-07-18): the max PrivacyLevel of the
+   INPUTS is inherited by every OUTPUT. The two helpers below are the single
+   point of judgment for the whole plan/agenda pipeline -- items carry
+   "PrivacyLevel"; anything malformed or unlabelled is 1.0 (fail-safe);
+   aggregates carry "MaxPrivacyLevel" = max over their items.
+   ============================================================ *)
+
+(* fail-safe per-item PL: malformed item / missing PL -> 1.0 *)
+iSVRPItemPL[item_] := With[
+  {p = If[AssociationQ[item], Lookup[item, "PrivacyLevel", Missing[]],
+     Missing["Malformed"]]},
   If[NumberQ[p], N[p], 1.0]];
 
-(* a view containing even one PL >= 0.5 mail is confidential (maildb rule).
-   Wrap through ClaudeCode`Confidential when available (cell marking + secret
-   variable registration); else schedule SourceVaultMarkConfidentialViewCells
-   on the evaluation notebook (FE only) as the fallback. *)
+(* aggregate: empty -> 0.0 (nothing disclosed); non-list -> 1.0 *)
+iSVRPMaxPL[items_List] := If[items === {}, 0., Max[iSVRPItemPL /@ items]];
+iSVRPMaxPL[_] := 1.0;
+
+iSVRPMailPL = iSVRPItemPL;   (* historical alias *)
+
 iSVRPAgendaConfidentialQ[mailItems_List] :=
   mailItems =!= {} && AnyTrue[mailItems, iSVRPMailPL[#] >= 0.5 &];
+iSVRPAgendaConfidentialQ[_] := True;   (* undeterminable input -> confidential *)
 
-iSVRPWrapConfidential[result_, mailItems_List] := Which[
-  !iSVRPAgendaConfidentialQ[mailItems], result,
-  Length[DownValues[ClaudeCode`Confidential]] > 0,
-    ClaudeCode`Confidential[result],
-  True,
-    Quiet@Check[
-      If[TrueQ[$Notebooks] &&
-          Length[DownValues[SourceVaultMarkConfidentialViewCells]] > 0,
-        With[{nb = EvaluationNotebook[]},
-          If[Head[nb] === NotebookObject,
-            SessionSubmit[ScheduledTask[
-              Quiet@Check[SourceVaultMarkConfidentialViewCells[nb], Null],
-              {1.0}]]]]];
-      Null, Null];
-    result];
+iSVRPAgendaMaxPL[mailItems_List] :=
+  If[mailItems === {}, 0., Max[iSVRPMailPL /@ mailItems]];
+iSVRPAgendaMaxPL[_] := 1.0;
+
+(* the max mail PL of the LAST agenda render; the confidential-view registry
+   spec below reads it so the notebook-scan hooks can mark ClaudeEval output
+   cells (where Confidential[] cannot locate the evaluation cell). *)
+If[!NumberQ[$iSVRPLastAgendaConfidentialPL],
+  $iSVRPLastAgendaConfidentialPL = 0.];
+
+(* ============================================================
+   Confidential output: DEFENSE IN DEPTH (2026-07-18).
+   A single mechanism proved fragile: ClaudeCode`Confidential locates the
+   evaluation cell via NBCurrentCellIndex, which fails on ClaudeEval /
+   runtime paths (cellIdx 0 -> no mark at all), while the notebook-scan
+   fallback only fires when something schedules it. So a confidential
+   agenda now gets, independently:
+     L1 SELF-MARKING RENDER -- the returned view itself carries a red
+        confidential frame + badge. Path-independent: whatever evaluates
+        it, the human sees the classification.
+     L2 ClaudeCode`Confidential wrap -- cell marking + secret-variable
+        registration + CellEpilog when the evaluation cell is locatable.
+     L3 notebook-scan fallback -- ALWAYS scheduled when a FE is present
+        (not only when Confidential is absent), so runtime paths get
+        their output cells marked by SourceVaultMarkConfidentialViewCells.
+     L4 registry spec -- agenda prompts/calls are registered in the shared
+        confidential-view registry, so maildb's scan and auto hooks treat
+        agenda outputs like mail views.
+   Every judgment is guarded fail-safe: malformed input counts as
+   confidential, and a failing layer degrades to the next, never to
+   silence. *)
+
+iSVRPConfidentialBadge[] := Style[
+  "\:26a0 \:6a5f\:5bc6 \[Dash] PrivacyLevel 0.5 \:4ee5\:4e0a\:306e\:5185\:5bb9\:3092\:542b\:307f\:307e\:3059 (\:30af\:30e9\:30a6\:30c9\:9001\:4fe1\:4e0d\:53ef)",
+  Bold, 11, RGBColor[0.75, 0.1, 0.1]];
+
+(* numeric form: the aggregate max PL decides; anything non-numeric is 1.0 *)
+iSVRPWrapConfidential[result_, pl_?NumberQ] := Module[{out},
+  $iSVRPLastAgendaConfidentialPL = N[pl];
+  If[pl < 0.5, Return[result]];
+  (* L1: self-marking render (works on every evaluation path) *)
+  out = Framed[
+    Column[{iSVRPConfidentialBadge[], result},
+      Alignment -> Left, Spacings -> 0.4],
+    Background -> RGBColor[1, 0.96, 0.96],
+    FrameStyle -> Directive[RGBColor[0.8, 0.2, 0.2]],
+    RoundingRadius -> 6, FrameMargins -> 8];
+  (* L3: always schedule the notebook scan when a FE is present *)
+  Quiet@Check[
+    If[TrueQ[$Notebooks] &&
+        Length[DownValues[SourceVaultMarkConfidentialViewCells]] > 0,
+      With[{nb = EvaluationNotebook[]},
+        If[Head[nb] === NotebookObject,
+          SessionSubmit[ScheduledTask[
+            Quiet@Check[SourceVaultMarkConfidentialViewCells[nb], Null],
+            {1.0}]]]]], Null];
+  (* L2: cell marking / secret registration on direct evaluation *)
+  If[Length[DownValues[ClaudeCode`Confidential]] > 0,
+    Quiet@Check[ClaudeCode`Confidential[out], out],
+    out]];
+(* list / anything else: reduce to the aggregate PL (fail-safe 1.0) *)
+iSVRPWrapConfidential[result_, mailItems_] :=
+  iSVRPWrapConfidential[result,
+    Quiet@Check[iSVRPMaxPL[mailItems], 1.0]];
+
+(* L4: shared confidential-view registry (SourceVault`Private, load-order
+   free). The input matcher covers both explicit calls and the natural
+   ClaudeEval prompts that route to the agenda; the PL comes from the last
+   agenda render (0.0 when it was clean, so clean outputs never get marked). *)
+iSVRPAgendaViewInputQ[text_String] :=
+  StringContainsQ[text, "SourceVaultRoutineAgenda"] ||
+  StringContainsQ[text, "\:4e88\:5b9a"] ||
+  StringContainsQ[text, "\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb"] ||
+  StringContainsQ[ToLowerCase[text], "schedule"];
+iSVRPAgendaViewInputQ[___] := False;
+iSVRPAgendaCellPL[___] := $iSVRPLastAgendaConfidentialPL;
+If[!ListQ[$iSVConfidentialViewSpecRegistry],
+  $iSVConfidentialViewSpecRegistry = {}];
+$iSVConfidentialViewSpecRegistry = Append[
+  DeleteCases[$iSVConfidentialViewSpecRegistry, {iSVRPAgendaViewInputQ, _}],
+  {iSVRPAgendaViewInputQ, iSVRPAgendaCellPL}];
 
 iSVRPMailKind[cat_, deadline_] := Which[
   cat === "TaskRequest", {"\:4f9d\:983c", RGBColor[0.75, 0.35, 0.1]},
@@ -968,6 +1079,37 @@ iSVRPMailRow[item_Association, nowAbs_, tz_ : Automatic] := Module[
       Style["\:3000\:3000" <> summary, GrayLevel[0.4], 10], Nothing]},
     Spacings -> 0.1, Alignment -> Left]];
 
+(* mail band ordering (R9 display): OVERDUE-deadline mails FIRST (most overdue
+   -> nearest), THEN upcoming-deadline mails (soonest first), THEN no-deadline
+   mails (original newest-received order). Lightweight sub-headers separate the
+   dated groups so the "past-due, then upcoming" split is visible. This is a
+   VIEW-layer concern only; SourceVaultRoutineAgendaData["Mail"] keeps its
+   canonical newest-first order. *)
+iSVRPMailDeadlineAbs[item_Association] :=
+  With[{d = Lookup[item, "Deadline", Missing[]]},
+    If[StringQ[d] || DateObjectQ[d], iSVRPAbs[d], $Failed]];
+
+iSVRPMailBandRows[mail_List, nowAbs_, tz_] := Module[
+  {withAbs, overdue, future, none, sub, out = {}},
+  withAbs = Map[{#, iSVRPMailDeadlineAbs[#]} &, mail];
+  overdue = Cases[withAbs, {it_, a_?NumberQ} /; a < nowAbs :> {it, a}];
+  future  = Cases[withAbs, {it_, a_?NumberQ} /; a >= nowAbs :> {it, a}];
+  none    = Cases[withAbs, {it_, a_} /; ! NumberQ[a] :> it];
+  overdue = First /@ SortBy[overdue, Last];   (* ascending -> most overdue first *)
+  future  = First /@ SortBy[future, Last];    (* ascending -> soonest first *)
+  sub[txt_, col_] := Style[txt, col, Bold, 11];
+  If[overdue =!= {},
+    AppendTo[out, sub["\:26a0 \:3006\:5207\:8d85\:904e", RGBColor[0.85, 0.2, 0.2]]];
+    out = Join[out, Map[iSVRPMailRow[#, nowAbs, tz] &, overdue]]];
+  If[future =!= {},
+    AppendTo[out, sub["\:4eca\:5f8c\:306e\:3006\:5207", RGBColor[0.15, 0.35, 0.6]]];
+    out = Join[out, Map[iSVRPMailRow[#, nowAbs, tz] &, future]]];
+  If[none =!= {},
+    If[overdue =!= {} || future =!= {},
+      AppendTo[out, sub["\:3006\:5207\:306a\:3057", GrayLevel[0.5]]]];
+    out = Join[out, Map[iSVRPMailRow[#, nowAbs, tz] &, none]]];
+  out];
+
 Options[SourceVaultRoutineAgendaView] = Options[SourceVaultRoutineAgendaData];
 SourceVaultRoutineAgendaView[dur_Quantity, opts : OptionsPattern[]] :=
   SourceVaultRoutineAgendaView[N[AbsoluteTime[]],
@@ -1007,7 +1149,7 @@ SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
   (* R9: actionable mails needing reply / owner-directed requests *)
   If[mail =!= {} || mailPending > 0,
     Module[{nowAbs = N[AbsoluteTime[]], rows},
-      rows = Map[iSVRPMailRow[#, nowAbs, tz] &, mail];
+      rows = iSVRPMailBandRows[mail, nowAbs, tz];
       If[IntegerQ[mailPending] && mailPending > 0,
         AppendTo[rows, Style[
           "(\:672a\:5206\:985e " <> ToString[mailPending] <>
@@ -1019,10 +1161,14 @@ SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
           Alignment -> Left, Spacings -> 0.4],
         Background -> RGBColor[0.95, 0.97, 1], FrameStyle -> RGBColor[0.55, 0.65, 0.85],
         RoundingRadius -> 5, FrameMargins -> 8]]]];
+  (* the wrap decision uses the aggregate MaxPrivacyLevel over EVERY
+     component (notebook titles, calendar summaries, mails) -- missing
+     aggregate is fail-safe 1.0 *)
   iSVRPWrapConfidential[
     Framed[Column[sections, Spacings -> 1.2, Alignment -> Left],
       FrameStyle -> GrayLevel[0.85], FrameMargins -> 12, RoundingRadius -> 6],
-    mail]];
+    With[{m = Lookup[data, "MaxPrivacyLevel", Missing[]]},
+      If[NumberQ[m], N[m], 1.0]]]];
 SourceVaultRoutineAgendaView[] :=
   SourceVaultRoutineAgendaView[Quantity[7, "Days"]];
 SourceVaultRoutineAgendaView[___] :=
