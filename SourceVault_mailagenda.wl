@@ -57,10 +57,12 @@ thread view (SourceVaultMailThreadNotebook) and body display.";
 
 SourceVaultMailAgendaInherit::usage =
   "SourceVaultMailAgendaInherit[recordId, opts] creates an inheriting work notebook \
-in $onWork for the mail: newNote-style metadata cell <|Title (subject), Keywords, \
-Status->Todo, Deadline (inferred, if any), MailRecordId|> plus an open-original-mail \
-button cell. Records NotebookCreated in agenda.json (item leaves the agenda), emits \
-an inheritance event to $SourceVaultMailAgendaEventSink (mining layer seam). \
+in $onWork for the mail, laid out like Templates/SourceVault notebook template.nb: a \
+leading \"NotebookStatus\" style cell <|Keywords, Deadline (inferred, if any), \
+NextReview, Status->Todo, Title (subject), MailRecordId|>, then the content (Title \
+cell + an open-original-mail button that resolves the notebook at click time via \
+ButtonNotebook[]). Records NotebookCreated in agenda.json (item leaves the agenda), \
+emits an inheritance event to $SourceVaultMailAgendaEventSink (mining layer seam). \
 Options: \"Directory\" (Automatic -> Global`$onWork), \"Open\" (True -> SystemOpen), \
 \"Deadline\", \"Title\". Returns <|Status, NotebookPath, RecordId|>.";
 
@@ -502,12 +504,44 @@ iSVMAEmitEvent[ev_Association] :=
   If[MatchQ[$SourceVaultMailAgendaEventSink, _Function],
     Quiet@Check[$SourceVaultMailAgendaEventSink[ev], Null], Null];
 
+(* editable input-form date, matching the template's DateObject[{y, m, d}] *)
+iSVMADateInputString[d_?DateObjectQ] :=
+  "DateObject[{" <> StringRiffle[ToString /@ Round[DateList[d][[;; 3]]], ", "] <> "}]";
+
+(* template-conform status line (Templates/SourceVault notebook template.nb):
+   key order Keywords/Deadline/NextReview/Status first, then Title (agenda
+   labels through NBOnWorkTasks) and MailRecordId (back-navigation). Emitted
+   as a RAW InputForm string placed in BoxData -- the front end parses it as
+   editable input text (same convention as SourceVaultNewNotebook), and the
+   non-evaluating readers re-parse it via ToExpression[..., HoldComplete], so
+   DateObject[{y,m,d}] / Quantity[1,\"Weeks\"] stay in whitelist form. *)
+iSVMAStatusInputString[subject_String, rid_String, deadline_] :=
+  "<|\"Keywords\" -> {\"mail\"}" <>
+  If[DateObjectQ[deadline],
+    ", \"Deadline\" -> " <> iSVMADateInputString[deadline], ""] <>
+  ", \"NextReview\" -> Quantity[1, \"Weeks\"], \"Status\" -> \"Todo\", " <>
+  "\"Title\" -> " <> ToString[subject, InputForm] <>
+  ", \"MailRecordId\" -> " <> ToString[rid, InputForm] <> "|>";
+
+(* the inheriting notebook's cells: NotebookStatus FIRST, content after (the
+   template's cell layout). The mail button must NOT capture a kernel symbol:
+   it resolves its own notebook AT CLICK TIME via ButtonNotebook[] (a
+   serialized Module-local path variable would be undefined after reopen,
+   leaving a button that silently does nothing). *)
+iSVMAInheritCells[subject_String, rid_String, deadline_] := {
+  Cell[BoxData[iSVMAStatusInputString[subject, rid, deadline]], "NotebookStatus"],
+  Cell[subject, "Title"],
+  Cell[BoxData[ToBoxes[
+    Button["\:2709 \:5143\:30e1\:30fc\:30eb\:30fb\:8fd4\:4fe1\:3092\:958b\:304f",
+      SourceVault`SourceVaultMailForNotebook[ButtonNotebook[]],
+      Method -> "Queued"]]], "Input"]};
+
 Options[SourceVault`SourceVaultMailAgendaInherit] = {
   "Directory" -> Automatic, "Open" -> True, "Deadline" -> Automatic,
   "Title" -> Automatic};
 
 SourceVault`SourceVaultMailAgendaInherit[rid_String, OptionsPattern[]] := Module[
-  {dir, row, subject, deadline, meta, nbPath, cells, buttonCell, res},
+  {dir, row, subject, deadline, dl = Missing["None"], nbPath, cells, res},
   dir = With[{d = OptionValue["Directory"]},
     If[d === Automatic, Quiet@Check[Symbol["Global`$onWork"], $Failed], d]];
   If[!StringQ[dir] || !DirectoryQ[dir],
@@ -520,35 +554,24 @@ SourceVault`SourceVaultMailAgendaInherit[rid_String, OptionsPattern[]] := Module
   If[!StringQ[subject], subject = "mail task"];
   deadline = With[{d = OptionValue["Deadline"]},
     If[d === Automatic, Lookup[row, "Deadline", Missing[]], d]];
-  meta = <|"Title" -> subject, "Keywords" -> {"mail"}, "Status" -> "Todo"|>;
   If[StringQ[deadline],
-    With[{dl = Quiet@Check[DateObject[StringTake[deadline, UpTo[10]]], $Failed]},
-      If[DateObjectQ[dl], meta["Deadline"] = dl]]];
-  If[DateObjectQ[deadline], meta["Deadline"] = deadline];
-  meta["MailRecordId"] = rid;
+    With[{d0 = Quiet@Check[DateObject[StringTake[deadline, UpTo[10]]], $Failed]},
+      If[DateObjectQ[d0], dl = d0]]];
+  If[DateObjectQ[deadline], dl = deadline];
   nbPath = FileNameJoin[{dir,
     DateString[{"Year", "Month", "Day"}] <> "-" <> iSVMASafeFileName[subject] <> ".nb"}];
   If[FileExistsQ[nbPath],
     nbPath = StringReplace[nbPath, ".nb" ~~ EndOfString ->
       "-" <> ToString[UnixTime[]] <> ".nb"]];
-  buttonCell = Cell[BoxData[ToBoxes[
-    Button["\:2709 \:5143\:30e1\:30fc\:30eb\:30fb\:8fd4\:4fe1\:3092\:958b\:304f",
-      SourceVault`SourceVaultMailForNotebook[nbPath], Method -> "Queued"]]], "Input"];
-  (* the metadata cell is written as InputForm TEXT: it round-trips exactly via
-     ToExpression[str, InputForm, HoldComplete] (non-evaluating), so the NBAccess
-     safe extractor sees DateObject[{y,m,d}] literally (whitelist form). A
-     StandardForm TemplateBox would re-parse into the long DateObject form. *)
-  cells = {
-    Cell[subject, "Title"],
-    Cell[ToString[Defer[Evaluate[meta]], InputForm], "Input",
-      InitializationCell -> True],
-    buttonCell};
+  cells = iSVMAInheritCells[subject, rid, dl];
   (* privacy inheritance: the note embeds mail content (subject + a body
      link), so it explicitly declares itself non-publishable. Absent tagging
      already means PL 1.0 fail-safe; writing it makes the inheritance
-     explicit and survives any future default change. *)
+     explicit and survives any future default change. The stylesheet is the
+     template's ("SourceVault default.nb"), which defines "NotebookStatus". *)
   res = Quiet@Check[Export[nbPath,
     Notebook[cells,
+      StyleDefinitions -> "SourceVault default.nb",
       TaggingRules -> {"SourceVault" -> {"CloudPublishable" -> False}}],
     "NB"], $Failed];
   If[res === $Failed,
@@ -564,22 +587,30 @@ SourceVault`SourceVaultMailAgendaInherit[___] :=
 
 (* ---------------- notebook -> mail back-navigation ---------------- *)
 
-(* non-evaluating metadata read: Import Notebook -> first init/input cell ->
-   MakeExpression -> NBAccess safe extractor (whitelist incl. MailRecordId). *)
-iSVMARecordIdFromNotebook[path_String] := Module[{nb, inits, first, held, meta},
+(* non-evaluating metadata read: Import Notebook -> "NotebookStatus" style cell
+   (template new-style, first choice; our own Inherit output) else first
+   init/input cell (legacy Inherit notebooks) -> held parse -> NBAccess safe
+   extractor (whitelist incl. MailRecordId). *)
+
+(* raw-string content (BoxData["<|...|>"] or a text cell) parses via
+   ToExpression+HoldComplete (non-evaluating); box content via MakeExpression *)
+iSVMAHeldParse[c_] := Which[
+  MatchQ[c, BoxData[_String]],
+    Quiet@Check[ToExpression[First[c], InputForm, HoldComplete], $Failed],
+  StringQ[c],
+    Quiet@Check[ToExpression[c, InputForm, HoldComplete], $Failed],
+  True,
+    Quiet@Check[MakeExpression[c, StandardForm], $Failed]];
+
+iSVMARecordIdFromNotebook[path_String] := Module[{nb, cands, held, meta},
   nb = Quiet@Check[Import[path, "Notebook"], $Failed];
   If[Head[nb] =!= Notebook, Return[Missing["Unreadable"]]];
-  inits = Cases[nb, Cell[bx_, ___, InitializationCell -> True, ___] :> bx, Infinity];
-  If[inits === {}, inits = Cases[nb, Cell[b_BoxData, "Input", ___] :> b, Infinity]];
-  If[inits === {}, Return[Missing["NoMetadata"]]];
-  first = First[inits];
-  (* text cells (our own Inherit output) parse via ToExpression+HoldComplete
-     (non-evaluating); box cells via MakeExpression *)
-  held = Which[
-    StringQ[first],
-      Quiet@Check[ToExpression[first, InputForm, HoldComplete], $Failed],
-    True,
-      Quiet@Check[MakeExpression[first, StandardForm], $Failed]];
+  cands = Cases[nb, Cell[c_, "NotebookStatus", ___] :> c, Infinity];
+  If[cands === {},
+    cands = Cases[nb, Cell[bx_, ___, InitializationCell -> True, ___] :> bx, Infinity]];
+  If[cands === {}, cands = Cases[nb, Cell[b_BoxData, "Input", ___] :> b, Infinity]];
+  If[cands === {}, Return[Missing["NoMetadata"]]];
+  held = iSVMAHeldParse[First[cands]];
   If[!MatchQ[held, _HoldComplete], Return[Missing["ParseFailed"]]];
   meta = If[Length[DownValues[NBAccess`NBOnWorkTaskSafeExtract]] > 0,
     Quiet@Check[NBAccess`NBOnWorkTaskSafeExtract[held], <||>], <||>];

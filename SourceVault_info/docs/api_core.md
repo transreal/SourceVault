@@ -141,7 +141,9 @@ Options: `"TimeoutSeconds" -> 5` (取得タイムアウト秒), `"TTLSeconds" ->
 
 ### SourceVaultAppendEvent[event, opts]
 event を append-only event directory に one-event-one-file で commit する。`EventID` が無ければ `"evt:"<>CreateUUID[]` を付与。`Digest` と `CreatedAtUTC` を補う。同一 `EventID` の再 commit は digest 一致なら idempotent 成功、不一致なら `"EventIdCollision"`。内部で `"vault-write-event"` lock を取得する。
-→ `<|"Status" -> "OK"|"EventIdCollision"|"CommitFailed", "EventID" -> eid, "Digest" -> "sha256:...", "Path" -> path, "Idempotent" -> True|False, "Ref" -> "event:evt:..."|>`
+→ OK: `<|"Status" -> "OK", "EventID" -> eid, "Digest" -> "sha256:...", "Path" -> path, "Idempotent" -> True|False, "Ref" -> "event:evt:..."|>`
+→ EventIdCollision: `<|"Status" -> "EventIdCollision", "EventID" -> eid, "Existing" -> "sha256:...", "New" -> "sha256:..."|>`
+→ CommitFailed: `<|"Status" -> "CommitFailed", "EventID" -> eid|>`
 
 ### SourceVaultTransactionLog[opts]
 event directory の event を新しい順に返す。
@@ -205,7 +207,7 @@ pointer の digest 検証済み event 履歴を `Sequence` 昇順で返す。各
 in-flight blob 保護の既定 grace period (秒) を返す。既定値 86400 (24 時間)。
 
 ### SourceVaultGCDryRun[opts] → Association
-削除せずに GC 候補 blob を報告する。`SourceVaultRunGC["ConfirmDelete" -> False]` と同じ。
+削除せずに GC 候補 blob を報告する。`SourceVaultRunGC["ConfirmDelete" -> False, opts]` と同じ。
 
 ### SourceVaultRunGC[opts]
 未参照かつ retention 期限切れの blob を回収する。grace period 内の blob / in-flight write / replay 失敗 vault は削除しない (fail-closed)。実削除前に `SourceVaultCheckVaultConsistency["Quick" -> True]` を実行し、不健全な vault では GC しない。
@@ -213,7 +215,7 @@ in-flight blob 保護の既定 grace period (秒) を返す。既定値 86400 (2
 Options: `"ConfirmDelete" -> False` (True にしないと実削除しない), `"GraceSeconds" -> Automatic` (Automatic は `SourceVaultGCGracePeriod[]` の値)
 
 ### SourceVaultRetentionPlan[scope, opts] → Association
-blob 群の参照状態と retention 判定の計画を返す (削除しない)。
+blob 群の参照状態と retention 判定の計画を返す (削除しない)。`scope` は既定 `All`。現状は判定処理には使われず戻り値にそのままエコーされるのみ (常に全 blob が計画対象)。
 → `<|"Status" -> "OK", "Scope" -> scope, "BlobCount" -> n, "Plan" -> [{<|"Hash", "RefCount", "Referenced", "AgeSeconds"|>}, ...]|>`
 
 ## Consistency / Test (§17.12.11)

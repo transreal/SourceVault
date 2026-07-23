@@ -38,10 +38,14 @@ Options: "DryRun" -> False, "AllowLLMRouter" -> Automatic, "AllowWorkflow" -> Au
 ### SourceVaultProposePromptRoute[prompt_String, opts]
 ClaudeEval向けPromptRouter API (spec v11 5.3)。スケジュールプロンプトをUNEVALUATEDな提案式に解決する。**R9分岐 (2026-07-17)**: 素の予定/スケジュールプロンプト(「今日の予定」等)は統合日別アジェンダ HoldComplete[SourceVaultRoutineAgendaView[Quantity[n,"Days"]]] を提案(カレンダー+ノートブック〆切+要対応メール)。プロンプトが「ノートブック」/notebook を含む・FilterSpec の絞り込みがある・明示スコープ($onWork/仕事)がある場合は従来のノートブック一覧ダッシュボード HoldComplete[SourceVaultUpcomingSchedule["Scope"->..., "Period"->Quantity[n,"Days"], "Refresh"->"Never", "FallbackToCloud"->"Deny", "FilterSpec"-><|...|>]] を提案。式は評価しない。ClaudeEvalブリッジはそのフィールドのみをRuntimeに渡しhead検証する。プロンプトの日付範囲がPeriod、他の絞り込みがFilterSpec(閉じたDSL: Kind And/Or/Not/Field、ホワイトリストOp、スキーマフィールド名のみ、任意コード不可)になる。スケジュール以外のプロンプトはStatus NotDispatched。
 → PromptRouteProposal Association
-Options: opts
+Options: "Caller" -> "ClaudeEval"
 
-例: SourceVaultProposePromptRoute["今日の予定"] → <|"Status"->"Proposed", "ProposedExpression"->HoldComplete[SourceVaultRoutineAgendaView[Quantity[3,"Days"]]], ...|>
-例: SourceVaultProposePromptRoute["今日のノートブックリスト"] → <|"Status"->"Proposed", "ProposedExpression"->HoldComplete[SourceVaultUpcomingSchedule["Period"->Quantity[3,"Days"],...]], ...|>
+**ノートブック〆切一覧の入口 (2026-07-22)**: 「日付語 + ノートブック」(今日/本日/明日/明後日/今週/来週/今月 + 「ノートブック」または notebook) はノートブック一覧ダッシュボード SourceVaultUpcomingSchedule にルーティングされ、その日付語が Period になる (今日=1日, 明日=2日, 明後日=3日, 今週=7日, 来週=14日, 今月=31日)。「今日から3日間のノートブック」のように明示の日数・日付があればそちらが優先。「新規/新しい/作成/作って/作る/new notebook/create」を含む作成要求は除外され、従来どおり SourceVaultNewNotebook ルートに残る。この日付語→Periodの上書きはノートブック側のみで、素の「今日の予定」等のアジェンダの窓 (既定7日) は変えない。
+
+例: SourceVaultProposePromptRoute["今日の予定"] → <|"Status"->"Proposed", "ProposedExpression"->HoldComplete[SourceVaultRoutineAgendaView[Quantity[7,"Days"]]], ...|>
+例: SourceVaultProposePromptRoute["今日のノートブックリスト"] → <|"Status"->"Proposed", "ProposedExpression"->HoldComplete[SourceVaultUpcomingSchedule["Period"->Quantity[1,"Days"],...]], ...|>
+例: SourceVaultProposePromptRoute["今日のノートブック"] → <|"Status"->"Proposed", "ProposedExpression"->HoldComplete[SourceVaultUpcomingSchedule["Scope"->Automatic,"Period"->Quantity[1,"Days"],...]], ...|>
+例: SourceVaultProposePromptRoute["今週のノートブック"] → Period Quantity[7,"Days"] / ["来週のノートブック"] → Quantity[14,"Days"]
 
 ### SourceVaultAddSavedPrompt[prompt_String, targetExprString_String, opts]
 (プロンプト, 式) ペアを**直接**保存 PromptRoute として登録する(事前の ClaudeEval 実行不要)。
@@ -81,12 +85,12 @@ SourceVault所有許可リストとClaudeOrchestrator所有ハンドラー許可
 ### SourceVaultRegisterPromptRoute[route_Association, opts]
 PromptRouteをコンパイル済みprompt-route-registryに追加または置換する。DryRun -> True(デフォルト、rule 103)は計画(Topic/RouteId/アクション)を報告するだけで書き込まない。DryRun -> Falseは原子書き込み(encode→verify round-trip→tmp→Windows安全rename)。廃止は物理削除でなくLifecycleStatusマーク(この層はルートエントリを削除しない)。
 → <|"WrittenCount"->_, "SkippedCount"->_, "ByAction"->_, "Topic"->_, "Channel"->_, "Path"->_|>
-Options: "DryRun" -> True
+Options: "DryRun" -> True, "Confirm" -> False, "Channel" -> "public"
 
 ### SourceVaultListPromptRoutes[opts]
 チャンネルのPromptRouteリストを返す。
 → List
-Options: "IncludeSeed" -> True (Trueのとき、レジストリにないRouteIdについてビルトインシードルートを追加)
+Options: "IncludeSeed" -> True (Trueのとき、レジストリにないRouteIdについてビルトインシードルートを追加), "Channel" -> "public"
 
 ### SourceVaultGetPromptRoute[routeId_String, opts]
 指定RouteIdのPromptRouteを返す。見つからない場合はStatus NotFoundのAssociationを返す。
@@ -129,14 +133,14 @@ Options: opts
 ### SourceVaultPromptReprocessPlan[opts]
 PromptRouteレジストリをスキャンして陳腐化ルートの再処理計画を返す(spec 14.2/14.3)。読み取り専用。再処理は実行しない。陳腐化判定: SchemaVersion不一致、CompiledRegistryVersion不一致、またはStaleRouteIdsに直接指定。分類ポリシー: FunctionRoute(ReadOnly callable) -> "AutoRecomputable", Intentルート/TabularQuery -> "OnDemandRefresh", WorkflowRoute/WorkflowTemplate -> "NeedsApproval"。即時自動再処理はデフォルトでなくキューのみ。
 → Association (計画のみ、キュー)
-Options: "StaleRouteIds" -> {} (直接指定する陳腐化RouteIdのリスト)
+Options: "StaleRouteIds" -> {} (直接指定する陳腐化RouteIdのリスト), "Channel" -> "public"
 
 ## プロンプト保存・検索・UI
 
 ### SaveLastPrompt[memo_String, opts]
 最新の成功したClaudeEval/ContinueEvalプロンプト実行を名前付きPromptRouteとして保存する。memoはRouteのMemoフィールドに格納される自由記述メモ(プロンプトテーブルに表示)。Encrypt -> Trueは生プロンプト/TargetExprStringをSourceVaultEncryptedPut(encrypt-then-MAC、鍵はNBAccess経由)で暗号化しEncryptedPayloadとして埋め込み、Examplesを空に、PromptStorageClassを"Encrypted"に設定(Memoは表示ラベルとして平文保持)。SourceVault暗号化モジュールのロードとSourceVaultInitializeEncryption[]実行が必要。マスターキー基盤未整備のため現状Status NotImplementedを返す(生プロンプトをサイレントに平文保存しない)。Encrypt -> Falseは生プロンプト/関数を平文保存し、PrivacyLevel(SourceVaultResolvePromptPrivacy追跡)とCloudFallbackをルートに記録。SourceVaultDecryptPromptRoute[route]で暗号化ルートを復元。
 → Association
-Options: "Channel" -> Automatic ("public"|"private"|"local"; プライバシーから解決), "Encrypt" -> False, "DryRun" -> False, "RouteId" -> Automatic
+Options: "Channel" -> Automatic ("public"|"private"|"local"; プライバシーから解決), "Encrypt" -> False, "DryRun" -> False, "RouteId" -> Automatic, "ReplayClass" -> Automatic, "PromptText" -> Automatic, "TargetExprString" -> Automatic, "ForceNewVersion" -> False, "Auto" -> False
 
 ### AddPromptMemo[memo_String, opts]
 最新のClaudeEval/ContinueEvalプロンプトに自由記述メモを付与する。SourceVaultAutoSaveLastPromptで自動保存された最新バージョンのMemoをSourceVaultUpdatePromptRouteMemo経由でインプレース更新する(SaveLastPromptと違い冗長な新バージョンを作らない)。対象プロンプトは最終実行から解決("PromptText"で上書き)、プロンプトグループ内最新バージョンを対象("RouteId"で上書き)。保存バージョンが存在しない場合(auto-saveがスキップするHeavyLLMワンショット等)はSaveLastPromptにフォールバック。
@@ -150,11 +154,12 @@ Options: "PromptText" -> Automatic, "RouteId" -> Automatic
 ### SourceVaultSearchPromptRoutes[query_String, opts]
 保存済みPromptRouteのうちプロンプト例またはmemoにqueryを部分一致するものを返す(SourceVaultFindNotebooks Keywordsと同様)。query ""は全件マッチ。実行しない。
 → List (routeのAssociationのリスト)
-Options: "CreatedAt" -> <|"From"->_,"To"->_|>, "UpdatedAt" -> <|"From"->_,"To"->_|> (notebookクエリAPIと同じ日付範囲形式), "Channel" -> All|"public"|"private"|"local", "IncludeSeed" -> True
+Options: "Channel" -> All|"public"|"private"|"local", "IncludeSeed" -> True, "CreatedAt" -> Missing[] (<|"From"->_,"To"->_|>形式で日付範囲フィルタ; notebookクエリAPIと同じ形式), "UpdatedAt" -> Missing[] (同様、最終更新日でフィルタ)
 
 ### SourceVaultFormatPromptRouteList[routes_List, opts]
 保存済みPromptRouteをGridでレンダリングする。列: Prompt, Memo, Target, CreatedAt, UpdatedAt, Privacy。各行に3ボタン: Preview(ドライラン、実行せず何が実行されるか表示)/Run(即実行)/ToInput(保存された関数呼び出し式を新Input cellに書き込み)。SourceVaultFormatNotebookListに準ずる。プロンプトルートリストのデフォルト表示形式。
 → Grid
+Options: "MaxRows" -> Infinity
 
 ### SourceVaultReplayRoute[route_Association, opts]
 保存済みPromptRouteを再実行クラスに応じて再構成し、評価用の式文字列を返す。Replayable: TargetExprStringをそのまま返す。LightLLM: 新プロンプトなしは元のTargetExprStringを復元、新プロンプト文字列を与えると軽量LLM("ExtractModel" -> AutomaticはSourceVault既定モデル)で各パラメータスロットの新InputForm値を抽出してParameterTemplateを埋めた式文字列を返す。HeavyLLMまたは式が記録されていないルートはClaudeEval[...]形式の式を返す。
@@ -195,7 +200,7 @@ SourceVaultPromptRoutePanelがデフォルト(検索なし)状態で表示する
 ### SourceVaultAutoSaveLastPrompt[prompt_String, opts]
 最新の成功したClaudeEval/ContinueEval実行を新しい保存済みPromptRouteバージョンとして保存する(既存バージョンを上書きしない)。ClaudeEvalが自動的に呼び出すデフォルトオンキャプチャパス(手動・memo付きの対応物はSaveLastPrompt)。同一(正規化)プロンプトのバージョンはPromptGroupIdを共有する。TargetExprStringがグループの最新バージョンと重複する場合はスキップ。$SourceVaultPromptAutoSaveでゲート制御。
 → SaveLastPromptの結果 または <|"Status"->"Skipped"|>
-Options: "Memo" -> "", SaveLastPromptの全オプション
+Options: "Memo" -> "", "TurnId" -> Automatic, "ExprString" -> Automatic
 
 ### SourceVaultMatchSavedPromptVersions[prompt_String, opts]
 正規化プロンプトが完全一致する保存済みPromptRouteを全チャンネルから返す(PromptHash正規化と同じ正規化を使用)。primaryを先頭に、その後新着順。マッチなしは{}。
@@ -207,12 +212,12 @@ Options: "Channel" -> All, "IncludeSeed" -> False
 → Association|Missing["NoPrimary"]
 
 ### SourceVaultSetPrimaryPromptRoute[routeId_String, opts]
-ルートをPromptGroupId内のプライマリバージョンとしてマークし、兄弟ルートのPrimaryをクリアする(チャンネル横断)。AutoExecute -> TrueのときClaudeEvalは確認ダイアログなしにルートの凍結式をリリース評価できる(ReplaySafety "EnvironmentIndependent"のルートのみ有効)。可逆なメタデータトグルのためDryRunデフォルトFalse。
+ルートをPromptGroupId内のプライマリバージョンとしてマークし、兄弟ルートのPrimaryをクリアする(チャンネル横断)。AutoExecute -> TrueのときClaudeEvalは確認ダイアログなしにルートの凍結式をリリース評価できる(ReplaySafety "EnvironmentIndependent"のルートのみ有効)。AutoExecute -> Automatic(デフォルト)は既存ルートのAutoExecute値を継承する。可逆なメタデータトグルのためDryRunデフォルトFalse。
 → <|"Status"->_, "RouteId"->_, "Channel"->_, "ClearedSiblings"->_|>
-Options: "AutoExecute" -> False, "DryRun" -> False
+Options: "AutoExecute" -> Automatic, "DryRun" -> False
 
 ### SourceVaultRunPrimaryRoute[groupId_String, opts]
-プライマリルートの凍結式のゲート付きエグゼキュータ。TargetExprStringを評価なしにパースし、(a)headがReadOnly/SafeCreate SourceVault callableで(b)ReplaySafety "EnvironmentIndependent"のときのみ評価する。Set/SetDelayed/AppendTo/ClaudeAttach/SystemCredentialおよび未分類headは拒否(AutoEvaluate禁止rule準拠)。ClaudeEvalはHoldComplete[SourceVaultRunPrimaryRoute[..]]提案経由でのみ到達する(ClaudeEvalが保存式を直接リリースすることはない)。
+プライマリルートの凍結式のゲート付きエグゼキュータ。TargetExprStringを評価なしにパースし、(a)headがReadOnly/SafeCreate SourceVault callableで(b)ReplaySafety "EnvironmentIndependent"のときのみ評価する。Set/SetDelayed/AppendTo/ClaudeAttach/SystemCredentialおよび未分類headは拒否(AutoEvaluate禁止rule準拠)。ClaudeEvalはHoldComplete[SourceVaultRunPrimaryRoute[..]]提案経由でのみ到達する(ClaudeEvalが保存式を直接リリースすることはない)。オプションなし(Options[...]={})。
 → Association
 
 ### SourceVaultPromptVersionsUI[normKey_String, prompt_String, opts]
@@ -222,6 +227,7 @@ Options: "AutoExecute" -> False, "DryRun" -> False
 ### SourceVaultProposeSavedPromptRoute[prompt_String, opts]
 ClaudeEvalエントリの保存済みプロンプト提案器(claudecodeからLLM呼び出し前に弱呼び出し)。"ProposedExpression"として、AutoExecuteありEnvironmentIndependentプライマリのときHoldComplete[SourceVaultRunPrimaryRoute[groupId]]、保存バージョンがあるときHoldComplete[SourceVaultPromptVersionsUI[..]]を返す。機能がオフ・ワンショットバイパスキーマッチ・保存バージョン不一致のときStatus NotDispatched。
 → PromptRouteProposal Association
+Options: "Caller" -> Automatic
 
 ### SourceVaultUpdatePromptRouteMemo[routeId_String, memo_String]
 保存済みPromptRouteのMemoフィールドを設定し(チャンネル原子書き換え)、UpdatedAtを更新する。暗号化ルートでもMemoはプレーンテキストで保存される(表示ラベルのため)。SourceVaultFormatPromptRouteListの編集可能Memoセルが使用する。

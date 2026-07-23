@@ -58,7 +58,7 @@ SourceVaultUpcomingSchedule 本来の装飾付き Grid
 
 これにより `ClaudeEval` の出力は、内部診断 `Association` でも PromptRouter 独自の簡易表でもなく、**allowlist 済み callable を評価した結果**(`SourceVaultUpcomingSchedule` 本来の Title link・tooltip・date styling 付きの表)になります。
 
-`SaveLastPrompt[memo]` で ClaudeEval の実行結果を名前付き PromptRoute として保存でき、`SourceVaultSearchPromptRoutes[query]` で過去に保存したルートをプロンプト例・Memo の部分一致で検索できます。`SourceVaultAddSavedPrompt[prompt, targetExprString]` は「特定プロンプトへの対応の再定義」を、事前の ClaudeEval 実行なしで直接 (プロンプト, 式) ペアとして登録する入口です。プロンプトが「今日の予定」のような素のスケジュール要求のときは、`SourceVaultProposePromptRoute` はノートブック一覧ダッシュボードでなく、カレンダー・ノートブック〆切・要対応メールを統合した日別アジェンダ (`SourceVaultRoutineAgendaView`) を優先して提案します。`$SourceVaultPromptBypassOnce` は「LLM に再度聞く」ボタン用のワンショットバイパスです。`$SourceVaultContextPlannerEnabled` が True のとき、ClaudeEval はコンテキスト依存度に応じたコンテキストプランを自動適用します。
+`SaveLastPrompt[memo]` で ClaudeEval の実行結果を名前付き PromptRoute として保存でき、`SourceVaultSearchPromptRoutes[query]` で過去に保存したルートをプロンプト例・Memo の部分一致で検索できます。`SourceVaultAddSavedPrompt[prompt, targetExprString]` は「特定プロンプトへの対応の再定義」を、事前の ClaudeEval 実行なしで直接 (プロンプト, 式) ペアとして登録する入口です。プロンプトが「今日の予定」のような素のスケジュール要求のときは、`SourceVaultProposePromptRoute` はノートブック一覧ダッシュボードでなく、カレンダー・ノートブック〆切・要対応メールを統合した日別アジェンダ (`SourceVaultRoutineAgendaView`) を優先して提案します。〆切付きノートブックの一覧そのものが欲しいときは **「今日のノートブック」「今週のノートブック」** のように *日付語 + ノートブック* で呼びます (今日=1日, 明日=2日, 明後日=3日, 今週=7日, 来週=14日, 今月=31日 の窓で `SourceVaultUpcomingSchedule`)。「今日から3日間のノートブック」のような明示の日数・日付が優先され、「新規ノートブックを作って」等の作成要求は従来どおり `SourceVaultNewNotebook` に残ります。`$SourceVaultPromptBypassOnce` は「LLM に再度聞く」ボタン用のワンショットバイパスです。`$SourceVaultContextPlannerEnabled` が True のとき、ClaudeEval はコンテキスト依存度に応じたコンテキストプランを自動適用します。
 
 ### TabularQuery — スケジュールの絞り込み
 

@@ -17,7 +17,7 @@ private helper は `SourceVault`ServiceManagerPrivate`` 文脈に置き、公開
 Options: "Path" -> Automatic (Automatic で標準パス使用、明示パスも可)
 
 ### SourceVaultLocalConfigStatus[] → Association
-local init の有無と登録済みプロファイル summary を返す。キー: `LocalConfigRoot`, `LocalInitPath`, `LocalInitExists`, `SearchProfiles`, `ServiceProfiles`。
+local init の有無と登録済みプロファイル summary を返す。キー: `Status`, `LocalConfigRoot`, `LocalInitPath`, `LocalInitExists`, `SearchProfiles`, `ServiceProfiles`。
 
 ### SourceVaultLocalConfigDoctor[opts] → Association
 必須 registry (ReleaseContext / SearchBackend / WebServiceEndpoint) の登録状況を点検し不足を報告する。
@@ -379,6 +379,7 @@ Web UI チャット用のデフォルトモデル名。Automatic で LM Studio `
 
 ### SourceVaultSetBillingAllowed[b] → True | False
 `$SourceVaultBillingAllowed` を設定する。引数は `True` または `False`。
+
 ### $SourceVaultCaneAnomalyTickIntervalSeconds(2026-07-14 追加)
 型: Number, 初期値: 未設定(既定 600)
 service ループが `SourceVaultCaneAnomalyScheduleTick`(SourceVault_anomaly.wl)を呼ぶ判定周期。

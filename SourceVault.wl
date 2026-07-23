@@ -6598,7 +6598,7 @@ iRegistryEntryMatchesQuery[entry_Association, query_] :=
   \:512a\:5148\:9806\:4f4d:
     1. Availability == "Available" \:3092\:4e0a\:4f4d
     2. Freshness: "Fresh" > "Stale" > "Expired" > "Unusable"
-    3. Class: "Heavy-Cloud" > "Heavy-Local" > "Light-Cloud" > "Light-Local"
+    3. Class: "Ultra-Cloud" > "Ultra-Local" > "Heavy-Cloud" > "Heavy-Local" > "Light-Cloud" > "Light-Local"
   Sort key tuple \:3092\:8fd4\:3059\:3002
 *)
 iRegistryResolveOrder[entry_Association] :=
@@ -6621,6 +6621,7 @@ iRegistryResolveOrder[entry_Association] :=
     freshOrder = Switch[Lookup[entry, "Freshness", "Unknown"],
       "Fresh", 0, "Stale", 1, "Expired", 2, "Unusable", 3, _, 4];
     classOrder = Switch[Lookup[entry, "Class", "Unknown"],
+      "Ultra-Cloud", -2, "Ultra-Local", -1,
       "Heavy-Cloud", 0, "Heavy-Local", 1,
       "Light-Cloud", 2, "Light-Local", 3, _, 4];
     (* Stage 9 P1.5: \:540c\:3058 provider/intent \:306b\:8907\:6570\:5019\:88dc\:304c\:3042\:308b\:3068\:304d
@@ -6641,6 +6642,18 @@ iRegistryResolveOrder[entry_Association] :=
      SourceVault \:81ea\:8eab\:306f\:4f4e\:4fa1\:683c\:30c0\:30a4\:30b8\:30a7\:30b9\:30c8\:3092\:4fdd\:6301 (\:4ed5\:69d8\:66f8 \[Section] 2.5)
 *)
 iModelSeedEntries[] := {
+  (* Ultra tier (above heavy): the spec-generation / spec-implementation
+     workflows prefer this class for the implementer role when available.
+     code-ultra = Claude Code CLI (subscription, allowed under the paid-API
+     ban); ultra = Anthropic metered API (requires paid-API permission). *)
+  <|"Kind" -> "Model", "Provider" -> "claudecode", "Intent" -> "code-ultra",
+    "ModelId" -> "claude-fable-5", "Availability" -> "Available",
+    "Class" -> "Ultra-Local", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
+    "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
+  <|"Kind" -> "Model", "Provider" -> "anthropic", "Intent" -> "ultra",
+    "ModelId" -> "claude-fable-5", "Availability" -> "Available",
+    "Class" -> "Ultra-Cloud", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
+    "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "claudecode", "Intent" -> "extraction",
     "ModelId" -> "claude-sonnet-4-6", "Availability" -> "Available",
     "Class" -> "Heavy-Local", "Capabilities" -> {"Reasoning", "Code"},
@@ -14722,6 +14735,27 @@ SourceVaultHarnessRuntimeEnvironmentChangedQ[
 SourceVaultHarnessRuntimeEnvironmentChangedQ[___] :=
   <|"Changed" -> $Failed, "Reason" -> "InvalidArguments"|>;
 
+(* ============================================================
+   privacy 契約の登録 (2026-07-22)
+   privacy 層が無い環境 (単体ロード・テスト) でも動くよう弱結合 (rule 11)。
+   手本: SourceVault_maildb.wl の iSVMDRegisterPrivacyContracts。
+   ============================================================ *)
+iSVRegisterPrivacyContracts[] :=
+  Quiet@Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      SourceVault`SourceVaultRegisterPrivacyContract["SourceVaultResolveReference",
+        <|"Class" -> "Internal", "Exit" -> "None", "Sources" -> {},
+          "Module" -> "SourceVault.wl",
+          "Note" -> "ingest 済みソースの書誌メタ (SourceId/URI/File/URL/Title/Authors/" <>
+            "Published/Kind/PrivacyLevel) を参照文字列から引くだけの内部解決関数。" <>
+            "user-facing な入口ではなく ClaudeAttach の sv URI アタッチと " <>
+            "documentation.wl の cite 解決が呼ぶ。privacy source として宣言された " <>
+            "私的ストア (mail/notebook/eagle/oops/llmlog) には到達しない " <>
+            "(監査の runtime leak 判定でも到達なし)。ソース自身の PrivacyLevel は " <>
+            "戻り値にそのまま載せて呼び出し側へ渡す。"|>]];
+    Null, Null];
+iSVRegisterPrivacyContracts[];
+
 End[];   (* `Private` *)
 
 EndPackage[];
@@ -15044,7 +15078,7 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        "SourceVault_packageapi.wl", "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
        "SourceVault_mailstructure.wl", "SourceVault_mailsuggest.wl",
-       "SourceVault_searchview.wl", "SourceVault_knowledgehome.wl", "SourceVault_cognition.wl", "SourceVault_adjudication.wl", "SourceVault_capbroker.wl", "SourceVault_taint.wl", "SourceVault_anomaly.wl", "SourceVault_routine.wl", "SourceVault_routineplan.wl", "SourceVault_mailagenda.wl",
+       "SourceVault_searchview.wl", "SourceVault_knowledgehome.wl", "SourceVault_cognition.wl", "SourceVault_adjudication.wl", "SourceVault_capbroker.wl", "SourceVault_taint.wl", "SourceVault_anomaly.wl", "SourceVault_routine.wl", "SourceVault_routineplan.wl", "SourceVault_mailagenda.wl", "SourceVault_anonymize.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",
        "SourceVault_workflowcatalog.wl"}]]];

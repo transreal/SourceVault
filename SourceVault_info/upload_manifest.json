@@ -37,7 +37,8 @@
 		"SourceVault_mailsuggest.wl",
 		"SourceVault_packageapi.wl",
 		"SourceVault_llmlog.wl",
-		"SourceVault_simrun.wl"
+		"SourceVault_simrun.wl",
+		"SourceVault_anonymize.wl"
 	],
 	"directories":[
 		"SourceVault_info",

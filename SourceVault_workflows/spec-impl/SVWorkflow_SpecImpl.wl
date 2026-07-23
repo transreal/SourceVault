@@ -13,7 +13,16 @@
 
    Roles map to models generically (NOTE: inverse of spec-review):
      - Implementer role (plan / implement)  -> ClaudeCode`$ClaudeModel
+       (the palette entry upgrades this to the ultra model class when usable:
+        ClaudeCode`ClaudeUltraModelSpec, CLI-first, $ClaudeModel fallback;
+        every prompt to an ultra-class model carries the token-economy
+        subagent directive, and the plan step lets an ultra implementer pick
+        the implementation style native / dag / petri)
      - Verifier role (review / verify)       -> ClaudeCode`$ClaudeAdvisaryModel
+   Verify gates (deterministic, before the LLM verdict): load smoke ->
+   dynamic load+launch -> TEST GATE (a test file must exist AND exit 0 in a
+   fresh kernel; "TestGate"->False restores legacy advisory handling).
+   Approved + test pass => Proven -> True (proven-code contract).
 
    The loop (payload-driven staging):
      NeedPlan --Plan(impl)--> Planned
@@ -69,7 +78,7 @@ If[Length[DownValues[SourceVault`SourceVaultSaveImmutableSnapshot]] === 0,
 BeginPackage["SourceVaultWorkflow`SpecImpl`", {"ClaudeOrchestrator`Workflow`", "SourceVault`"}]
 
 BuildNet::usage =
-  "BuildNet[name, opts] builds and registers a ClaudeOrchestrator WorkflowNet that implements an approved spec as a codified SVWorkflow_<Name> package and returns its workflow id. Options: \"MaxRounds\", \"MaxAuxRounds\", \"ClaudeModel\" (implementer role; default ClaudeCode`$ClaudeModel), \"AdvisaryModel\" (verifier role; default ClaudeCode`$ClaudeAdvisaryModel), \"PlanFunction\", \"ImplementFunction\", \"VerifyFunction\", \"ProgressFile\", \"TargetDir\".";
+  "BuildNet[name, opts] builds and registers a ClaudeOrchestrator WorkflowNet that implements an approved spec as a codified SVWorkflow_<Name> package and returns its workflow id. Options: \"MaxRounds\", \"MaxAuxRounds\", \"ClaudeModel\" (implementer role; default ClaudeCode`$ClaudeModel), \"AdvisaryModel\" (verifier role; default ClaudeCode`$ClaudeAdvisaryModel), \"PlanFunction\", \"ImplementFunction\", \"VerifyFunction\", \"GenTestFunction\" (test-runner seam; default: run test_*.wls in a fresh kernel), \"TestGate\" (default True: a missing test file or a non-zero test exit deterministically forces NeedsRevision; Approved therefore means test pass AND verifier agreement -> Proven), \"ProgressFile\", \"TargetDir\". An ultra-class implementer additionally chooses the implementation style (native / dag / petri) at planning and every prompt to it carries the token-economy subagent directive.";
 
 RunSpecImpl::usage =
   "RunSpecImpl[name, opts] builds the net, submits the initial token, runs the workflow synchronously, and returns a summary association (FinalStatus, Stages, GeneratedFiles, TargetDir, PlanURI, ArtifactURI, VerifyURI, chains). Required option \"Spec\" (sv:// URI / snapshot ref / spec text). Other options: \"Notes\", \"PackageRoot\", plus all BuildNet options and \"MaxSteps\", \"MaxWait\".";
@@ -362,12 +371,46 @@ iOrchCodex[tup_, prompt_] := Module[{ws, answerFile, model, modelArgs, res, ans}
     "[codex produced no output: timed out after " <> ToString[$iOrchCallTimeLimit] <>
       "s or the call failed]"]];
 
-iOrchQuery[m_, prompt_] := Module[{tup = iModelTuple[m], prov, r},
+(* ---- ultra-class detection + token-economy directive ----
+   A model tuple is "ultra-class" when its ModelId equals the model the
+   SourceVault registry resolves for the provider's ULTRA INTENT (code-ultra /
+   ultra, e.g. claude-fable-5) -- the same lookup the ultra resolver itself
+   uses, so detection and resolution can never disagree. (Do NOT look the
+   {Provider, ModelId} entry up and test its Class: the compiled registry
+   auto-fetches CLI catalog entries with Class "Unknown", which would shadow
+   the seed's Ultra-* class.) Registry-driven: no model id is hardcoded here.
+   Memoized per tuple (the registry does not change mid-run). Fail-soft False. *)
+$iUltraIntents = <|"claudecode" -> "code-ultra", "anthropic" -> "ultra"|>;
+
+iUltraModelQ[m_] := iUltraModelQ[m] = Module[{tup = iModelTuple[m], prov, name, intent, res},
+  prov = ToLowerCase[ToString[tup[[1]]]];
+  name = If[Length[tup] >= 2 && StringQ[tup[[2]]], tup[[2]], ""];
+  intent = Lookup[$iUltraIntents, prov, ""];
+  If[name === "" || name === "Automatic" || intent === "", Return[False, Module]];
+  res = Quiet @ Check[
+    SourceVault`ClaudeResolveModel[prov, intent], Missing["ResolveFailed"]];
+  AssociationQ[res] && Lookup[res, "ModelId", ""] === name];
+
+(* cost directive prepended to EVERY prompt sent to an ultra-class model
+   (single choke point: iOrchQuery). The Japanese body is the user-mandated
+   wording: delegate to Opus/Sonnet subagents, keep the main session on
+   design/audit/review, do only the hardest parts here. *)
+$iUltraEconomyDirective =
+  "=== ULTRA SESSION COST DIRECTIVE ===\n" <>
+  "\:30c8\:30fc\:30af\:30f3\:3092\:7bc0\:7d04\:3059\:308b\:305f\:3081\:306bOpus/Sonnet\:3092\:9069\:5207\:306b\:30b5\:30d6\:30a8\:30fc\:30b8\:30a7\:30f3\:30c8\:3068\:3057\:3066\:5207\:308a\:51fa\:3057\:3066\:5b9f\:884c\:3057\:3001\:30e1\:30a4\:30f3\:30bb\:30c3\:30b7\:30e7\:30f3\:306f\:8a2d\:8a08\:3068\:76e3\:67fb\:3001\:30ec\:30d3\:30e5\:30fc\:306b\:5c02\:5ff5\:3057\:3066\:304f\:3060\:3055\:3044\:3002\:5b9f\:88c5\:96e3\:6613\:5ea6\:304c\:7279\:306b\:9ad8\:3044\:3068\:3053\:308d\:306f\:3053\:306e\:30bb\:30c3\:30b7\:30e7\:30f3\:3067\:3084\:3063\:3066\:3088\:3044\:3002\n";
+
+iUltraWrapPrompt[m_, prompt_String] :=
+  If[TrueQ[Quiet @ Check[iUltraModelQ[m], False]],
+    $iUltraEconomyDirective <> "\n" <> prompt, prompt];
+iUltraWrapPrompt[_, prompt_] := prompt;
+
+iOrchQuery[m_, prompt_] := Module[{tup = iModelTuple[m], prov, p2, r},
   prov = ToLowerCase[tup[[1]]];
+  p2 = iUltraWrapPrompt[m, prompt];
   If[prov === "chatgptcodex",
-    iOrchCodex[tup, prompt],
+    iOrchCodex[tup, p2],
     r = Quiet @ Check[
-      Block[{ClaudeCode`$ClaudeModel = tup}, ClaudeCode`ClaudeQuerySync[prompt]], $Failed];
+      Block[{ClaudeCode`$ClaudeModel = tup}, ClaudeCode`ClaudeQuerySync[p2]], $Failed];
     If[StringQ[r], r, ""]]];
 
 (* ============================================================
@@ -429,17 +472,40 @@ iConventions[name_, canon_] :=
   "SourceVaultMachineProfile[] -> <|\"MachineTag\",\"ProcessorCount\",\"MemoryGB\",\"GPUs\",...|>; " <>
   "SourceVaultSimRunFolder[uri_String] -> local folder path | Missing.\n";
 
+(* ---- implementation-style selection (ultra-class implementer only) ----
+   Non-ultra implementers keep the historical default: a plain native
+   function package (a Petri-net / WorkflowNet package is produced only when
+   the spec itself explicitly demands one). An ultra-class implementer is
+   asked to CHOOSE the optimal style among native / dag / petri and to record
+   the choice + reason in the plan (auditable via the plan payload). *)
+$iStyleValues = {"native", "dag", "petri"};
+
+iStyleDirective[model_] := If[! TrueQ[Quiet @ Check[iUltraModelQ[model], False]], "",
+  "IMPLEMENTATION STYLE SELECTION (enabled because an ultra-class implementer is running): choose " <>
+  "the OPTIMAL implementation style for the package core and report it in the JSON:\n" <>
+  "- \"native\" (default): plain Mathematica functions -- sequential logic, reports, computations.\n" <>
+  "- \"dag\": a dependency-DAG of PURE-FUNCTION stages composed within a single run -- choose when " <>
+  "the work is a fan-out/fan-in of independent computations (parallel map / staged pipeline) with " <>
+  "NO state that must survive between runs.\n" <>
+  "- \"petri\": a layer-2 ClaudeOrchestrator`Workflow` WorkflowNet package exposing a public " <>
+  "BuildNet -- choose when the workflow carries state ACROSS steps/turns: approval waits, " <>
+  "retry/revise loops, multi-token progress, pause/resume.\n" <>
+  "Decision rule: state that must survive between turns -> petri; turn-internal parallel pure " <>
+  "stages -> dag; otherwise native. When in doubt choose native.\n"];
+
 (* PLAN: decide single vs multi-stage; if multi, draft a split-implementation aux spec. *)
-iRealPlan[model_, payload_] := Module[{name, canon, spec, notes, prompt, out, json, multi, stages, aux},
+iRealPlan[model_, payload_] := Module[{name, canon, spec, notes, styleDir, prompt, out, json, multi, stages, aux, style, styleReason},
   name = Lookup[payload, "Name", "workflow"];
   canon = Lookup[payload, "Canon", iCanonicalName[name]];
   spec = Lookup[payload, "Spec", ""];
   notes = Lookup[payload, "Notes", ""];
+  styleDir = iStyleDirective[model];
   prompt =
     iLangInstr[payload] <> "\n" <>
     "You are the implementer. Plan how to implement the APPROVED design spec below as a codified " <>
     "SourceVault workflow package named \"" <> name <> "\".\n" <>
     iConventions[name, canon] <>
+    styleDir <>
     "Decide whether the implementation should be split into multiple sequential stages.\n" <>
     "STRONGLY PREFER A SINGLE STAGE. Almost every workflow -- in particular any that generates one " <>
     "notebook / report / visualization -- must be a SINGLE stage that fully implements everything in " <>
@@ -453,7 +519,10 @@ iRealPlan[model_, payload_] := Module[{name, canon, spec, notes, prompt, out, js
     "If multi-stage, write a split-implementation auxiliary spec (Markdown) describing each stage and its scope.\n" <>
     "Write the auxSpec and stage titles in " <> iLangName[] <> ".\n" <>
     "Respond with EXACTLY one JSON object inside a ```json block and nothing else.\n" <>
-    "Schema: {\"multi\":true|false,\"stages\":[\"stage title\",...],\"auxSpec\":\"markdown (\\\"\\\" if single stage)\"}\n" <>
+    If[styleDir === "",
+      "Schema: {\"multi\":true|false,\"stages\":[\"stage title\",...],\"auxSpec\":\"markdown (\\\"\\\" if single stage)\"}\n",
+      "Schema: {\"multi\":true|false,\"stages\":[\"stage title\",...],\"auxSpec\":\"markdown (\\\"\\\" if single stage)\"," <>
+      "\"style\":\"native\"|\"dag\"|\"petri\",\"styleReason\":\"one-line justification\"}\n"] <>
     If[StringQ[notes] && notes =!= "", "\n=== Implementation notes ===\n" <> notes <> "\n", ""] <>
     "\n=== APPROVED SPEC ===\n" <> spec;
   out = iOrchQuery[model, prompt];
@@ -464,7 +533,14 @@ iRealPlan[model_, payload_] := Module[{name, canon, spec, notes, prompt, out, js
   If[stages === {}, stages = {"(single)"}; multi = False];
   If[! multi, stages = {First[stages]}];
   aux = Lookup[json, "auxSpec", ""];
-  <|"Multi" -> multi, "Stages" -> stages, "AuxSpec" -> If[StringQ[aux], aux, ""]|>];
+  (* style keys only appear for an ultra-class implementer; anything else
+     (absent / invalid) collapses to "" = the historical native default *)
+  style = Lookup[json, "style", ""];
+  If[! (StringQ[style] && MemberQ[$iStyleValues, style]), style = ""];
+  styleReason = Lookup[json, "styleReason", ""];
+  If[! StringQ[styleReason], styleReason = ""];
+  <|"Multi" -> multi, "Stages" -> stages, "AuxSpec" -> If[StringQ[aux], aux, ""],
+    "Style" -> style, "StyleReason" -> styleReason|>];
 
 (* AUX REVIEW: verifier reviews the auxiliary split-implementation spec. *)
 iRealPlanReview[model_, payload_, auxText_] := Module[{prompt, out, json, verdict, findings, rtext},
@@ -512,6 +588,37 @@ iRealPlanRevise[model_, payload_, auxText_, feedback_] := Module[{name, canon, p
     <|"AuxSpec" -> If[StringQ[aux], aux, auxText],
       "Stages" -> If[stages =!= {}, stages, Lookup[payload, "Stages", {"(single)"}]]|>]];
 
+(* style-specific packaging directives for the implement prompt. Only a plan
+   made by an ultra-class implementer sets ImplStyle; "" (or "native") keeps
+   the historical plain-function-package behavior with no extra text. *)
+iStyleImplementBlock[payload_] := Module[
+  {style = Lookup[payload, "ImplStyle", ""], reason},
+  reason = Lookup[payload, "StyleReason", ""];
+  reason = If[StringQ[reason] && reason =!= "", " Reason recorded at planning: " <> reason, ""];
+  Switch[style,
+    "petri",
+    "IMPLEMENTATION STYLE: \"petri\" (chosen at planning)." <> reason <> "\n" <>
+    "Implement the core as a layer-2 codified workflow driven by a ClaudeOrchestrator WorkflowNet:\n" <>
+    "- Expose a PUBLIC BuildNet[...] that builds and registers the net (a WorkflowNet spec with " <>
+    "Places / Transitions / Guards / PureFunction handlers via ClaudeCreateWorkflowNet) and returns " <>
+    "the workflow id, mirroring the structure of SVWorkflow_SpecImpl/SpecReview.\n" <>
+    "- Include \"ClaudeOrchestrator`Workflow`\" in the BeginPackage needed contexts and self-bootstrap " <>
+    "ClaudeOrchestrator.wl + ClaudeOrchestrator_workflow.wl from pkgRoot (DownValues-guarded Get) " <>
+    "BEFORE BeginPackage, exactly like the spec-impl workflow package does.\n" <>
+    "- The <Launch>[\"run\"] form submits the initial token (ClaudeSubmitToken) and drives the net " <>
+    "(ClaudeRunWorkflow), returning the final-token summary. The no-arg launch stays a SAFE report " <>
+    "(net structure / places / description), never running the net.\n" <>
+    "- The test file must exercise BuildNet plus one full run of the net with injected pure-function " <>
+    "mock handlers (no LLM / no network).\n",
+    "dag",
+    "IMPLEMENTATION STYLE: \"dag\" (chosen at planning)." <> reason <> "\n" <>
+    "Structure the core as an explicit dependency-DAG of PURE-FUNCTION stages composed within a " <>
+    "single run: declare the stages and their dependencies (fan-out/fan-in) as data, evaluate " <>
+    "independent stages independently, and keep every stage a side-effect-free function so each is " <>
+    "unit-testable on its own. No state may survive between runs. The test file must cover the " <>
+    "stages individually AND one composed end-to-end run.\n",
+    _, ""]];
+
 (* IMPLEMENT: carry out the implementation sub-steps for the current stage
    (write/modify code -> write tests -> run tests -> verify results) and return
    the file manifest (code + test files) plus a structured step log. *)
@@ -534,6 +641,7 @@ iRealImplement[model_, payload_] := Module[
     "You are the implementer. Implement the APPROVED design spec below as a codified SourceVault " <>
     "workflow package named \"" <> name <> "\".\n" <>
     iConventions[name, canon] <>
+    iStyleImplementBlock[payload] <>
     If[multi,
       "This is a MULTI-STAGE implementation. Implement ONLY stage " <> ToString[idx] <> " of " <>
         ToString[Length[stages]] <> ": \"" <> stageTitle <> "\". Build on any files already generated; " <>
@@ -573,6 +681,9 @@ iRealImplement[model_, payload_] := Module[
     "up to SourceVault.wl then Get it), use NETWORK-FREE unit tests of the core logic INCLUDING data-shape " <>
     "handling (feed a sample TimeSeries / sample {date,value} pairs instead of calling the network), Print " <>
     "PASS/FAIL counts, and Exit[1] on ANY failure.\n" <>
+    "THE TEST FILE IS A HARD GATE: a missing test file, or a test run that exits non-zero, deterministically " <>
+    "forces NeedsRevision -- approval is impossible until the generated test actually passes (exit 0) in a " <>
+    "fresh kernel AND the verifier agrees. Never ship a knowingly failing or placeholder test.\n" <>
     If[existing =!= {}, "\nAlready-generated files (relative paths): " <>
       StringRiffle[existing, ", "] <> "\n", ""] <>
     If[StringQ[lastVerify] && lastVerify =!= "",
@@ -683,6 +794,12 @@ iRealVerify[model_, payload_, filesText_] := Module[{prompt, out, json, verdict,
     "an ASCII context (e.g. a \"SpecV2\"-style ASCII leaf) would FAIL to load and is WRONG. NEVER " <>
     "request ASCII-izing, renaming, or otherwise changing the context / file name / BeginPackage form " <>
     "-- treat naming, syntax and load-ability as settled facts, never a finding.\n\n" <>
+    With[{style = Lookup[payload, "ImplStyle", ""]},
+      If[! (StringQ[style] && style =!= ""), "",
+        "IMPLEMENTATION STYLE (chosen at planning): \"" <> style <> "\". Judge the structure against " <>
+        "that choice: for \"petri\" a WorkflowNet/BuildNet-based package is INTENTIONAL (not " <>
+        "overengineering); for \"dag\" explicit pure-function stages are intentional. Do not demand a " <>
+        "restructuring to a different style unless the spec itself requires it.\n\n"]] <>
     "WHAT TO JUDGE -- SPEC FIDELITY ONLY: does the package implement the APPROVED requirements" <>
     If[multi, " for THIS stage", ""] <> "? When the APPROVED spec has an \"## Execution Profile\" " <>
     "with ExecutionClass \"simulation\", also check the simulation contract: bulk outputs must go to " <>
@@ -876,10 +993,12 @@ iDynHarnessLoad[targetDir_, slug_, pkgRoot_] := Module[
     <|"Ran" -> False, "OK" -> False,
       "Output" -> "dynamic load test could not run (wolframscript unavailable or timed out): " <> ToString[runRes]|>]];
 
-(* run the generated test file in a fresh kernel. ADVISORY: its result is
-   surfaced to the LLM verifier as context (not a hard gate), because a test can
-   fail on its own fragility rather than a real package defect. The hard
-   deterministic gate is iDynHarnessLoad (load + no-arg launch). *)
+(* run the generated test file in a fresh kernel. HARD GATE (proven-code
+   contract): when the test gate is on (default), a non-zero exit code
+   deterministically forces NeedsRevision -- a fragile test must be FIXED by
+   the implementer, not waved through. Only an INCONCLUSIVE run (wolframscript
+   unavailable / timed out: "Ran" -> False) falls back to advisory handling so
+   an infrastructure problem never blocks. *)
 iRunGenTest[targetDir_] := Module[{testFiles, testRes, exitCode, stdout},
   testFiles = FileNames["test_*.wls", targetDir];
   If[testFiles === {}, Return[<|"Ran" -> False, "OK" -> True, "Output" -> "(no test file)"|>]];
@@ -924,6 +1043,8 @@ iPlanHandler[model_, planFn_, progressFile_] := Function[binding,
     <|"Payload" -> Join[pl, <|
       "Multi" -> multi, "Stages" -> stages, "StageIndex" -> 1,
       "AuxSpec" -> aux, "AuxApproved" -> ! multi, "AuxRound" -> 0,
+      "ImplStyle" -> Lookup[res, "Style", ""],
+      "StyleReason" -> Lookup[res, "StyleReason", ""],
       "PlanRef" -> ref, "PlanURI" -> iRefToURI[ref]|>]|>]];
 
 iAuxReviewHandler[vmodel_, imodel_, reviewFn_, reviseFn_, progressFile_] := Function[binding,
@@ -1020,8 +1141,10 @@ iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[bindin
         "Round" -> If[emptyImpl, Lookup[pl, "MaxRounds", $DefaultMaxRounds], Lookup[pl, "Round", 1]],
         "ArtifactRef" -> ref, "ArtifactURI" -> iRefToURI[ref], "ImplModel" -> iModelLabel[model]|>]|>]];
 
-iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True] := Function[binding,
-  Quiet @ Module[{pl, idx, ctx, smoke, dyn, gentest, filesText, res, verdict, findings, rtext, ref},
+iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True,
+    genTestFn_:Automatic, testGateQ_:True] := Function[binding,
+  Quiet @ Module[{pl, idx, ctx, smoke, dyn, gtFn, testsOnDisk, gentest,
+      testGate = "NotRun", filesText, res, verdict, findings, rtext, ref},
     pl = iPayload[binding];
     idx = Lookup[pl, "StageIndex", 1];
     iProg[progressFile, pl, "Verify", "verifier", model,
@@ -1066,26 +1189,59 @@ iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True] := Fu
             "via SourceVault`SourceVaultLoadWorkflow and its no-arg launch entry was called. " <>
             "Result: " <> Lookup[dyn, "Output", ""] <> " " <>
             "Fix so the package loads with no error messages and the no-arg launch returns cleanly (no Missing/$Failed)."],
-        (* load gate OK (or inconclusive) -> run the generated test (ADVISORY) and
-           feed its real output to the LLM verifier, then verify against the spec *)
-        gentest = If[TrueQ[$iDynTest] && TrueQ[dyn["Ran"]],
-          iProg[progressFile, pl, "Verify", "verifier", model, "running generated test (fresh kernel)"];
-          iRunGenTest[targetDir],
-          <|"Ran" -> False, "Output" -> ""|>];
-        filesText = iReadGenerated[targetDir, Lookup[pl, "GeneratedFiles", {}]] <>
-          If[TrueQ[gentest["Ran"]],
-            "\n\n=== EXECUTED TEST RESULT (the generated test was run in a fresh wolframscript kernel) ===\n" <>
-              Lookup[gentest, "Output", ""] <> "\n", ""];
-        res = verifyFn[model, pl, filesText];
-        verdict = Lookup[res, "Verdict", "NeedsRevision"];
-        findings = Lookup[res, "Findings", "[]"];
-        rtext = Lookup[res, "ReviewText", ""]]];
+        (* load gates OK (or inconclusive) -> TEST HARD GATE (proven-code
+           contract): (1) a test file MUST exist; (2) it must exit 0 in a fresh
+           kernel. Only then does the LLM verifier judge spec fidelity, so an
+           Approved verdict means deterministic-test pass AND verifier
+           agreement. An inconclusive run ("Ran" -> False: wolframscript
+           unavailable / timed out) never blocks -- it is recorded as
+           TestGate "NotRun" (Proven stays False). "TestGate" -> False
+           (testGateQ) restores the legacy advisory behavior. *)
+        gtFn = genTestFn /. Automatic -> iRunGenTest;
+        testsOnDisk = FileNames["test_*.wls", targetDir];
+        Which[
+          TrueQ[testGateQ] && testsOnDisk === {},
+          (testGate = "Missing";
+           verdict = "NeedsRevision";
+           findings = "[{\"id\":\"missing-tests\",\"severity\":\"blocker\",\"title\":\"no test file was generated (the verification code is mandatory)\"}]";
+           rtext = "TEST GATE FAILED -- NO TEST FILE: verification code must be generated TOGETHER with the " <>
+             "implementation. Emit a standalone-runnable \"test_<canon>.wls\" (loads the package via " <>
+             "SourceVault`SourceVaultLoadWorkflow, network-free assertions over the core logic, Print " <>
+             "PASS/FAIL counts, Exit[1] on any failure) in the same file manifest as the code."),
+          True,
+          (gentest = If[TrueQ[testGateQ] || (TrueQ[$iDynTest] && TrueQ[dyn["Ran"]]),
+             iProg[progressFile, pl, "Verify", "verifier", model, "running generated test (fresh kernel)"];
+             gtFn[targetDir],
+             <|"Ran" -> False, "OK" -> True, "Output" -> ""|>];
+           If[TrueQ[gentest["Ran"]] && ! TrueQ[gentest["OK"]] && TrueQ[testGateQ],
+             (testGate = "Failed";
+              verdict = "NeedsRevision";
+              findings = "[{\"id\":\"test-failed\",\"severity\":\"blocker\",\"title\":\"the generated test fails (non-zero exit) in a fresh kernel\"}]";
+              rtext = "TEST GATE FAILED -- the generated test was ACTUALLY RUN in a fresh wolframscript kernel " <>
+                "and exited non-zero. Approval is impossible until the test passes (exit 0). Fix the CODE when an " <>
+                "assertion exposes a real defect, or fix the TEST when the test itself is wrong/fragile -- then " <>
+                "re-emit both. Test output:\n" <> Lookup[gentest, "Output", ""]),
+             (testGate = Which[
+                TrueQ[gentest["Ran"]] && TrueQ[gentest["OK"]], "Passed",
+                True, "NotRun"];
+              filesText = iReadGenerated[targetDir, Lookup[pl, "GeneratedFiles", {}]] <>
+                If[TrueQ[gentest["Ran"]],
+                  "\n\n=== EXECUTED TEST RESULT (the generated test was run in a fresh wolframscript kernel) ===\n" <>
+                    Lookup[gentest, "Output", ""] <> "\n", ""];
+              res = verifyFn[model, pl, filesText];
+              verdict = Lookup[res, "Verdict", "NeedsRevision"];
+              findings = Lookup[res, "Findings", "[]"];
+              rtext = Lookup[res, "ReviewText", ""])])]]];
     ref = iSaveVerify[Lookup[pl, "Name", "wf"], idx, Lookup[pl, "Round", 1],
       verdict, findings, Lookup[pl, "ArtifactRef", "none"], rtext,
       iModelLabel[model]];
     <|"Payload" -> Join[pl, <|"Verdict" -> verdict, "VerifyRef" -> ref,
         "VerifyURI" -> iRefToURI[ref], "LastVerifyText" -> rtext,
-        "VerifyModel" -> iModelLabel[model], "SmokeOK" -> TrueQ[Lookup[smoke, "OK", False]]|>]|>]];
+        "VerifyModel" -> iModelLabel[model], "SmokeOK" -> TrueQ[Lookup[smoke, "OK", False]],
+        "TestGate" -> testGate,
+        (* proven-code contract: BOTH the deterministic test pass AND the
+           verifier's agreement are required for a Proven artifact *)
+        "Proven" -> (verdict === "Approved" && testGate === "Passed")|>]|>]];
 
 iApproveHandler[progressFile_] := Function[binding,
   Quiet @ Module[{pl}, pl = iPayload[binding];
@@ -1131,13 +1287,15 @@ Options[BuildNet] = {
   "PlanReviseFunction" -> Automatic,
   "ImplementFunction" -> Automatic,
   "VerifyFunction" -> Automatic,
+  "GenTestFunction" -> Automatic,
   "ProgressFile" -> None,
   "SmokeTest" -> True,
+  "TestGate" -> True,
   "TargetDir" -> Automatic};
 
 BuildNet[name_String, opts:OptionsPattern[]] := Module[
   {claude, advisary, planFn, planReviewFn, planReviseFn, implFn, verifyFn,
-   progressFile, smokeQ, targetDir, spec, wid},
+   genTestFn, testGateQ, progressFile, smokeQ, targetDir, spec, wid},
   claude   = iResolveClaude[OptionValue["ClaudeModel"]];
   advisary = iResolveAdvisary[OptionValue["AdvisaryModel"]];
   planFn       = OptionValue["PlanFunction"] /. Automatic -> iRealPlan;
@@ -1145,6 +1303,8 @@ BuildNet[name_String, opts:OptionsPattern[]] := Module[
   planReviseFn = OptionValue["PlanReviseFunction"] /. Automatic -> iRealPlanRevise;
   implFn   = OptionValue["ImplementFunction"] /. Automatic -> iRealImplement;
   verifyFn = OptionValue["VerifyFunction"] /. Automatic -> iRealVerify;
+  genTestFn = OptionValue["GenTestFunction"];
+  testGateQ = TrueQ[OptionValue["TestGate"]];
   progressFile = OptionValue["ProgressFile"];
   smokeQ = TrueQ[OptionValue["SmokeTest"]];
   targetDir = OptionValue["TargetDir"] /. Automatic ->
@@ -1203,7 +1363,7 @@ BuildNet[name_String, opts:OptionsPattern[]] := Module[
         "Guard" -> Function[b, ! iImplBlocked[b]],
         "Priority" -> 1,
         "Executor" -> "PureFunction",
-        "RuntimeSpec" -> <|"Handler" -> iVerifyHandler[advisary, verifyFn, progressFile, targetDir, smokeQ]|>],
+        "RuntimeSpec" -> <|"Handler" -> iVerifyHandler[advisary, verifyFn, progressFile, targetDir, smokeQ, genTestFn, testGateQ]|>],
       "Approve" -> WorkflowTransition["Approve",
         "InputArcs" -> {<|"Place" -> "Verified"|>},
         "OutputArcs" -> {<|"Place" -> "Approved", "TokenKind" -> "Artifact"|>},
@@ -1288,7 +1448,9 @@ RunSpecImpl[name_String, opts:OptionsPattern[]] := Module[
     "PlanReviseFunction" -> OptionValue["PlanReviseFunction"],
     "ImplementFunction" -> OptionValue["ImplementFunction"],
     "VerifyFunction" -> OptionValue["VerifyFunction"],
+    "GenTestFunction" -> OptionValue["GenTestFunction"],
     "SmokeTest" -> OptionValue["SmokeTest"],
+    "TestGate" -> OptionValue["TestGate"],
     "ProgressFile" -> progressFile, "TargetDir" -> targetDir];
 
   initPayload = Join[<|
@@ -1323,6 +1485,9 @@ RunSpecImpl[name_String, opts:OptionsPattern[]] := Module[
     "Stages" -> Lookup[finalPayload, "Stages", {"(single)"}],
     "Rounds" -> Lookup[finalPayload, "Round", Missing[]],
     "FinalVerdict" -> Lookup[finalPayload, "Verdict", Missing[]],
+    "ImplStyle" -> Lookup[finalPayload, "ImplStyle", ""],
+    "TestGate" -> Lookup[finalPayload, "TestGate", "NotRun"],
+    "Proven" -> TrueQ[Lookup[finalPayload, "Proven", False]],
     "BlockReason" -> Lookup[finalPayload, "BlockReason", ""],
     "GeneratedFiles" -> Lookup[finalPayload, "GeneratedFiles", {}],
     "ImplModel" -> Lookup[finalPayload, "ImplModel", Missing[]],

@@ -1,5 +1,3 @@
-## ブートストラップ / 設定
-
 ### $SourceVaultVersion
 型: String
 パッケージバージョン文字列。現行値 `"2026-05-29-stage-9-p1.5-model-registry-autoupdate"`。
@@ -130,6 +128,10 @@ Options:
 - `PinVersion` -> Automatic | True | False
 - `"Asynchronous"` -> False (True 時は LLMGraphDAGCreate 経由でジョブキューに投入し JobId を即時 return。LLMGraphDAGCreate (claudecode.wl) が必要)
 - `"EnsureUUID"` -> Automatic | True | False (`.nb` 取り込み時の UUID 自動付与。Automatic/True なら hash 計算前に SourceVaultEnsureNotebookUUID を呼び元ファイルに UUID を埋め込む。`.nb` 以外と巨大ファイル (`>$SourceVaultMaxFileSizeMB`) はスキップ。付与に失敗しても ingest は続行)
+
+### SourceVaultResolveReference[ref]
+ingest 済みソースを参照文字列から解決する。ref は正準 snapshot URI (`sv://snapshot/sha256/<hex>`) / SourceId (`src-...`) / ingest 済み URL のいずれか。ClaudeAttach の sv URI アタッチ / documentation.wl の cite 解決が利用する。
+→ `<|"Status" -> "OK"|"NotFound", "SourceId" -> _, "URI" -> _, "File" -> _ (現 PC で実在する raw snapshot パス、無ければ ""), "URL" -> _, "Title" -> _, "Authors" -> _, "Published" -> _, "Kind" -> _, "PrivacyLevel" -> _|>`
 
 ### SourceVaultIngestWait[ingestResult, timeoutSec]
 非同期 ingest の完了を待つ。ingestResult が sync 完了済み (Status: Ingested/AlreadyCurrent/RebuiltMetadata) なら即座に return。Status: Queued の場合は SourceId の snapshot 増加を polling して新規 snapshot 出現で完了。第一引数は SourceVaultIngest の結果 Association または SourceId String。timeoutSec 既定 60 秒、超過で Status: Timeout。

@@ -1816,7 +1816,12 @@ iSVPRSeedPromptRoutes[] :=
            \:7d20\:306e\:300c\:4e88\:5b9a/\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb\:300d\:306f Propose \:5074\:306e\:5206\:5c90\:3067
            seed-sourcevault-routine-agenda-v1 (AgendaView) \:3078\:3002 *)
         "KeywordsAny" -> {"\:30b9\:30b1\:30b8\:30e5\:30fc\:30eb", "\:4e88\:5b9a", "schedule",
-          "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30ea\:30b9\:30c8", "notebook list"}
+          "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30ea\:30b9\:30c8", "notebook list",
+          (* \:300c\:65e5\:4ed8\:8a9e + \:306e + \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d\:306e\:5b9a\:578b\:53e5 (2026-07-22)\:3002
+             \:7d20\:306e\:300c\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d\:306f\:5165\:308c\:306a\:3044 (\:65b0\:898f\:4f5c\:6210\:30eb\:30fc\:30c8\:3068\:885d\:7a81\:3059\:308b)\:3002 *)
+          "\:4eca\:65e5\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af", "\:660e\:65e5\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af",
+          "\:4eca\:9031\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af", "\:6765\:9031\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af",
+          "\:4eca\:6708\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af"}
       |>,
       "Target" -> <|
         "Kind"       -> "TabularQuery",
@@ -3377,6 +3382,48 @@ iSVPRNotebookListPromptQ[prompt_String] :=
   StringContainsQ[prompt, "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af"] ||
   StringContainsQ[ToLowerCase[prompt], "notebook"];
 
+(* ----- notebook deadline window (2026-07-22) -----
+   \:300c\:4eca\:65e5\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d\:300c\:4eca\:9031\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d\:306e\:3088\:3046\:306a\:300c\:65e5\:4ed8\:8a9e + \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d\:306e
+   \:8a00\:3044\:65b9\:3092\:3001\:7de0\:3081\:5207\:308a\:4ed8\:304d\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:4e00\:89a7 (SourceVaultUpcomingSchedule) \:306e\:6b63\:898f\:5165\:53e3\:306b\:3059\:308b\:3002
+   R9 \:3067\:7d20\:306e\:300c\:4e88\:5b9a\:300d\:304c\:7d71\:5408\:30a2\:30b8\:30a7\:30f3\:30c0\:3078\:79fb\:3063\:305f\:305f\:3081\:3001\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:4e00\:89a7\:306b\:306f
+   \:305d\:308c\:5c02\:7528\:306e\:8a00\:3044\:56de\:3057\:304c\:5fc5\:8981\:306b\:306a\:3063\:305f\:3002
+   \:300c\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:4f5c\:3063\:3066\:300d\:7cfb\:306f\:4f5c\:6210\:30eb\:30fc\:30c8 (SourceVaultNewNotebook) \:306e\:6301\:3061\:5206\:306a\:306e\:3067\:9664\:5916\:3059\:308b\:3002 *)
+iSVPRNotebookCreatePromptQ[prompt_String] :=
+  StringContainsQ[prompt,
+    {"\:65b0\:898f", "\:65b0\:3057\:3044", "\:4f5c\:6210", "\:4f5c\:3063\:3066", "\:4f5c\:308b"}] ||
+  StringContainsQ[ToLowerCase[prompt],
+    {"new notebook", "create"}];
+
+(* bare day word -> forward window in days (today inclusive).
+   Missing["NoDayWord"] when the prompt names no day word. This is the
+   NOTEBOOK-side cue only: iSVPRParsePeriodDays (shared with the agenda)
+   is left untouched so \:300c\:4eca\:65e5\:306e\:4e88\:5b9a\:300d keeps its wider agenda window. *)
+iSVPRDayWordDays[prompt_String] :=
+  Module[{lc = ToLowerCase[prompt]},
+    Which[
+      StringContainsQ[prompt, "\:660e\:5f8c\:65e5"], 3,
+      StringContainsQ[prompt, "\:660e\:65e5"] ||
+        StringContainsQ[lc, "tomorrow"], 2,
+      StringContainsQ[prompt, "\:4eca\:65e5"] ||
+        StringContainsQ[prompt, "\:672c\:65e5"] ||
+        StringContainsQ[lc, "today"], 1,
+      StringContainsQ[prompt, "\:4eca\:9031"] ||
+        StringContainsQ[lc, "this week"], 7,
+      StringContainsQ[prompt, "\:6765\:9031"] ||
+        StringContainsQ[lc, "next week"], 14,
+      StringContainsQ[prompt, "\:4eca\:6708"] ||
+        StringContainsQ[lc, "this month"], 31,
+      True, Missing["NoDayWord"]]];
+iSVPRDayWordDays[_] := Missing["NoDayWord"];
+
+(* "\:65e5\:4ed8\:8a9e + \:30ce\:30fc\:30c8\:30d6\:30c3\:30af" (\:6570\:5b57\:306e\:671f\:9593\:6307\:5b9a\:3082\:65e5\:4ed8\:8a9e\:6271\:3044) \:304b\:3064\:4f5c\:6210\:8981\:6c42\:3067\:306a\:3044\:3002 *)
+iSVPRNotebookWindowPromptQ[prompt_String] :=
+  iSVPRNotebookListPromptQ[prompt] &&
+  !iSVPRNotebookCreatePromptQ[prompt] &&
+  (IntegerQ[iSVPRDayWordDays[prompt]] ||
+   AssociationQ[iSVPRParsePeriodDays[prompt]]);
+iSVPRNotebookWindowPromptQ[_] := False;
+
 iSVPRAgendaPreferredQ[prompt_String, filterSpec_, scopeSym_] :=
   !iSVPRNotebookListPromptQ[prompt] &&
   (filterSpec === None || MissingQ[filterSpec]) &&
@@ -3398,7 +3445,9 @@ SourceVaultProposePromptRoute[prompt_String,
       StringContainsQ[prompt, "\:4e88\:5b9a"] ||
       StringContainsQ[ToLowerCase[prompt], "schedule"] ||
       StringContainsQ[prompt, "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30ea\:30b9\:30c8"] ||
-      StringContainsQ[ToLowerCase[prompt], "notebook list"];
+      StringContainsQ[ToLowerCase[prompt], "notebook list"] ||
+      (* \:300c\:4eca\:65e5\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d\:300c\:4eca\:9031\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d\:7b49 (2026-07-22) *)
+      iSVPRNotebookWindowPromptQ[prompt];
     If[!isSchedule,
       (* \:30b9\:30b1\:30b8\:30e5\:30fc\:30eb\:4ee5\:5916\:306f seed route \:30c6\:30fc\:30d6\:30eb (SourceVaultResolvePromptRoute) \:3067
          \:89e3\:6c7a\:3092\:8a66\:307f\:308b\:3002Function route \:304c\:78ba\:5b9a\:3057\:3001\:305d\:306e FunctionId \:304c allowlist \:3067
@@ -3422,6 +3471,15 @@ SourceVaultProposePromptRoute[prompt_String,
       Lookup[periodInfo, "AnchorNote", None], None];
     If[!IntegerQ[periodDays] || periodDays < 1,
       periodDays = 7];
+
+    (* notebook-side day word (2026-07-22). \:300c\:4eca\:65e5\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d -> 1 \:65e5\:3001
+       \:300c\:6765\:9031\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:300d -> 14 \:65e5\:3002\:660e\:793a\:7684\:306a\:65e5\:6570\:30fb\:65e5\:4ed8 (iSVPRParsePeriodDays)
+       \:304c\:3042\:308c\:3070\:305d\:3061\:3089\:304c\:512a\:5148\:3002\:30a2\:30b8\:30a7\:30f3\:30c0\:5074\:306f\:3053\:306e\:4e0a\:66f8\:304d\:3092\:53d7\:3051\:306a\:3044\:3002 *)
+    If[!AssociationQ[periodInfo] &&
+       iSVPRNotebookListPromptQ[prompt],
+      Module[{dw = iSVPRDayWordDays[prompt]},
+        If[IntegerQ[dw] && dw >= 1,
+          periodDays = dw; anchorNote = "NotebookDayWord"]]];
 
     (* non-date narrowing -> FilterSpec *)
     filterSpec = iSVPRParseFilterSpec[prompt];

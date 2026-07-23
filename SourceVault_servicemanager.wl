@@ -1759,6 +1759,17 @@ iDispatchServiceCommand[cmd_Association] := Switch[Lookup[cmd, "Command"],
           <|"Status" -> "OK", "MCP" -> r|>]]],
   _, <|"Status" -> "UnknownCommand", "Command" -> Lookup[cmd, "Command", Missing[]]|>];
 
+(* service ループ内フックの安全実行 (2026-07-22)。
+   `Quiet@TimeConstrained[…]` だけでは不十分だった: TimeConstrained は割り込み不能区間
+   (ファイル I/O 待ち等) にいると時間切れの Abort を保留し、区間を抜けてから発火させる。
+   発火位置が TimeConstrained の外になると、ループ全体を包む CheckAbort[While[…], stop=True]
+   がそれを拾い、サービスが自滅する (実測: Cane tick の 300s 到達と同時刻に ServiceStopped。
+   tick 自身のログすら残らない)。ここで Abort を吸収し、失敗をフック単位に閉じ込める。 *)
+SetAttributes[iSMSafeHook, HoldFirst];
+iSMSafeHook[expr_, secs_, fallback_] := iSMSafeHook[expr, secs, fallback, fallback];
+iSMSafeHook[expr_, secs_, timeoutVal_, errVal_] := Quiet @ CheckAbort[
+  TimeConstrained[Check[expr, errVal], secs, timeoutVal], timeoutVal];
+
 (* pending command を処理。done/ へ結果付きで移し、Stop 要求の有無を返す。
    WLMCP command だけは deferred: サブカーネルへ submit して done を書かずに
    戻る (iSMWLMCPPoll が完了時に done を書く)。 *)
@@ -1800,12 +1811,12 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
   (* llmlog: 起動時に Claude Code セッションログのダイジェストを CoreRoot へ ingest
      (llmlog があれば)。初回バックログは MaxSessionsPerRun で刻み、tick 毎に消化する。 *)
   If[Length[DownValues[SourceVault`SourceVaultIngestClaudeCodeLogs]] > 0,
-    Quiet @ TimeConstrained[
-      Check[SourceVault`SourceVaultIngestClaudeCodeLogs["MaxSessionsPerRun" -> 40], Null], 120, Null]];
+    iSMSafeHook[
+      SourceVault`SourceVaultIngestClaudeCodeLogs["MaxSessionsPerRun" -> 40], 120, Null]];
   (* WLMCP: AgentTools MCP 用サブカーネルを起動時に温める (初回リクエストを
      待たせない)。失敗しても fail-soft (Ready=False で明示エラー応答)。 *)
   If[iSMWLMCPEnabledQ[serviceId],
-    Quiet @ TimeConstrained[Check[iSMWLMCPEnsure[dir], Null], 300, Null]];
+    iSMSafeHook[iSMWLMCPEnsure[dir], 300, Null]];
   (* headless dispatch (配車専用モード): opt-in マシンでは実行 stack
      (workflowregistry + ClaudeOrchestrator workflow engine) を起動時に温める。
      ループ内での初回長時間 Get は heartbeat を止め watchdog の誤再起動を招く
@@ -1813,15 +1824,23 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
   If[Length[DownValues[SourceVault`SourceVaultAutoTriggerHeadlessDispatchTick]] > 0 &&
      TrueQ[Quiet @ Check[SourceVault`SourceVaultHeadlessDispatchEnabledQ[], False]],
     Module[{stackR},
-      stackR = Quiet @ TimeConstrained[
-        Check[SourceVault`Private`iSVATEnsureHeadlessExecStack[], $Failed],
-        300, $Failed];
+      stackR = iSMSafeHook[SourceVault`Private`iSVATEnsureHeadlessExecStack[], 300, $Failed];
       iServiceLog[dir, "HeadlessDispatchStackPreload",
         <|"Result" -> If[AssociationQ[stackR],
             Lookup[stackR, "Status", "?"], ToString[stackR]]|>]]];
   lastRollupAbs = AbsoluteTime[];
   lastCCIngestAbs = AbsoluteTime[];
   lastDiagIngestAbs = 0;   (* hardening 05 Inc2: 初回 tick で即 ingest *)
+  (* 起動直後フリーズ対策 (2026-07-22): 下記3フックは Module 初期値 0 のままだと
+     最初のループ反復で必ず走る。とくに Cane anomaly tick は TimeConstrained 300s
+     を焼き切ることがあり (実測: 起動 12:12:05 → TimedOut 12:17:05)、その間 heartbeat が
+     Counter:1 で止まる → proxy の鮮度判定 (>60s) が healthState:"Stale"/ok:false を返す
+     → SourceVaultMCPRunningQ=False → パレットが「MCP 停止中」固定。ユーザーが押すと
+     再起動されて 300s タイマーがリセットされるので、押し続ける限り復帰しない。
+     起動時刻を基準にして初回発火を1周期ぶん遅らせ、ループ前の安全地帯を確保する。 *)
+  lastCaneAnomalyAbs = AbsoluteTime[];
+  lastCapPruneAbs = AbsoluteTime[];
+  lastStreamSweepAbs = AbsoluteTime[];
   interval = OptionValue["HeartbeatIntervalSeconds"];
   maxSec = OptionValue["MaxSeconds"];  (* 安全弁: Automatic なら無制限 *)
   statusPath = FileNameJoin[{dir, "status.json"}];
@@ -1858,17 +1877,15 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
          (AbsoluteTime[] - lastRollupAbs) > SourceVault`$SourceVaultRollupIntervalSeconds,
         (* #3: rollup をループ内で無制限ブロックさせない。Dropbox I/O ハング等は
            TimeConstrained で打ち切り (Abort)、サービスループは次反復へ進める。 *)
-        Quiet @ TimeConstrained[
-          Check[SourceVault`SourceVaultRollupReferenceEvents[], Null], 30, Null];
+        iSMSafeHook[SourceVault`SourceVaultRollupReferenceEvents[], 30, Null];
         lastRollupAbs = AbsoluteTime[]];
       (* llmlog: 低頻度で Claude Code セッションログを増分 ingest (watermark 冪等・
          変更セッションのみ digest)。rollup と同じく TimeConstrained で打ち切る。 *)
       If[Length[DownValues[SourceVault`SourceVaultIngestClaudeCodeLogs]] > 0 &&
          NumericQ[SourceVault`$SourceVaultClaudeCodeIngestIntervalSeconds] &&
          (AbsoluteTime[] - lastCCIngestAbs) > SourceVault`$SourceVaultClaudeCodeIngestIntervalSeconds,
-        Quiet @ TimeConstrained[
-          Check[SourceVault`SourceVaultIngestClaudeCodeLogs["MaxSessionsPerRun" -> 40], Null],
-          120, Null];
+        iSMSafeHook[
+          SourceVault`SourceVaultIngestClaudeCodeLogs["MaxSessionsPerRun" -> 40], 120, Null];
         lastCCIngestAbs = AbsoluteTime[]];
       (* hardening 05 Inc2: producer per-process spool の診断イベントを
          正準 diagnostics-log へ ingest (単一書き手=この service kernel。
@@ -1877,8 +1894,7 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
          (AbsoluteTime[] - lastDiagIngestAbs) >
            If[NumericQ[SourceVault`$SourceVaultDiagIngestIntervalSeconds],
              SourceVault`$SourceVaultDiagIngestIntervalSeconds, 60],
-        Quiet @ TimeConstrained[
-          Check[SourceVault`SourceVaultDiagnosticsIngestSpool[], Null], 30, Null];
+        iSMSafeHook[SourceVault`SourceVaultDiagnosticsIngestSpool[], 30, Null];
         lastDiagIngestAbs = AbsoluteTime[]];
       (* Cane 1H-A: anomaly ワークフローの schedule tick (owner 登録の ScheduleSpec が
          Enabled のときだけ実行。observe-only・冪等・enforcement なし=I-16。
@@ -1888,9 +1904,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
            If[NumericQ[SourceVault`$SourceVaultCaneAnomalyTickIntervalSeconds],
              SourceVault`$SourceVaultCaneAnomalyTickIntervalSeconds, 600],
         Module[{caneR},
-          caneR = Quiet @ TimeConstrained[
-            Check[SourceVault`SourceVaultCaneAnomalyScheduleTick[], <|"Status" -> "Error"|>],
-            300, <|"Status" -> "TimedOut"|>];
+          caneR = iSMSafeHook[SourceVault`SourceVaultCaneAnomalyScheduleTick[],
+            300, <|"Status" -> "TimedOut"|>, <|"Status" -> "Error"|>];
           lastCaneAnomalyAbs = AbsoluteTime[];
           (* Disabled/NotDue はログしない (量の配慮)。実行・失敗のみ記録 *)
           If[AssociationQ[caneR] && MemberQ[{"Ran", "Reused", "RunFailed", "Error", "TimedOut"},
@@ -1906,10 +1921,9 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
            If[NumericQ[SourceVault`$SourceVaultCapBrokerPruneIntervalSeconds],
              SourceVault`$SourceVaultCapBrokerPruneIntervalSeconds, 3600],
         Module[{pruneR},
-          pruneR = Quiet @ TimeConstrained[
-            Check[SourceVault`SourceVaultPruneCapBroker["DryRun" -> False, "GraceSeconds" -> 300],
-              <|"Status" -> "Error"|>],
-            60, <|"Status" -> "TimedOut"|>];
+          pruneR = iSMSafeHook[
+            SourceVault`SourceVaultPruneCapBroker["DryRun" -> False, "GraceSeconds" -> 300],
+            60, <|"Status" -> "TimedOut"|>, <|"Status" -> "Error"|>];
           lastCapPruneAbs = AbsoluteTime[];
           If[AssociationQ[pruneR] && Lookup[pruneR, "TotalPruned", 0] > 0,
             iServiceLog[dir, "CapBrokerPruned",
@@ -1927,10 +1941,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
            If[NumericQ[SourceVault`$SourceVaultHeadlessDispatchIntervalSeconds],
              SourceVault`$SourceVaultHeadlessDispatchIntervalSeconds, 60],
         Module[{tickR},
-          tickR = Quiet @ TimeConstrained[
-            Check[SourceVault`SourceVaultAutoTriggerHeadlessDispatchTick[],
-              <|"Status" -> "Error"|>],
-            120, <|"Status" -> "TimedOut"|>];
+          tickR = iSMSafeHook[SourceVault`SourceVaultAutoTriggerHeadlessDispatchTick[],
+            120, <|"Status" -> "TimedOut"|>, <|"Status" -> "Error"|>];
           lastDispatchAbs = AbsoluteTime[];
           If[AssociationQ[tickR] && Lookup[tickR, "Status", ""] =!= "Disabled",
             dispatchCounter++;

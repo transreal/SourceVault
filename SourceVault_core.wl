@@ -909,10 +909,19 @@ iAllEventFiles[] := Module[{dir = iSub["events"]},
 ];
 
 Options[SourceVaultTransactionLog] = {"Limit" -> 100, "EventClass" -> All};
-SourceVaultTransactionLog[OptionsPattern[]] := Module[{files, evs, limit, cls},
+SourceVaultTransactionLog[OptionsPattern[]] := Module[{files, strs, evs, limit, cls},
   limit = OptionValue["Limit"]; cls = OptionValue["EventClass"];
   files = iAllEventFiles[];
-  evs = Select[iFromJSON[iReadStringUTF8[#]] & /@ files, AssociationQ];
+  strs = iReadStringUTF8 /@ files;
+  (* 性能 (2026-07-22): EventClass 指定時は「クラス名を含まない本文」を **パース前に** 捨てる。
+     event は 1 件 1 ファイルで、読み込み自体は安い (実測 17,448 件で ~1.1s) が JSON パースは
+     1 件あたり ms 級かかる。旧実装は全件パースしてから EventClass/Limit を適用していたため、
+     どちらを指定しても I/O とパース量が一切減らず、event 総数に線形で悪化していた
+     (17,448 件で 1 スキャン ~100s)。これを 3 回呼ぶ anomaly collector が service ループを
+     300s 占有し、tick の TimeConstrained 満了 → Abort → サービス自滅まで起きた。
+     粗い部分一致なので取りこぼしは無い (厳密判定は直後の Select が従来どおり行う)。 *)
+  If[StringQ[cls], strs = Select[strs, StringQ[#] && StringContainsQ[#, cls] &]];
+  evs = Select[iFromJSON /@ strs, AssociationQ];
   If[cls =!= All, evs = Select[evs, Lookup[#, "EventClass"] === cls &]];
   evs = ReverseSortBy[evs, Lookup[#, "CreatedAtUTC", ""] &];
   If[IntegerQ[limit], Take[evs, UpTo[limit]], evs]

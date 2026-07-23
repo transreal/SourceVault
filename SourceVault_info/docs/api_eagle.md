@@ -42,7 +42,11 @@ Eagle API 死活確認の再チェック間隔秒。`SourceVaultEagleRefresh[]` 
 
 ### $SourceVaultEagleCloudPublishableTag
 型: String, 初期値: "Cloud-Publishable"
-クラウド要約を許可するタグ名 (大文字小文字無視)。このタグが付いた item は "Method"->Automatic の要約でクラウド経路を使い、summary record に PrivacyLevel 0.0 が記録される。クラウド経路は `$ClaudeModel` の provider 準拠: claudecode/未設定→Claude Code CLI、chatgptcodex/codex→Codex CLI (テキストのみ。画像/動画は Codex 未対応のため Claude Code CLI にフォールバックする)。anthropic/openai を明示した場合のみ課金 API を使う。Cloud-Publishable 付き item のサマリーノートでは NBMarkCellConfidential で confidential マークされたセル (privacyLevel > 0.5) を検索インデックス/Note フィールドから除外する。タグ無し item のノートは全文がローカル検索対象 (メタ情報はライブラリ既定 PL の fail-safe マーキングが前提)。
+クラウド要約を許可するタグ名 (大文字小文字無視)。このタグが付いた item は "Method"->Automatic の要約でクラウド経路を使い、summary record に PrivacyLevel 0.0 が記録される。クラウド経路は `$ClaudeModel` の provider 準拠: claudecode/未設定→Claude Code CLI、chatgptcodex/codex→Codex CLI (テキストのみ。画像/動画は Codex 未対応のため Claude Code CLI にフォールバックする)。anthropic/openai を明示した場合のみ課金 API を使う。また summary record に PrivacyLevel が無くても実効 PL に `$SourceVaultEagleCloudPublishablePL` (既定 0.45) の上限が適用され、MCP release gate (sourcevault_get 等) でクラウド開示可になる。Cloud-Publishable 付き item のサマリーノートでは NBMarkCellConfidential で confidential マークされたセル (privacyLevel > 0.5) を検索インデックス/Note フィールドから除外する。タグ無し item のノートは全文がローカル検索対象 (メタ情報はライブラリ既定 PL の fail-safe マーキングが前提)。
+
+### $SourceVaultEagleCloudPublishablePL
+型: Number, 初期値: 0.45
+`$SourceVaultEagleCloudPublishableTag` 付き item の実効 PrivacyLevel 上限。summary record に per-item の "PrivacyLevel" を持たない item には 実効 PL = Min[ライブラリ既定, この値] が適用される。record 側の PrivacyLevel (`SourceVaultEagleSetSummaryPrivacy` またはクラウド要約時の 0.0) はこの上限より優先。非数値を設定するとタグによる PL 反映を無効化 (従来挙動 = ライブラリ既定のみ)。タグ無し item には一切影響しない (fail-closed)。
 
 ### $SourceVaultEagleNotebookStyle
 型: String, 初期値: "SourceVault default.nb"
@@ -50,7 +54,7 @@ Eagle API 死活確認の再チェック間隔秒。`SourceVaultEagleRefresh[]` 
 
 ### $SourceVaultEaglePrivacyLevel
 型: Number|Association, 初期値: 1.0
-Eagle View/Dataset/Search/GeoView 出力セルの既定 PrivacyLevel。数値 (全ライブラリ共通) または `<|登録名orライブラリパス -> PL, "Default" -> PL|>`。0.5 以下ならクラウドにも全文可としてマークしない。
+Eagle View/Dataset/Search/GeoView 出力セルの既定 PrivacyLevel。数値 (全ライブラリ共通) または `<|登録名orライブラリパス -> PL, "Default" -> PL|>`。0.5 以下ならクラウドにも全文可としてマークしない。Cloud-Publishable タグ付き item には `$SourceVaultEagleCloudPublishablePL` の上限が適用される。
 
 ## ライブラリ登録・管理
 
@@ -349,6 +353,7 @@ Options:
 ### SourceVaultEagleSummaryRow[item, opts] → Association
 一覧用の低漏洩行を SourceVault 共通スキーマで返す:
 `<|Kind("eagle"), Id, URI("sv://object/eagle-<id>"), Title, Authors, Published, Summary, URL, File, Date, PrivacyLevel|>` + eagle 固有の `<|Ext, Size, Tags, Folders, Annotation|>`
+PrivacyLevel の優先順位: summary record の "PrivacyLevel" > Cloud-Publishable タグ上限 (`$SourceVaultEagleCloudPublishablePL`) > ライブラリ既定 (`$SourceVaultEaglePrivacyLevel`)。
 `SourceVaultSourceRow` (SourceVault.wl) と同じ共通キーを共有し、`SourceVaultSummaries` の横断検索行と互換。混在データセットの汎用 join/参照キーは "URI"。旧キー "Name" は "Title" に改名。
 Options: "Library" -> Automatic
 
@@ -358,7 +363,7 @@ Options: "Library" -> Automatic
 Options: SourceVaultEagleSearch と同じ全オプション
 
 ### SourceVaultEagleView[query, opts]
-検索結果を行ごとに 原本を開く(▶)/Eagle で表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表で返す。列: ▶/⌂/☰・サムネイル・Date・Name・Ext・Size・Tags・Summary(先頭 150 字、全文は☰)・PL(実効 PrivacyLevel)・URI(`sv://object/eagle-<id>`、`SourceVaultMCPGet` で解決可)。
+検索結果を行ごとに 原本を開く(▶)/Eagle で表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表で返す。列: ▶/⌂/☰・サムネイル・Date・Name・Ext・Size・Tags・Summary(先頭 150 字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(`sv://object/eagle-<id>`、`SourceVaultMCPGet` で解決可)。
 → Dataset
 Options: SourceVaultEagleSearch と同じ全オプション + "Thumbnails" -> True, "ThumbnailSize" -> Automatic
 

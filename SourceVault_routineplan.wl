@@ -765,18 +765,38 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
           "ModifiedWithinDays" -> OptionValue["ModifiedWithinDays"]], {}], {}],
       o]];
   If[!ListQ[ow], ow = {}];
-  Do[Module[{due = iSVRPAbs[Lookup[t, "Due", Missing[]]],
-      kind = Lookup[t, "DueKind", Missing[]], state = Lookup[t, "State", "Open"], item, d},
+  (* A note can carry BOTH a Deadline and a NextReview, and they are
+     INDEPENDENT occurrences: a far-future deadline must not hide a review that
+     falls inside the window (the notebook list shows both columns, so the
+     agenda has to agree). Place one item per date; when both land on the same
+     day the deadline supersedes, so no duplicate row appears. *)
+  Do[Module[{state = Lookup[t, "State", "Open"], dlAbs, nrAbs, dlDay, occ},
     (* Keep = intentionally parked: no reminders, so neither the day list nor
        the overdue band should nag about it *)
-    If[NumberQ[due] && !MemberQ[{"Done", "Pass", "Keep"}, state],
-      d = iSVRPDayStart[due, tz];
-      item = <|"Kind" -> Switch[kind, "NextReview", "Review", _, "Deadline"],
-        "DueT" -> due, "Label" -> iSVRPTaskName[t], "Path" -> Lookup[t, "Path", Missing[]],
-        "State" -> state, "PrivacyLevel" -> iSVRPItemPL[t], "DayAbs" -> d|>;
-      Which[
-        d < fromDay, If[TrueQ[OptionValue["IncludeOverdue"]], AppendTo[overdue, item]],
-        d < toDayEnd, AppendTo[items, item]]]],
+    If[!MemberQ[{"Done", "Pass", "Keep"}, state],
+      dlAbs = iSVRPAbs[Lookup[t, "DeadlineDue", Missing[]]];
+      nrAbs = iSVRPAbs[Lookup[t, "ReviewDue", Missing[]]];
+      (* legacy / injected records expose only Due+DueKind *)
+      If[!NumberQ[dlAbs] && !NumberQ[nrAbs],
+        With[{d0 = iSVRPAbs[Lookup[t, "Due", Missing[]]]},
+          If[NumberQ[d0],
+            If[Lookup[t, "DueKind", Missing[]] === "NextReview",
+              nrAbs = d0, dlAbs = d0]]]];
+      dlDay = If[NumberQ[dlAbs], iSVRPDayStart[dlAbs, tz], Missing[]];
+      occ = {};
+      If[NumberQ[dlAbs], AppendTo[occ, {"Deadline", dlAbs}]];
+      If[NumberQ[nrAbs] &&
+          ! (NumberQ[dlDay] && iSVRPDayStart[nrAbs, tz] == dlDay),
+        AppendTo[occ, {"Review", nrAbs}]];
+      Do[Module[{kind = o[[1]], due = o[[2]], item, d},
+        d = iSVRPDayStart[due, tz];
+        item = <|"Kind" -> kind, "DueT" -> due, "Label" -> iSVRPTaskName[t],
+          "Path" -> Lookup[t, "Path", Missing[]], "State" -> state,
+          "PrivacyLevel" -> iSVRPItemPL[t], "DayAbs" -> d|>;
+        Which[
+          d < fromDay, If[TrueQ[OptionValue["IncludeOverdue"]], AppendTo[overdue, item]],
+          d < toDayEnd, AppendTo[items, item]]],
+        {o, occ}]]],
     {t, ow}];
 
   overdue = SortBy[overdue, #["DueT"] &];

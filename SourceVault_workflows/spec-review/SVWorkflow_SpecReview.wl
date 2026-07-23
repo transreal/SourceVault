@@ -239,12 +239,43 @@ iOrchCodex[tup_, prompt_] := Module[{ws, answerFile, model, modelArgs, res, ans}
     "[codex produced no output: timed out after " <> ToString[$iOrchCallTimeLimit] <>
       "s or the call failed]"]];
 
-iOrchQuery[m_, prompt_] := Module[{tup = iModelTuple[m], prov, r},
+(* ---- ultra-class detection + token-economy directive (mirror of spec-impl) ----
+   A model tuple is "ultra-class" when its ModelId equals the model the
+   SourceVault registry resolves for the provider's ULTRA INTENT (code-ultra /
+   ultra, e.g. claude-fable-5) -- the same lookup the ultra resolver itself
+   uses, so detection and resolution can never disagree. (A {Provider,
+   ModelId} Class test would be shadowed by compiled auto-fetch entries with
+   Class "Unknown".) Registry-driven; memoized; fail-soft False. The directive
+   (user-mandated wording: delegate to Opus/Sonnet subagents, keep the main
+   session on design/audit/review) is prepended to EVERY prompt sent to an
+   ultra-class model. *)
+$iUltraIntents = <|"claudecode" -> "code-ultra", "anthropic" -> "ultra"|>;
+
+iUltraModelQ[m_] := iUltraModelQ[m] = Module[{tup = iModelTuple[m], prov, name, intent, res},
+  prov = ToLowerCase[ToString[tup[[1]]]];
+  name = If[Length[tup] >= 2 && StringQ[tup[[2]]], tup[[2]], ""];
+  intent = Lookup[$iUltraIntents, prov, ""];
+  If[name === "" || name === "Automatic" || intent === "", Return[False, Module]];
+  res = Quiet @ Check[
+    SourceVault`ClaudeResolveModel[prov, intent], Missing["ResolveFailed"]];
+  AssociationQ[res] && Lookup[res, "ModelId", ""] === name];
+
+$iUltraEconomyDirective =
+  "=== ULTRA SESSION COST DIRECTIVE ===\n" <>
+  "\:30c8\:30fc\:30af\:30f3\:3092\:7bc0\:7d04\:3059\:308b\:305f\:3081\:306bOpus/Sonnet\:3092\:9069\:5207\:306b\:30b5\:30d6\:30a8\:30fc\:30b8\:30a7\:30f3\:30c8\:3068\:3057\:3066\:5207\:308a\:51fa\:3057\:3066\:5b9f\:884c\:3057\:3001\:30e1\:30a4\:30f3\:30bb\:30c3\:30b7\:30e7\:30f3\:306f\:8a2d\:8a08\:3068\:76e3\:67fb\:3001\:30ec\:30d3\:30e5\:30fc\:306b\:5c02\:5ff5\:3057\:3066\:304f\:3060\:3055\:3044\:3002\:5b9f\:88c5\:96e3\:6613\:5ea6\:304c\:7279\:306b\:9ad8\:3044\:3068\:3053\:308d\:306f\:3053\:306e\:30bb\:30c3\:30b7\:30e7\:30f3\:3067\:3084\:3063\:3066\:3088\:3044\:3002\n";
+
+iUltraWrapPrompt[m_, prompt_String] :=
+  If[TrueQ[Quiet @ Check[iUltraModelQ[m], False]],
+    $iUltraEconomyDirective <> "\n" <> prompt, prompt];
+iUltraWrapPrompt[_, prompt_] := prompt;
+
+iOrchQuery[m_, prompt_] := Module[{tup = iModelTuple[m], prov, p2, r},
   prov = ToLowerCase[tup[[1]]];
+  p2 = iUltraWrapPrompt[m, prompt];
   If[prov === "chatgptcodex",
-    iOrchCodex[tup, prompt],
+    iOrchCodex[tup, p2],
     r = Quiet @ Check[
-      Block[{ClaudeCode`$ClaudeModel = tup}, ClaudeCode`ClaudeQuerySync[prompt]], $Failed];
+      Block[{ClaudeCode`$ClaudeModel = tup}, ClaudeCode`ClaudeQuerySync[p2]], $Failed];
     If[StringQ[r], r, ""]]];
 
 (* ---- compute-aware spec drafting: execution profile rules + machine table ----
