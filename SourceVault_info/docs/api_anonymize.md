@@ -6,12 +6,18 @@ Implements de-identification primitives for SourceVault (spec `sourcevault_anony
 - L0b: `LineageManifest` node/edge graph + self-validator.
 - G0b: `DeclassificationGrant` request/approve/verify/consume-use lifecycle.
 - L1: `PseudonymMap` (immutable MapVersion snapshots + MapHead CAS pointer).
+- L2a: content-addressed `DerivedArtifact` builder + `ArtifactBinding` + origin reverse-lookup index.
+- L2b: `DeclassificationPublication` record/head + two-phase publish + revoke.
+- L3a/L3b: `EvaluationPlanManifest`/`EvaluationResultManifest`, quarantined ingress, `AnnotationContent`/`AnnotationBinding`, join preview + atomic write-back.
+- A0: `AnonymizationPolicy` registry.
+- A1-A3: `SourceVaultAnonymize` end-to-end execution under an owner grant.
 - U0: `ReleaseHandle` mapping/revoke/rotate.
 
 Design principles (spec §2):
 - P-A3 fail-closed: undecidable/missing-key/unknown-type inputs return `$Failed`/`Failure`, never a guess.
+- P-A7 durable-audit-first: publish/lineage-affecting steps refuse to proceed if the audit event can't be durably appended.
 - P-A13 identity independence: `SourceUnitID` embeds `SourceObjectID` so two different logical objects with identical content never collide; order-independent.
-- P-A15 owner-authorized execution: this module's Plan never reads body content. A high-PL-reading Execute (`SourceVaultAnonymize`) is added once the G0b grant gate exists; not defined in this file.
+- P-A15 owner-authorized execution: `SourceVaultAnonymize` (the high-PL-reading Execute) requires a verified `DeclassificationGrant`; without one it fails closed with `NeedsOwnerApproval` and never touches the body.
 - P-A19 record binding: `Origins` binds ref+digest+role in one record, then canonical-sorts + digests (no parallel arrays).
 
 Private helpers live in ``SourceVault`AnonymizePrivate`` with an `iSVA` prefix and are not part of the public API.
@@ -65,7 +71,7 @@ On success: `<|Status->"Initialized"|"AlreadyInitialized", CreatedKeyRefs, Exist
 Returns existence + Fingerprint (no key material) per KeyRef, keyed by KeyRef string: `<|Exists, Purpose, KeyId, CanonicalizationVersion, Fingerprint|>`. Used for cross-node fingerprint checks (spec §5.5.1).
 
 ### SourceVaultAnonymizeVerifyKeyFingerprints[] → Association
-Verifies current key fingerprints against the shared pin file (spec §5.5.1 / AC-053). First run pins current fingerprints (`Status->"Pinned"`); a match returns `Status->"OK"` (with `NewlyPinnedKeyRefs` for any newly-added keys, e.g. the grant key); a mismatch returns `Status->"Failed", Reason->"KeyFingerprintMismatch"` and blocks further ID generation (guards against a volatile-backend kernel, e.g. MCP, silently minting IDs under a different key). Also returns `Status->"Failed"` for `"VolatileKeyBackend"` or `"KeysMissing"`, or `Status->"Skipped"` if the pin store is unavailable.
+Verifies current key fingerprints against the shared pin file (spec §5.5.1 / AC-053). First run pins current fingerprints (`Status->"Pinned"`); a match returns `Status->"OK"` (with `NewlyPinnedKeyRefs` for any newly-added keys, e.g. the grant key); a mismatch returns `Status->"Failed", Reason->"KeyFingerprintMismatch"` and blocks further ID generation (guards against a volatile-backend kernel, e.g. MCP, silently minting IDs under a different key). Also returns `Status->"Failed"` for `"VolatileKeyBackend"`, `"KeysMissing"`, or `"PinUnreadable"`, or `Status->"Skipped"` for `"PinStoreUnavailable"`/`"PinWriteFailed"`.
 
 ## Canonicalization
 
@@ -126,7 +132,7 @@ Never reads document bodies/blobs/OCR/LLM/pseudonym maps — only parses ref str
 ### SourceVaultAnonymizationPlan[origRef, opts]
 Also accepts a `List` of ref strings: `SourceVaultAnonymizationPlan[origRefs_List, opts]`.
 Builds a schema-only anonymization plan for one or more origin refs (`sv://` URI / snapshot ref / `blob:sha256:...`).
-→ Association: `<|Status->"OK", Type->"AnonymizationPlan", SchemaVersion->1, SchemaOnly->True, Origins (record-bound: OriginRef/RefForm/ObjectClass/Role/PrivacyLevel/PrivacyLevelSource), OriginSetDigest, UnitCountRange->"SchemaOnly", TargetLevelChoices->{"0.45","0.2"}, SinkChoices->{"CloudLLM","CloudLLM-LowTrust"}, CandidatePolicies, CandidateProfiles, CanonicalizationVersion, EngineVersion, PlanDigest, CreatedAtUTC, PlanRef (if Save->True)|>`
+→ Association: `<|Status->"OK", Type->"AnonymizationPlan", SchemaVersion->1, SchemaOnly->True, Origins (record-bound: OriginRef/RefForm/ObjectClass/Role/PrivacyLevel/PrivacyLevelSource), OriginSetDigest, UnitCountRange->"SchemaOnly", TargetLevelChoices->{"0.45","0.2"}, SinkChoices->{"CloudLLM","CloudLLM-LowTrust"}, CandidatePolicies (registered PolicyId keys), CandidateProfiles->{}, CanonicalizationVersion, EngineVersion, PlanDigest, CreatedAtUTC, PlanRef (if Save->True)|>`
 On failure: `<|Status->"Failed", Reason->"EmptyOrNonStringOrigins"|"InvalidOriginRef", Invalid->{...}|>`.
 Options: `"Save" -> False` (when `True`, persists the plan as an `AnonymizationPlan` snapshot via `SourceVaultSaveImmutableSnapshot` and includes `PlanRef`; save failure leaves `PlanRef -> $Failed`).
 Ref forms recognized: `snapshot:<Class>:<hex>`, `sv://snapshot/<Class>/<hex>`, `sv://hash/sha256/<64hex>`, `blob:sha256:<64hex>`, generic `sv://<namespace>/<id...>`. Unrecognized/malformed refs make that origin invalid, and the whole plan fails.
@@ -166,13 +172,85 @@ Required keys: `EntityClass`, `MapScope`. Independent numbering per distinct sco
 
 ### SourceVaultAnonymizeAssignSubjectTokens[mapSpec, identities]
 Appends entities to the map and assigns `SubjectToken`s (lock → reload head → merge → uniqueness check → save new immutable MapVersion (PL 1.0) → MapHead CAS; retries up to 3 times on conflict).
-→ `<|Status->"OK", MapId, MapRef, MapVersion, Assignments, NewVersion->True|>`
+→ `<|Status->"OK", MapId, MapRef, MapVersion, Assignments, NewVersion->True|False|>` (`NewVersion->False` when the batch changed nothing — no new MapVersion is written, fully idempotent)
 `identities` elements: `<|"Institution", "CanonicalID", "Identity"-><|...|>, "KnownStrings"->{...}|>`. The same entity (by `EntityID`) always returns its existing `SubjectToken` (stable numbering); `KnownStrings` are expanded deterministically (NFC, full-width→half-width, whitespace-stripped variants) and merged.
-Failure reasons: `"InvalidMapSpec"`, `"CoreUnavailable"`, `"EmptyIdentities"`, `"EntityIDFailed"`, `"LockUnavailable"`, `"CASRetriesExhausted"`, `"SnapshotSaveFailed"`.
+Failure reasons: `"InvalidMapSpec"`, `"CoreUnavailable"`, `"EmptyIdentities"`, `"EntityIDFailed"`, `"TokenGenerationFailed"`, `"UniquenessViolation"`, `"LockUnavailable"`, `"CASRetriesExhausted"`, `"SnapshotSaveFailed"`.
 
 ### SourceVaultAnonymizePseudonymMap[mapIdOrRef] → Association
 Reads the pseudonym map. Pass a `MapId` (`"map:..."`) for the latest MapHead version, or an exact snapshot ref for that exact version (content immutable even as head advances, AC-029). Returns the map Association with `MapRef` appended.
 Failure reasons: `"MapHeadNotFound"`, `"MapVersionUnreadable"`.
+
+## ArtifactBinding + Reverse Lookup (L2a, spec §5.6)
+
+Anonymized artifacts are saved as content-addressed `DerivedArtifact` snapshots (identical content → identical ref; no volatile fields such as `CreatedAtUTC`/`Status` allowed in the body — the builder is `Private`/internal, used only by `SourceVaultAnonymize`/publish). `ArtifactBinding` is an immutable PL 1.0 snapshot that pins one direction only: binding → artifact/origins/policy/map/lineage. The origin reverse-lookup index is keyed by a keyed-HMAC digest of the canonical origin ref, so only a principal who already knows the origin ref can derive the lookup key (consistent with unlisted discoverability).
+
+### SourceVaultAnonymizedVariants[origRefOrURI] → Association
+The only listing path for a given origin's anonymized variants. Looks up the origin's reverse-index file, loads each bound `ArtifactBinding`, and verifies its `BindingDigest` before including it.
+→ `<|Status->"OK", OriginRef, Variants->{<|BindingRef, ArtifactRef, PolicyRef, MapRef, LineageManifestRef|>...}|>` | `<|Status->"Failed", Reason->"BindingIndexUnavailable"|"DigestUnavailable"|>`
+Tampered/unreadable bindings are silently dropped from `Variants` rather than failing the whole call. Read carries a PL 1.0 privacy note.
+
+## Publication (L2b, spec §5.10, §8.2, §10.4)
+
+Publication state's single source of truth is `PublicationHead` (per-artifact file pointer, CAS-updated) → `DeclassificationPublication` record. The internal publish sequence (used by `SourceVaultAnonymize`) is: staged verification → durable `AnonymizePublicationPrepared` event → head CAS → PL sidecar set → best-effort `AnonymizePublicationCompleted` event → ReleaseHandle issuance. Whatever point a crash occurs at, the observable state is either "not published" or "published + high-PL sidecar" (safe side); re-running resumes idempotently. Staged/Draft artifacts are structurally invisible — no head exists for them yet (AC-048).
+
+### SourceVaultAnonymizePublicationStatus[artifactRef] → Association
+Resolves and integrity-checks the publication head for an artifact.
+→ `<|Status->"OK", State->"Published"|"Revoked", PublicationRef, TargetLevel, Discoverability->"Unlisted", ArtifactRef|>`
+No head yet: `<|Status->"NotPublished", ArtifactRef|>`. Record/artifact digest mismatch: `<|Status->"IntegrityFailed", ArtifactRef|>`.
+
+### SourceVaultRevokeDeclassifiedArtifact[artifactRef, reason] → Association
+Owner-interactive-only mutation. Writes a new `DeclassificationPublication` record (`State->"Revoked"`, `RevocationEpoch` incremented) via head CAS, revokes every `ReleaseHandle` for the artifact, and resets the PL sidecar to the fail-closed default (`0.85`). Copies already released to an external party cannot be recalled — this is recorded verbatim in the `AnonymizePublicationRevoked` audit event.
+→ `<|Status->"OK", PublicationRef, State->"Revoked", ArtifactRef|>`
+Failure reasons: `"NonInteractiveMutationRefused"`, `"NotPublished"`, `"RecordUnreadable"`, `"RecordSaveFailed"`, `"HeadCASConflict"`.
+
+## Evaluation & Annotations (L3a/L3b, spec §5.9, §5.11, §13)
+
+Grading results are attributed via the `EvaluationPlanManifest`'s `JobID -> TargetItemTokens` binding, computed at plan-build time — a token an inbound response claims for itself is never trusted (out-of-band binding). Any received cloud-transport payload should first land in a quarantined `CloudTransportResult` snapshot at protected-minimum PL (internal helper, called before parsing untrusted responses).
+
+### SourceVaultCreateDerivedAnnotations[artifactRef, envelope] → Association
+Validates the result envelope's `JobID`s against the Plan's job set (exact match required — no partial batches), builds an `EvaluationResultManifest`, an `AnnotationContent` snapshot (saved at `ProtectedMinimum` PL) whose `Items` carry `ItemToken`/`SubjectToken`/`Score`/`Reason` resolved from the Plan (not the response), and an `AnnotationBinding` (PL 1.0) pinning content ↔ artifact ↔ plan ↔ result ↔ rubric digest.
+→ `<|Status->"OK", AnnotationBindingRef, AnnotationContentRef, ResultManifestRef, ItemCount|>`
+`envelope`: `<|"PlanRef", "Results"->{<|"JobID","Score","Reason"|>...}, "ProtectedMinimum"->1.0, "AnnotationType"->"Grade"|>`.
+Failure reasons: `"MalformedEnvelope"`, `"PlanUnreadable"`, `"ArtifactMismatch"`, `"JobSetMismatch"` (includes `Missing`/`Unknown`/`Duplicate` counts — unknown/missing/duplicate JobIDs fail the whole batch, AC-026/033), `"ResultManifestSaveFailed"`, `"ContentSaveFailed"`, `"NonCanonicalBinding"`, `"BindingSaveFailed"`.
+
+### SourceVaultValidateDerivedJoin[annotationBindingRef] → Association
+Join preview: verifies the `AnnotationBinding` digest, pins to the referenced `LineageManifest`/`PseudonymMap`/`ArtifactBinding`, and resolves every `ItemToken` along `ItemToken -> DerivedUnit -> SubjectToken -> Entity`. Reports counts only — never PII.
+→ `<|Status->"OK", AllMatched, Matched, Unknown, Duplicate, SetMismatch, UnresolvedSubject|>`
+Failure reasons: `"AnnotationBindingUnreadable"`, `"AnnotationBindingTampered"`, `"ContentUnreadable"`, `"LineageMismatch"`, `"LineageUnreadable"`, `"MapUnreadable"`.
+
+### SourceVaultAttachDerivedResults[annotationBindingRef] → Association
+Re-runs the join preview; only if `AllMatched` does it join scores to real Identity and return rows (PL 1.0-watermarked). Any single mismatch fails the whole call with zero rows (no partial write-back, AC-025). Takes no origin/map override arguments — everything resolves from the annotation's own reference chain.
+→ `<|Status->"OK", Rows->{<|ItemToken, SubjectToken, EntityID, Identity, DisplayLabel, DerivedUnitID, Score, Reason, Attempt|>...}, RowCount|>`
+Failure: `<|Status->"Failed", Reason->"JoinPreviewFailed", Preview|>`, or any `SourceVaultValidateDerivedJoin` failure reason.
+
+## Anonymization Policy Registry (A0, spec §5.1, §6.1)
+
+### SourceVaultRegisterAnonymizationPolicy[policy] → Association
+Saves `policy` as an immutable `AnonymizationPolicy` snapshot (PL sidecar = `PolicyPrivacyLevel`) and records `PolicyId -> ref` in a local JSON registry file. A revised policy gets a new digest (= a distinct variant); the registry is updated to point at the latest.
+Required `policy` keys: `PolicyId` (String), `Tiers` (non-empty Association keyed by TargetLevel string, each tier holding e.g. `FieldRules`, `DefaultFieldRule`, `TextRules`). Optional: `"PolicyPrivacyLevel" -> 0.5`.
+→ `<|Status->"OK", PolicyId, PolicyRef, PolicyDigest|>`
+Failure reasons: `"MalformedPolicy"`, `"PolicySaveFailed"`, `"RegistryUnavailable"`.
+
+### SourceVaultAnonymizationPolicies[] → Association
+Returns the registry map `PolicyId -> PolicyRef` (empty `<||>` if none registered or the registry file is unavailable).
+
+### SourceVaultAnonymizationPolicy[idOrRef] → Association
+Resolves a policy, either by a registered `PolicyId` or by passing a direct `snapshot:...`/`sv://...` ref, and loads it.
+→ policy fields + `<|Status->"OK", PolicyRef, PolicyDigest|>`
+Failure reasons: `"PolicyNotRegistered"`, `"PolicyUnreadable"`.
+
+## SourceVaultAnonymize (A1-A3, spec §8)
+
+The Execute head: the only public function in this module that reads document bodies, and only after verifying an owner-issued `DeclassificationGrant`.
+
+### SourceVaultAnonymize[origRef, opts]
+Runs the full pipeline: 段 0a grant verification (no body read yet) → 段 0b exact origin open → build/reuse `PseudonymMap` entries for fields marked `{"Pseudonym", ..., ...}` in the policy tier → apply `FieldRules` (`"Drop"`/`"Redact"`/`"KeepRaw"`/`"Keep"`/`{"Pseudonym",...}`/`{"Generalize","timestamp->date"}`, default from `DefaultFieldRule`) → three-layer `TextRules` on `"Keep"` string fields (KnownValueScan pairs, regex `Patterns`, optional `PrivateModelScanFn` seam) → per-row `ItemToken` + `SourceUnitID`/`DerivedUnitID` lineage node/edge construction → Verify gate (V1 known-value leak scan / V2 pattern leak scan / V3 external `VerifyFn`) → save `LineageManifest` + content-addressed `DerivedArtifact` + `ArtifactBinding` → publish per the grant's `PublishMode` → local cache-identity write.
+→ `<|Status->"OK", ArtifactRef, ArtifactBindingRef, LineageManifestRef, MapRef, PublicationState->"Staged"|"Published", ReleaseHandle, Payload->{rows...}, CacheHit->False, Report-><|Rows,Entities,Verify->"Pass"|>|>`
+Cache hit (identical `OriginSetDigest`+`PolicyDigest`+`TargetLevel`+`EngineVersion`+`CanonicalizationVersion`, already `Published`, `Force->False`): `<|Status->"OK", ArtifactRef, PublicationState->"Published", CacheHit->True, MapRef|>` (no body re-processed).
+Options: `"GrantRef" -> None` (required `DeclassificationGrant` Association; absent → `<|Status->"Failed", Reason->"NeedsOwnerApproval"|>` without reading the body), `"TargetLevel" -> Automatic` (defaults to the grant's `ExactTargetLevel`), `"Policy" -> Automatic` (defaults to the grant's `PolicyRef`), `"Purpose" -> None` (defaults to the grant's `Purpose`), `"IntendedSink" -> None` (defaults to the grant's `IntendedSink`), `"PrivateModelScanFn" -> None` and `"VerifyFn" -> None` (local-LLM seam functions; if the resolved policy tier sets `TextRules.PrivateModelScan->True` and either is missing, returns `<|Status->"NeedsReview", Reason->"PrivateModelScanUnavailable"|>` without saving), `"Force" -> False` (bypass the cache hit).
+Failure/Review reasons: `"NeedsOwnerApproval"`, `"PlanFailed"` (schema-only plan build failed), any `SourceVaultVerifyDeclassificationGrant` reason, any `SourceVaultAnonymizationPolicy` reason, `"TierNotDefined"` (policy has no tier for the resolved `TargetLevel`), any `SourceVaultConsumeDeclassificationGrantUse` reason, `"OriginUnreadable"`, `"NoRows"`, `"NeedsReview"` with `"PrivateModelScanUnavailable"`, `"Failed"` with `"V1KnownValueLeak"`/`"V2PatternLeak"`, `"NeedsReview"` with `"V3VerifierRejected"`, `"LineageBuildFailed"`, or any lineage/artifact/binding/publish save failure reason (see the corresponding sections above).
+Origin rows: reads the loaded origin's `"Rows"` field (list of Association rows) if present, else treats the whole origin as a single row.
+Both `SourceVaultApproveDeclassification` and `SourceVaultAnonymize` are registered in `NBAccess`$NBApprovalHeads` — agent/LLM-driven calls route through Hold → owner Approve UI (self-approval is structurally blocked).
 
 ## ReleaseHandle mapping (U0, spec §5.10, §10.5)
 
@@ -188,5 +266,3 @@ Revokes every ReleaseHandle for an artifact (owner-interactive-only mutation; co
 ### SourceVaultRotateReleaseHandle[artifactRef] → Association
 Revokes all old handles and issues a fresh one (handle-leak response; owner-interactive-only). New handle plaintext is returned only in the result (mapping retains only its digest); artifact content identity is unchanged (AC-085).
 → `<|Status->"OK", RevokedCount, ReleaseHandle, ArtifactRef|>` | `<|Status->"Failed", Reason->"NonInteractiveMutationRefused"|"HandleStoreUnavailable"|>`
-
-This is the full content — no file was written per your instruction. Let me know if you'd like me to save it (I'd need write permission granted first).
