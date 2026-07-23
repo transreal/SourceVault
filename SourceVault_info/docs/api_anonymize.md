@@ -8,16 +8,21 @@ Implements de-identification primitives for SourceVault (spec `sourcevault_anony
 - L1: `PseudonymMap` (immutable MapVersion snapshots + MapHead CAS pointer).
 - L2a: content-addressed `DerivedArtifact` builder + `ArtifactBinding` + origin reverse-lookup index.
 - L2b: `DeclassificationPublication` record/head + two-phase publish + revoke.
-- L3a/L3b: `EvaluationPlanManifest`/`EvaluationResultManifest`, quarantined ingress, `AnnotationContent`/`AnnotationBinding`, join preview + atomic write-back.
+- L3a/L3b: `EvaluationPlanManifest` builder + quarantined ingress, `EvaluationResultManifest`, `AnnotationContent`/`AnnotationBinding`, join preview + atomic write-back.
 - A0: `AnonymizationPolicy` registry.
 - A1-A3: `SourceVaultAnonymize` end-to-end execution under an owner grant.
+- A6: image/PDF-page redaction (raster black-out + re-encode) and an independent (V5) redaction-completeness verifier.
+- A7: MCP-facing low-PL projection getter (`SourceVaultAnonymizeGetByHandle`) and the unlisted-ObjectClass predicate.
+- G1: `CompositionPolicy` (aggregate/join PrivacyLevel) + append-only `ExposureLedger` (record/guard).
+- G2: `EvaluationDistributionPlan` conformance check.
+- G1c: SystemDoctor-facing sanitized exposure probe, owner-only detailed diagnostic, SIEM registration, and escalation.
 - U0: `ReleaseHandle` mapping/revoke/rotate.
 
 Design principles (spec §2):
 - P-A3 fail-closed: undecidable/missing-key/unknown-type inputs return `$Failed`/`Failure`, never a guess.
 - P-A7 durable-audit-first: publish/lineage-affecting steps refuse to proceed if the audit event can't be durably appended.
 - P-A13 identity independence: `SourceUnitID` embeds `SourceObjectID` so two different logical objects with identical content never collide; order-independent.
-- P-A15 owner-authorized execution: `SourceVaultAnonymize` (the high-PL-reading Execute) requires a verified `DeclassificationGrant`; without one it fails closed with `NeedsOwnerApproval` and never touches the body.
+- P-A15 owner-authorized execution: `SourceVaultAnonymize` (the high-PL-reading Execute) requires a verified `DeclassificationGrant`; without one it fails closed with `NeedsOwnerApproval` and never touches the body. It is also registered in `NBAccess`$NBApprovalHeads` alongside `SourceVaultApproveDeclassification`, so agent/LLM-driven calls route through Hold → owner Approve UI.
 - P-A19 record binding: `Origins` binds ref+digest+role in one record, then canonical-sorts + digests (no parallel arrays).
 
 Private helpers live in ``SourceVault`AnonymizePrivate`` with an `iSVA` prefix and are not part of the public API.
@@ -132,7 +137,7 @@ Never reads document bodies/blobs/OCR/LLM/pseudonym maps — only parses ref str
 ### SourceVaultAnonymizationPlan[origRef, opts]
 Also accepts a `List` of ref strings: `SourceVaultAnonymizationPlan[origRefs_List, opts]`.
 Builds a schema-only anonymization plan for one or more origin refs (`sv://` URI / snapshot ref / `blob:sha256:...`).
-→ Association: `<|Status->"OK", Type->"AnonymizationPlan", SchemaVersion->1, SchemaOnly->True, Origins (record-bound: OriginRef/RefForm/ObjectClass/Role/PrivacyLevel/PrivacyLevelSource), OriginSetDigest, UnitCountRange->"SchemaOnly", TargetLevelChoices->{"0.45","0.2"}, SinkChoices->{"CloudLLM","CloudLLM-LowTrust"}, CandidatePolicies (registered PolicyId keys), CandidateProfiles->{}, CanonicalizationVersion, EngineVersion, PlanDigest, CreatedAtUTC, PlanRef (if Save->True)|>`
+→ Association: `<|Status->"OK", Type->"AnonymizationPlan", SchemaVersion->1, SchemaOnly->True, Origins (record-bound: OriginRef/RefForm/ObjectClass/Role/PrivacyLevel/PrivacyLevelSource — Role is hardcoded `"origin"` for every entry, never derived from list position, so the OriginSetDigest stays order-independent), OriginSetDigest, UnitCountRange->"SchemaOnly", TargetLevelChoices->{"0.45","0.2"}, SinkChoices->{"CloudLLM","CloudLLM-LowTrust"}, CandidatePolicies (registered PolicyId keys), CandidateProfiles->{}, CanonicalizationVersion, EngineVersion, PlanDigest, CreatedAtUTC, PlanRef (if Save->True)|>`
 On failure: `<|Status->"Failed", Reason->"EmptyOrNonStringOrigins"|"InvalidOriginRef", Invalid->{...}|>`.
 Options: `"Save" -> False` (when `True`, persists the plan as an `AnonymizationPlan` snapshot via `SourceVaultSaveImmutableSnapshot` and includes `PlanRef`; save failure leaves `PlanRef -> $Failed`).
 Ref forms recognized: `snapshot:<Class>:<hex>`, `sv://snapshot/<Class>/<hex>`, `sv://hash/sha256/<64hex>`, `blob:sha256:<64hex>`, generic `sv://<namespace>/<id...>`. Unrecognized/malformed refs make that origin invalid, and the whole plan fails.
@@ -146,7 +151,7 @@ Issuance requires an owner interactive FrontEnd session (`Head[$FrontEnd]===Fron
 Builds a `DeclassificationRequest` from a schema-only `AnonymizationPlan` (never reads body content).
 → Association: `<|ObjectClass->"DeclassificationRequest", SchemaVersion->1, Status->"OK", RequestID, PlanDigest, Origins (PrivacyLevel/-Source dropped), OriginSetDigest, TargetLevel, Purpose, IntendedSink, PolicyRef, PolicyDigest, PublishMode, MaxExecuteUses, TTLSeconds, CreatedAtUTC|>`
 On failure: `<|Status->"Failed", Reason->"InvalidPlan"|"TargetLevelNotChosen"|"PurposeNotChosen"|"IntendedSinkNotChosen", ...|>` — the owner must make an exact, explicit choice; the system never silently defaults `TargetLevel`/`Purpose`/`IntendedSink`.
-Options: `"TargetLevel" -> None` (must be a member of `plan`'s `TargetLevelChoices`), `"Purpose" -> None` (required String), `"IntendedSink" -> None` (required `<|"Class"->...|>`), `"PolicyRef" -> "unspecified"`, `"PolicyDigest" -> "unspecified"`, `"PublishMode" -> "StageForOwnerReview"` (alt: `"PublishIfVerified"`), `"MaxExecuteUses" -> 1`, `"TTLSeconds" -> 86400`.
+Options: `"TargetLevel" -> None` (must be a member of `plan`'s `TargetLevelChoices`), `"Purpose" -> None` (required String), `"IntendedSink" -> None` (required `<|"Class"->...|>`), `"PolicyRef" -> "unspecified"`, `"PolicyDigest" -> "unspecified"` (both flow verbatim into the request and are later exact-matched by `SourceVaultVerifyDeclassificationGrant`), `"PublishMode" -> "StageForOwnerReview"` (alt: `"PublishIfVerified"`), `"MaxExecuteUses" -> 1`, `"TTLSeconds" -> 86400`.
 
 ### SourceVaultApproveDeclassification[request] → Association
 Owner-interactive-only approval. Issues and MAC-signs a `DeclassificationGrant` binding the exact origin/policy/TargetLevel/purpose/sink/expiry/uses.
@@ -205,7 +210,17 @@ Failure reasons: `"NonInteractiveMutationRefused"`, `"NotPublished"`, `"RecordUn
 
 ## Evaluation & Annotations (L3a/L3b, spec §5.9, §5.11, §13)
 
-Grading results are attributed via the `EvaluationPlanManifest`'s `JobID -> TargetItemTokens` binding, computed at plan-build time — a token an inbound response claims for itself is never trusted (out-of-band binding). Any received cloud-transport payload should first land in a quarantined `CloudTransportResult` snapshot at protected-minimum PL (internal helper, called before parsing untrusted responses).
+Grading results are attributed via the `EvaluationPlanManifest`'s `JobID -> TargetItemTokens` binding, computed at plan-build time — a token an inbound response claims for itself is never trusted (out-of-band binding). Any received cloud-transport payload should first land in a quarantined `CloudTransportResult` snapshot at protected-minimum PL via `SourceVaultAnonymizeQuarantineIngress`, before parsing untrusted responses.
+
+### SourceVaultAnonymizeBuildEvaluationPlan[spec]
+Builds and saves (PL 1.0) the pre-send `EvaluationPlanManifest`: 1 unit = 1 job = 1 examinee. Fixes the `JobID -> TargetItemTokens` out-of-band binding that result attribution later trusts.
+→ `<|Status->"OK", PlanRef, Jobs->{<|JobID, JobToken, AttemptID, RequestBindingNonceDigest, EvaluationUnitID, TargetItemTokens, SubjectToken, ExpectedResultCardinality|>...}, EvaluationBatchID|>`
+`spec` keys: `TargetArtifactRef` (String, required), `ArtifactBindingRef` (String, required), `Units` (non-empty list, required) — each unit: `ItemTokens` (non-empty list of strings, required), `AttemptID -> "attempt-1"`, `EvaluationUnitID` (default derived from a digest of the sorted `ItemTokens`), `SubjectToken -> "unspecified"`, `ExpectedResultCardinality -> 1`; top-level `RequestDigest`/`RubricDigest`/`DistributionPlanRef -> "unspecified"`.
+Failure reasons: `"MissingPlanFields"`, `"BadUnitTokens"`, `"PlanSaveFailed"`.
+
+### SourceVaultAnonymizeQuarantineIngress[planRef, jobId, raw] → Association
+Saves a raw provider response verbatim as a `CloudTransportResult` snapshot at protected-minimum PL (1.0), from the instant it is received (AC-086) — before any parsing of untrusted content.
+→ `<|Status->"OK", QuarantineRef|>` | `<|Status->"Failed", Reason->"QuarantineSaveFailed"|>`
 
 ### SourceVaultCreateDerivedAnnotations[artifactRef, envelope] → Association
 Validates the result envelope's `JobID`s against the Plan's job set (exact match required — no partial batches), builds an `EvaluationResultManifest`, an `AnnotationContent` snapshot (saved at `ProtectedMinimum` PL) whose `Items` carry `ItemToken`/`SubjectToken`/`Score`/`Reason` resolved from the Plan (not the response), and an `AnnotationBinding` (PL 1.0) pinning content ↔ artifact ↔ plan ↔ result ↔ rubric digest.
@@ -244,11 +259,11 @@ Failure reasons: `"PolicyNotRegistered"`, `"PolicyUnreadable"`.
 The Execute head: the only public function in this module that reads document bodies, and only after verifying an owner-issued `DeclassificationGrant`.
 
 ### SourceVaultAnonymize[origRef, opts]
-Runs the full pipeline: 段 0a grant verification (no body read yet) → 段 0b exact origin open → build/reuse `PseudonymMap` entries for fields marked `{"Pseudonym", ..., ...}` in the policy tier → apply `FieldRules` (`"Drop"`/`"Redact"`/`"KeepRaw"`/`"Keep"`/`{"Pseudonym",...}`/`{"Generalize","timestamp->date"}`, default from `DefaultFieldRule`) → three-layer `TextRules` on `"Keep"` string fields (KnownValueScan pairs, regex `Patterns`, optional `PrivateModelScanFn` seam) → per-row `ItemToken` + `SourceUnitID`/`DerivedUnitID` lineage node/edge construction → Verify gate (V1 known-value leak scan / V2 pattern leak scan / V3 external `VerifyFn`) → save `LineageManifest` + content-addressed `DerivedArtifact` + `ArtifactBinding` → publish per the grant's `PublishMode` → local cache-identity write.
+Runs the full pipeline: 段 0a grant verification (no body read yet) → 段 0b exact origin open → build/reuse `PseudonymMap` entries for fields marked `{"Pseudonym", ..., ...}` in the policy tier → apply `FieldRules` (`"Drop"`/`"Redact"`/`"KeepRaw"`/`"Keep"`/`{"Pseudonym",...}`/`{"Generalize","timestamp->date"}`, default from `DefaultFieldRule`) → three-layer `TextRules` on `"Keep"` string fields (KnownValueScan pairs, regex `Patterns`, optional `PrivateModelScanFn` seam) → per-row `ItemToken` + `SourceUnitID`/`DerivedUnitID` lineage node/edge construction → Verify gate (V1 known-value leak scan / V2 pattern leak scan / V3 external `VerifyFn` / k-anonymity check) → save `LineageManifest` + content-addressed `DerivedArtifact` + `ArtifactBinding` → publish per the grant's `PublishMode` → local cache-identity write.
 → `<|Status->"OK", ArtifactRef, ArtifactBindingRef, LineageManifestRef, MapRef, PublicationState->"Staged"|"Published", ReleaseHandle, Payload->{rows...}, CacheHit->False, Report-><|Rows,Entities,Verify->"Pass"|>|>`
-Cache hit (identical `OriginSetDigest`+`PolicyDigest`+`TargetLevel`+`EngineVersion`+`CanonicalizationVersion`, already `Published`, `Force->False`): `<|Status->"OK", ArtifactRef, PublicationState->"Published", CacheHit->True, MapRef|>` (no body re-processed).
-Options: `"GrantRef" -> None` (required `DeclassificationGrant` Association; absent → `<|Status->"Failed", Reason->"NeedsOwnerApproval"|>` without reading the body), `"TargetLevel" -> Automatic` (defaults to the grant's `ExactTargetLevel`), `"Policy" -> Automatic` (defaults to the grant's `PolicyRef`), `"Purpose" -> None` (defaults to the grant's `Purpose`), `"IntendedSink" -> None` (defaults to the grant's `IntendedSink`), `"PrivateModelScanFn" -> None` and `"VerifyFn" -> None` (local-LLM seam functions; if the resolved policy tier sets `TextRules.PrivateModelScan->True` and either is missing, returns `<|Status->"NeedsReview", Reason->"PrivateModelScanUnavailable"|>` without saving), `"Force" -> False` (bypass the cache hit).
-Failure/Review reasons: `"NeedsOwnerApproval"`, `"PlanFailed"` (schema-only plan build failed), any `SourceVaultVerifyDeclassificationGrant` reason, any `SourceVaultAnonymizationPolicy` reason, `"TierNotDefined"` (policy has no tier for the resolved `TargetLevel`), any `SourceVaultConsumeDeclassificationGrantUse` reason, `"OriginUnreadable"`, `"NoRows"`, `"NeedsReview"` with `"PrivateModelScanUnavailable"`, `"Failed"` with `"V1KnownValueLeak"`/`"V2PatternLeak"`, `"NeedsReview"` with `"V3VerifierRejected"`, `"LineageBuildFailed"`, or any lineage/artifact/binding/publish save failure reason (see the corresponding sections above).
+Cache hit (identical `OriginSetDigest`+`PolicyDigest`+`TargetLevel`+`EngineVersion`+`CanonicalizationVersion`, already `Published`, `Force->False`): `<|Status->"OK", ArtifactRef, PublicationState->"Published", CacheHit->True, MapRef|>` (reduced shape — no `ArtifactBindingRef`/`LineageManifestRef`/`ReleaseHandle`/`Payload`/`Report`; no body re-processed).
+Options: `"GrantRef" -> None` (required `DeclassificationGrant` Association; absent → `<|Status->"Failed", Reason->"NeedsOwnerApproval"|>` without reading the body), `"TargetLevel" -> Automatic` (defaults to the grant's `ExactTargetLevel`), `"Policy" -> Automatic` (defaults to the grant's `PolicyRef`), `"Purpose" -> None` (defaults to the grant's `Purpose`; if explicitly given, must exactly match the grant's `Purpose` or `SourceVaultVerifyDeclassificationGrant` fails with `GrantRequestMismatch`), `"IntendedSink" -> None` (same, matched against the grant's `IntendedSink.Class`), `"PrivateModelScanFn" -> None` and `"VerifyFn" -> None` (local-LLM seam functions; if the resolved policy tier sets `TextRules.PrivateModelScan->True` and either is missing, returns `<|Status->"NeedsReview", Reason->"PrivateModelScanUnavailable"|>` without saving), `"Force" -> False` (bypass the cache hit).
+Failure/Review reasons: `"NeedsOwnerApproval"`, `"PlanFailed"` (schema-only plan build failed), any `SourceVaultVerifyDeclassificationGrant` reason, any `SourceVaultAnonymizationPolicy` reason, `"TierNotDefined"` (policy has no tier for the resolved `TargetLevel`), any `SourceVaultConsumeDeclassificationGrantUse` reason, `"OriginUnreadable"`, `"NoRows"`, `"NeedsReview"` with `"PrivateModelScanUnavailable"`, `"Failed"` with `"V1KnownValueLeak"`/`"V2PatternLeak"`/`"KAnonymityViolation"`, `"NeedsReview"` with `"V3VerifierRejected"`, `"LineageBuildFailed"`, or any lineage/artifact/binding/publish save failure reason (see the corresponding sections above).
 Origin rows: reads the loaded origin's `"Rows"` field (list of Association rows) if present, else treats the whole origin as a single row.
 Both `SourceVaultApproveDeclassification` and `SourceVaultAnonymize` are registered in `NBAccess`$NBApprovalHeads` — agent/LLM-driven calls route through Hold → owner Approve UI (self-approval is structurally blocked).
 
@@ -266,3 +281,73 @@ Revokes every ReleaseHandle for an artifact (owner-interactive-only mutation; co
 ### SourceVaultRotateReleaseHandle[artifactRef] → Association
 Revokes all old handles and issues a fresh one (handle-leak response; owner-interactive-only). New handle plaintext is returned only in the result (mapping retains only its digest); artifact content identity is unchanged (AC-085).
 → `<|Status->"OK", RevokedCount, ReleaseHandle, ArtifactRef|>` | `<|Status->"Failed", Reason->"NonInteractiveMutationRefused"|"HandleStoreUnavailable"|>`
+
+## MCP Projection / Unlisted (A7, spec §15.1, §15.3, §10.5)
+
+### SourceVaultAnonymizeGetByHandle[releaseHandle] → Association
+The only unauthorized-reuse-safe retrieval path: resolves the handle, re-verifies `SourceVaultAnonymizePublicationStatus` is exactly `"Published"` (defense-in-depth beyond the handle store's own check), loads the artifact, and returns a low-PL projection — `Payload`/`Format`/`TargetLevel` only, never `OriginRef`/`MapRef`/`ArtifactBindingRef`/`LineageManifestRef`.
+→ `<|Status->"OK", ArtifactRef, TargetLevel, Format->"Records", Discoverability->"Unlisted", Payload|>`
+Failure reasons: `"HandleInvalid"` (NotFound/Revoked/Expired all indistinguishable), `"NotPublished"`, `"ArtifactUnreadable"`.
+
+### SourceVaultAnonymizeUnlistedClassQ[source] → Boolean
+`True` if `source` (an Association, e.g. a snapshot record) is in the unlisted class set (spec §15.1): `Discoverability->"Unlisted"`, or `ObjectClass` in `{"AnnotationContent","AnnotationBinding","CloudTransportResult","PseudonymMap","LineageManifest","ArtifactBinding","DeclassificationPublication","EvaluationPlanManifest","EvaluationResultManifest","CerezoGradingProjection","AnonymizationPlan","DeclassificationGrant"}`, or `ObjectClass->"DerivedArtifact"` with `ArtifactType->"Anonymized"`. `False` for non-Association input. Called weakly from the search index's release policy so search/catalog never lists these.
+
+## Composition Policy + Exposure Ledger (G1, spec §5.14, §13.5, §15.2)
+
+### SourceVaultAnonymizeComposedPrivacy[spec] → Association
+Returns the composed `PrivacyLevel` for an aggregate/joined artifact (spec §13.5) — not a simple `Max` of inputs.
+→ `<|PrivacyLevel, Basis|>` (always returns; no `Status`/failure branch)
+`spec` keys (all optional, defaulted): `AnnotationType -> "None"`, `DistinctSubjectCount -> 1`, `IndividualValuesPresent -> False`, `InputPL -> 0.45`. Decision order: `AnnotationType->"Grade"` with individual values present → `PL 1.0, Basis->"GradeWithIndividualValues"`; ≥2 distinct subjects with individual values → `PL 1.0, Basis->"MultiSubjectAggregate"`; ≥2 distinct subjects without individual values → `PL 0.85, Basis->"AggregateStatisticsNeedsPolicy"`; else → `PL->Max[InputPL,0], Basis->"SingleItemInputPL"`.
+
+### SourceVaultAnonymizeRecordExposure[event] → Association
+Durably appends an `ExposureEvent` to a high-PL append-only JSONL ledger (`PrivateVault/config/anonymize-exposure-ledger.jsonl`). Never includes body content or real tokens; `ScopeID` is replaced with an owner-only keyed HMAC digest before writing.
+`event["EventClass"]`: `"PublicationActivated"`/`"ContentReleased"`/`"CloudEgressed"`/`"CloudIngressReceived"`/`"AggregateCreated"`/`"ReleaseDenied"`/`"ReleaseIndeterminate"`, plus the internal `"PreReleaseIntent"` used by `SourceVaultAnonymizeExposureGuard`. Only `"ContentReleased"`/`"CloudEgressed"`/`"ReleaseIndeterminate"` are coverage-counted (`CoverageCounted->True`).
+→ `<|Status->"OK", EventClass, CoverageCounted|>`
+Failure reasons: `"LedgerUnavailable"`, `"LedgerWriteFailed"`.
+
+### SourceVaultAnonymizeExposureGuard[intent]
+Evaluates an ExposureLedger rollup immediately before a release/egress and returns a gate decision (spec §15.2). First durably records a `"PreReleaseIntent"` event via `SourceVaultAnonymizeRecordExposure` — if that record fails, the call denies outright (never proceeds unrecorded).
+→ `<|Decision->"Deny", Reason->"PreReleaseIntentUnrecordable"|>` (early-exit shape, no coverage fields) | `<|Decision->"Deny"|"RequireOwnerApproval"|"PermitAndReport"|"Permit", Reason, CoverageAfter, CohortRatio, RequestID|>`
+`intent` keys: `ScopeID -> "none"` (hashed), `ProviderTrustDomain -> "Unknown"`, `DistinctSubjects -> 0`, `CohortSize -> 0`, `RequestID` (default a fresh UUID), `ExposurePolicy -> <||>` (sub-keys, checked in order: `MaxDistinctSubjectsPerProviderPerWindow` Integer → over → `RequireOwnerApproval`/`"DistinctSubjectThresholdExceeded"`; `MaxCohortCoveragePerProvider` Numeric → over → `RequireOwnerApproval`/`"CohortCoverageThresholdExceeded"`; `MaxVariantsPerOriginPerProvider` Integer → over → `RequireOwnerApproval`/`"RepeatedVariantExposure"`; `AlertThreshold` Numeric → over → `PermitAndReport`/`"AlertThreshold"`; else → `Permit`/`"BelowThresholds"`; `WindowSeconds -> 86400` controls the rollup window).
+
+## Evaluation Distribution Plan (G2, spec §13.6)
+
+### SourceVaultAnonymizeValidateDistribution[plan, assignment] → Association
+Checks whether a provider `assignment` conforms to an owner-approved `DistributionPlan` (spec §13.6): rejects unauthorized providers, per-provider subject-count overflow, and duplicate-subject cross-provider sends (redundant grading requires explicit permission).
+→ `<|Status->"OK"|"Failed", UnauthorizedProviders->count, OverLimitProviders->count, DuplicateSubjects->count|>` (failure is signaled purely by nonzero counts, no named per-violation Reason)
+`plan` keys: `AllowedProviders -> {}`, `MaxSubjectsPerProvider -> Infinity` (only enforced when set to an Integer), `AllowCrossProviderDuplicateSubject -> False`. `assignment`: list of `<|"SubjectToken", "Provider"|>`.
+
+## System Doctor Diagnostics (G1c, spec §16.2)
+
+### SourceVaultAnonymizeExposureProbe[] → Association
+Sanitized SystemDoctor-facing probe over the ExposureLedger — never exposes actual artifact/provider/owner/scope values, only Health + coarse range buckets (`"0"`/`"1-9"`/`"10-49"`/`"50-199"`/`"200+"`), guarding against the alert itself leaking information (spec T41).
+→ `<|Health->"High"|"OK", ReasonCode->"AnonymizedArtifactConcentratedUse"|"BelowThreshold", ScopeCountRange, MaxScopeReleaseRange|>` | `<|Health->"Warning", ReasonCode->"ExposureLedgerUnavailable"|>` (reduced shape on ledger read failure)
+`Health->"High"` when any single scope has more coverage-counted releases than the (internal, mutable) concentration threshold — default `50`.
+
+### SourceVaultAnonymizeExposureSensitiveDoctor[] → Association
+Owner-interactive-only detailed diagnostic (unsanitized): per-provider-trust-domain coverage, top-5 scopes by release count, and a remediation hint.
+→ `<|Status->"OK", TotalReleases, DistinctScopes, ByProviderTrustDomain-><|domain->count,...|>, TopScopes->{<|Scope,Releases,Variants|>...}, Remediation|>`
+Failure reasons: `"OwnerOnly"` (non-interactive caller), `"ExposureLedgerUnavailable"`.
+
+### SourceVaultRegisterAnonymizeExposureDiagnostics[] → Association
+Weakly registers `SourceVaultAnonymizeExposureProbe` as probe id `"anonymize-exposure"` into SourceVault diagnostics/SIEM (`SourceVaultDiagnosticsRegisterProbe`, if loaded).
+→ `<|Status->"Registered"|"Failed", ProbeId->"anonymize-exposure"|>` | `<|Status->"DiagnosticsUnavailable"|>` if diagnostics isn't loaded.
+
+### SourceVaultAnonymizeExposureEscalateIfNeeded[] → Association
+Runs `SourceVaultAnonymizeExposureProbe[]`; if `Health` is `"High"` or `"Critical"` and `SourceVaultDiagnosticsEscalate` is loaded, sends a cloud-safe escalation event (`EventClass->"AnonymizeExposureConcentration"`, `Severity->"High"` — hardcoded regardless of the actual probe `Health`, `ReasonCode`, `Component->"anonymize-exposure"`, `MaxScopeReleaseRange`).
+→ `<|Status->"Escalated", ReasonCode|>` | `<|Status->"NoEscalation", Health|>`
+
+## Image Redaction (A6, spec §6.6, §6.8, AC-020)
+
+### SourceVaultAnonymizeImageRedact[img, regions] → Image
+Black-out redaction: zeroes the raw byte pixels inside each region, then rebuilds a fresh `Image` (full re-encode — no metadata/layers survive). Returns a raw `Image`, not an Association.
+`regions`: `{<|"x1","y1","x2","y2"|>...}`, normalized 0-1 coordinates (bottom-origin; internally flipped to top-origin pixel rows). Degenerate regions (after clipping, `c2<c1` or `r2<r1`) are silently skipped.
+
+### SourceVaultAnonymizePDFPageImages[pages, opts] → Association
+Applies `SourceVaultAnonymizeImageRedact` to every page in a list, using the same flat `"Regions"` list on every page (not per-page). Non-`Image` list elements pass through unchanged.
+→ `<|Status->"OK", Format->"PageImageList", Pages->{redactedOrPassthrough...}|>` (always `"OK"`, no failure path)
+Options: `"Regions" -> {}`, `"DPI" -> 150` (defined but currently unused by the implementation — DPI must already be baked into the input `Image`s).
+
+### SourceVaultAnonymizeVerifyRedactedImage[img, regions] → Association
+Independent V5 redaction-completeness check (spec §6.8/AC-020, a separate code path from the redactor): for each region, fails if the pixel patch has nonzero variance (`Max-Min>0`, i.e. not solid black) — a different check than `ImageRedact`'s own logic. Degenerate region bounds count as a failure here (opposite of `ImageRedact`'s silent-skip).
+→ `<|Status->"OK"|"Failed", NonSolidRegions->count|>`

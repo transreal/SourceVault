@@ -1129,6 +1129,13 @@ iSVTrunc[x_, _] := x;
 iSVResultId[uri_String] := "res-" <> StringTake[IntegerString[Hash[uri, "SHA256"], 16, 64], -12];
 iSVResultId[_] := "res-unknown";
 
+(* 匿名化拡張の系譜参照キー: 低 PL projection には決して出さない (anonymize spec §15.3)。
+   AccessTags は scope gate に必要なので blocklist に含めない。 *)
+$iSVLineageProjectionBlocklist = {"OriginRef", "OriginRefs", "MapRef",
+  "LineageManifestRef", "ArtifactBindingRef", "SourceUnitID", "DerivedUnitID",
+  "PublicationRef", "EvaluationPlanManifestRef", "EvaluationResultManifestRef",
+  "ContentRef", "ProfileRef", "BindingDigest"};
+
 Options[SourceVaultNormalizeSearchResult] = {
   "Adapter" -> Missing[], "Kind" -> Missing[], "ReleasedProjection" -> "metadata",
   "IncludeSnippets" -> True, "IncludeMetadata" -> True, "MaxChars" -> 800};
@@ -1154,8 +1161,12 @@ SourceVaultNormalizeSearchResult[row_Association, OptionsPattern[]] := Module[
     "Citation" -> Lookup[row, "Citation", <||>],
     "Score" -> Lookup[row, "Score", Missing["NotScored"]],
     "MatchedFields" -> Lookup[row, "MatchedFields", {}],
-    (* metadata 非要求でも AccessTags は scope gate (§2.6) のため必ず保持する。 *)
-    "Metadata" -> With[{md = With[{m = Lookup[row, "Metadata", <||>]}, If[AssociationQ[m], m, <||>]]},
+    (* metadata 非要求でも AccessTags は scope gate (§2.6) のため必ず保持する。
+       匿名化拡張の系譜参照 (OriginRef/MapRef/LineageManifestRef/SourceUnitID/
+       DerivedUnitID 等) は低 PL projection に決して出さない (anonymize spec §15.3)。
+       inclMeta=True でも strip する二重防御。 *)
+    "Metadata" -> With[{md = With[{m = Lookup[row, "Metadata", <||>]},
+        If[AssociationQ[m], KeyDrop[m, $iSVLineageProjectionBlocklist], <||>]]},
       If[inclMeta, md,
         With[{at = Lookup[md, "AccessTags", Missing[]]},
           If[MissingQ[at], Missing["NotRequested"], <|"AccessTags" -> at|>]]]],

@@ -177,6 +177,19 @@ SourceVaultAnonymizedVariants::usage =
   "逆引き index は origin ref の keyed HMAC をキーに引く (origin を知る principal だけが\n" <>
   "導出できる)。読み出しには PL 1.0 の透かしが付く。";
 
+(* ---- A7: MCP projection / unlisted (仕様 §15.1, §15.3, §10.5) ---- *)
+SourceVaultAnonymizeGetByHandle::usage =
+  "SourceVaultAnonymizeGetByHandle[releaseHandle] は exact ReleaseHandle 経由で匿名化成果物を\n" <>
+  "取得する唯一の無許可 Reuse 経路 (仕様 §10.5)。handle 解決 -> PublicationHead が Published か\n" <>
+  "確認 -> 低 PL projection (Payload=ItemToken ベース行・TargetLevel・Format のみ。\n" <>
+  "系譜参照 OriginRef/MapRef/BindingRef は一切含まない) を返す。Revoked/Expired は HandleInvalid。";
+
+SourceVaultAnonymizeUnlistedClassQ::usage =
+  "SourceVaultAnonymizeUnlistedClassQ[source] は source (snapshot record 等) が匿名化拡張の\n" <>
+  "unlisted クラス (検索・カタログ・一覧に載せない) かを返す (仕様 §15.1)。\n" <>
+  "Discoverability==\"Unlisted\" または匿名化 ObjectClass / DerivedArtifact(Anonymized) を True。\n" <>
+  "検索索引の release policy から弱結合で呼ばれる。";
+
 (* ---- L2b: Publication (仕様 §5.10, §8.2, §10.4) ---- *)
 SourceVaultAnonymizePublicationStatus::usage =
   "SourceVaultAnonymizePublicationStatus[artifactRef] は公開状態の正本 (PublicationHead ->\n" <>
@@ -191,6 +204,16 @@ SourceVaultRevokeDeclassifiedArtifact::usage =
   "既に外部へ渡った copy は回収不能である (監査イベントに明記される)。";
 
 (* ---- L3a/L3b: 評価 manifest + annotation + join (仕様 §5.9, §5.11, §13) ---- *)
+SourceVaultAnonymizeBuildEvaluationPlan::usage =
+  "SourceVaultAnonymizeBuildEvaluationPlan[spec] は送信前 EvaluationPlanManifest を構築・保存する\n" <>
+  "(PL 1.0)。spec: <|\"TargetArtifactRef\", \"ArtifactBindingRef\", \"Units\" ->\n" <>
+  "{<|\"ItemTokens\"->{...}, \"SubjectToken\"|>...}, \"RubricDigest\"|>。1 unit = 1 job = 1 受験者。\n" <>
+  "結果帰属の正本となる JobID -> ItemToken の out-of-band binding を確定する。";
+
+SourceVaultAnonymizeQuarantineIngress::usage =
+  "SourceVaultAnonymizeQuarantineIngress[planRef, jobId, raw] は provider 生応答を受信 byte の\n" <>
+  "時点から protected minimum PL (既定 1.0) の quarantine に隔離保存する (AC-086)。";
+
 SourceVaultCreateDerivedAnnotations::usage =
   "SourceVaultCreateDerivedAnnotations[artifactRef, resultEnvelope] は評価結果を\n" <>
   "AnnotationContent (protected minimum PL) + AnnotationBinding (PL 1.0) として保存する。\n" <>
@@ -223,6 +246,63 @@ SourceVaultRotateReleaseHandle::usage =
   "SourceVaultRotateReleaseHandle[artifactRef] は旧 handle を全て失効させ新 handle を発行する\n" <>
   "(handle 漏洩対応。オーナー対話環境限定)。新 handle 平文は返り値でのみ渡される\n" <>
   "(mapping には digest しか残らない)。artifact の content identity は不変 (AC-085)。";
+
+(* ---- G1: CompositionPolicy + ExposureLedger (仕様 §13.5, §5.14) ---- *)
+SourceVaultAnonymizeComposedPrivacy::usage =
+  "SourceVaultAnonymizeComposedPrivacy[spec] は集約・結合物の PrivacyLevel を返す (仕様 §13.5)。\n" <>
+  "spec: <|\"AnnotationType\", \"DistinctSubjectCount\", \"IndividualValuesPresent\",\n" <>
+  "\"InputPL\"|>。成績を含む/複数 subject の個別値を含む集約は PL 1.0 (単純 Max では判定しない)。";
+
+SourceVaultAnonymizeRecordExposure::usage =
+  "SourceVaultAnonymizeRecordExposure[event] は ExposureEvent を高 PL の append-only ledger へ\n" <>
+  "durable 記録する (本文・実 token を含めない。ScopeID/SubjectSetDigest は owner-only HMAC)。\n" <>
+  "EventClass: PublicationActivated / ContentReleased / CloudEgressed / CloudIngressReceived /\n" <>
+  "AggregateCreated / ReleaseDenied / ReleaseIndeterminate。coverage 加算は release 系のみ。";
+
+SourceVaultAnonymizeExposureGuard::usage =
+  "SourceVaultAnonymizeExposureGuard[intent] は release/egress 直前に ExposureLedger rollup を\n" <>
+  "評価し Permit / PermitAndReport / RequireOwnerApproval / Deny を返す (仕様 §15.2)。\n" <>
+  "release 前に PreReleaseIntent を durable 記録 (これに失敗したら Deny = 無記録では通さない)。\n" <>
+  "閾値未満の単発は自動 Permit、cohort coverage / distinct subject / variant 超過は停止。\n" <>
+  "intent: <|\"ScopeID\", \"ProviderTrustDomain\", \"DistinctSubjects\", \"CohortSize\",\n" <>
+  "\"VariantSetDigest\", \"RequestID\", \"ExposurePolicy\"|>。";
+
+(* ---- G2: EvaluationDistributionPlan (仕様 §13.6) ---- *)
+SourceVaultAnonymizeValidateDistribution::usage =
+  "SourceVaultAnonymizeValidateDistribution[plan, assignment] は provider 分散が owner-approved\n" <>
+  "DistributionPlan に適合するかを検査する (仕様 §13.6): 未許可 provider / provider あたり\n" <>
+  "subject 上限超過 / 同一 subject の重複送信 (冗長採点は明示許可のみ) を拒否する。";
+
+(* ---- G1c: System Doctor 連携 (仕様 §16.2) ---- *)
+SourceVaultAnonymizeExposureProbe::usage =
+  "SourceVaultAnonymizeExposureProbe[] は SystemDoctor 向けの sanitized probe。\n" <>
+  "ExposureLedger を集計し Health / ReasonCode / 件数レンジのみを返す\n" <>
+  "(artifact/provider/owner/scope の実値は出さない。alert 自体の漏洩防止 = 仕様 T41)。";
+SourceVaultAnonymizeExposureSensitiveDoctor::usage =
+  "SourceVaultAnonymizeExposureSensitiveDoctor[] はオーナー対話環境限定の詳細診断:\n" <>
+  "provider trust domain 別 coverage・variant 数・該当 scope・推奨 remediation を返す。\n" <>
+  "非オーナー環境では拒否 (OwnerOnly)。";
+SourceVaultRegisterAnonymizeExposureDiagnostics::usage =
+  "SourceVaultRegisterAnonymizeExposureDiagnostics[] は exposure probe を SourceVault\n" <>
+  "diagnostics (SIEM) に登録する (弱結合。diagnostics 未ロードなら DiagnosticsUnavailable)。\n" <>
+  "High/Critical は SourceVaultDiagnosticsEscalate へ cloud-safe summary で送られる。";
+SourceVaultAnonymizeExposureEscalateIfNeeded::usage =
+  "SourceVaultAnonymizeExposureEscalateIfNeeded[] は probe が High/Critical のとき\n" <>
+  "cloud-safe な escalation event を SourceVaultDiagnosticsEscalate へ送る (弱結合)。";
+
+(* ---- A6: フォーマット変換 (仕様 §6.6, §12) ---- *)
+SourceVaultAnonymizeImageRedact::usage =
+  "SourceVaultAnonymizeImageRedact[img, regions] は画像の指定領域を黒塗りして再エンコードした\n" <>
+  "新しい Image を返す (仕様 §6.6)。regions: {<|\"x1\",\"y1\",\"x2\",\"y2\"|>...} 正規化座標 (0-1)。\n" <>
+  "ラスタ上書き+再エンコードなので元のメタデータ・レイヤは残らない。";
+SourceVaultAnonymizePDFPageImages::usage =
+  "SourceVaultAnonymizePDFPageImages[pdfPages, opts] はマルチページ PDF (Image のリスト、または\n" <>
+  "{Image} 化済み) の各ページを指定領域黒塗り+再エンコードした画像リストへ変換する。\n" <>
+  "opts: \"Regions\"->{...}(全ページ共通の正規化矩形), \"DPI\"。Format \"PageImageList\" 相当。";
+SourceVaultAnonymizeVerifyRedactedImage::usage =
+  "SourceVaultAnonymizeVerifyRedactedImage[img, regions] は V5 (変換完全性) の独立検査を行う:\n" <>
+  "各黒塗り領域のピクセルが単色 (分散≈0) であることを確認する (仕様 §6.8 / AC-020)。\n" <>
+  "検出器と別系統の決定論チェック。";
 
 (* ---- A0: ポリシー登録 (仕様 §5.1, §6.1) ---- *)
 SourceVaultRegisterAnonymizationPolicy::usage =
@@ -1318,7 +1398,7 @@ iSVASaveContentAddressedDerivedArtifact[artifact_Association] := Module[{core, s
   If[!StringQ[Lookup[artifact, "PayloadDigest"]],
     Return[<|"Status" -> "Failed", "Reason" -> "PayloadDigestMissing"|>]];
   core = Join[<|"ObjectClass" -> "DerivedArtifact", "ArtifactType" -> "Anonymized",
-    "ArtifactSchemaVersion" -> 2|>, artifact];
+    "ArtifactSchemaVersion" -> 2, "Discoverability" -> "Unlisted"|>, artifact];
   saved = Quiet @ Check[
     SourceVault`SourceVaultSaveImmutableSnapshot["DerivedArtifact", core], $Failed];
   ref = If[AssociationQ[saved],
@@ -1553,6 +1633,37 @@ iSVAMapSetTargetPL[ref_String, lv_?NumericQ] :=
     Quiet @ Check[
       SourceVault`SourceVaultSetImmutableSnapshotPrivacyLevel[ref, N[lv]], Null], Null];
 
+$iSVAUnlistedClasses = {"AnnotationContent", "AnnotationBinding", "CloudTransportResult",
+  "PseudonymMap", "LineageManifest", "ArtifactBinding", "DeclassificationPublication",
+  "EvaluationPlanManifest", "EvaluationResultManifest", "CerezoGradingProjection",
+  "AnonymizationPlan", "DeclassificationGrant"};
+
+SourceVaultAnonymizeUnlistedClassQ[source_Association] :=
+  Lookup[source, "Discoverability", ""] === "Unlisted" ||
+  MemberQ[$iSVAUnlistedClasses, Lookup[source, "ObjectClass", ""]] ||
+  (Lookup[source, "ObjectClass", ""] === "DerivedArtifact" &&
+   Lookup[source, "ArtifactType", ""] === "Anonymized");
+SourceVaultAnonymizeUnlistedClassQ[___] := False;
+
+SourceVaultAnonymizeGetByHandle[releaseHandle_String] := Module[{res, st, art},
+  res = SourceVaultResolveReleaseHandle[releaseHandle];
+  If[Lookup[res, "Status"] =!= "OK",
+    Return[<|"Status" -> "Failed", "Reason" -> "HandleInvalid"|>]];
+  (* Published head の再確認 (Revoke 後は publication が Revoked だが handle 側も
+     失効しているはず。二重防御で head も見る) *)
+  st = SourceVaultAnonymizePublicationStatus[res["ArtifactRef"]];
+  If[Lookup[st, "State"] =!= "Published",
+    Return[<|"Status" -> "Failed", "Reason" -> "NotPublished"|>]];
+  art = iSVAMapLoadByRef[res["ArtifactRef"]];
+  If[!AssociationQ[art],
+    Return[<|"Status" -> "Failed", "Reason" -> "ArtifactUnreadable"|>]];
+  (* 低 PL projection: 系譜参照は artifact 本体に無い (一方向 pin)。Payload/Format/TL のみ *)
+  <|"Status" -> "OK", "ArtifactRef" -> res["ArtifactRef"],
+    "TargetLevel" -> Lookup[art, "TargetLevel", "?"],
+    "Format" -> Lookup[art, "Format", "Records"],
+    "Discoverability" -> "Unlisted",
+    "Payload" -> Lookup[art, "Payload", {}]|>];
+
 SourceVaultAnonymizePublicationStatus[artifactRef_String] := Module[{headRef, rec},
   headRef = iSVAPubHeadRead[artifactRef];
   If[!StringQ[headRef],
@@ -1654,6 +1765,10 @@ iSVABuildEvaluationPlan[spec_Association] := Module[
     "EvaluationBatchID" -> rec["EvaluationBatchID"]|>];
 iSVABuildEvaluationPlanSafe[spec_Association] :=
   Catch[iSVABuildEvaluationPlan[spec], "svaPlan"];
+SourceVaultAnonymizeBuildEvaluationPlan[spec_Association] :=
+  iSVABuildEvaluationPlanSafe[spec];
+SourceVaultAnonymizeQuarantineIngress[planRef_String, jobId_String, raw_String] :=
+  iSVAQuarantineIngress[planRef, jobId, raw];
 
 (* quarantine: 受信 byte を最初から protected minimum PL で隔離保存 (仕様 §5.9 / AC-086) *)
 iSVAQuarantineIngress[planRef_String, jobId_String, raw_String, pl_ : 1.0] :=
@@ -1924,6 +2039,263 @@ SourceVaultRotateReleaseHandle[artifactRef_String] := Module[{n, issued},
     "ReleaseHandle" -> issued["ReleaseHandle"], "ArtifactRef" -> artifactRef|>];
 
 (* ============================================================
+   7a. G1/G2: CompositionPolicy / ExposureLedger / Guard / DistributionPlan
+   (仕様 §5.14, §13.5, §13.6, §15.2 / AC-069/070/073/074/094/095)
+   ============================================================ *)
+
+If[!ValueQ[$iSVAExposureLedgerOverride], $iSVAExposureLedgerOverride = Automatic];
+$iSVAExposureScopeKeyRef = $iSVAGrantKeyRef;  (* owner-only keyed HMAC (grant 鍵を流用) *)
+
+iSVAExposureLedgerPath[] := Which[
+  StringQ[$iSVAExposureLedgerOverride], $iSVAExposureLedgerOverride,
+  Names["SourceVault`SourceVaultRoot"] =!= {},
+  With[{r = Quiet @ Check[SourceVault`SourceVaultRoot["PrivateVault"], $Failed]},
+    If[StringQ[r], FileNameJoin[{r, "config", "anonymize-exposure-ledger.jsonl"}],
+      $Failed]],
+  True, $Failed];
+
+(* CompositionPolicy (§13.5): 単純 Max では判定しない *)
+SourceVaultAnonymizeComposedPrivacy[spec_Association] := Module[
+    {atype, distinct, indiv, inputPL, pl},
+  atype = Lookup[spec, "AnnotationType", "None"];
+  distinct = Lookup[spec, "DistinctSubjectCount", 1];
+  indiv = TrueQ[Lookup[spec, "IndividualValuesPresent", False]];
+  inputPL = Lookup[spec, "InputPL", 0.45];
+  pl = Which[
+    (* 成績を含む永続物 / 複数 subject の個別値を含む集約 -> PL 1.0 *)
+    atype === "Grade" && indiv, 1.0,
+    IntegerQ[distinct] && distinct >= 2 && indiv, 1.0,
+    (* 統計のみ (個別値なし) は別 policy 必要 -> 保守的に高 PL *)
+    IntegerQ[distinct] && distinct >= 2 && !indiv, 0.85,
+    True, N[Max[inputPL, 0.0]]];
+  <|"PrivacyLevel" -> pl,
+    "Basis" -> Which[
+      atype === "Grade" && indiv, "GradeWithIndividualValues",
+      IntegerQ[distinct] && distinct >= 2 && indiv, "MultiSubjectAggregate",
+      IntegerQ[distinct] && distinct >= 2, "AggregateStatisticsNeedsPolicy",
+      True, "SingleItemInputPL"]|>];
+
+iSVAExposureScopeHash[s_String] := Module[{mac},
+  mac = Quiet @ Check[NBAccess`NBMacWithKeyRef[$iSVAExposureScopeKeyRef,
+    StringToByteArray[s, "UTF-8"], "exposure-scope"], $Failed];
+  If[StringQ[mac], StringTake[ToLowerCase[mac], 32], iSVASHA256Hex[s][[;; 32]]]];
+
+$iSVACoverageEventClasses = {"ContentReleased", "CloudEgressed", "ReleaseIndeterminate"};
+
+SourceVaultAnonymizeRecordExposure[event_Association] := Module[
+    {path = iSVAExposureLedgerPath[], ec, ev, strm, ok = False},
+  If[path === $Failed,
+    Return[<|"Status" -> "Failed", "Reason" -> "LedgerUnavailable"|>]];
+  ec = Lookup[event, "EventClass", "None"];
+  ev = Join[<|"EventClass" -> ec,
+      "ScopeID" -> iSVAExposureScopeHash[ToString@Lookup[event, "ScopeID", "none"]],
+      "CoverageCounted" -> MemberQ[$iSVACoverageEventClasses, ec],
+      "AtUTC" -> DateString[Now, "ISODateTime", TimeZone -> 0] <> "Z"|>,
+    KeyDrop[event, {"ScopeID"}]];
+  Quiet @ Check[
+    (If[!DirectoryQ[DirectoryName[path]], CreateDirectory[DirectoryName[path]]];
+     strm = OpenAppend[path, BinaryFormat -> True];
+     If[Head[strm] === OutputStream,
+       BinaryWrite[strm, StringToByteArray[
+         ExportString[ev, "RawJSON", "Compact" -> True] <> "\n", "UTF-8"]];
+       Close[strm]; ok = True]), Null];
+  If[!ok, Return[<|"Status" -> "Failed", "Reason" -> "LedgerWriteFailed"|>]];
+  <|"Status" -> "OK", "EventClass" -> ec,
+    "CoverageCounted" -> MemberQ[$iSVACoverageEventClasses, ec]|>];
+
+(* ledger rollup: scope 内の coverage 加算イベントを読む *)
+iSVAExposureRollup[scopeHash_String, windowSec_ : 86400] := Module[
+    {path = iSVAExposureLedgerPath[], lines, evs, cutoff},
+  If[path === $Failed || !FileExistsQ[path],
+    Return[<|"DistinctSubjects" -> 0, "Variants" -> 0, "Releases" -> 0|>]];
+  lines = Quiet @ Check[Import[path, {"Text", "Lines"}], {}];
+  evs = Select[Map[Quiet @ Check[ImportString[#, "RawJSON"], $Failed] &, lines],
+    AssociationQ[#] && Lookup[#, "ScopeID"] === scopeHash &&
+      TrueQ[Lookup[#, "CoverageCounted"]] &];
+  <|"DistinctSubjects" -> Total[Lookup[#, "DistinctSubjects", 0] & /@ evs],
+    "Variants" -> Length[DeleteDuplicates[
+      Lookup[#, "VariantSetDigest", ""] & /@ evs]],
+    "Releases" -> Length[evs]|>];
+
+SourceVaultAnonymizeExposureGuard[intent_Association] := Module[
+    {scope, pol, rollup, coverage, cohort, projected, ratio, req, decision, reason},
+  scope = iSVAExposureScopeHash[ToString@Lookup[intent, "ScopeID", "none"]];
+  pol = Lookup[intent, "ExposurePolicy", <||>];
+  req = ToString@Lookup[intent, "RequestID", CreateUUID[]];
+  (* PreReleaseIntent を先に durable 記録。失敗したら Deny (無記録では通さない) *)
+  If[SourceVaultAnonymizeRecordExposure[<|"EventClass" -> "PreReleaseIntent",
+      "ScopeID" -> Lookup[intent, "ScopeID", "none"], "RequestID" -> req,
+      "ProviderTrustDomain" -> Lookup[intent, "ProviderTrustDomain", "Unknown"],
+      "DistinctSubjects" -> Lookup[intent, "DistinctSubjects", 0]|>]["Status"] =!= "OK",
+    Return[<|"Decision" -> "Deny", "Reason" -> "PreReleaseIntentUnrecordable"|>]];
+  rollup = iSVAExposureRollup[scope,
+    Lookup[pol, "WindowSeconds", 86400]];
+  coverage = rollup["DistinctSubjects"] + Lookup[intent, "DistinctSubjects", 0];
+  cohort = Lookup[intent, "CohortSize", 0];
+  ratio = If[IntegerQ[cohort] && cohort > 0, N[coverage/cohort], 0.];
+  decision = Which[
+    IntegerQ[Lookup[pol, "MaxDistinctSubjectsPerProviderPerWindow"]] &&
+      coverage > pol["MaxDistinctSubjectsPerProviderPerWindow"],
+    {"RequireOwnerApproval", "DistinctSubjectThresholdExceeded"},
+    NumericQ[Lookup[pol, "MaxCohortCoveragePerProvider"]] &&
+      ratio > pol["MaxCohortCoveragePerProvider"],
+    {"RequireOwnerApproval", "CohortCoverageThresholdExceeded"},
+    IntegerQ[Lookup[pol, "MaxVariantsPerOriginPerProvider"]] &&
+      (rollup["Variants"] + 1) > pol["MaxVariantsPerOriginPerProvider"],
+    {"RequireOwnerApproval", "RepeatedVariantExposure"},
+    NumericQ[Lookup[pol, "AlertThreshold"]] && ratio > pol["AlertThreshold"],
+    {"PermitAndReport", "AlertThreshold"},
+    True, {"Permit", "BelowThresholds"}];
+  {decision, reason} = {First[decision], Last[decision]};
+  <|"Decision" -> decision, "Reason" -> reason,
+    "CoverageAfter" -> coverage, "CohortRatio" -> ratio,
+    "RequestID" -> req|>];
+
+(* DistributionPlan (§13.6) *)
+SourceVaultAnonymizeValidateDistribution[plan_Association, assignment_List] := Module[
+    {allowed, maxPer, allowDup, perProvider, dupSubj, unauthorized, over},
+  allowed = Lookup[plan, "AllowedProviders", {}];
+  maxPer = Lookup[plan, "MaxSubjectsPerProvider", Infinity];
+  allowDup = TrueQ[Lookup[plan, "AllowCrossProviderDuplicateSubject", False]];
+  (* assignment: {<|"SubjectToken", "Provider"|>...} *)
+  unauthorized = Select[assignment,
+    !MemberQ[allowed, Lookup[#, "Provider"]] &];
+  perProvider = Counts[Lookup[#, "Provider"] & /@ assignment];
+  over = Select[Normal[perProvider], IntegerQ[maxPer] && #[[2]] > maxPer &];
+  dupSubj = If[allowDup, {},
+    Keys[Select[Counts[Lookup[#, "SubjectToken"] & /@ assignment], # > 1 &]]];
+  <|"Status" -> If[unauthorized === {} && over === {} && dupSubj === {},
+      "OK", "Failed"],
+    "UnauthorizedProviders" -> Length[unauthorized],
+    "OverLimitProviders" -> Length[over],
+    "DuplicateSubjects" -> Length[dupSubj]|>];
+
+(* --- G1c: System Doctor sanitized probe + owner-only doctor + escalation --- *)
+If[!ValueQ[$iSVAExposureProbeConcentrationThreshold],
+  $iSVAExposureProbeConcentrationThreshold = 50];
+
+iSVAExposureRangeLabel[n_Integer] := Which[
+  n <= 0, "0", n < 10, "1-9", n < 50, "10-49", n < 200, "50-199", True, "200+"];
+
+iSVAReadExposureEvents[] := Module[{path = iSVAExposureLedgerPath[], lines},
+  If[path === $Failed || !FileExistsQ[path], Return[{}]];
+  lines = Quiet @ Check[Import[path, {"Text", "Lines"}], $Failed];
+  If[!ListQ[lines], Return[$Failed]];
+  Select[Map[Quiet @ Check[ImportString[#, "RawJSON"], $Failed] &, lines],
+    AssociationQ[#] && TrueQ[Lookup[#, "CoverageCounted"]] &]];
+
+SourceVaultAnonymizeExposureProbe[] := Module[{evs, byScope, maxRel, health, reason},
+  evs = iSVAReadExposureEvents[];
+  If[evs === $Failed,
+    Return[<|"Health" -> "Warning", "ReasonCode" -> "ExposureLedgerUnavailable"|>]];
+  byScope = If[evs === {}, <||>, Counts[Lookup[#, "ScopeID", ""] & /@ evs]];
+  maxRel = If[byScope === <||>, 0, Max[Values[byScope]]];
+  {health, reason} = Which[
+    maxRel > $iSVAExposureProbeConcentrationThreshold,
+    {"High", "AnonymizedArtifactConcentratedUse"},
+    True, {"OK", "BelowThreshold"}];
+  (* sanitized: 実 scope/provider は出さず件数レンジのみ *)
+  <|"Health" -> health, "ReasonCode" -> reason,
+    "ScopeCountRange" -> iSVAExposureRangeLabel[Length[byScope]],
+    "MaxScopeReleaseRange" -> iSVAExposureRangeLabel[maxRel]|>];
+
+SourceVaultAnonymizeExposureSensitiveDoctor[] := Module[{evs, byScope, byProvider},
+  If[!iSVAInteractiveOwnerQ[],
+    Return[<|"Status" -> "Failed", "Reason" -> "OwnerOnly"|>]];
+  evs = iSVAReadExposureEvents[];
+  If[evs === $Failed,
+    Return[<|"Status" -> "Failed", "Reason" -> "ExposureLedgerUnavailable"|>]];
+  byScope = GroupBy[evs, Lookup[#, "ScopeID", ""] &];
+  byProvider = GroupBy[evs, Lookup[#, "ProviderTrustDomain", "Unknown"] &];
+  <|"Status" -> "OK",
+    "TotalReleases" -> Length[evs],
+    "DistinctScopes" -> Length[byScope],
+    "ByProviderTrustDomain" ->
+      Association[KeyValueMap[#1 -> Length[#2] &, byProvider]],
+    "TopScopes" -> Take[
+      ReverseSortBy[KeyValueMap[<|"Scope" -> #1, "Releases" -> Length[#2],
+        "Variants" -> Length[DeleteDuplicates[
+          Lookup[#, "VariantSetDigest", ""] & /@ #2]]|> &, byScope],
+        #["Releases"] &], UpTo[5]],
+    "Remediation" -> If[Length[byScope] > 0 &&
+        Max[Length /@ Values[byScope]] > $iSVAExposureProbeConcentrationThreshold,
+      "Concentrated use detected. Review the top scope, consider provider sharding or owner reapproval.",
+      "No concentration above threshold."]|>];
+
+SourceVaultRegisterAnonymizeExposureDiagnostics[] := Module[{reg},
+  If[Names["SourceVault`SourceVaultDiagnosticsRegisterProbe"] === {},
+    Return[<|"Status" -> "DiagnosticsUnavailable"|>]];
+  reg = Quiet @ Check[
+    SourceVault`SourceVaultDiagnosticsRegisterProbe["anonymize-exposure",
+      SourceVaultAnonymizeExposureProbe], $Failed];
+  <|"Status" -> If[reg === $Failed, "Failed", "Registered"],
+    "ProbeId" -> "anonymize-exposure"|>];
+
+(* probe が High を返すとき cloud-safe な escalation event を送る (弱結合) *)
+SourceVaultAnonymizeExposureEscalateIfNeeded[] := Module[{p},
+  p = SourceVaultAnonymizeExposureProbe[];
+  If[MemberQ[{"High", "Critical"}, Lookup[p, "Health"]] &&
+     Names["SourceVault`SourceVaultDiagnosticsEscalate"] =!= {},
+    Quiet @ Check[SourceVault`SourceVaultDiagnosticsEscalate[<|
+      "EventClass" -> "AnonymizeExposureConcentration",
+      "Severity" -> "High", "ReasonCode" -> p["ReasonCode"],
+      "Component" -> "anonymize-exposure",
+      "MaxScopeReleaseRange" -> p["MaxScopeReleaseRange"]|>], Null];
+    <|"Status" -> "Escalated", "ReasonCode" -> p["ReasonCode"]|>,
+    <|"Status" -> "NoEscalation", "Health" -> Lookup[p, "Health"]|>]];
+
+(* ============================================================
+   7b. A6: フォーマット変換 (仕様 §6.6, §12)
+   原則: 黒塗りは必ずラスタ上書き + 再エンコード (見かけ黒塗り = テキスト層/
+   メタデータ残存を構造的に排除)。V5 は独立の決定論チェック (検出器と別系統)。
+   ============================================================ *)
+
+(* 正規化矩形 (0-1) をピクセル座標へ写して黒塗り。ImageData を直接書き換えて
+   新規 Image を作る (再エンコード = 元のメタ/レイヤは残らない) *)
+iSVAImageRedactRaster[img_Image, regions_List] := Module[
+    {data, w, h, ch},
+  data = ImageData[img, "Byte"];
+  {w, h} = ImageDimensions[img];
+  ch = If[Length[Dimensions[data]] === 3, Last[Dimensions[data]], 1];
+  Do[Module[{x1, y1, x2, y2, c1, r1, c2, r2},
+    x1 = Clip[Lookup[r, "x1", 0.], {0, 1}]; x2 = Clip[Lookup[r, "x2", 0.], {0, 1}];
+    y1 = Clip[Lookup[r, "y1", 0.], {0, 1}]; y2 = Clip[Lookup[r, "y2", 0.], {0, 1}];
+    (* 画像行は上が index 1。正規化 y は下原点なので反転 *)
+    c1 = Max[1, Ceiling[Min[x1, x2] w]]; c2 = Min[w, Floor[Max[x1, x2] w]];
+    r1 = Max[1, Ceiling[(1 - Max[y1, y2]) h]]; r2 = Min[h, Floor[(1 - Min[y1, y2]) h]];
+    If[c2 >= c1 && r2 >= r1,
+      data[[r1 ;; r2, c1 ;; c2]] = If[ch === 1, 0, ConstantArray[0, {r2 - r1 + 1, c2 - c1 + 1, ch}]]]],
+    {r, regions}];
+  (* 新規 Image (再エンコード) *)
+  Image[data, "Byte"]];
+
+SourceVaultAnonymizeImageRedact[img_Image, regions_List] :=
+  iSVAImageRedactRaster[img, regions];
+
+Options[SourceVaultAnonymizePDFPageImages] = {"Regions" -> {}, "DPI" -> 150};
+SourceVaultAnonymizePDFPageImages[pages_List, OptionsPattern[]] := Module[{regions},
+  regions = OptionValue["Regions"];
+  <|"Status" -> "OK", "Format" -> "PageImageList",
+    "Pages" -> Map[If[Head[#] === Image,
+      SourceVaultAnonymizeImageRedact[#, regions], #] &, pages]|>];
+
+(* V5: 各領域が単色 (分散 0) かを独立検査 *)
+SourceVaultAnonymizeVerifyRedactedImage[img_Image, regions_List] := Module[
+    {data, w, h, fails},
+  data = ImageData[img, "Byte"];
+  {w, h} = ImageDimensions[img];
+  fails = Select[regions, Function[r, Module[{x1, y1, x2, y2, c1, r1, c2, r2, patch},
+    x1 = Clip[Lookup[r, "x1", 0.], {0, 1}]; x2 = Clip[Lookup[r, "x2", 0.], {0, 1}];
+    y1 = Clip[Lookup[r, "y1", 0.], {0, 1}]; y2 = Clip[Lookup[r, "y2", 0.], {0, 1}];
+    c1 = Max[1, Ceiling[Min[x1, x2] w]]; c2 = Min[w, Floor[Max[x1, x2] w]];
+    r1 = Max[1, Ceiling[(1 - Max[y1, y2]) h]]; r2 = Min[h, Floor[(1 - Min[y1, y2]) h]];
+    If[c2 < c1 || r2 < r1, True,
+      patch = Flatten[data[[r1 ;; r2, c1 ;; c2]]];
+      Max[patch] - Min[patch] > 0]]]];
+  <|"Status" -> If[fails === {}, "OK", "Failed"],
+    "NonSolidRegions" -> Length[fails]|>];
+
+(* ============================================================
    8. A0: ポリシー registry (仕様 §5.1, §6.1)
    ============================================================ *)
 
@@ -1991,9 +2363,58 @@ iSVACacheDir[] := Which[
     If[StringQ[r], FileNameJoin[{r, "config", "anonymize-cache"}], $Failed]],
   True, $Failed];
 
+(* 一般化階層 5 種 (仕様 §6.5)。文字列前提。判定不能は元値 *)
 iSVAApplyGeneralize[val_, "timestamp->date"] :=
   If[StringQ[val] && StringLength[val] >= 10, StringTake[val, 10], val];
+iSVAApplyGeneralize[val_, "timestamp->week"] :=
+  If[StringQ[val] && StringLength[val] >= 10,
+    Quiet @ Check[DateString[DateObject[StringTake[val, 10]], "ISOWeekDate"] //
+      (StringTake[#, 8] &), StringTake[val, 7]], val];
+iSVAApplyGeneralize[val_, "date->month"] :=
+  If[StringQ[val] && StringLength[val] >= 7, StringTake[val, 7], val];
+iSVAApplyGeneralize[val_, "age->decade"] := Module[{n},
+  n = Quiet @ Check[ToExpression[ToString[val]], $Failed];
+  If[IntegerQ[n], ToString[10 Floor[n/10]] <> "s", val]];
+iSVAApplyGeneralize[val_, "dept->faculty"] := val;  (* 既定は恒等 (階層は policy で拡張) *)
 iSVAApplyGeneralize[val_, _] := val;
+
+(* k 匿名性検査 (仕様 §6.5, §9.2 V4)。rows: 変換後の行 (Association list)。
+   qids: 準識別子キー列。返り値: <|Status, Violations, Rows|>。
+   OnFail: "Suppress"(違反行の qid を repl 化)/ "GeneralizeUp"(全 qid を 1 段粗く)/ "Fail" *)
+iSVAKAnonymityCheck[rows_List, kspec_Association, repl_String] := Module[
+    {k, qids, onFail, genUp, classes, violators, out},
+  k = Lookup[kspec, "K", 1];
+  qids = Lookup[kspec, "QuasiIdentifiers", {}];
+  onFail = Lookup[kspec, "OnFail", "Suppress"];
+  genUp = Lookup[kspec, "GeneralizeUp", <||>];
+  If[!(IntegerQ[k] && k >= 2 && qids =!= {}),
+    Return[<|"Status" -> "OK", "Rows" -> rows, "Violations" -> 0|>]];
+  classes[rws_] := GatherBy[Range[Length[rws]],
+    Function[i, Lookup[rws[[i]], qids, Missing[]]]];
+  violators[rws_] := Flatten[Select[classes[rws], Length[#] < k &]];
+  Which[
+    violators[rows] === {},
+    <|"Status" -> "OK", "Rows" -> rows, "Violations" -> 0|>,
+    onFail === "Fail",
+    <|"Status" -> "Failed", "Reason" -> "KAnonymityViolation",
+      "Violations" -> Length[violators[rows]]|>,
+    onFail === "GeneralizeUp",
+    Module[{r2 = rows},
+      r2 = Map[Function[row, Module[{r = row},
+        KeyValueMap[Function[{attr, hier},
+          If[MemberQ[qids, attr] && KeyExistsQ[r, attr],
+            r[attr] = iSVAApplyGeneralize[r[attr], hier]]], genUp]; r]], r2];
+      If[violators[r2] === {},
+        <|"Status" -> "OK", "Rows" -> r2, "Violations" -> 0, "Generalized" -> True|>,
+        (* まだ違反 -> Suppress にフォールバック *)
+        out = MapIndexed[Function[{row, idx}, If[MemberQ[violators[r2], First[idx]],
+          Module[{r = row}, Scan[(r[#] = repl) &, qids]; r], row]], r2];
+        <|"Status" -> "OK", "Rows" -> out, "Violations" -> 0,
+          "Suppressed" -> True|>]],
+    True,  (* Suppress (既定) *)
+    out = MapIndexed[Function[{row, idx}, If[MemberQ[violators[rows], First[idx]],
+      Module[{r = row}, Scan[(r[#] = repl) &, qids]; r], row]], rows];
+    <|"Status" -> "OK", "Rows" -> out, "Violations" -> 0, "Suppressed" -> True|>]];
 
 (* KnownValueScan + Patterns。pairs: {knownString -> subjectToken...} (長い順) *)
 iSVAApplyTextRules[s_String, pairs_List, patterns_List, repl_String] := Module[{t = s},
@@ -2037,7 +2458,7 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
      origin, rows, pseudoFields, identities, mapSpec, asg, mapEntries, tokenOf,
      textPairs, patterns, repl, scanFn, verifyFn, needScan, anonRows, itemToks,
      srcNodes, derNodes, edges, manifest, mref, art, bind, pub, knownAll, vfail,
-     policyId, subjOf},
+     policyId, subjOf, kres},
   grant = OptionValue["GrantRef"];
   (* --- 段 0a: 本文非読の認可 --- *)
   If[!AssociationQ[grant],
@@ -2107,10 +2528,15 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
           "CanonicalID" -> idv, "Identity" -> ident,
           "KnownStrings" -> Values[ident]|>]], rows],
       #["CanonicalID"] &]];
-  mapSpec = <|"EntityClass" -> Lookup[Lookup[policy, "PseudonymRules", <||>],
-      "EntityClass", "Subject"],
-    "MapScope" -> Lookup[Lookup[policy, "PseudonymRules", <||>], "MapScope",
-      "origin:" <> plan["OriginSetDigest"]]|>;
+  mapSpec = Module[{pr = Lookup[policy, "PseudonymRules", <||>], scopeKey, scope},
+    scopeKey = Lookup[pr, "MapScopeKey", None];
+    scope = Which[
+      StringQ[scopeKey] && rows =!= {} &&
+        StringQ[Lookup[First[rows], scopeKey]],
+      "scope:" <> Lookup[First[rows], scopeKey],
+      StringQ[Lookup[pr, "MapScope"]], pr["MapScope"],
+      True, "origin:" <> plan["OriginSetDigest"]];
+    <|"EntityClass" -> Lookup[pr, "EntityClass", "Subject"], "MapScope" -> scope|>];
   asg = If[identities === {},
     <|"Status" -> "OK", "MapRef" -> "unspecified", "Assignments" -> <||>|>,
     SourceVaultAnonymizeAssignSubjectTokens[mapSpec, identities]];
@@ -2137,10 +2563,19 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
       First[pseudoFields]]},
     If[pf === None, "unspecified",
       Lookup[tokenOf, ToString[Lookup[row, pf[[1]], ""]], "unspecified"]]]];
-  anonRows = {}; itemToks = {}; srcNodes = {}; derNodes = {}; edges = {};
-  MapIndexed[Function[{row, idx}, Module[
-      {i = First[idx], anon, itok, sunit, dunit, subj},
-    anon = iSVAAnonymizeRow[row, tier, tokenOf, textPairs, patterns, repl, scanFn];
+  (* --- 行変換 (ItemToken 採番前) --- *)
+  anonRows = iSVAAnonymizeRow[#, tier, tokenOf, textPairs, patterns, repl, scanFn] & /@ rows;
+  (* --- k 匿名性 (V4)。qid の同値類が k 未満なら Suppress/GeneralizeUp/Fail --- *)
+  kres = iSVAKAnonymityCheck[anonRows, Lookup[tier, "KAnonymity", <||>], repl];
+  If[Lookup[kres, "Status"] =!= "OK",
+    Return[<|"Status" -> "Failed",
+      "Reason" -> Lookup[kres, "Reason", "KAnonymityViolation"]|>]];
+  anonRows = kres["Rows"];
+  (* --- ItemToken 採番 + lineage 構築 (k 匿名性適用後の行に対して) --- *)
+  itemToks = {}; srcNodes = {}; derNodes = {}; edges = {};
+  anonRows = MapIndexed[Function[{anon0, idx}, Module[
+      {i = First[idx], row, anon = anon0, itok, sunit, dunit, subj},
+    row = rows[[i]];
     itok = SourceVaultAnonymizeGenerateToken["Item"];
     subj = subjOf[row];
     anon["ItemToken"] = itok;
@@ -2148,7 +2583,7 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
     sunit = "sunit:" <> StringTake[iSVASHA256Hex[
       plan["OriginSetDigest"] <> ToString[i]], 24];
     dunit = "dunit:" <> StringTake[iSVASHA256Hex[itok], 24];
-    AppendTo[anonRows, anon]; AppendTo[itemToks, itok];
+    AppendTo[itemToks, itok];
     AppendTo[srcNodes, <|"UnitID" -> sunit,
       "ObjectID" -> "sobj:" <> StringTake[iSVASHA256Hex[ToString[i]], 16],
       "VersionID" -> plan["OriginSetDigest"],
@@ -2159,9 +2594,19 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
       "ContentDigest" -> iSVASHA256Hex[ToString[Hash[anon]]]|>];
     AppendTo[edges, <|"Relation" -> "Redacted", "FromUnitIDs" -> {sunit},
       "ToUnitIDs" -> {dunit}, "Cardinality" -> "1:1",
-      "TransformDigest" -> policy["PolicyDigest"]|>]]], rows];
-  (* --- Verify V1/V2/V3 --- *)
-  vfail = Module[{strs = Cases[anonRows, _String, {2}]},
+      "TransformDigest" -> policy["PolicyDigest"]|>];
+    anon]], anonRows];
+  (* --- Verify V1/V2/V3 ---
+     KeepRaw フィールドと token (ItemToken/SubjectToken) は Verify 対象外:
+     KeepRaw は「PII 混入なし」と宣言された値 (課題キー等が \d{7} に機械一致するのを
+     PII リークと誤判定しないため)、token は非意味的識別子。 *)
+  vfail = Module[{excludeKeys, strs},
+    excludeKeys = Join[
+      Keys[Select[Lookup[tier, "FieldRules", <||>], # === "KeepRaw" &]],
+      {"ItemToken", "SubjectToken"}];
+    strs = Flatten[Map[Function[row,
+      KeyValueMap[If[StringQ[#2] && !MemberQ[excludeKeys, #1], #2, Nothing] &, row]],
+      anonRows]];
     Which[
       AnyTrue[strs, Function[s, AnyTrue[knownAll, StringContainsQ[s, #] &]]],
       "V1KnownValueLeak",
@@ -2253,10 +2698,33 @@ If[Names["SourceVault`SourceVaultRegisterPrivacyContract"] =!= {},
        SourceVault`SourceVaultRotateReleaseHandle,
        SourceVault`SourceVaultAnonymizePublicationStatus,
        SourceVault`SourceVaultRevokeDeclassifiedArtifact,
+       SourceVault`SourceVaultAnonymizeGetByHandle,
        SourceVault`SourceVaultCreateDerivedAnnotations,
        SourceVault`SourceVaultValidateDerivedJoin,
        SourceVault`SourceVaultAttachDerivedResults,
-       SourceVault`SourceVaultAnonymize}];
+       SourceVault`SourceVaultAnonymize,
+       SourceVault`SourceVaultAnonymizeBuildEvaluationPlan,
+       SourceVault`SourceVaultAnonymizeQuarantineIngress}];
+    Scan[
+      SourceVault`SourceVaultRegisterPrivacyContract[#,
+        <|"Class" -> "Public", "Exit" -> "None",
+          "NoDataFlow" -> "pure image raster transform/verify; no private store access"|>] &,
+      {SourceVault`SourceVaultAnonymizeImageRedact,
+       SourceVault`SourceVaultAnonymizePDFPageImages,
+       SourceVault`SourceVaultAnonymizeVerifyRedactedImage,
+       SourceVault`SourceVaultAnonymizeComposedPrivacy,
+       SourceVault`SourceVaultAnonymizeRecordExposure,
+       SourceVault`SourceVaultAnonymizeExposureGuard,
+       SourceVault`SourceVaultAnonymizeValidateDistribution,
+       SourceVault`SourceVaultAnonymizeUnlistedClassQ,
+       SourceVault`SourceVaultAnonymizeExposureProbe,
+       SourceVault`SourceVaultRegisterAnonymizeExposureDiagnostics,
+       SourceVault`SourceVaultAnonymizeExposureEscalateIfNeeded}];
+    (* sensitive doctor は owner-only で高感度メタデータを返す -> Private *)
+    SourceVault`SourceVaultRegisterPrivacyContract[
+      SourceVault`SourceVaultAnonymizeExposureSensitiveDoctor,
+      <|"Class" -> "Private", "Exit" -> "Result",
+        "NoDataFlow" -> "owner-only aggregate exposure metadata; no private store access"|>];
     Scan[
       SourceVault`SourceVaultRegisterPrivacyContract[#,
         <|"Class" -> "Public", "Exit" -> "None",

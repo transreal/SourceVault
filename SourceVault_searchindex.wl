@@ -429,6 +429,13 @@ $validStates = {"Approved", "Published", "Released"};
 SourceVaultEvaluateReleasePolicy[source_Association, contextName_String, opts___] := Module[
   {ctx, why = {}, decision, tags, reqTags, denyTags, maxPL, pl, state, expChk, notExpired,
    policyDigest},
+  (* Unlisted (匿名化成果物等) は ReleaseContext に依存せず検索・カタログ・一覧に載せない
+     (anonymize spec §15.1)。context 解決より前に弾く。弱結合: anonymize 未ロードなら no-op。 *)
+  If[TrueQ[Quiet @ Check[
+      Length[Names["SourceVault`SourceVaultAnonymizeUnlistedClassQ"]] > 0 &&
+        SourceVault`SourceVaultAnonymizeUnlistedClassQ[source], False]],
+    Return[<|"Decision" -> "Deny", "Why" -> {"UnlistedDiscoverability"},
+      "PolicyDigest" -> Missing["Unlisted"], "Context" -> contextName|>]];
   ctx = iResolve["ReleaseContext", contextName];
   If[FailureQ[ctx], Return[ctx]];
   policyDigest = SourceVault`SourceVaultSnapshotDigest[ctx];

@@ -1,5 +1,3 @@
-## MCP dispatch / protocol
-
 ### $SourceVaultMCPProtocolVersion
 型: String, 初期値: "2024-11-05"
 `initialize` レスポンスで返す MCP protocol バージョン。
@@ -117,7 +115,7 @@ sv:// オブジェクトの全プロパティを返す。共通 key: URI/Namespa
 
 ### SourceVaultRegisterMCPDataAdapter[name, spec] → Association|Failure
 data adapter を登録する。spec 必須: "Kinds" ({_String..})。
-任意 spec key: "Capabilities" (<|cap->bool|>)、"Search"/"Resolve"/"Read"/"SummaryRow"/"Metadata"/"Authorize"/"URIForObject"/"OwnsURIQ" 関数 (OwnsURIQ は `Function[parsedURI]->True|False` で `sourcevault_get` の URI 所有 adapter 選定に使う)、"Available" (bool)、"AvailableProbe" (Function[])、"RequireGrantFor" ({_String..})、"UnavailableReason"、"BodyGrantRequired" (bool、既定 True。False で view=body を grant なしで解放 — PublicDoc adapter 用、release gate は通す。R-spec §5.6)、"ExtraViews" (<|viewName -> Function[parsed, accessRequest]|>、adapter 固有 view。packageapi: contract/scaffolded/guided)、"FilterKeys"/"FilterExamples" ({_String..}、catalog に露出する adapter 固有 filter discovery。packageapi の packages 等)、"SearchWarnings" (Function[spec]->{<|Code,...|>..}、adapter 固有の非致命的検索警告。0 件時に LLM へヒントを返す)。
+任意 spec key: "Capabilities" (<|cap->bool|>)、"Search"/"Resolve"/"Read"/"SummaryRow"/"Metadata"/"Authorize"/"URIForObject"/"OwnsURIQ" 関数 (OwnsURIQ は `Function[parsedURI]->True|False` で `sourcevault_get` の URI 所有 adapter 選定に使う)、"Available" (bool)、"AvailableProbe" (Function[])、"RequireGrantFor" ({_String..})、"UnavailableReason"、"BodyGrantRequired" (bool、既定 True。False で view=body を grant なしで解放 — PublicDoc adapter 用、release gate は通す。R-spec §5.6)、"ExtraViews" (<|viewName -> Function[parsed, accessRequest]|>、adapter 固有 view。packageapi: contract/scaffolded/guided)、"FilterKeys"/"FilterExamples" ({_String..}、catalog に露出する adapter 固有 filter discovery。packageapi の packages 等)、"SearchWarnings" (Function[spec]->{<|Code,...|>..}、adapter 固有の非致命的検索警告。0 件時に LLM へヒントを返す)、"Description" (String、catalog 表示用の説明文)。
 Capabilities key: Search / ReadMetadata / ReadSummary / ReadContext / ReadBody / DepositArtifact / ResolveObjectURI / SemanticSearch / MetadataFilter。未指定 key は False で補完する。
 返値: `<|"Status"->"OK", "Name", "Kinds", "Capabilities"|>`。Kinds 不正は `Failure["AdapterMissingKinds"]`、spec 非 Association は `Failure["AdapterSpecNotAssociation"]`。
 
@@ -160,7 +158,7 @@ Options: "Default" -> 0.5 (cloud 安全境界)
 ## Catalog (spec §9.2 / §16)
 
 ### SourceVaultMCPCatalog[opts]
-登録済み adapter の catalog を JSON 安全な連想で返す。各 adapter record: name/kinds/available/capabilities/requiresGrantFor、adapter 固有の filterKeys/filterExamples があれば付加、unavailable なら unavailableReason を付加。トップに defaultReturnFormats ({"compactText","structuredJson","referencesOnly"})。可用性は spec "AvailableProbe" (Function[]) があれば動的評価、無ければ静的 "Available"。`sourcevault_catalog` tool の実体。
+登録済み adapter の catalog を JSON 安全な連想で返す。各 adapter record: name/kinds/available/capabilities/requiresGrantFor、adapter 固有の description/filterKeys/filterExamples があれば付加、unavailable なら unavailableReason を付加。capabilities は内部 Capability key を短縮名で返す: Search->search, ReadMetadata->metadata, ReadSummary->summary, ReadContext->context, ReadBody->body, DepositArtifact->deposit, ResolveObjectURI->resolve_uri, SemanticSearch->semantic, MetadataFilter->metadataFilter。トップに defaultReturnFormats ({"compactText","structuredJson","referencesOnly"})。可用性は spec "AvailableProbe" (Function[]) があれば動的評価、無ければ静的 "Available"。`sourcevault_catalog` tool の実体。
 → Association
 Options: "IncludeUnavailable" -> True
 
