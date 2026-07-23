@@ -6280,11 +6280,15 @@ iSVSnapshotKindOf[snapshotId_String] :=
   Which[
     (* content-addressed 不変スナップショット (snapshot:class:hex / sv://snapshot/..)。
        コロンを含むので legacy の colon-path FileExistsQ より前に pattern で判定する。 *)
+    (* NOTE: core のシンボルは完全修飾必須。SourceVault.wl 本体は core より先に
+       ロードされるため、非修飾だと SourceVault`Private` の孤児シンボルに束縛され
+       Which が未評価のまま残る (2026-07-23: Cerezo snapshot の PL 1.0 付与が
+       この孤児化で silent に失敗していた実バグ)。 *)
     (StringStartsQ[snapshotId, "snapshot:"] || StringStartsQ[snapshotId, "sv://snapshot/"]) &&
-      SourceVaultImmutableSnapshotExistsQ[snapshotId], "Immutable",
+      TrueQ[Quiet @ SourceVault`SourceVaultImmutableSnapshotExistsQ[snapshotId]], "Immutable",
     FileExistsQ[iNotebookSnapshotPath[snapshotId]], "Notebook",
     FileExistsQ[iSnapshotMetaPathOf[snapshotId]], "PdfUrl",
-    SourceVaultImmutableSnapshotExistsQ[snapshotId], "Immutable",
+    TrueQ[Quiet @ SourceVault`SourceVaultImmutableSnapshotExistsQ[snapshotId]], "Immutable",
     True, "NotFound"
   ];
 
@@ -6307,7 +6311,7 @@ SourceVaultSetSnapshotPrivacyLevel[snapshotId_String, level_?NumericQ] :=
        サイドレコードへ委譲する (本体ファイルは書き換えない)。 *)
     If[kind === "Immutable",
       Return[Join[<|"SnapshotId" -> snapshotId|>,
-        SourceVaultSetImmutableSnapshotPrivacyLevel[snapshotId, lv]]]];
+        SourceVault`SourceVaultSetImmutableSnapshotPrivacyLevel[snapshotId, lv]]]];
     path = If[kind === "Notebook",
       iNotebookSnapshotPath[snapshotId],
       iSnapshotMetaPathOf[snapshotId]];
