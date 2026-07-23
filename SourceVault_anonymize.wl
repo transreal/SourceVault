@@ -171,6 +171,11 @@ SourceVaultAnonymizePseudonymMap::usage =
   "MapId なら MapHead の最新版、snapshot ref なら exact 版 (head が進んでも内容不変 = AC-029)。";
 
 (* ---- L2a: ArtifactBinding + 逆引き (仕様 §5.6, §7.3) ---- *)
+(* U1: origin->variant は origin を読む権限を持つ principal 専用 (仕様 §10.2, §15.1) *)
+SourceVaultAnonymizedVariants::accessnote =
+  "SourceVaultAnonymizedVariants は unlisted 成果物の唯一の一覧経路なので、\n" <>
+  "権限のない照会には variant の有無に依らず同一の Denied 応答を返す (存在 oracle 防止)。";
+
 SourceVaultAnonymizedVariants::usage =
   "SourceVaultAnonymizedVariants[origRefOrURI] は元オブジェクトに紐づく匿名化成果物の\n" <>
   "一覧 (BindingRef/ArtifactRef/PolicyRef/MapRef) を返す。unlisted の唯一の一覧経路であり、\n" <>
@@ -183,6 +188,12 @@ SourceVaultAnonymizeGetByHandle::usage =
   "取得する唯一の無許可 Reuse 経路 (仕様 §10.5)。handle 解決 -> PublicationHead が Published か\n" <>
   "確認 -> 低 PL projection (Payload=ItemToken ベース行・TargetLevel・Format のみ。\n" <>
   "系譜参照 OriginRef/MapRef/BindingRef は一切含まない) を返す。Revoked/Expired は HandleInvalid。";
+
+SourceVaultAnonymizeFilterUnlisted::usage =
+  "SourceVaultAnonymizeFilterUnlisted[entries] は一覧系 (search/catalog/fs_list) の結果から\n" <>
+  "unlisted クラス (匿名化成果物・AnnotationContent・quarantine 等) を落とす (仕様 §15.1, 増分 U1)。\n" <>
+  "row 本体と row の \"Metadata\" の双方を検査する。adapter は結果配列をこれに通すだけでよい\n" <>
+  "(additive)。到達経路は exact ReleaseHandle の bearer get と origin 権限者のリンクたどりのみ。";
 
 SourceVaultAnonymizeUnlistedClassQ::usage =
   "SourceVaultAnonymizeUnlistedClassQ[source] は source (snapshot record 等) が匿名化拡張の\n" <>
@@ -246,6 +257,38 @@ SourceVaultRotateReleaseHandle::usage =
   "SourceVaultRotateReleaseHandle[artifactRef] は旧 handle を全て失効させ新 handle を発行する\n" <>
   "(handle 漏洩対応。オーナー対話環境限定)。新 handle 平文は返り値でのみ渡される\n" <>
   "(mapping には digest しか残らない)。artifact の content identity は不変 (AC-085)。";
+
+(* ---- A4: 監査 (仕様 §5.12, §7.3, AC-014) ---- *)
+SourceVaultAnonymizationAuditSummary::usage =
+  "SourceVaultAnonymizationAuditSummary[opts] は匿名化イベントログの低 PL 集計を返す\n" <>
+  "(件数・EventClass 別・状態別のみ。ref/principal/PII は含めない)。誰でも呼べる (Public)。\n" <>
+  "opts: \"WindowSeconds\"->All。戻り値 <|Status, ByEventClass, Publications, Reuses,\n" <>
+  "Reverifications, Revocations, Supersessions, TotalEvents|>。";
+SourceVaultAnonymizationAudit::usage =
+  "SourceVaultAnonymizationAudit[opts] はオーナー/高 PL 向けの詳細監査を返す\n" <>
+  "(元 PL→先 PL・policy/grant digest・PublicationRef・principal・reason を含む。PII は含まない)。\n" <>
+  "非対話オーナー環境では OwnerOnly で拒否 (存在集計は AuditSummary で取れる)。\n" <>
+  "opts: \"WindowSeconds\"->All, \"EventClass\"->All, \"Limit\"->200。";
+
+(* ---- U2: handle scrub / provider envelope (仕様 §5.10, T47) ---- *)
+SourceVaultAnonymizeHandleTag::usage =
+  "SourceVaultAnonymizeHandleTag[handle] は ReleaseHandle 平文を log/ledger 用の keyed HMAC\n" <>
+  "タグ \"rh:<hmac 先頭>\" に変換する (仕様 §5.10。ledger には平文を書かない)。";
+SourceVaultAnonymizeScrubHandles::usage =
+  "SourceVaultAnonymizeScrubHandles[x] は log/diagnostics/notification/provider payload に混じった\n" <>
+  "ReleaseHandle 平文を除去する (仕様 §5.10, T47)。文字列中の \"sv://release/<hex>\" を keyed HMAC\n" <>
+  "タグへ置換し、Association/List を再帰処理する。キー名が Handle/ReleaseHandle 等のフィールドは\n" <>
+  "値ごとタグ化する。低 PL の sink に渡す前段でこれを通す。";
+SourceVaultAnonymizeHandleLeakQ::usage =
+  "SourceVaultAnonymizeHandleLeakQ[x] は x (文字列/連想/リスト) に ReleaseHandle 平文が\n" <>
+  "残っているかを返す (監査・テスト用)。";
+SourceVaultAnonymizeReleaseHandleEnvelope::usage =
+  "SourceVaultAnonymizeReleaseHandleEnvelope[handle, opts] は handle を外部 provider へ渡す\n" <>
+  "request envelope を組む (仕様 §5.10)。handle は URL の path/query に載せず、redaction 対象の\n" <>
+  "Authorization header (既定) または request body で渡す。opts: \"URL\"(handle を含めてはならない・\n" <>
+  "含むと fail-closed)、\"Carrier\"->\"Header\"|\"Body\"、\"Method\"->\"GET\"。戻り値は\n" <>
+  "<|Status, URL, Method, Headers, Body, RedactKeys (log 時に伏せるキー)|>。\n" <>
+  "handle が URL に載っていれば <|Status->\"Failed\", Reason->\"HandleInURL\"|> (proxy/APM 漏洩防止)。";
 
 (* ---- G1: CompositionPolicy + ExposureLedger (仕様 §13.5, §5.14) ---- *)
 SourceVaultAnonymizeComposedPrivacy::usage =
@@ -1509,17 +1552,40 @@ iSVAVerifyArtifactBinding[binding_Association] :=
   SourceVaultAnonymizeCanonicalDigest[KeyDrop[binding, "BindingDigest"]] ===
     binding["BindingDigest"];
 
-SourceVaultAnonymizedVariants[origRefOrURI_String] := Module[
-    {parsed, canonical, dir, key, path, refs, out},
+(* 一覧系からの unlisted 除外 (U1)。row 本体と Metadata の両方を見る *)
+iSVAUnlistedRowQ[row_] :=
+  SourceVaultAnonymizeUnlistedClassQ[row] ||
+  (AssociationQ[row] &&
+    SourceVaultAnonymizeUnlistedClassQ[Lookup[row, "Metadata", <||>]]);
+
+SourceVaultAnonymizeFilterUnlisted[entries_List] :=
+  Select[entries, ! iSVAUnlistedRowQ[#] &];
+SourceVaultAnonymizeFilterUnlisted[x_] := x;
+
+Options[SourceVaultAnonymizedVariants] = {"AccessLevel" -> Automatic};
+SourceVaultAnonymizedVariants[origRefOrURI_String, OptionsPattern[]] := Module[
+    {parsed, canonical, dir, key, path, refs, out, pl, acc, allowed, denied},
   parsed = iSVAParseRef[origRefOrURI];
   canonical = If[TrueQ[Lookup[parsed, "Valid", False]],
     parsed["CanonicalRef"], origRefOrURI];
+  (* 権限判定を先に済ませる。origin が読めない/存在しない場合の PL は fail-closed 1.0
+     (存在しない ref と読めない ref で応答が変わらないようにする) *)
+  pl = With[{x = Quiet @ Check[
+      SourceVault`SourceVaultSnapshotPrivacyLevel[canonical], $Failed]},
+    If[NumericQ[x], x, 1.0]];
+  acc = OptionValue["AccessLevel"];
+  allowed = iSVAInteractiveOwnerQ[] || (NumericQ[acc] && acc >= pl);
+  (* 権限がないときの応答は variant の有無・origin の存否に依らず常にこれ *)
+  denied = <|"Status" -> "Denied", "Reason" -> "OriginNotReadable",
+    "OriginRef" -> canonical, "Variants" -> {}|>;
   dir = iSVABindingIndexDir[];
   If[dir === $Failed,
-    Return[<|"Status" -> "Failed", "Reason" -> "BindingIndexUnavailable"|>]];
+    Return[If[allowed,
+      <|"Status" -> "Failed", "Reason" -> "BindingIndexUnavailable"|>, denied]]];
   key = iSVAHandleDigest[canonical];
   If[key === $Failed,
-    Return[<|"Status" -> "Failed", "Reason" -> "DigestUnavailable"|>]];
+    Return[If[allowed,
+      <|"Status" -> "Failed", "Reason" -> "DigestUnavailable"|>, denied]]];
   path = FileNameJoin[{dir, StringTake[key, 40] <> ".json"}];
   refs = If[FileExistsQ[path],
     Quiet @ Check[Import[path, "RawJSON"], {}], {}];
@@ -1531,6 +1597,9 @@ SourceVaultAnonymizedVariants[origRefOrURI_String] := Module[
             "PolicyRef" -> b["PolicyRef"], "MapRef" -> b["MapRef"],
             "LineageManifestRef" -> b["LineageManifestRef"]|>]]]],
     refs];
+  (* 検索・読み出しは権限に依らず同じ経路を通し、最後に結果を捨てる
+     (件数・error code・分岐時間で存在を漏らさない) *)
+  If[! allowed, Return[denied]];
   If[Names["SourceVault`SourceVaultNotePrivacy"] =!= {},
     Quiet @ Check[SourceVault`SourceVaultNotePrivacy[1.0], Null]];
   <|"Status" -> "OK", "OriginRef" -> canonical, "Variants" -> out|>];
@@ -1579,6 +1648,20 @@ iSVAPubEventAppend[ev_Association] := Module[{path = iSVAPubEventPath[], strm, o
   If[ok && Names["SourceVault`SourceVaultAppendEvent"] =!= {},
     Quiet @ Check[SourceVault`SourceVaultAppendEvent[ev], Null]];
   ok];
+
+(* A4: 監査イベント発行 (publication event log を正本に再利用)。best-effort:
+   ここでの失敗は publish を止めない (Prepared/CAS のような正本状態遷移ではない)。
+   イベントは ref digest・level・policy/grant digest のみ (PII 非含有、§5.12) *)
+iSVAAuditEmit[eventClass_String, fields_Association] :=
+  iSVAPubEventAppend[Join[<|"EventClass" -> eventClass|>,
+    KeyDrop[fields, "EventClass"],
+    <|"AtUTC" -> DateString[Now, "ISODateTime", TimeZone -> 0] <> "Z"|>]];
+
+iSVAPubEventsRead[] := Module[{path = iSVAPubEventPath[], lines},
+  If[path === $Failed || !FileExistsQ[path], Return[{}]];
+  lines = Quiet @ Check[Import[path, {"Text", "Lines"}], {}];
+  Select[Map[Quiet @ Check[ImportString[#, "RawJSON"], $Failed] &, lines],
+    AssociationQ]];
 
 iSVAPubHeadFile[artifactRef_String] := With[{dir = iSVAPubHeadDir[]},
   If[dir === $Failed, $Failed,
@@ -2144,6 +2227,121 @@ SourceVaultRotateReleaseHandle[artifactRef_String] := Module[{n, issued},
   If[issued["Status"] =!= "OK", Return[issued]];
   <|"Status" -> "OK", "RevokedCount" -> n,
     "ReleaseHandle" -> issued["ReleaseHandle"], "ArtifactRef" -> artifactRef|>];
+
+(* ============================================================
+   7b. U2: handle scrub / leak detection / provider envelope (仕様 §5.10, T47)
+   handle は準機密。低 PL の sink (log/diagnostics/notification/provider payload) に
+   平文で書かない。ledger には keyed HMAC タグ。外部送信は header/body で渡し URL に載せない。
+   ============================================================ *)
+
+(* keyed HMAC タグ。鍵が無ければ非可逆 fallback (平文は決して残さない) *)
+SourceVaultAnonymizeHandleTag[handle_String] := With[{d = iSVAHandleDigest[handle]},
+  "rh:" <> If[StringQ[d], StringTake[d, UpTo[16]],
+    StringTake[iSVASHA256Hex["norehandlekey:" <> handle], UpTo[16]]]];
+SourceVaultAnonymizeHandleTag[_] := Missing["NotAHandle"];
+
+(* 文字列中の handle 平文 "sv://release/<64hex>" を全て keyed タグへ置換 *)
+$iSVAHandlePattern = "sv://release/" ~~ Repeated[HexadecimalCharacter, {64}];
+iSVAScrubHandleString[s_String] :=
+  StringReplace[s, h : $iSVAHandlePattern :> SourceVaultAnonymizeHandleTag[h]];
+
+(* キー名がこれらのフィールドは値ごとタグ化する (中身が非文字列でも) *)
+$iSVAHandleKeyNames = {"ReleaseHandle", "Handle", "BearerHandle", "ReleaseHandles"};
+iSVAScrubHandleValueForKey[k_, v_] :=
+  If[MemberQ[$iSVAHandleKeyNames, k],
+    Which[
+      StringQ[v], If[SourceVaultAnonymizeReleaseHandleValidQ[v],
+        SourceVaultAnonymizeHandleTag[v], iSVAScrubHandleString[v]],
+      ListQ[v], SourceVaultAnonymizeScrubHandles[v],
+      MissingQ[v] || v === None || v === Null, v,
+      True, "rh:redacted"],
+    SourceVaultAnonymizeScrubHandles[v]];
+
+SourceVaultAnonymizeScrubHandles[s_String] := iSVAScrubHandleString[s];
+SourceVaultAnonymizeScrubHandles[a_Association] :=
+  Association[KeyValueMap[# -> iSVAScrubHandleValueForKey[#1, #2] &, a]];
+SourceVaultAnonymizeScrubHandles[l_List] := SourceVaultAnonymizeScrubHandles /@ l;
+SourceVaultAnonymizeScrubHandles[x_] := x;
+
+SourceVaultAnonymizeHandleLeakQ[s_String] := StringContainsQ[s, $iSVAHandlePattern];
+SourceVaultAnonymizeHandleLeakQ[a_Association] :=
+  AnyTrue[Values[a], SourceVaultAnonymizeHandleLeakQ];
+SourceVaultAnonymizeHandleLeakQ[l_List] := AnyTrue[l, SourceVaultAnonymizeHandleLeakQ];
+SourceVaultAnonymizeHandleLeakQ[_] := False;
+
+Options[SourceVaultAnonymizeReleaseHandleEnvelope] = {
+  "URL" -> "", "Carrier" -> "Header", "Method" -> "GET", "Body" -> <||>};
+SourceVaultAnonymizeReleaseHandleEnvelope[handle_String, OptionsPattern[]] := Module[
+    {url, carrier, method, body},
+  If[!SourceVaultAnonymizeReleaseHandleValidQ[handle],
+    Return[<|"Status" -> "Failed", "Reason" -> "InvalidHandle"|>]];
+  url = ToString @ OptionValue["URL"];
+  carrier = OptionValue["Carrier"];
+  method = ToString @ OptionValue["Method"];
+  body = OptionValue["Body"];
+  If[!AssociationQ[body], body = <||>];
+  (* fail-closed: handle が URL の path/query に載っていたら拒否
+     (proxy/access log/browser history/APM への漏洩を作らない) *)
+  If[StringContainsQ[url, handle] || SourceVaultAnonymizeHandleLeakQ[url],
+    Return[<|"Status" -> "Failed", "Reason" -> "HandleInURL"|>]];
+  Which[
+    carrier === "Header",
+    <|"Status" -> "OK", "URL" -> url, "Method" -> method,
+      "Headers" -> <|"Authorization" -> "Bearer " <> handle|>,
+      "Body" -> body, "RedactKeys" -> {"Authorization"}|>,
+    carrier === "Body",
+    <|"Status" -> "OK", "URL" -> url, "Method" -> If[method === "GET", "POST", method],
+      "Headers" -> <||>, "Body" -> Append[body, "release_handle" -> handle],
+      "RedactKeys" -> {"release_handle"}|>,
+    True, <|"Status" -> "Failed", "Reason" -> "UnknownCarrier"|>]];
+
+(* ============================================================
+   7c. A4: 監査 (AuditSummary=低 PL 集計 / Audit=owner 詳細) (仕様 §5.12, §7.3)
+   ============================================================ *)
+
+$iSVAPublishEventClasses = {"SourceVaultDeclassified", "AnonymizePublicationCompleted"};
+$iSVAReuseEventClasses = {"PublishedReuse"};
+$iSVAReverifyEventClasses = {"Reverified"};
+$iSVARevokeEventClasses = {"AnonymizePublicationRevoked", "Revoked"};
+$iSVASupersedeEventClasses = {"Superseded"};
+
+iSVAAuditWindowFilter[evs_List, windowSec_] :=
+  If[windowSec === All || !NumericQ[windowSec], evs,
+    With[{cut = DateString[DatePlus[Now, {-windowSec, "Second"}],
+        "ISODateTime", TimeZone -> 0] <> "Z"},
+      Select[evs, StringQ[Lookup[#, "AtUTC", ""]] && Lookup[#, "AtUTC"] >= cut &]]];
+
+Options[SourceVaultAnonymizationAuditSummary] = {"WindowSeconds" -> All};
+SourceVaultAnonymizationAuditSummary[OptionsPattern[]] := Module[{evs, byClass, cnt},
+  evs = iSVAAuditWindowFilter[iSVAPubEventsRead[], OptionValue["WindowSeconds"]];
+  byClass = Counts[Lookup[#, "EventClass", "Unknown"] & /@ evs];
+  cnt = Function[classes, Total[Lookup[byClass, classes, 0]]];
+  (* 低 PL 集計のみ。ref/principal/PII は返さない (Public) *)
+  <|"Status" -> "OK",
+    "ByEventClass" -> byClass,
+    "Publications" -> Lookup[byClass, "SourceVaultDeclassified", 0],
+    "Reuses" -> cnt[$iSVAReuseEventClasses],
+    "Reverifications" -> cnt[$iSVAReverifyEventClasses],
+    "Revocations" -> cnt[$iSVARevokeEventClasses],
+    "Supersessions" -> cnt[$iSVASupersedeEventClasses],
+    "TotalEvents" -> Length[evs]|>];
+
+Options[SourceVaultAnonymizationAudit] = {
+  "WindowSeconds" -> All, "EventClass" -> All, "Limit" -> 200};
+SourceVaultAnonymizationAudit[OptionsPattern[]] := Module[{evs, ecFilter, lim},
+  (* owner/高 PL 専用。ref/grant/principal を含むため非オーナーには出さない *)
+  If[!iSVAInteractiveOwnerQ[],
+    Return[<|"Status" -> "Failed", "Reason" -> "OwnerOnly",
+      "Hint" -> "SourceVaultAnonymizationAuditSummary for counts"|>]];
+  evs = iSVAAuditWindowFilter[iSVAPubEventsRead[], OptionValue["WindowSeconds"]];
+  ecFilter = OptionValue["EventClass"];
+  If[StringQ[ecFilter],
+    evs = Select[evs, Lookup[#, "EventClass", ""] === ecFilter &]];
+  lim = OptionValue["Limit"];
+  If[IntegerQ[lim] && Length[evs] > lim, evs = Take[evs, -lim]];
+  If[Names["SourceVault`SourceVaultNotePrivacy"] =!= {},
+    Quiet @ Check[SourceVault`SourceVaultNotePrivacy[1.0], Null]];
+  <|"Status" -> "OK", "EventCount" -> Length[evs], "Events" -> evs|>];
 
 (* ============================================================
    7a. G1/G2: CompositionPolicy / ExposureLedger / Guard / DistributionPlan
@@ -3057,6 +3255,10 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
     If[AssociationQ[cached] && StringQ[Lookup[cached, "ArtifactRef"]],
       With[{st = SourceVaultAnonymizePublicationStatus[cached["ArtifactRef"]]},
         If[Lookup[st, "State", "?"] === "Published",
+          iSVAAuditEmit["PublishedReuse", <|
+            "ArtifactRefDigest" -> iSVAHandleDigest[cached["ArtifactRef"]],
+            "TargetLevel" -> tl, "PolicyDigest" -> policy["PolicyDigest"],
+            "GrantID" -> Lookup[grant, "GrantID", "unspecified"]|>];
           Return[<|"Status" -> "OK", "ArtifactRef" -> cached["ArtifactRef"],
             "PublicationState" -> "Published", "CacheHit" -> True,
             "MapRef" -> Lookup[cached, "MapRef", "unspecified"]|>]]]]];
@@ -3211,6 +3413,19 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
          CreateDirectory[DirectoryName[cachePath]]];
        Export[cachePath, <|"ArtifactRef" -> art["ArtifactRef"],
          "MapRef" -> asg["MapRef"], "CacheIdentity" -> cacheId|>, "RawJSON"]), Null]];
+  (* A4: Publish 成立を監査記録 (元 PL->先 PL・policy/grant。PII 非含有)。
+     staged は未公開なので Declassified を出さない *)
+  If[!TrueQ[Lookup[pub, "Staged", False]],
+    iSVAAuditEmit["SourceVaultDeclassified", <|
+      "ArtifactRefDigest" -> iSVAHandleDigest[art["ArtifactRef"]],
+      "PublicationRef" -> Lookup[pub, "PublicationRef", "unspecified"],
+      "SourcePL" -> N[Max[Append[
+        Cases[Lookup[#, "PrivacyLevel", Nothing] & /@ plan["Origins"], _?NumericQ],
+        1.0]]],
+      "TargetPL" -> N[ToExpression[tl]],
+      "PolicyDigest" -> policy["PolicyDigest"],
+      "GrantID" -> Lookup[grant, "GrantID", "unspecified"],
+      "Verify" -> "Pass", "EntityCount" -> Length[mapEntries]|>]];
   <|"Status" -> "OK", "ArtifactRef" -> art["ArtifactRef"],
     "ArtifactBindingRef" -> bind["BindingRef"],
     "LineageManifestRef" -> mref, "MapRef" -> asg["MapRef"],
@@ -3261,7 +3476,19 @@ If[Names["SourceVault`SourceVaultRegisterPrivacyContract"] =!= {},
        SourceVault`SourceVaultAttachDerivedResults,
        SourceVault`SourceVaultAnonymize,
        SourceVault`SourceVaultAnonymizeBuildEvaluationPlan,
-       SourceVault`SourceVaultAnonymizeQuarantineIngress}];
+       SourceVault`SourceVaultAnonymizeQuarantineIngress,
+       (* U1: 一覧フィルタは caller の row を選別するだけ (純関数) *)
+       SourceVault`SourceVaultAnonymizeFilterUnlisted,
+       (* U2: handle scrub / envelope は純変換 (私的ストア非到達) *)
+       SourceVault`SourceVaultAnonymizeHandleTag,
+       SourceVault`SourceVaultAnonymizeScrubHandles,
+       SourceVault`SourceVaultAnonymizeHandleLeakQ,
+       SourceVault`SourceVaultAnonymizeReleaseHandleEnvelope,
+       (* A4: AuditSummary は低 PL 集計 (件数のみ) *)
+       SourceVault`SourceVaultAnonymizationAuditSummary,
+       (* C4: ページ SourceUnit 化 / 黒塗り成果物は純変換 *)
+       SourceVault`SourceVaultAnonymizeBuildPageUnits,
+       SourceVault`SourceVaultAnonymizeAnswerSheetPages}];
     Scan[
       SourceVault`SourceVaultRegisterPrivacyContract[#,
         <|"Class" -> "Public", "Exit" -> "None",
@@ -3301,7 +3528,14 @@ If[Names["SourceVault`SourceVaultRegisterPrivacyContract"] =!= {},
        SourceVault`SourceVaultResolveReleaseHandle,
        SourceVault`SourceVaultAnonymizeAssignSubjectTokens,
        SourceVault`SourceVaultAnonymizePseudonymMap,
-       SourceVault`SourceVaultAnonymizedVariants}];
+       SourceVault`SourceVaultAnonymizedVariants,
+       (* A4: owner 詳細監査 (ref/grant を含む・owner-only) *)
+       SourceVault`SourceVaultAnonymizationAudit,
+       (* C4: identity 系は OCR PII を扱う snapshot 由来 (owner adjudication) *)
+       SourceVault`SourceVaultAnonymizeRecordIdentityEvidence,
+       SourceVault`SourceVaultAnonymizeAdjudicateIdentity,
+       SourceVault`SourceVaultAnonymizeIdentityStatus,
+       SourceVault`SourceVaultAnonymizeAnswerSheetPlan}];
     SourceVault`SourceVaultRegisterPrivacyContract[
       SourceVault`SourceVaultAnonymizePseudonymMapId,
       <|"Class" -> "Public", "Exit" -> "None",

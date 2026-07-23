@@ -1566,6 +1566,12 @@ iSVRunAdapterSearch[name_String, spec_Association, accessRequest_Association] :=
   If[fn === None, Return[{}]];
   rows = Quiet @ fn[spec, accessRequest];  (* Check は使わない (message=失敗の誤判定を避ける) *)
   If[! ListQ[rows], Return[{}]];
+  (* unlisted (匿名化成果物等) は索引・一覧・検索結果に載せない (anonymize spec §15.1)。
+     弱結合: anonymize 未ロードなら no-op。projection より前で落とす *)
+  If[Length[Names["SourceVault`SourceVaultAnonymizeFilterUnlisted"]] > 0,
+    rows = Quiet @ Check[
+      SourceVault`SourceVaultAnonymizeFilterUnlisted[rows], rows]];
+  If[! ListQ[rows], Return[{}]];
   ret = Lookup[spec, "return", <||>];
   Function[row, SourceVaultNormalizeSearchResult[row,
     "Adapter" -> name, "ReleasedProjection" -> "summary",

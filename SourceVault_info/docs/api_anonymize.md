@@ -282,6 +282,46 @@ Revokes every ReleaseHandle for an artifact (owner-interactive-only mutation; co
 Revokes all old handles and issues a fresh one (handle-leak response; owner-interactive-only). New handle plaintext is returned only in the result (mapping retains only its digest); artifact content identity is unchanged (AC-085).
 → `<|Status->"OK", RevokedCount, ReleaseHandle, ArtifactRef|>` | `<|Status->"Failed", Reason->"NonInteractiveMutationRefused"|"HandleStoreUnavailable"|>`
 
+## Handle scrub / provider envelope (U2, spec §5.10, T47)
+
+A ReleaseHandle is quasi-secret: never write its plaintext to a low-PL log, diagnostics line, notification, or provider payload; the ledger carries a keyed HMAC instead.
+
+### SourceVaultAnonymizeHandleTag[handle] → String
+Maps a handle plaintext to a keyed-HMAC log/ledger tag `"rh:<hmac-prefix>"` (distinct per handle, not reversible to the plaintext). Non-handle input → `Missing["NotAHandle"]`.
+
+### SourceVaultAnonymizeScrubHandles[x] → same shape as x
+Removes handle plaintext from anything bound for a low-PL sink. Replaces `"sv://release/<hex>"` substrings inside strings with the keyed tag, and recurses through Associations/Lists. Fields whose key is `ReleaseHandle`/`Handle`/`BearerHandle`/`ReleaseHandles` are tagged value-and-all. Non-string/list/assoc values pass through unchanged.
+
+### SourceVaultAnonymizeHandleLeakQ[x] → Boolean
+`True` if `x` (string/assoc/list) still contains a handle plaintext. For audits and tests.
+
+### SourceVaultAnonymizeReleaseHandleEnvelope[handle, opts] → Association
+Builds a provider request envelope that carries the handle in a redaction-flagged `Authorization` header (default) or the request body — **never** the URL path/query.
+Options: `"URL" -> ""` (must not contain the handle), `"Carrier" -> "Header"|"Body"`, `"Method" -> "GET"`, `"Body" -> <||>`.
+→ Header: `<|Status->"OK", URL, Method, Headers-><|"Authorization"->"Bearer <handle>"|>, Body, RedactKeys->{"Authorization"}|>`. Body: handle goes to `Body["release_handle"]`, `Method` forced to POST, `RedactKeys->{"release_handle"}`.
+Fail-closed: `<|Status->"Failed", Reason->"HandleInURL"|>` if the handle appears in the URL (proxy/access-log/browser-history/APM leak), `"InvalidHandle"`, `"UnknownCarrier"`.
+
+## Unlisted list filtering (U1, spec §15.1, §10.2)
+
+### SourceVaultAnonymizeFilterUnlisted[entries] → List
+Drops unlisted-class rows from a list/catalog/search result (checks each row and its `"Metadata"` sub-association via `SourceVaultAnonymizeUnlistedClassQ`). Adapters just pipe their result array through this (additive). Non-list input returns unchanged. Wired weakly into the MCP adapter search path so unlisted artifacts never surface in a listing; the only reach paths remain an exact ReleaseHandle bearer get and an origin-authorized link-follow.
+
+`SourceVaultAnonymizedVariants[origRef, opts]` — the reverse origin→variant lookup — now gates on read authority (spec §10.2): `opts` `"AccessLevel" -> Automatic`. An interactive owner, or a declared access ceiling ≥ the origin's PL, resolves the variants; otherwise the call returns an identical `<|Status->"Denied", Reason->"OriginNotReadable", Variants->{}|>` **regardless of whether variants exist, the origin exists, or neither** — the search runs the same path either way and discards the result, so count/error-code/branch-timing never leak existence.
+
+## Audit (A4, spec §5.12, §7.3, AC-014)
+
+Publish, cache-reuse, revoke, supersede all emit events to the publication event log (the canonical audit record). Events carry only ref digests, privacy levels, and policy/grant digests — never PII.
+
+### SourceVaultAnonymizationAuditSummary[opts] → Association
+Low-PL aggregate over the event log — counts only, callable by anyone (Public). Never returns refs/principal/PII.
+Options: `"WindowSeconds" -> All`.
+→ `<|Status->"OK", ByEventClass, Publications, Reuses, Reverifications, Revocations, Supersessions, TotalEvents|>`
+
+### SourceVaultAnonymizationAudit[opts] → Association
+Owner/high-PL detail: the actual events, including source-PL→target-PL, policy/grant digests, `PublicationRef`, and reason (still no PII). Refused in a non-interactive-owner environment (`<|Status->"Failed", Reason->"OwnerOnly"|>` — counts are still available via the summary).
+Options: `"WindowSeconds" -> All`, `"EventClass" -> All`, `"Limit" -> 200`.
+→ `<|Status->"OK", EventCount, Events|>`
+
 ## MCP Projection / Unlisted (A7, spec §15.1, §15.3, §10.5)
 
 ### SourceVaultAnonymizeGetByHandle[releaseHandle] → Association
