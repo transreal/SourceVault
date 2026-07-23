@@ -350,4 +350,52 @@ Options: `"Regions" -> {}`, `"DPI" -> 150` (defined but currently unused by the 
 
 ### SourceVaultAnonymizeVerifyRedactedImage[img, regions] → Association
 Independent V5 redaction-completeness check (spec §6.8/AC-020, a separate code path from the redactor): for each region, fails if the pixel patch has nonzero variance (`Max-Min>0`, i.e. not solid black) — a different check than `ImageRedact`'s own logic. Degenerate region bounds count as a failure here (opposite of `ImageRedact`'s silent-skip).
+
+## MediaScan — auto-detected redaction (A8, spec §6.8)
+
+### SourceVaultAnonymizeMediaScan[img, opts] → Association
+Redacts PII regions found by a **local** OCR/vision detector, combined with declared regions. Detector and declared regions are **not** exclusive: declared regions are always burned in, detected ones are added.
+→ `<|Status->"OK"|"NeedsReview", Reason, Image, Regions, Evidence|>`
+Options: `"DeclaredRegions" -> {}`, `"MediaScanFn" -> None` (`img -> {<|"x1","y1","x2","y2","confidence"|>...}`; injection seam, local only — unset means no detection), `"ConfidenceThreshold" -> 0.5`, `"IndependentVerifierFn" -> None` (`img -> {residual regions...}`; must be a different code path from the redactor).
+Fail-closed → `"NeedsReview"` (caller must not auto-publish) in four cases, reported in `Reason`: `"MediaScannerUnavailable"` (detector threw; declared regions are still burned in), `"LowConfidenceDetection"` (something was detected below threshold — evidence that the page could not be fully covered), `"NoRegionsToRedact"` (nothing declared and nothing detected — never a silent pass), `"V5CompletenessFailed"` / `"IndependentVerifierFoundResidual"`.
+`Evidence` (detector, detected/kept/low-confidence/declared counts, V5 status, independent residual count) is meant to be persisted at PL 1.0 by the caller.
+
+## Answer-sheet PDF grading (C4, spec §12.1, §12.2, §14.3)
+
+### SourceVaultAnonymizeBuildPageUnits[spec, opts] → Association
+Splits a scanned PDF into per-page SourceUnits. `spec`: `<|"SourceObjectID", "SourceVersionID", "PDFDigest", "Pages"->{Image...}|>`.
+Each page gets **two** ids: `SourceUnitID` (locator = PDF digest + physical page index — changes when pages are reordered) and `ContentUnitID` (locator = PDF digest + page image digest — invariant under reordering, and identical for duplicated pages). `PageUnitContentSetDigest` is therefore stable across page reordering while `PageUnitSetDigest` is not; that pair is what makes the spec's "robust by digest" property checkable.
+Also flags `Blank` (byte spread ≤ `"BlankTolerance"`, default 0) and `DuplicateOf` (index of the first page with the same image digest).
+→ `<|Status->"OK", PDFDigest, PageUnits, PageCount, DuplicatePageCount, BlankPageCount, PageUnitSetDigest, PageUnitContentSetDigest|>`
+
+### SourceVaultAnonymizeRecordIdentityEvidence[candidates, opts] → Association
+Stores OCR identity candidates as an immutable PL 1.0 `IdentityEvidence` snapshot. **OCR output is never adopted as identity directly** (spec §12.2) — a subject is `"AutoConfirmed"` only if it trips none of the fail-closed conditions, otherwise `"NeedsAdjudication"`.
+`candidates`: `{<|"PageIndex", "PageDigest", "BoundingBox", "RawText", "StudentIDCandidate", "StudentNameCandidate", "Confidence"|>...}`.
+Options: `"Roster" -> {<|"StudentID","StudentName"|>...}`, `"ConfidenceThreshold" -> 0.8`, `"ExpectedSubjectCount"`/`"ExpectedPageCount" -> Automatic`, `"Engine"`/`"EngineVersion"`/`"Config"`.
+Per-subject reason codes: `"LowConfidence"`, `"IDNotInRoster"`, `"RosterNameMismatch"` (id and name are different people on the roster), `"NonContiguousPages"` (same id at non-adjacent pages = a split booklet), `"DuplicatePageIndex"`, `"AmbiguousPageBoundary"` (page with no id candidate). Evidence-wide reasons land in `GlobalReasons`: `"SubjectCountMismatch"`, `"PageCountMismatch"`, `"AmbiguousPageBoundary"`.
+**The return value deliberately carries no PII** — only `EvidenceRef`, `EvidenceDigest` and `SubjectKey` (HMAC prefix of the normalized id). Names, raw OCR text and bounding boxes stay inside the PL 1.0 snapshot.
+Note: digests are taken over a real-safe projection (confidences/bounding boxes are `Real`, which CanonicalEncode v1 rejects fail-closed).
+
+### SourceVaultAnonymizeAdjudicateIdentity[evidenceRef, decision] → Association
+Append-only adjudication event pinning `EvidenceDigest` and the candidate digest of the subject. `decision`: `<|"SubjectKey", "Decision"->"Confirmed"|"Rejected", "Adjudicator", "Note"|>`.
+Requires an interactive owner session (`NonInteractiveMutationRefused` otherwise); refuses unknown subject keys; fails (`AdjudicationLogWriteFailed`) if the durable log cannot be appended. Events go to `config/anonymize-identity-adjudications.jsonl` and are weakly emitted to the publication audit log.
+
+### SourceVaultAnonymizeIdentityStatus[evidenceRef] → Association
+Folds adjudication events (matched on both `EvidenceRef` **and** `EvidenceDigest`, so events do not carry over to a re-recorded evidence) onto the initial per-subject states; the latest decision per subject wins.
+**While `GlobalReasons` is non-empty, `AutoConfirmed` no longer implies `Confirmed`** — if the page↔examinee correspondence itself is in doubt (headcount/page-count mismatch), only an explicit owner decision can confirm a subject.
+→ `<|Status->"OK", State->"Resolved"|"NeedsAdjudication", Subjects, ConfirmedSubjectKeys, PendingSubjectKeys, RejectedSubjectKeys, GlobalReasons|>`
+
+### SourceVaultAnonymizeAnswerSheetPages[pages, opts] → Association
+Runs `SourceVaultAnonymizeMediaScan` over each answer page (same options) and keeps only the pages it returned `"OK"` for; anything else is dropped into `ExcludedPages` and never reaches the artifact. `PageReports` carries the per-page status/reason/evidence but **not** the images.
+→ `<|Status->"OK"|"NeedsReview", Format->"PageImageList", Pages, PageIndices, PageReports, ExcludedPages|>`
+
+### SourceVaultAnonymizeAnswerSheetPlan[spec, opts] → Association
+Builds the EvaluationPlanManifest for answer-sheet grading: **EvaluationUnit = one examinee (all their pages), ResultSlot = one question**.
+`spec`: `<|"TargetArtifactRef", "ArtifactBindingRef", "RubricDigest", "Subjects"->{<|"SubjectKey", "SubjectToken", "ItemTokens", "Slots"|>...}|>`; `Slots` entries are either a plain key string or `<|"SlotKey", "TargetItemToken", "ExpectedOutputSchemaDigest"|>`.
+Option `"IdentityEvidenceRef" -> None`: when given, only subjects whose identity is `Confirmed` are graded; the rest are returned as `ExcludedUnits` with `Reason->"IdentityNotConfirmed"` (this is what prevents grades from being written back to the wrong person). All subjects unconfirmed → `Failed`/`"NoConfirmedSubjects"`. Without the option no identity check is performed and every subject is included.
+→ plan fields (`PlanRef`, `Jobs`, `EvaluationBatchID`) plus `<|IncludedSubjectCount, ExcludedUnits, IdentityEvidenceRef|>`
+
+### ResultSlots in the evaluation plan (spec §5.11)
+`SourceVaultAnonymizeBuildEvaluationPlan` accepts `"ResultSlots"` on a unit and mints one `ResultSlotToken` per slot plus `ExpectedResultSlotMultisetDigest`; a slot whose `TargetItemToken` is not in that unit's `ItemTokens` is refused (`SlotTargetNotInUnit`), so a slot can never point at another examinee's item.
+`SourceVaultCreateDerivedAnnotations` then requires each result of a slotted job to carry `"Slots" -> {<|"ResultSlotToken", "Score", "Reason"|>...}`: a missing list is `MissingResultSlots`, a differing multiset is `ResultSlotSetMismatch`, and both refuse the **whole batch**. The item token always comes from the plan; response tokens are only used to match slots. Annotation items gain a `SlotKey`, and the join key becomes `ItemToken#SlotKey` (unchanged for slot-less annotations, so existing digests still match).
 → `<|Status->"OK"|"Failed", NonSolidRegions->count|>`

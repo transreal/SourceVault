@@ -304,6 +304,56 @@ SourceVaultAnonymizeVerifyRedactedImage::usage =
   "各黒塗り領域のピクセルが単色 (分散≈0) であることを確認する (仕様 §6.8 / AC-020)。\n" <>
   "検出器と別系統の決定論チェック。";
 
+SourceVaultAnonymizeMediaScan::usage =
+  "SourceVaultAnonymizeMediaScan[img, opts] はローカル OCR/vision (注入シーム) で画像内の\n" <>
+  "PII 領域を自動検出し、宣言 Regions と併せて黒塗りする (仕様 §6.8, 増分 A8)。\n" <>
+  "opts: \"DeclaredRegions\"->{...}(必ず塗る), \"MediaScanFn\"->fn(img->{<|x1,y1,x2,y2,confidence|>...})\n" <>
+  "  ローカル限定の検出器 (未指定は検出なし), \"ConfidenceThreshold\"->0.5,\n" <>
+  "  \"IndependentVerifierFn\"->fn(img->{残存領域...})(V5 の独立検出器。redaction とは別系統)。\n" <>
+  "戻り値 <|Status->\"OK\"|\"NeedsReview\", Image, Regions, Evidence|>。\n" <>
+  "検出器不通・低 confidence のみで宣言 Regions もない・独立 verifier が残存検出 -> NeedsReview\n" <>
+  "(fail-closed。自動 Publish しない)。検出証跡は PL 1.0 想定 (呼び出し側で保存)。";
+
+(* ---- C4: 答案 PDF 採点 (仕様 §12.1, §12.2, §14.3) ---- *)
+SourceVaultAnonymizeBuildPageUnits::usage =
+  "SourceVaultAnonymizeBuildPageUnits[spec, opts] はスキャン PDF をページ単位の SourceUnit へ\n" <>
+  "分解する (仕様 §12.1)。spec: <|\"SourceObjectID\", \"SourceVersionID\", \"PDFDigest\",\n" <>
+  "\"Pages\"->{Image...}|>。各ページに SourceUnitID (PDF digest+physical page index+page image\n" <>
+  "digest) と ContentUnitID (位置非依存) を与え、空白ページ・重複ページを検出する。\n" <>
+  "ページ順入替に対しては ContentUnitID / PageUnitContentSetDigest が不変 (digest ベース)。";
+SourceVaultAnonymizeRecordIdentityEvidence::usage =
+  "SourceVaultAnonymizeRecordIdentityEvidence[candidates, opts] は OCR 由来の identity 候補を\n" <>
+  "IdentityEvidence (PL 1.0 不変 snapshot) として記録する (仕様 §12.2)。OCR 出力を identity として\n" <>
+  "即採用しない: fail-closed 条件 (LowConfidence / IDNotInRoster / RosterNameMismatch /\n" <>
+  "NonContiguousPages / AmbiguousPageBoundary / SubjectCountMismatch / PageCountMismatch) の\n" <>
+  "いずれかに触れた subject は NeedsAdjudication となり自動確定しない。\n" <>
+  "opts: \"Roster\"->{<|StudentID, StudentName|>...}, \"ConfidenceThreshold\"->0.8,\n" <>
+  "  \"ExpectedSubjectCount\"/\"ExpectedPageCount\"->Automatic, \"Engine\"/\"EngineVersion\"/\"Config\"。\n" <>
+  "戻り値には実体 (氏名・学籍番号・raw text) を入れない (EvidenceRef と SubjectKey のみ)。";
+SourceVaultAnonymizeAdjudicateIdentity::usage =
+  "SourceVaultAnonymizeAdjudicateIdentity[evidenceRef, decision] は identity の目視確定を\n" <>
+  "append-only の adjudication event として記録する (仕様 §12.2)。原本 EvidenceDigest と\n" <>
+  "候補 digest を pin する。decision: <|\"SubjectKey\", \"Decision\"->\"Confirmed\"|\"Rejected\",\n" <>
+  "\"Adjudicator\", \"Note\"|>。オーナー対話セッション必須 (非対話は拒否)。";
+SourceVaultAnonymizeIdentityStatus::usage =
+  "SourceVaultAnonymizeIdentityStatus[evidenceRef] は IdentityEvidence の初期状態に\n" <>
+  "adjudication event を畳んで最終状態を返す。\n" <>
+  "戻り値: <|State->\"Resolved\"|\"NeedsAdjudication\", ConfirmedSubjectKeys, PendingSubjectKeys,\n" <>
+  "RejectedSubjectKeys, Subjects|>。未確定 subject が 1 つでもあれば NeedsAdjudication。";
+SourceVaultAnonymizeAnswerSheetPages::usage =
+  "SourceVaultAnonymizeAnswerSheetPages[pages, opts] は答案ページ画像を宣言 Regions +\n" <>
+  "MediaScan (A8) で黒塗りし PageImageList 成果物を作る (仕様 §12, §14.3)。\n" <>
+  "MediaScan が OK でないページは成果物に入れず ExcludedPages に落とす (fail-closed)。\n" <>
+  "opts: \"DeclaredRegions\", \"MediaScanFn\", \"ConfidenceThreshold\", \"IndependentVerifierFn\"。\n" <>
+  "PageReports には画像を含めない (証跡のみ)。";
+SourceVaultAnonymizeAnswerSheetPlan::usage =
+  "SourceVaultAnonymizeAnswerSheetPlan[spec, opts] は答案採点の EvaluationPlanManifest を作る\n" <>
+  "(仕様 §14.3)。EvaluationUnit = 一受験者の全ページ、ResultSlot = 設問別。\n" <>
+  "spec: <|\"TargetArtifactRef\", \"ArtifactBindingRef\", \"RubricDigest\",\n" <>
+  "\"Subjects\"->{<|\"SubjectKey\", \"SubjectToken\", \"ItemTokens\", \"Slots\"|>...}|>。\n" <>
+  "opts: \"IdentityEvidenceRef\"->ref (指定時は adjudication で Confirmed の subject のみ採点対象。\n" <>
+  "残りは ExcludedUnits(IdentityNotConfirmed) — 別人への書き戻しを防ぐ fail-closed)。";
+
 (* ---- A0: ポリシー登録 (仕様 §5.1, §6.1) ---- *)
 SourceVaultRegisterAnonymizationPolicy::usage =
   "SourceVaultRegisterAnonymizationPolicy[policy] は匿名化ポリシーを不変 snapshot として登録する。\n" <>
@@ -1736,9 +1786,28 @@ iSVABuildEvaluationPlan[spec_Association] := Module[
   If[!StringQ[artifactRef] || !StringQ[bindingRef] ||
      units === {} || !AllTrue[units, AssociationQ],
     Return[<|"Status" -> "Failed", "Reason" -> "MissingPlanFields"|>]];
-  jobs = Map[Function[u, Module[{toks = Lookup[u, "ItemTokens", {}]},
+  jobs = Map[Function[u, Module[{toks = Lookup[u, "ItemTokens", {}], slots, slotRecs},
       If[!(ListQ[toks] && toks =!= {} && AllTrue[toks, StringQ]),
         Throw[<|"Status" -> "Failed", "Reason" -> "BadUnitTokens"|>, "svaPlan"]];
+      (* ResultSlot (複数結果 job = 設問別採点。仕様 §5.11)。
+         slot は "Q1" のような文字列か <|SlotKey, TargetItemToken, ...|>。
+         TargetItemToken は必ず当該 unit の ItemTokens 内 (別受験者への流し込みを防ぐ) *)
+      slots = Lookup[u, "ResultSlots", {}];
+      If[!ListQ[slots],
+        Throw[<|"Status" -> "Failed", "Reason" -> "BadUnitSlots"|>, "svaPlan"]];
+      slotRecs = Map[Function[s, Module[{sa, target},
+          sa = If[StringQ[s], <|"SlotKey" -> s|>, s];
+          If[!AssociationQ[sa],
+            Throw[<|"Status" -> "Failed", "Reason" -> "BadUnitSlots"|>, "svaPlan"]];
+          target = Lookup[sa, "TargetItemToken", First[toks]];
+          If[!MemberQ[toks, target],
+            Throw[<|"Status" -> "Failed", "Reason" -> "SlotTargetNotInUnit"|>, "svaPlan"]];
+          <|"ResultSlotToken" -> SourceVaultAnonymizeGenerateToken["ResultSlot"],
+            "SlotKey" -> ToString @ Lookup[sa, "SlotKey", "slot"],
+            "TargetItemToken" -> target,
+            "ExpectedOutputSchemaDigest" ->
+              ToString @ Lookup[sa, "ExpectedOutputSchemaDigest", "unspecified"]|>]],
+        slots];
       <|"JobID" -> "job:" <> iSVARandomHex[8],
         "JobToken" -> SourceVaultAnonymizeGenerateToken["Job"],
         "AttemptID" -> Lookup[u, "AttemptID", "attempt-1"],
@@ -1747,7 +1816,11 @@ iSVABuildEvaluationPlan[spec_Association] := Module[
           "eunit:" <> StringTake[iSVASHA256Hex[StringJoin[Sort[toks]]], 24]],
         "TargetItemTokens" -> toks,
         "SubjectToken" -> Lookup[u, "SubjectToken", "unspecified"],
-        "ExpectedResultCardinality" -> Lookup[u, "ExpectedResultCardinality", 1]|>]],
+        "ResultSlots" -> slotRecs,
+        "ExpectedResultSlotMultisetDigest" ->
+          iSVALinSetDigest[Lookup[#, "ResultSlotToken"] & /@ slotRecs],
+        "ExpectedResultCardinality" -> Lookup[u, "ExpectedResultCardinality",
+          Max[1, Length[slotRecs]]]|>]],
     units];
   rec = <|"ObjectClass" -> "EvaluationPlanManifest", "SchemaVersion" -> 1,
     "EvaluationBatchID" -> "batch:" <> iSVARandomHex[8],
@@ -1782,8 +1855,17 @@ iSVAQuarantineIngress[planRef_String, jobId_String, raw_String, pl_ : 1.0] :=
     If[StringQ[ref], <|"Status" -> "OK", "QuarantineRef" -> ref|>,
       <|"Status" -> "Failed", "Reason" -> "QuarantineSaveFailed"|>]];
 
+(* join key: 設問別 (ResultSlot) 結果は同一 ItemToken を複数持つので SlotKey で分ける。
+   slot 無し (従来) は ItemToken そのもの = 後方互換 *)
+iSVAItemJoinKey[it_Association] := With[{sk = Lookup[it, "SlotKey", ""]},
+  If[StringQ[sk] && sk =!= "",
+    Lookup[it, "ItemToken", ""] <> "#" <> sk, Lookup[it, "ItemToken", ""]]];
+
 (* L3b: annotation 生成。帰属の正本は Plan の JobID -> TargetItemTokens *)
 SourceVaultCreateDerivedAnnotations[artifactRef_String, envelope_Association] :=
+  Catch[iSVACreateDerivedAnnotationsBody[artifactRef, envelope], "svaAnn"];
+
+iSVACreateDerivedAnnotationsBody[artifactRef_String, envelope_Association] :=
   Module[{planRef, plan, results, jobIndex, jobIds, resIds, missing, unknown, dup,
       items, protMin, resultRec, resultRef, contentRec, contentRef,
       bindingRec, bindingDigest, bindingRef2, itemTokens},
@@ -1808,15 +1890,37 @@ SourceVaultCreateDerivedAnnotations[artifactRef_String, envelope_Association] :=
         "Missing" -> Length[missing], "Unknown" -> Length[unknown],
         "Duplicate" -> Length[dup]|>]];
     (* out-of-band binding: ItemToken は Plan から引く (応答由来の token は不使用) *)
-    items = Flatten[Map[Function[r, Module[{job = jobIndex[r["JobID"]]},
-        Map[Function[tok,
-          <|"ItemToken" -> tok,
-            "SubjectToken" -> Lookup[job, "SubjectToken", "unspecified"],
-            "Score" -> Lookup[r, "Score", Null],
-            "Reason" -> ToString[Lookup[r, "Reason", ""]],
-            "Attempt" -> 1, "Supersedes" -> "none"|>],
-          job["TargetItemTokens"]]]], results]];
-    itemTokens = Lookup[#, "ItemToken"] & /@ items;
+    items = Flatten[Map[Function[r, Module[
+        {job = jobIndex[r["JobID"]], slots, rslots, planTokens, respTokens},
+        slots = Lookup[job, "ResultSlots", {}];
+        rslots = Lookup[r, "Slots", None];
+        If[ListQ[slots] && slots =!= {},
+          (* 設問別 job: slot multiset を検証してから slot -> TargetItemToken (Plan 由来) *)
+          If[!ListQ[rslots] || !AllTrue[rslots, AssociationQ],
+            Throw[<|"Status" -> "Failed", "Reason" -> "MissingResultSlots",
+              "JobID" -> r["JobID"]|>, "svaAnn"]];
+          planTokens = Sort[Lookup[#, "ResultSlotToken"] & /@ slots];
+          respTokens = Sort[ToString @ Lookup[#, "ResultSlotToken", ""] & /@ rslots];
+          If[planTokens =!= respTokens,
+            Throw[<|"Status" -> "Failed", "Reason" -> "ResultSlotSetMismatch",
+              "JobID" -> r["JobID"]|>, "svaAnn"]];
+          Map[Function[sl, Module[{rs},
+            rs = SelectFirst[rslots,
+              Lookup[#, "ResultSlotToken", ""] === sl["ResultSlotToken"] &, <||>];
+            <|"ItemToken" -> sl["TargetItemToken"], "SlotKey" -> sl["SlotKey"],
+              "SubjectToken" -> Lookup[job, "SubjectToken", "unspecified"],
+              "Score" -> Lookup[rs, "Score", Null],
+              "Reason" -> ToString[Lookup[rs, "Reason", ""]],
+              "Attempt" -> 1, "Supersedes" -> "none"|>]], slots],
+          (* 単一結果 job (従来) *)
+          Map[Function[tok,
+            <|"ItemToken" -> tok,
+              "SubjectToken" -> Lookup[job, "SubjectToken", "unspecified"],
+              "Score" -> Lookup[r, "Score", Null],
+              "Reason" -> ToString[Lookup[r, "Reason", ""]],
+              "Attempt" -> 1, "Supersedes" -> "none"|>],
+            job["TargetItemTokens"]]]]], results]];
+    itemTokens = iSVAItemJoinKey /@ items;
     resultRec = <|"ObjectClass" -> "EvaluationResultManifest", "SchemaVersion" -> 1,
       "PlanRef" -> planRef,
       "PlanBatchID" -> plan["EvaluationBatchID"],
@@ -1889,9 +1993,11 @@ SourceVaultValidateDerivedJoin[annBindingRef_String] := Module[
     (Lookup[#, "ItemToken", ""] -> #) & /@ Lookup[bundle["Lineage"], "DerivedNodes", {}]];
   entriesBySubj = Association[
     (Lookup[#, "SubjectToken", ""] -> #) & /@ Lookup[bundle["Map"], "Entries", {}]];
-  actual = Lookup[#, "ItemToken", ""] & /@ items;
+  (* dup/digest は join key (設問別は ItemToken#SlotKey)、lineage 照合は ItemToken *)
+  actual = iSVAItemJoinKey /@ items;
   dup = Keys[Select[Counts[actual], # > 1 &]];
-  unknown = Select[actual, !KeyExistsQ[derivedByToken, #] &];
+  unknown = Select[Lookup[#, "ItemToken", ""] & /@ items,
+    !KeyExistsQ[derivedByToken, #] &];
   expected = If[StringQ[Lookup[bundle["Binding"], "ExpectedItemTokenSetDigest"]],
     Lookup[bundle["Binding"], "ExpectedItemTokenSetDigest"], "unspecified"];
   missing = If[expected =!= iSVALinSetDigest[actual], {"TokenSetDigestMismatch"}, {}];
@@ -1930,6 +2036,7 @@ SourceVaultAttachDerivedResults[annBindingRef_String] := Module[
         "Identity" -> Lookup[entry, "Identity", <||>],
         "DisplayLabel" -> Lookup[entry, "DisplayLabel", ""],
         "DerivedUnitID" -> Lookup[dn, "UnitID", "?"],
+        "SlotKey" -> Lookup[it, "SlotKey", ""],
         "Score" -> Lookup[it, "Score", Null],
         "Reason" -> Lookup[it, "Reason", ""],
         "Attempt" -> Lookup[it, "Attempt", 1]|>]], items];
@@ -2295,6 +2402,423 @@ SourceVaultAnonymizeVerifyRedactedImage[img_Image, regions_List] := Module[
   <|"Status" -> If[fails === {}, "OK", "Failed"],
     "NonSolidRegions" -> Length[fails]|>];
 
+(* --- A8: MediaScan = ローカル OCR/vision による自動検出黒塗り (仕様 §6.8) --- *)
+Options[SourceVaultAnonymizeMediaScan] = {
+  "DeclaredRegions" -> {}, "MediaScanFn" -> None,
+  "ConfidenceThreshold" -> 0.5, "IndependentVerifierFn" -> None};
+
+SourceVaultAnonymizeMediaScan[img_Image, OptionsPattern[]] := Module[
+    {declared, scanFn, thr, verFn, detected, kept, allRegions, redacted, v5,
+     residual, evidence, status},
+  declared = OptionValue["DeclaredRegions"];
+  scanFn = OptionValue["MediaScanFn"];
+  thr = OptionValue["ConfidenceThreshold"];
+  verFn = OptionValue["IndependentVerifierFn"];
+  (* 検出器はローカル限定。未指定なら検出なし *)
+  detected = If[scanFn === None, {},
+    Quiet @ Check[scanFn[img], $Failed]];
+  If[detected === $Failed,
+    (* 検出器不通: 宣言 Regions があればそれだけ塗り NeedsReview、無ければ NeedsReview *)
+    Return[<|"Status" -> "NeedsReview", "Reason" -> "MediaScannerUnavailable",
+      "Image" -> If[declared =!= {},
+        SourceVaultAnonymizeImageRedact[img, declared], img],
+      "Regions" -> declared,
+      "Evidence" -> <|"Detector" -> "Unavailable"|>|>]];
+  If[!ListQ[detected], detected = {}];
+  (* confidence 閾値で採否。低 confidence 検出は「読めるが伏せきれない」兆候 *)
+  kept = Select[detected, NumericQ[Lookup[#, "confidence", 1.]] &&
+    Lookup[#, "confidence", 1.] >= thr &];
+  (* 宣言 Regions は必ず塗る + 検出領域を追加 (排他でない) *)
+  allRegions = Join[declared, kept];
+  redacted = If[allRegions === {}, img,
+    SourceVaultAnonymizeImageRedact[img, allRegions]];
+  (* V5: redaction 検出器と別系統の独立 verifier で残存を確認 *)
+  v5 = SourceVaultAnonymizeVerifyRedactedImage[redacted, allRegions];
+  residual = If[verFn === None, {},
+    Quiet @ Check[verFn[redacted], {}]];
+  If[!ListQ[residual], residual = {}];
+  evidence = <|"Detector" -> If[scanFn === None, "None", "Local"],
+    "DetectedCount" -> Length[detected],
+    "KeptCount" -> Length[kept],
+    "LowConfidenceCount" -> Length[detected] - Length[kept],
+    "DeclaredCount" -> Length[declared],
+    "V5" -> Lookup[v5, "Status", "?"],
+    "IndependentResidualCount" -> Length[residual]|>;
+  (* fail-closed: (a) 検出も宣言も無い (画像に何もしていない) / (b) 低 confidence 検出が
+     あった (伏せきれていない懸念) / (c) V5 不合格 / (d) 独立 verifier が残存検出 *)
+  status = Which[
+    allRegions === {}, "NeedsReview",
+    Length[detected] > Length[kept], "NeedsReview",
+    Lookup[v5, "Status"] =!= "OK", "NeedsReview",
+    residual =!= {}, "NeedsReview",
+    True, "OK"];
+  <|"Status" -> status,
+    "Reason" -> Which[
+      status === "OK", "Redacted",
+      Length[detected] > Length[kept], "LowConfidenceDetection",
+      allRegions === {}, "NoRegionsToRedact",
+      Lookup[v5, "Status"] =!= "OK", "V5CompletenessFailed",
+      residual =!= {}, "IndependentVerifierFoundResidual",
+      True, "NeedsReview"],
+    "Image" -> redacted, "Regions" -> allRegions, "Evidence" -> evidence|>];
+
+(* ============================================================
+   7c. C4: 答案 PDF 採点 (仕様 §12.1, §12.2, §14.3)
+   ページ SourceUnit 化 -> 宣言 Regions + MediaScan 黒塗り (A6/A8) ->
+   IdentityEvidence + adjudication -> EvaluationUnit (一受験者 = 全ページ) +
+   ResultSlot (設問別) の Plan。identity 未確定は採点対象外 (fail-closed)。
+   ============================================================ *)
+
+(* CanonicalEncode v1 は Real を fail-closed で拒否する (§5.2)。OCR confidence や
+   bounding box は Real なので、digest を取る前に決定論的な整数表現へ落とす。
+   保存される snapshot 側は元の値のまま (digest だけが正規化表現を見る) *)
+iSVACanonSafe[l_List] := iSVACanonSafe /@ l;
+iSVACanonSafe[a_Association] :=
+  Association[KeyValueMap[ToString[#1] -> iSVACanonSafe[#2] &, a]];
+iSVACanonSafe[x_] := Which[
+  StringQ[x] || IntegerQ[x] || x === True || x === False || x === Null ||
+    Head[x] === ByteArray, x,
+  NumericQ[x], "num:" <> IntegerString[Round[N[x] 1000000]],
+  True, ToString[x, InputForm]];
+
+iSVAImageDigest[img_Image] :=
+  Quiet @ Check[Hash[ImageData[img, "Byte"], "SHA256", "HexString"], $Failed];
+
+iSVAImageSpread[img_Image] := Module[{d},
+  d = Quiet @ Check[Flatten[ImageData[img, "Byte"]], $Failed];
+  If[!ListQ[d] || d === {}, $Failed, Max[d] - Min[d]]];
+
+Options[SourceVaultAnonymizeBuildPageUnits] = {"BlankTolerance" -> 0};
+SourceVaultAnonymizeBuildPageUnits[spec_Association, OptionsPattern[]] := Module[
+    {pages, pdfDigest, objId, verId, tol, digests, units, dups, blanks},
+  pages = Lookup[spec, "Pages", $Failed];
+  pdfDigest = Lookup[spec, "PDFDigest", $Failed];
+  objId = Lookup[spec, "SourceObjectID", $Failed];
+  verId = ToString @ Lookup[spec, "SourceVersionID", "v1"];
+  tol = OptionValue["BlankTolerance"];
+  If[!ListQ[pages] || pages === {} || !StringQ[pdfDigest] || !StringQ[objId],
+    Return[<|"Status" -> "Failed", "Reason" -> "MalformedPageSpec"|>]];
+  If[!AllTrue[pages, Head[#] === Image &],
+    Return[<|"Status" -> "Failed", "Reason" -> "NonImagePage"|>]];
+  digests = iSVAImageDigest /@ pages;
+  If[MemberQ[digests, $Failed],
+    Return[<|"Status" -> "Failed", "Reason" -> "PageDigestFailed"|>]];
+  units = MapIndexed[Function[{img, pos}, Module[
+      {i = First[pos], dg, locDigest, contentLoc, sunit, cunit, spread, firstPos},
+    dg = digests[[i]];
+    (* 正準 locator = PDF 全体 digest + physical page index (§12.1) *)
+    locDigest = SourceVaultAnonymizeCanonicalDigest[
+      <|"PDFDigest" -> pdfDigest, "PhysicalPageIndex" -> i|>];
+    (* 位置非依存の content locator: ページ順入替に不変 (digest ベースの頑健性) *)
+    contentLoc = SourceVaultAnonymizeCanonicalDigest[
+      <|"PDFDigest" -> pdfDigest, "PageContentDigest" -> dg|>];
+    sunit = SourceVaultAnonymizeSourceUnitID[<|
+      "SourceObjectID" -> objId, "SourceVersionID" -> verId,
+      "SourceUnitKind" -> "pdf-page",
+      "CanonicalLocatorDigest" -> locDigest, "SourceContentDigest" -> dg|>];
+    cunit = SourceVaultAnonymizeSourceUnitID[<|
+      "SourceObjectID" -> objId, "SourceVersionID" -> verId,
+      "SourceUnitKind" -> "pdf-page-content",
+      "CanonicalLocatorDigest" -> contentLoc, "SourceContentDigest" -> dg|>];
+    spread = iSVAImageSpread[img];
+    firstPos = FirstPosition[digests, dg];
+    <|"PageIndex" -> i, "SourceUnitID" -> sunit, "ContentUnitID" -> cunit,
+      "PageImageDigest" -> dg, "CanonicalLocatorDigest" -> locDigest,
+      "Blank" -> (NumericQ[spread] && spread <= tol),
+      "DuplicateOf" -> If[ListQ[firstPos] && First[firstPos] < i,
+        First[firstPos], None]|>]],
+    pages];
+  If[MemberQ[Flatten[Lookup[units, {"SourceUnitID", "ContentUnitID"}]], $Failed],
+    Return[<|"Status" -> "Failed", "Reason" -> "SourceUnitIDFailed"|>]];
+  dups = Select[units, Lookup[#, "DuplicateOf"] =!= None &];
+  blanks = Select[units, TrueQ[Lookup[#, "Blank"]] &];
+  <|"Status" -> "OK", "PDFDigest" -> pdfDigest, "PageUnits" -> units,
+    "PageCount" -> Length[units],
+    "DuplicatePageCount" -> Length[dups], "BlankPageCount" -> Length[blanks],
+    "PageUnitSetDigest" -> iSVALinSetDigest[Lookup[units, "SourceUnitID"]],
+    "PageUnitContentSetDigest" ->
+      iSVALinSetDigest[DeleteDuplicates[Lookup[units, "ContentUnitID"]]]|>];
+
+(* --- C4b: IdentityEvidence (仕様 §12.2) --- *)
+
+iSVANormID[s_] := ToUpperCase[StringReplace[ToString[s], Except[WordCharacter] -> ""]];
+iSVANormName[s_] := StringReplace[ToString[s],
+  (WhitespaceCharacter | "\:3000") -> ""];
+iSVASubjectKey[normId_String] :=
+  "subj:" <> StringTake[iSVASHA256Hex[normId], UpTo[16]];
+
+Options[SourceVaultAnonymizeRecordIdentityEvidence] = {
+  "Roster" -> {}, "ConfidenceThreshold" -> 0.8,
+  "ExpectedSubjectCount" -> Automatic, "ExpectedPageCount" -> Automatic,
+  "Engine" -> "unspecified", "EngineVersion" -> "unspecified", "Config" -> <||>};
+
+SourceVaultAnonymizeRecordIdentityEvidence[candidates_List, OptionsPattern[]] := Module[
+    {roster, thr, expSubj, expPages, rosterIdx, perCand, byKey, subjects,
+     globalReasons = {}, state, rec, digest, ref, summary},
+  If[candidates === {} || !AllTrue[candidates, AssociationQ],
+    Return[<|"Status" -> "Failed", "Reason" -> "MalformedCandidates"|>]];
+  roster = OptionValue["Roster"]; thr = OptionValue["ConfidenceThreshold"];
+  expSubj = OptionValue["ExpectedSubjectCount"];
+  expPages = OptionValue["ExpectedPageCount"];
+  rosterIdx = If[ListQ[roster] && AllTrue[roster, AssociationQ],
+    Association[Map[iSVANormID[Lookup[#, "StudentID", ""]] ->
+      iSVANormName[Lookup[#, "StudentName", ""]] &, roster]], <||>];
+  (* 候補ごとの fail-closed 判定 (OCR 出力を identity として即採用しない) *)
+  perCand = MapIndexed[Function[{c, pos}, Module[{id, nm, conf, rs = {}},
+      id = iSVANormID[Lookup[c, "StudentIDCandidate", ""]];
+      nm = iSVANormName[Lookup[c, "StudentNameCandidate", ""]];
+      conf = Lookup[c, "Confidence", 0.];
+      If[!NumericQ[conf] || conf < thr, AppendTo[rs, "LowConfidence"]];
+      If[id === "", AppendTo[rs, "AmbiguousPageBoundary"]];
+      If[rosterIdx =!= <||> && id =!= "",
+        Which[
+          !KeyExistsQ[rosterIdx, id], AppendTo[rs, "IDNotInRoster"],
+          nm =!= "" && rosterIdx[id] =!= nm, AppendTo[rs, "RosterNameMismatch"]]];
+      <|"PageIndex" -> Lookup[c, "PageIndex", First[pos]],
+        "SubjectKey" -> If[id === "", "unassigned", iSVASubjectKey[id]],
+        "Confidence" -> If[NumericQ[conf], N[conf], 0.],
+        "Reasons" -> rs|>]],
+    candidates];
+  (* subject 単位: ページの連続性 (冊子が分断されていないか) を検査 *)
+  byKey = GroupBy[Select[perCand, Lookup[#, "SubjectKey"] =!= "unassigned" &],
+    Lookup[#, "SubjectKey"] &];
+  subjects = KeyValueMap[Function[{k, cs}, Module[{idx, rs},
+      idx = Sort[Lookup[cs, "PageIndex"]];
+      rs = DeleteDuplicates[Flatten[Lookup[cs, "Reasons"]]];
+      If[Length[idx] =!= Length[DeleteDuplicates[idx]],
+        AppendTo[rs, "DuplicatePageIndex"]];
+      If[Length[DeleteDuplicates[idx]] > 1 &&
+         Max[idx] - Min[idx] + 1 =!= Length[DeleteDuplicates[idx]],
+        AppendTo[rs, "NonContiguousPages"]];
+      <|"SubjectKey" -> k, "PageIndices" -> idx, "PageCount" -> Length[idx],
+        "Reasons" -> DeleteDuplicates[rs],
+        "State" -> If[DeleteDuplicates[rs] === {},
+          "AutoConfirmed", "NeedsAdjudication"]|>]],
+    byKey];
+  If[AnyTrue[perCand, Lookup[#, "SubjectKey"] === "unassigned" &],
+    AppendTo[globalReasons, "AmbiguousPageBoundary"]];
+  If[IntegerQ[expSubj] && Length[subjects] =!= expSubj,
+    AppendTo[globalReasons, "SubjectCountMismatch"]];
+  If[IntegerQ[expPages] && Length[candidates] =!= expPages,
+    AppendTo[globalReasons, "PageCountMismatch"]];
+  state = If[globalReasons === {} &&
+    AllTrue[subjects, Lookup[#, "State"] === "AutoConfirmed" &],
+    "AutoConfirmed", "NeedsAdjudication"];
+  (* 実体 (raw text・氏名・学籍番号) は PL 1.0 snapshot 内にのみ置く *)
+  rec = <|"ObjectClass" -> "IdentityEvidence", "SchemaVersion" -> 1,
+    "Engine" -> ToString @ OptionValue["Engine"],
+    "EngineVersion" -> ToString @ OptionValue["EngineVersion"],
+    "Config" -> OptionValue["Config"],
+    "ConfidenceThreshold" -> N[thr],
+    "RosterSize" -> Length[rosterIdx],
+    "Candidates" -> candidates,
+    "PerCandidate" -> perCand,
+    "Subjects" -> subjects,
+    "GlobalReasons" -> globalReasons,
+    "State" -> state,
+    "CreatedAtUTC" -> DateString[Now, "ISODateTime", TimeZone -> 0] <> "Z"|>;
+  digest = SourceVaultAnonymizeCanonicalDigest[iSVACanonSafe[rec]];
+  If[!StringQ[digest],
+    Return[<|"Status" -> "Failed", "Reason" -> "NonCanonicalEvidence"|>]];
+  ref = iSVASaveSnapshotAs["IdentityEvidence",
+    Append[rec, "EvidenceDigest" -> digest], 1.0];
+  If[!StringQ[ref],
+    Return[<|"Status" -> "Failed", "Reason" -> "EvidenceSaveFailed"|>]];
+  (* 戻り値は ref + SubjectKey + reason code のみ (§12.2: 実体を入れない) *)
+  summary = Map[KeyTake[#, {"SubjectKey", "PageIndices", "PageCount",
+    "Reasons", "State"}] &, subjects];
+  <|"Status" -> "OK", "EvidenceRef" -> ref, "EvidenceDigest" -> digest,
+    "State" -> state, "SubjectCount" -> Length[subjects],
+    "Subjects" -> summary, "GlobalReasons" -> globalReasons,
+    "NeedsAdjudicationKeys" ->
+      Lookup[Select[subjects, Lookup[#, "State"] =!= "AutoConfirmed" &],
+        "SubjectKey", {}]|>];
+
+(* --- C4c: adjudication (append-only。原本 digest と候補を pin) --- *)
+
+If[!ValueQ[$iSVAIdentityEventPathOverride], $iSVAIdentityEventPathOverride = Automatic];
+
+iSVAIdentityEventPath[] := Which[
+  StringQ[$iSVAIdentityEventPathOverride], $iSVAIdentityEventPathOverride,
+  Names["SourceVault`SourceVaultRoot"] =!= {},
+  With[{r = Quiet @ Check[SourceVault`SourceVaultRoot["PrivateVault"], $Failed]},
+    If[StringQ[r],
+      FileNameJoin[{r, "config", "anonymize-identity-adjudications.jsonl"}], $Failed]],
+  True, $Failed];
+
+iSVAIdentityEventAppend[ev_Association] := Module[
+    {path = iSVAIdentityEventPath[], strm, ok = False},
+  If[path === $Failed, Return[False]];
+  Quiet @ Check[
+    (If[!DirectoryQ[DirectoryName[path]], CreateDirectory[DirectoryName[path]]];
+     strm = OpenAppend[path, BinaryFormat -> True];
+     If[Head[strm] === OutputStream,
+       BinaryWrite[strm, StringToByteArray[
+         ExportString[ev, "RawJSON", "Compact" -> True] <> "\n", "UTF-8"]];
+       Close[strm]; ok = True]), Null];
+  (* 監査系へは弱結合 emit (実体は入れず ref/SubjectKey のみ) *)
+  If[ok, iSVAPubEventAppend[ev]];
+  ok];
+
+iSVAIdentityEventsFor[evidenceRef_String, evidenceDigest_String] := Module[
+    {path = iSVAIdentityEventPath[], lines},
+  If[path === $Failed || !FileExistsQ[path], Return[{}]];
+  lines = Quiet @ Check[Import[path, {"Text", "Lines"}], {}];
+  Select[Map[Quiet @ Check[ImportString[#, "RawJSON"], $Failed] &, lines],
+    AssociationQ[#] &&
+      Lookup[#, "EventClass"] === "AnonymizeIdentityAdjudicated" &&
+      Lookup[#, "EvidenceRef"] === evidenceRef &&
+      Lookup[#, "EvidenceDigest"] === evidenceDigest &]];
+
+SourceVaultAnonymizeAdjudicateIdentity[evidenceRef_String, decision_Association] :=
+  Module[{ev, subjKey, dec, subj, evDigest, event, evRef},
+  If[!iSVAInteractiveOwnerQ[],
+    Return[<|"Status" -> "Failed", "Reason" -> "NonInteractiveMutationRefused"|>]];
+  ev = iSVAMapLoadByRef[evidenceRef];
+  If[!AssociationQ[ev] || Lookup[ev, "ObjectClass"] =!= "IdentityEvidence",
+    Return[<|"Status" -> "Failed", "Reason" -> "EvidenceUnreadable"|>]];
+  evDigest = Lookup[ev, "EvidenceDigest", $Failed];
+  If[!StringQ[evDigest],
+    Return[<|"Status" -> "Failed", "Reason" -> "EvidenceDigestMissing"|>]];
+  subjKey = Lookup[decision, "SubjectKey", $Failed];
+  dec = Lookup[decision, "Decision", $Failed];
+  If[!StringQ[subjKey] || !MemberQ[{"Confirmed", "Rejected"}, dec],
+    Return[<|"Status" -> "Failed", "Reason" -> "MalformedDecision"|>]];
+  subj = SelectFirst[Lookup[ev, "Subjects", {}],
+    Lookup[#, "SubjectKey", ""] === subjKey &, $Failed];
+  If[subj === $Failed,
+    Return[<|"Status" -> "Failed", "Reason" -> "UnknownSubjectKey"|>]];
+  event = <|"EventClass" -> "AnonymizeIdentityAdjudicated",
+    "EvidenceRef" -> evidenceRef, "EvidenceDigest" -> evDigest,
+    "SubjectKey" -> subjKey, "Decision" -> dec,
+    "CandidateDigest" -> SourceVaultAnonymizeCanonicalDigest[iSVACanonSafe[subj]],
+    "PriorState" -> Lookup[subj, "State", "?"],
+    "Adjudicator" -> ToString @ Lookup[decision, "Adjudicator", "unspecified"],
+    "Note" -> ToString @ Lookup[decision, "Note", ""],
+    "AtUTC" -> DateString[Now, "ISODateTime", TimeZone -> 0] <> "Z"|>;
+  If[!TrueQ[iSVAIdentityEventAppend[event]],
+    Return[<|"Status" -> "Failed", "Reason" -> "AdjudicationLogWriteFailed"|>]];
+  evRef = iSVASaveSnapshotAs["IdentityAdjudicationEvent",
+    Join[<|"ObjectClass" -> "IdentityAdjudicationEvent", "SchemaVersion" -> 1|>,
+      event], 1.0];
+  <|"Status" -> "OK", "Decision" -> dec, "SubjectKey" -> subjKey,
+    "EventRef" -> If[StringQ[evRef], evRef, "unsaved"],
+    "EvidenceDigest" -> evDigest|>];
+
+SourceVaultAnonymizeIdentityStatus[evidenceRef_String] := Module[
+    {ev, evDigest, subjects, events, byKey, folded, pending, confirmed, rejected},
+  ev = iSVAMapLoadByRef[evidenceRef];
+  If[!AssociationQ[ev] || Lookup[ev, "ObjectClass"] =!= "IdentityEvidence",
+    Return[<|"Status" -> "Failed", "Reason" -> "EvidenceUnreadable"|>]];
+  evDigest = Lookup[ev, "EvidenceDigest", ""];
+  subjects = Lookup[ev, "Subjects", {}];
+  events = iSVAIdentityEventsFor[evidenceRef, evDigest];
+  byKey = GroupBy[events, Lookup[#, "SubjectKey"] &];
+  (* 全体理由 (員数不一致・ページ境界曖昧) はページ↔受験者の対応そのものを疑わせる。
+     §12.2「自動確定しない」= 個々の subject の AutoConfirmed も無効化し、
+     オーナーの明示 adjudication だけが確定手段になる (fail-closed) *)
+  folded = Map[Function[s, Module[{k, evs, last, final},
+      k = Lookup[s, "SubjectKey", ""];
+      evs = Lookup[byKey, k, {}];
+      last = If[evs === {}, None, Last[evs]];  (* append-only: 最後の決定が有効 *)
+      final = Which[
+        last =!= None && Lookup[last, "Decision"] === "Rejected", "Rejected",
+        last =!= None && Lookup[last, "Decision"] === "Confirmed", "Confirmed",
+        Lookup[s, "State"] === "AutoConfirmed" &&
+          Lookup[ev, "GlobalReasons", {}] === {}, "Confirmed",
+        True, "Pending"];
+      <|"SubjectKey" -> k, "PageIndices" -> Lookup[s, "PageIndices", {}],
+        "InitialState" -> Lookup[s, "State", "?"],
+        "Reasons" -> Lookup[s, "Reasons", {}],
+        "AdjudicationCount" -> Length[evs], "FinalState" -> final|>]],
+    subjects];
+  confirmed = Lookup[Select[folded, Lookup[#, "FinalState"] === "Confirmed" &],
+    "SubjectKey", {}];
+  pending = Lookup[Select[folded, Lookup[#, "FinalState"] === "Pending" &],
+    "SubjectKey", {}];
+  rejected = Lookup[Select[folded, Lookup[#, "FinalState"] === "Rejected" &],
+    "SubjectKey", {}];
+  (* 全体の未確定判定には evidence 全体の fail-closed 理由も含める *)
+  <|"Status" -> "OK",
+    "State" -> If[pending === {} && Lookup[ev, "GlobalReasons", {}] === {},
+      "Resolved", "NeedsAdjudication"],
+    "Subjects" -> folded, "ConfirmedSubjectKeys" -> confirmed,
+    "PendingSubjectKeys" -> pending, "RejectedSubjectKeys" -> rejected,
+    "GlobalReasons" -> Lookup[ev, "GlobalReasons", {}]|>];
+
+(* --- C4d: 答案ページの黒塗り成果物 (A6 + A8) --- *)
+
+Options[SourceVaultAnonymizeAnswerSheetPages] = {
+  "DeclaredRegions" -> {}, "MediaScanFn" -> None,
+  "ConfidenceThreshold" -> 0.5, "IndependentVerifierFn" -> None};
+
+SourceVaultAnonymizeAnswerSheetPages[pages_List, OptionsPattern[]] := Module[
+    {reports, okOnes, excluded},
+  If[pages === {} || !AllTrue[pages, Head[#] === Image &],
+    Return[<|"Status" -> "Failed", "Reason" -> "NonImagePage"|>]];
+  reports = MapIndexed[Function[{img, pos}, Module[{r},
+      r = SourceVaultAnonymizeMediaScan[img,
+        "DeclaredRegions" -> OptionValue["DeclaredRegions"],
+        "MediaScanFn" -> OptionValue["MediaScanFn"],
+        "ConfidenceThreshold" -> OptionValue["ConfidenceThreshold"],
+        "IndependentVerifierFn" -> OptionValue["IndependentVerifierFn"]];
+      <|"PageIndex" -> First[pos], "Status" -> Lookup[r, "Status", "NeedsReview"],
+        "Reason" -> Lookup[r, "Reason", "Unknown"],
+        "Evidence" -> Lookup[r, "Evidence", <||>],
+        "Image" -> Lookup[r, "Image", img]|>]],
+    pages];
+  okOnes = Select[reports, Lookup[#, "Status"] === "OK" &];
+  excluded = Lookup[Select[reports, Lookup[#, "Status"] =!= "OK" &], "PageIndex", {}];
+  <|"Status" -> If[excluded === {}, "OK", "NeedsReview"],
+    "Format" -> "PageImageList",
+    "Pages" -> Lookup[okOnes, "Image", {}],
+    "PageIndices" -> Lookup[okOnes, "PageIndex", {}],
+    "PageReports" -> Map[KeyDrop[#, "Image"] &, reports],
+    "ExcludedPages" -> excluded|>];
+
+(* --- C4e: 答案採点 Plan (EvaluationUnit = 一受験者の全ページ / ResultSlot = 設問別) --- *)
+
+Options[SourceVaultAnonymizeAnswerSheetPlan] = {"IdentityEvidenceRef" -> None};
+
+SourceVaultAnonymizeAnswerSheetPlan[spec_Association, OptionsPattern[]] := Module[
+    {subjects, evRef, st, confirmed, included, excludedSubs, units, plan},
+  subjects = Lookup[spec, "Subjects", $Failed];
+  If[!ListQ[subjects] || subjects === {} || !AllTrue[subjects, AssociationQ],
+    Return[<|"Status" -> "Failed", "Reason" -> "MalformedSubjects"|>]];
+  evRef = OptionValue["IdentityEvidenceRef"];
+  If[StringQ[evRef],
+    st = SourceVaultAnonymizeIdentityStatus[evRef];
+    If[Lookup[st, "Status"] =!= "OK", Return[st]];
+    confirmed = Lookup[st, "ConfirmedSubjectKeys", {}],
+    (* evidence 未指定 = identity 検証を経ていない。呼び出し側の責任で全件 *)
+    confirmed = Automatic];
+  included = If[confirmed === Automatic, subjects,
+    Select[subjects, MemberQ[confirmed, Lookup[#, "SubjectKey", ""]] &]];
+  excludedSubs = If[confirmed === Automatic, {},
+    Select[subjects, !MemberQ[confirmed, Lookup[#, "SubjectKey", ""]] &]];
+  If[included === {},
+    Return[<|"Status" -> "Failed", "Reason" -> "NoConfirmedSubjects",
+      "ExcludedUnits" -> Map[<|"SubjectKey" -> Lookup[#, "SubjectKey", "?"],
+        "Reason" -> "IdentityNotConfirmed"|> &, excludedSubs]|>]];
+  units = Map[Function[s, <|
+      "ItemTokens" -> Lookup[s, "ItemTokens", {}],
+      "SubjectToken" -> Lookup[s, "SubjectToken", "unspecified"],
+      "ResultSlots" -> Lookup[s, "Slots", {}],
+      "AttemptID" -> Lookup[s, "AttemptID", "attempt-1"]|>], included];
+  plan = SourceVaultAnonymizeBuildEvaluationPlan[<|
+    "TargetArtifactRef" -> Lookup[spec, "TargetArtifactRef", $Failed],
+    "ArtifactBindingRef" -> Lookup[spec, "ArtifactBindingRef", $Failed],
+    "RubricDigest" -> Lookup[spec, "RubricDigest", "unspecified"],
+    "RequestDigest" -> Lookup[spec, "RequestDigest", "unspecified"],
+    "DistributionPlanRef" -> Lookup[spec, "DistributionPlanRef", "unspecified"],
+    "Units" -> units|>];
+  If[Lookup[plan, "Status"] =!= "OK", Return[plan]];
+  Join[plan, <|
+    "IncludedSubjectCount" -> Length[included],
+    "ExcludedUnits" -> Map[<|"SubjectKey" -> Lookup[#, "SubjectKey", "?"],
+      "Reason" -> "IdentityNotConfirmed"|> &, excludedSubs],
+    "IdentityEvidenceRef" -> If[StringQ[evRef], evRef, "none"]|>]];
+
 (* ============================================================
    8. A0: ポリシー registry (仕様 §5.1, §6.1)
    ============================================================ *)
@@ -2422,31 +2946,64 @@ iSVAApplyTextRules[s_String, pairs_List, patterns_List, repl_String] := Module[{
   t = Fold[StringReplace[#1, RegularExpression[#2] -> repl] &, t, patterns];
   t];
 
-iSVAAnonymizeRow[row_Association, tier_Association, tokenOf_Association,
-    textPairs_List, patterns_List, repl_String, scanFn_] := Module[
-    {rules, defRule, out = <||>},
-  rules = Lookup[tier, "FieldRules", <||>];
-  defRule = Lookup[tier, "DefaultFieldRule", "Redact"];
-  KeyValueMap[Function[{k, v}, Module[{rule = Lookup[rules, k, defRule], nv},
-    nv = Which[
+(* パスパターン照合 (L4)。"." 区切り。"*" は 1 セグメントの任意にマッチ。
+   例: "Detail.Files.*.URL" は "Detail.Files.0.URL" 等にマッチ。 *)
+iSVAPathMatchQ[pattern_String, path_String] := Module[{pp, ps},
+  pp = StringSplit[pattern, "."]; ps = StringSplit[path, "."];
+  Length[pp] === Length[ps] &&
+    AllTrue[Transpose[{pp, ps}], (#[[1]] === "*" || #[[1]] === #[[2]]) &]];
+
+(* path に最も具体的にマッチする FieldRule キー ("*" が少ないほど具体的) *)
+iSVAMatchRuleKey[rules_Association, path_String] := Module[{hits},
+  hits = Select[Keys[rules], iSVAPathMatchQ[#, path] &];
+  If[hits === {}, Missing[], First[SortBy[hits, StringCount[#, "*"] &]]]];
+
+iSVATextScan[v_, textPairs_, patterns_, repl_, scanFn_] :=
+  If[StringQ[v],
+    Module[{t = iSVAApplyTextRules[v, textPairs, patterns, repl]},
+      If[scanFn =!= None,
+        Module[{spans = Quiet @ Check[scanFn[t], {}]},
+          If[ListQ[spans],
+            Fold[StringReplace[#1, #2 -> repl] &, t, Select[spans, StringQ]], t]],
+        t]], v];
+
+(* 再帰 walk。value を path のルールで変換。Nothing は親から除去される。 *)
+iSVAWalkNode[value_, path_String, rules_Association, defRule_String,
+    tokenOf_Association, textPairs_List, patterns_List, repl_String, scanFn_] :=
+  Module[{mk = iSVAMatchRuleKey[rules, path], rule},
+    rule = If[MissingQ[mk], Missing[], rules[mk]];
+    Which[
+      (* 明示ルール: 中間ノード (Association/List) にも適用しサブツリーごと処理 *)
       rule === "Drop", Nothing,
       rule === "Redact", repl,
-      rule === "KeepRaw", v,
-      rule === "Keep",
-      If[StringQ[v],
-        Module[{t = iSVAApplyTextRules[v, textPairs, patterns, repl]},
-          If[scanFn =!= None,
-            Module[{spans = Quiet @ Check[scanFn[t], {}]},
-              If[ListQ[spans],
-                Fold[StringReplace[#1, #2 -> repl] &, t, Select[spans, StringQ]], t]],
-            t]], v],
-      MatchQ[rule, {"Pseudonym", _, _}],
-      Lookup[tokenOf, ToString[v], repl],
-      MatchQ[rule, {"Generalize", _}],
-      iSVAApplyGeneralize[v, rule[[2]]],
-      True, repl];
-    If[nv =!= Nothing, out[k] = nv]]], row];
-  out];
+      rule === "KeepRaw", value,
+      MatchQ[rule, {"Pseudonym", _, _}], Lookup[tokenOf, ToString[value], repl],
+      MatchQ[rule, {"Generalize", _}], iSVAApplyGeneralize[value, rule[[2]]],
+      (* Keep もしくは未指定 container: 再帰。子は個別ルール優先・無ければ default *)
+      AssociationQ[value],
+      DeleteCases[
+        Association[KeyValueMap[Function[{k, v},
+          k -> iSVAWalkNode[v, path <> "." <> ToString[k], rules, defRule,
+            tokenOf, textPairs, patterns, repl, scanFn]], value]], Nothing],
+      ListQ[value],
+      DeleteCases[MapIndexed[
+        iSVAWalkNode[#1, path <> "." <> ToString[First[#2] - 1], rules, defRule,
+          tokenOf, textPairs, patterns, repl, scanFn] &, value], Nothing],
+      (* leaf: Keep(明示) は text scan。未指定は default に従う *)
+      rule === "Keep", iSVATextScan[value, textPairs, patterns, repl, scanFn],
+      True, Switch[defRule,
+        "Drop", Nothing, "KeepRaw", value,
+        "Keep", iSVATextScan[value, textPairs, patterns, repl, scanFn],
+        _, repl]]];
+
+iSVAAnonymizeRow[row_Association, tier_Association, tokenOf_Association,
+    textPairs_List, patterns_List, repl_String, scanFn_] := Module[{rules, defRule},
+  rules = Lookup[tier, "FieldRules", <||>];
+  defRule = Lookup[tier, "DefaultFieldRule", "Redact"];
+  DeleteCases[
+    Association[KeyValueMap[Function[{k, v},
+      k -> iSVAWalkNode[v, ToString[k], rules, defRule,
+        tokenOf, textPairs, patterns, repl, scanFn]], row]], Nothing]];
 
 Options[SourceVaultAnonymize] = {
   "GrantRef" -> None, "TargetLevel" -> Automatic, "Policy" -> Automatic,
@@ -2712,6 +3269,7 @@ If[Names["SourceVault`SourceVaultRegisterPrivacyContract"] =!= {},
       {SourceVault`SourceVaultAnonymizeImageRedact,
        SourceVault`SourceVaultAnonymizePDFPageImages,
        SourceVault`SourceVaultAnonymizeVerifyRedactedImage,
+       SourceVault`SourceVaultAnonymizeMediaScan,
        SourceVault`SourceVaultAnonymizeComposedPrivacy,
        SourceVault`SourceVaultAnonymizeRecordExposure,
        SourceVault`SourceVaultAnonymizeExposureGuard,
