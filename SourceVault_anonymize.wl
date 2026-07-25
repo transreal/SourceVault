@@ -1552,6 +1552,26 @@ iSVAVerifyArtifactBinding[binding_Association] :=
   SourceVaultAnonymizeCanonicalDigest[KeyDrop[binding, "BindingDigest"]] ===
     binding["BindingDigest"];
 
+(* origin の逆引き index から、指定 artifact の ArtifactBinding を引く (検証付き)。
+   旧形式 cache (ArtifactBindingRef 未記録) の復旧などに使う *)
+iSVABindingRefForArtifact[originRef_String, artifactRef_String] := Module[
+    {parsed, canonical, dir, key, path, refs},
+  parsed = iSVAParseRef[originRef];
+  canonical = If[TrueQ[Lookup[parsed, "Valid", False]],
+    parsed["CanonicalRef"], originRef];
+  dir = iSVABindingIndexDir[];
+  If[dir === $Failed, Return[$Failed]];
+  key = iSVAHandleDigest[canonical];
+  If[key === $Failed, Return[$Failed]];
+  path = FileNameJoin[{dir, StringTake[key, 40] <> ".json"}];
+  refs = If[FileExistsQ[path], Quiet @ Check[Import[path, "RawJSON"], {}], {}];
+  If[!ListQ[refs], refs = {}];
+  SelectFirst[refs,
+    Function[bref, Module[{b = iSVAMapLoadByRef[bref]},
+      AssociationQ[b] && Lookup[b, "ArtifactRef", ""] === artifactRef &&
+        iSVAVerifyArtifactBinding[b]]],
+    $Failed]];
+
 (* 一覧系からの unlisted 除外 (U1)。row 本体と Metadata の両方を見る *)
 iSVAUnlistedRowQ[row_] :=
   SourceVaultAnonymizeUnlistedClassQ[row] ||
@@ -3259,9 +3279,24 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
             "ArtifactRefDigest" -> iSVAHandleDigest[cached["ArtifactRef"]],
             "TargetLevel" -> tl, "PolicyDigest" -> policy["PolicyDigest"],
             "GrantID" -> Lookup[grant, "GrantID", "unspecified"]|>];
+          (* Payload は成果物 snapshot (公開済み = 低 PL) から復元する。
+             cache hit でも下流 (採点 plan) が fresh 実行と同形で使えるようにする。
+             ArtifactBindingRef が cache に無い (旧形式 cache) 場合は origin の
+             逆引き index から復元する — 欠けたまま返すと採点 annotation が
+             attach 時に LineageMismatch で死ぬ *)
           Return[<|"Status" -> "OK", "ArtifactRef" -> cached["ArtifactRef"],
             "PublicationState" -> "Published", "CacheHit" -> True,
-            "MapRef" -> Lookup[cached, "MapRef", "unspecified"]|>]]]]];
+            "MapRef" -> Lookup[cached, "MapRef", "unspecified"],
+            "ArtifactBindingRef" ->
+              With[{c = Lookup[cached, "ArtifactBindingRef", None]},
+                If[StringQ[c] && StringStartsQ[c, "snapshot:"], c,
+                  With[{r = iSVABindingRefForArtifact[
+                      Lookup[First[plan["Origins"]], "OriginRef", ""],
+                      cached["ArtifactRef"]]},
+                    If[StringQ[r], r, "unspecified"]]]],
+            "Payload" -> With[{a = iSVAMapLoadByRef[cached["ArtifactRef"]]},
+              If[AssociationQ[a], Lookup[a, "Payload", Missing["Unreadable"]],
+                Missing["Unreadable"]]]|>]]]]];
   (* --- lease (crash retry は同一 identity で冪等) --- *)
   lease = SourceVaultConsumeDeclassificationGrantUse[grant, "anonymize:" <> cacheId];
   If[lease["Status"] =!= "OK", Return[lease]];
@@ -3412,7 +3447,9 @@ SourceVaultAnonymize[origRef_String, OptionsPattern[]] := Module[
       (If[!DirectoryQ[DirectoryName[cachePath]],
          CreateDirectory[DirectoryName[cachePath]]];
        Export[cachePath, <|"ArtifactRef" -> art["ArtifactRef"],
-         "MapRef" -> asg["MapRef"], "CacheIdentity" -> cacheId|>, "RawJSON"]), Null]];
+         "MapRef" -> asg["MapRef"],
+         "ArtifactBindingRef" -> bind["BindingRef"],
+         "CacheIdentity" -> cacheId|>, "RawJSON"]), Null]];
   (* A4: Publish 成立を監査記録 (元 PL->先 PL・policy/grant。PII 非含有)。
      staged は未公開なので Declassified を出さない *)
   If[!TrueQ[Lookup[pub, "Staged", False]],
