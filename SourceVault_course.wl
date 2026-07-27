@@ -1,0 +1,4411 @@
+(* ::Package:: *)
+
+(* ============================================================
+   SourceVault_course.wl — 演習問題データベース / 試験用紙生成 / 採点支援
+
+   科目 (subject) ごとの演習問題ストア:
+     - 問題ノートブック (離散数学問題.nb 等) からの構造 ingest
+       (セルを評価せず held のまま分解するので FE 不要・副作用なし)
+     - 分野 / 単元 (シラバス突合) / 難易度 / 出題履歴 のメタデータ管理
+     - 試験構成 (ExamCompose) → 問題用紙 PDF + 解答用紙 PDF 生成
+     - 解答用紙レイアウトはデータとして試験レコードに保存され、
+       スキャン答案の切出し (採点) と同一ジオメトリを共有する
+     - 類似問題の LLM 生成 (Draft → オーナー承認)
+     - 答案スキャン取込 / 受講者リスト突合せ (オーナー目視) / 採点 / 配点再設定
+
+   プライバシー:
+     - 問題レコード自体は個人情報を含まないため既定 PL 0.3 (クラウド可)
+     - スキャン答案・突合せ・採点結果は PL 1.0 (ローカルのみ)
+     - クラウド LLM へ送るのは解答欄領域の crop のみ (学生番号 / 氏名領域は
+       ジオメトリで除外)。ID / 氏名の認識・突合せはオーナーの目視で行う。
+
+   SourceVault.wl から自動ロードされるためロードバナーは出さない。
+   ============================================================ *)
+
+BeginPackage["SourceVault`"]
+
+(* ---- config ---- *)
+$SourceVaultExercisesRoot::usage =
+  "$SourceVaultExercisesRoot は演習問題ストアの root override。Automatic なら <PrivateVault>/exercises。";
+$SourceVaultExerciseDefaultPrivacyLevel::usage =
+  "$SourceVaultExerciseDefaultPrivacyLevel は問題レコードの既定 privacy level (0.3、個人情報なし前提)。";
+$SourceVaultExercisesViewLimit::usage =
+  "$SourceVaultExercisesViewLimit は View 系 Dataset の既定表示上限 (50)。";
+$SourceVaultExamFontFamily::usage =
+  "$SourceVaultExamFontFamily は試験用紙描画のフォント。Automatic なら OS で選ぶ (Windows: Yu Gothic)。";
+$SourceVaultExamInstructor::usage =
+  "$SourceVaultExamInstructor は試験用紙に印字する担当教員名。";
+$SourceVaultExamTemplatePDF::usage =
+  "$SourceVaultExamTemplatePDF は公式「試験問題・解答用紙」白紙 PDF のパス。Automatic なら <exercises root>/templates/試験問題・解答用紙.pdf を使い、無ければ内蔵描画ヘッダにフォールバック。None で常に内蔵描画。";
+
+(* ---- subject ---- *)
+SourceVaultExerciseRegisterSubject::usage =
+  "SourceVaultExerciseRegisterSubject[code, spec] は科目を登録する。spec keys: \"Title\", \"Syllabus\" (<|n-><|\"Topic\",\"Field\"|>|> または本文文字列), \"UnitMap\" (<|生単元->訂正単元|>), \"LectureHeader\"。";
+SourceVaultExerciseSubjects::usage =
+  "SourceVaultExerciseSubjects[] は登録済み科目コードのリストを返す。";
+SourceVaultExerciseSubjectInfo::usage =
+  "SourceVaultExerciseSubjectInfo[code] は科目設定 Association を返す。";
+SourceVaultExerciseParseSyllabus::usage =
+  "SourceVaultExerciseParseSyllabus[text] はシラバス本文から <|n-><|\"Topic\",\"Field\"|>|> を抽出する。";
+
+(* ---- problem CRUD / query ---- *)
+SourceVaultExerciseAdd::usage =
+  "SourceVaultExerciseAdd[subject, assoc] は問題レコードを追加し Id を返す。assoc keys: \"Question\"|\"QuestionHeld\", \"Choices\", \"Answer\", \"Source\", \"Explanation\", \"Unit\", \"Field\", \"Difficulty\", \"Status\" 等。";
+SourceVaultExerciseGet::usage =
+  "SourceVaultExerciseGet[id] は問題レコード Association を返す (見つからなければ Missing)。";
+SourceVaultExerciseUpdate::usage =
+  "SourceVaultExerciseUpdate[id, changes] はレコードへ changes (Association) をマージする。";
+SourceVaultExerciseRetire::usage =
+  "SourceVaultExerciseRetire[id] は問題を Status->\"Retired\" にする (削除はしない)。";
+SourceVaultExercises::usage =
+  "SourceVaultExercises[subject, opts] は問題インデックス (Association のリスト) を返す core 関数。opts: \"Unit\", \"Field\", \"Format\", \"Status\" (既定 \"Active\"), \"MaxItems\"。";
+SourceVaultExercisesView::usage =
+  "SourceVaultExercisesView[subject, opts] は SourceVaultExercises の Dataset 表示 (件数上限つき)。";
+SourceVaultExerciseSearch::usage =
+  "SourceVaultExerciseSearch[subject, query, opts] は問題本文 / 選択肢 / 出典の部分一致検索 (core、Association リスト)。";
+SourceVaultExerciseSearchView::usage =
+  "SourceVaultExerciseSearchView[subject, query, opts] は検索結果の Dataset 表示。";
+SourceVaultExerciseStructure::usage =
+  "SourceVaultExerciseStructure[id] は問題レコードの内部構造 (問題文が文字列か held か、held の中身がどんな要素の並びか、選択肢の型) を返す。レイアウトが崩れる原因を切り分けるための診断。SourceVaultExerciseStructureView は Dataset 版。";
+SourceVaultExerciseStructureView::usage =
+  "SourceVaultExerciseStructureView[id] は SourceVaultExerciseStructure の Dataset 表示。";
+SourceVaultExerciseView::usage =
+  "SourceVaultExerciseView[id] は 1 問を描画つきで表示する (FE 必要な場合あり)。";
+SourceVaultExerciseStats::usage =
+  "SourceVaultExerciseStats[subject] は単元 / 分野 / 形式 / 難易度の件数集計を返す。";
+(* 原問に手を入れずに調整するためのレコードフィールド:
+   "HideChoices" -> True        選択肢欄を出さない (中身が問題文・表・図の側にある場合)
+   "QuestionNote" -> "..."      問題文の後ろに注記を足す (条件の明示など)
+   "QuestionOverride" -> "..."  問題文を差し替える (図はそのまま残る)。
+                                元データの文章が壊れている場合に使う。 *)
+SourceVaultExerciseSetDifficulty::usage =
+  "SourceVaultExerciseSetDifficulty[id, d, opts] は推定難易度 (1..5) を設定する。opts: \"DifficultySource\"。";
+SourceVaultExerciseAssignUnit::usage =
+  "SourceVaultExerciseAssignUnit[ids, unit] は複数問題の単元を一括修正する (単元ずれ訂正用)。";
+SourceVaultExerciseEstimateDifficulty::usage =
+  "SourceVaultExerciseEstimateDifficulty[subject, opts] は難易度未設定の問題を LLM で一括推定する (1=易〜5=難、DifficultySource->\"llm\")。opts: \"LLMFn\" (テストシーム), \"Overwrite\"->False, \"MaxItems\"。";
+SourceVaultExerciseUnitAuditView::usage =
+  "SourceVaultExerciseUnitAuditView[subject] は単元ごとにシラバス題目と問題見出しを並べ、単元ずれ確認を支援する。";
+
+(* ---- ingest ---- *)
+SourceVaultExerciseIngestNotebook::usage =
+  "SourceVaultExerciseIngestNotebook[nbPath, subject, opts] は問題ノートブックを構造 ingest する (セル評価なし・FE 不要)。第N回 Subsubsection 配下の excercise*={...} 代入を held のまま分解する。opts: \"UnitMap\", \"SubjectTitle\", \"DryRun\", \"Status\"。戻り値は report Association。";
+
+(* ---- similar problem generation ---- *)
+SourceVaultExerciseGenerateSimilar::usage =
+  "SourceVaultExerciseGenerateSimilar[id, n, opts] はベース問題の類似問題を LLM で n 問生成し Draft として保存する。opts: \"LLMFn\" (テストシーム)。図問題は構造 (状態遷移 / 辺集合 / 集合式) を JSON で生成させ、図はこちらで描画し、正解を機械検証する: オートマトン=受理シミュレーション (NFAPlot)、二項関係=律の充足判定 (Graph)、集合演算=全ベン領域の列挙による恒真性判定。検証を通らない生成は破棄する。承認は SourceVaultExerciseApproveDraft。";
+SourceVaultExerciseRebuildFigure::usage =
+  "SourceVaultExerciseRebuildFigure[id] は FigureSpec を持つ問題の図を現行ビルダーで再構築する (LLM 再呼び出しなし)。図レイアウト調整後の一括再描画に使う。FigureSpec が無い問題は NoFigureSpec で失敗する (Scan で流して可)。";
+SourceVaultExerciseDrafts::usage =
+  "SourceVaultExerciseDrafts[subject] は Draft 状態の問題インデックスを返す。";
+SourceVaultExerciseDraftsView::usage =
+  "SourceVaultExerciseDraftsView[subject] は Draft 一覧の Dataset 表示。";
+SourceVaultExerciseApproveDraft::usage =
+  "SourceVaultExerciseApproveDraft[id] は Draft を Active に昇格する。";
+SourceVaultExerciseDiscardDraft::usage =
+  "SourceVaultExerciseDiscardDraft[id] は Draft を破棄 (ファイル削除) する。";
+
+(* ---- exam ---- *)
+SourceVaultExamCompose::usage =
+  "SourceVaultExamCompose[subject, spec] は試験を構成し exam レコードを保存する。spec keys: \"ExamId\", \"Title\", \"ExamName\" (中間テスト/定期考査等), \"Year\", \"DateSpec\"->{y,m,d,\"曜\",時限}, \"Groups\"->{{id..}..}, \"Points\", \"DefaultPoints\", \"Duration\", \"Allowed\"。解答用紙レイアウトも同時に確定・保存される。";
+SourceVaultExamGet::usage = "SourceVaultExamGet[examId] は exam レコードを返す。";
+SourceVaultExamList::usage = "SourceVaultExamList[] / SourceVaultExamList[subject] は exam 一覧 (Association リスト) を返す。";
+SourceVaultExamSelectProblems::usage =
+  "SourceVaultExamSelectProblems[subject, opts] は出題候補 Id リストを選ぶ。opts: \"Units\", \"PerUnit\", \"Difficulty\"->{min,max}, \"RandomSeed\", \"Exclude\"。";
+SourceVaultExamSetPoints::usage =
+  "SourceVaultExamSetPoints[examId, weights] は配点を再設定する。weights は \"g-n\"->点 の Association か、出題順の点リスト。戻り値に \"Total\" を含む。";
+SourceVaultExamAnswerKey::usage =
+  "SourceVaultExamAnswerKey[examId] は <|\"問1-1\"->\"3\",...|> 形式の模範解答 Association を返す (模範解答.wl 互換)。";
+SourceVaultExamRecordHistory::usage =
+  "SourceVaultExamRecordHistory[examId] は実施済み試験として各問題の ExamHistory に出題情報 (年度 / 試験名 / 問題番号 / 配点) を刻む。";
+SourceVaultExamSlots::usage =
+  "SourceVaultExamSlots[examId] は <|\"1-1\" -> 問題Id, ...|> を返す。スロット番号から Id を引くのに使う (Id を手打ちしないため)。";
+SourceVaultExamRepairSlots::usage =
+  "SourceVaultExamRepairSlots[examId, opts] は SourceVaultExamAudit で問題のあるスロット (問題文・選択肢・正解の欠落、レコード消失) を、同じ科目の未使用かつ健全な問題へ差し替える。opts: \"Slots\"->Automatic|{\"1-21\",..}。配点・レイアウトのキーは不変。";
+SourceVaultExamAudit::usage =
+  "SourceVaultExamAudit[examId] は試験の各スロットについて、問題文・選択肢・正解の欠落を検査し <|Slot, Id, Issues, Headline|> のリストを返す。Issues: \"NoQuestion\" (問題文も図もない) / \"NoChoices\" (選択問題なのに選択肢がない) / \"NoAnswer\" (正解未設定) / \"NotFound\"。";
+SourceVaultExamAuditView::usage =
+  "SourceVaultExamAuditView[examId] は SourceVaultExamAudit の Dataset 表示。既定では問題のあるスロットのみ (\"OnlyIssues\"->False で全件)。";
+SourceVaultExamValidateFigures::usage =
+  "SourceVaultExamValidateFigures[examId] は試験に現在入っている生成問題 (FigureSpec 付き) を機械再検証し、スロットごとに <|Slot, Id, Recipe, OK, Reason, Hits|> を返す。Hits は合否によらず「機械が計算した正解の選択肢番号」なので、用紙を読んだ解答一覧との突合せに使える。検証器を強化した後の既存問題の再点検に使う。SourceVaultExamValidateFiguresView は Dataset 版。";
+SourceVaultExamValidateFiguresView::usage =
+  "SourceVaultExamValidateFiguresView[examId] は SourceVaultExamValidateFigures の Dataset 表示 (NG 行のみ \"OnlyFailures\"->True)。";
+SourceVaultExamVerifyText::usage =
+  "SourceVaultExamVerifyText[examId, opts] は文章題 (選択肢が文字列の問題) について、選択肢を 1 つずつ独立に「答えとして成立するか」LLM に問い直し、成立するのが正解ちょうど 1 つかを検査して <|Slot, Id, Answer, Reported, OK, Negative, Notes, Headline|> を返す。Negative は「適切でないものはどれか」型の否定形問題かどうか、Notes は選択肢ごとの判断理由 (検証器が誤ることもあるので最終判断はオーナーが行う)。文字列だけで完結しない問題は検査せず Missing[理由] (NeedsFigure=図が本体・NotTextChoices・NoQuestionText・NoAnswer・NotFound)。図問題は SourceVaultExamValidateFigures の担当。opts: \"LLMFn\", \"Slots\", \"PerChoice\" (既定 True。False は 1 問 1 回の一括質問で速いが取りこぼす)。";
+SourceVaultExamSimilarPairs::usage =
+  "SourceVaultExamSimilarPairs[examId, opts] は試験の中で似すぎている問題の組を返す (LLM 不要)。判定は ①指紋 (レシピ+課題) の一致 ②本文+選択肢の文字 bigram の Jaccard 類似度。<|SlotA, SlotB, Score, SameForm, Signature, HeadlineA, HeadlineB|>。opts: \"Threshold\" (0.6)。SourceVaultExamSimilarPairsView は Dataset 版。";
+SourceVaultExamSimilarPairsView::usage =
+  "SourceVaultExamSimilarPairsView[examId] は SourceVaultExamSimilarPairs の Dataset 表示。";
+SourceVaultExamDedupeSlots::usage =
+  "SourceVaultExamDedupeSlots[examId, opts] は似すぎている問題を連結成分にまとめ、各群で 1 問だけ残して残りを原問へ差し戻す (元の出題はシラバス全単元に散らしてあるため多様性が戻る)。opts: \"Threshold\" (0.6), \"Apply\" (True。False なら差し戻さず対象だけ報告)。";
+SourceVaultExamVerifyTextView::usage =
+  "SourceVaultExamVerifyTextView[examId] は SourceVaultExamVerifyText の Dataset 表示 (既定は複数正解などの NG 行のみ、\"OnlyFailures\"->False で全件)。";
+SourceVaultExamSetSlot::usage =
+  "SourceVaultExamSetSlot[examId, slot, id] は指定スロット (\"2-2\" 等) の問題を DB 内の任意の問題 id に差し替える (オーナーによる手動差し替え)。配点・解答用紙レイアウトのキーは不変。出題ミスのある原問を別の問題へ置き換えるときに使う。";
+SourceVaultExamRevertSlots::usage =
+  "SourceVaultExamRevertSlots[examId, slots] は指定スロット (\"1-26\" 等のリスト、または All) を PreviousGroups の元問題へ差し戻す。配点・レイアウトキーは不変。差し戻した類似問題の Draft レコード自体は残る (破棄は SourceVaultExerciseDiscardDraft)。";
+SourceVaultExamReplaceWithSimilar::usage =
+  "SourceVaultExamReplaceWithSimilar[examId, opts] は試験の各問題に LLM で類似問題を生成し (Draft 保存)、指定割合のスロットを類似問題へ入れ替える。配点・解答用紙レイアウトは維持、元の構成は exam レコードの PreviousGroups に保存。対象=画像なし選択問題+図レシピあり問題 (オートマトン/二項関係グラフは構造生成+NFAPlot/Graph 描画+正解の機械検証)。その他の図問題・記述は原問のまま。opts: \"Fraction\" (0.7。0 なら LLM を呼ばず何もしない = 原問のままの試験)、\"RandomSeed\", \"Slots\"->All|{\"1-26\",..} (対象スロット限定), \"LLMFn\", \"GenerateForAll\" (True=入替対象外のスロットの分も Draft ストックを生成。Fraction>0 のときのみ有効), \"DuplicateThreshold\" (0.6。他スロットと同型 (レシピ+課題が同じ) または本文が似すぎる生成は採用せず原問を残す。理由は FailureReasons に DuplicateForm / DuplicateText。図問題は本文でなく図で区別するので本文の類似では弾かない。オートマトンは受理言語の指紋 (AvoidSpecs) で重複を防ぐため、この判定の対象外), \"Variant\" (課題をオーナーが指定する。SortTrace: swaps|insertion|selection|quick / BinaryTree: preorder|inorder|postorder / GraphAlgo: shortest|mst|bfs|dfs / StackQueue: Stack|Queue。指定時は既出でも無条件に従うので \"Slots\" と併用する)。";
+SourceVaultExamPaperPDF::usage =
+  "SourceVaultExamPaperPDF[examId, outPath, opts] は問題用紙 PDF (【g-n】2 段組) を生成する (FE 必要)。ヘッダは $SourceVaultExamTemplatePDF (公式白紙) をオーバーレイ。複数ページは Notebook 印刷経由、失敗時はページ別ファイルへフォールバック (ExportMode で報告)。opts: \"Resolution\", \"ColumnWidth\", \"Explanation\"。";
+SourceVaultExamProblemPreview::usage =
+  "SourceVaultExamProblemPreview[examId, slot] は指定スロット 1 問だけを問題用紙と同じ組版で表示する (レイアウト確認用)。opts: \"Wide\" (True で段抜き幅)。";
+SourceVaultExamAnswerSheetPDF::usage =
+  "SourceVaultExamAnswerSheetPDF[examId, outPath, opts] は解答用紙 PDF を生成する。ヘッダは $SourceVaultExamTemplatePDF をオーバーレイ。レイアウトは exam レコードの SheetLayout と同一 (採点切出しと共有)。opts: \"GroupLabels\" (Automatic=通し番号のときは大問の [1] [2] を出さない / True / False)。";
+SourceVaultExamSetNumbering::usage =
+  "SourceVaultExamSetNumbering[examId, \"Continuous\"|\"Group\"] は用紙に印刷する問題番号の付け方を設定する。\"Continuous\" は大問をまたいで 1..N の通し番号 (問題用紙・解答用紙の両方に効く)、\"Group\" は従来の大問ごと (問題用紙 1-4 / 解答用紙 4)。内部のスロットキー・配点・解答キー・採点の切出し座標は変わらない。";
+SourceVaultExamNumbering::usage =
+  "SourceVaultExamNumbering[examId] はスロットキーと用紙に印刷される番号の対応 <|Slot, Printed, Points|> を返す (採点時の読み替え用)。SourceVaultExamNumberingView は Dataset 版。";
+SourceVaultExamNumberingView::usage =
+  "SourceVaultExamNumberingView[examId] は SourceVaultExamNumbering の Dataset 表示。";
+SourceVaultExamSheetLayout::usage =
+  "SourceVaultExamSheetLayout[examId] は解答用紙レイアウト (PageSize / 解答セル矩形 / 学生番号・氏名矩形) を返す。";
+
+(* ---- grading ---- *)
+SourceVaultExamRosterImport::usage =
+  "SourceVaultExamRosterImport[path, opts] は受講者リスト (xls/xlsx) から {{学籍番号, 氏名}..} を読む。opts: \"HeaderRows\" (6), \"IDColumn\" (2), \"NameColumn\" (3)。";
+SourceVaultExamSheetIngest::usage =
+  "SourceVaultExamSheetIngest[examId, pdfPathOrImages, opts] は回収済み解答用紙 (マルチページ PDF または画像リスト) を取り込み保存する (PL 1.0 ローカル)。opts: \"Roster\", \"ImageWidth\" (2200)。";
+SourceVaultExamMatches::usage =
+  "SourceVaultExamMatches[examId, opts] は答案突合せデータ {番号, {学籍番号画像, 氏名画像}, 受講者} の core リストを返す。opts: \"DiffX\", \"DiffY\" (切出し較正)。";
+SourceVaultExamMatchView::usage =
+  "SourceVaultExamMatchView[examId, opts] は答案突合せのオーナー確認ビュー (スキャンの学籍番号・氏名画像と受講者リストを並置)。必ず目視で確認すること。";
+SourceVaultExamSetMatch::usage =
+  "SourceVaultExamSetMatch[examId, <|スキャン番号->受講者番号|>] は突合せ対応を修正する。";
+SourceVaultExamRecognize::usage =
+  "SourceVaultExamRecognize[examId, opts] は各答案の解答欄領域 (個人情報領域を除外した crop) から解答を読み取る。opts: \"RecognizerFn\" (シーム; fn[crop, keys]->Association), \"Scans\"->All|{i..}。既定はクラウド vision (ClaudeQueryBg)。";
+SourceVaultExamSetAnswer::usage =
+  "SourceVaultExamSetAnswer[examId, scanIdx, key, value] は認識結果を手動修正する (key は \"1-1\" 形式)。";
+SourceVaultExamSetMark::usage =
+  "SourceVaultExamSetMark[examId, scanIdx, key, mark] は採点記号 (○/△/×/?) を手動設定する (自動判定の上書き)。";
+SourceVaultExamScore::usage =
+  "SourceVaultExamScore[examId, opts] は突合せ + 認識結果 + 模範解答 + 配点から採点する core 関数 (Association リスト)。○=満点, △=Ceiling[配点/2], ×/未=0。";
+SourceVaultExamScoreView::usage =
+  "SourceVaultExamScoreView[examId, opts] は採点結果の Dataset 表示。";
+SourceVaultExamScoreReport::usage =
+  "SourceVaultExamScoreReport[examId, opts] は採点報告 (Dataset)。opts: \"Export\"->path.xlsx でローカル書出し。";
+
+Begin["`CoursePrivate`"]
+
+(* ============================================================
+   config defaults
+   ============================================================ *)
+
+If[!ValueQ[$SourceVaultExercisesRoot], $SourceVaultExercisesRoot = Automatic];
+If[!ValueQ[$SourceVaultExerciseDefaultPrivacyLevel], $SourceVaultExerciseDefaultPrivacyLevel = 0.3];
+If[!ValueQ[$SourceVaultExercisesViewLimit], $SourceVaultExercisesViewLimit = 50];
+If[!ValueQ[$SourceVaultExamFontFamily], $SourceVaultExamFontFamily = Automatic];
+If[!ValueQ[$SourceVaultExamInstructor], $SourceVaultExamInstructor = "今井 勝喜"];
+If[!ValueQ[$SourceVaultExamTemplatePDF], $SourceVaultExamTemplatePDF = Automatic];
+
+iEXFont[] := If[StringQ[$SourceVaultExamFontFamily], $SourceVaultExamFontFamily,
+  If[StringContainsQ[$SystemID, "Windows"], "Yu Gothic", "Hiragino Kaku Gothic ProN"]];
+
+(* ============================================================
+   root / persistence
+   ============================================================ *)
+
+iEXRoot[] := Module[{r},
+  If[StringQ[$SourceVaultExercisesRoot], Return[$SourceVaultExercisesRoot]];
+  r = Quiet @ Check[
+    If[Length[Names["SourceVault`SourceVaultRoot"]] > 0 &&
+       Length[DownValues[SourceVault`SourceVaultRoot]] > 0,
+      SourceVault`SourceVaultRoot["PrivateVault"], $Failed], $Failed];
+  If[StringQ[r], FileNameJoin[{r, "exercises"}], $Failed]];
+
+iEXEnsureDir[dir_String] := (If[!DirectoryQ[dir], Quiet @ CreateDirectory[dir, CreateIntermediateDirectories -> True]]; dir);
+
+(* 圧縮 WXF (BinarySerialize PerformanceGoal->"Size")。画像問題の held 式は
+   RasterBox 展開で数 MB になるため、非圧縮 Export["WXF"] は使わない。
+   stream は必ず Close する (Dropbox 競合コピー対策)。 *)
+iEXWriteWXF[path_String, expr_] := Module[{st},
+  iEXEnsureDir[DirectoryName[path]];
+  st = OpenWrite[path, BinaryFormat -> True];
+  If[st === $Failed, Return[$Failed]];
+  WithCleanup[BinaryWrite[st, BinarySerialize[expr, PerformanceGoal -> "Size"]], Close[st]];
+  path];
+
+iEXReadWXF[path_String] := Module[{st, bytes},
+  If[!FileExistsQ[path], Return[Missing["NotFound", path]]];
+  st = OpenRead[path, BinaryFormat -> True];
+  If[st === $Failed, Return[Missing["Unreadable", path]]];
+  bytes = WithCleanup[ReadByteArray[st], Close[st]];
+  If[!ByteArrayQ[bytes], Return[Missing["Empty", path]]];
+  Quiet @ Check[BinaryDeserialize[bytes], Missing["Corrupt", path]]];
+
+iEXFail[reason_String, extra___Rule] := Failure["ExerciseStore", <|"MessageTemplate" -> reason, extra|>];
+
+iEXNowIso[] := DateString[TimeZoneConvert[Now, 0], "ISODateTime"] <> "Z";
+
+iEXSubjectsPath[] := With[{r = iEXRoot[]}, If[StringQ[r], FileNameJoin[{r, "subjects.wxf"}], $Failed]];
+iEXSubjectDir[subj_String] := With[{r = iEXRoot[]}, If[StringQ[r], FileNameJoin[{r, subj}], $Failed]];
+iEXRecordPath[id_String] := With[{d = iEXSubjectDir[iEXIdSubject[id]]}, If[StringQ[d], FileNameJoin[{d, "records", id <> ".wxf"}], $Failed]];
+iEXIndexPath[subj_String] := With[{d = iEXSubjectDir[subj]}, If[StringQ[d], FileNameJoin[{d, "index.wxf"}], $Failed]];
+iEXExamDir[] := With[{r = iEXRoot[]}, If[StringQ[r], FileNameJoin[{r, "exams"}], $Failed]];
+iEXExamPath[examId_String] := With[{d = iEXExamDir[]}, If[StringQ[d], FileNameJoin[{d, examId <> ".wxf"}], $Failed]];
+iEXGradingPath[examId_String] := With[{d = iEXExamDir[]}, If[StringQ[d], FileNameJoin[{d, examId <> "-grading.wxf"}], $Failed]];
+iEXScanDir[examId_String] := With[{d = iEXExamDir[]}, If[StringQ[d], FileNameJoin[{d, examId <> "-scans"}], $Failed]];
+
+(* id = "<subject>-<hash12>" : subject 側にハイフンが含まれても後ろ 13 文字を落とせば復元できる *)
+iEXIdSubject[id_String] := If[StringLength[id] > 13, StringDrop[id, -13], id];
+
+(* ============================================================
+   held-expression 構造分解ユーティリティ (評価しない)
+   ============================================================ *)
+
+iEXHeldListQ[Hold[_List]] := True;
+iEXHeldListQ[_] := False;
+
+(* Hold[{a,b,..}] -> {Hold[a], Hold[b], ..} : 要素を評価せずに分解する標準イディオム *)
+iEXHeldParts[Hold[l_List]] := ReleaseHold[Map[Hold, Hold[l], {2}]];
+iEXHeldParts[_] := $Failed;
+
+iEXHeldStringQ[Hold[_String]] := True;
+iEXHeldStringQ[_] := False;
+iEXHeldString[Hold[s_String]] := s;
+
+iEXHeldIntegerQ[Hold[_Integer]] := True;
+iEXHeldIntegerQ[_] := False;
+iEXHeldInteger[Hold[n_Integer]] := n;
+
+(* held 式の中の可読文字列 (見出し用) *)
+iEXHeldStrings[h_Hold] := Cases[h, s_String :> s, Infinity];
+
+iEXToHoldComplete[Hold[e_]] := HoldComplete[e];
+
+iEXCleanText[s_String] := StringTrim[StringReplace[s,
+  {"<br>" -> "\n", "\r" -> "",
+   (* 元データに残った HTML エスケープを戻す (0&lt;k&lt;n → 0<k<n) *)
+   "&lt;" -> "<", "&gt;" -> ">", "&quot;" -> "\"", "&nbsp;" -> " ", "&amp;" -> "&"}]];
+
+(* FE linear syntax (\!\(...\)) はカーネル文字列内では私用領域文字で保持される:
+   63425=\! 63433=\( 63424=\) 63432=\* 63409=\` 。
+   これを含む文字列は box 文字列として RawBoxes で表示すると FE が整形する
+   (Style[str] のままだとエスケープが生表示され、折返し不能で全体が縮小される)。 *)
+$iEXLinChar = FromCharacterCode[63425];
+
+iEXHasLinearQ[s_String] := StringContainsQ[s, $iEXLinChar];
+
+(* linear syntax の括弧が揃っているか。元データには途中で切れているものがあり、
+   そのまま RawBoxes に渡すと表示エラーになるので、その場合は素のテキストで出す。 *)
+iEXLinearBalancedQ[s_String] :=
+  StringCount[s, FromCharacterCode[63433]] === StringCount[s, FromCharacterCode[63424]] &&
+  StringCount[s, $iEXLinChar] <= StringCount[s, FromCharacterCode[63433]];
+
+(* 桁揃えされた式・擬似コード (タブや連続空白で整形されたもの) は等幅で組む。
+   比例フォントだと条件部の位置がばらばらに見えるため。 *)
+(* 桁揃えはタブがあるときだけ「そのまま保持」する。空白による字下げは
+   元ノートブックの折返し由来のことが多く、保持すると本文が階段状になる。
+   式の桁揃えは iEXTextDisplay が Grid の列で揃えるのでここでは扱わない。 *)
+iEXPreformattedQ[s_String] := StringContainsQ[s, "\t"];
+
+(* 桁揃えされた行 (「式   (条件)」のように 2 文字以上の空白で区切られた行) は
+   フォントに頼らず Grid の列で揃える。比例フォントでも等幅でも確実に揃う。 *)
+iEXAlignedLineQ[l_String] := StringContainsQ[l, RegularExpression["[^\\s][ \t\:3000]{2,}[^\\s]"]];
+
+iEXTextDisplay[s_String, ff_, fs_] := Module[{lines, groups},
+  lines = StringSplit[s, "\n"];
+  If[Length[lines] < 2 || Count[lines, _?iEXAlignedLineQ] < 2, Return[$Failed]];
+  groups = Split[lines, iEXAlignedLineQ[#1] === iEXAlignedLineQ[#2] &];
+  Column[Map[Function[grp,
+     If[iEXAlignedLineQ[First[grp]],
+      Module[{cells = Map[StringSplit[#, RegularExpression["[ \t\:3000]{2,}"]] &, grp], w},
+       w = Max[Length /@ cells];
+       Grid[Map[PadRight[#, w, ""] &, cells] /.
+          c_String :> Style[c, FontFamily -> ff, FontSize -> fs],
+        Alignment -> Left, Spacings -> {1.5, 0.25}]],
+      Style[iEXWrapText[StringRiffle[grp, "\n"]], FontFamily -> ff, FontSize -> fs,
+        Sequence @@ $iEXTextLayoutOpts]]], groups],
+   Alignment -> Left, Spacings -> 0.35]];
+
+(* 禁則処理: 行頭に来てはいけない文字の前と、行末に来てはいけない文字の後に
+   結合子 (WORD JOINER) を入れて、そこで折り返されないようにする。 *)
+(* 行頭に置けない文字: 句読点・コンマ・閉じ括弧・小書き仮名・長音など。
+   行末に置けない文字: 開き括弧。折返し位置の判定だけに使う (本文は変えない)。 *)
+$iEXNoBreakBefore = Characters[
+  "。、．，,.:;：；・）)］]｝}】〕》」』＞>！!？?…ーぁぃぅぇぉっゃゅょゎヵヶァィゥェォッャュョヮ"];
+$iEXNoBreakAfter = Characters["（(「『【〔｛{［[《＜<"];
+
+(* 折返し行の先頭が字下げされないようにする (既定の LineIndent が効くと
+   本文が階段状に見える) *)
+$iEXTextLayoutOpts = {LineIndent -> 0, ParagraphIndent -> 0};
+
+(* Mathematica の文字列組版は禁則処理をせず、結合子 (U+2060) も効かないので、
+   列幅が分かっている場合はこちらで改行位置を決める。
+   $iEXWrapBudget = 1 行に入る全角文字数 (None なら折返ししない)。 *)
+$iEXWrapBudget = None;
+
+iEXCharWidth[c_String] := Module[{k = First[ToCharacterCode[c]]},
+  Which[k === 8288 || k === 65279, 0., k < 256, 0.5, True, 1.]];
+
+iEXWordCharQ[c_String] := StringMatchQ[c, RegularExpression["[A-Za-z0-9._]"]];
+
+iEXWrapLine[line_String, budget_] := Module[
+  {chars = Characters[line], out = {}, acc = {}, w = 0., c, cw, sp, bd, head, tail},
+  Do[
+   c = chars[[i]]; cw = iEXCharWidth[c];
+   If[w + cw > budget && acc =!= {},
+    Which[
+     (* 行頭に置けない文字はあふれても今の行に残す *)
+     MemberQ[$iEXNoBreakBefore, c], AppendTo[acc, c]; w += cw,
+     (* 行末に置けない文字が直前にあれば、その 1 字を次の行へ送る *)
+     MemberQ[$iEXNoBreakAfter, Last[acc]],
+      head = Most[acc]; AppendTo[out, StringJoin[head]];
+      acc = {Last[acc], c}; w = Total[iEXCharWidth /@ acc],
+     True,
+      head = acc; tail = {};
+      (* 英数字の語の途中では切らない。直前の空白、無ければ語の先頭まで戻す
+         (日本語中に埋まった push などが分断されるのを防ぐ)。 *)
+      If[iEXWordCharQ[c] && iEXWordCharQ[Last[acc]],
+       sp = Max[Append[Flatten[Position[acc, " "]], 0]];
+       bd = Max[Append[Flatten[Position[acc, x_String /; !iEXWordCharQ[x]]], 0]];
+       Which[
+        sp > 1 && sp >= bd, head = Take[acc, sp - 1]; tail = Drop[acc, sp],
+        bd > 0 && bd < Length[acc], head = Take[acc, bd]; tail = Drop[acc, bd],
+        True, head = acc; tail = {}]];
+      If[head === {}, head = acc; tail = {}];
+      AppendTo[out, StringJoin[head]];
+      acc = Append[tail, c]; w = Total[iEXCharWidth /@ acc]],
+    AppendTo[acc, c]; w += cw],
+   {i, Length[chars]}];
+  If[acc =!= {}, AppendTo[out, StringJoin[acc]]];
+  StringRiffle[out, "\n"]];
+
+iEXWrapText[s_String] := If[!NumericQ[$iEXWrapBudget] || $iEXWrapBudget < 4, s,
+  StringRiffle[Map[iEXWrapLine[#, $iEXWrapBudget] &, StringSplit[s, "\n", All]], "\n"]];
+
+(* 選択肢の区切りは専用マークで渡す。box 文字列 (linear syntax) では生の
+   "\n" が改行にならないので、box 経路では行ごとに組み直す必要がある。
+   元データ由来の "\n" (式の途中の折返し) と区別するために別の文字を使う。 *)
+$iEXBreakMark = FromCharacterCode[1];
+
+iEXStyledString[s0_String, opts___] := Module[
+  {s, parts, o = Flatten[{opts}], oa, g, linQ},
+  parts = Select[StringSplit[s0, $iEXBreakMark], StringTrim[#] =!= "" &];
+  s = StringReplace[s0, $iEXBreakMark -> "\n"];
+  oa = Association[Cases[o, HoldPattern[_ -> _]]];
+  (* 途中で切れた linear syntax はそのまま組むと表示エラーになるので素で出す *)
+  linQ = iEXHasLinearQ[s] && iEXLinearBalancedQ[s];
+  g = If[iEXHasLinearQ[s], $Failed,
+    iEXTextDisplay[s, Lookup[oa, FontFamily, iEXFont[]], Lookup[oa, FontSize, 9]]];
+  If[g =!= $Failed, g,
+   If[iEXPreformattedQ[s],
+    o = Append[DeleteCases[o, HoldPattern[FontFamily -> _]], FontFamily -> "Consolas"]];
+   o = Join[o, $iEXTextLayoutOpts];
+   Which[
+    (* box 文字列は折返しを自前で決められないのでそのまま組む。
+       ただし **生の "\n" は box では改行にならない** ので、選択肢の
+       区切り (専用マーク) の位置で分けて Column に積む。
+       元データ由来の "\n" では分けない (式の途中で linear syntax が
+       切れて組版エラーになるため)。分けた塊が閉じていなければ分けない。 *)
+    linQ && Length[parts] > 1 && AllTrue[parts, iEXLinearBalancedQ],
+     Column[Map[Style[RawBoxes[#], Sequence @@ o, ShowStringCharacters -> False] &,
+        parts],
+      Alignment -> Left, Spacings -> 0.1],
+    linQ, Style[RawBoxes[s], Sequence @@ o, ShowStringCharacters -> False],
+    iEXHasLinearQ[s], Style[iEXWrapText[iEXStripLinear[s]], Sequence @@ o],
+    True, Style[iEXWrapText[s], Sequence @@ o]]]];
+
+(* 表示中のシンボルが Global`n のように文脈つきで出るのを防ぐ。
+   他パッケージに同名シンボルがあると短縮名が曖昧になり、
+   Mathematica は文脈つきで表示する。組版の間だけ Global` を優先させる。 *)
+SetAttributes[iEXWithGlobalContext, HoldFirst];
+iEXWithGlobalContext[e_] := Block[
+  {$Context = "Global`",
+   $ContextPath = DeleteDuplicates[Prepend[$ContextPath, "Global`"]]}, e];
+
+(* 見出し用: linear syntax マーカーを落として素の文字だけ残す *)
+iEXStripLinear[s_String] := StringReplace[s,
+  {FromCharacterCode[63425] -> "", FromCharacterCode[63432] -> "",
+   FromCharacterCode[63433] -> "", FromCharacterCode[63424] -> "",
+   FromCharacterCode[63409] -> "`"}];
+
+(* box 文字列 (linear syntax) は私用領域文字だけでなく ASCII の \! \( \) \*
+   としても来る (held 図の中の文字列を集めた場合)。見出しは 60 字で切り詰める
+   ので、box 記法が残っていると途中で閉じが失われ、FE が
+   「文字列にエラーがあり ShowStringCharacters->False で表示できません」を出す。
+   見出しからは box 記法を落として素のテキストにする。 *)
+iEXPlainForHeadline[s_String] := Module[{t = iEXStripLinear[s]},
+  t = StringDelete[t, RegularExpression["\\\\\\*?[A-Za-z]+Box\\["]];
+  t = StringDelete[t, {"\\!", "\\*", "\\(", "\\)", "\\`", "\\,"}];
+  StringDelete[t, {"\\[", "\\]"}]];
+
+iEXHeadline[s_String] := With[
+  {t = StringReplace[iEXPlainForHeadline[s], WhitespaceCharacter .. -> " "]},
+  If[StringLength[t] > 60, StringTake[t, 60] <> "…", t]];
+iEXHeadline[_] := "";
+
+(* ============================================================
+   subject 管理
+   ============================================================ *)
+
+iEXSubjects[] := With[{p = iEXSubjectsPath[]},
+  If[!StringQ[p], <||>, Replace[iEXReadWXF[p], Except[_Association] -> <||>]]];
+
+iEXSaveSubjects[a_Association] := With[{p = iEXSubjectsPath[]},
+  If[StringQ[p], iEXWriteWXF[p, a], $Failed]];
+
+SourceVaultExerciseParseSyllabus[text_String] :=
+  Module[{pos, tokens, topics},
+    pos = StringPosition[text, RegularExpression["第\\d+回"]];
+    If[pos === {}, Return[<||>]];
+    tokens = Table[
+      {ToExpression[StringTake[text, {pos[[k, 1]] + 1, pos[[k, 2]] - 1}]],
+       StringTake[text, {pos[[k, 2]] + 1, If[k < Length[pos], pos[[k + 1, 1]] - 1, StringLength[text]]}]},
+      {k, Length[pos]}];
+    topics = Map[Function[tk, Module[{n = tk[[1]], seg = tk[[2]], topic, field},
+      topic = StringTrim[First[StringSplit[seg, {"予習", "復習"}], seg]];
+      topic = StringTrim[StringReplace[topic, "[" ~~ Shortest[___] ~~ "時間]" -> ""]];
+      field = StringTrim[First[StringSplit[topic, {"：", ":"}], topic]];
+      n -> <|"Topic" -> topic, "Field" -> field|>]], tokens];
+    Association[topics]];
+
+Options[SourceVaultExerciseRegisterSubject] = {};
+SourceVaultExerciseRegisterSubject[code_String, spec_Association : <||>] := Module[
+  {subjects = iEXSubjects[], syl, entry},
+  syl = Lookup[spec, "Syllabus", <||>];
+  If[StringQ[syl], syl = SourceVaultExerciseParseSyllabus[syl]];
+  If[!AssociationQ[syl], syl = <||>];
+  entry = <|
+    "Code" -> code,
+    "Title" -> Lookup[spec, "Title", code],
+    "Syllabus" -> syl,
+    "UnitMap" -> Replace[Lookup[spec, "UnitMap", <||>], Except[_Association] -> <||>],
+    "LectureHeader" -> Lookup[spec, "LectureHeader", code],
+    "Registered" -> Lookup[Lookup[subjects, code, <||>], "Registered", iEXNowIso[]],
+    "Modified" -> iEXNowIso[]|>;
+  subjects[code] = entry;
+  If[iEXSaveSubjects[subjects] === $Failed, Return[iEXFail["RootUnresolved"]]];
+  entry];
+
+SourceVaultExerciseSubjects[] := Keys[iEXSubjects[]];
+SourceVaultExerciseSubjectInfo[code_String] := Lookup[iEXSubjects[], code, Missing["NotRegistered", code]];
+
+(* 単元番号 -> (UnitMap 訂正後) 単元番号 *)
+iEXMapUnit[subj_String, raw_] := Module[{info = SourceVaultExerciseSubjectInfo[subj], um},
+  If[!AssociationQ[info] || !IntegerQ[raw], Return[raw]];
+  um = Lookup[info, "UnitMap", <||>];
+  Lookup[um, raw, Lookup[um, ToString[raw], raw]]];
+
+iEXUnitField[subj_String, unit_] := Module[{info = SourceVaultExerciseSubjectInfo[subj], syl},
+  If[!AssociationQ[info] || !IntegerQ[unit], Return[Missing["Unknown"]]];
+  syl = Lookup[info, "Syllabus", <||>];
+  Lookup[Lookup[syl, unit, Lookup[syl, ToString[unit], <||>]], "Field", Missing["Unknown"]]];
+
+(* ============================================================
+   問題レコード CRUD + index
+   ============================================================ *)
+
+$iEXIndexCache = <||>;
+
+iEXIndex[subj_String] := Module[{p = iEXIndexPath[subj], idx},
+  If[KeyExistsQ[$iEXIndexCache, subj], Return[$iEXIndexCache[subj]]];
+  If[!StringQ[p], Return[<||>]];
+  idx = Replace[iEXReadWXF[p], Except[_Association] -> <||>];
+  $iEXIndexCache[subj] = idx;
+  idx];
+
+iEXSaveIndex[subj_String, idx_Association] := Module[{p = iEXIndexPath[subj]},
+  If[!StringQ[p], Return[$Failed]];
+  $iEXIndexCache[subj] = idx;
+  iEXWriteWXF[p, idx]];
+
+(* 巨大 held 式でも高速になるよう、圧縮シリアライズ後の bytes をハッシュする *)
+iEXContentHash[content_] := StringTake[IntegerString[
+  Hash[BinarySerialize[content, PerformanceGoal -> "Size"], "SHA256"], 16, 64], 12];
+
+iEXIndexEntry[rec_Association] := <|
+  "Id" -> rec["Id"], "Unit" -> Lookup[rec, "Unit", Missing[]],
+  "Field" -> Lookup[rec, "Field", Missing[]],
+  "Format" -> Lookup[rec, "Format", "Choice"],
+  "Status" -> Lookup[rec, "Status", "Active"],
+  "Difficulty" -> Lookup[rec, "Difficulty", Missing[]],
+  "Headline" -> Lookup[rec, "Headline", ""],
+  "HasImage" -> Lookup[rec, "HasImage", False],
+  "Source" -> iEXHeadline[Replace[Lookup[rec, "Source", ""], Except[_String] -> ""]],
+  "BaseId" -> Lookup[rec, "BaseId", Missing[]],
+  "Recipe" -> With[{fs = Lookup[rec, "FigureSpec", Missing[]]},
+    If[AssociationQ[fs], Lookup[fs, "Recipe", Missing[]], Missing[]]],
+  "ContentHash" -> Lookup[rec, "ContentHash", ""],
+  "Created" -> Lookup[rec, "Created", ""]|>;
+
+iEXPutRecord[rec_Association] := Module[{id = rec["Id"], subj, path, idx},
+  subj = rec["Subject"];
+  path = iEXRecordPath[id];
+  If[!StringQ[path], Return[$Failed]];
+  iEXWriteWXF[path, rec];
+  idx = iEXIndex[subj];
+  idx[id] = iEXIndexEntry[rec];
+  iEXSaveIndex[subj, idx];
+  id];
+
+SourceVaultExerciseGet[id_String] := With[{p = iEXRecordPath[id]},
+  If[!StringQ[p], Missing["RootUnresolved"],
+    Replace[iEXReadWXF[p], m_Missing :> Missing["NotFound", id]]]];
+
+iEXNormalizeNewRecord[subj_String, a_Association] := Module[
+  {q, qh, choices, headline, hasImage, content, hash, id, fmt, rec},
+  q = Lookup[a, "Question", Missing[]];
+  qh = Lookup[a, "QuestionHeld", Missing[]];
+  choices = Replace[Lookup[a, "Choices", {}], Except[_List] -> {}];
+  headline = Which[
+    StringQ[q], iEXHeadline[q],
+    MatchQ[qh, _HoldComplete], iEXHeadline[StringRiffle[Cases[qh, s_String :> s, Infinity], " "]],
+    True, ""];
+  hasImage = MatchQ[qh, _HoldComplete] || MemberQ[choices, _HoldComplete | _Image];
+  fmt = Lookup[a, "Format", If[Length[choices] > 0, "Choice", "Written"]];
+  content = {q, qh, choices, Lookup[a, "Answer", Missing[]]};
+  hash = iEXContentHash[content];
+  id = subj <> "-" <> hash;
+  rec = <|
+    "Id" -> id, "Subject" -> subj,
+    "Unit" -> Lookup[a, "Unit", Missing[]],
+    "RawUnit" -> Lookup[a, "RawUnit", Lookup[a, "Unit", Missing[]]],
+    "AltUnits" -> Lookup[a, "AltUnits", {}],
+    "Field" -> Lookup[a, "Field", iEXUnitField[subj, Lookup[a, "Unit", Missing[]]]],
+    "Format" -> fmt,
+    "Question" -> q, "QuestionHeld" -> qh,
+    "Choices" -> choices,
+    "Answer" -> Lookup[a, "Answer", Missing[]],
+    "ModelAnswer" -> Lookup[a, "ModelAnswer", Missing[]],
+    "Explanation" -> Lookup[a, "Explanation", Missing[]],
+    "Source" -> Lookup[a, "Source", ""],
+    "Difficulty" -> Lookup[a, "Difficulty", Missing[]],
+    "DifficultySource" -> Lookup[a, "DifficultySource", Missing[]],
+    "ExamHistory" -> Replace[Lookup[a, "ExamHistory", {}], Except[_List] -> {}],
+    "Status" -> Lookup[a, "Status", "Active"],
+    "BaseId" -> Lookup[a, "BaseId", Missing[]],
+    "Origin" -> Lookup[a, "Origin", <||>],
+    "FigureSpec" -> Lookup[a, "FigureSpec", Missing[]],
+    "Headline" -> headline, "HasImage" -> hasImage,
+    "ContentHash" -> hash,
+    "PrivacyLevel" -> Lookup[a, "PrivacyLevel", $SourceVaultExerciseDefaultPrivacyLevel],
+    "Created" -> iEXNowIso[], "Modified" -> iEXNowIso[]|>;
+  rec];
+
+SourceVaultExerciseAdd[subj_String, a_Association] := Module[{rec, existing},
+  rec = iEXNormalizeNewRecord[subj, a];
+  existing = SourceVaultExerciseGet[rec["Id"]];
+  If[AssociationQ[existing],
+    (* 同一内容: 既存を維持し、別単元由来なら AltUnits に追記 *)
+    Module[{alt = Lookup[existing, "AltUnits", {}], ru = Lookup[rec, "RawUnit", Missing[]]},
+      If[IntegerQ[ru] && ru =!= Lookup[existing, "RawUnit", Missing[]] && !MemberQ[alt, ru],
+        SourceVaultExerciseUpdate[existing["Id"], <|"AltUnits" -> Append[alt, ru]|>]];
+      Return[<|"Id" -> existing["Id"], "Existed" -> True|>]]];
+  If[iEXPutRecord[rec] === $Failed, Return[iEXFail["RootUnresolved"]]];
+  <|"Id" -> rec["Id"], "Existed" -> False|>];
+
+SourceVaultExerciseUpdate[id_String, changes_Association] := Module[{rec = SourceVaultExerciseGet[id]},
+  If[!AssociationQ[rec], Return[iEXFail["NotFound", "Id" -> id]]];
+  rec = Join[rec, changes, <|"Modified" -> iEXNowIso[]|>];
+  (* Headline / HasImage は内容変更に追随 *)
+  If[KeyExistsQ[changes, "Question"] || KeyExistsQ[changes, "QuestionHeld"],
+    rec["Headline"] = Which[
+      StringQ[rec["Question"]], iEXHeadline[rec["Question"]],
+      MatchQ[rec["QuestionHeld"], _HoldComplete],
+        iEXHeadline[StringRiffle[Cases[rec["QuestionHeld"], s_String :> s, Infinity], " "]],
+      True, Lookup[rec, "Headline", ""]]];
+  iEXPutRecord[rec];
+  (* レコード全体を返すと、図や数式入り文字列がノートブックに展開されて
+     重く・警告も出るので要約だけ返す (中身は SourceVaultExerciseGet で見る) *)
+  (* 既存レコードの見出しに box 記法が残っていることがあるので、
+     返す前に素のテキストへ落とす (壊れた box 文字列は FE が表示できない) *)
+  <|"Status" -> "OK", "Id" -> id, "Updated" -> Keys[changes],
+    "Headline" -> iEXHeadline[Lookup[rec, "Headline", ""]]|>];
+
+SourceVaultExerciseRetire[id_String] := SourceVaultExerciseUpdate[id, <|"Status" -> "Retired"|>];
+
+SourceVaultExerciseSetDifficulty[id_String, d_?NumericQ, OptionsPattern[{"DifficultySource" -> "owner"}]] :=
+  SourceVaultExerciseUpdate[id, <|"Difficulty" -> d, "DifficultySource" -> OptionValue["DifficultySource"]|>];
+
+SourceVaultExerciseAssignUnit[ids_List, unit_Integer] :=
+  Map[Function[id, SourceVaultExerciseUpdate[id,
+    <|"Unit" -> unit, "Field" -> iEXUnitField[iEXIdSubject[id], unit]|>]["Id"]], ids];
+SourceVaultExerciseAssignUnit[id_String, unit_Integer] := First[SourceVaultExerciseAssignUnit[{id}, unit]];
+
+(* ---- query ---- *)
+
+Options[SourceVaultExercises] = {"Unit" -> All, "Field" -> All, "Format" -> All,
+  "Status" -> "Active", "MaxItems" -> All};
+SourceVaultExercises[subj_String, OptionsPattern[]] := Module[
+  {idx = iEXIndex[subj], rows, u = OptionValue["Unit"], f = OptionValue["Field"],
+   fmt = OptionValue["Format"], st = OptionValue["Status"], mx = OptionValue["MaxItems"]},
+  rows = Values[idx];
+  If[st =!= All, rows = Select[rows, MatchQ[Lookup[#, "Status"], st] &]];
+  If[u =!= All, rows = Select[rows, MatchQ[Lookup[#, "Unit"], u] &]];
+  If[f =!= All, rows = Select[rows, MatchQ[Lookup[#, "Field"], f] &]];
+  If[fmt =!= All, rows = Select[rows, MatchQ[Lookup[#, "Format"], fmt] &]];
+  rows = SortBy[rows, {Replace[Lookup[#, "Unit"], Except[_Integer] -> Infinity] &,
+    Lookup[#, "Created", ""] &, Lookup[#, "Id", ""] &}];
+  If[IntegerQ[mx], Take[rows, UpTo[mx]], rows]];
+
+SourceVaultExercisesView[subj_String, opts : OptionsPattern[SourceVaultExercises]] := Module[
+  {rows = SourceVaultExercises[subj, opts], lim = $SourceVaultExercisesViewLimit},
+  Dataset[KeyTake[#, {"Id", "Unit", "Field", "Format", "Status", "Difficulty", "HasImage", "Headline", "Source"}] & /@
+    Take[rows, UpTo[lim]]]];
+
+Options[SourceVaultExerciseSearch] = {"Status" -> All, "MaxItems" -> All};
+SourceVaultExerciseSearch[subj_String, query_String, OptionsPattern[]] := Module[
+  {idx = iEXIndex[subj], ids, hits, st = OptionValue["Status"], mx = OptionValue["MaxItems"]},
+  ids = Keys[idx];
+  If[st =!= All, ids = Select[ids, MatchQ[Lookup[idx[#], "Status"], st] &]];
+  hits = Select[ids, Function[id, Module[{rec = SourceVaultExerciseGet[id], txt},
+    If[!AssociationQ[rec], False,
+      txt = StringRiffle[Flatten[{
+        Replace[Lookup[rec, "Question", ""], Except[_String] -> ""],
+        Cases[Lookup[rec, "Choices", {}], _String],
+        Replace[Lookup[rec, "Source", ""], Except[_String] -> ""],
+        Replace[Lookup[rec, "Explanation", ""], Except[_String] -> ""],
+        Lookup[rec, "Headline", ""]}], " "];
+      StringContainsQ[txt, query, IgnoreCase -> True]]]]];
+  hits = Lookup[idx, #] & /@ hits;
+  If[IntegerQ[mx], Take[hits, UpTo[mx]], hits]];
+
+(* 同じ問題が「テキスト+図」版と「全体が画像」版で二重に入っていることがあるので、
+   一覧でどちらかが分かるようにする (画像版は段組で字が小さくなる)。 *)
+iEXRecordKind[rec_] := Which[
+  !AssociationQ[rec], "?",
+  !StringQ[Lookup[rec, "Question", Missing[]]] || StringTrim[rec["Question"]] === "",
+   If[MatchQ[Lookup[rec, "QuestionHeld", Missing[]], _HoldComplete], "図のみ", "空"],
+  MatchQ[Lookup[rec, "QuestionHeld", Missing[]], _HoldComplete], "テキスト+図",
+  True, "テキスト"];
+
+SourceVaultExerciseSearchView[subj_String, query_String, opts : OptionsPattern[SourceVaultExerciseSearch]] :=
+  Dataset[Map[Function[e, Join[
+      KeyTake[e, {"Id", "Unit", "Field", "Status"}],
+      <|"Kind" -> iEXRecordKind[SourceVaultExerciseGet[Lookup[e, "Id"]]]|>,
+      KeyTake[e, {"Headline", "Source"}]]],
+    Take[SourceVaultExerciseSearch[subj, query, opts], UpTo[$SourceVaultExercisesViewLimit]]]];
+
+SourceVaultExerciseStats[subj_String] := Module[{rows = Values[iEXIndex[subj]]},
+  <|"Total" -> Length[rows],
+    "ByStatus" -> Counts[Lookup[#, "Status", "?"] & /@ rows],
+    "ByUnit" -> KeySort[Counts[Lookup[#, "Unit", Missing[]] & /@ rows], iEXUnitOrder],
+    "ByField" -> Counts[Replace[Lookup[#, "Field", Missing[]], _Missing -> "(未設定)"] & /@ rows],
+    "ByFormat" -> Counts[Lookup[#, "Format", "?"] & /@ rows],
+    "ByDifficulty" -> KeySort[Counts[Replace[Lookup[#, "Difficulty", Missing[]], _Missing -> "(未推定)"] & /@ rows]]|>];
+
+iEXUnitOrder[a_, b_] := Order[{If[IntegerQ[a], a, Infinity]}, {If[IntegerQ[b], b, Infinity]}] === 1 || a === b;
+
+SourceVaultExerciseUnitAuditView[subj_String] := Module[
+  {info = SourceVaultExerciseSubjectInfo[subj], syl, rows, units},
+  syl = If[AssociationQ[info], Lookup[info, "Syllabus", <||>], <||>];
+  rows = Values[iEXIndex[subj]];
+  units = Union[Join[Select[Keys[syl], IntegerQ], Cases[Lookup[#, "Unit"] & /@ rows, _Integer]]];
+  Dataset[Map[Function[u, <|
+    "単元" -> u,
+    "シラバス題目" -> Lookup[Lookup[syl, u, <||>], "Topic", Missing["シラバスなし"]],
+    "問題数" -> Count[rows, r_ /; Lookup[r, "Unit"] === u],
+    "問題見出し" -> Column[iEXHeadline[Lookup[#, "Headline", ""]] & /@
+      Select[rows, Lookup[#, "Unit"] === u &]]|>], units]]];
+
+(* ============================================================
+   ノートブック ingest (構造抽出・評価なし)
+   ============================================================ *)
+
+iEXCellText[content_] := Which[
+  StringQ[content], content,
+  True, StringJoin[Cases[{content}, s_String :> s, Infinity]]];
+
+(* Input セルの box から excercise*={...} 代入の RHS を held のまま取り出す。
+   複数行セルは BoxData が box の生リスト ({RowBox[...], "", RowBox[...], ...}) に
+   なるため、行ごとに個別へ ToExpression する。
+   注意: ToExpression は未定義シンボル (mathRaster 等) を現在の $Context に作るため、
+   どのカーネル/セッションで ingest しても Global` に束縛されるよう固定する
+   (固定しないと MCP セッション等では Sessions`...`mathRaster になり NB で描画不能)。 *)
+iEXCellExerciseLists[b_] := Block[{$Context = "Global`", $ContextPath = {"System`", "Global`"}},
+  Module[{lines, holds},
+  lines = If[ListQ[b], DeleteCases[b, "" | "\n" | "\[IndentingNewLine]"], {b}];
+  holds = Select[Map[Quiet[ToExpression[#, StandardForm, Hold]] &, lines], Head[#] === Hold &];
+  Catenate @ Map[Function[h, Cases[h,
+    HoldPattern[Set[s_Symbol, l_List]] /;
+      (StringContainsQ[ToLowerCase[SymbolName[Unevaluated[s]]], "cercise" | "xercise"] &&
+       Function[Null, Length[Unevaluated[#]] > 0, HoldAll][l]) :> Hold[l],
+    Infinity]], holds]]];
+
+(* held 問題 1 件 {q, choices, ans, src, expl, ...} を正規化用 Association へ *)
+iEXParseProblem[p_Hold] := Module[{parts, q, choicesH, choices, ans, src, expl, a},
+  If[!iEXHeldListQ[p], Return[$Failed]];
+  parts = iEXHeldParts[p];
+  If[Length[parts] < 2, Return[$Failed]];
+  a = <||>;
+  (* --- question --- *)
+  q = parts[[1]];
+  Which[
+    iEXHeldStringQ[q], a["Question"] = iEXCleanText[iEXHeldString[q]],
+    iEXHeldListQ[q] && AllTrue[iEXHeldParts[q], iEXHeldStringQ],
+      a["Question"] = iEXCleanText[StringRiffle[iEXHeldString /@ iEXHeldParts[q], "\n"]],
+    True, a["QuestionHeld"] = iEXToHoldComplete[q]];
+  (* --- choices --- *)
+  choicesH = parts[[2]];
+  choices = If[iEXHeldListQ[choicesH],
+    Map[Function[c, Which[
+      iEXHeldStringQ[c], iEXCleanText[iEXHeldString[c]],
+      iEXHeldIntegerQ[c], ToString[iEXHeldInteger[c]],
+      True, iEXToHoldComplete[c]]],
+      iEXHeldParts[choicesH]],
+    {}];
+  a["Choices"] = choices;
+  (* --- answer --- *)
+  If[Length[parts] >= 3,
+    Which[
+      iEXHeldIntegerQ[parts[[3]]], a["Answer"] = iEXHeldInteger[parts[[3]]],
+      iEXHeldStringQ[parts[[3]]], a["Answer"] = iEXHeldString[parts[[3]]],
+      True, Null]];
+  If[Length[parts] >= 4 && iEXHeldStringQ[parts[[4]]], a["Source"] = StringTrim[iEXHeldString[parts[[4]]]]];
+  If[Length[parts] >= 5 && iEXHeldStringQ[parts[[5]]], a["Explanation"] = StringTrim[iEXHeldString[parts[[5]]]]];
+  a];
+
+Options[SourceVaultExerciseIngestNotebook] = {
+  "UnitMap" -> Automatic, "SubjectTitle" -> Automatic, "DryRun" -> False,
+  "Status" -> "Active"};
+SourceVaultExerciseIngestNotebook[nbPath_String, subj_String, OptionsPattern[]] := Module[
+  {nb, cells, curUnit = Missing[], inSyllabus = False, syllabusText = "", results = {},
+   skipped = 0, unitMapOpt = OptionValue["UnitMap"], info, ingested = 0, existed = 0,
+   dryRun = TrueQ[OptionValue["DryRun"]], status = OptionValue["Status"], ids = {}, unitCounts = <||>},
+  If[!FileExistsQ[nbPath], Return[iEXFail["FileNotFound", "Path" -> nbPath]]];
+  If[!dryRun && !StringQ[iEXRoot[]], Return[iEXFail["RootUnresolved"]]];
+  nb = Quiet[Block[{$CharacterEncoding = "UTF-8"}, Get[nbPath]]];
+  If[Head[nb] =!= Notebook, Return[iEXFail["NotANotebook", "Path" -> nbPath]]];
+  cells = Cases[nb, Cell[_, _String, ___], Infinity];
+  (* ---- pass 1: シラバス本文と単元見出しの走査 + 問題抽出 ---- *)
+  Scan[Function[cell, Module[{content = cell[[1]], style = cell[[2]], title, us, lists},
+    Switch[style,
+      "Subsubsection",
+        title = iEXCellText[content];
+        inSyllabus = StringContainsQ[title, "シラバス"];
+        us = StringCases[title, "第" ~~ n : DigitCharacter .. ~~ "回" :> ToExpression[n]];
+        curUnit = If[us === {}, Missing[], First[us]],
+      "Text",
+        If[inSyllabus, syllabusText = syllabusText <> " " <> iEXCellText[content]],
+      "Input",
+        If[MatchQ[content, _BoxData],
+          lists = iEXCellExerciseLists[First[content]];
+          Scan[Function[hl, Module[{probs = iEXHeldParts[hl]},
+            If[ListQ[probs],
+              Scan[Function[p, Module[{pa = iEXParseProblem[p]},
+                If[AssociationQ[pa],
+                  AppendTo[results, Join[pa, <|"RawUnit" -> curUnit|>]],
+                  skipped++]]], probs]]]], lists]],
+      _, Null]]], cells];
+  (* ---- 科目登録 / 更新 (ノートブックのシラバスを正とし、Title / UnitMap は維持) ---- *)
+  info = SourceVaultExerciseSubjectInfo[subj];
+  If[!dryRun,
+    Module[{freshSyl = SourceVaultExerciseParseSyllabus[syllabusText]},
+      SourceVaultExerciseRegisterSubject[subj, <|
+        "Title" -> Which[
+          StringQ[OptionValue["SubjectTitle"]], OptionValue["SubjectTitle"],
+          AssociationQ[info], Lookup[info, "Title", subj],
+          True, subj],
+        "Syllabus" -> If[Length[freshSyl] > 0, freshSyl,
+          If[AssociationQ[info], Lookup[info, "Syllabus", <||>], <||>]],
+        "UnitMap" -> Which[
+          AssociationQ[unitMapOpt], unitMapOpt,
+          AssociationQ[info], Lookup[info, "UnitMap", <||>],
+          True, <||>]|>]]];
+  (* ---- 保存 ---- *)
+  Scan[Function[pa, Module[{unit, r},
+    unit = iEXMapUnit[subj, Lookup[pa, "RawUnit", Missing[]]];
+    unitCounts[unit] = Lookup[unitCounts, Key[unit], 0] + 1;
+    If[!dryRun,
+      r = SourceVaultExerciseAdd[subj, Join[pa, <|
+        "Unit" -> unit, "Status" -> status,
+        "Origin" -> <|"Notebook" -> nbPath, "RawUnit" -> Lookup[pa, "RawUnit", Missing[]]|>|>]];
+      If[AssociationQ[r],
+        AppendTo[ids, r["Id"]];
+        If[TrueQ[r["Existed"]], existed++, ingested++]]]]], results];
+  <|"Status" -> "OK", "Subject" -> subj, "Notebook" -> nbPath,
+    "Parsed" -> Length[results], "Ingested" -> ingested, "Existed" -> existed,
+    "SkippedUnparsed" -> skipped, "DryRun" -> dryRun,
+    "Units" -> KeySort[unitCounts, iEXUnitOrder],
+    "SyllabusUnits" -> Length[SourceVaultExerciseParseSyllabus[syllabusText]],
+    "Ids" -> ids|>];
+
+(* ============================================================
+   描画 (FE が必要な経路)
+   ============================================================ *)
+
+iEXEnsureMathRasterShim[] := (
+  If[DownValues[Global`mathRaster] === {} && OwnValues[Global`mathRaster] === {},
+    Global`mathRaster = Function[e, Rasterize[e, ImageResolution -> 200]]];
+  Null);
+
+(* held 合成の構造分解: 元データの多くは mathRaster / Rasterize /
+   ImageResize で「問題文テキスト+図」を一括画像化しており、そのまま列幅へ
+   縮小するとテキストが極小化する。ラッパを剥がし、Inset だけの Graphics は
+   中身の列へ崩して、テキストを実寸で折返し表示できる形にする。
+   実描画プリミティブ (Line/Circle/Raster 等) を含む本物の図は崩さない。 *)
+iEXExplodeHeldContent[hc_HoldComplete] := hc //. {
+   HoldPattern[Global`mathRaster[x_]] :> x,
+   HoldPattern[Rasterize[x_, ___]] :> x,
+   HoldPattern[ImageResize[x_, ___]] :> x,
+   HoldPattern[GraphicsGrid[m_List, ___]] :> Column[Map[Row[#, "  "] &, m]],
+   HoldPattern[GraphicsRow[l_List, ___]] :> Row[l, "  "],
+   HoldPattern[Graphics[prims_, ___]] /;
+     (!FreeQ[prims, _Inset] &&
+      FreeQ[prims, _Line | _Polygon | _Rectangle | _Circle | _Disk |
+        _Arrow | _Point | _Raster | _GraphicsComplex]) :>
+    Column[Cases[prims, Inset[c_, ___] :> c, Infinity]]};
+
+iEXRenderHeld[hc_HoldComplete] := Module[{res},
+  iEXEnsureMathRasterShim[];
+  res = Quiet @ Check[ReleaseHold[iEXExplodeHeldContent[hc]], $Failed];
+  If[res === $Failed, res = Quiet @ Check[ReleaseHold[hc], $Failed]];
+  If[res === $Failed, Style["(描画失敗)", Italic, Gray], res]];
+iEXRenderHeld[x_] := x;
+
+(* 描画済み内容の表示整形:
+   - 文字列 → linear syntax 対応の Style
+   - リスト (held の {文, 画像, ...}) → Column 展開 (生の {…} を出さない)
+   - 画像/Graphics → 幅 maxPt に収める (幅超過でブロック全体が縮小され
+     文字が極小化するのを防ぐ) *)
+(* fill が True なら与えられた幅いっぱいまで引き伸ばす。
+   元ノートブックで文字ごと 1 枚の画像に焼き込まれた問題は、
+   拡大でしか字を大きくできないため段抜き表示で使う。 *)
+iEXFitContent[expr_, maxPt_ : 225, fill_ : False] := Which[
+  ImageQ[expr],
+   Image[expr, ImageSize -> If[TrueQ[fill], maxPt, Min[ImageDimensions[expr][[1]], maxPt]]],
+  True, Module[{img = Quiet @ Check[
+      iEXWithGlobalContext[Rasterize[expr, ImageResolution -> 300]], $Failed], wpt},
+    If[img === $Failed, expr,
+     wpt = ImageDimensions[img][[1]]*72./300;
+     Image[img, ImageSize -> If[TrueQ[fill], maxPt, Min[wpt, maxPt]]]]]];
+
+(* 表示モデル上の自然幅 (pt): これが列幅を大きく超える問題は縮小されて
+   中の文字が読めなくなるため、段抜き (全幅) で組む対象にする。 *)
+iEXContentNaturalWidth[expr_] := Module[{ws},
+  ws = Cases[{expr},
+    e_ /; ImageQ[e] :> N[ImageDimensions[e][[1]]], {0, Infinity}];
+  ws = Join[ws, Cases[{expr},
+    g_Graphics :> Quiet @ Check[
+      ImageDimensions[iEXWithGlobalContext[Rasterize[g, ImageResolution -> 150]]][[1]]*72./150,
+      0.], {0, Infinity}]];
+  Max[Append[ws, 0.]]];
+
+Options[iEXWideProblemQ] = {"WideThreshold" -> 480};
+iEXWideProblemQ[rec_Association, OptionsPattern[]] := Module[{h},
+  h = Lookup[rec, "QuestionHeld", Missing[]];
+  If[!MatchQ[h, _HoldComplete], Return[False]];
+  Quiet @ Check[
+    iEXContentNaturalWidth[iEXRenderHeld[h]] > OptionValue["WideThreshold"], False]];
+
+(* 表示専用の本文整形 (ingest 側 iEXCleanText とは分離: hash を変えない):
+   - セル由来の \[IndentingNewLine] は「∵」風グリフ+字下げとして生表示され
+     文を分断するため除去して結合する
+   - 空行 (連続改行) を 1 つに潰し、行頭の空白を除く *)
+(* 文章の流し直し: 元データの改行のうち、文の途中で折れているもの (前の行が
+   句点等で終わらず、次の行が見出し記号で始まらない) は継ぎ、文の区切りだけ
+   改行として残す。桁揃えされた行はそのまま行として保つ。 *)
+iEXReflow[t_String] := Module[{lines, out = {}},
+  lines = StringTrim /@ StringSplit[t, "\n"];
+  lines = DeleteCases[lines, ""];
+  Scan[Function[l,
+    Which[
+     out === {}, AppendTo[out, l],
+     iEXAlignedLineQ[l] || iEXAlignedLineQ[Last[out]] ||
+      StringMatchQ[Last[out], RegularExpression[".*[。．\\.:：;；!！?？」』）)】］]$"]] ||
+      StringMatchQ[l, RegularExpression["^[(（\\[［【・\\-→表図注].*"]],
+      AppendTo[out, l],
+     True, out[[-1]] = Last[out] <>
+       (* 英数字どうしを継ぐときだけ空白を入れる (日本語は詰めて継ぐ) *)
+       If[StringMatchQ[Last[out], RegularExpression[".*[A-Za-z0-9,;)]$"]] &&
+          StringMatchQ[l, RegularExpression["^[A-Za-z0-9(].*"]], " ", ""] <> l]],
+   lines];
+  StringRiffle[out, "\n"]];
+
+(* <br> は作問者が明示した改行なので、流し直しで詰めてはいけない。
+   一旦専用の印に退避してから reflow し、最後に改行へ戻す。
+   罠: この印は iEXTidyText の内部専用。選択肢の区切りに使う
+   $iEXBreakMark と同じ名前にすると、後から代入した方で上書きされ、
+   区切りが reflow 後に "\n" へ潰されて box 経路で改行が消える。 *)
+$iEXTidyBreakMark = FromCharacterCode[63487];
+
+iEXTidyText[s_String] := Module[{t},
+  t = StringReplace[s, {"\r" -> "", "<br>" -> $iEXTidyBreakMark,
+     "&lt;" -> "<", "&gt;" -> ">", "&quot;" -> "\"", "&nbsp;" -> " ", "&amp;" -> "&"}];
+  t = StringReplace[t, "\[IndentingNewLine]" -> ""];
+  If[iEXPreformattedQ[t],
+   (* 桁揃えが意味を持つので字下げは保持し、タブだけ空白に正規化する *)
+   t = StringReplace[t, "\t" -> "    "];
+   t = StringReplace[t, RegularExpression["\\n{3,}"] -> "\n\n"],
+   t = iEXReflow[t]];
+  t = StringReplace[t, $iEXTidyBreakMark -> "\n"];
+  StringTrim[t]];
+
+(* Text[…]/Style[…] を素の文字列へ、隣接する文字列片は 1 段落へ結合する
+   (元データは 1 文を複数片に割っており、行ブロックが分かれると不自然に折れる) *)
+iEXNormPiece[x_] := Replace[x, {
+   Text[s_String, ___] :> s, Style[s_String, ___] :> s,
+   Text[Style[s_String, ___], ___] :> s, Style[Text[s_String, ___], ___] :> s}];
+
+(* 素の数値は元データに残ったレイアウト指定の断片 (ImageSize の値など) で
+   本文ではないので落とす *)
+iEXCoalesce[items_List] := Map[
+   If[MatchQ[#, {__String}], StringJoin[#], First[#]] &,
+   Split[Map[iEXNormPiece, DeleteCases[items, _?NumericQ]], StringQ[#1] && StringQ[#2] &]];
+
+iEXContentDisplay[expr_, fs_ : 9, maxPt_ : 225, fill_ : False] := Module[{ff = iEXFont[]},
+  Which[
+   StringQ[expr], iEXStyledString[iEXTidyText[expr], FontFamily -> ff, FontSize -> fs],
+   ListQ[expr], Column[Map[iEXContentDisplay[#, fs, maxPt, fill] &, iEXCoalesce[expr]]],
+   MatchQ[expr, Text[_String, ___] | Style[_String, ___]],
+     iEXStyledString[iEXTidyText[First[expr]], FontFamily -> ff, FontSize -> fs],
+   (* 文字列以外を包む Style / Text は中身に降りる。元データの FontSize を
+      引き継ぐと本文より小さく組まれてしまうため、こちらの指定を使う。 *)
+   MatchQ[expr, Style[Except[_String], ___] | Text[Except[_String], ___]],
+     iEXContentDisplay[First[expr], fs, maxPt, fill],
+   MatchQ[expr, Pane[_, ___] | Framed[_, ___] | Item[_, ___]],
+     iEXContentDisplay[First[expr], fs, maxPt, fill],
+   MatchQ[expr, Column[_List, ___]],
+     Column[Map[iEXContentDisplay[#, fs, maxPt, fill] &, iEXCoalesce[First[expr]]]],
+   MatchQ[expr, Row[_List, ___]],
+     Row[Map[iEXContentDisplay[#, fs, maxPt, fill] &, iEXCoalesce[First[expr]]], "  "],
+   (* 補集合の上線 (iEXOverBarDisp が作る Grid)。この分岐が無いと下の
+      iEXFitContent に落ち、本文の書体・大きさが当たらないまま
+      ノートブック既定の書体で組まれて上線つきの文字だけ浮く。
+      Dividers の形で自前の上線 Grid だけを見分ける (元データの表は対象外)。 *)
+   MatchQ[expr, Grid[_, ___, Dividers -> {None, {1 -> _}}, ___]],
+     Style[expr, FontFamily -> ff, FontSize -> fs],
+   True, iEXFitContent[expr, maxPt, fill]]];
+
+(* 選択肢文字列が元データ側で "(1) ..." と番号入りのとき、付与番号と重複させない *)
+(* 先頭に自分の番号が重複して付いている場合だけ落とす。
+   選択肢そのものが数値のとき (「(1) 1」など) は消さない。 *)
+iEXChoiceText[c_String, ix_Integer] := Module[
+  {t = iEXTidyText[c], n = ToString[ix], rest},
+  If[StringStartsQ[t, "(" <> n <> ")"],
+   rest = StringTrim[StringDrop[t, StringLength["(" <> n <> ")"]]];
+   If[rest === "", t, rest],
+   t]];
+
+(* 選択肢が「自分の番号そのもの」だけかどうか。
+   ただしこれだけでは省いてよいか決まらない (1,2,3,4 が解答の値そのもの
+   である問題があるため)。実際に省くのは、その番号の中身が問題文・表・図の
+   側にあると確認できる場合だけ (iEXHideChoicesQ)。 *)
+iEXRedundantChoicesQ[chs_List] := chs =!= {} &&
+  AllTrue[Range[Length[chs]], Function[i, Module[{t},
+    StringQ[chs[[i]]] &&
+    (t = StringTrim[iEXCleanText[chs[[i]]]];
+     MemberQ[{ToString[i], "(" <> ToString[i] <> ")", "（" <> ToString[i] <> "）"}, t])]]];
+
+(* 選択肢の見出し (x) かどうか。直前が英数字なら push(a) や f(1) のような
+   本文中の括弧なので見出しとみなさない (句点や空白、行頭の直後は見出し)。 *)
+iEXMarkerPresentQ[s_String, m_String] := StringContainsQ[s,
+  RegularExpression["(?<![A-Za-z0-9_])[(\\x{FF08}]" <> m <> "[)\\x{FF09}]"]];
+
+(* 問題文が (1)...(n) の見出しで選択肢を列挙しているか *)
+iEXTextEnumeratesQ[qtext_String, n_Integer] := n >= 2 &&
+  AllTrue[Range[n], iEXMarkerPresentQ[qtext, ToString[#]] &];
+
+(* 問題文が (a)...(d) の見出しで選択肢を列挙しているか *)
+iEXTextEnumeratesLettersQ[qtext_String, n_Integer] := n >= 2 &&
+  AllTrue[Range[n], iEXMarkerPresentQ[qtext, FromCharacterCode[96 + #]] &];
+
+(* 図中の表が 1..n を第 1 列に持つか (1-21/1-22 のような表参照問題) *)
+iEXGridEnumeratesQ[content_, n_Integer] := n >= 2 && AnyTrue[
+  Cases[{content}, _Grid, {0, Infinity}],
+  Function[g, Module[{rows = First[g], col},
+    ListQ[rows] && Length[rows] >= n &&
+    (col = Map[If[ListQ[#] && # =!= {}, First[#], Null] &, rows];
+     AllTrue[Range[n], MemberQ[col, #] || MemberQ[col, ToString[#]] &])]]];
+
+(* 図・数式側の文字列が (1)...(n) の見出しで選択肢を列挙しているか。
+   述語論理式のように選択肢が box (linear syntax) で持たれている問題は
+   Grid ではないので iEXGridEnumeratesQ では拾えない。 *)
+iEXContentEnumeratesQ[content_, n_Integer] := n >= 2 &&
+  Module[{txt = StringRiffle[Cases[{content}, s_String :> s, {0, Infinity}], " "]},
+   StringLength[txt] > 0 && iEXTextEnumeratesQ[txt, n]];
+
+(* 問題文が (1)..(m) を見出しとして持つときの m。選択肢欄が空の問題
+   (列挙が問題文側にある) でも数えられるよう、選択肢の数には依存しない。
+   「式(1)」のように直前が空白でないものは見出しと見なさない。 *)
+(* iEXMarkerPresentQ は「直前が英数字でない」なので「式(1)と式(2)より」も
+   拾う。改行を入れる判断はそれでは緩すぎるため、ここだけ
+   「行頭または空白の直後」に限定する。 *)
+iEXEnumHeadingQ[s_String, m_String] := StringContainsQ[s,
+  RegularExpression["(?:^|[\\s\\x{3000}])[(\\x{FF08}]" <> m <> "[)\\x{FF09}]"]];
+
+iEXEnumeratedCount[s_String] := Module[{k = 1},
+  While[k <= 12 && iEXEnumHeadingQ[s, ToString[k]], k++];
+  If[k - 1 >= 2, k - 1, 0]];
+
+(* 図・数式側 (held content) にある列挙の数。述語論理のように選択肢が
+   box 文字列の断片として持たれている問題は、問題文側の列挙数は 0 になる。
+   断片をまたいで数えるため、空白で連結してから数える。 *)
+iEXContentEnumeratedCount[content_] := If[MissingQ[content], 0,
+  iEXEnumeratedCount[
+   StringRiffle[Cases[{content}, s_String :> s, {0, Infinity}], " "]]];
+
+(* content の列挙を (k) ごとに分ける。
+   **文字列に区切り文字を埋め込む方式は使えない**: iEXCoalesce が隣接文字列を
+   区切りなしで StringJoin するため下流で潰れる。構造として分割し、各片を
+   包んで文字列の連なりから外す (Coalesce の結合対象にならない)。
+   包む head は **iEXNormPiece が剥がさないもの** でなければならない
+   (Text/Style は剥がされて文字列に戻り、また結合される)。Row を使う。
+   Column の要素になるので 1 片 1 行に組まれる。 *)
+iEXSplitEnumPieces[s_String, n_Integer] :=
+  Map[Row[{#}] &, Select[StringSplit[iEXBreakEnumerations[s, n], $iEXBreakMark],
+    StringTrim[#] =!= "" &]];
+
+iEXBreakEnumerationsInContent[content_, n_Integer] := With[
+  {split = Function[x, If[StringQ[x], iEXSplitEnumPieces[x, n], {x}]]},
+  Which[
+   MatchQ[content, Column[_List, ___]],
+    Column[Flatten[Map[split, First[content]]], Sequence @@ Rest[content]],
+   ListQ[content], Flatten[Map[split, content]],
+   StringQ[content], Column[iEXSplitEnumPieces[content, n]],
+   True, content]];
+
+(* 列挙された選択肢が 1 段落に流れて読みにくいので、(k) の直前で改行する。
+   すでに行頭にある (k) はそのまま。
+   罠: StringReplace の "$1" 後方参照は RuleDelayed (:>) では展開されない。
+   正規表現を使わず WL の文字列パターンで前後を捕まえる。 *)
+iEXBreakEnumerations[s_String, n_Integer] := Module[{t = s},
+  If[n < 2, Return[s]];
+  Do[Module[{mk = ToString[k], mark},
+    mark = ("(" ~~ mk ~~ ")") | ("（" ~~ mk ~~ "）");
+    t = StringReplace[t,
+      (c : Except["\n" | $iEXBreakMark]) ~~ ((" " | "\t" | "　") ...) ~~ (m : mark) :>
+        c <> $iEXBreakMark <> m]], {k, n}];
+  StringTrim[t]];
+
+(* 問題側が図を n 個並べたものか (図に番号を振って選択肢欄を省くケース) *)
+iEXFigureListItems[content_] := Module[{items},
+  items = Which[
+    ListQ[content], content,
+    MatchQ[content, Column[_List, ___]], First[content],
+    True, {}];
+  DeleteCases[items, _?(StringQ[#] && StringTrim[#] === "" &) | _?NumericQ]];
+
+iEXFigureListQ[content_, n_Integer] := Module[{items = iEXFigureListItems[content]},
+  n >= 2 && Length[items] === n &&
+  AllTrue[items, (ImageQ[#] || MatchQ[#, _Graphics | _Grid | _GraphicsBox]) &]];
+
+(* 選択肢が a,b,c,d の並びのとき: 解答は番号で書かせるので、
+   問題文中の (a)(b)(c)(d) を (1)(2)(3)(4) に振り直し、選択肢欄は省く。 *)
+iEXLetterChoicesQ[chs_List] := chs =!= {} && Length[chs] <= 5 &&
+  AllTrue[Range[Length[chs]], Function[i, Module[{t, L},
+    L = FromCharacterCode[96 + i];
+    StringQ[chs[[i]]] &&
+    (t = StringTrim[iEXCleanText[chs[[i]]]];
+     MemberQ[{L, "(" <> L <> ")", "（" <> L <> "）",
+       ToUpperCase[L], "(" <> ToUpperCase[L] <> ")"}, t])]]];
+
+(* 見出しの (a)(b)... だけを番号に振り替える (push(a) のような本文は変えない) *)
+iEXRenumberLetterMarkers[s_String, n_Integer] := StringReplace[s,
+  Table[With[{L = FromCharacterCode[96 + i], num = ToString[i]},
+     RegularExpression["(?<![A-Za-z0-9_])[(\\x{FF08}]" <> L <> "[)\\x{FF09}]"] ->
+       "(" <> num <> ")"], {i, n}]];
+
+iEXRenderContent[rec_Association] := Which[
+  StringQ[Lookup[rec, "Question", Missing[]]], rec["Question"],
+  MatchQ[Lookup[rec, "QuestionHeld", Missing[]], _HoldComplete], iEXRenderHeld[rec["QuestionHeld"]],
+  True, "(内容なし)"];
+
+(* 構造診断: レイアウトが崩れるときに中身の並びを確認する *)
+iEXPartPreview[p_] := Which[
+  StringQ[p], StringTake[iEXStripLinear[p], UpTo[70]],
+  ImageQ[p], "Image " <> ToString[ImageDimensions[p]],
+  MatchQ[p, _Graphics], "Graphics",
+  MatchQ[p, _Grid], "Grid " <> ToString[Dimensions[First[p]]],
+  True, StringTake[ToString[Short[p, 1], InputForm], UpTo[70]]];
+
+SourceVaultExerciseStructure[id_String] := Module[{rec, q, content, parts},
+  rec = SourceVaultExerciseGet[id];
+  If[!AssociationQ[rec], Return[iEXFail["NotFound", "Id" -> id]]];
+  q = Lookup[rec, "Question", Missing[]];
+  content = If[MatchQ[Lookup[rec, "QuestionHeld", Missing[]], _HoldComplete],
+    iEXRenderHeld[rec["QuestionHeld"]], Missing[]];
+  parts = Which[
+    ListQ[content], content,
+    MatchQ[content, Column[_List, ___]], First[content],
+    MissingQ[content], {},
+    True, {content}];
+  <|"Id" -> id,
+    "QuestionKind" -> If[StringQ[q], "String", ToString[Head[q]]],
+    "QuestionPreview" -> If[StringQ[q], StringTake[iEXStripLinear[q], UpTo[70]], ""],
+    "ContentHead" -> ToString[Head[content]],
+    "PartCount" -> Length[parts],
+    "Parts" -> Map[<|"Head" -> ToString[Head[#]], "Preview" -> iEXPartPreview[#]|> &, parts],
+    "ChoiceHeads" -> Map[ToString[Head[#]] &, Lookup[rec, "Choices", {}]]|>];
+
+SourceVaultExerciseStructureView[id_String] := Module[
+  {s = SourceVaultExerciseStructure[id]},
+  If[!AssociationQ[s], s,
+   Column[{Dataset[KeyDrop[s, "Parts"]], Dataset[s["Parts"]]}]]];
+
+SourceVaultExerciseView[id_String] := Module[{rec = SourceVaultExerciseGet[id], q, chs},
+  If[!AssociationQ[rec], Return[rec]];
+  q = iEXRenderContent[rec];
+  chs = MapIndexed[Function[{c, ix}, Row[{"(", First[ix], ") ",
+    If[StringQ[c], iEXStyledString[c, FontSize -> 11], iEXContentDisplay[iEXRenderHeld[c], 11]]}]],
+    Lookup[rec, "Choices", {}]];
+  Column[Flatten[{
+    Style[Row[{id, "  [", Lookup[rec, "Field", "-"], " / 第", Lookup[rec, "Unit", "-"], "回 / ",
+      Lookup[rec, "Status", "-"], "]"}], Bold, 11],
+    iEXContentDisplay[q, 12],
+    chs,
+    Style[Row[{"正解: ", Lookup[rec, "Answer", "-"], "   難易度: ", Lookup[rec, "Difficulty", "-"]}], Darker[Green]],
+    Style[Row[{"出典: ", Lookup[rec, "Source", "-"]}], Gray, 9],
+    If[StringQ[Lookup[rec, "Explanation", Missing[]]],
+      Style[Row[{"解説: ", rec["Explanation"]}], Gray, 9], Nothing]}], Spacings -> 1]];
+
+(* 問題ブロック (問題用紙用): 【g-n】 + 問題文 + 選択肢。
+   各行を TextGrid の行として ItemSize 幅で折り返し、画像は幅キャップ。
+   これでブロック自然幅が揃い、Rasterize 時の縮小率 (=文字サイズ) が均一になる。 *)
+(* 問題文を差し替えたときに、元の文章要素を落として図だけ残す *)
+iEXContentFiguresOnly[content_] := Module[{drop},
+  drop = _String | _?NumericQ | Text[_String, ___] | Style[_String, ___];
+  Which[
+   ListQ[content], With[{k = DeleteCases[content, drop]}, If[k === {}, Missing[], k]],
+   MatchQ[content, Column[_List, ___]],
+    With[{k = DeleteCases[First[content], drop]},
+     If[k === {}, Missing[], Column[k]]],
+   MatchQ[content, drop], Missing[],
+   True, content]];
+
+(* 番号つきの並び。4 個なら 2x2 グリッド、それ以外は 1 列。 *)
+iEXNumberedBlock[items_List, ff_, fs_, maxPt_, fill_] := Module[{cells},
+  cells = MapIndexed[Function[{c, ix},
+     Row[{Style["(" <> ToString[First[ix]] <> ") ", FontFamily -> ff, FontSize -> fs],
+       iEXContentDisplay[iEXRenderHeld[c], fs, maxPt, fill]}]], items];
+  If[Length[cells] === 4,
+   Grid[Partition[cells, 2], Alignment -> {Left, Center}, Spacings -> {0.6, 0.4}],
+   Column[cells, Alignment -> Left, Spacings -> 0.4]]];
+
+iEXProblemBlock[label_String, rec_Association, colWidth_ : 25, maxImgPt_ : 225,
+  fill_ : False] :=
+ (* 1 行に入る全角文字数を渡して、禁則処理つきの折返しを自前で行う。
+    ItemSize の 1 単位 ≈ 10pt、本文は 9pt なので colWidth*10/9 が目安。 *)
+ Block[{$iEXWrapBudget = Floor[colWidth*10/9*0.95]},
+ Module[
+  {ff = iEXFont[], q, qtext, rows, chs, n, letterQ, numericQ, content, figureQ, hideQ},
+  q = Lookup[rec, "Question", Missing[]];
+  chs = Lookup[rec, "Choices", {}];
+  n = Length[chs];
+  numericQ = iEXRedundantChoicesQ[chs];
+  qtext = Which[
+    StringQ[Lookup[rec, "QuestionOverride", Missing[]]],
+     iEXTidyText[rec["QuestionOverride"]],
+    StringQ[q], iEXTidyText[q],
+    True, ""];
+  (* 選択肢が a,b,c,d でも、問題文が (a)(b)(c)(d) の見出しで列挙している場合だけ
+     「中身は問題文側」とみなす。push(a) のようにデータが文字の問題は対象外。 *)
+  letterQ = iEXLetterChoicesQ[chs] && iEXTextEnumeratesLettersQ[qtext, n];
+  If[letterQ, qtext = iEXRenumberLetterMarkers[qtext, n]];
+  content = If[MatchQ[Lookup[rec, "QuestionHeld", Missing[]], _HoldComplete],
+    iEXRenderHeld[rec["QuestionHeld"]], Missing[]];
+  (* 問題文を差し替えたときは、元の文章部分は出さず図だけ残す *)
+  If[StringQ[Lookup[rec, "QuestionOverride", Missing[]]] && !MissingQ[content],
+   content = iEXContentFiguresOnly[content]];
+  (* 図が n 個並んでいて選択肢が番号だけなら、図の側に番号を振る *)
+  figureQ = numericQ && !MissingQ[content] && iEXFigureListQ[content, n];
+  (* 選択肢欄を省いてよいのは、その中身が問題文・表・図の側にあると
+     確認できるときだけ。1,2,3,4 が解答の値そのものである問題を消さない。 *)
+  hideQ = TrueQ[Lookup[rec, "HideChoices", False]] || letterQ || figureQ ||
+    (numericQ && (iEXTextEnumeratesQ[qtext, n] || iEXGridEnumeratesQ[content, n] ||
+       iEXContentEnumeratesQ[content, n]));
+  (* 選択肢が列挙されている場合は (1)(2)… の前で改行して読ませる。
+     列挙は問題文側にあるとは限らない。述語論理のように box 文字列の
+     断片として図・数式側に持たれている問題もあるので両方見る。
+     選択肢欄が空の問題は n=0 なので、列挙数は中身から数える。 *)
+  Module[{en = iEXEnumeratedCount[qtext]},
+   If[en >= 2, qtext = iEXBreakEnumerations[qtext, en]]];
+  If[!MissingQ[content],
+   Module[{cn = iEXContentEnumeratedCount[content]},
+    If[cn >= 2, content = iEXBreakEnumerationsInContent[content, cn]]]];
+  rows = {{iEXStyledString["【" <> label <> "】 " <> qtext, FontFamily -> ff, FontSize -> 9]}};
+  If[!MissingQ[content],
+   AppendTo[rows, {If[figureQ,
+      iEXNumberedBlock[iEXFigureListItems[content], ff, 9, maxImgPt, fill],
+      iEXContentDisplay[content, 9, maxImgPt, fill]]}]];
+  (* 原問に手を入れずに条件を補うための注記 (例: 平均実行時間で考える旨) *)
+  If[StringQ[Lookup[rec, "QuestionNote", Missing[]]],
+   AppendTo[rows, {iEXStyledString[iEXTidyText[rec["QuestionNote"]],
+      FontFamily -> ff, FontSize -> 9]}]];
+  Which[
+   hideQ, Null,
+   chs === {},
+    AppendTo[rows, {Style["(解答用紙の記述欄に解答すること)", FontFamily -> ff, FontSize -> 8, Gray]}],
+   (* 図の選択肢は 1 行 1 枚だと縦に伸びすぎるので 2x2 グリッドで組む *)
+   n === 4 && AllTrue[chs, MatchQ[#, _HoldComplete] &],
+    AppendTo[rows, {iEXNumberedBlock[chs, ff, 9, 225, False]}],
+   True,
+    Scan[Function[ix, Module[{c = chs[[ix]]},
+      AppendTo[rows, {If[StringQ[c],
+        iEXStyledString["(" <> ToString[ix] <> ") " <> iEXChoiceText[c, ix], FontFamily -> ff, FontSize -> 9],
+        Row[{Style["(" <> ToString[ix] <> ") ", FontFamily -> ff, FontSize -> 9],
+          iEXContentDisplay[iEXRenderHeld[c], 9]}]]}]]],
+      Range[n]]];
+  TextGrid[rows, ItemSize -> {colWidth, 0}, Alignment -> Left]]];
+
+(* ============================================================
+   exam 構成
+   ============================================================ *)
+
+Options[SourceVaultExamSelectProblems] = {"Units" -> All, "PerUnit" -> 2,
+  "Difficulty" -> All, "RandomSeed" -> Automatic, "Exclude" -> {}, "Status" -> "Active",
+  "SkipIncomplete" -> True};
+SourceVaultExamSelectProblems[subj_String, OptionsPattern[]] := Module[
+  {rows, units, per = OptionValue["PerUnit"], diff = OptionValue["Difficulty"],
+   seed = OptionValue["RandomSeed"], excl = OptionValue["Exclude"], pick},
+  rows = SourceVaultExercises[subj, "Status" -> OptionValue["Status"]];
+  rows = Select[rows, !MemberQ[excl, Lookup[#, "Id"]] &];
+  (* 問題文・選択肢・正解が欠けているレコードは出題候補から外す *)
+  If[TrueQ[OptionValue["SkipIncomplete"]],
+   rows = Select[rows, iEXRecordIssues[SourceVaultExerciseGet[Lookup[#, "Id"]]] === {} &]];
+  If[diff =!= All && MatchQ[diff, {_?NumericQ, _?NumericQ}],
+    rows = Select[rows, Module[{d = Lookup[#, "Difficulty", Missing[]]},
+      !NumericQ[d] || (diff[[1]] <= d <= diff[[2]])] &]];
+  units = If[OptionValue["Units"] === All,
+    Union[Cases[Lookup[#, "Unit"] & /@ rows, _Integer]], OptionValue["Units"]];
+  pick = Function[{u, n}, Module[{cand = Select[rows, Lookup[#, "Unit"] === u &]},
+    Lookup[#, "Id"] & /@ If[Length[cand] <= n, cand,
+      If[seed === Automatic, Take[cand, n],
+        BlockRandom[SeedRandom[seed + u]; RandomSample[cand, n]]]]]];
+  Flatten[Map[Function[u, pick[u, If[AssociationQ[per], Lookup[per, u, 0], per]]], units]]];
+
+Options[SourceVaultExamCompose] = {};
+SourceVaultExamCompose[subj_String, spec_Association] := Module[
+  {groups, recs, missing, examId, points, defPts, exam, layout, info},
+  groups = Replace[Lookup[spec, "Groups", {}], Except[_List] -> {}];
+  groups = MapIndexed[Function[{g, ix}, Which[
+    AssociationQ[g], <|"Label" -> Lookup[g, "Label", First[ix]], "Problems" -> Lookup[g, "Problems", {}]|>,
+    ListQ[g], <|"Label" -> First[ix], "Problems" -> g|>,
+    True, <|"Label" -> First[ix], "Problems" -> {}|>]], groups];
+  If[groups === {} || AnyTrue[groups, Lookup[#, "Problems", {}] === {} &],
+    Return[iEXFail["EmptyGroups"]]];
+  recs = Association[Map[# -> SourceVaultExerciseGet[#] &,
+    Flatten[Lookup[#, "Problems"] & /@ groups]]];
+  missing = Keys[Select[recs, !AssociationQ[#] &]];
+  If[missing =!= {}, Return[iEXFail["ProblemsNotFound", "Ids" -> missing]]];
+  info = SourceVaultExerciseSubjectInfo[subj];
+  examId = If[KeyExistsQ[spec, "ExamId"], spec["ExamId"],
+    subj <> "-" <> ToString[Lookup[spec, "Year", DateValue[Now, "Year"]]] <> "-" <>
+      ToString[Length[Quiet[SourceVaultExamList[subj]]] + 1]];
+  defPts = Lookup[spec, "DefaultPoints", 3];
+  points = Association[Flatten[Map[Function[g,
+    MapIndexed[Function[{id, ix},
+      (ToString[g["Label"]] <> "-" <> ToString[First[ix]]) -> defPts], g["Problems"]]], groups]]];
+  If[AssociationQ[Lookup[spec, "Points", Missing[]]],
+    points = Join[points, KeyMap[ToString, spec["Points"]]]];
+  exam = <|
+    "ExamId" -> examId, "Subject" -> subj,
+    "Title" -> Lookup[spec, "Title", If[AssociationQ[info], Lookup[info, "Title", subj], subj]],
+    "ExamName" -> Lookup[spec, "ExamName", "定期試験"],
+    "Year" -> Lookup[spec, "Year", DateValue[Now, "Year"]],
+    "DateSpec" -> Lookup[spec, "DateSpec", {DateValue[Now, "Year"], 1, 1, "月", 1}],
+    "Duration" -> Lookup[spec, "Duration", 60],
+    "Allowed" -> Lookup[spec, "Allowed", "自分のサマリー"],
+    "Groups" -> groups, "Points" -> points,
+    "Created" -> iEXNowIso[]|>;
+  layout = iEXComputeSheetLayout[exam, recs];
+  exam["SheetLayout"] = layout;
+  If[!StringQ[iEXExamPath[examId]], Return[iEXFail["RootUnresolved"]]];
+  iEXWriteWXF[iEXExamPath[examId], exam];
+  exam];
+
+SourceVaultExamGet[examId_String] := With[{p = iEXExamPath[examId]},
+  If[!StringQ[p], Missing["RootUnresolved"], iEXReadWXF[p]]];
+
+SourceVaultExamList[] := Module[{d = iEXExamDir[], files},
+  If[!StringQ[d] || !DirectoryQ[d], Return[{}]];
+  files = Select[FileNames["*.wxf", d], !StringEndsQ[#, "-grading.wxf"] &];
+  Select[Map[iEXReadWXF, files], AssociationQ]];
+SourceVaultExamList[subj_String] := Select[SourceVaultExamList[], Lookup[#, "Subject"] === subj &];
+
+iEXSaveExam[exam_Association] := iEXWriteWXF[iEXExamPath[exam["ExamId"]], exam];
+
+iEXExamKeys[exam_Association] := Flatten[Map[Function[g,
+  MapIndexed[Function[{id, ix}, ToString[g["Label"]] <> "-" <> ToString[First[ix]]], g["Problems"]]],
+  exam["Groups"]]];
+
+iEXExamProblemIds[exam_Association] := Flatten[Lookup[#, "Problems"] & /@ exam["Groups"]];
+
+(* ---- 用紙に印刷する問題番号 ----
+   内部のスロットキー ("1-4" 等) は配点・解答キー・採点の切出し座標が
+   すべて依存しているので変えない。**表示だけ**を切り替える。
+   "Continuous" なら大問をまたいで 1..N の通し番号、"Group" なら従来どおり。
+   問題用紙と解答用紙が必ず同じ番号になるよう、設定は exam レコードに持つ。 *)
+iEXContinuousNumberingQ[exam_] :=
+  AssociationQ[exam] && ToString[Lookup[exam, "Numbering", "Group"]] === "Continuous";
+
+iEXDisplayNumbers[exam_Association] := Module[{keys = iEXExamKeys[exam]},
+  If[iEXContinuousNumberingQ[exam],
+   Association[MapIndexed[#1 -> ToString[First[#2]] &, keys]],
+   (* 従来: 問題用紙は "1-4"、解答用紙は大問内の番号 "4" *)
+   Association[Map[# -> # &, keys]]]];
+
+(* 解答用紙のセルに書く番号 (従来は大問内の番号) *)
+iEXSheetNumbers[exam_Association] := Module[{keys = iEXExamKeys[exam]},
+  If[iEXContinuousNumberingQ[exam],
+   Association[MapIndexed[#1 -> ToString[First[#2]] &, keys]],
+   Association[Map[# -> Last[StringSplit[#, "-"]] &, keys]]]];
+
+SourceVaultExamSetNumbering[examId_String, mode_String] := Module[
+  {exam = SourceVaultExamGet[examId]},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  If[!MemberQ[{"Continuous", "Group"}, mode],
+   Return[iEXFail["BadNumbering", "Mode" -> mode,
+     "Hint" -> "\"Continuous\" (通し番号 1..N) か \"Group\" (大問ごと) を指定する。"]]];
+  exam["Numbering"] = mode;
+  iEXSaveExam[exam];
+  <|"Status" -> "OK", "ExamId" -> examId, "Numbering" -> mode,
+    "Sample" -> Take[Normal[iEXDisplayNumbers[exam]], UpTo[3]]|>];
+
+(* スロットキーと印刷される番号の対応 (採点時の読み替え用) *)
+SourceVaultExamNumbering[examId_String] := Module[{exam = SourceVaultExamGet[examId], disp},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  disp = iEXDisplayNumbers[exam];
+  Map[Function[key, <|"Slot" -> key, "Printed" -> disp[key],
+     "Points" -> Lookup[Lookup[exam, "Points", <||>], key, Missing[]]|>],
+   iEXExamKeys[exam]]];
+
+SourceVaultExamNumberingView[examId_String] := Module[
+  {rows = SourceVaultExamNumbering[examId]},
+  If[!ListQ[rows], rows, Dataset[rows]]];
+
+SourceVaultExamSetPoints[examId_String, weights_] := Module[
+  {exam = SourceVaultExamGet[examId], keys, pts},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  keys = iEXExamKeys[exam];
+  pts = Which[
+    AssociationQ[weights],
+      Module[{w = KeyMap[ToString, weights], bad},
+        bad = Complement[Keys[w], keys];
+        If[bad =!= {}, Return[iEXFail["UnknownKeys", "Keys" -> bad]]];
+        Join[exam["Points"], w]],
+    ListQ[weights] && Length[Flatten[weights]] === Length[keys],
+      AssociationThread[keys -> Flatten[weights]],
+    True, Return[iEXFail["BadWeights",
+      "Expected" -> Length[keys], "Got" -> If[ListQ[weights], Length[Flatten[weights]], Head[weights]]]]];
+  exam["Points"] = pts;
+  iEXSaveExam[exam];
+  <|"Status" -> "OK", "ExamId" -> examId, "Points" -> pts, "Total" -> Total[Values[pts]]|>];
+
+SourceVaultExamAnswerKey[examId_String] := Module[{exam = SourceVaultExamGet[examId], out = <||>},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  Scan[Function[g, MapIndexed[Function[{id, ix}, Module[{rec = SourceVaultExerciseGet[id], key, ans},
+    key = "問" <> ToString[g["Label"]] <> "-" <> ToString[First[ix]];
+    ans = If[AssociationQ[rec],
+      Which[
+        IntegerQ[Lookup[rec, "Answer", Missing[]]], ToString[rec["Answer"]],
+        StringQ[Lookup[rec, "Answer", Missing[]]], rec["Answer"],
+        StringQ[Lookup[rec, "ModelAnswer", Missing[]]], rec["ModelAnswer"],
+        True, ""], ""];
+    out[key] = ans]], g["Problems"]]], exam["Groups"]];
+  out];
+
+SourceVaultExamRecordHistory[examId_String] := Module[{exam = SourceVaultExamGet[examId], n = 0},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  Scan[Function[g, MapIndexed[Function[{id, ix}, Module[{rec = SourceVaultExerciseGet[id], key, hist, entry},
+    key = ToString[g["Label"]] <> "-" <> ToString[First[ix]];
+    If[AssociationQ[rec],
+      hist = Lookup[rec, "ExamHistory", {}];
+      entry = <|"Year" -> exam["Year"], "Exam" -> exam["ExamName"], "ExamId" -> examId,
+        "Number" -> key, "Points" -> Lookup[exam["Points"], key, Missing[]]|>;
+      If[!MemberQ[hist, e_ /; Lookup[e, "ExamId"] === examId && Lookup[e, "Number"] === key],
+        SourceVaultExerciseUpdate[id, <|"ExamHistory" -> Append[hist, entry]|>]; n++]]]],
+    g["Problems"]]], exam["Groups"]];
+  <|"Status" -> "OK", "ExamId" -> examId, "Recorded" -> n|>];
+
+(* ============================================================
+   解答用紙レイアウト (pt / A4 595x842, y は上から下向き)
+   採点時の切出しと同一のジオメトリを共有する
+   ============================================================ *)
+
+$iEXPage = {595, 842};
+
+iEXComputeSheetLayout[exam_Association, recs_Association] := Module[
+  {y, cells = <||>, groupRows = {}, x0 = 45, labelW = 30, gridX = 75, gridR = 555,
+   cols = 6, rowH = 34, writtenH = 88, colW},
+  colW = (gridR - 75)/cols // N;
+  y = 210.;
+  Scan[Function[g, Module[{label = ToString[g["Label"]], ids = g["Problems"], colIx = 0, firstRowY = y},
+    AppendTo[groupRows, <|"Label" -> label, "Top" -> y|>];
+    MapIndexed[Function[{id, ix}, Module[{rec = recs[id], key},
+      key = label <> "-" <> ToString[First[ix]];
+      If[Lookup[rec, "Format", "Choice"] === "Written" || Lookup[rec, "Choices", {}] === {},
+        (* 記述問題: 行を改めて全幅の記述欄 *)
+        If[colIx > 0, y += rowH; colIx = 0];
+        cells[key] = <|"Rect" -> {{gridX, y}, {gridR, y + writtenH}}, "Kind" -> "Written"|>;
+        y += writtenH,
+        (* 選択問題: 6 列グリッド *)
+        cells[key] = <|"Rect" -> {{gridX + colIx*colW, y}, {gridX + (colIx + 1)*colW, y + rowH}},
+          "Kind" -> "Choice"|>;
+        colIx++;
+        If[colIx >= cols, colIx = 0; y += rowH]]]], ids];
+    If[colIx > 0, y += rowH];
+    y += 6.]], exam["Groups"]];
+  <|"PageSize" -> $iEXPage,
+    "Cells" -> cells,
+    "GroupRows" -> groupRows,
+    "LabelX" -> x0, "LabelWidth" -> labelW,
+    "IDRect" -> {{326., 83.5}, {396., 128.5}},
+    "NameRect" -> {{414., 83.5}, {514., 128.5}},
+    "AnswerAreaTop" -> 200., "AnswerAreaBottom" -> y + 4.,
+    "HeaderBottom" -> 157.|>];
+
+SourceVaultExamSheetLayout[examId_String] := Module[{exam = SourceVaultExamGet[examId]},
+  If[!AssociationQ[exam], iEXFail["ExamNotFound", "ExamId" -> examId], Lookup[exam, "SheetLayout", Missing[]]]];
+
+(* ---- 描画 (y 反転して Graphics 座標へ) ---- *)
+
+iEXgy[y_] := $iEXPage[[2]] - y;
+
+(* ---- 公式「試験問題・解答用紙」白紙テンプレート ----
+   ヘッダ座標は公式 PDF の実測値 (pt, y は上から):
+   表 = 上83.5 / 下128.5 / ラベル行仕切り106 (x32..162.5 のみ)
+   縦罫 x = 32,76,162.5,179,223,308,326,396,414,514,532,576
+   学生番号欄 326..396 / 氏名欄 414..514 / 採点欄 532..576                *)
+
+$iEXTemplateCache = <||>;
+
+iEXTemplatePath[] := Which[
+  StringQ[$SourceVaultExamTemplatePDF] && FileExistsQ[$SourceVaultExamTemplatePDF],
+    $SourceVaultExamTemplatePDF,
+  $SourceVaultExamTemplatePDF === None, $Failed,
+  True, Module[{r = iEXRoot[], p},
+    If[!StringQ[r], Return[$Failed]];
+    p = FileNameJoin[{r, "templates", "試験問題・解答用紙.pdf"}];
+    If[FileExistsQ[p], p, $Failed]]];
+
+iEXTemplateGraphic[] := Module[{p = iEXTemplatePath[], g},
+  If[!StringQ[p], Return[$Failed]];
+  If[KeyExistsQ[$iEXTemplateCache, p], Return[$iEXTemplateCache[p]]];
+  g = Quiet @ Check[First[Import[p, "PageGraphics"]], $Failed];
+  If[Head[g] =!= Graphics, Return[$Failed]];
+  $iEXTemplateCache[p] = g;
+  g];
+
+(* 記入値 (テンプレート有無に共通)。位置は公式様式実測。 *)
+iEXHeaderValuePrims[exam_Association] := Module[{ff = iEXFont[], ds = exam["DateSpec"]},
+  {(* 科目名が欄からはみ出さないよう字数で級数を落とす (欄幅 76-162.5pt) *)
+   With[{ttl = ToString[exam["Title"]]},
+    Text[Style[ttl, Which[
+       StringLength[ttl] <= 6, 11, StringLength[ttl] <= 9, 9.5,
+       StringLength[ttl] <= 12, 7, True, 6], FontFamily -> ff], {119, iEXgy[95]}]],
+   Text[Style[$SourceVaultExamInstructor, 10, FontFamily -> ff], {119, iEXgy[117.5]}],
+   Text[Style[ToString[exam["Duration"]], 16, FontFamily -> ff], {196, iEXgy[113]}],
+   Text[Style[ToString[ds[[1]]], 10, FontFamily -> ff], {402, iEXgy[63.5]}, {1, 0}],
+   Text[Style[ToString[ds[[2]]], 10, FontFamily -> ff], {436, iEXgy[63.5]}, {1, 0}],
+   Text[Style[ToString[ds[[3]]], 10, FontFamily -> ff], {471, iEXgy[63.5]}, {1, 0}],
+   Text[Style[ToString[ds[[4]]], 10, FontFamily -> ff], {502, iEXgy[63.5]}, {1, 0}],
+   Text[Style[ToString[ds[[5]]], 10, FontFamily -> ff], {541, iEXgy[63.5]}, {1, 0}],
+   Circle[{209., iEXgy[145.]}, 6.5],
+   Text[Style[ToString[Lookup[exam, "Allowed", ""]], 10, FontFamily -> ff], {240, iEXgy[146]}, {-1, 0}]}];
+
+(* テンプレートが無い場合の内蔵描画 (公式様式を同一座標で模す) *)
+iEXDrawnHeaderPrims[exam_Association] := Module[{ff = iEXFont[], t = 83.5, m = 106., b = 128.5, vx},
+  vx = {32, 76, 162.5, 179, 223, 308, 326, 396, 414, 514, 532, 576};
+  Join[
+   {Text[Style["福山大学試験問題・解答用紙", Bold, 15, FontFamily -> ff], {42, iEXgy[60]}, {-1, 0}]},
+   MapThread[Text[Style[#1, 10, FontFamily -> ff], {#2, iEXgy[63.5]}] &,
+    {{"年", "月", "日", "曜日", "時限"}, {408, 442, 477, 512, 553}}],
+   {Line[{{32, iEXgy[t]}, {576, iEXgy[t]}}],
+    Line[{{32, iEXgy[b]}, {576, iEXgy[b]}}],
+    Line[{{32, iEXgy[m]}, {162.5, iEXgy[m]}}]},
+   Map[Line[{{#, iEXgy[t]}, {#, iEXgy[b]}}] &, vx],
+   {Text[Style["試験科目", 8, FontFamily -> ff], {54, iEXgy[95]}],
+    Text[Style["担当教員", 8, FontFamily -> ff], {54, iEXgy[117.5]}],
+    Text[Style["試\n験\n時\n間", 6.5, FontFamily -> ff], {170.7, iEXgy[106]}],
+    Text[Style["分", 9, FontFamily -> ff], {214, iEXgy[118]}],
+    Text[Style["学科", 8, FontFamily -> ff], {289, iEXgy[96]}],
+    Text[Style["年次", 8, FontFamily -> ff], {289, iEXgy[117.5]}],
+    Text[Style["学\n生\n番\n号", 6.5, FontFamily -> ff], {317, iEXgy[106]}],
+    Text[Style["氏", 8, FontFamily -> ff], {405, iEXgy[96]}],
+    Text[Style["名", 8, FontFamily -> ff], {405, iEXgy[117.5]}],
+    Text[Style["採", 8, FontFamily -> ff], {523, iEXgy[96]}],
+    Text[Style["点", 8, FontFamily -> ff], {523, iEXgy[117.5]}],
+    Text[Style["（注）筆記用具以外の持込品　　1. なし　　2. あり（　　　　　　　　　　　　　　）",
+      9, FontFamily -> ff], {42, iEXgy[146]}, {-1, 0}],
+    Line[{{32, iEXgy[157]}, {576, iEXgy[157]}}]}]];
+
+iEXHeaderPrims[exam_Association, layout_Association] := Module[{tpl = iEXTemplateGraphic[]},
+  Join[
+   If[Head[tpl] === Graphics,
+    {Inset[tpl, {595/2., iEXgy[421.]}, Center, {595.3, 842.}]},
+    iEXDrawnHeaderPrims[exam]],
+   iEXHeaderValuePrims[exam]]];
+
+(* 罠: 引数の数を変えると、同じカーネルに残る旧定義 (引数 1 個) の方が
+   具体的なので 1 引数呼び出しでそちらが勝ち、Get で再ロードしても
+   直らない。実装は別名に置き、公開する引数の形は変えない。 *)
+iEXSheetPrims[exam_Association] := iEXSheetPrimsWith[exam, Automatic];
+
+iEXSheetPrimsWith[exam_Association, groupLabels_] := Module[
+  {layout = exam["SheetLayout"], ff = iEXFont[], prims, cells, num,
+   sheetNums = iEXSheetNumbers[exam], showGroups},
+  (* 通し番号にすると番号だけで一意に決まるので、大問の [1] [2] は出さない *)
+  showGroups = If[groupLabels === Automatic,
+    !iEXContinuousNumberingQ[exam], TrueQ[groupLabels]];
+  cells = layout["Cells"];
+  prims = iEXHeaderPrims[exam, layout];
+  AppendTo[prims,
+    Text[Style["(回答欄の枠外に書かれた記述は採点しない)", 8, FontFamily -> ff],
+      {552, iEXgy[layout["AnswerAreaTop"] - 8]}, {1, 0}]];
+  (* グループラベル *)
+  If[showGroups,
+   Scan[Function[gr, AppendTo[prims,
+     Text[Style["[" <> gr["Label"] <> "]", 11, FontFamily -> ff],
+       {layout["LabelX"] + 8, iEXgy[gr["Top"] + 17]}]]], layout["GroupRows"]]];
+  (* 解答セル *)
+  Scan[Function[key, Module[{c = cells[key], r},
+    r = c["Rect"];
+    num = Lookup[sheetNums, key, Last[StringSplit[key, "-"]]];
+    AppendTo[prims, {EdgeForm[{Black, Thin}], FaceForm[None],
+      Rectangle[{r[[1, 1]], iEXgy[r[[2, 2]]]}, {r[[2, 1]], iEXgy[r[[1, 2]]]}]}];
+    If[c["Kind"] === "Choice",
+      AppendTo[prims, Text[Style[num, 8, FontFamily -> ff],
+        {r[[1, 1]] + 7, iEXgy[r[[1, 2]] + 8]}]],
+      AppendTo[prims, {
+        Text[Style[num, 8, FontFamily -> ff], {r[[1, 1]] + 7, iEXgy[r[[1, 2]] + 8]}],
+        Text[Style["[導出(計算)過程]", 7, FontFamily -> ff], {r[[1, 1]] + 48, iEXgy[r[[1, 2]] + 8]}],
+        Text[Style["[答]", 7, FontFamily -> ff], {r[[2, 1]] - 40, iEXgy[r[[2, 2]] - 8]}]}]]]],
+    Keys[cells]];
+  (* 下書き境界 *)
+  AppendTo[prims,
+    Text[Style["------------------------- 以下と裏面は下書き、計算に使ってよい -------------------------",
+      9, FontFamily -> ff], {$iEXPage[[1]]/2, iEXgy[layout["AnswerAreaBottom"] + 18]}]];
+  prims];
+
+Options[SourceVaultExamAnswerSheetPDF] = {"GroupLabels" -> Automatic};
+SourceVaultExamAnswerSheetPDF[examId_String, outPath_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], g},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  g = Graphics[iEXSheetPrimsWith[exam, OptionValue["GroupLabels"]],
+    PlotRange -> {{0, $iEXPage[[1]]}, {0, $iEXPage[[2]]}},
+    ImageSize -> $iEXPage, AspectRatio -> Automatic, PlotRangePadding -> 0];
+  Export[outPath, g, "PDF"];
+  <|"Status" -> "OK", "Path" -> outPath, "ExamId" -> examId|>];
+
+(* ============================================================
+   問題用紙 PDF (2 段組)
+   ============================================================ *)
+
+(* この WL の Export は Graphics リストを 1 ページに typeset してしまう
+   ({"PDF","Pages"} でも同じ・実測) ため、複数ページは Notebook 経由で
+   改ページさせる (FE 必要)。失敗時はページ別ファイルへフォールバック。 *)
+iEXExportPagesPDF[path_String, pages_List] := Module[{nb, ok},
+  If[Length[pages] === 1,
+   Export[path, First[pages], "PDF"];
+   Return[<|"Path" -> path, "Mode" -> "Single"|>]];
+  (* PrintingStyleEnvironment "Working" が必須: 既定 (Printout) は約 0.72 倍に
+     縮小して印字する (実測)。ImageSize は印字域 (841.89pt) を超えて空白ページが
+     挟まらないよう 1pt 弱だけ縮める ({594,841} で実測フルブリード 99.4%)。 *)
+  nb = Notebook[
+    MapIndexed[Cell[BoxData[ToBoxes[Show[#1, ImageSize -> {594., 841.}]]], "Output",
+      ShowCellBracket -> False, CellMargins -> {{0, 0}, {0, 0}},
+      CellFrameMargins -> 0,
+      PageBreakBelow -> (First[#2] < Length[pages])] &, pages],
+    PrintingOptions -> {"PrintingMargins" -> {{0., 0.}, {0., 0.}},
+      "PaperSize" -> {595.28, 841.89}},
+    PrintingStyleEnvironment -> "Working",
+    PageHeaders -> {{None, None, None}, {None, None, None}},
+    PageFooters -> {{None, None, None}, {None, None, None}},
+    Magnification -> 1];
+  Quiet @ Check[Export[path, nb, "PDF"], $Failed];
+  ok = Quiet @ Check[Length[Import[path, "PageImages"]] >= Length[pages], False];
+  If[TrueQ[ok], <|"Path" -> path, "Mode" -> "Notebook"|>,
+   Module[{files},
+    files = MapIndexed[Function[{pg, ix}, Module[{f = StringReplace[path,
+        ".pdf" ~~ EndOfString -> "-p" <> ToString[First[ix]] <> ".pdf"]},
+      Export[f, pg, "PDF"]; f]], pages];
+    <|"Path" -> files, "Mode" -> "PerPageFiles"|>]]];
+
+Options[SourceVaultExamProblemPreview] = {"Wide" -> False, "Resolution" -> 300,
+  "FillWide" -> True};
+SourceVaultExamProblemPreview[examId_String, slot_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], hit, rec, wide = TrueQ[OptionValue["Wide"]], blk},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  hit = SelectFirst[iEXExamSlots[exam], First[#] === slot &, Missing[]];
+  If[MissingQ[hit], Return[iEXFail["SlotNotFound", "Slot" -> slot]]];
+  rec = SourceVaultExerciseGet[hit[[2]]];
+  If[!AssociationQ[rec], Return[iEXFail["NotFound", "Id" -> hit[[2]]]]];
+  (* プレビューも用紙と同じ番号で組む *)
+  blk = iEXProblemBlock[Lookup[iEXDisplayNumbers[exam], slot, slot], rec,
+    If[wide, 50, 25], If[wide, 490, 225],
+    wide && TrueQ[OptionValue["FillWide"]]];
+  Column[{
+    Style[Row[{slot, "  ", hit[[2]],
+      "  自然幅: ", Round[Quiet @ Check[iEXContentNaturalWidth[
+         iEXRenderHeld[Lookup[rec, "QuestionHeld", Missing[]]]], 0.]], "pt",
+      "  選択肢省略: ", TrueQ[iEXLetterChoicesQ[Lookup[rec, "Choices", {}]] ||
+         iEXRedundantChoicesQ[Lookup[rec, "Choices", {}]]],
+      (* 組版の切り分け用: 選択肢の数と、問題文が見出しで列挙している数 *)
+      "  選択肢数: ", Length[Lookup[rec, "Choices", {}]],
+      "  本文の列挙数: ", iEXEnumeratedCount[
+        iEXTidyText[Replace[Lookup[rec, "Question", ""], Except[_String] -> ""]]],
+      "  図側の列挙数: ", iEXContentEnumeratedCount[
+        If[MatchQ[Lookup[rec, "QuestionHeld", Missing[]], _HoldComplete],
+         iEXRenderHeld[rec["QuestionHeld"]], Missing[]]]}],
+     Gray, 9],
+    Framed[iEXWithGlobalContext[
+      Rasterize[blk, ImageResolution -> OptionValue["Resolution"],
+        ImageSize -> If[wide, 505, 250]]]]}]];
+
+Options[SourceVaultExamPaperPDF] = {"Resolution" -> 300, "ColumnWidth" -> 25,
+  "WideSlots" -> None, "WideThreshold" -> 700, "FillWide" -> True,
+  "Explanation" -> "以下の選択問題を解き、解答用紙の回答欄に番号を記入しなさい。"};
+SourceVaultExamPaperPDF[examId_String, outPath_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], res = OptionValue["Resolution"], blocks, imgs,
+   recs, wides, incomplete, disp,
+   page1Top = 190., pageTopN = 40., pageBottom = 812., colXs = {45., 305.},
+   colWpt = 250., fullWpt = 505.,
+   pages = {}, expRes, ff = iEXFont[], expl = OptionValue["Explanation"]},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  (* ---- 幅の広い図の問題は段抜き (全幅 1 段) にする ----
+     列幅に押し込むと中の文字が読めなくなるため。ページ単位で 2 段組と
+     全幅組を切り替え、出題順はそのまま保つ。 *)
+  recs = Flatten[Map[Function[g,
+    MapIndexed[Function[{id, ix},
+      {ToString[g["Label"]] <> "-" <> ToString[First[ix]], SourceVaultExerciseGet[id]}],
+      g["Problems"]]], exam["Groups"]], 1];
+  wides = Map[Function[lr, Which[
+     !AssociationQ[lr[[2]]], False,
+     OptionValue["WideSlots"] === None, False,
+     OptionValue["WideSlots"] === Automatic,
+      TrueQ[iEXWideProblemQ[lr[[2]], "WideThreshold" -> OptionValue["WideThreshold"]]],
+     ListQ[OptionValue["WideSlots"]], MemberQ[OptionValue["WideSlots"], lr[[1]]],
+     True, False]], recs];
+  (* 用紙に出す番号は表示設定に従う (通し番号なら 1..N)。
+     スロットキーは "WideSlots" 指定や監査でそのまま使う *)
+  disp = iEXDisplayNumbers[exam];
+  blocks = MapThread[Function[{lr, wide},
+     iEXProblemBlock[Lookup[disp, lr[[1]], lr[[1]]],
+      Replace[lr[[2]], Except[_Association] -> <||>],
+      If[wide, Round[OptionValue["ColumnWidth"]*fullWpt/colWpt], OptionValue["ColumnWidth"]],
+      If[wide, fullWpt - 15, 225],
+      wide && TrueQ[OptionValue["FillWide"]]]], {recs, wides}];
+  imgs = MapThread[Function[{blk, wide}, iEXWithGlobalContext[
+     Rasterize[blk, ImageResolution -> res, ImageSize -> If[wide, fullWpt, colWpt]]]],
+    {blocks, wides}];
+  (* ---- ページ詰め ---- *)
+  (* 段抜きの問題はページ上部に帯として置き、その下を 2 段で流す。
+     段抜き 1 問のためにページを 1 枚使い切らないようにする。 *)
+  Module[{scale = 72./res, items, pageNo = 1, colIdx = 1, curH = 0., curCol = {},
+     curCols = {}, curWide = {}, curWideH = 0., placed = {}, avail, flush},
+    items = MapThread[{#1, ImageDimensions[#1][[2]]*scale, #2} &, {imgs, wides}];
+    avail[] := If[pageNo === 1, pageBottom - page1Top, pageBottom - pageTopN];
+    flush[] := If[curWide =!= {} || curCol =!= {} || curCols =!= {},
+      If[curCol =!= {}, AppendTo[curCols, curCol]; curCol = {}];
+      AppendTo[placed, <|"Wide" -> curWide, "Cols" -> curCols|>];
+      curWide = {}; curWideH = 0.; curCols = {}; curH = 0.; colIdx = 1; pageNo++];
+    Scan[Function[it, Module[{w = it[[3]], h = it[[2]] + 8.},
+      If[TrueQ[w],
+       (* 段抜き: 既に 2 段組の中身があるページには載せず、次ページの上部へ *)
+       If[curCol =!= {} || curCols =!= {}, flush[]];
+       If[curWide =!= {} && curWideH + h > avail[], flush[]];
+       AppendTo[curWide, {it[[1]], h}]; curWideH += h,
+       (* 通常: 段抜き帯の下から 2 段で流す *)
+       If[curH + h > avail[] - curWideH && curCol =!= {},
+        AppendTo[curCols, curCol]; curCol = {}; curH = 0.; colIdx++;
+        If[colIdx > 2, flush[]]];
+       AppendTo[curCol, {it[[1]], h}]; curH += h]]], items];
+    flush[];
+    (* ---- ページ描画 ---- *)
+    pages = MapIndexed[Function[{pg, pix},
+      Module[{pno = First[pix], prims = {}, topY, yy, colTop},
+      topY = If[pno === 1, page1Top, pageTopN];
+      If[pno === 1,
+        prims = iEXHeaderPrims[exam, Lookup[exam, "SheetLayout", <||>]];
+        AppendTo[prims, Text[Style["※ 本問題用紙の空欄、裏を計算用紙として使ってよい。", 9, FontFamily -> ff],
+          {563, iEXgy[168]}, {1, 0}]];
+        AppendTo[prims, Text[Style[expl, 9, FontFamily -> ff], {42, iEXgy[181]}, {-1, 0}]]];
+      (* 段抜きの帯を上部に積む *)
+      yy = topY;
+      Scan[Function[ih,
+        AppendTo[prims, Inset[ih[[1]], {colXs[[1]], iEXgy[yy]}, {Left, Top}, fullWpt]];
+        yy += ih[[2]]], pg["Wide"]];
+      colTop = yy;
+      (* その下を 2 段で流す *)
+      MapIndexed[Function[{col, cix},
+        Module[{x = colXs[[Min[First[cix], Length[colXs]]]], y2 = colTop},
+        Scan[Function[ih,
+          AppendTo[prims, Inset[ih[[1]], {x, iEXgy[y2]}, {Left, Top}, colWpt]];
+          y2 += ih[[2]]], col]]], pg["Cols"]];
+      Graphics[prims, PlotRange -> {{0, $iEXPage[[1]]}, {0, $iEXPage[[2]]}},
+        ImageSize -> $iEXPage, AspectRatio -> Automatic, PlotRangePadding -> 0]]], placed]];
+  expRes = iEXExportPagesPDF[outPath, pages];
+  (* 中身の欠けたスロットは用紙に空欄として出るので、生成結果で必ず知らせる *)
+  incomplete = Map[First, Select[recs, iEXRecordIssues[#[[2]]] =!= {} &]];
+  <|"Status" -> Which[
+      incomplete =!= {}, "IncompleteProblems",
+      expRes["Mode"] === "PerPageFiles", "PerPageFallback",
+      True, "OK"],
+    "Path" -> expRes["Path"], "ExamId" -> examId, "Pages" -> Length[pages],
+    "ExportMode" -> expRes["Mode"], "Problems" -> Length[blocks],
+    "IncompleteSlots" -> incomplete|>];
+
+(* 引数が文字列でないと定義に一致せず無言で未評価のまま残るので、
+   何が期待されているかを Failure で返す (path 未定義のまま渡す事故対策) *)
+SourceVaultExamPaperPDF[examId_, outPath_, ___] := iEXFail["BadArguments",
+   "Hint" -> "SourceVaultExamPaperPDF[\"examId\", \"出力先.pdf\", opts]。" <>
+     "出力先はファイルパスの文字列で渡してください。",
+   "Given" -> {Head[examId], Head[outPath]}] /;
+  !(StringQ[examId] && StringQ[outPath]);
+
+SourceVaultExamAnswerSheetPDF[examId_, outPath_, ___] := iEXFail["BadArguments",
+   "Hint" -> "SourceVaultExamAnswerSheetPDF[\"examId\", \"出力先.pdf\"]。" <>
+     "出力先はファイルパスの文字列で渡してください。",
+   "Given" -> {Head[examId], Head[outPath]}] /;
+  !(StringQ[examId] && StringQ[outPath]);
+
+(* ============================================================
+   受講者リスト / 答案スキャン / 突合せ
+   ============================================================ *)
+
+Options[SourceVaultExamRosterImport] = {"HeaderRows" -> 6, "IDColumn" -> 2, "NameColumn" -> 3};
+SourceVaultExamRosterImport[path_String, OptionsPattern[]] := Module[
+  {data, rows, idc = OptionValue["IDColumn"], nmc = OptionValue["NameColumn"]},
+  If[!FileExistsQ[path], Return[iEXFail["FileNotFound", "Path" -> path]]];
+  data = Quiet @ Import[path];
+  If[ListQ[data] && Length[data] > 0 && ListQ[First[data]] && Depth[data] >= 4, data = First[data]];
+  If[!ListQ[data], Return[iEXFail["BadRoster", "Path" -> path]]];
+  rows = Drop[data, Min[OptionValue["HeaderRows"], Length[data]]];
+  rows = Select[rows, ListQ[#] && Length[#] >= Max[idc, nmc] &&
+    #[[idc]] =!= "" && #[[idc]] =!= Null &];
+  SortBy[Map[{iEXRosterId[#[[idc]]], ToString[#[[nmc]]]} &, rows], First]];
+
+iEXRosterId[x_] := Which[
+  IntegerQ[x], ToString[x],
+  NumericQ[x], ToString[Round[x]],
+  True, StringTrim[ToString[x]]];
+
+iEXGrading[examId_String] := Module[{p = iEXGradingPath[examId]},
+  If[!StringQ[p], Return[<||>]];
+  Replace[iEXReadWXF[p], Except[_Association] -> <||>]];
+
+iEXSaveGrading[examId_String, g_Association] := iEXWriteWXF[iEXGradingPath[examId], g];
+
+Options[SourceVaultExamSheetIngest] = {"Roster" -> Automatic, "ImageWidth" -> 2200};
+SourceVaultExamSheetIngest[examId_String, source_, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], imgs, dir, files, g, w = OptionValue["ImageWidth"]},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  imgs = Which[
+    StringQ[source] && FileExistsQ[source],
+      Quiet @ Check[Import[source, "PageImages"], $Failed],
+    ListQ[source] && AllTrue[source, ImageQ], source,
+    True, $Failed];
+  If[!ListQ[imgs] || imgs === {}, Return[iEXFail["NoImages"]]];
+  imgs = Map[If[ImageDimensions[#][[1]] =!= w, ImageResize[#, w], #] &, imgs];
+  dir = iEXEnsureDir[iEXScanDir[examId]];
+  files = MapIndexed[Function[{img, ix}, Module[{f = FileNameJoin[{dir,
+      "scan-" <> IntegerString[First[ix], 10, 3] <> ".png"}]},
+    Export[f, img]; f]], imgs];
+  g = iEXGrading[examId];
+  g["Scans"] = files;
+  g["ScanCount"] = Length[files];
+  If[OptionValue["Roster"] =!= Automatic, g["Roster"] = OptionValue["Roster"]];
+  If[!KeyExistsQ[g, "Matches"], g["Matches"] = <||>];
+  If[!KeyExistsQ[g, "Answers"], g["Answers"] = <||>];
+  If[!KeyExistsQ[g, "Marks"], g["Marks"] = <||>];
+  g["PrivacyLevel"] = 1.0;  (* 答案は個人情報 (ローカルのみ) *)
+  iEXSaveGrading[examId, g];
+  <|"Status" -> "OK", "ExamId" -> examId, "ScanCount" -> Length[files],
+    "RosterCount" -> Length[Lookup[g, "Roster", {}]]|>];
+
+iEXScanImage[g_Association, i_Integer] := Module[{files = Lookup[g, "Scans", {}]},
+  If[1 <= i <= Length[files], Quiet @ Import[files[[i]]], $Failed]];
+
+(* layout 矩形 (pt, y 上向き基準は上から) を画像 pixel 範囲へ変換して切り出す *)
+iEXCropRect[img_Image, layout_Association, rect_, diffx_, diffy_] := Module[
+  {dims = ImageDimensions[img], ps = layout["PageSize"], sx, sy, c1, c2, r1, r2},
+  sx = dims[[1]]/ps[[1]]; sy = dims[[2]]/ps[[2]];
+  c1 = Clip[Round[rect[[1, 1]]*sx + diffx], {1, dims[[1]]}];
+  c2 = Clip[Round[rect[[2, 1]]*sx + diffx], {1, dims[[1]]}];
+  r1 = Clip[Round[rect[[1, 2]]*sy + diffy], {1, dims[[2]]}];
+  r2 = Clip[Round[rect[[2, 2]]*sy + diffy], {1, dims[[2]]}];
+  ImageTake[img, {r1, r2}, {c1, c2}]];
+
+Options[SourceVaultExamMatches] = {"DiffX" -> 0, "DiffY" -> 0};
+SourceVaultExamMatches[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], g, layout, roster, matches, dx = OptionValue["DiffX"], dy = OptionValue["DiffY"]},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  g = iEXGrading[examId];
+  If[Lookup[g, "Scans", {}] === {}, Return[iEXFail["NoScans", "ExamId" -> examId]]];
+  layout = exam["SheetLayout"];
+  roster = Lookup[g, "Roster", {}];
+  matches = Lookup[g, "Matches", <||>];
+  Table[Module[{img = iEXScanImage[g, i], ri, student},
+    ri = Lookup[matches, i, i];
+    student = If[1 <= ri <= Length[roster], roster[[ri]], Missing["NoRosterEntry", ri]];
+    <|"Scan" -> i,
+      "IDImage" -> If[ImageQ[img], iEXCropRect[img, layout, layout["IDRect"], dx, dy], Missing[]],
+      "NameImage" -> If[ImageQ[img], iEXCropRect[img, layout, layout["NameRect"], dx, dy], Missing[]],
+      "RosterIndex" -> ri, "Student" -> student|>],
+    {i, Lookup[g, "ScanCount", 0]}]];
+
+SourceVaultExamMatchView[examId_String, opts : OptionsPattern[SourceVaultExamMatches]] := Module[
+  {rows = SourceVaultExamMatches[examId, opts], mkRow},
+  If[!ListQ[rows], Return[rows]];
+  mkRow = Function[r,
+    Row[{
+      Style[r["Scan"], Bold, 12],
+      "  ",
+      Framed[Row[{r["IDImage"], "  ", r["NameImage"]}]],
+      "  ",
+      Replace[r["Student"], {
+        {sid_, nm_} :> Style[Row[{sid, "　", nm}], 12],
+        _Missing :> Style["(受講者未対応)", Red]}]
+    }]];
+  Column[Map[mkRow, rows], Spacings -> 1.5]];
+
+SourceVaultExamSetMatch[examId_String, overrides_Association] := Module[{g = iEXGrading[examId]},
+  If[g === <||>, Return[iEXFail["NoGradingState", "ExamId" -> examId]]];
+  g["Matches"] = Join[Lookup[g, "Matches", <||>], overrides];
+  iEXSaveGrading[examId, g];
+  <|"Status" -> "OK", "Matches" -> g["Matches"]|>];
+
+(* ============================================================
+   解答認識 (解答欄領域のみ切出し / 個人情報領域はクラウドへ送らない)
+   ============================================================ *)
+
+iEXAnswerRegionCrop[img_Image, layout_Association] := Module[{top, bottom},
+  top = layout["AnswerAreaTop"] - 6;
+  bottom = layout["AnswerAreaBottom"] + 6;
+  iEXCropRect[img, layout, {{0, top}, {layout["PageSize"][[1]], bottom}}, 0, 0]];
+
+iEXRecognitionPrompt[keys_List] := StringJoin[
+  "This is the answer grid region of a university exam answer sheet (no personal information).\n",
+  "Each numbered box contains a handwritten answer (usually a single digit choice number).\n",
+  "Boxes are numbered row by row within each group. Output ONLY key=value lines, no other text.\n",
+  "Keys in reading order:\n",
+  StringRiffle[Map[# <> "=(answer in box " <> Last[StringSplit[#, "-"]] <> ")" &, keys], "\n"],
+  "\nRules:\n- A number in parentheses like (3) means the answer is 3\n",
+  "- Empty or unreadable box: leave the value empty\n- Output only key=value lines"];
+
+iEXParseKeyValues[resp_String, keys_List] := Module[{lines, pairs},
+  lines = Select[StringSplit[StringReplace[resp, {"＝" -> "=", "```" -> ""}], "\n"],
+    StringContainsQ[#, "="] &];
+  pairs = Map[Function[line, Module[{pos = StringPosition[line, "="]},
+    If[pos === {}, Nothing,
+      StringTrim[StringTake[line, First[First[pos]] - 1]] ->
+        StringTrim[StringDrop[line, First[First[pos]]]]]]], lines];
+  KeyTake[Association[pairs], keys]];
+
+iEXVisionFn[] := If[Length[Names["ClaudeCode`ClaudeQueryBg"]] > 0 &&
+    Length[DownValues[ClaudeCode`ClaudeQueryBg]] > 0,
+  Function[items, ToString[ClaudeCode`ClaudeQueryBg[items]]],
+  $Failed];
+
+Options[SourceVaultExamRecognize] = {"RecognizerFn" -> Automatic, "Scans" -> All};
+SourceVaultExamRecognize[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], g, layout, keys, fn, target, done = 0, failed = {}},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  g = iEXGrading[examId];
+  If[Lookup[g, "Scans", {}] === {}, Return[iEXFail["NoScans", "ExamId" -> examId]]];
+  layout = exam["SheetLayout"];
+  keys = iEXExamKeys[exam];
+  fn = OptionValue["RecognizerFn"];
+  If[fn === Automatic,
+    Module[{vf = iEXVisionFn[]},
+      If[vf === $Failed, Return[iEXFail["NoRecognizer",
+        "Hint" -> "ClaudeCode 未ロード。\"RecognizerFn\"->fn[crop, keys] を指定してください。"]]];
+      fn = Function[{crop, ks}, iEXParseKeyValues[vf[{iEXRecognitionPrompt[ks], crop}], ks]]]];
+  target = If[OptionValue["Scans"] === All, Range[Lookup[g, "ScanCount", 0]], OptionValue["Scans"]];
+  Scan[Function[i, Module[{img = iEXScanImage[g, i], crop, res},
+    If[!ImageQ[img], AppendTo[failed, i],
+      crop = iEXAnswerRegionCrop[img, layout];
+      res = Quiet @ Check[fn[crop, keys], $Failed];
+      If[AssociationQ[res],
+        g["Answers"] = Append[Lookup[g, "Answers", <||>], i -> res]; done++,
+        AppendTo[failed, i]]]]], target];
+  iEXSaveGrading[examId, g];
+  <|"Status" -> If[failed === {}, "OK", "Partial"], "ExamId" -> examId,
+    "Recognized" -> done, "Failed" -> failed|>];
+
+SourceVaultExamSetAnswer[examId_String, scanIdx_Integer, key_String, value_String] := Module[
+  {g = iEXGrading[examId], a},
+  If[g === <||>, Return[iEXFail["NoGradingState", "ExamId" -> examId]]];
+  a = Lookup[Lookup[g, "Answers", <||>], scanIdx, <||>];
+  a[key] = value;
+  g["Answers"] = Append[Lookup[g, "Answers", <||>], scanIdx -> a];
+  iEXSaveGrading[examId, g];
+  <|"Status" -> "OK"|>];
+
+SourceVaultExamSetMark[examId_String, scanIdx_Integer, key_String, mark_String] := Module[
+  {g = iEXGrading[examId], m},
+  If[g === <||>, Return[iEXFail["NoGradingState", "ExamId" -> examId]]];
+  m = Lookup[Lookup[g, "Marks", <||>], scanIdx, <||>];
+  m[key] = mark;
+  g["Marks"] = Append[Lookup[g, "Marks", <||>], scanIdx -> m];
+  iEXSaveGrading[examId, g];
+  <|"Status" -> "OK"|>];
+
+(* ============================================================
+   採点
+   ============================================================ *)
+
+iEXAutoMark[recognized_, correct_String] := Which[
+  !StringQ[recognized] || StringTrim[recognized] === "", "?",
+  correct === "", "?",
+  StringTrim[StringReplace[recognized, {"(" -> "", ")" -> "", "（" -> "", "）" -> ""}]] === correct, "○",
+  True, "×"];
+
+iEXMarkPoints[mark_String, pts_] := Which[
+  !NumericQ[pts], 0,
+  mark === "○", pts,
+  mark === "△", Ceiling[pts/2],
+  True, 0];
+
+Options[SourceVaultExamScore] = {};
+SourceVaultExamScore[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], g, keys, keyAns, roster, matches},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  g = iEXGrading[examId];
+  If[Lookup[g, "Scans", {}] === {}, Return[iEXFail["NoScans", "ExamId" -> examId]]];
+  keys = iEXExamKeys[exam];
+  keyAns = KeyMap[StringDrop[#, 1] &, SourceVaultExamAnswerKey[examId]];  (* "問1-1"->"1-1" *)
+  roster = Lookup[g, "Roster", {}];
+  matches = Lookup[g, "Matches", <||>];
+  Table[Module[{ri, student, recog, manual, marks, scores, unresolved},
+    ri = Lookup[matches, i, i];
+    student = If[1 <= ri <= Length[roster], roster[[ri]], {Missing["NoRoster"], Missing["NoRoster"]}];
+    recog = Lookup[Lookup[g, "Answers", <||>], i, <||>];
+    manual = Lookup[Lookup[g, "Marks", <||>], i, <||>];
+    marks = Association[Map[Function[k, k -> Lookup[manual, k,
+      iEXAutoMark[Lookup[recog, k, ""], Lookup[keyAns, k, ""]]]], keys]];
+    scores = Association[Map[Function[k, k -> iEXMarkPoints[marks[k],
+      Lookup[exam["Points"], k, 0]]], keys]];
+    unresolved = Count[Values[marks], "?"];
+    <|"Scan" -> i, "StudentID" -> student[[1]], "Name" -> student[[2]],
+      "Total" -> Total[Values[scores]], "Unresolved" -> unresolved,
+      "Marks" -> marks, "Scores" -> scores, "Answers" -> recog|>],
+    {i, Lookup[g, "ScanCount", 0]}]];
+
+SourceVaultExamScoreView[examId_String, opts : OptionsPattern[SourceVaultExamScore]] := Module[
+  {rows = SourceVaultExamScore[examId, opts]},
+  If[!ListQ[rows], Return[rows]];
+  Dataset[Map[Join[KeyTake[#, {"Scan", "StudentID", "Name", "Total", "Unresolved"}], #["Marks"]] &, rows]]];
+
+Options[SourceVaultExamScoreReport] = {"Export" -> None};
+SourceVaultExamScoreReport[examId_String, OptionsPattern[]] := Module[
+  {rows = SourceVaultExamScore[examId], exam = SourceVaultExamGet[examId], keys, table, out},
+  If[!ListQ[rows], Return[rows]];
+  keys = iEXExamKeys[exam];
+  table = Map[Function[r, Join[
+    <|"学籍番号" -> r["StudentID"], "氏名" -> r["Name"], "合計" -> r["Total"], "未確定" -> r["Unresolved"]|>,
+    KeyMap["問" <> # &, r["Scores"]]]], rows];
+  out = Dataset[table];
+  If[StringQ[OptionValue["Export"]],
+    Export[OptionValue["Export"],
+      Prepend[Map[Values, table], Join[{"学籍番号", "氏名", "合計", "未確定"}, Map["問" <> # &, keys]]]];
+    <|"Status" -> "OK", "Exported" -> OptionValue["Export"], "Rows" -> Length[table]|>,
+    out]];
+
+(* ============================================================
+   類似問題生成 (LLM / Draft 承認フロー)
+   ============================================================ *)
+
+iEXLLMTextFn[] := Module[{plKey},
+  If[Length[Names["ClaudeCode`ClaudeQuerySync"]] === 0 ||
+     Length[DownValues[ClaudeCode`ClaudeQuerySync]] === 0, Return[$Failed]];
+  plKey = SelectFirst[Options[ClaudeCode`ClaudeQuerySync][[All, 1]],
+    (Head[#] === Symbol && SymbolName[#] === "PrivacyLevel") || # === "PrivacyLevel" &,
+    Missing[]];
+  With[{k = plKey},
+    If[MissingQ[k],
+      Function[prompt, ToString[ClaudeCode`ClaudeQuerySync[prompt]]],
+      Function[prompt, ToString[ClaudeCode`ClaudeQuerySync[prompt,
+        k -> $SourceVaultExerciseDefaultPrivacyLevel]]]]]];
+
+iEXSimilarPrompt[rec_Association, subjTitle_String, n_Integer] := Module[
+  {q, chs, ans},
+  q = If[StringQ[Lookup[rec, "Question", Missing[]]], rec["Question"],
+    StringRiffle[Cases[Lookup[rec, "QuestionHeld", HoldComplete[]], s_String :> s, Infinity], " "]];
+  chs = Cases[Lookup[rec, "Choices", {}], _String];
+  ans = Lookup[rec, "Answer", Missing[]];
+  StringJoin[
+    "あなたは大学講義「", subjTitle, "」の試験問題作成者です。\n",
+    "以下のベース問題と同じ概念を問う類似の選択問題を ", ToString[n], " 問、日本語で新規作成してください。\n\n",
+    "[分野] ", ToString[Lookup[rec, "Field", "-"]], "\n",
+    "[ベース問題]\n", q, "\n",
+    If[chs =!= {}, "[選択肢]\n" <> StringRiffle[MapIndexed[
+      "(" <> ToString[First[#2]] <> ") " <> #1 &, chs], "\n"] <> "\n", ""],
+    If[IntegerQ[ans], "[正解] (" <> ToString[ans] <> ")\n", ""],
+    "\n条件:\n",
+    "- 数値・題材・選択肢の内容を変えること (丸写し禁止)\n",
+    "- 難易度はベース問題と同程度\n",
+    "- 選択肢は 4 つ、正解はそのうち 1 つ\n",
+    "- 誤答選択肢はもっともらしくすること\n\n",
+    "出力は次の JSON 配列のみ (前後に説明やコードフェンスを付けない):\n",
+    "[{\"question\":\"...\",\"choices\":[\"...\",\"...\",\"...\",\"...\"],\"answer\":1,\"explanation\":\"...\"}]"]];
+
+(* 「適切でないものはどれか」型 (否定形) の問題では、答えになるのは
+   記述として誤っている選択肢。これを見落とすと「正しい記述が 3 つある」
+   =出題ミス、と正常な問題を誤判定する。判定は決定的に行い、
+   プロンプトにも明示して LLM の否定の取り違えを防ぐ。 *)
+$iEXNegativeQuestionPatterns = {"適切でないもの", "適切でない", "適当でないもの",
+  "誤っているもの", "誤りであるもの", "誤りはどれか", "誤っているのはどれか",
+  "正しくないもの", "正しくないのはどれか", "当てはまらないもの",
+  "該当しないもの", "成り立たないもの", "満たさないもの"};
+iEXNegativeQuestionQ[q_] := StringQ[q] &&
+  StringContainsQ[q, Alternatives @@ $iEXNegativeQuestionPatterns];
+
+iEXNegationNote[q_] := If[iEXNegativeQuestionQ[q],
+  "\n注意: これは「あてはまらないもの」を選ばせる否定形の問題である。" <>
+   "したがって、記述として誤っている選択肢が答えとして成立する。\n", ""];
+
+(* テキスト問題は計算で検証できないので、別プロンプトで「条件を満たす選択肢を
+   すべて挙げさせ」、正解 1 つだけになっているかを確かめる。
+   複数正解・正解なしの生成 (実レビューで繰り返し出た不具合) を弾く。 *)
+iEXTextVerifyPrompt[pa_Association] := With[
+  {q = ToString[Lookup[pa, "Question", ""]]},
+  StringJoin[
+   "次の選択問題について、答えとして成立する選択肢の番号をすべて挙げてください。\n",
+   "紛らわしいものも見落とさず、該当するものはすべて含めてください。\n",
+   "問題文が何を対象に問うているか (どの方式・どの場合について問うているか) を取り違えないこと。\n",
+   iEXNegationNote[q], "\n",
+   "[問題] ", q, "\n",
+   StringRiffle[MapIndexed["(" <> ToString[First[#2]] <> ") " <> ToString[#1] &,
+     Lookup[pa, "Choices", {}]], "\n"],
+   "\n\n出力は番号の JSON 配列のみ (例: [2])。説明やコードフェンスは付けないこと。"]];
+
+iEXParseNumberList[resp_String] := Module[{txt, data},
+  txt = StringTrim[StringReplace[resp, "```" -> ""]];
+  Module[{p1 = StringPosition[txt, "["], p2 = StringPosition[txt, "]"]},
+   If[p1 =!= {} && p2 =!= {},
+    txt = StringTake[txt, {First[First[p1]], Last[Last[p2]]}]]];
+  data = Quiet @ Check[ImportByteArray[StringToByteArray[txt, "UTF-8"], "RawJSON"], $Failed];
+  If[ListQ[data] && AllTrue[data, IntegerQ], Sort[DeleteDuplicates[data]], $Failed]];
+
+(* 一括で「すべて挙げよ」と聞くと、強いモデルでも取りこぼす (実レビューは
+   3 巡目で選択肢 3 を見落とし 4 巡目で拾った)。選択肢を 1 つずつ独立に
+   真偽判定させる方が確実なので、監査ではこちらを既定にする。 *)
+(* 「他の選択肢と比べて『最も適切か』ではなく」と書くと、問題文自身が
+   「最も適切なものはどれか」と問うている場合に指示が衝突して、正解の
+   選択肢まで false になる (実機 1-1 で全選択肢 false になった)。
+   独立判定は保ちつつ、問うている対象の取り違えを明示的に戒める。
+   また、いきなり true/false を出させるより理由を先に書かせた方が
+   当たるので、最終行だけを判定に使う。 *)
+iEXChoiceVerifyPrompt[pa_Association, k_Integer] := With[
+  {q = ToString[Lookup[pa, "Question", ""]]},
+  StringJoin[
+   "次の選択問題の選択肢 (", ToString[k], ") だけを見て、それが答えとして成立するかを判定してください。\n",
+   "他の選択肢と比較する必要はない。この選択肢が問題の条件を満たすかどうかだけを見ること。\n",
+   "問題文が何を対象に問うているか (どの方式・どの場合について問うているか) を取り違えないこと。\n",
+   iEXNegationNote[q], "\n",
+   "[問題] ", q, "\n",
+   "[選択肢 (", ToString[k], ")] ", ToString[Lookup[pa, "Choices", {}][[k]]],
+   "\n\nまず判断の理由を 1 文で書き、改行して最終行に true か false だけを書くこと。",
+   "最終行には他の語を入れないこと。"]];
+
+iEXBoolWord[t_String] := Which[
+  (* 否定形を先に見る。「正しくない」は "正" 始まりなので順序が逆だと誤判定する *)
+  StringMatchQ[t, ("false" | "no" | "誤り" | "誤" | "いいえ" | "正しくない" |
+     "成立しない" | "不正解") ~~ ___], False,
+  StringMatchQ[t, ("true" | "yes" | "正しい" | "はい" | "成立する" | "正解") ~~ ___], True,
+  StringContainsQ[t, "true"] && !StringContainsQ[t, "false"], True,
+  StringContainsQ[t, "false"] && !StringContainsQ[t, "true"], False,
+  True, Missing["Unparsed"]];
+
+(* 理由 + 最終行 true/false 形式。最終行で決め、駄目なら全体を見る。 *)
+iEXParseBool[resp_String] := Module[{txt, lines, v},
+  txt = StringReplace[resp, {"```" -> "", "\"" -> "", "*" -> ""}];
+  lines = Select[StringTrim /@ StringSplit[txt, "\n"], # =!= "" &];
+  If[lines === {}, Return[Missing["Unparsed"]]];
+  v = iEXBoolWord[ToLowerCase[Last[lines]]];
+  If[MissingQ[v], v = iEXBoolWord[ToLowerCase[StringTrim[txt]]]];
+  v];
+
+(* 条件を満たす選択肢の番号集合と、その判断理由を返す。
+   食い違ったときにオーナーが是非を判断できるよう、理由を捨てない
+   (実機 1-1 では検証器の方が間違っていた)。判定不能なら Set は $Failed。 *)
+iEXTextCorrectDetail[fn_, pa_Association, perChoice : (True | False) : False] := Module[
+  {ch = Lookup[pa, "Choices", {}], resp, raw, flags},
+  If[!ListQ[ch] || ch === {}, Return[<|"Set" -> $Failed, "Notes" -> {}|>]];
+  If[!TrueQ[perChoice],
+   resp = Quiet @ Check[fn[iEXTextVerifyPrompt[pa]], $Failed];
+   Return[<|"Set" -> If[StringQ[resp], iEXParseNumberList[resp], $Failed],
+     "Notes" -> If[StringQ[resp], {iEXShortNote[resp]}, {}]|>]];
+  raw = Table[Quiet @ Check[fn[iEXChoiceVerifyPrompt[pa, k]], $Failed], {k, Length[ch]}];
+  flags = Map[If[StringQ[#], iEXParseBool[#], Missing["Unparsed"]] &, raw];
+  <|(* 1 つでも判定不能なら「一意と確認できた」とは言えないので落とす *)
+    "Set" -> If[AnyTrue[flags, MissingQ], $Failed, Flatten[Position[flags, True]]],
+    "Notes" -> MapIndexed[Function[{r, ix},
+      "(" <> ToString[First[ix]] <> ") " <> ToString[flags[[First[ix]]]] <> ": " <>
+       If[StringQ[r], iEXShortNote[r], "-"]], raw]|>];
+
+iEXShortNote[s_String] := StringTake[
+  StringTrim[StringReplace[s, {"\n" -> " ", "\r" -> ""}]], UpTo[140]];
+
+iEXTextCorrectSet[fn_, pa_Association, perChoice : (True | False) : False] :=
+  iEXTextCorrectDetail[fn, pa, perChoice]["Set"];
+
+iEXTextAnswerUniqueQ[fn_, pa_Association, perChoice : (True | False) : False] := Module[
+  {nums, ans = Lookup[pa, "Answer", Missing[]]},
+  If[!IntegerQ[ans], Return[False]];
+  nums = iEXTextCorrectSet[fn, pa, perChoice];
+  ListQ[nums] && nums === {ans}];
+
+iEXParseSimilarJson[resp_String] := Module[{txt, data},
+  txt = StringTrim[StringReplace[resp,
+    {StartOfLine ~~ "```" ~~ Shortest[___] ~~ EndOfLine -> "", "```" -> ""}]];
+  (* JSON 配列部分のみ抽出 *)
+  Module[{p1 = StringPosition[txt, "["], p2 = StringPosition[txt, "]"]},
+    If[p1 =!= {} && p2 =!= {},
+      txt = StringTake[txt, {First[First[p1]], Last[Last[p2]]}]]];
+  data = Quiet @ Check[
+    ImportByteArray[StringToByteArray[txt, "UTF-8"], "RawJSON"], $Failed];
+  If[!ListQ[data], Return[$Failed]];
+  Select[Map[Function[d, If[!AssociationQ[d], Nothing, <|
+    "Question" -> Lookup[d, "question", Lookup[d, "Question", ""]],
+    "Choices" -> Replace[Lookup[d, "choices", Lookup[d, "Choices", {}]], Except[_List] -> {}],
+    "Answer" -> Replace[Lookup[d, "answer", Lookup[d, "Answer", Missing[]]],
+      s_String :> Quiet[Check[ToExpression[s], Missing[]]]],
+    "Explanation" -> Lookup[d, "explanation", Lookup[d, "Explanation", ""]]|>]], data],
+    StringQ[#["Question"]] && StringLength[#["Question"]] > 0 && Length[#["Choices"]] >= 2 &]];
+
+(* ============================================================
+   図問題レシピ: オートマトン / 二項関係グラフ
+   LLM には構造 (状態遷移・辺集合) だけを JSON で出させ、図は
+   NFAPlot / Graph でこちらが描画する。正解は機械検証する
+   (オートマトン=受理シミュレーション、関係=律の充足判定)。
+   ============================================================ *)
+
+iEXFigureRecipe[rec_Association] := Module[{field, txt},
+  field = ToString[Lookup[rec, "Field", ""]];
+  txt = field <> " " <> ToString[Lookup[rec, "Headline", ""]];
+  Which[
+   StringContainsQ[txt, "オートマトン"], "Automaton",
+   StringContainsQ[field, "関係"] || StringContainsQ[txt, "二項関係"], "Relation",
+   (* ベン図 (網掛けで集合を表す図) は SetAlgebra より先に見る *)
+   StringContainsQ[txt, "ベン図" | "網掛け"], "VennDiagram",
+   StringContainsQ[txt, "述語論理" | "述語を" | "\[ForAll]" | "\[Exists]"], "PredicateLogic",
+   StringContainsQ[field, "集合"] || StringContainsQ[txt, "積集合" | "和集合" | "補集合"],
+    "SetAlgebra",
+   StringContainsQ[txt, "浮動小数点"], "FloatFormat",
+   StringContainsQ[txt, "構文木" | "構文規則" | "優先順位" | "結合規則"], "ExprTree",
+   StringContainsQ[txt, "最短経路" | "最小全域木" | "全域木" | "ダイクストラ" |
+     "クラスカル" | "プリム" | "幅優先" | "深さ優先" | "ネットワーク"], "GraphAlgo",
+   StringContainsQ[txt, "整列" | "ソート" | "交換回数"], "SortTrace",
+   StringContainsQ[txt, "スタック" | "キュー" | "push" | "PUSH"], "StackQueue",
+   StringContainsQ[txt, "2分木" | "二分木" | "木構造" | "探索木" | "走査" | "節点"], "BinaryTree",
+   True, None]];
+
+(* ---- 二項関係: 律の判定 ---- *)
+iEXRelPropQ["Reflexive", vs_List, edges_List] := AllTrue[vs, MemberQ[edges, {#, #}] &];
+iEXRelPropQ["Symmetric", vs_List, edges_List] := AllTrue[edges, MemberQ[edges, Reverse[#]] &];
+iEXRelPropQ["Antisymmetric", vs_List, edges_List] :=
+  AllTrue[edges, (#[[1]] === #[[2]] || !MemberQ[edges, Reverse[#]]) &];
+iEXRelPropQ["Transitive", vs_List, edges_List] :=
+  AllTrue[Tuples[{edges, edges}], (#[[1, 2]] =!= #[[2, 1]] || MemberQ[edges, {#[[1, 1]], #[[2, 2]]}]) &];
+
+(* 問題文からちょうど 1 つの律を特定 (反対称律⊃対称律に注意)。複数/0 なら検証不能 *)
+iEXRelQuestionProp[q_String] := Module[{names = {}},
+  If[StringContainsQ[q, "反射律"], AppendTo[names, "Reflexive"]];
+  If[StringContainsQ[q, "反対称律"], AppendTo[names, "Antisymmetric"]];
+  If[StringCount[q, "対称律"] - StringCount[q, "反対称律"] > 0, AppendTo[names, "Symmetric"]];
+  If[StringContainsQ[q, "推移律"], AppendTo[names, "Transitive"]];
+  If[Length[names] === 1, First[names], None]];
+
+iEXValidateRelationSpec[spec_Association] := Module[
+  {q, vs, ces, ans, prop, negated, flags, hits},
+  q = Lookup[spec, "question", ""]; vs = Lookup[spec, "vertices", {}];
+  ces = Lookup[spec, "choiceEdges", {}]; ans = Lookup[spec, "answer", 0];
+  If[!(ListQ[vs] && vs =!= {} && ListQ[ces] && Length[ces] >= 2 &&
+      IntegerQ[ans] && 1 <= ans <= Length[ces] &&
+      AllTrue[ces, ListQ[#] && AllTrue[#, MatchQ[#, {_Integer, _Integer}] &] &]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  (* 空関係は各律を空虚に満たし複数正解の温床になるため拒否 (実レビューで発覚) *)
+  If[AnyTrue[ces, # === {} &],
+   Return[<|"OK" -> False, "Reason" -> "EmptyChoice"|>]];
+  (* 頂点集合の退化: 重複頂点は Graph で潰れて「番号が足りない図」になる *)
+  If[Length[DeleteDuplicates[vs]] =!= Length[vs],
+   Return[<|"OK" -> False, "Reason" -> "DuplicateVertices"|>]];
+  (* 辺が未宣言の頂点を指すと図に余分な頂点が現れる *)
+  If[!SubsetQ[vs, DeleteDuplicates[Flatten[ces]]],
+   Return[<|"OK" -> False, "Reason" -> "UnknownVertex",
+     "Extra" -> Complement[DeleteDuplicates[Flatten[ces]], vs]|>]];
+  prop = iEXRelQuestionProp[q];
+  (* 問う律を特定できない問題文は検証不能 → 受理せず拒否 (検証は義務) *)
+  If[prop === None, Return[<|"OK" -> False, "Reason" -> "UnverifiableQuestion"|>]];
+  negated = StringContainsQ[q, "満たさない"];
+  flags = Map[iEXRelPropQ[prop, vs, #] &, ces];
+  hits = Flatten[Position[flags, If[negated, False, True]]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* ---- オートマトン: NFA シミュレーション ---- *)
+iEXSimulateNFA[transitions_List, initial_, accepting_List, input_String] := Module[
+  {states = {initial}},
+  Scan[Function[ch,
+    states = DeleteDuplicates[Cases[transitions, {s_, ch, t_} /; MemberQ[states, s] :> t]]],
+   Characters[input]];
+  IntersectingQ[states, accepting]];
+
+(* 選択肢を LLM 任せにせず列挙で作り直す。
+   受理判定は決定的に計算できるので、同じ長さのビット列から
+   「受理 1 つ + 非受理 3 つ」を選べば、複数正解・正解なしで破棄される
+   失敗モード (実機でオートマトン生成が繰り返し失敗した原因) が消える。 *)
+iEXBitStrings[n_Integer] := StringJoin /@ Tuples[{"0", "1"}, n];
+
+iEXRepairAutomatonChoices[spec_Association] := Module[
+  {tr, ini, acc, best = Missing[], ansPos, choices},
+  tr = Lookup[spec, "transitions", {}]; ini = Lookup[spec, "initial", ""];
+  acc = Lookup[spec, "accepting", {}];
+  If[!(ListQ[tr] && tr =!= {} && AllTrue[tr, MatchQ[#, {_, _String, _}] &] &&
+      ListQ[acc] && acc =!= {}), Return[$Failed]];
+  Scan[Function[len, Module[{cands, yes, no},
+     If[MissingQ[best],
+      cands = iEXBitStrings[len];
+      yes = Select[cands, iEXSimulateNFA[tr, ini, acc, #] &];
+      no = Complement[cands, yes];
+      If[Length[yes] >= 1 && Length[no] >= 3, best = {yes, no}]]]],
+   {4, 5, 3, 6}];
+  If[MissingQ[best], Return[$Failed]];
+  (* 正解位置は spec 由来の値で散らす (決定的) *)
+  ansPos = Mod[Replace[Lookup[spec, "answer", 1], Except[_Integer] -> 1] - 1, 4] + 1;
+  choices = Insert[Take[best[[2]], 3], First[best[[1]]], ansPos];
+  Join[spec, <|"choices" -> choices, "answer" -> ansPos|>]];
+
+(* 受理言語の指紋: 長さ 0..5 の全ビット列に対する受理/非受理ベクトル。
+   これが一致する機械は (試験問題として) 同じ問題なので重複と見なす。 *)
+iEXAutomatonSignature[spec_Association] := Module[{tr, ini, acc},
+  tr = Lookup[spec, "transitions", {}]; ini = Lookup[spec, "initial", ""];
+  acc = Lookup[spec, "accepting", {}];
+  If[!(ListQ[tr] && tr =!= {} && ListQ[acc] && acc =!= {}), Return[Missing["BadSpec"]]];
+  Map[TrueQ[iEXSimulateNFA[tr, ini, acc, #]] &,
+   Catenate[Table[iEXBitStrings[len], {len, 0, 5}]]]];
+
+(* 受理条件のテーマ: ベース問題ごとに決定的に選び、同じ機械の量産を防ぐ *)
+$iEXAutomatonThemes = {
+  "末尾が 01 であるビット列を受理する",
+  "1 の個数が偶数であるビット列を受理する",
+  "部分列 110 を含むビット列を受理する",
+  "0 が 2 個以上連続する箇所を含むビット列を受理する",
+  "先頭が 1 かつ末尾が 0 であるビット列を受理する",
+  "0 の個数が 3 の倍数であるビット列を受理する",
+  "末尾が 11 であるビット列を受理する",
+  "1 が 2 個以上連続する箇所を含まないビット列を受理する"};
+
+iEXAutomatonTheme[seed_String] :=
+  $iEXAutomatonThemes[[Mod[Hash[seed, "SHA256"], Length[$iEXAutomatonThemes]] + 1]];
+
+iEXValidateAutomatonSpec[spec_Association] := Module[
+  {q, tr, ini, acc, chs, ans, negated, flags, hits},
+  q = Lookup[spec, "question", ""]; tr = Lookup[spec, "transitions", {}];
+  ini = Lookup[spec, "initial", ""]; acc = Lookup[spec, "accepting", {}];
+  chs = Lookup[spec, "choices", {}]; ans = Lookup[spec, "answer", 0];
+  If[!(ListQ[tr] && tr =!= {} && AllTrue[tr, MatchQ[#, {_, _String, _}] &] &&
+      ListQ[acc] && acc =!= {} && ListQ[chs] && Length[chs] >= 2 &&
+      AllTrue[chs, StringQ] && IntegerQ[ans] && 1 <= ans <= Length[chs]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  (* 検証できるのは「どのビット列が受理されるか」を問う形式だけ。
+     受理状態や遷移の穴埋めを選ばせる形式 (実レビューで問題になった 2-2 型) は
+     シミュレーションで正誤を決められないため拒否する (検証は義務)。
+     "受理" を含むだけでは不十分: 「どの状態を受理状態とすればよいか」も含む。 *)
+  If[StringContainsQ[q, "どの状態" | "受理状態とす" | "受理状態を" | "状態を選"],
+   Return[<|"OK" -> False, "Reason" -> "UnverifiableQuestion"|>]];
+  If[!StringContainsQ[q, "受理"],
+   Return[<|"OK" -> False, "Reason" -> "UnverifiableQuestion"|>]];
+  If[!AllTrue[chs, StringMatchQ[#, ("0" | "1") ..] &],
+   Return[<|"OK" -> False, "Reason" -> "NonBitChoices"|>]];
+  negated = StringContainsQ[q, "受理されない"];
+  flags = Map[iEXSimulateNFA[tr, ini, acc, #] &, chs];
+  hits = Flatten[Position[flags, If[negated, False, True]]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* ---- 集合代数: ベン領域の全列挙による恒真性判定 ----
+   式は JSON の木 (<|"var"->"A"|> / <|"op"->"union"|"inter"|"comp"|"diff","args"->{..}|>)。
+   n 個の集合に対し 2^n 個の領域 (所属パターン) をすべて評価するので、
+   「常に成立するか」を有限回で厳密に判定できる。 *)
+
+iEXSetExprValidQ[expr_, vars_List] := Which[
+  AssociationQ[expr] && KeyExistsQ[expr, "var"], MemberQ[vars, expr["var"]],
+  AssociationQ[expr] && KeyExistsQ[expr, "op"],
+   Module[{op = expr["op"], args = Lookup[expr, "args", {}]},
+    ListQ[args] && Switch[op,
+      "union" | "inter", Length[args] >= 2,
+      "comp", Length[args] === 1,
+      "diff", Length[args] === 2,
+      _, False] && AllTrue[args, iEXSetExprValidQ[#, vars] &]],
+  True, False];
+
+iEXSetEval[expr_, vars_List, bits_List] := Which[
+  KeyExistsQ[expr, "var"], TrueQ[bits[[First[First[Position[vars, expr["var"]]]]]]],
+  True, Module[{op = expr["op"], args = expr["args"]},
+   Switch[op,
+    "union", AnyTrue[args, iEXSetEval[#, vars, bits] &],
+    "inter", AllTrue[args, iEXSetEval[#, vars, bits] &],
+    "comp", ! iEXSetEval[First[args], vars, bits],
+    "diff", iEXSetEval[args[[1]], vars, bits] && ! iEXSetEval[args[[2]], vars, bits],
+    _, False]]];
+
+iEXSetClaimValidQ[claim_, vars_List] :=
+  AssociationQ[claim] && KeyExistsQ[claim, "lhs"] && KeyExistsQ[claim, "rhs"] &&
+  MemberQ[{"subset", "superset", "equal"}, Lookup[claim, "rel", "subset"]] &&
+  iEXSetExprValidQ[claim["lhs"], vars] && iEXSetExprValidQ[claim["rhs"], vars];
+
+iEXSetClaimAlwaysQ[claim_, vars_List] := Module[{rel = Lookup[claim, "rel", "subset"]},
+  AllTrue[Tuples[{True, False}, Length[vars]], Function[bits,
+    Module[{l = iEXSetEval[claim["lhs"], vars, bits], r = iEXSetEval[claim["rhs"], vars, bits]},
+     Switch[rel, "subset", ! l || r, "superset", ! r || l, "equal", l === r, _, False]]]]];
+
+iEXValidateSetSpec[spec_Association] := Module[
+  {q, vars, chs, ans, negated, flags, hits},
+  q = Lookup[spec, "question", ""]; vars = Lookup[spec, "sets", {}];
+  chs = Lookup[spec, "choices", {}]; ans = Lookup[spec, "answer", 0];
+  If[!(ListQ[vars] && 2 <= Length[vars] <= 3 && AllTrue[vars, StringQ] &&
+      DeleteDuplicates[vars] === vars &&
+      ListQ[chs] && Length[chs] >= 2 && IntegerQ[ans] && 1 <= ans <= Length[chs] &&
+      AllTrue[chs, iEXSetClaimValidQ[#, vars] &]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  negated = StringContainsQ[q, "成立しない" | "常には成り立たない" | "成り立たない"];
+  flags = Map[iEXSetClaimAlwaysQ[#, vars] &, chs];
+  hits = Flatten[Position[flags, If[negated, False, True]]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* 補集合の上線。**OverBar は使わない**: 数式用の OverscriptBox として
+   組まれ、内側に Style を置いても既定の数式書体 (セリフ・大きめ) のまま
+   になり、本文と書体が揃わない (実機で確認)。
+   Grid の上罫線で線を引けば中身は普通のテキストなので書体をそのまま継ぐ。
+   線の幅も中身の幅に一致する。
+   **書体・大きさは指定しない**: iEXContentDisplay は Style[非文字列,...] の
+   中身に降りて外側の Style を捨てるため、選択肢は周囲の指定 (9pt) で
+   組まれる。ここで 10pt などを固定すると上線つきの文字だけ浮く。 *)
+iEXOverBarDisp[x_] := Grid[{{x}},
+  Dividers -> {None, {1 -> GrayLevel[0]}},
+  Spacings -> {0, 0.15}, ItemSize -> All, Alignment -> {Center, Baseline}];
+
+(* 表示: A̅ ∪ B̅ のような組版式へ (曖昧さを避けるため複合項は括弧で括る) *)
+iEXSetExprDisp[expr_, vars_List] := Which[
+  KeyExistsQ[expr, "var"], expr["var"],
+  expr["op"] === "comp", iEXOverBarDisp[iEXSetExprDispP[First[expr["args"]], vars]],
+  expr["op"] === "union", Row[Riffle[Map[iEXSetExprDispP[#, vars] &, expr["args"]], "\[Union]"]],
+  expr["op"] === "inter", Row[Riffle[Map[iEXSetExprDispP[#, vars] &, expr["args"]], "\[Intersection]"]],
+  expr["op"] === "diff", Row[Riffle[Map[iEXSetExprDispP[#, vars] &, expr["args"]], "-"]],
+  True, "?"];
+
+(* 括弧つき (単項・変数はそのまま) *)
+iEXSetExprDispP[expr_, vars_List] := If[
+  KeyExistsQ[expr, "var"] || Lookup[expr, "op", ""] === "comp",
+  iEXSetExprDisp[expr, vars],
+  Row[{"(", iEXSetExprDisp[expr, vars], ")"}]];
+
+iEXSetClaimHeld[claim_, vars_List] := With[
+  {disp = Style[Row[{
+      iEXSetExprDisp[claim["lhs"], vars],
+      (* 等号を含む包含であることを記号で明示する (⊂ は真部分集合と解釈され得るため、
+         採点上の解釈差が出ないよう ⊆ / ⊇ を使う。検証も ⊆ 意味論で行っている) *)
+      Switch[Lookup[claim, "rel", "subset"],
+       "subset", " \[SubsetEqual] ", "superset", " \[SupersetEqual] ", _, " = "],
+      iEXSetExprDisp[claim["rhs"], vars]}],
+     FontSize -> 10, FontFamily -> "Arial",
+     (* 単文字がイタリックの数式書体に化けるのを防ぐ *)
+     SingleLetterItalics -> False, FontSlant -> Plain]},
+  HoldComplete[disp]];
+
+(* ============================================================
+   述語論理レシピ "PredicateLogic" (決定的生成・LLM 不要)
+   日本語の文に対応する述語論理式を選ばせる。
+   有限モデル (領域 2〜3 要素 × 述語の全外延) を総当たりして真理値ベクタを
+   求め、正解と同値な選択肢がちょうど 1 つであることを検証する。
+   ∀∃ の入替え・⇒ と ∧ の取違え・¬ の位置違いは、この総当たりで
+   すべて区別できる。
+   ============================================================ *)
+
+iEXPLEval[f_, dom_List, model_Association, env_Association] := Which[
+  KeyExistsQ[f, "pred"],
+   Module[{args = Lookup[f, "args", {Lookup[f, "arg", "x"]}], vals},
+    vals = Map[Lookup[env, #, First[dom]] &, args];
+    MemberQ[Lookup[model, f["pred"], {}],
+     If[Length[vals] === 1, First[vals], vals]]],
+  KeyExistsQ[f, "q"],
+   Module[{v = Lookup[f, "var", "x"]},
+    If[f["q"] === "forall",
+     AllTrue[dom, iEXPLEval[f["body"], dom, model, Append[env, v -> #]] &],
+     AnyTrue[dom, iEXPLEval[f["body"], dom, model, Append[env, v -> #]] &]]],
+  True,
+   Module[{a = Lookup[f, "args", {}]},
+    Switch[Lookup[f, "op", ""],
+     "not", ! iEXPLEval[First[a], dom, model, env],
+     "and", AllTrue[a, iEXPLEval[#, dom, model, env] &],
+     "or", AnyTrue[a, iEXPLEval[#, dom, model, env] &],
+     "implies", ! iEXPLEval[a[[1]], dom, model, env] ||
+       iEXPLEval[a[[2]], dom, model, env],
+     _, False]]];
+
+iEXPLUsesBinaryQ[f_] := ! FreeQ[f, "R"];
+
+(* 2 項述語があると組合せが増えるので領域 2 まで。
+   ∀∃ の入替えは領域 2 で区別できる。 *)
+iEXPLModels[useBinary : (True | False)] := Module[{out = {}},
+  Do[Module[{dom = Range[n], subs = Subsets[Range[n]]},
+    If[useBinary,
+     If[n === 2,
+      Do[AppendTo[out, {dom, <|"P" -> p, "Q" -> q, "R" -> r|>}],
+       {p, subs}, {q, subs}, {r, Subsets[Tuples[dom, 2]]}]],
+     Do[AppendTo[out, {dom, <|"P" -> p, "Q" -> q, "R" -> {}|>}],
+      {p, subs}, {q, subs}]]], {n, {2, 3}}];
+  out];
+
+iEXPLTruth[f_, models_List] :=
+  Map[TrueQ[iEXPLEval[f, #[[1]], #[[2]], <||>]] &, models];
+
+(* 表示: 述語名を日本語に置き換えた素のテキスト (本文と同じ書体で流れる) *)
+iEXPLStr[f_, names_Association] := Which[
+  KeyExistsQ[f, "pred"],
+   Lookup[names, f["pred"], f["pred"]] <> "(" <>
+     StringRiffle[Lookup[f, "args", {Lookup[f, "arg", "x"]}], ", "] <> ")",
+  KeyExistsQ[f, "q"],
+   If[f["q"] === "forall", "\[ForAll]", "\[Exists]"] <> Lookup[f, "var", "x"] <>
+     "(" <> iEXPLStr[f["body"], names] <> ")",
+  True,
+   Module[{a = Lookup[f, "args", {}]},
+    Switch[Lookup[f, "op", ""],
+     "not", "\[Not]" <> iEXPLStrP[First[a], names],
+     "and", StringRiffle[Map[iEXPLStrP[#, names] &, a], " \[And] "],
+     "or", StringRiffle[Map[iEXPLStrP[#, names] &, a], " \[Or] "],
+     "implies", iEXPLStrP[a[[1]], names] <> " \[DoubleRightArrow] " <>
+       iEXPLStrP[a[[2]], names],
+     _, "?"]]];
+
+iEXPLStrP[f_, names_Association] := If[
+  KeyExistsQ[f, "pred"] || KeyExistsQ[f, "q"] || Lookup[f, "op", ""] === "not",
+  iEXPLStr[f, names], "(" <> iEXPLStr[f, names] <> ")"];
+
+(* 論理式の組み立て補助 *)
+iEXplP[p_String, v_String] := <|"pred" -> p, "args" -> {v}|>;
+iEXplR[u_String, v_String] := <|"pred" -> "R", "args" -> {u, v}|>;
+iEXplAll[v_String, b_] := <|"q" -> "forall", "var" -> v, "body" -> b|>;
+iEXplEx[v_String, b_] := <|"q" -> "exists", "var" -> v, "body" -> b|>;
+iEXplNot[a_] := <|"op" -> "not", "args" -> {a}|>;
+iEXplAnd[a_, b_] := <|"op" -> "and", "args" -> {a, b}|>;
+iEXplImp[a_, b_] := <|"op" -> "implies", "args" -> {a, b}|>;
+
+$iEXPLTemplates := Module[
+  {px = iEXplP["P", "x"], qx = iEXplP["Q", "x"], py = iEXplP["P", "y"],
+   qy = iEXplP["Q", "y"], rxy = iEXplR["x", "y"]},
+  {<|"names" -> <|"P" -> "犬", "Q" -> "吠える"|>,
+    "legend" -> "犬(x): x は犬である、吠える(x): x は吠える",
+    "ja" -> "すべての犬は吠える",
+    "correct" -> iEXplAll["x", iEXplImp[px, qx]],
+    "wrong" -> {iEXplAll["x", iEXplAnd[px, qx]],
+      iEXplEx["x", iEXplImp[px, qx]], iEXplEx["x", iEXplAnd[px, qx]]}|>,
+   <|"names" -> <|"P" -> "犬", "Q" -> "吠える"|>,
+    "legend" -> "犬(x): x は犬である、吠える(x): x は吠える",
+    "ja" -> "吠える犬が存在する",
+    "correct" -> iEXplEx["x", iEXplAnd[px, qx]],
+    "wrong" -> {iEXplEx["x", iEXplImp[px, qx]],
+      iEXplAll["x", iEXplAnd[px, qx]], iEXplAll["x", iEXplImp[px, qx]]}|>,
+   <|"names" -> <|"P" -> "犬", "Q" -> "吠える"|>,
+    "legend" -> "犬(x): x は犬である、吠える(x): x は吠える",
+    "ja" -> "吠えない犬は存在しない",
+    "correct" -> iEXplNot[iEXplEx["x", iEXplAnd[px, iEXplNot[qx]]]],
+    "wrong" -> {iEXplNot[iEXplAll["x", iEXplAnd[px, iEXplNot[qx]]]],
+      iEXplEx["x", iEXplAnd[px, iEXplNot[qx]]],
+      iEXplAll["x", iEXplAnd[px, iEXplNot[qx]]]}|>,
+   <|"names" -> <|"P" -> "学生", "Q" -> "合格する"|>,
+    "legend" -> "学生(x): x は学生である、合格する(x): x は合格する",
+    "ja" -> "合格しない学生がいる",
+    "correct" -> iEXplEx["x", iEXplAnd[px, iEXplNot[qx]]],
+    "wrong" -> {iEXplNot[iEXplEx["x", iEXplAnd[px, qx]]],
+      iEXplAll["x", iEXplAnd[px, iEXplNot[qx]]],
+      iEXplEx["x", iEXplImp[px, iEXplNot[qx]]]}|>,
+   <|"names" -> <|"P" -> "学生", "Q" -> "科目", "R" -> "履修する"|>,
+    "legend" -> "学生(x): x は学生である、科目(y): y は科目である、" <>
+      "履修する(x, y): x は y を履修する",
+    "ja" -> "どの学生も、少なくとも一つの科目を履修している",
+    "correct" -> iEXplAll["x", iEXplImp[px, iEXplEx["y", iEXplAnd[qy, rxy]]]],
+    "wrong" -> {iEXplEx["y", iEXplAnd[qy, iEXplAll["x", iEXplImp[px, rxy]]]],
+      iEXplEx["x", iEXplAnd[px, iEXplEx["y", iEXplAnd[qy, rxy]]]],
+      iEXplAll["x", iEXplAnd[px, iEXplEx["y", iEXplAnd[qy, rxy]]]]}|>,
+   <|"names" -> <|"P" -> "学生", "Q" -> "科目", "R" -> "履修する"|>,
+    "legend" -> "学生(x): x は学生である、科目(y): y は科目である、" <>
+      "履修する(x, y): x は y を履修する",
+    "ja" -> "すべての学生が履修している科目が存在する",
+    "correct" -> iEXplEx["y", iEXplAnd[qy, iEXplAll["x", iEXplImp[px, rxy]]]],
+    "wrong" -> {iEXplAll["x", iEXplImp[px, iEXplEx["y", iEXplAnd[qy, rxy]]]],
+      iEXplAll["y", iEXplImp[qy, iEXplEx["x", iEXplAnd[px, rxy]]]],
+      iEXplEx["y", iEXplAnd[qy, iEXplEx["x", iEXplAnd[px, rxy]]]]}|>}];
+
+iEXPLSpec[seed_String] := Module[
+  {tmpl, models, ct, cands, ansPos, formulas},
+  tmpl = $iEXPLTemplates[[
+    Mod[Hash[seed, "SHA256"], Length[$iEXPLTemplates]] + 1]];
+  models = iEXPLModels[iEXPLUsesBinaryQ[tmpl["correct"]]];
+  ct = iEXPLTruth[tmpl["correct"], models];
+  (* 誤答は「正解と同値でない」ものだけ *)
+  cands = Select[tmpl["wrong"], iEXPLTruth[#, models] =!= ct &];
+  If[Length[cands] < 3, Return[$Failed]];
+  ansPos = Mod[Hash[seed <> "#a", "SHA256"], 4] + 1;
+  formulas = Insert[Take[cands, 3], tmpl["correct"], ansPos];
+  <|"Recipe" -> "PredicateLogic", "names" -> tmpl["names"],
+    "correct" -> tmpl["correct"], "formulas" -> formulas, "answer" -> ansPos,
+    "question" -> "述語を、" <> tmpl["legend"] <> " とするとき、「" <>
+      tmpl["ja"] <> "」に対応する述語論理式はどれか。",
+    "choices" -> Map[iEXPLStr[#, tmpl["names"]] &, formulas]|>];
+
+iEXValidatePLSpec[spec_Association] := Module[
+  {correct, formulas, ans, models, ct, hits},
+  correct = Lookup[spec, "correct", Missing[]];
+  formulas = Lookup[spec, "formulas", {}];
+  ans = Lookup[spec, "answer", 0];
+  If[!(AssociationQ[correct] && ListQ[formulas] && Length[formulas] >= 2 &&
+      AllTrue[formulas, AssociationQ] && IntegerQ[ans] && 1 <= ans <= Length[formulas]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  models = iEXPLModels[iEXPLUsesBinaryQ[correct] ||
+    AnyTrue[formulas, iEXPLUsesBinaryQ]];
+  ct = iEXPLTruth[correct, models];
+  (* 恒真・恒偽の式は問題にならない *)
+  If[DeleteDuplicates[ct] === {True} || DeleteDuplicates[ct] === {False},
+   Return[<|"OK" -> False, "Reason" -> "DegenerateFormula"|>]];
+  hits = Flatten[Position[Map[iEXPLTruth[#, models] &, formulas], ct]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* ============================================================
+   正規表現レシピ "RegexAutomaton" (決定的生成・LLM 不要)
+   状態遷移図を見せ、その機械が受理する文字列全体を表す正規表現を
+   選ばせる。受理判定と正規表現の照合を長さ 5 以下の全ビット列で
+   突き合わせ、言語が一致する選択肢がちょうど 1 つであることを検証する。
+   「受理されるビット列はどれか」型と並べても同型にならない。
+   ============================================================ *)
+
+$iEXBitStrings := Flatten[Table[Map[StringJoin, Tuples[{"0", "1"}, n]], {n, 0, 5}]];
+
+iEXNFALanguage[spec_Association] := Select[$iEXBitStrings,
+  iEXSimulateNFA[spec["transitions"], spec["initial"], spec["accepting"], #] &];
+
+iEXRegexLanguage[re_String] := Select[$iEXBitStrings,
+  Quiet @ Check[StringMatchQ[#, RegularExpression[re]], False] &];
+
+(* 機械と正規表現を対にして持つ (どちらも人手で検算済み。ずれていれば
+   検証で落ちて原問のまま残るので安全側) *)
+$iEXRegexTemplates = {
+  <|"re" -> "(0|1)*1", "ja" -> "1 で終わる",
+    "transitions" -> {{"a", "0", "a"}, {"a", "1", "b"},
+      {"b", "0", "a"}, {"b", "1", "b"}},
+    "initial" -> "a", "accepting" -> {"b"}|>,
+  <|"re" -> "(0|1)*10", "ja" -> "10 で終わる",
+    "transitions" -> {{"a", "0", "a"}, {"a", "1", "b"},
+      {"b", "0", "c"}, {"b", "1", "b"}, {"c", "0", "a"}, {"c", "1", "b"}},
+    "initial" -> "a", "accepting" -> {"c"}|>,
+  <|"re" -> "(0|1)*1(0|1)*", "ja" -> "1 を含む",
+    "transitions" -> {{"a", "0", "a"}, {"a", "1", "b"},
+      {"b", "0", "b"}, {"b", "1", "b"}},
+    "initial" -> "a", "accepting" -> {"b"}|>,
+  <|"re" -> "(0|1)*00(0|1)*", "ja" -> "00 を含む",
+    "transitions" -> {{"a", "0", "b"}, {"a", "1", "a"},
+      {"b", "0", "c"}, {"b", "1", "a"}, {"c", "0", "c"}, {"c", "1", "c"}},
+    "initial" -> "a", "accepting" -> {"c"}|>,
+  <|"re" -> "(1*01*0)*1*", "ja" -> "0 の個数が偶数",
+    "transitions" -> {{"a", "0", "b"}, {"a", "1", "a"},
+      {"b", "0", "a"}, {"b", "1", "b"}},
+    "initial" -> "a", "accepting" -> {"a"}|>,
+  <|"re" -> "((0|1)(0|1))*", "ja" -> "長さが偶数",
+    "transitions" -> {{"a", "0", "b"}, {"a", "1", "b"},
+      {"b", "0", "a"}, {"b", "1", "a"}},
+    "initial" -> "a", "accepting" -> {"a"}|>};
+
+iEXRegexSpec[seed_String] := Module[{idx, tmpl, lang, cands, ansPos, choices},
+  idx = Mod[Hash[seed, "SHA256"], Length[$iEXRegexTemplates]] + 1;
+  tmpl = $iEXRegexTemplates[[idx]];
+  lang = iEXNFALanguage[tmpl];
+  If[lang === {} || Length[lang] === Length[$iEXBitStrings], Return[$Failed]];
+  (* 誤答は「言語が実際に異なる」正規表現だけ *)
+  cands = Select[Map[#["re"] &, Delete[$iEXRegexTemplates, idx]],
+    iEXRegexLanguage[#] =!= lang &];
+  If[Length[cands] < 3, Return[$Failed]];
+  cands = Take[RotateLeft[cands,
+     Mod[Hash[seed <> "#d", "SHA256"], Length[cands]]], 3];
+  ansPos = Mod[Hash[seed <> "#a", "SHA256"], 4] + 1;
+  choices = Insert[cands, tmpl["re"], ansPos];
+  <|"Recipe" -> "RegexAutomaton", "transitions" -> tmpl["transitions"],
+    "initial" -> tmpl["initial"], "accepting" -> tmpl["accepting"],
+    "choices" -> choices, "answer" -> ansPos,
+    "question" -> "次の状態遷移図で表現される有限オートマトンが受理する文字列全体を表す" <>
+      "正規表現はどれか。ここで、* は直前の要素の 0 回以上の繰返し、| は選択を表す。"|>];
+
+iEXValidateRegexSpec[spec_Association] := Module[{lang, chs, ans, hits},
+  chs = Lookup[spec, "choices", {}]; ans = Lookup[spec, "answer", 0];
+  If[!(ListQ[chs] && Length[chs] >= 2 && AllTrue[chs, StringQ] &&
+      IntegerQ[ans] && 1 <= ans <= Length[chs] &&
+      ListQ[Lookup[spec, "transitions", Missing[]]]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  lang = iEXNFALanguage[spec];
+  (* 全受理・全非受理は問題にならない *)
+  If[lang === {} || Length[lang] === Length[$iEXBitStrings],
+   Return[<|"OK" -> False, "Reason" -> "DegenerateAutomaton"|>]];
+  hits = Flatten[Position[Map[iEXRegexLanguage, chs], lang]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* ============================================================
+   ベン図レシピ "VennDiagram" (決定的生成・LLM 不要)
+   3 集合 A,B,C が作る 7 領域を 3 bit (A,B,C への所属) で表し、
+   集合式が真になる領域だけを網掛けして描く。
+   誤答は正解から領域を 1 つ入れ替えて作るので「見た目は近いが確実に違う」。
+   条件を満たす図がちょうど 1 つであることを領域集合の比較で機械検証する。
+   ============================================================ *)
+
+$iEXVennSets = {"A", "B", "C"};
+$iEXVennCenters = {{-0.42, 0.26}, {0.42, 0.26}, {0., -0.44}};
+$iEXVennRadius = 0.76;
+
+iEXvVar[s_String] := <|"var" -> s|>;
+iEXvUnion[a_, b_] := <|"op" -> "union", "args" -> {a, b}|>;
+iEXvInter[a_, b_] := <|"op" -> "inter", "args" -> {a, b}|>;
+iEXvComp[a_] := <|"op" -> "comp", "args" -> {a}|>;
+
+(* 領域番号 k (1..7) = A,B,C への所属を 3 bit で表したもの *)
+iEXVennBits[k_Integer] := Map[# === 1 &, IntegerDigits[k, 2, 3]];
+
+iEXVennRegions[expr_] :=
+  Select[Range[7], iEXSetEval[expr, $iEXVennSets, iEXVennBits[#]] &];
+
+$iEXVennTemplates := With[
+  {a = iEXvVar["A"], b = iEXvVar["B"], c = iEXvVar["C"]},
+  {(* (A~ ∩ B ∩ C) ∪ (A ∩ B ∩ C~) *)
+   iEXvUnion[iEXvInter[iEXvInter[iEXvComp[a], b], c],
+     iEXvInter[iEXvInter[a, b], iEXvComp[c]]],
+   iEXvInter[a, iEXvUnion[b, c]],
+   iEXvInter[iEXvUnion[a, b], iEXvComp[c]],
+   iEXvInter[iEXvInter[a, iEXvComp[b]], iEXvComp[c]],
+   iEXvInter[iEXvInter[iEXvComp[a], iEXvComp[b]], c],
+   iEXvUnion[iEXvInter[a, b], iEXvInter[b, c]],
+   iEXvInter[iEXvComp[a], iEXvUnion[b, c]]}];
+
+iEXVennSpec[seed_String] := Module[{expr, correct, cands, ansPos, regions},
+  expr = $iEXVennTemplates[[
+    Mod[Hash[seed, "SHA256"], Length[$iEXVennTemplates]] + 1]];
+  correct = iEXVennRegions[expr];
+  (* 全領域・空はベン図として成立しない *)
+  If[correct === {} || Length[correct] === 7, Return[$Failed]];
+  (* 誤答は領域を 1 つだけ入れ替えたもの (近いが確実に別の図) *)
+  cands = DeleteDuplicates[Select[
+     Map[Function[k, Sort[If[MemberQ[correct, k],
+        DeleteCases[correct, k], Append[correct, k]]]],
+      RotateLeft[Range[7], Mod[Hash[seed <> "#d", "SHA256"], 7]]],
+     # =!= {} && Length[#] =!= 7 && Sort[#] =!= Sort[correct] &]];
+  If[Length[cands] < 3, Return[$Failed]];
+  ansPos = Mod[Hash[seed <> "#a", "SHA256"], 4] + 1;
+  regions = Insert[Take[cands, 3], Sort[correct], ansPos];
+  <|"Recipe" -> "VennDiagram", "sets" -> $iEXVennSets, "expr" -> expr,
+    "regions" -> regions, "answer" -> ansPos,
+    "question" -> "集合 A, B, C について、次の集合 X を網掛け部分で表しているベン図はどれか。" <>
+      "ここで、\[Intersection] は積集合、\[Union] は和集合、上線は補集合を表す。"|>];
+
+iEXValidateVennSpec[spec_Association] := Module[
+  {expr, regions, ans, correct, hits},
+  expr = Lookup[spec, "expr", Missing[]];
+  regions = Lookup[spec, "regions", {}];
+  ans = Lookup[spec, "answer", 0];
+  If[!(AssociationQ[expr] && ListQ[regions] && Length[regions] >= 2 &&
+      AllTrue[regions, ListQ] && IntegerQ[ans] && 1 <= ans <= Length[regions]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  If[AnyTrue[regions, # === {} || Length[#] === 7 &],
+   Return[<|"OK" -> False, "Reason" -> "DegenerateRegion"|>]];
+  If[Length[DeleteDuplicates[Map[Sort, regions]]] =!= Length[regions],
+   Return[<|"OK" -> False, "Reason" -> "DuplicateChoice"|>]];
+  correct = iEXVennRegions[expr];
+  hits = Flatten[Position[Map[Sort, regions], Sort[correct]]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* 図: 3 円の輪郭 + 指定領域の網掛け。反復子は形式シンボルにして、
+   セッションの x, y に値が入っていても壊れないようにする。 *)
+iEXVennHeld[regions_List] := With[
+  {rs = Select[regions, IntegerQ[#] && 1 <= # <= 7 &],
+   cs = $iEXVennCenters, rad = $iEXVennRadius},
+  HoldComplete[Show[
+    RegionPlot[
+     Or @@ Map[Function[bits,
+        And @@ MapThread[Function[{ctr, b},
+           If[TrueQ[b],
+            (\[FormalX] - ctr[[1]])^2 + (\[FormalY] - ctr[[2]])^2 <= rad^2,
+            (\[FormalX] - ctr[[1]])^2 + (\[FormalY] - ctr[[2]])^2 > rad^2]],
+          {cs, bits}]],
+       Map[Function[k, Map[# === 1 &, IntegerDigits[k, 2, 3]]], rs]],
+     {\[FormalX], -1.32, 1.32}, {\[FormalY], -1.38, 1.12},
+     PlotStyle -> GrayLevel[0.68], BoundaryStyle -> None, PlotPoints -> 60,
+     Frame -> False, Axes -> False, PlotRangePadding -> None],
+    Graphics[{Thickness[0.006],
+      Circle[cs[[1]], rad], Circle[cs[[2]], rad], Circle[cs[[3]], rad],
+      Text[Style["A", 9, FontFamily -> "Arial"], cs[[1]] + {-0.48, 0.5}],
+      Text[Style["B", 9, FontFamily -> "Arial"], cs[[2]] + {0.48, 0.5}],
+      Text[Style["C", 9, FontFamily -> "Arial"], cs[[3]] + {0., -0.52}]}],
+    ImageSize -> 108, PlotRange -> {{-1.32, 1.32}, {-1.38, 1.12}}]]];
+
+iEXVennExprHeld[expr_, vars_List] := With[
+  {disp = Style[Row[{"X = ", iEXSetExprDisp[expr, vars]}],
+     FontSize -> 10, FontFamily -> "Arial",
+     SingleLetterItalics -> False, FontSlant -> Plain]},
+  HoldComplete[disp]];
+
+(* ============================================================
+   データ構造レシピ: スタック / キュー、2 分木
+   いずれも「操作の結果」「走査順」を決定的に計算できるので、
+   選択肢はこちらで作り (正解 1 + もっともらしい誤答 3)、
+   図は CreateDataStructure / Graph で描画する。
+   ============================================================ *)
+
+(* ---- スタック / キュー ---- *)
+(* 内容リストは Stack: 底→頂、Queue: 先頭→末尾 *)
+iEXSimulateSQ[structure_String, initial_List, ops_List] := Catch[
+  Module[{st = initial},
+   Scan[Function[op, Module[{name, arg},
+      If[!ListQ[op] || op === {}, Throw[$Failed, "sq"]];
+      name = ToLowerCase[ToString[First[op]]];
+      arg = If[Length[op] >= 2, ToString[op[[2]]], ""];
+      Which[
+       MemberQ[{"push", "enq", "enqueue", "add"}, name],
+        If[arg === "", Throw[$Failed, "sq"], st = Append[st, arg]],
+       MemberQ[{"pop", "deq", "dequeue", "remove"}, name],
+        If[st === {}, Throw[$Failed, "sq"],
+         st = If[structure === "Stack", Most[st], Rest[st]]],
+       True, Throw[$Failed, "sq"]]]], ops];
+   st], "sq"];
+
+iEXSQFormat[lst_List] := If[lst === {}, "(空)", StringRiffle[lst, ", "]];
+
+(* 操作名は構造に合わせて統一する (キューに push/pop を使うと
+   スタック操作と紛らわしいため、キューは enq/deq とする) *)
+iEXSQOpName[structure_String, name_String] := Module[{n = ToLowerCase[name]},
+  If[structure === "Queue",
+   If[MemberQ[{"push", "enq", "enqueue", "add"}, n], "enq", "deq"],
+   If[MemberQ[{"push", "enq", "enqueue", "add"}, n], "push", "pop"]]];
+
+iEXSQOpLabel[structure_String, op_] := Module[{name = iEXSQOpName[structure, ToString[First[op]]]},
+  If[Length[op] >= 2, name <> "(" <> ToString[op[[2]]] <> ")", name <> "()"]];
+
+iEXSQOpsLegend[structure_String] := If[structure === "Queue",
+  "ここで enq(x) はキューの末尾への挿入、deq() は先頭からの取出しを表す。",
+  "ここで push(x) はスタックへの積み上げ、pop() は取出しを表す。"];
+
+iEXRepairSQChoices[spec_Association] := Module[
+  {struct, init, ops, res, variants, ansPos, choices},
+  struct = Lookup[spec, "structure", ""];
+  If[!MemberQ[{"Stack", "Queue"}, struct], Return[$Failed]];
+  init = Map[ToString, Replace[Lookup[spec, "initial", {}], Except[_List] -> {}]];
+  ops = Lookup[spec, "ops", {}];
+  If[!ListQ[ops] || ops === {}, Return[$Failed]];
+  res = iEXSimulateSQ[struct, init, ops];
+  If[res === $Failed || Length[res] < 2, Return[$Failed]];
+  (* 誤答: 逆順 / 回転 / 1 つ多い / 1 つ少ない *)
+  variants = DeleteDuplicates[Select[
+     {Reverse[res], RotateLeft[res], Most[res], Rest[res], Append[res, Last[res]]},
+     ListQ[#] && # =!= res && # =!= {} &]];
+  If[Length[variants] < 3, Return[$Failed]];
+  ansPos = Mod[Replace[Lookup[spec, "answer", 1], Except[_Integer] -> 1] - 1, 4] + 1;
+  choices = Insert[Map[iEXSQFormat, Take[variants, 3]], iEXSQFormat[res], ansPos];
+  Join[spec, <|"choices" -> choices, "answer" -> ansPos|>]];
+
+iEXValidateSQSpec[spec_Association] := Module[
+  {struct, init, ops, res, chs, ans, hits},
+  struct = Lookup[spec, "structure", ""];
+  init = Map[ToString, Replace[Lookup[spec, "initial", {}], Except[_List] -> {}]];
+  ops = Lookup[spec, "ops", {}]; chs = Lookup[spec, "choices", {}];
+  ans = Lookup[spec, "answer", 0];
+  If[!(MemberQ[{"Stack", "Queue"}, struct] && ListQ[ops] && ops =!= {} &&
+      ListQ[chs] && Length[chs] >= 2 && AllTrue[chs, StringQ] &&
+      IntegerQ[ans] && 1 <= ans <= Length[chs] && init =!= {}),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  res = iEXSimulateSQ[struct, init, ops];
+  If[res === $Failed, Return[<|"OK" -> False, "Reason" -> "BadOperations"|>]];
+  hits = Flatten[Position[chs, iEXSQFormat[res]]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* 図: スタックとキューは**抽象データ構造**であって、連結リストで実装すると
+   は限らない。CreateDataStructure の Visualization は矢印つきのリンク図
+   なので実装方式を誤って示唆する → 使わず、区切りだけの枠で描く
+   (配列とも連結リストとも読めない中立な表現)。
+   どちらの端が先頭 / 底かは図から読み取れないので必ず文字で示す。 *)
+iEXSQBoxExpr[structure_String, items_List] := Module[{cells = Map[ToString, items], g},
+  If[cells === {}, Return[Style["(空)", FontSize -> 9, FontFamily -> "Arial"]]];
+  If[structure === "Stack",
+   (* 縦置き: 上が頂上、下が底 (解答は「底から順」) *)
+   Column[{
+     Style["頂上", FontSize -> 8, GrayLevel[0.4]],
+     Grid[Transpose[{Reverse[cells]}], Frame -> All, FrameStyle -> Gray,
+      ItemSize -> {2.2, 1.4}, Alignment -> Center,
+      ItemStyle -> Directive[FontSize -> 9, FontFamily -> "Arial"]],
+     Style["底", FontSize -> 8, GrayLevel[0.4]]},
+    Alignment -> Center, Spacings -> 0.15],
+   (* 横置き: 左が先頭、右が末尾 (解答は「先頭から順」) *)
+   Row[{Style["先頭", FontSize -> 8, GrayLevel[0.4]], Spacer[5],
+     Grid[{cells}, Frame -> All, FrameStyle -> Gray,
+      ItemSize -> {2.2, 1.4}, Alignment -> Center,
+      ItemStyle -> Directive[FontSize -> 9, FontFamily -> "Arial"]],
+     Spacer[5], Style["末尾", FontSize -> 8, GrayLevel[0.4]]}]]];
+
+iEXSQVizHeld[structure_String, items_List, ops_List] := With[
+  {box = iEXSQBoxExpr[structure, items],
+   opsText = "操作: " <> StringRiffle[Map[iEXSQOpLabel[structure, #] &, ops], " \[Rule] "] <>
+     "\n" <> iEXSQOpsLegend[structure]},
+  HoldComplete[Column[{box, Style[opsText, FontSize -> 9]}, Spacings -> 0.4]]];
+
+(* ---- 2 分木 ---- *)
+iEXTreeValidQ[t_] := AssociationQ[t] && KeyExistsQ[t, "v"] &&
+  AllTrue[{Lookup[t, "l", Null], Lookup[t, "r", Null]},
+   (# === Null || MissingQ[#] || iEXTreeValidQ[#]) &];
+
+iEXTreeTraverse[t_, order_String] := If[!(AssociationQ[t] && KeyExistsQ[t, "v"]), {},
+  Module[{v = {ToString[t["v"]]},
+    l = iEXTreeTraverse[Lookup[t, "l", Null], order],
+    r = iEXTreeTraverse[Lookup[t, "r", Null], order]},
+   Switch[order,
+    "preorder", Join[v, l, r],
+    "inorder", Join[l, v, r],
+    "postorder", Join[l, r, v],
+    _, {}]]];
+
+iEXTreeEdges[t_] := If[!(AssociationQ[t] && KeyExistsQ[t, "v"]), {},
+  Module[{l = Lookup[t, "l", Null], r = Lookup[t, "r", Null], out = {}},
+   If[AssociationQ[l], AppendTo[out, DirectedEdge[ToString[t["v"]], ToString[l["v"]]]]];
+   If[AssociationQ[r], AppendTo[out, DirectedEdge[ToString[t["v"]], ToString[r["v"]]]]];
+   Join[out, iEXTreeEdges[l], iEXTreeEdges[r]]]];
+
+(* 左右が図でも保たれるよう座標を自分で決める (中順の並び順 = x, 深さ = -y) *)
+iEXTreeCoords[t_] := Module[{counter = 0, out = {}, walk},
+  walk[node_, depth_] := If[AssociationQ[node] && KeyExistsQ[node, "v"],
+    walk[Lookup[node, "l", Null], depth + 1];
+    counter++; AppendTo[out, ToString[node["v"]] -> {counter, -depth}];
+    walk[Lookup[node, "r", Null], depth + 1]];
+  walk[t, 0]; out];
+
+iEXTreeGraphHeld[t_] := With[
+  {vs = iEXTreeTraverse[t, "preorder"],
+   (* 木は矢印なしで描く (親子は配置で分かる) *)
+   es = iEXTreeEdges[t] /. DirectedEdge -> UndirectedEdge,
+   co = iEXTreeCoords[t]},
+  HoldComplete[Graph[vs, es,
+    VertexCoordinates -> co,
+    VertexLabels -> Placed["Name", Center],
+    VertexLabelStyle -> Directive[FontSize -> 11, FontFamily -> "Arial", Black],
+    VertexSize -> 0.55, VertexStyle -> Directive[White, EdgeForm[Black]],
+    EdgeStyle -> Black, ImageSize -> 150]]];
+
+iEXRepairTreeChoices[spec_Association] := Module[
+  {t, order, correct, alts, ansPos, choices},
+  t = Lookup[spec, "tree", Missing[]]; order = Lookup[spec, "order", ""];
+  If[!iEXTreeValidQ[t] || !MemberQ[{"preorder", "inorder", "postorder"}, order],
+   Return[$Failed]];
+  correct = iEXTreeTraverse[t, order];
+  If[Length[correct] < 4 || DeleteDuplicates[correct] =!= correct, Return[$Failed]];
+  (* 誤答は他の走査順と逆順: 受験者が取り違えやすい形にする *)
+  alts = DeleteDuplicates[Select[
+     Join[Map[iEXTreeTraverse[t, #] &, {"preorder", "inorder", "postorder"}],
+       {Reverse[correct], RotateLeft[correct]}],
+     # =!= correct && Length[#] === Length[correct] &]];
+  If[Length[alts] < 3, Return[$Failed]];
+  ansPos = Mod[Replace[Lookup[spec, "answer", 1], Except[_Integer] -> 1] - 1, 4] + 1;
+  choices = Insert[Map[StringRiffle[#, ", "] &, Take[alts, 3]],
+    StringRiffle[correct, ", "], ansPos];
+  Join[spec, <|"choices" -> choices, "answer" -> ansPos|>]];
+
+iEXValidateTreeSpec[spec_Association] := Module[{t, order, chs, ans, correct, hits},
+  t = Lookup[spec, "tree", Missing[]]; order = Lookup[spec, "order", ""];
+  chs = Lookup[spec, "choices", {}]; ans = Lookup[spec, "answer", 0];
+  If[!(iEXTreeValidQ[t] && MemberQ[{"preorder", "inorder", "postorder"}, order] &&
+      ListQ[chs] && Length[chs] >= 2 && AllTrue[chs, StringQ] &&
+      IntegerQ[ans] && 1 <= ans <= Length[chs]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  correct = iEXTreeTraverse[t, order];
+  If[Length[correct] < 4 || DeleteDuplicates[correct] =!= correct,
+   Return[<|"OK" -> False, "Reason" -> "DegenerateTree"|>]];
+  hits = Flatten[Position[chs, StringRiffle[correct, ", "]]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* ============================================================
+   構文木レシピ (演算子の優先順位・結合規則)
+   式の構文解析は決定的に計算できるので LLM を使わない。
+   正解木を優先順位つき構文解析で求め、誤答は「優先順位を入れ替えた解析」
+   「右結合で解析」「優先順位を同じにして解析」から作る。
+   ============================================================ *)
+
+(* LLM を使わず決定的に生成できるレシピ *)
+$iEXDeterministicRecipes = {"ExprTree", "FloatFormat", "GraphAlgo", "SortTrace",
+  "VennDiagram", "RegexAutomaton", "PredicateLogic"};
+
+$iEXExprTemplates = {
+  {"a", "op1", "b", "op2", "c", "op2", "(", "d", "op1", "e", ")"},
+  {"a", "op2", "b", "op1", "c", "op2", "d"},
+  {"(", "a", "op1", "b", ")", "op2", "c", "op1", "d"},
+  {"a", "op1", "b", "op2", "(", "c", "op1", "d", ")", "op2", "e"},
+  {"a", "op2", "b", "op2", "c", "op1", "d"},
+  {"a", "op1", "(", "b", "op2", "c", ")", "op1", "d", "op2", "e"}};
+
+(* 優先順位つき構文解析 (precedence climbing)。prec は演算子 -> 優先順位。 *)
+iEXParseInfix[tokens_List, prec_Association, rightAssoc_ : False] :=
+  Module[{pos = 1, parseExpr, parsePrimary},
+   parsePrimary[] := Module[{t, e},
+     If[pos > Length[tokens], Return[$Failed, Module]];
+     t = tokens[[pos]];
+     If[t === "(",
+      pos++; e = parseExpr[0]; If[pos <= Length[tokens] && tokens[[pos]] === ")", pos++]; e,
+      pos++; <|"v" -> t, "l" -> Null, "r" -> Null|>]];
+   parseExpr[minPrec_] := Module[{lhs = parsePrimary[], op, p, rhs},
+     While[pos <= Length[tokens] && KeyExistsQ[prec, tokens[[pos]]] &&
+        prec[tokens[[pos]]] >= minPrec,
+      op = tokens[[pos]]; p = prec[op]; pos++;
+      rhs = parseExpr[If[TrueQ[rightAssoc], p, p + 1]];
+      lhs = <|"v" -> op, "l" -> lhs, "r" -> rhs|>];
+     lhs];
+   parseExpr[0]];
+
+iEXExprString[tokens_List] :=
+  StringReplace[StringRiffle[tokens, " "], {"( " -> "(", " )" -> ")"}];
+
+(* 節点名が重複する (op2 が複数回出る) ので、一意 id を振って
+   ラベルは別に与える。x は中順の位置、y は深さ (左右が図でも保たれる)。 *)
+iEXExprTreeGraphHeld[t_] := Module[{cnt = 0, ino = 0, labels = {}, edges = {}, coords = {}, walk},
+  walk[node_, depth_] := Module[{id, lid, rid},
+    cnt++; id = cnt;
+    (* 木は親子関係が配置で分かるので矢印は付けない (矢じりが図に対して大きく
+       バランスを崩すため)。有向グラフが要る二項関係の図とは区別する。 *)
+    If[AssociationQ[Lookup[node, "l", Null]],
+     lid = walk[node["l"], depth + 1]; AppendTo[edges, UndirectedEdge[id, lid]]];
+    ino++; AppendTo[coords, id -> {ino, -depth}];
+    AppendTo[labels, id -> ToString[Lookup[node, "v", ""]]];
+    If[AssociationQ[Lookup[node, "r", Null]],
+     rid = walk[node["r"], depth + 1]; AppendTo[edges, UndirectedEdge[id, rid]]];
+    id];
+  If[!AssociationQ[t], Return[HoldComplete[Style["(木なし)", Italic, Gray]]]];
+  walk[t, 0];
+  With[{vs = labels[[All, 1]], es = edges, co = coords,
+    vl = Map[#[[1]] -> Placed[Style[#[[2]], FontSize -> 7, FontFamily -> "Arial"], Center] &,
+      labels]},
+   HoldComplete[Graph[vs, es,
+     VertexCoordinates -> co, VertexLabels -> vl,
+     VertexSize -> 0.78, VertexStyle -> Directive[White, EdgeForm[Black]],
+     EdgeStyle -> Black, ImageSize -> 105]]]];
+
+iEXExprTreeQuestion[tokens_List] := StringJoin[
+  "次の式の構文木として適切なものはどれか。ここで、演算子 op1 は op2 より優先順位が高く、",
+  "同じ優先順位の演算子は左から順に結合するものとする。\n式: ", iEXExprString[tokens]];
+
+iEXExprTreeSpec[seed_String] := Module[{tmpl, correct, cands, ansPos, trees, spec = $Failed},
+  Do[
+   tmpl = $iEXExprTemplates[[
+     Mod[Hash[seed <> "#" <> ToString[i], "SHA256"], Length[$iEXExprTemplates]] + 1]];
+   correct = iEXParseInfix[tmpl, <|"op1" -> 2, "op2" -> 1|>, False];
+   If[AssociationQ[correct],
+    cands = DeleteCases[DeleteDuplicates[{
+       iEXParseInfix[tmpl, <|"op1" -> 1, "op2" -> 2|>, False],
+       iEXParseInfix[tmpl, <|"op1" -> 2, "op2" -> 1|>, True],
+       iEXParseInfix[tmpl, <|"op1" -> 1, "op2" -> 1|>, False],
+       iEXParseInfix[tmpl, <|"op1" -> 1, "op2" -> 1|>, True]}], correct];
+    cands = Select[cands, AssociationQ];
+    If[Length[cands] >= 3,
+     ansPos = Mod[Hash[seed, "SHA256"], 4] + 1;
+     trees = Insert[Take[cands, 3], correct, ansPos];
+     spec = <|"Recipe" -> "ExprTree", "tokens" -> tmpl,
+       "question" -> iEXExprTreeQuestion[tmpl],
+       "trees" -> trees, "answer" -> ansPos|>;
+     Break[]]],
+   {i, 2*Length[$iEXExprTemplates]}];
+  spec];
+
+iEXValidateExprTreeSpec[spec_Association] := Module[{tmpl, trees, ans, correct, hits},
+  tmpl = Lookup[spec, "tokens", {}]; trees = Lookup[spec, "trees", {}];
+  ans = Lookup[spec, "answer", 0];
+  If[!(ListQ[tmpl] && tmpl =!= {} && AllTrue[tmpl, StringQ] &&
+      ListQ[trees] && Length[trees] >= 2 && AllTrue[trees, AssociationQ] &&
+      IntegerQ[ans] && 1 <= ans <= Length[trees]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  correct = iEXParseInfix[tmpl, <|"op1" -> 2, "op2" -> 1|>, False];
+  If[!AssociationQ[correct], Return[<|"OK" -> False, "Reason" -> "ParseFailed"|>]];
+  hits = Flatten[Position[trees, correct, {1}]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* ============================================================
+   浮動小数点形式レシピ (16 ビット: S 1 / e 4 (2 の補数) / f 11)
+   値 = (-1)^S * 0.f * 2^e。正規化は f の最上位けたが 1 であること。
+   符号化・復号とも厳密有理数で計算できるので LLM を使わない。
+   ============================================================ *)
+
+iEXIntToTwos[n_Integer, w_Integer] :=
+  StringJoin[ToString /@ IntegerDigits[Mod[n, 2^w], 2, w]];
+
+iEXFloatDecode[bits_String] := Module[{s, e, f, ev, fv},
+  If[StringLength[bits] =!= 16 || !StringMatchQ[bits, ("0" | "1") ..], Return[$Failed]];
+  s = StringTake[bits, 1]; e = StringTake[bits, {2, 5}]; f = StringTake[bits, {6, 16}];
+  ev = FromDigits[e, 2]; If[ev >= 8, ev = ev - 16];
+  fv = Total[MapIndexed[If[#1 === "1", 2^(-First[#2]), 0] &, Characters[f]]];
+  (-1)^ToExpression[s]*fv*2^ev];
+
+iEXFloatEncode[v_] := Module[{e = 0, x, y, f = ""},
+  If[!(NumericQ[v] && v > 0), Return[$Failed]];
+  x = v;
+  While[x >= 1, x = x/2; e++];
+  While[x < 1/2, x = 2 x; e--];
+  y = x;
+  Do[y = 2 y; If[y >= 1, f = f <> "1"; y = y - 1, f = f <> "0"], {11}];
+  If[y =!= 0 || !(-8 <= e <= 7), $Failed, "0" <> iEXIntToTwos[e, 4] <> f]];
+
+iEXFloatShiftExp[bits_String, d_Integer] := Module[{ev},
+  ev = FromDigits[StringTake[bits, {2, 5}], 2]; If[ev >= 8, ev = ev - 16];
+  If[!(-8 <= ev + d <= 7), $Failed,
+   StringTake[bits, 1] <> iEXIntToTwos[ev + d, 4] <> StringTake[bits, {6, 16}]]];
+
+$iEXFloatTargets = {{1, 4, "0.25"}, {3, 8, "0.375"}, {3, 4, "0.75"}, {3, 2, "1.5"},
+  {3, 1, "3"}, {6, 1, "6"}, {12, 1, "12"}, {5, 8, "0.625"}, {5, 16, "0.3125"}, {10, 1, "10"}};
+
+iEXFloatBitsHeld[bits_String] := With[
+  {s = StringTake[bits, 1], e = StringTake[bits, {2, 5}], f = StringTake[bits, {6, 16}]},
+  HoldComplete[Grid[{{s, e, f}}, Frame -> All, FrameStyle -> Gray,
+    ItemStyle -> Directive[FontFamily -> "Consolas", FontSize -> 8],
+    Spacings -> {0.6, 0.4}]]];
+
+iEXFloatFormatHeld[] := HoldComplete[Grid[
+   {{"S", "e", "f"}, {"1 ビット", "4 ビット", "11 ビット"}},
+   Frame -> All, FrameStyle -> Gray,
+   ItemStyle -> Directive[FontFamily -> "Arial", FontSize -> 8],
+   Spacings -> {1.2, 0.4}, ItemSize -> {{3, 5, 11}, Automatic}]];
+
+iEXFloatQuestion[valStr_String] := StringJoin[
+  "次の 16 ビットの浮動小数点形式で 10 進数 ", valStr, " を正規化して表したものはどれか。\n",
+  "ここで S は仮数部の符号 (0: 正, 1: 負)、e は指数部 (2 を基数とし、負数は 2 の補数で表現)、",
+  "f は仮数部 (2 進数、絶対値表示) であり、表す値は (-1)^S × 0.f × 2^e である。",
+  "正規化は、仮数部の最上位けたが 0 にならないように指数部と仮数部を調節する操作とする。"];
+
+iEXFloatSpec[seed_String] := Module[{tgt, correct, cands, ansPos, bits, spec = $Failed},
+  Do[
+   tgt = $iEXFloatTargets[[
+     Mod[Hash[seed <> "#" <> ToString[i], "SHA256"], Length[$iEXFloatTargets]] + 1]];
+   correct = iEXFloatEncode[tgt[[1]]/tgt[[2]]];
+   If[StringQ[correct],
+    cands = Select[DeleteDuplicates[{
+       "1" <> StringDrop[correct, 1],              (* 符号を誤る *)
+       iEXFloatShiftExp[correct, 1],               (* 指数を 1 大きく *)
+       iEXFloatShiftExp[correct, -1],              (* 指数を 1 小さく *)
+       iEXFloatShiftExp[correct, 2]}], StringQ[#] && # =!= correct &];
+    If[Length[cands] >= 3,
+     ansPos = Mod[Hash[seed, "SHA256"], 4] + 1;
+     bits = Insert[Take[cands, 3], correct, ansPos];
+     spec = <|"Recipe" -> "FloatFormat", "num" -> tgt[[1]], "den" -> tgt[[2]],
+       "valueString" -> tgt[[3]], "question" -> iEXFloatQuestion[tgt[[3]]],
+       "bits" -> bits, "answer" -> ansPos|>;
+     Break[]]],
+   {i, 2*Length[$iEXFloatTargets]}];
+  spec];
+
+iEXValidateFloatSpec[spec_Association] := Module[{target, bits, ans, vals, hits},
+  bits = Lookup[spec, "bits", {}]; ans = Lookup[spec, "answer", 0];
+  If[!(IntegerQ[Lookup[spec, "num", 0]] && IntegerQ[Lookup[spec, "den", 0]] &&
+      spec["den"] =!= 0 && ListQ[bits] && Length[bits] >= 2 &&
+      AllTrue[bits, StringQ[#] && StringLength[#] === 16 &] &&
+      IntegerQ[ans] && 1 <= ans <= Length[bits]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  target = spec["num"]/spec["den"];
+  vals = Map[iEXFloatDecode, bits];
+  If[MemberQ[vals, $Failed], Return[<|"OK" -> False, "Reason" -> "BadBits"|>]];
+  hits = Flatten[Position[vals, target, {1}]];
+  Which[
+   hits =!= {ans}, <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>,
+   StringTake[bits[[ans]], {6, 6}] =!= "1", <|"OK" -> False, "Reason" -> "NotNormalized"|>,
+   True, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>]];
+
+(* ============================================================
+   グラフレシピ (最短経路 / 最小全域木 / 探索順)
+   重み付きグラフのテンプレートから決定的に生成し、答えは自前計算で確定させる。
+   ============================================================ *)
+
+$iEXGraphTemplates = {
+  <|"v" -> {1, 2, 3, 4, 5},
+    "e" -> {{1, 2, 4}, {1, 3, 2}, {2, 3, 1}, {2, 4, 5}, {3, 4, 8}, {3, 5, 10}, {4, 5, 2}},
+    "s" -> 1, "t" -> 5|>,
+  <|"v" -> {1, 2, 3, 4, 5, 6},
+    "e" -> {{1, 2, 3}, {1, 3, 5}, {2, 3, 1}, {2, 4, 6}, {3, 5, 4}, {4, 5, 2}, {4, 6, 7}, {5, 6, 3}},
+    "s" -> 1, "t" -> 6|>,
+  <|"v" -> {1, 2, 3, 4, 5},
+    "e" -> {{1, 2, 7}, {1, 3, 9}, {2, 3, 3}, {2, 4, 4}, {3, 5, 6}, {4, 5, 5}},
+    "s" -> 1, "t" -> 5|>,
+  <|"v" -> {1, 2, 3, 4, 5, 6},
+    "e" -> {{1, 2, 2}, {1, 4, 8}, {2, 3, 5}, {2, 5, 4}, {3, 6, 3}, {4, 5, 1}, {5, 6, 6}},
+    "s" -> 1, "t" -> 6|>};
+
+iEXGraphMSTWeight[vs_List, es_List] := Module[{parent, find, total = 0},
+  parent = AssociationThread[vs -> vs];
+  find[x_] := If[parent[x] === x, x, find[parent[x]]];
+  Scan[Function[e, Module[{a = find[e[[1]]], b = find[e[[2]]]},
+     If[a =!= b, parent[a] = b; total += e[[3]]]]], SortBy[es, Last]];
+  total];
+
+iEXGraphShortest[vs_List, es_List, s_, t_] := Module[{n = Length[vs], idx, d},
+  idx = AssociationThread[vs -> Range[n]];
+  d = Table[If[i === j, 0, Infinity], {i, n}, {j, n}];
+  Scan[Function[e, Module[{a = idx[e[[1]]], b = idx[e[[2]]], w = e[[3]]},
+     d[[a, b]] = Min[d[[a, b]], w]; d[[b, a]] = Min[d[[b, a]], w]]], es];
+  Do[d[[i, j]] = Min[d[[i, j]], d[[i, k]] + d[[k, j]]], {k, n}, {i, n}, {j, n}];
+  d[[idx[s], idx[t]]]];
+
+(* 隣接頂点は番号の小さい順に訪れる (問題文に明記する) *)
+iEXGraphNeighbors[es_List, x_] := Sort[DeleteDuplicates[Join[
+   Cases[es, {x, y_, _} :> y], Cases[es, {y_, x, _} :> y]]]];
+
+iEXGraphTraverse[es_List, s_, mode_String] := Module[{seen = {s}, order = {}, queue = {s}, cur},
+  If[mode === "bfs",
+   While[queue =!= {},
+    cur = First[queue]; queue = Rest[queue]; AppendTo[order, cur];
+    Scan[If[!MemberQ[seen, #], AppendTo[seen, #]; AppendTo[queue, #]] &,
+     iEXGraphNeighbors[es, cur]]],
+   Module[{stack = {s}}, seen = {};
+    While[stack =!= {},
+     cur = First[stack]; stack = Rest[stack];
+     If[!MemberQ[seen, cur],
+      AppendTo[seen, cur]; AppendTo[order, cur];
+      stack = Join[iEXGraphNeighbors[es, cur], stack]]]]];
+  order];
+
+iEXGraphHeld[vs_List, es_List] := With[
+  {v = vs, ed = Map[UndirectedEdge[#[[1]], #[[2]]] &, es],
+   lab = Map[UndirectedEdge[#[[1]], #[[2]]] -> #[[3]] &, es]},
+  HoldComplete[Graph[v, ed,
+    EdgeLabels -> lab,
+    EdgeLabelStyle -> Directive[FontSize -> 8, FontFamily -> "Arial"],
+    VertexLabels -> Placed["Name", Center],
+    VertexLabelStyle -> Directive[FontSize -> 9, FontFamily -> "Arial", Black],
+    VertexSize -> 0.35, VertexStyle -> Directive[White, EdgeForm[Black]],
+    EdgeStyle -> Black, ImageSize -> 150]]];
+
+iEXGraphSpec[seed_String] := iEXGraphSpecW[seed, Automatic];
+iEXGraphSpec[seed_String, want_] := iEXGraphSpecW[seed, want];
+
+iEXGraphSpecW[seed_String, want_] := Module[
+  {tp, task, correct, cands, ansPos, choices, q},
+  tp = $iEXGraphTemplates[[
+    Mod[Hash[seed, "SHA256"], Length[$iEXGraphTemplates]] + 1]];
+  task = If[MemberQ[{"shortest", "mst", "bfs", "dfs"}, want], want,
+    {"shortest", "mst", "bfs", "dfs"}[[Mod[Hash[seed <> "#t", "SHA256"], 4] + 1]]];
+  Switch[task,
+   "shortest",
+    correct = iEXGraphShortest[tp["v"], tp["e"], tp["s"], tp["t"]];
+    q = "次の重み付きグラフにおいて、頂点 " <> ToString[tp["s"]] <> " から頂点 " <>
+      ToString[tp["t"]] <> " までの最短経路の重みの合計はいくらか。";
+    cands = Select[{correct + 1, correct - 1, correct + 2, correct + 3},
+      # > 0 && # =!= correct &],
+   "mst",
+    correct = iEXGraphMSTWeight[tp["v"], tp["e"]];
+    q = "次の重み付きグラフの最小全域木に含まれる辺の重みの合計はいくらか。";
+    cands = Select[{correct + 1, correct - 1, correct + 2, correct + 3},
+      # > 0 && # =!= correct &],
+   _,
+    correct = iEXGraphTraverse[tp["e"], tp["s"], task];
+    q = "次のグラフを頂点 " <> ToString[tp["s"]] <> " から" <>
+      If[task === "bfs", "幅優先探索", "深さ優先探索"] <>
+      "したときの頂点の訪問順はどれか。ここで、隣接する頂点は番号の小さい順に訪れるものとする。";
+    cands = DeleteCases[DeleteDuplicates[{
+       iEXGraphTraverse[tp["e"], tp["s"], If[task === "bfs", "dfs", "bfs"]],
+       Reverse[correct], RotateLeft[correct], Sort[correct]}], correct]];
+  If[Length[cands] < 3, Return[$Failed]];
+  ansPos = Mod[Hash[seed <> "#a", "SHA256"], 4] + 1;
+  choices = Insert[Map[If[ListQ[#], StringRiffle[ToString /@ #, ", "], ToString[#]] &,
+     Take[cands, 3]],
+    If[ListQ[correct], StringRiffle[ToString /@ correct, ", "], ToString[correct]], ansPos];
+  <|"Recipe" -> "GraphAlgo", "vertices" -> tp["v"], "edges" -> tp["e"],
+    "start" -> tp["s"], "goal" -> tp["t"], "task" -> task, "question" -> q,
+    "choices" -> choices, "answer" -> ansPos|>];
+
+iEXValidateGraphSpec[spec_Association] := Module[{vs, es, task, correct, chs, ans, hits},
+  vs = Lookup[spec, "vertices", {}]; es = Lookup[spec, "edges", {}];
+  task = Lookup[spec, "task", ""]; chs = Lookup[spec, "choices", {}];
+  ans = Lookup[spec, "answer", 0];
+  If[!(ListQ[vs] && Length[vs] >= 3 && ListQ[es] && es =!= {} &&
+      AllTrue[es, MatchQ[#, {_, _, _?NumericQ}] &] &&
+      ListQ[chs] && Length[chs] >= 2 && AllTrue[chs, StringQ] &&
+      IntegerQ[ans] && 1 <= ans <= Length[chs]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  correct = Switch[task,
+    "shortest", ToString[iEXGraphShortest[vs, es, spec["start"], spec["goal"]]],
+    "mst", ToString[iEXGraphMSTWeight[vs, es]],
+    "bfs" | "dfs", StringRiffle[ToString /@ iEXGraphTraverse[es, spec["start"], task], ", "],
+    _, $Failed];
+  If[!StringQ[correct], Return[<|"OK" -> False, "Reason" -> "UnknownTask"|>]];
+  hits = Flatten[Position[chs, correct, {1}]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* ============================================================
+   配列 / 整列レシピ (交換回数・途中経過)
+   ============================================================ *)
+
+$iEXSortLists = {{5, 3, 8, 1, 4}, {2, 7, 4, 6, 3}, {9, 1, 5, 3, 7},
+  {4, 8, 2, 6, 1}, {6, 2, 9, 4, 3}, {3, 6, 1, 8, 5}};
+
+(* 隣接交換の回数 = 転倒数 *)
+iEXBubbleSwaps[lst_List] := Count[Subsets[Range[Length[lst]], {2}],
+  p_ /; lst[[p[[1]]]] > lst[[p[[2]]]]];
+
+(* 挿入ソートを k 回 (k 要素目までを整列) 行った時点の配列 *)
+iEXInsertionPass[lst_List, k_Integer] :=
+  Join[Sort[Take[lst, k]], Drop[lst, k]];
+
+(* 選択ソートを k 回行った時点の配列 (毎回最小値を先頭へ交換) *)
+iEXSelectionPass[lst_List, k_Integer] := Module[{a = lst, i, m, tmp},
+  Do[m = i - 1 + First[Ordering[Take[a, {i, Length[a]}], 1]];
+   tmp = a[[i]]; a[[i]] = a[[m]]; a[[m]] = tmp, {i, k}];
+  a];
+
+(* クイックソートの 1 回目の分割。先頭要素をピボットとし、ピボット未満を
+   左、ピボット以上を右へ、それぞれ元の並び順を保ったまま集めてピボットを
+   境目に置く (安定分割)。分割方式を問題文で明示するので解が一意に定まる。 *)
+iEXQuickPartition[lst_List] := Module[{p, rest},
+  If[Length[lst] < 2, Return[lst]];
+  p = First[lst]; rest = Rest[lst];
+  Join[Select[rest, # < p &], {p}, Select[rest, # >= p &]]];
+
+iEXArrayHeld[lst_List] := With[{cells = Map[ToString, lst]},
+  HoldComplete[Grid[{cells}, Frame -> All, FrameStyle -> Gray,
+    ItemSize -> {2.2, 1.4}, Alignment -> Center,
+    ItemStyle -> Directive[FontSize -> 9, FontFamily -> "Arial"]]]];
+
+(* 旧定義 (引数 1 個) が残っていても必ず新実装へ流れるよう、
+   公開シグネチャは 1 引数のまま据え置き、実装は別名に置く *)
+iEXSortSpec[seed_String] := iEXSortSpecW[seed, Automatic];
+iEXSortSpec[seed_String, want_] := iEXSortSpecW[seed, want];
+
+iEXSortSpecW[seed_String, want_] := Module[
+  {lst, task, k, correct, cands, ansPos, choices, q},
+  lst = $iEXSortLists[[Mod[Hash[seed, "SHA256"], Length[$iEXSortLists]] + 1]];
+  task = If[MemberQ[{"swaps", "insertion", "selection", "quick"}, want], want,
+    {"swaps", "insertion", "selection", "quick"}[[
+      Mod[Hash[seed <> "#t", "SHA256"], 4] + 1]]];
+  k = 2 + Mod[Hash[seed <> "#k", "SHA256"], 2];
+  Switch[task,
+   "swaps",
+    correct = iEXBubbleSwaps[lst];
+    q = "次の配列をバブルソート (隣り合う要素を比較し、順序が逆なら交換する) で" <>
+      "昇順に整列するとき、要素の交換は何回行われるか。";
+    cands = Select[{correct + 1, correct - 1, correct + 2, correct - 2},
+      # >= 0 && # =!= correct &],
+   "insertion",
+    correct = iEXInsertionPass[lst, k];
+    q = "次の配列を挿入ソートで昇順に整列する。先頭から " <> ToString[k] <>
+      " 個の要素までの整列が終わった時点の配列はどれか。";
+    cands = DeleteCases[DeleteDuplicates[{
+       iEXInsertionPass[lst, k + 1], iEXSelectionPass[lst, k],
+       Sort[lst], Reverse[lst], RotateLeft[lst]}], correct],
+   "quick",
+    correct = iEXQuickPartition[lst];
+    q = "次の配列をクイックソートで昇順に整列する。先頭の要素をピボットとし、" <>
+      "ピボット未満の要素を左側に、ピボット以上の要素を右側に、" <>
+      "それぞれ元の並び順を保ったまま集めてピボットをその境目に置く。" <>
+      "1 回目の分割が終わった時点の配列はどれか。";
+    (* 誤答: ピボットを先頭に残す / 大小を逆にする / 末尾をピボットにする *)
+    cands = DeleteCases[DeleteDuplicates[{
+       Join[{First[lst]}, Select[Rest[lst], # < First[lst] &],
+         Select[Rest[lst], # >= First[lst] &]],
+       Join[Select[Rest[lst], # >= First[lst] &], {First[lst]},
+         Select[Rest[lst], # < First[lst] &]],
+       Join[Select[Most[lst], # < Last[lst] &], {Last[lst]},
+         Select[Most[lst], # >= Last[lst] &]],
+       Sort[lst], Reverse[lst]}], correct],
+   _,
+    correct = iEXSelectionPass[lst, k];
+    q = "次の配列を選択ソート (未整列部分の最小値を先頭と交換する) で昇順に" <>
+      "整列する。交換を " <> ToString[k] <> " 回行った時点の配列はどれか。";
+    cands = DeleteCases[DeleteDuplicates[{
+       iEXSelectionPass[lst, k + 1], iEXInsertionPass[lst, k],
+       Sort[lst], Reverse[lst], RotateLeft[lst]}], correct]];
+  If[Length[cands] < 3, Return[$Failed]];
+  ansPos = Mod[Hash[seed <> "#a", "SHA256"], 4] + 1;
+  choices = Insert[Map[If[ListQ[#], StringRiffle[ToString /@ #, ", "], ToString[#]] &,
+     Take[cands, 3]],
+    If[ListQ[correct], StringRiffle[ToString /@ correct, ", "], ToString[correct]], ansPos];
+  <|"Recipe" -> "SortTrace", "list" -> lst, "task" -> task, "k" -> k,
+    "question" -> q, "choices" -> choices, "answer" -> ansPos|>];
+
+iEXValidateSortSpec[spec_Association] := Module[{lst, task, k, correct, chs, ans, hits},
+  lst = Lookup[spec, "list", {}]; task = Lookup[spec, "task", ""];
+  k = Lookup[spec, "k", 0]; chs = Lookup[spec, "choices", {}];
+  ans = Lookup[spec, "answer", 0];
+  If[!(ListQ[lst] && Length[lst] >= 4 && AllTrue[lst, IntegerQ] &&
+      ListQ[chs] && Length[chs] >= 2 && AllTrue[chs, StringQ] &&
+      IntegerQ[ans] && 1 <= ans <= Length[chs]),
+   Return[<|"OK" -> False, "Reason" -> "BadShape"|>]];
+  correct = Switch[task,
+    "swaps", ToString[iEXBubbleSwaps[lst]],
+    "insertion", StringRiffle[ToString /@ iEXInsertionPass[lst, k], ", "],
+    "selection", StringRiffle[ToString /@ iEXSelectionPass[lst, k], ", "],
+    "quick", StringRiffle[ToString /@ iEXQuickPartition[lst], ", "],
+    _, $Failed];
+  If[!StringQ[correct], Return[<|"OK" -> False, "Reason" -> "UnknownTask"|>]];
+  hits = Flatten[Position[chs, correct, {1}]];
+  If[hits === {ans}, <|"OK" -> True, "Checked" -> True, "Hits" -> hits|>,
+   <|"OK" -> False, "Reason" -> "AnswerMismatch", "Hits" -> hits, "Answer" -> ans|>]];
+
+(* ---- 図の held 式 (自己完結・ストア保存可能) ---- *)
+(* 頂点円と番号が判読できる大きさを明示する。既定のままだと ImageSize を小さく
+   した際にラベル字形が潰れ、番号を読み違える (実レビューで 3 と 5 の誤読が発生)。 *)
+iEXRelationGraphHeld[vs_List, edges_List] := With[
+  {v = vs, e = Map[DirectedEdge[#[[1]], #[[2]]] &, edges]},
+  HoldComplete[Graph[v, e,
+    GraphLayout -> "CircularEmbedding",
+    VertexLabels -> Placed["Name", Center],
+    (* 2 列グリッドに 4 つ並べるので 1 枚は列幅の半分に収める。
+       小さくしても番号が読めるよう、頂点円とラベルは相対的に大きく取る。 *)
+    VertexLabelStyle -> Directive[FontSize -> 11, FontFamily -> "Arial", Black],
+    VertexSize -> 0.5,
+    VertexStyle -> Directive[White, EdgeForm[Black]],
+    (* 矢じりが図に対して大きくなりすぎないように明示指定する *)
+    EdgeStyle -> Directive[Black, Arrowheads[0.07]],
+    ImageSize -> 105]]];
+
+iEXAutomatonPlotHeld[transitions_List, initial_, accepting_List] := Module[{rules},
+  rules = Map[#[[1]] -> DeleteDuplicates[#[[2]]] &,
+    Normal[GroupBy[transitions, ({#[[1]], #[[2]]} &) -> (#[[3]] &)]]];
+  With[{r = rules, i = initial, a = accepting},
+   HoldComplete[Quiet[Check[
+     ResourceFunction["NFAPlot"][r, i, a,
+       "StateLabelSize" -> Medium, "TransitionLabelSize" -> Medium],
+     Labeled[
+      Graph[Catenate[Map[Function[ru,
+         Map[DirectedEdge[ru[[1, 1]], #] &, ru[[2]]]], r]],
+       VertexLabels -> Placed["Name", Center], VertexSize -> 0.32,
+       VertexStyle -> Directive[White, EdgeForm[Black]], ImageSize -> 160],
+      "初期状態: " <> ToString[i] <> "  受理状態: " <> StringRiffle[ToString /@ a, ","]]]]]]];
+
+(* ---- 生成プロンプト ---- *)
+iEXFigureBaseText[rec_Association] := iEXStripLinear[StringRiffle[Flatten[{
+   Replace[Lookup[rec, "Question", ""], Except[_String] -> ""],
+   Take[Cases[Lookup[rec, "QuestionHeld", HoldComplete[]], s_String :> s, Infinity], UpTo[3]]}], " "]];
+
+iEXAutomatonPrompt[subjTitle_String, baseText_String, theme_String] := StringJoin[
+  "あなたは大学講義「", subjTitle, "」の試験問題作成者です。\n",
+  "以下のベース問題 (有限オートマトンの状態遷移図の問題) と同型の新しい問題を 1 問作成してください。\n\n",
+  "[ベース問題文] ", baseText, "\n",
+  "[今回の受理条件] ", theme, "\n",
+  "  (他の問題と機械が重複しないよう、この受理条件ちょうどを実現する機械にすること)\n\n",
+  "条件:\n",
+  "- 状態数 3 個前後の決定性オートマトン (全状態 × 全記号 {\"0\",\"1\"} の遷移を定義)\n",
+  "- question は「受理されるビット列はどれか」形式にすること (受理状態を選ばせる形式は不可)\n",
+  "- choices は 0 と 1 だけからなるビット列 4 つ。正解番号のビット列だけが受理され、\n",
+  "  他の 3 つは受理されないこと (こちらで受理シミュレーションによる機械検証を行い、\n",
+  "  複数正解・正解なしは不合格として破棄する)\n",
+  "- 図はこちらで描画するので構造だけを返すこと\n\n",
+  "出力は次の JSON オブジェクトのみ (前後に説明やコードフェンスを付けない):\n",
+  "{\"question\":\"次の状態遷移図で表現されるオートマトンで受理されるビット列はどれか。ここで、ビット列は左から順に読み込まれるものとする。\",",
+  "\"states\":[\"a\",\"b\",\"c\"],\"initial\":\"a\",\"accepting\":[\"c\"],",
+  "\"transitions\":[[\"a\",\"0\",\"a\"],[\"a\",\"1\",\"b\"]],",
+  "\"choices\":[\"0101\",\"0111\",\"1100\",\"1010\"],\"answer\":2,\"explanation\":\"...\"}"];
+
+iEXRelationPrompt[subjTitle_String, baseText_String] := StringJoin[
+  "あなたは大学講義「", subjTitle, "」の試験問題作成者です。\n",
+  "以下のベース問題 (二項関係を有向グラフで表示し、律の充足を問う問題) と同型の新しい問題を 1 問作成してください。\n\n",
+  "[ベース問題文] ", baseText, "\n\n条件:\n",
+  "- vertices は 1..5 程度の整数\n",
+  "- choiceEdges は 4 つの辺集合 (自己ループ [x,x] も可)。(x,y) は x→y の有向辺\n",
+  "- question で言及する律はちょうど 1 つだけにすること\n",
+  "  (反射律/対称律/反対称律/推移律 のいずれか 1 つ + 満たす/満たさない)。\n",
+  "  複数の律に言及した問題文は機械検証できないため破棄する\n",
+  "- **空の辺集合 [] は禁止**。空関係はすべての律を空虚に満たすため複数正解になる\n",
+  "- 問う律を、ちょうど正解番号の選択肢だけが満たし、他の 3 つは満たさないこと\n",
+  "  (こちらで機械検証を行い、複数正解・正解なしは不合格として破棄する)\n",
+  "- 図はこちらで描画するので構造だけを返すこと\n\n",
+  "出力は次の JSON オブジェクトのみ (前後に説明やコードフェンスを付けない):\n",
+  "{\"question\":\"いくつかの二項関係Rをグラフ表示したものである。(x,y)∈Rをx→yの有向辺で表している。反射律を満たすものは\",",
+  "\"vertices\":[1,2,3,4,5],\"choiceEdges\":[[[1,1],[1,2]],[[2,3]],[[1,1],[2,2],[3,3],[4,4],[5,5]],[[3,1]]],",
+  "\"answer\":3,\"explanation\":\"...\"}"];
+
+iEXSetPrompt[subjTitle_String, baseText_String] := StringJoin[
+  "あなたは大学講義「", subjTitle, "」の試験問題作成者です。\n",
+  "以下のベース問題 (集合演算の等式・包含関係が常に成立するかを問う問題) と\n",
+  "同型の新しい問題を 1 問作成してください。\n\n",
+  "[ベース問題文] ", baseText, "\n\n条件:\n",
+  "- sets は 2 個または 3 個 (例 [\"A\",\"B\"])\n",
+  "- choices は 4 つの主張。各主張は lhs / rel / rhs で表す\n",
+  "  rel は \"subset\" (⊂) / \"superset\" (⊃) / \"equal\" (=)\n",
+  "- 式は木で表す: {\"var\":\"A\"} / {\"op\":\"union\"|\"inter\",\"args\":[..]} /\n",
+  "  {\"op\":\"comp\",\"args\":[式]} (補集合) / {\"op\":\"diff\",\"args\":[式,式]} (差集合)\n",
+  "- **正解の主張だけが任意の集合について常に成立し、他の 3 つは反例を持つこと**。\n",
+  "  こちらで全ベン領域 (2^n 通りの所属パターン) を列挙して機械検証し、\n",
+  "  複数正解・正解なしは不合格として破棄する\n",
+  "- ド・モルガンの法則で言い換えただけの主張を複数入れないこと\n",
+  "  (例: 補集合の外し方が違うだけで同値になり、正解が二つになる)\n\n",
+  "出力は次の JSON オブジェクトのみ (前後に説明やコードフェンスを付けない):\n",
+  "{\"question\":\"集合A,Bについて、常に成立する関係はどれか。ここで、∩は積集合、∪は和集合、上線は補集合を表す。\",",
+  "\"sets\":[\"A\",\"B\"],\"choices\":[",
+  "{\"lhs\":{\"op\":\"union\",\"args\":[{\"var\":\"A\"},{\"var\":\"B\"}]},\"rel\":\"subset\",\"rhs\":{\"var\":\"A\"}},",
+  "{\"lhs\":{\"op\":\"inter\",\"args\":[{\"var\":\"A\"},{\"var\":\"B\"}]},\"rel\":\"subset\",\"rhs\":{\"op\":\"union\",\"args\":[{\"var\":\"A\"},{\"var\":\"B\"}]}}",
+  "],\"answer\":2,\"explanation\":\"...\"}"];
+
+iEXSQPrompt[subjTitle_String, baseText_String] := StringJoin[
+  "あなたは大学講義「", subjTitle, "」の試験問題作成者です。\n",
+  "以下のベース問題 (スタックまたはキューの操作結果を問う問題) と同型の新しい問題を\n",
+  "1 問作成してください。\n\n[ベース問題文] ", baseText, "\n\n条件:\n",
+  "- structure は \"Stack\" または \"Queue\"\n",
+  "- initial は初期内容 (2〜3 個、空にしない)。Stack は底→頂、Queue は先頭→末尾の順\n",
+  "- ops は操作列 (4〜6 個)。[\"push\",\"5\"] / [\"pop\"] の形\n",
+  "  Stack の pop は頂点を、Queue の pop は先頭を取り除く\n",
+  "- 空の状態で pop しないこと。最終内容は 2 個以上残ること\n",
+  "- 選択肢はこちらで計算して作るので choices は省略してよい\n",
+  "- 図はこちらで描画するので構造だけを返すこと\n\n",
+  "出力は次の JSON オブジェクトのみ (前後に説明やコードフェンスを付けない):\n",
+  "{\"question\":\"初期状態が図のようなスタックに対して、次の操作を順に行ったとき、スタックの内容 (底から順) はどれか。\",",
+  "\"structure\":\"Stack\",\"initial\":[\"1\",\"2\"],",
+  "\"ops\":[[\"push\",\"3\"],[\"pop\"],[\"push\",\"4\"],[\"push\",\"5\"]],",
+  "\"answer\":2,\"explanation\":\"...\"}"];
+
+iEXTreePrompt[subjTitle_String, baseText_String] := StringJoin[
+  "あなたは大学講義「", subjTitle, "」の試験問題作成者です。\n",
+  "以下のベース問題 (2 分木の走査順を問う問題) と同型の新しい問題を 1 問作成してください。\n\n",
+  "[ベース問題文] ", baseText, "\n\n条件:\n",
+  "- tree は 2 分木。節点は {\"v\":\"値\",\"l\":左部分木,\"r\":右部分木} で表し、\n",
+  "  子が無い場合は null にする\n",
+  "- 節点は 6〜9 個、値は重複しない 1 文字 (数字またはアルファベット)\n",
+  "- order は \"preorder\" (前順) / \"inorder\" (中順) / \"postorder\" (後順) のいずれか\n",
+  "- 選択肢はこちらで計算して作る (他の走査順が誤答になる) ので choices は省略してよい\n",
+  "- 図はこちらで描画するので構造だけを返すこと\n\n",
+  "出力は次の JSON オブジェクトのみ (前後に説明やコードフェンスを付けない):\n",
+  "{\"question\":\"次の 2 分木を中順 (通りがけ順) に走査したとき、節点の値の並びはどれか。\",",
+  "\"tree\":{\"v\":\"1\",\"l\":{\"v\":\"2\",\"l\":{\"v\":\"4\",\"l\":null,\"r\":null},\"r\":{\"v\":\"5\",\"l\":null,\"r\":null}},",
+  "\"r\":{\"v\":\"3\",\"l\":{\"v\":\"6\",\"l\":null,\"r\":null},\"r\":null}},",
+  "\"order\":\"inorder\",\"answer\":3,\"explanation\":\"...\"}"];
+
+iEXParseFigureJson[resp_String] := Module[{txt, data},
+  txt = StringTrim[StringReplace[resp, "```" -> ""]];
+  Module[{p1 = StringPosition[txt, "{"], p2 = StringPosition[txt, "}"]},
+    If[p1 =!= {} && p2 =!= {},
+      txt = StringTake[txt, {First[First[p1]], Last[Last[p2]]}]]];
+  data = Quiet @ Check[ImportByteArray[StringToByteArray[txt, "UTF-8"], "RawJSON"], $Failed];
+  If[AssociationQ[data], data, $Failed]];
+
+(* ---- レシピ内の課題を散らす ----
+   2 分木は前順/中順/後順、整列はバブル/挿入/選択…と課題が複数あるのに、
+   LLM は同じ課題ばかり選び (実機で 5 問すべて後順)、決定的レシピも
+   seed 次第で偏る (実機で 3 問すべて選択ソート)。試験の中で既に使われて
+   いる課題を避けて選ぶ。                                             *)
+$iEXRecipeVariants = <|
+  "BinaryTree" -> {"preorder", "inorder", "postorder"},
+  "SortTrace" -> {"swaps", "insertion", "selection", "quick"},
+  "GraphAlgo" -> {"shortest", "mst", "bfs", "dfs"},
+  "StackQueue" -> {"Stack", "Queue"},
+  (* 二項関係は「どの律を問うか」が課題。同じ律が並ばないようにする *)
+  "Relation" -> {"Reflexive", "Symmetric", "Antisymmetric", "Transitive"}|>;
+
+iEXRelPropJa[prop_] := Switch[ToString[prop],
+  "Reflexive", "反射律", "Symmetric", "対称律",
+  "Antisymmetric", "反対称律", "Transitive", "推移律", _, ""];
+
+iEXVariantKey[recipe_String] := Switch[recipe,
+  "BinaryTree", "order", "SortTrace" | "GraphAlgo", "task",
+  "StackQueue", "structure", _, None];
+
+(* 未使用の課題を優先して選ぶ。全部使われていれば seed 由来のまま。
+   避けるべき課題が無ければ None = 差し替えない (単発生成の挙動を変えない)。 *)
+iEXPickVariant[recipe_String, seed_String, avoidForms_List] := Module[{vs, ord, free},
+  vs = Lookup[$iEXRecipeVariants, recipe, {}];
+  If[vs === {} || avoidForms === {}, Return[None]];
+  ord = RotateLeft[vs, Mod[Hash[seed, "SHA256"], Length[vs]]];
+  free = Select[ord, !MemberQ[avoidForms, recipe <> ":" <> #] &];
+  If[free === {}, First[ord], First[free]]];
+
+(* その課題が試験内で既出か *)
+iEXFormUsedQ[recipe_String, variant_, avoidForms_List] :=
+  MemberQ[avoidForms, recipe <> ":" <> ToString[variant]];
+
+(* 課題を差し替えたら問題文も作り直す (LLM の文面は元の課題を指しているため、
+   そのままだと「後順」と書いてあるのに前順を答えさせる事故になる) *)
+iEXVariantQuestion[recipe_String, variant_String] := Switch[{recipe, variant},
+  {"BinaryTree", "preorder"},
+   "次の 2 分木を前順 (行きがけ順) に走査したとき、節点の値の並びはどれか。",
+  {"BinaryTree", "inorder"},
+   "次の 2 分木を中順 (通りがけ順) に走査したとき、節点の値の並びはどれか。",
+  {"BinaryTree", "postorder"},
+   "次の 2 分木を後順 (帰りがけ順) に走査したとき、節点の値の並びはどれか。",
+  (* 図を指していることを本文で明示する (「初期状態の」だけだと図と結びつかない) *)
+  {"StackQueue", "Stack"},
+   "初期状態が図のようなスタックに対して、次の操作を順に行ったとき、スタックの内容 (底から順) はどれか。",
+  {"StackQueue", "Queue"},
+   "初期状態が図のようなキューに対して、次の操作を順に行ったとき、キューの内容 (先頭から順) はどれか。",
+  _, None];
+
+(* ---- 図問題の類似生成 (1 問 / 呼び出し・検証つき・最大 2 回試行) ---- *)
+iEXGenerateSimilarFigure[rec_Association, recipe_String, fn_, subjTitle_String,
+  avoidSpecs_List : {}, avoidForms_List : {}, forceVariant_ : Automatic] := Module[
+  {prompt, curPrompt, spec = $Failed, valid = <|"OK" -> False|>, attempt = 0, r, qa,
+   lastReason = "NoAttempt", avoidSigs, want, wantKey, forcedQ},
+  avoidSigs = DeleteCases[Map[iEXAutomatonSignature, Select[avoidSpecs, AssociationQ]], _Missing];
+  (* オーナーが課題を指定した場合は無条件に従う (「1-20 はクイックソートに」等) *)
+  forcedQ = StringQ[forceVariant] &&
+    MemberQ[Lookup[$iEXRecipeVariants, recipe, {}], forceVariant];
+  want = If[forcedQ, forceVariant,
+    iEXPickVariant[recipe, Lookup[rec, "Id", ""], avoidForms]];
+  wantKey = iEXVariantKey[recipe];
+  prompt = Switch[recipe,
+    "Automaton", iEXAutomatonPrompt[subjTitle, iEXFigureBaseText[rec],
+      iEXAutomatonTheme[Lookup[rec, "Id", ""] <> ToString[Length[avoidSigs]]]],
+    "SetAlgebra", iEXSetPrompt[subjTitle, iEXFigureBaseText[rec]],
+    "StackQueue", iEXSQPrompt[subjTitle, iEXFigureBaseText[rec]],
+    "BinaryTree", iEXTreePrompt[subjTitle, iEXFigureBaseText[rec]],
+    _, iEXRelationPrompt[subjTitle, iEXFigureBaseText[rec]]];
+  (* 二項関係は spec に課題キーを持たない (問う律は問題文で決まる) ので、
+     プロンプトには律の名前を日本語で指示する。こちらで問題文を差し替えると
+     choiceEdges と正解の対応が崩れるため、上書きはしない。 *)
+  Which[
+   recipe === "Relation" && StringQ[want] && iEXRelPropJa[want] =!= "",
+    prompt = prompt <> "\n\n注意: 問う律は「" <> iEXRelPropJa[want] <>
+      "」にすること (他の律には言及しない)。",
+   StringQ[want] && StringQ[wantKey],
+    prompt = prompt <> "\n\n注意: " <> wantKey <> " は \"" <> want <> "\" にすること。"];
+  (* 決定的レシピ (構文木 / 浮動小数点形式) は LLM を使わずに生成する *)
+  If[MemberQ[$iEXDeterministicRecipes, recipe],
+   spec = Switch[recipe,
+     "ExprTree", iEXExprTreeSpec[Lookup[rec, "Id", ""]],
+     "FloatFormat", iEXFloatSpec[Lookup[rec, "Id", ""]],
+     (* 指定があれば従い、無ければ seed 由来の課題が既出のときだけ作り直す *)
+     "GraphAlgo", Module[{s0 = iEXGraphSpec[Lookup[rec, "Id", ""]]},
+       If[StringQ[want] && AssociationQ[s0] &&
+          (forcedQ || iEXFormUsedQ[recipe, Lookup[s0, "task", ""], avoidForms]),
+        iEXGraphSpec[Lookup[rec, "Id", ""], want], s0]],
+     "SortTrace", Module[{s0 = iEXSortSpec[Lookup[rec, "Id", ""]]},
+       If[StringQ[want] && AssociationQ[s0] &&
+          (forcedQ || iEXFormUsedQ[recipe, Lookup[s0, "task", ""], avoidForms]),
+        iEXSortSpec[Lookup[rec, "Id", ""], want], s0]],
+     "VennDiagram", iEXVennSpec[Lookup[rec, "Id", ""]],
+     "RegexAutomaton", iEXRegexSpec[Lookup[rec, "Id", ""]],
+     "PredicateLogic", iEXPLSpec[Lookup[rec, "Id", ""]],
+     _, $Failed];
+   valid = Which[
+     !AssociationQ[spec], <|"OK" -> False, "Reason" -> "TemplateExhausted"|>,
+     recipe === "ExprTree", iEXValidateExprTreeSpec[spec],
+     recipe === "GraphAlgo", iEXValidateGraphSpec[spec],
+     recipe === "SortTrace", iEXValidateSortSpec[spec],
+     recipe === "VennDiagram", iEXValidateVennSpec[spec],
+     recipe === "RegexAutomaton", iEXValidateRegexSpec[spec],
+     recipe === "PredicateLogic", iEXValidatePLSpec[spec],
+     True, iEXValidateFloatSpec[spec]];
+   lastReason = Lookup[valid, "Reason", "OK"]];
+  While[attempt < 3 && !TrueQ[valid["OK"]] &&
+     !MemberQ[$iEXDeterministicRecipes, recipe],
+   attempt++;
+   (* リトライ時は失敗理由をフィードバックして構成を変えさせる *)
+   curPrompt = If[attempt === 1, prompt,
+     prompt <> "\n\n注意: 直前の試行は機械検証に失敗した (" <> ToString[lastReason] <>
+      ")。遷移や辺集合・choices を変更し、正解の選択肢だけが条件を満たすことを自分で検算してから出力すること。" <>
+      If[lastReason === "DuplicateAutomaton",
+       "\nDuplicateAutomaton は既存問題と同じ言語を受理していることを意味する。受理条件そのものを別のものに変えること。", ""]];
+   spec = Module[{resp = Quiet @ Check[fn[curPrompt], $Failed]},
+     If[StringQ[resp], iEXParseFigureJson[resp], $Failed]];
+   (* LLM は指示しても同じ課題を返しがちなので、**既出の課題を返してきた
+      ときだけ** こちらで差し替える (既出でなければ LLM の選択を尊重する)。
+      問題文も作り直さないと「後順」と書いてあるのに前順を答えさせる
+      事故になる。選択肢はこの後の repair が課題から計算し直す。 *)
+   If[AssociationQ[spec] && StringQ[want] && StringQ[wantKey] &&
+      Lookup[spec, wantKey, ""] =!= want &&
+      (forcedQ || iEXFormUsedQ[recipe, Lookup[spec, wantKey, ""], avoidForms]),
+    spec[wantKey] = want;
+    Module[{nq = iEXVariantQuestion[recipe, want]},
+     If[StringQ[nq], spec["question"] = nq]]];
+   (* オートマトンは選択肢を列挙で作り直してから検証する (作り直せない
+      = 全受理/全非受理などの退化した機械なら、そのまま検証で落とす) *)
+   (* 選択肢は決定的に計算できるレシピでは列挙・計算で作り直す *)
+   If[AssociationQ[spec],
+    Module[{rep = Switch[recipe,
+       "Automaton", iEXRepairAutomatonChoices[spec],
+       "StackQueue", iEXRepairSQChoices[spec],
+       "BinaryTree", iEXRepairTreeChoices[spec],
+       _, $Failed]},
+     If[AssociationQ[rep], spec = rep]]];
+   valid = Which[
+     spec === $Failed, <|"OK" -> False, "Reason" -> "ParseFailed"|>,
+     recipe === "Automaton",
+      Module[{v0 = iEXValidateAutomatonSpec[spec]},
+       (* 既存問題と同じ言語を受理する機械は「同じ問題」なので作り直させる *)
+       If[TrueQ[v0["OK"]] && MemberQ[avoidSigs, iEXAutomatonSignature[spec]],
+        <|"OK" -> False, "Reason" -> "DuplicateAutomaton"|>, v0]],
+     recipe === "SetAlgebra", iEXValidateSetSpec[spec],
+     recipe === "StackQueue", iEXValidateSQSpec[spec],
+     recipe === "BinaryTree", iEXValidateTreeSpec[spec],
+     True, iEXValidateRelationSpec[spec]];
+   lastReason = Lookup[valid, "Reason", "OK"]];
+  If[!TrueQ[valid["OK"]],
+   Return[iEXFail["FigureGenFailed", "Recipe" -> recipe, "Reason" -> lastReason]]];
+  qa = Switch[recipe,
+   "Automaton",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "QuestionHeld" -> iEXAutomatonPlotHeld[spec["transitions"], spec["initial"], spec["accepting"]],
+      "Choices" -> spec["choices"], "Answer" -> spec["answer"]|>,
+   "SetAlgebra",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "Choices" -> Map[iEXSetClaimHeld[#, spec["sets"]] &, spec["choices"]],
+      "Answer" -> spec["answer"]|>,
+   "VennDiagram",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "QuestionHeld" -> iEXVennExprHeld[spec["expr"], spec["sets"]],
+      "Choices" -> Map[iEXVennHeld, spec["regions"]],
+      "Answer" -> spec["answer"]|>,
+   "RegexAutomaton",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "QuestionHeld" -> iEXAutomatonPlotHeld[spec["transitions"], spec["initial"],
+        spec["accepting"]],
+      "Choices" -> spec["choices"], "Answer" -> spec["answer"]|>,
+   (* 述語論理は図を持たない (本文と選択肢だけ) *)
+   "PredicateLogic",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "Choices" -> spec["choices"], "Answer" -> spec["answer"]|>,
+   "StackQueue",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "QuestionHeld" -> iEXSQVizHeld[spec["structure"],
+        Map[ToString, Replace[Lookup[spec, "initial", {}], Except[_List] -> {}]], spec["ops"]],
+      "Choices" -> spec["choices"], "Answer" -> spec["answer"]|>,
+   "BinaryTree",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "QuestionHeld" -> iEXTreeGraphHeld[spec["tree"]],
+      "Choices" -> spec["choices"], "Answer" -> spec["answer"]|>,
+   "ExprTree",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "Choices" -> Map[iEXExprTreeGraphHeld, spec["trees"]],
+      "Answer" -> spec["answer"]|>,
+   "FloatFormat",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "QuestionHeld" -> iEXFloatFormatHeld[],
+      "Choices" -> Map[iEXFloatBitsHeld, spec["bits"]],
+      "Answer" -> spec["answer"]|>,
+   "GraphAlgo",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "QuestionHeld" -> iEXGraphHeld[spec["vertices"], spec["edges"]],
+      "Choices" -> spec["choices"], "Answer" -> spec["answer"]|>,
+   "SortTrace",
+    <|"Question" -> Lookup[spec, "question", ""],
+      "QuestionHeld" -> iEXArrayHeld[spec["list"]],
+      "Choices" -> spec["choices"], "Answer" -> spec["answer"]|>,
+   _,
+    <|"Question" -> Lookup[spec, "question", ""],
+      "Choices" -> Map[iEXRelationGraphHeld[spec["vertices"], #] &, spec["choiceEdges"]],
+      "Answer" -> spec["answer"]|>];
+  r = SourceVaultExerciseAdd[rec["Subject"], Join[qa, <|
+    "Explanation" -> Lookup[spec, "explanation", Missing[]],
+    "Unit" -> Lookup[rec, "Unit", Missing[]],
+    "Field" -> Lookup[rec, "Field", Missing[]],
+    "Source" -> "LLM生成・図再構成 (base: " <> rec["Id"] <> ")",
+    "Status" -> "Draft", "BaseId" -> rec["Id"],
+    "Difficulty" -> Lookup[rec, "Difficulty", Missing[]],
+    "DifficultySource" -> "inherited",
+    "FigureSpec" -> Join[spec, <|"Recipe" -> recipe|>]|>]];
+  (* 同じ内容の問題が既にある場合は失敗ではなく再利用する。
+     構文木のような決定的レシピは作り直すと必ず同一内容になるため。 *)
+  If[AssociationQ[r] && StringQ[Lookup[r, "Id", Missing[]]],
+   <|"Status" -> "OK", "BaseId" -> rec["Id"], "Requested" -> 1, "Parsed" -> 1,
+     "Created" -> {r["Id"]}, "Recipe" -> recipe, "Existed" -> TrueQ[r["Existed"]],
+     "Validated" -> TrueQ[Lookup[valid, "Checked", False]]|>,
+   iEXFail["FigureGenFailed", "Recipe" -> recipe, "Reason" -> "StoreError"]]];
+
+Options[SourceVaultExerciseGenerateSimilar] = {"LLMFn" -> Automatic, "AvoidSpecs" -> {},
+  "AvoidForms" -> {}, "Variant" -> Automatic,
+  "UseRecipes" -> Automatic, "VerifyText" -> True, "PerChoice" -> False};
+SourceVaultExerciseGenerateSimilar[id_String, n_Integer : 3, OptionsPattern[]] := Module[
+  {rec = SourceVaultExerciseGet[id], subj, info, fn, resp, parsed, created = {}, recipe,
+   verifyText = TrueQ[OptionValue["VerifyText"]],
+   perChoice = TrueQ[OptionValue["PerChoice"]]},
+  If[!AssociationQ[rec], Return[iEXFail["NotFound", "Id" -> id]]];
+  subj = rec["Subject"];
+  info = SourceVaultExerciseSubjectInfo[subj];
+  (* 図問題は構造生成+機械検証ルートへ。決定的レシピは LLM 不要。
+     "UseRecipes"->All なら図のない問題にもレシピを当てる (図つきの
+     検証済み問題に作り替える)。 *)
+  recipe = Which[
+    OptionValue["UseRecipes"] === None, None,
+    OptionValue["UseRecipes"] === All, iEXFigureRecipe[rec],
+    True, If[TrueQ[Lookup[rec, "HasImage", False]], iEXFigureRecipe[rec], None]];
+  (* オートマトンの問題を「受理されるビット列」型でなく
+     「受理する言語を表す正規表現」型に作り替える (オーナー指定) *)
+  If[recipe === "Automaton" && OptionValue["Variant"] === "regex",
+   recipe = "RegexAutomaton"];
+  fn = OptionValue["LLMFn"];
+  If[fn === Automatic, fn = iEXLLMTextFn[]];
+  If[fn === $Failed && !MemberQ[$iEXDeterministicRecipes, recipe], Return[iEXFail["NoLLM",
+    "Hint" -> "ClaudeCode 未ロード。\"LLMFn\"->Function[prompt, ...] を指定してください。"]]];
+  If[recipe =!= None,
+   Return[iEXGenerateSimilarFigure[rec, recipe, fn,
+     If[AssociationQ[info], Lookup[info, "Title", subj], subj],
+     Replace[OptionValue["AvoidSpecs"], Except[_List] -> {}],
+     Replace[OptionValue["AvoidForms"], Except[_List] -> {}],
+     OptionValue["Variant"]]]];
+  resp = Quiet @ Check[fn[iEXSimilarPrompt[rec,
+    If[AssociationQ[info], Lookup[info, "Title", subj], subj], n]], $Failed];
+  If[!StringQ[resp], Return[iEXFail["LLMFailed"]]];
+  parsed = iEXParseSimilarJson[resp];
+  If[parsed === $Failed || parsed === {},
+    Return[iEXFail["ParseFailed", "Raw" -> If[StringQ[resp], StringTake[resp, UpTo[500]], resp]]]];
+  (* テキスト問題は計算で検証できないので、正解が一つに定まるかを LLM に
+     問い直して確かめる (複数正解・正解なしを弾く)。 *)
+  If[TrueQ[verifyText],
+   Module[{ok = Select[parsed, iEXTextAnswerUniqueQ[fn, #, perChoice] &]},
+    If[ok === {},
+     Return[iEXFail["TextVerifyFailed", "BaseId" -> id,
+       "Hint" -> "生成された問題の正解が一意でないと判定された。"]]];
+    parsed = ok]];
+  Scan[Function[pa, Module[{r},
+    r = SourceVaultExerciseAdd[subj, Join[pa, <|
+      "Unit" -> Lookup[rec, "Unit", Missing[]],
+      "Field" -> Lookup[rec, "Field", Missing[]],
+      "Source" -> "LLM生成 (base: " <> id <> ")",
+      "Status" -> "Draft", "BaseId" -> id,
+      "Difficulty" -> Lookup[rec, "Difficulty", Missing[]],
+      "DifficultySource" -> "inherited"|>]];
+    If[AssociationQ[r] && !TrueQ[r["Existed"]], AppendTo[created, r["Id"]]]]], parsed];
+  <|"Status" -> "OK", "BaseId" -> id, "Requested" -> n, "Parsed" -> Length[parsed],
+    "Created" -> created|>];
+
+(* ---- 難易度一括推定 ---- *)
+
+iEXDifficultyPrompt[subjTitle_String, items : {{_String, _String} ..}] := StringJoin[
+  "あなたは大学講義「", subjTitle, "」の試験問題作成者です。\n",
+  "以下の各問題の難易度を 1 (易しい) 〜 5 (難しい) の整数で推定してください。\n",
+  "受講生は情報工学科の学部生です。\n\n",
+  StringJoin @@ Map[Function[it, "[" <> it[[1]] <> "] " <> it[[2]] <> "\n"], items],
+  "\n出力は次の JSON 配列のみ (前後に説明やコードフェンスを付けない):\n",
+  "[{\"id\":\"...\",\"difficulty\":3}]"];
+
+Options[SourceVaultExerciseEstimateDifficulty] = {
+  "LLMFn" -> Automatic, "Overwrite" -> False, "MaxItems" -> All, "BatchSize" -> 15};
+SourceVaultExerciseEstimateDifficulty[subj_String, OptionsPattern[]] := Module[
+  {info, fn, rows, targets, batches, updated = 0, failedBatches = 0, mx = OptionValue["MaxItems"]},
+  info = SourceVaultExerciseSubjectInfo[subj];
+  fn = OptionValue["LLMFn"];
+  If[fn === Automatic, fn = iEXLLMTextFn[]];
+  If[fn === $Failed, Return[iEXFail["NoLLM",
+    "Hint" -> "ClaudeCode 未ロード。\"LLMFn\"->Function[prompt, ...] を指定してください。"]]];
+  rows = SourceVaultExercises[subj];
+  targets = If[TrueQ[OptionValue["Overwrite"]], rows,
+    Select[rows, !NumericQ[Lookup[#, "Difficulty", Missing[]]] &]];
+  If[IntegerQ[mx], targets = Take[targets, UpTo[mx]]];
+  If[targets === {}, Return[<|"Status" -> "OK", "Updated" -> 0, "Targets" -> 0|>]];
+  batches = Partition[targets, UpTo[OptionValue["BatchSize"]]];
+  Scan[Function[batch, Module[{items, resp, data},
+    items = Map[Function[r, {Lookup[r, "Id"],
+      StringTake[Lookup[r, "Headline", ""], UpTo[200]]}], batch];
+    resp = Quiet @ Check[fn[iEXDifficultyPrompt[
+      If[AssociationQ[info], Lookup[info, "Title", subj], subj], items]], $Failed];
+    data = If[StringQ[resp], iEXParseDifficultyJson[resp], $Failed];
+    If[ListQ[data],
+      Scan[Function[d, Module[{did = Lookup[d, "id", ""], dv = Lookup[d, "difficulty", Missing[]]},
+        If[StringQ[did] && IntegerQ[dv] && 1 <= dv <= 5 &&
+           AssociationQ[SourceVaultExerciseGet[did]],
+          SourceVaultExerciseUpdate[did, <|"Difficulty" -> dv, "DifficultySource" -> "llm"|>];
+          updated++]]], data],
+      failedBatches++]]], batches];
+  <|"Status" -> If[failedBatches === 0, "OK", "Partial"], "Targets" -> Length[targets],
+    "Updated" -> updated, "FailedBatches" -> failedBatches|>];
+
+iEXParseDifficultyJson[resp_String] := Module[{txt, data},
+  txt = StringTrim[StringReplace[resp, "```" -> ""]];
+  Module[{p1 = StringPosition[txt, "["], p2 = StringPosition[txt, "]"]},
+    If[p1 =!= {} && p2 =!= {},
+      txt = StringTake[txt, {First[First[p1]], Last[Last[p2]]}]]];
+  data = Quiet @ Check[ImportByteArray[StringToByteArray[txt, "UTF-8"], "RawJSON"], $Failed];
+  If[ListQ[data], Select[data, AssociationQ], $Failed]];
+
+(* FigureSpec からの図の再構築 (ビルダー更新後の一括再描画用・LLM 不要) *)
+SourceVaultExerciseRebuildFigure[id_String] := Module[
+  {rec = SourceVaultExerciseGet[id], spec},
+  If[!AssociationQ[rec], Return[iEXFail["NotFound", "Id" -> id]]];
+  spec = Lookup[rec, "FigureSpec", Missing[]];
+  If[!AssociationQ[spec], Return[iEXFail["NoFigureSpec", "Id" -> id]]];
+  Switch[Lookup[spec, "Recipe", ""],
+   "Automaton",
+    SourceVaultExerciseUpdate[id, <|"QuestionHeld" ->
+      iEXAutomatonPlotHeld[spec["transitions"], spec["initial"], spec["accepting"]]|>],
+   "Relation",
+    SourceVaultExerciseUpdate[id, <|"Choices" ->
+      Map[iEXRelationGraphHeld[spec["vertices"], #] &, spec["choiceEdges"]]|>],
+   "SetAlgebra",
+    SourceVaultExerciseUpdate[id, <|"Choices" ->
+      Map[iEXSetClaimHeld[#, spec["sets"]] &, spec["choices"]]|>],
+   "VennDiagram",
+    SourceVaultExerciseUpdate[id, <|
+      "QuestionHeld" -> iEXVennExprHeld[spec["expr"], spec["sets"]],
+      "Choices" -> Map[iEXVennHeld, spec["regions"]]|>],
+   "RegexAutomaton",
+    SourceVaultExerciseUpdate[id, <|"QuestionHeld" ->
+      iEXAutomatonPlotHeld[spec["transitions"], spec["initial"], spec["accepting"]]|>],
+   (* 本文も定型なので図と一緒に作り直す (図の指示・端の呼び方を本文と
+      揃えるため。structure から一意に決まるので LLM の文面は不要) *)
+   "StackQueue",
+    SourceVaultExerciseUpdate[id, Join[
+      <|"QuestionHeld" -> iEXSQVizHeld[spec["structure"],
+         Map[ToString, Replace[Lookup[spec, "initial", {}], Except[_List] -> {}]],
+         spec["ops"]]|>,
+      With[{q = iEXVariantQuestion["StackQueue", ToString[spec["structure"]]]},
+       If[StringQ[q], <|"Question" -> q|>, <||>]]]],
+   "BinaryTree",
+    SourceVaultExerciseUpdate[id, <|"QuestionHeld" -> iEXTreeGraphHeld[spec["tree"]]|>],
+   "ExprTree",
+    SourceVaultExerciseUpdate[id, <|"Choices" -> Map[iEXExprTreeGraphHeld, spec["trees"]]|>],
+   "FloatFormat",
+    SourceVaultExerciseUpdate[id, <|"QuestionHeld" -> iEXFloatFormatHeld[],
+      "Choices" -> Map[iEXFloatBitsHeld, spec["bits"]]|>],
+   "GraphAlgo",
+    SourceVaultExerciseUpdate[id,
+      <|"QuestionHeld" -> iEXGraphHeld[spec["vertices"], spec["edges"]]|>],
+   "SortTrace",
+    SourceVaultExerciseUpdate[id, <|"QuestionHeld" -> iEXArrayHeld[spec["list"]]|>],
+   _, Return[iEXFail["UnknownRecipe", "Id" -> id]]];
+  <|"Status" -> "OK", "Id" -> id, "Recipe" -> spec["Recipe"]|>];
+
+(* ---- 生成問題の機械再検証 / スロット差し戻し ---- *)
+
+iEXExamSlots[exam_Association] := Flatten[Map[Function[g,
+   MapIndexed[Function[{id, ix},
+     {ToString[g["Label"]] <> "-" <> ToString[First[ix]], id}], g["Problems"]]],
+  exam["Groups"]], 1];
+
+(* レコードの欠落検査: 出題前にここで弾く *)
+iEXRecordIssues[rec_] := Module[{iss = {}, q, ans},
+  If[!AssociationQ[rec], Return[{"NotFound"}]];
+  q = Lookup[rec, "Question", Missing[]];
+  If[!(StringQ[q] && StringTrim[q] =!= "") &&
+     !MatchQ[Lookup[rec, "QuestionHeld", Missing[]], _HoldComplete],
+   AppendTo[iss, "NoQuestion"]];
+  (* 選択肢が空なら Format によらず報告する (ingest で落ちている場合がある) *)
+  If[Replace[Lookup[rec, "Choices", {}], Except[_List] -> {}] === {},
+   AppendTo[iss, "NoChoices"]];
+  ans = Lookup[rec, "Answer", Missing[]];
+  If[MissingQ[ans] || ans === "" ||
+     (!StringQ[Lookup[rec, "ModelAnswer", Missing[]]] && ans === Null),
+   AppendTo[iss, "NoAnswer"]];
+  iss];
+
+SourceVaultExamSlots[examId_String] := Module[{exam = SourceVaultExamGet[examId]},
+  If[!AssociationQ[exam], iEXFail["ExamNotFound", "ExamId" -> examId],
+   Association[Map[#[[1]] -> #[[2]] &, iEXExamSlots[exam]]]]];
+
+Options[SourceVaultExamRepairSlots] = {"Slots" -> Automatic};
+SourceVaultExamRepairSlots[examId_String, OptionsPattern[]] := Module[
+  {exam, audit, targets, used, pool, k = 0, failed = {}, assign = <||>,
+   newGroups, exam2},
+  exam = SourceVaultExamGet[examId];
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  audit = SourceVaultExamAudit[examId];
+  If[!ListQ[audit], Return[audit]];
+  targets = If[OptionValue["Slots"] === Automatic,
+    Map[#["Slot"] &, Select[audit, #["Issues"] =!= {} &]],
+    Replace[OptionValue["Slots"], Except[_List] -> {}]];
+  If[targets === {},
+   Return[<|"Status" -> "OK", "ExamId" -> examId, "Repaired" -> {}, "Failed" -> {}|>]];
+  used = iEXExamSlots[exam][[All, 2]];
+  pool = Select[Lookup[SourceVaultExercises[exam["Subject"]], "Id", {}],
+    Function[pid, !MemberQ[used, pid] &&
+      iEXRecordIssues[SourceVaultExerciseGet[pid]] === {}]];
+  (* 問題文が文字列として入っているものを優先する。問題ごと 1 枚の画像に
+     なっているレコードは段組では字が小さくなるため後回しにする。 *)
+  pool = SortBy[pool, Function[pid, Module[{r = SourceVaultExerciseGet[pid]},
+     -Boole[AssociationQ[r] && StringQ[Lookup[r, "Question", Missing[]]] &&
+        StringTrim[r["Question"]] =!= ""]]]];
+  (* 差し替えは 1 回の再構成でまとめて行う。1 スロットずつ SetSlot すると、
+     残りの壊れたスロットのせいで再構成が失敗して 1 件も直らない。 *)
+  Scan[Function[slot, k++;
+    If[k > Length[pool], AppendTo[failed, slot], assign[slot] = pool[[k]]]], targets];
+  If[assign === <||>,
+   Return[<|"Status" -> "Partial", "ExamId" -> examId, "Repaired" -> {},
+     "Failed" -> failed, "PoolSize" -> Length[pool]|>]];
+  newGroups = Map[Function[g, <|"Label" -> g["Label"],
+     "Problems" -> MapIndexed[Function[{id, ix},
+        Lookup[assign, ToString[g["Label"]] <> "-" <> ToString[First[ix]], id]],
+       g["Problems"]]|>], exam["Groups"]];
+  exam2 = SourceVaultExamCompose[exam["Subject"], <|
+    "ExamId" -> examId, "Title" -> exam["Title"], "ExamName" -> exam["ExamName"],
+    "Year" -> exam["Year"], "DateSpec" -> exam["DateSpec"],
+    "Duration" -> exam["Duration"], "Allowed" -> exam["Allowed"],
+    "Groups" -> newGroups, "Points" -> exam["Points"]|>];
+  If[!AssociationQ[exam2], Return[exam2]];
+  exam2["PreviousGroups"] = Lookup[exam, "PreviousGroups", exam["Groups"]];
+  (* 番号の付け方は再構成で失われるので引き継ぐ *)
+  exam2["Numbering"] = Lookup[exam, "Numbering", "Group"];
+  iEXSaveExam[exam2];
+  <|"Status" -> If[failed === {}, "OK", "Partial"], "ExamId" -> examId,
+    "Repaired" -> Normal[assign], "Failed" -> failed, "PoolSize" -> Length[pool]|>];
+
+SourceVaultExamAudit[examId_String] := Module[{exam},
+  exam = SourceVaultExamGet[examId];
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  Map[Function[sl, Module[{rec = SourceVaultExerciseGet[sl[[2]]]},
+     <|"Slot" -> sl[[1]], "Id" -> sl[[2]], "Issues" -> iEXRecordIssues[rec],
+       "Headline" -> If[AssociationQ[rec], Lookup[rec, "Headline", ""], ""]|>]],
+   iEXExamSlots[exam]]];
+
+Options[SourceVaultExamAuditView] = {"OnlyIssues" -> True};
+SourceVaultExamAuditView[examId_String, OptionsPattern[]] := Module[
+  {rows = SourceVaultExamAudit[examId]},
+  If[!ListQ[rows], Return[rows]];
+  If[TrueQ[OptionValue["OnlyIssues"]], rows = Select[rows, #["Issues"] =!= {} &]];
+  Dataset[rows]];
+
+SourceVaultExamValidateFigures[examId_String] := Module[{exam, slots},
+  exam = SourceVaultExamGet[examId];
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  slots = iEXExamSlots[exam];
+  Map[Function[sl, Module[{rec = SourceVaultExerciseGet[sl[[2]]], spec, v},
+     spec = If[AssociationQ[rec], Lookup[rec, "FigureSpec", Missing[]], Missing[]];
+     If[!AssociationQ[spec],
+      <|"Slot" -> sl[[1]], "Id" -> sl[[2]], "Recipe" -> Missing["NoFigureSpec"],
+        "OK" -> Missing["NotGenerated"], "Reason" -> "", "Hits" -> Missing[]|>,
+      v = Switch[Lookup[spec, "Recipe", ""],
+        "Automaton", iEXValidateAutomatonSpec[spec],
+        "Relation", iEXValidateRelationSpec[spec],
+        "SetAlgebra", iEXValidateSetSpec[spec],
+        "StackQueue", iEXValidateSQSpec[spec],
+        "BinaryTree", iEXValidateTreeSpec[spec],
+        "ExprTree", iEXValidateExprTreeSpec[spec],
+        "FloatFormat", iEXValidateFloatSpec[spec],
+        "GraphAlgo", iEXValidateGraphSpec[spec],
+        "SortTrace", iEXValidateSortSpec[spec],
+        "VennDiagram", iEXValidateVennSpec[spec],
+        "RegexAutomaton", iEXValidateRegexSpec[spec],
+        "PredicateLogic", iEXValidatePLSpec[spec],
+        _, <|"OK" -> False, "Reason" -> "UnknownRecipe"|>];
+      <|"Slot" -> sl[[1]], "Id" -> sl[[2]], "Recipe" -> spec["Recipe"],
+        "OK" -> TrueQ[v["OK"]], "Reason" -> Lookup[v, "Reason", ""],
+        "Hits" -> Lookup[v, "Hits", Missing[]]|>]]], slots]];
+
+Options[SourceVaultExamValidateFiguresView] = {"OnlyFailures" -> False};
+SourceVaultExamValidateFiguresView[examId_String, OptionsPattern[]] := Module[
+  {rows = SourceVaultExamValidateFigures[examId]},
+  If[!ListQ[rows], Return[rows]];
+  rows = Select[rows, !MissingQ[#["OK"]] &];
+  If[TrueQ[OptionValue["OnlyFailures"]], rows = Select[rows, !TrueQ[#["OK"]] &]];
+  Dataset[rows]];
+
+(* 文章題検査の対象外にする理由。None なら検査できる。
+   **図つき問題を除くのが要**: LLM には文字列しか渡さないので、状態遷移図
+   などが本体の問題は「根拠がない」と全選択肢 false になり、正常な問題が
+   NG に見える (実機 dms 2-2 / 2-4 がこれだった)。
+   生成した図問題は SourceVaultExamValidateFigures が機械検証する。 *)
+iEXTextVerifySkipReason[rec_] := Module[{ch, ans},
+  If[!AssociationQ[rec], Return["NotFound"]];
+  ch = Lookup[rec, "Choices", {}];
+  ans = Lookup[rec, "Answer", Missing[]];
+  Which[
+   !StringQ[Lookup[rec, "Question", Missing[]]] ||
+     StringTrim[rec["Question"]] === "", "NoQuestionText",
+   (* レコードは "QuestionHeld" キーを常に持ち、図がなければ値が Missing[]。
+      KeyExistsQ で見ると全問が図つき扱いになるので中身で判定する。 *)
+   MatchQ[Lookup[rec, "QuestionHeld", Missing[]], _HoldComplete] ||
+     TrueQ[Lookup[rec, "HasImage", False]], "NeedsFigure",
+   !ListQ[ch] || ch === {} || !AllTrue[ch, StringQ], "NotTextChoices",
+   !IntegerQ[ans], "NoAnswer",
+   True, None]];
+
+(* 図問題は機械検証できるが、文章題は計算で確かめられない。
+   選択肢を 1 つずつ独立に「答えとして成立するか」問い直し ("PerChoice" 既定
+   True・選択肢数だけ LLM を呼ぶ)、成立する選択肢がちょうど正解 1 つに
+   なっているかを試験全体について確認する (複数正解の検出)。
+   "PerChoice"->False にすると 1 問 1 回の一括質問になる (速いが取りこぼす)。 *)
+Options[SourceVaultExamVerifyText] = {"LLMFn" -> Automatic, "Slots" -> Automatic,
+  "PerChoice" -> True};
+SourceVaultExamVerifyText[examId_String, OptionsPattern[]] := Module[
+  {exam, slots, fn, want, perChoice = TrueQ[OptionValue["PerChoice"]]},
+  exam = SourceVaultExamGet[examId];
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  fn = OptionValue["LLMFn"];
+  If[fn === Automatic, fn = iEXLLMTextFn[]];
+  If[fn === $Failed, Return[iEXFail["NoLLM",
+    "Hint" -> "ClaudeCode 未ロード。\"LLMFn\"->Function[prompt, ...] を指定してください。"]]];
+  want = OptionValue["Slots"];
+  slots = iEXExamSlots[exam];
+  If[ListQ[want], slots = Select[slots, MemberQ[want, #[[1]]] &]];
+  Map[Function[sl, Module[{rec = SourceVaultExerciseGet[sl[[2]]], ch, ans, det, nums, skip},
+     ch = If[AssociationQ[rec], Lookup[rec, "Choices", {}], {}];
+     ans = If[AssociationQ[rec], Lookup[rec, "Answer", Missing[]], Missing[]];
+     skip = iEXTextVerifySkipReason[rec];
+     If[skip =!= None,
+      <|"Slot" -> sl[[1]], "Id" -> sl[[2]], "Answer" -> ans,
+        "Reported" -> Missing[skip], "OK" -> Missing[skip],
+        "Negative" -> Missing[skip], "Notes" -> {},
+        "Headline" -> If[AssociationQ[rec], Lookup[rec, "Headline", ""], ""]|>,
+      det = iEXTextCorrectDetail[fn,
+        <|"Question" -> rec["Question"], "Choices" -> ch|>, perChoice];
+      nums = det["Set"];
+      <|"Slot" -> sl[[1]], "Id" -> sl[[2]], "Answer" -> ans,
+        "Reported" -> If[ListQ[nums], nums, Missing["Unparsed"]],
+        "OK" -> (ListQ[nums] && nums === {ans}),
+        (* 否定形 (「適切でないもの」型) かどうかは食い違いの原因になるので出す *)
+        "Negative" -> iEXNegativeQuestionQ[rec["Question"]],
+        (* 検証器が間違うこともあるので判断理由を残す (オーナーが是非を決める) *)
+        "Notes" -> det["Notes"],
+        "Headline" -> Lookup[rec, "Headline", ""]|>]]], slots]];
+
+(* ============================================================
+   同型問題の検出 (LLM 不要)
+   レシピで作り直すと、同じ単元の問題が同じレシピに当たって
+   「初期状態+操作列 → 内容はどれか」のような同型問題が並ぶ。
+   元の出題はシラバス全単元に散らしてあるので、これは改変で
+   持ち込んだ劣化。指紋 (レシピ+課題) の一致と、本文の文字
+   bigram の Jaccard 類似度の両方で拾う。
+   ============================================================ *)
+
+(* 生成問題の指紋。同じレシピ・同じ課題なら見た目も同型になる。 *)
+iEXProblemSignature[rec_] := Module[{fs, parts, prop},
+  If[!AssociationQ[rec], Return[Missing["NotFound"]]];
+  fs = Lookup[rec, "FigureSpec", Missing[]];
+  If[!AssociationQ[fs],
+   (* 原問には FigureSpec が無いので指紋も付かない。二項関係だけは
+      本文から問う律を読み取って指紋にする。これが無いと「原問が反射律
+      なのに生成問題も反射律」を避けられない (実機で発生)。 *)
+   Return[Module[{p = iEXRelQuestionProp[
+       ToString[Lookup[rec, "Question", ""]] <> " " <>
+       ToString[Lookup[rec, "Headline", ""]]]},
+     If[StringQ[p], "Relation:" <> p, Missing["NoSpec"]]]]];
+  (* 二項関係は問う律 (反射/対称/反対称/推移) が課題そのもの。spec に
+     持っていないので問題文から導く (既存レコードもそのまま判定できる)。 *)
+  prop = If[Lookup[fs, "Recipe", ""] === "Relation" && !KeyExistsQ[fs, "prop"],
+    Replace[iEXRelQuestionProp[ToString[Lookup[fs, "question", ""]]], None -> ""],
+    Lookup[fs, "prop", ""]];
+  parts = Append[
+    Map[StringTrim[ToString[Lookup[fs, #, ""]]] &,
+     {"Recipe", "task", "structure", "order"}],
+    StringTrim[ToString[prop]]];
+  StringRiffle[DeleteCases[parts, ""], ":"]];
+
+(* 本文+選択肢の文字 bigram 集合。空白と主な約物は落とす。 *)
+iEXProblemShingles[rec_] := Module[{t},
+  If[!AssociationQ[rec], Return[{}]];
+  t = StringJoin[
+    Replace[Lookup[rec, "Question", ""], Except[_String] -> ""],
+    StringJoin[Select[Lookup[rec, "Choices", {}], StringQ]]];
+  t = StringDelete[t, {" ", "\t", "\n", "\r", "　", "、", "。", "，", "．",
+    "（", "）", "(", ")", "「", "」", "『", "』"}];
+  If[StringLength[t] < 4, {},
+   DeleteDuplicates[StringJoin /@ Partition[Characters[t], 2, 1]]]];
+
+iEXJaccard[a_List, b_List] := If[a === {} || b === {}, 0.,
+  N[Length[Intersection[a, b]]/Length[Union[a, b]]]];
+
+Options[SourceVaultExamSimilarPairs] = {"Threshold" -> 0.6};
+SourceVaultExamSimilarPairs[examId_String, OptionsPattern[]] := Module[
+  {exam, slots, recs, sigs, sh, out = {}, th = OptionValue["Threshold"], n},
+  exam = SourceVaultExamGet[examId];
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  slots = iEXExamSlots[exam];
+  n = Length[slots];
+  recs = Map[SourceVaultExerciseGet[#[[2]]] &, slots];
+  sigs = Map[iEXProblemSignature, recs];
+  sh = Map[iEXProblemShingles, recs];
+  Do[Module[{score = iEXJaccard[sh[[i]], sh[[j]]], same},
+     same = StringQ[sigs[[i]]] && sigs[[i]] =!= "" && sigs[[i]] === sigs[[j]];
+     If[same || score >= th,
+      AppendTo[out, <|"SlotA" -> slots[[i, 1]], "SlotB" -> slots[[j, 1]],
+        "Score" -> Round[score, 0.01], "SameForm" -> same,
+        "Signature" -> If[same, sigs[[i]], ""],
+        "HeadlineA" -> If[AssociationQ[recs[[i]]], Lookup[recs[[i]], "Headline", ""], ""],
+        "HeadlineB" -> If[AssociationQ[recs[[j]]], Lookup[recs[[j]], "Headline", ""], ""]|>]]],
+   {i, n - 1}, {j, i + 1, n}];
+  SortBy[out, {-Boole[#["SameForm"]] &, -#["Score"] &}]];
+
+SourceVaultExamSimilarPairsView[examId_String, opts : OptionsPattern[]] := Module[
+  {rows = SourceVaultExamSimilarPairs[examId, opts]},
+  If[!ListQ[rows], Return[rows]];
+  Dataset[rows]];
+Options[SourceVaultExamSimilarPairsView] = Options[SourceVaultExamSimilarPairs];
+
+(* 近い問題の組を連結成分にまとめ、各群で 1 問だけ残して残りは原問へ
+   差し戻す。元の出題は単元を散らしてあるので、差し戻せば多様性が戻る。 *)
+Options[SourceVaultExamDedupeSlots] = {"Threshold" -> 0.6, "Apply" -> True};
+SourceVaultExamDedupeSlots[examId_String, OptionsPattern[]] := Module[
+  {pairs, groups, keep = {}, drop = {}, rev},
+  pairs = SourceVaultExamSimilarPairs[examId, "Threshold" -> OptionValue["Threshold"]];
+  If[!ListQ[pairs], Return[pairs]];
+  If[pairs === {},
+   Return[<|"Status" -> "OK", "Groups" -> {}, "Kept" -> {}, "Reverted" -> {}|>]];
+  (* 連結成分 = 「どれかと似ている」問題のかたまり *)
+  groups = ConnectedComponents[
+    Graph[Union @@ Map[{#["SlotA"], #["SlotB"]} &, pairs],
+      Map[UndirectedEdge[#["SlotA"], #["SlotB"]] &, pairs]]];
+  groups = Map[SortBy[#, iEXSlotOrderKey] &, groups];
+  Scan[Function[g, AppendTo[keep, First[g]]; drop = Join[drop, Rest[g]]], groups];
+  If[!TrueQ[OptionValue["Apply"]],
+   Return[<|"Status" -> "DryRun", "Groups" -> groups, "Kept" -> keep,
+     "WouldRevert" -> drop|>]];
+  rev = SourceVaultExamRevertSlots[examId, drop];
+  <|"Status" -> "OK", "Groups" -> groups, "Kept" -> keep,
+    "Reverted" -> Lookup[rev, "Reverted", {}],
+    (* 原問どうしが似ている場合は差し戻せない (元からそういう出題) *)
+    "NoOriginal" -> Complement[drop, Lookup[rev, "Reverted", {}]]|>];
+
+(* "1-10" が "1-9" の後に来るように数値で並べる *)
+iEXSlotOrderKey[slot_String] := Module[{p = StringSplit[slot, "-"]},
+  If[Length[p] === 2 && StringMatchQ[p[[1]], DigitCharacter ..] &&
+     StringMatchQ[p[[2]], DigitCharacter ..],
+   {ToExpression[p[[1]]], ToExpression[p[[2]]]}, {99, 99}]];
+
+Options[SourceVaultExamVerifyTextView] = {"LLMFn" -> Automatic, "Slots" -> Automatic,
+  "PerChoice" -> True, "OnlyFailures" -> True};
+SourceVaultExamVerifyTextView[examId_String, OptionsPattern[]] := Module[
+  {rows = SourceVaultExamVerifyText[examId, "LLMFn" -> OptionValue["LLMFn"],
+     "Slots" -> OptionValue["Slots"], "PerChoice" -> OptionValue["PerChoice"]]},
+  If[!ListQ[rows], Return[rows]];
+  rows = Select[rows, !MissingQ[#["OK"]] &];
+  If[TrueQ[OptionValue["OnlyFailures"]], rows = Select[rows, !TrueQ[#["OK"]] &]];
+  Dataset[rows]];
+
+SourceVaultExamSetSlot[examId_String, slot_String, id_String] := Module[
+  {exam, rec, found = False, newGroups, exam2},
+  exam = SourceVaultExamGet[examId];
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  rec = SourceVaultExerciseGet[id];
+  If[!AssociationQ[rec], Return[iEXFail["NotFound", "Id" -> id]]];
+  If[rec["Subject"] =!= exam["Subject"],
+   Return[iEXFail["SubjectMismatch", "Id" -> id, "Subject" -> rec["Subject"]]]];
+  newGroups = Map[Function[g, <|"Label" -> g["Label"],
+     "Problems" -> MapIndexed[Function[{cur, ix},
+        If[ToString[g["Label"]] <> "-" <> ToString[First[ix]] === slot,
+         found = True; id, cur]], g["Problems"]]|>],
+    exam["Groups"]];
+  If[!found, Return[iEXFail["SlotNotFound", "Slot" -> slot]]];
+  exam2 = SourceVaultExamCompose[exam["Subject"], <|
+    "ExamId" -> examId, "Title" -> exam["Title"], "ExamName" -> exam["ExamName"],
+    "Year" -> exam["Year"], "DateSpec" -> exam["DateSpec"],
+    "Duration" -> exam["Duration"], "Allowed" -> exam["Allowed"],
+    "Groups" -> newGroups, "Points" -> exam["Points"]|>];
+  If[!AssociationQ[exam2], Return[exam2]];
+  exam2["PreviousGroups"] = Lookup[exam, "PreviousGroups", exam["Groups"]];
+  (* 番号の付け方は再構成で失われるので引き継ぐ *)
+  exam2["Numbering"] = Lookup[exam, "Numbering", "Group"];
+  iEXSaveExam[exam2];
+  <|"Status" -> "OK", "ExamId" -> examId, "Slot" -> slot, "Id" -> id,
+    "Headline" -> Lookup[rec, "Headline", ""]|>];
+
+SourceVaultExamRevertSlots[examId_String, slots_] := Module[
+  {exam, prev, prevMap, newGroups, reverted = {}, missing = {}, exam2},
+  exam = SourceVaultExamGet[examId];
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  prev = Lookup[exam, "PreviousGroups", Missing[]];
+  If[!ListQ[prev], Return[iEXFail["NoPreviousGroups", "ExamId" -> examId]]];
+  prevMap = Association[Map[#[[1]] -> #[[2]] &,
+    iEXExamSlots[Join[exam, <|"Groups" -> prev|>]]]];
+  newGroups = Map[Function[g, <|"Label" -> g["Label"],
+     "Problems" -> MapIndexed[Function[{id, ix}, Module[
+        {key = ToString[g["Label"]] <> "-" <> ToString[First[ix]], old},
+        If[slots =!= All && !MemberQ[slots, key], id,
+         old = Lookup[prevMap, key, Missing[]];
+         Which[
+          !StringQ[old], AppendTo[missing, key]; id,
+          old === id, id,
+          True, AppendTo[reverted, key]; old]]]], g["Problems"]]|>],
+    exam["Groups"]];
+  exam2 = SourceVaultExamCompose[exam["Subject"], <|
+    "ExamId" -> examId, "Title" -> exam["Title"], "ExamName" -> exam["ExamName"],
+    "Year" -> exam["Year"], "DateSpec" -> exam["DateSpec"],
+    "Duration" -> exam["Duration"], "Allowed" -> exam["Allowed"],
+    "Groups" -> newGroups, "Points" -> exam["Points"]|>];
+  If[!AssociationQ[exam2], Return[exam2]];
+  exam2["PreviousGroups"] = prev;
+  exam2["Numbering"] = Lookup[exam, "Numbering", "Group"];
+  iEXSaveExam[exam2];
+  <|"Status" -> "OK", "ExamId" -> examId, "Reverted" -> reverted,
+    "NoPreviousEntry" -> missing|>];
+
+(* ---- 試験の類似問題入れ替え ---- *)
+
+Options[SourceVaultExamReplaceWithSimilar] = {"Fraction" -> 0.7, "RandomSeed" -> Automatic,
+  "LLMFn" -> Automatic, "GenerateForAll" -> True, "Slots" -> All,
+  "UseRecipes" -> Automatic, "VerifyText" -> True, "PerChoice" -> False,
+  "DuplicateThreshold" -> 0.6, "Variant" -> Automatic};
+SourceVaultExamReplaceWithSimilar[examId_String, OptionsPattern[]] := Module[
+  {exam, slots, recs, eligible, nRep, chosen, targets, mapping = <||>, failures = {},
+   skipped = {}, newGroups, replaced = {}, exam2, saved, avoidSpecs = {},
+   failureReasons = <||>, usedForms, usedShingles, newRecipe,
+   dupTh = OptionValue["DuplicateThreshold"]},
+  exam = SourceVaultExamGet[examId];
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  slots = iEXExamSlots[exam];
+  recs = Association[Map[#[[2]] -> SourceVaultExerciseGet[#[[2]]] &, slots]];
+  (* 対象 = 選択問題のうち、画像なし (テキスト生成) または図レシピあり
+     (オートマトン/二項関係グラフ=構造生成+機械検証)。それ以外の図問題と記述は原問のまま *)
+  eligible = Select[slots, Function[sl, Module[{r = recs[sl[[2]]]},
+     AssociationQ[r] && Lookup[r, "Format", "Choice"] === "Choice" &&
+       MissingQ[Lookup[r, "BaseId", Missing[]]] &&  (* 置換済み (類似問題) スロットは再対象にしない *)
+       (!TrueQ[Lookup[r, "HasImage", False]] || iEXFigureRecipe[r] =!= None)]]];
+  If[OptionValue["Slots"] =!= All,
+   eligible = Select[eligible, MemberQ[OptionValue["Slots"], #[[1]]] &]];
+  skipped = Complement[slots[[All, 1]], eligible[[All, 1]]];
+  nRep = Min[Length[eligible], Ceiling[OptionValue["Fraction"]*Length[slots]]];
+  (* 入れ替え 0 件なら LLM を一切呼ばずに何もしない ("Fraction"->0 = 原問のまま) *)
+  If[nRep <= 0,
+   Return[<|"Status" -> "NoChange", "ExamId" -> examId, "Slots" -> Length[slots],
+     "Eligible" -> Length[eligible], "Generated" -> 0, "Replaced" -> 0,
+     "SkippedSlots" -> skipped, "GenerationFailures" -> {}, "Mapping" -> <||>|>]];
+  chosen = If[OptionValue["RandomSeed"] === Automatic, Take[eligible, UpTo[nRep]],
+    BlockRandom[SeedRandom[OptionValue["RandomSeed"]]; RandomSample[eligible, nRep]]];
+  targets = If[TrueQ[OptionValue["GenerateForAll"]], eligible, chosen];
+  (* 各問題 1 問ずつ類似問題を生成 (Draft 保存)。失敗スロットは原問のまま。 *)
+  (* 既に使われている機械 (この試験のスロット + 同科目の生成済み問題) を集め、
+     同じ言語を受理する機械が再生産されるのを防ぐ *)
+  avoidSpecs = Module[{ids, specs},
+    ids = DeleteDuplicates[Join[slots[[All, 2]],
+      Lookup[Select[Values[iEXIndex[exam["Subject"]]],
+        Lookup[#, "Recipe", Missing[]] === "Automaton" &], "Id", {}]]];
+    specs = Map[Function[pid, Module[{r = SourceVaultExerciseGet[pid]},
+       If[AssociationQ[r], Lookup[r, "FigureSpec", Missing[]], Missing[]]]], ids];
+    Select[specs, AssociationQ[#] && Lookup[#, "Recipe", ""] === "Automaton" &]];
+  (* 同型問題の量産を防ぐ。同じ単元の問題は同じレシピに当たるので、
+     指紋 (レシピ+課題) や本文が既出のものは採用せず原問のまま残す。
+     元の出題はシラバス全単元に散らしてあるので、原問を残す方が多様。
+     比較相手からは **そのスロット自身** を必ず外す (類似問題は元問題に
+     似ているのが当たり前なので、外さないと全件が重複判定になる)。 *)
+  usedForms = Association[
+    Map[# -> iEXProblemSignature[SourceVaultExerciseGet[#]] &, slots[[All, 2]]]];
+  usedShingles = Association[
+    Map[# -> iEXProblemShingles[SourceVaultExerciseGet[#]] &, slots[[All, 2]]]];
+  Scan[Function[sl, Module[{id = sl[[2]], g, newRec, sig, sh, others},
+     If[!KeyExistsQ[mapping, id] && !MemberQ[failures, id],
+      g = SourceVaultExerciseGenerateSimilar[id, 1, "LLMFn" -> OptionValue["LLMFn"],
+        "AvoidSpecs" -> avoidSpecs, "UseRecipes" -> OptionValue["UseRecipes"],
+        "VerifyText" -> OptionValue["VerifyText"],
+        "PerChoice" -> OptionValue["PerChoice"],
+        (* 既に使われている課題 (後順・選択ソート等) を避けさせる *)
+        "AvoidForms" -> DeleteMissing[Values[KeyDrop[usedForms, id]]],
+        "Variant" -> OptionValue["Variant"]];
+      If[FailureQ[g], failureReasons[id] = Lookup[g[[2]], "Reason", "Unknown"]];
+      If[AssociationQ[g] && Lookup[g, "Created", {}] =!= {},
+       newRec = SourceVaultExerciseGet[First[g["Created"]]];
+       sig = iEXProblemSignature[newRec];
+       sh = iEXProblemShingles[newRec];
+       others = KeyDrop[usedShingles, id];
+       newRecipe = Lookup[
+         Replace[Lookup[newRec, "FigureSpec", <||>], Except[_Association] -> <||>],
+         "Recipe", ""];
+       Which[
+        (* オートマトンは問題文が定型で図だけが違うので、指紋も本文も
+           重複判定に使えない。受理言語の指紋 (AvoidSpecs) で既に
+           「同じ言語の機械は作り直す」ところまで担保されている。 *)
+        newRecipe === "Automaton", Null,
+        StringQ[sig] && sig =!= "" &&
+          MemberQ[DeleteMissing[Values[KeyDrop[usedForms, id]]], sig],
+         failureReasons[id] = "DuplicateForm"; AppendTo[failures, id],
+        (* 図問題は本文でなく図で区別する。定型の問題文で弾かない *)
+        newRecipe === "" && AnyTrue[Values[others], iEXJaccard[sh, #] >= dupTh &],
+         failureReasons[id] = "DuplicateText"; AppendTo[failures, id],
+        True, Null];
+       If[!MemberQ[failures, id],
+        mapping[id] = First[g["Created"]];
+        usedForms[id] = sig; usedShingles[id] = sh;
+        (* 生成した機械も「使用済み」に積み、同じ言語の再生産を防ぐ *)
+        If[newRecipe === "Automaton" && AssociationQ[newRec],
+         AppendTo[avoidSpecs, newRec["FigureSpec"]]]],
+       AppendTo[failures, id]]]]], targets];
+  (* 入れ替え (配点キー・順序は不変) *)
+  Module[{chosenIds = DeleteDuplicates[chosen[[All, 2]]]},
+   newGroups = Map[Function[g, <|"Label" -> g["Label"],
+      "Problems" -> Map[Function[id,
+        If[MemberQ[chosenIds, id] && KeyExistsQ[mapping, id],
+         AppendTo[replaced, id]; mapping[id], id]], g["Problems"]]|>],
+     exam["Groups"]]];
+  exam2 = SourceVaultExamCompose[exam["Subject"], <|
+    "ExamId" -> examId, "Title" -> exam["Title"], "ExamName" -> exam["ExamName"],
+    "Year" -> exam["Year"], "DateSpec" -> exam["DateSpec"],
+    "Duration" -> exam["Duration"], "Allowed" -> exam["Allowed"],
+    "Groups" -> newGroups, "Points" -> exam["Points"]|>];
+  If[!AssociationQ[exam2], Return[exam2]];
+  (* 元構成を保存 (差し戻し用) *)
+  exam2["PreviousGroups"] = Lookup[exam, "PreviousGroups", exam["Groups"]];
+  (* 番号の付け方は再構成で失われるので引き継ぐ *)
+  exam2["Numbering"] = Lookup[exam, "Numbering", "Group"];
+  saved = iEXSaveExam[exam2];
+  <|"Status" -> If[failures === {}, "OK", "Partial"], "ExamId" -> examId,
+    "Slots" -> Length[slots], "Eligible" -> Length[eligible],
+    "Generated" -> Length[mapping], "Replaced" -> Length[DeleteDuplicates[replaced]],
+    "SkippedSlots" -> skipped, "GenerationFailures" -> failures,
+    "FailureReasons" -> failureReasons, "Mapping" -> mapping|>];
+
+SourceVaultExerciseDrafts[subj_String] := SourceVaultExercises[subj, "Status" -> "Draft"];
+
+SourceVaultExerciseDraftsView[subj_String] := Module[{rows = SourceVaultExerciseDrafts[subj]},
+  Dataset[KeyTake[#, {"Id", "Unit", "Field", "BaseId", "Headline"}] & /@
+    Take[rows, UpTo[$SourceVaultExercisesViewLimit]]]];
+
+SourceVaultExerciseApproveDraft[id_String] := Module[{rec = SourceVaultExerciseGet[id]},
+  If[!AssociationQ[rec], Return[iEXFail["NotFound", "Id" -> id]]];
+  If[Lookup[rec, "Status"] =!= "Draft", Return[iEXFail["NotADraft", "Id" -> id]]];
+  SourceVaultExerciseUpdate[id, <|"Status" -> "Active"|>];
+  <|"Status" -> "OK", "Id" -> id|>];
+
+SourceVaultExerciseDiscardDraft[id_String] := Module[{rec = SourceVaultExerciseGet[id], subj, idx},
+  If[!AssociationQ[rec], Return[iEXFail["NotFound", "Id" -> id]]];
+  If[Lookup[rec, "Status"] =!= "Draft", Return[iEXFail["NotADraft", "Id" -> id]]];
+  subj = rec["Subject"];
+  Quiet @ DeleteFile[iEXRecordPath[id]];
+  idx = iEXIndex[subj];
+  idx = KeyDrop[idx, id];
+  iEXSaveIndex[subj, idx];
+  <|"Status" -> "OK", "Id" -> id, "Deleted" -> True|>];
+
+(* ============================================================
+   プライバシー分類の宣言 (コミットゲート用)
+   ・問題 DB そのものは個人情報を含まない (PL 0.3)。私的ストア
+     (<PrivateVault>/exercises) には到達するが、出力に私的データは載らない
+     ので "Public" + "NoDataFlow" 理由つき。
+   ・答案系 (名簿・スキャン・突合せ・採点) は学籍番号と氏名を扱うので
+     "Private"。View 系は "View"、生データを返す Core 系は "Result"。
+   ============================================================ *)
+
+$iEXPrivacyPublic = {
+  (* 科目・シラバス *)
+  "SourceVaultExerciseRegisterSubject", "SourceVaultExerciseSubjects",
+  "SourceVaultExerciseSubjectInfo", "SourceVaultExerciseParseSyllabus",
+  (* 問題レコード *)
+  "SourceVaultExerciseAdd", "SourceVaultExerciseGet", "SourceVaultExerciseUpdate",
+  "SourceVaultExerciseRetire", "SourceVaultExercises", "SourceVaultExercisesView",
+  "SourceVaultExerciseSearch", "SourceVaultExerciseSearchView",
+  "SourceVaultExerciseView", "SourceVaultExerciseStats",
+  "SourceVaultExerciseStructure", "SourceVaultExerciseStructureView",
+  "SourceVaultExerciseSetDifficulty", "SourceVaultExerciseAssignUnit",
+  "SourceVaultExerciseEstimateDifficulty", "SourceVaultExerciseUnitAuditView",
+  "SourceVaultExerciseIngestNotebook",
+  (* 類似問題生成 *)
+  "SourceVaultExerciseGenerateSimilar", "SourceVaultExerciseDrafts",
+  "SourceVaultExerciseDraftsView", "SourceVaultExerciseApproveDraft",
+  "SourceVaultExerciseDiscardDraft", "SourceVaultExerciseRebuildFigure",
+  (* 試験の構成・点検・用紙 *)
+  "SourceVaultExamCompose", "SourceVaultExamGet", "SourceVaultExamList",
+  "SourceVaultExamSelectProblems", "SourceVaultExamSetPoints",
+  "SourceVaultExamAnswerKey", "SourceVaultExamRecordHistory",
+  "SourceVaultExamSlots", "SourceVaultExamSetSlot", "SourceVaultExamRevertSlots",
+  "SourceVaultExamRepairSlots", "SourceVaultExamAudit", "SourceVaultExamAuditView",
+  "SourceVaultExamValidateFigures", "SourceVaultExamValidateFiguresView",
+  "SourceVaultExamVerifyText", "SourceVaultExamVerifyTextView",
+  "SourceVaultExamSimilarPairs", "SourceVaultExamSimilarPairsView",
+  "SourceVaultExamDedupeSlots", "SourceVaultExamReplaceWithSimilar",
+  "SourceVaultExamSetNumbering", "SourceVaultExamNumbering",
+  "SourceVaultExamNumberingView",
+  "SourceVaultExamPaperPDF", "SourceVaultExamProblemPreview",
+  "SourceVaultExamAnswerSheetPDF", "SourceVaultExamSheetLayout",
+  (* 設定変数 (値は書体名・担当教員名・テンプレート/ストアのパス・既定 PL・
+     表示件数。受講者に関する情報は持たない) *)
+  "$SourceVaultExamFontFamily", "$SourceVaultExamInstructor",
+  "$SourceVaultExamTemplatePDF", "$SourceVaultExerciseDefaultPrivacyLevel",
+  "$SourceVaultExercisesRoot", "$SourceVaultExercisesViewLimit"};
+
+(* 答案・受講者に触れるもの。Result=生データ / View=表示オブジェクト *)
+$iEXPrivacyPrivate = {
+  {"SourceVaultExamRosterImport", "Result"},
+  {"SourceVaultExamSheetIngest", "Result"},
+  {"SourceVaultExamMatches", "Result"},
+  {"SourceVaultExamMatchView", "View"},
+  {"SourceVaultExamSetMatch", "Result"},
+  {"SourceVaultExamRecognize", "Result"},
+  {"SourceVaultExamSetAnswer", "Result"},
+  {"SourceVaultExamSetMark", "Result"},
+  {"SourceVaultExamScore", "Result"},
+  {"SourceVaultExamScoreView", "View"},
+  {"SourceVaultExamScoreReport", "Result"}};
+
+iEXRegisterPrivacyContracts[] :=
+  Quiet@Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+     Scan[SourceVault`SourceVaultRegisterPrivacyContract[#,
+        <|"Class" -> "Public", "Module" -> "SourceVault_course.wl",
+          "NoDataFlow" ->
+           "問題 DB は個人情報を含まない (PL 0.3)。私的ストアには書くが、\
+出力は問題文・選択肢・配点・図など出題内容のみで、受講者に関する情報は載らない。"|>] &,
+      $iEXPrivacyPublic];
+     Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+        <|"Class" -> "Private", "Exit" -> Last[#], "Sources" -> {"exam"},
+          "Module" -> "SourceVault_course.wl"|>] &,
+      $iEXPrivacyPrivate]];
+    Null, Null];
+iEXRegisterPrivacyContracts[];
+
+End[]
+
+EndPackage[]

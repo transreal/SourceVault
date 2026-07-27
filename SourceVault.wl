@@ -1961,13 +1961,13 @@ iAuthorizeMaterialize[obj_Association, sinkSpec_] :=
 If[!ListQ[SourceVault`$SourceVaultSeedModelRegistry],
   SourceVault`$SourceVaultSeedModelRegistry = {
     <|"Provider" -> "anthropic", "Intent" -> "heavy",
-      "ModelId" -> "claude-opus-4-8", "Class" -> "Heavy-Cloud",
+      "ModelId" -> "claude-opus-5", "Class" -> "Heavy-Cloud",
       "Availability" -> "Available", "Source" -> "seed"|>,
     <|"Provider" -> "anthropic", "Intent" -> "math-extraction-heavy",
-      "ModelId" -> "claude-opus-4-8", "Class" -> "Heavy-Cloud",
+      "ModelId" -> "claude-opus-5", "Class" -> "Heavy-Cloud",
       "Availability" -> "Available", "Source" -> "seed"|>,
     <|"Provider" -> "anthropic", "Intent" -> "code-heavy",
-      "ModelId" -> "claude-opus-4-8", "Class" -> "Heavy-Cloud",
+      "ModelId" -> "claude-opus-5", "Class" -> "Heavy-Cloud",
       "Availability" -> "Available", "Source" -> "seed"|>,
     <|"Provider" -> "anthropic", "Intent" -> "sonnet",
       "ModelId" -> "claude-sonnet-4-6", "Class" -> "Mid-Cloud",
@@ -6663,11 +6663,11 @@ iModelSeedEntries[] := {
     "Class" -> "Heavy-Local", "Capabilities" -> {"Reasoning", "Code"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "claudecode", "Intent" -> "code-heavy",
-    "ModelId" -> "claude-opus-4-8", "Availability" -> "Available",
+    "ModelId" -> "claude-opus-5", "Availability" -> "Available",
     "Class" -> "Heavy-Local", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "anthropic", "Intent" -> "heavy",
-    "ModelId" -> "claude-opus-4-8", "Availability" -> "Available",
+    "ModelId" -> "claude-opus-5", "Availability" -> "Available",
     "Class" -> "Heavy-Cloud", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "anthropic", "Intent" -> "extraction",
@@ -6696,11 +6696,11 @@ iModelSeedEntries[] := {
      model catalog; SourceVault keeps a minimal set, not the full
      catalog. LLMs must not edit these directly. *)
   <|"Kind" -> "Model", "Provider" -> "chatgptcodex", "Intent" -> "heavy",
-    "ModelId" -> "gpt-5.5", "Availability" -> "Available",
+    "ModelId" -> "gpt-5.6-sol", "Availability" -> "Available",
     "Class" -> "Heavy-Cloud", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>,
   <|"Kind" -> "Model", "Provider" -> "chatgptcodex", "Intent" -> "code-heavy",
-    "ModelId" -> "gpt-5.3-codex", "Availability" -> "Available",
+    "ModelId" -> "gpt-5.6-sol", "Availability" -> "Available",
     "Class" -> "Heavy-Cloud", "Capabilities" -> {"Reasoning", "Code", "ToolUse"},
     "Freshness" -> "Fresh", "PolicySource" -> "seed:model-seed"|>
 };
@@ -11856,7 +11856,7 @@ iSVFetchModelIds[url_String, headers_List] :=
    not see the user's PATH on Windows). Returns the same shape as
    iSVFetchModelIds: <|"Status"->"OK"|"Failed", "ModelIds"->{..}|>. *)
 iSVFetchCodexModelIds[exe_String] :=
-  Module[{cmd, run, out, data, models, slugs},
+  Module[{cmd, run, out, data, models, slugs, ranked},
     cmd = If[$OperatingSystem === "Windows",
       {"cmd", "/c", exe, "debug", "models"},
       {exe, "debug", "models"}];
@@ -11879,12 +11879,21 @@ iSVFetchCodexModelIds[exe_String] :=
     models = Lookup[data, "models", {}];
     If[!ListQ[models],
       Return[<|"Status" -> "Failed", "Reason" -> "NoModelsArray"|>]];
-    slugs = Cases[models,
+    (* The CLI ranks its own catalog with "priority" (1 = the current
+       flagship). Keep that order: codex model slugs carry codenames
+       (gpt-5.6-sol) that the generic version parser treats as a
+       preview suffix, so name parsing alone can never tell which slug
+       is the newest. The catalog order is handed to the caller as
+       CatalogRank and wins over version parsing for this provider. *)
+    ranked = Cases[models,
       m_Association /;
         (StringQ[Lookup[m, "slug", Missing[]]] &&
          Lookup[m, "visibility", "list"] =!= "hide") :>
-        Lookup[m, "slug"]];
-    slugs = DeleteDuplicates @ Select[slugs, StringQ];
+        {Lookup[m, "slug"],
+         With[{p = Lookup[m, "priority", Missing[]]},
+           If[IntegerQ[p], p, 10^6]]}];
+    ranked = SortBy[ranked, Last];
+    slugs = DeleteDuplicates @ Select[First /@ ranked, StringQ];
     <|"Status" -> "OK", "ModelIds" -> slugs|>
   ];
 iSVFetchCodexModelIds[___] :=
@@ -12140,21 +12149,29 @@ iSVAssignIntentsToFetched[fetched_List] :=
           <|"Entry" -> e, "Provider" -> provider, "ModelId" -> id,
             "Family" -> family, "Version" -> version,
             "HasSuffix" -> hasSuffix,
+            "CatalogRank" -> Lookup[e, "CatalogRank", Missing["NoRank"]],
             "InferIntent" -> Lookup[infer, "Intent", Null],
             "InferClass" -> Lookup[infer, "Class", "Unknown"],
             "InferCaps" -> Lookup[infer, "Capabilities", {"Reasoning"}]|>]],
       fetched];
     (* (2) intent \:304c\:63a8\:8ad6\:3067\:304d\:4e14\:3064 suffix \:7121\:3057\:306e\:3082\:306e\:3092 (provider,intent) \:3067
-       \:30b0\:30eb\:30fc\:30d4\:30f3\:30b0\:3057\:3001\:6700\:5927\:30d0\:30fc\:30b8\:30e7\:30f3\:3092\:9078\:3076 *)
+       \:30b0\:30eb\:30fc\:30d4\:30f3\:30b0\:3057\:3001\:6700\:5927\:30d0\:30fc\:30b8\:30e7\:30f3\:3092\:9078\:3076\:3002
+       CatalogRank \:4ed8\:304d (provider \:81ea\:8eab\:304c\:9806\:4f4d\:3092\:8fd4\:3057\:3066\:304f\:308b codex CLI \:7b49) \:306f
+       \:4f8b\:5916: \:30b3\:30fc\:30c9\:30cd\:30fc\:30e0\:4ed8\:304d slug (gpt-5.6-sol) \:306f\:30d0\:30fc\:30b8\:30e7\:30f3\:89e3\:6790\:3067
+       preview suffix \:3068\:8aa4\:5224\:5b9a\:3055\:308c\:3066\:6607\:683c\:3067\:304d\:306a\:3044\:305f\:3081\:3001suffix \:5224\:5b9a\:3092
+       \:30d0\:30a4\:30d1\:30b9\:3057\:3066 rank \:6700\:5c0f (= provider \:304c\:8a00\:3046\:65d7\:8266) \:3092\:63a1\:308b\:3002 *)
     byKey = GroupBy[
       Select[withMeta,
-        StringQ[#["InferIntent"]] && !TrueQ[#["HasSuffix"]] &],
+        StringQ[#["InferIntent"]] &&
+          (!TrueQ[#["HasSuffix"]] || IntegerQ[#["CatalogRank"]]) &],
       {#["Provider"], #["InferIntent"]} &];
     promoted = Association @ KeyValueMap[
       Function[{key, group},
         Module[{best},
           best = First @ SortBy[group,
-            -iSVVersionSortKey[#["Version"]] &];
+            {If[IntegerQ[#["CatalogRank"]], 0, 1],
+             If[IntegerQ[#["CatalogRank"]], #["CatalogRank"], 0],
+             -iSVVersionSortKey[#["Version"]]} &];
           key -> best]],
       byKey];
     (* (3) base: \:5168 fetched \:3092 Intent=Null \:306e\:307e\:307e (\:4e00\:89a7\:7528)\:3002
@@ -12166,14 +12183,15 @@ iSVAssignIntentsToFetched[fetched_List] :=
           isPromoted = StringQ[m["InferIntent"]] &&
             KeyExistsQ[promoted, key] &&
             promoted[key]["ModelId"] === m["ModelId"] &&
-            !TrueQ[m["HasSuffix"]];
+            (!TrueQ[m["HasSuffix"]] || IntegerQ[m["CatalogRank"]]);
           If[isPromoted,
             <|e,
               "Intent" -> m["InferIntent"],
               "Class" -> m["InferClass"],
               "Capabilities" -> m["InferCaps"],
               "Kind" -> "Model",
-              "PolicySource" -> "auto-fetch:max-version"|>,
+              "PolicySource" -> If[IntegerQ[m["CatalogRank"]],
+                "auto-fetch:catalog-rank", "auto-fetch:max-version"]|>,
             (* \:975e\:6607\:683c\:30a8\:30f3\:30c8\:30ea\:306f Class \:3060\:3051\:63a8\:8ad6\:5024\:3067\:88dc\:5b8c\:3001Intent \:306f Null \:306e\:307e\:307e *)
             <|e, "Class" -> m["InferClass"]|>]]],
       withMeta];
@@ -12226,9 +12244,14 @@ iSVMergeModelRegistry[existing_List, fetched_List] :=
     fetchedKeys = Map[
       {Lookup[#, "Provider", ""], Lookup[#, "ModelId", ""]} &,
       fetched];
+    (* \:65e7\:30a8\:30f3\:30c8\:30ea\:306e\:9664\:53bb\:306f Source \:306e\:63a5\:982d\:8f9e\:3067\:5224\:5b9a\:3059\:308b\:3002
+       "auto-fetch:mirror-anthropic" \:306a\:3069\:306e\:6d3e\:751f Source \:3092 =!= "auto-fetch" \:3067
+       \:5224\:5b9a\:3057\:3066\:3044\:305f\:305f\:3081\:3001mirror \:30a8\:30f3\:30c8\:30ea\:304c refresh \:306e\:305f\:3073\:306b\:91cd\:8907\:3057\:3066
+       registry \:304c\:81a8\:3089\:3093\:3067\:3044\:305f (\:65e7\:30d0\:30fc\:30b8\:30e7\:30f3\:306e code-heavy \:30a8\:30f3\:30c8\:30ea\:304c
+       \:4f55\:4e16\:4ee3\:3082\:6b8b\:308b)\:3002manual / seed \:306f\:5f93\:6765\:901a\:308a\:6e29\:5b58\:3059\:308b\:3002 *)
     kept = Select[existing,
       Function[e,
-        Lookup[e, "Source", ""] =!= "auto-fetch" ||
+        !StringStartsQ[Lookup[e, "Source", ""], "auto-fetch"] ||
         !MemberQ[fetchedKeys,
           {Lookup[e, "Provider", ""], Lookup[e, "ModelId", ""]}]]];
     merged = Join[kept, fetched];
@@ -12290,8 +12313,10 @@ SourceVaultRefreshModelRegistry[opts:OptionsPattern[]] :=
                     "Reason" ->
                       Lookup[cresult, "Reason", "Unknown"]|>];
                 Return[Null, Module]];
-              centries = Map[
-                Function[mid,
+              (* CatalogRank: the CLI's own priority order (1 = flagship).
+                 iSVAssignIntentsToFetched prefers it over version parsing. *)
+              centries = MapIndexed[
+                Function[{mid, pos},
                   <|"Provider" -> provider,
                     "ModelId" -> mid,
                     "Endpoint" -> "codex-cli:debug-models",
@@ -12299,6 +12324,7 @@ SourceVaultRefreshModelRegistry[opts:OptionsPattern[]] :=
                     "Availability" -> "Available",
                     "Source" -> "auto-fetch",
                     "Intent" -> Null,
+                    "CatalogRank" -> First[pos],
                     "FetchedAt" -> ts|>],
                 Lookup[cresult, "ModelIds", {}]];
               fetched = Join[fetched, centries];
@@ -15085,7 +15111,7 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        "SourceVault_searchview.wl", "SourceVault_knowledgehome.wl", "SourceVault_cognition.wl", "SourceVault_adjudication.wl", "SourceVault_capbroker.wl", "SourceVault_taint.wl", "SourceVault_anomaly.wl", "SourceVault_routine.wl", "SourceVault_routineplan.wl", "SourceVault_mailagenda.wl", "SourceVault_anonymize.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",
-       "SourceVault_workflowcatalog.wl"}]]];
+       "SourceVault_workflowcatalog.wl", "SourceVault_course.wl"}]]];
 
 (* ============================================================
    mining 本番フック結線: maildb / mining が両方ロードされた後に、mining が

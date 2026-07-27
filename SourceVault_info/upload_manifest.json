@@ -38,7 +38,8 @@
 		"SourceVault_packageapi.wl",
 		"SourceVault_llmlog.wl",
 		"SourceVault_simrun.wl",
-		"SourceVault_anonymize.wl"
+		"SourceVault_anonymize.wl",
+		"SourceVault_course.wl"
 	],
 	"directories":[
 		"SourceVault_info",
