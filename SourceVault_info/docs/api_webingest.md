@@ -26,8 +26,9 @@ Options: `SourceVaultSearXNGSearch` の全オプション に加え、"FetchPage
 
 ### SourceVaultWebSearchSubmit[input_Association] → Association
 ### SourceVaultWebSearchSubmit[query_String, opts] → Association
-WebSearch job を作成し即座に返す。`$SourceVaultWebSearchAsync` が True なら `SessionSubmit` で非同期実行し `Status -> "Running"` を即返す。False なら inline 実行 (テスト用)。job 状態は `LocalState/jobs/<jobId>.json` に保存。
-→ `<|"JobId","Status","Async"|>`
+WebSearch job を作成し即座に返す。実行体は `$SourceVaultWebJobExecutor` で決定する。Subkernel モード時はサブカーネルで非同期実行し service カーネルを一切ブロックしない。Subkernel 確保失敗時は Session へ fail-soft 縮退。job 状態は `LocalState/jobs/<jobId>.json` に保存。
+→ `<|"JobId","Status","Async","Executor"|>`
+`Executor` は "Subkernel" / "Session" / "Inline" のいずれか。
 
 ### SourceVaultWebJobStatus[jobId_String] → Association
 → `<|"JobId","Status","JobType","CreatedAt","UpdatedAt","FailureReason"|>`。未存在なら `Status -> "NotFound"`。
@@ -39,14 +40,36 @@ WebSearch job を作成し即座に返す。`$SourceVaultWebSearchAsync` が Tru
 ### SourceVaultWebJobList[] → List
 LocalState 上の全 job Association リストを返す。
 
+### SourceVaultWebJobPump[] → Association
+サブカーネル実行中の job を進め、完了したものを回収する非ブロッキング関数。service ループの tick から低頻度で呼ぶ。`ParallelSubmit` した評価は queue が回らないと走り出さないため、この pump が実行の駆動輪になる。
+→ `<|"Pending","Reaped"|>`
+
+### SourceVaultWebJobKernelStatus[] → Association
+web job 実行体の状態を返す (診断用)。
+→ `<|"Executor","Kernels","PoolMin","Pending","PackageFile"|>`
+
 ### SourceVaultWebRecoverStaleJobs[] → Association
 service 起動時に残った Running/Queued job を `Failed (StaleJobRecovered:ServiceRestarted)` に掃く。
 → `<|"Recovered","Scanned"|>`
 
+## job 実行体変数
+
+### $SourceVaultWebJobExecutor
+型: "Subkernel" | "Session" | "Inline" | Automatic, 初期値: Automatic
+web job の実行体を選ぶ。Automatic (既定) = `$SourceVaultWebSearchAsync` が True なら "Subkernel"、False なら "Inline"。"Subkernel" = 永続サブカーネルで実行 (service カーネルを一切ブロックしない)。"Session" = SessionSubmit (同一カーネル、長い job の間 command ループが止まる — 2026-07-28 実測 12 分)。"Inline" = 同期実行 (テスト/デバッグ用)。Subkernel 確保失敗時は Session へ fail-soft 縮退する。
+
+### $SourceVaultWebJobKernelPoolMin
+型: Integer, 初期値: 2
+job 投入時に確保するサブカーネル数の下限。2 以上にするのは WLMCP など他用途のサブカーネルを web job が塞がないため。
+
+### $SourceVaultWebSearchAsync
+型: True|False, 初期値: True
+`$SourceVaultWebJobExecutor = Automatic` のとき実行体を決定するフラグ。True → "Subkernel" (service カーネルを塞がない)、False → "Inline" (テスト/デバッグ用)。`$SourceVaultWebJobExecutor` に明示値を設定した場合はこの変数は参照されない。
+
 ## URL 取得・WebDocument
 
 ### SourceVaultWebFetch[url_String, opts]
-URL 本文を取得し HTML clean-text 抽出 + ContentHash を行い、WebDocument を content-addressed store に不変 snapshot として保存する。取得/抽出失敗は EvidenceGap に記録。抽出成功時のみ `Ingested` 参照イベントを emit。provenance ベース構造 Priority を LocalState sidecar に保存。登録済み IngestHook を完了後に実行。
+URL 本文を取得し HTML clean-text 抽出 + ContentHash を行い、WebDocument を content-addressed store に不変 snapshot として保存する。取得/抽出失敗は EvidenceGap に記録。抽出成功時のみ `Ingested` 参照イベントを emit。provenance ベース構造 Priority を LocalState sidecar に保存。登録済み IngestHook を完了後に実行 (各フックは `$SourceVaultWebIngestHookTimeoutSeconds` でタイムアウト; タイムアウト時は `<|"Status" -> "HookTimedOut", "TimeoutSeconds" -> ...|>` として観測される)。
 → `<|"ObjectClass" -> "WebDocument","Url","CanonicalUrl","StatusCode","ContentType","ByteCount","ContentHash","RawBlobRef","CleanTextRef","CleanTextLength","Title","ExtractionStatus","ExtractionQuality","ExtractionReason","FetchedAt","IngestProvenance","CleanTextPreview","SnapshotRef","SnapshotStatus","Priority","IngestHooks"|>`
 Options: "TimeoutSeconds" -> 30, "StoreEvidence" -> True, "Provenance" -> `<||>`, "RecordGap" -> True
 ExtractionStatus 値: "Succeeded" / "Failed" / "FetchFailed" / "Skipped"
@@ -56,7 +79,7 @@ ExtractionQuality 値: "Good" (≥1500文字) / "Fair" (200-1499) / "Poor" (<200
 ## Web Ingest フック
 
 ### SourceVaultRegisterWebIngestHook[name_String, f_] → Association
-`SourceVaultWebFetch` 完了時に呼ぶフック `f[ctx]` を登録する拡張点。`ctx = <|"Result", "Url"|>`。hook 失敗は fetch を壊さない。
+`SourceVaultWebFetch` 完了時に呼ぶフック `f[ctx]` を登録する拡張点。`ctx = <|"Result", "Url"|>`。hook 失敗は fetch を壊さない。各フックは `$SourceVaultWebIngestHookTimeoutSeconds` でタイムアウトされる。
 → `<|"Status" -> "Registered","Name"|>`
 
 ### SourceVaultUnregisterWebIngestHook[name_String] → Association
@@ -64,6 +87,10 @@ ExtractionQuality 値: "Good" (≥1500文字) / "Fair" (200-1499) / "Poor" (<200
 
 ### SourceVaultWebIngestHooks[] → List
 登録済み web ingest フック名のリストを返す。
+
+### $SourceVaultWebIngestHookTimeoutSeconds
+型: Numeric, 初期値: 30
+`SourceVaultWebFetch` が各 IngestHook に許す最大実行秒数。超過したフックは `<|"Status" -> "HookTimedOut", "TimeoutSeconds" -> ...|>` として戻り値の `"IngestHooks"` に記録され、fetch 本体は成功扱いを維持する。
 
 ## 参照イベントログ
 
@@ -223,10 +250,6 @@ integrations 中の web 検索 backend を SearXNG 可用時は SourceVault MCP 
 型: String, 初期値: "http://127.0.0.1:8888"
 SearXNG の既定エンドポイント。`SourceVaultSearXNGSearch` の `"Endpoint" -> Automatic` 時に使用。
 
-### $SourceVaultWebSearchAsync
-型: True|False, 初期値: True
-`SourceVaultWebSearchSubmit` を非同期 (`SessionSubmit`) で実行するか。False なら inline 実行 (テスト/デバッグ用)。
-
 ### $SourceVaultWebSearchIntegrationId
 型: String, 初期値: "mcp/sourcevault"
 SearXNG 可用時に使う LM Studio integration ID。
@@ -241,9 +264,11 @@ SearXNG 不可時の後方互換 integration ID。
 |---|---|
 | SourceVaultSearXNGSearch | Provider / Results[]{Title,Url,Snippet,Rank} / Status |
 | SourceVaultWebSearch | RunId / IngestProvenance / SearchRunRef / Results |
-| SourceVaultWebSearchSubmit | JobId / Status / Async |
+| SourceVaultWebSearchSubmit | JobId / Status / Async / Executor |
 | SourceVaultWebJobResult | Ready / Result / FailureReason |
-| SourceVaultWebFetch | SnapshotRef / ContentHash / CleanTextRef / ExtractionStatus / Priority |
+| SourceVaultWebJobPump | Pending / Reaped |
+| SourceVaultWebJobKernelStatus | Executor / Kernels / PoolMin / Pending |
+| SourceVaultWebFetch | SnapshotRef / ContentHash / CleanTextRef / ExtractionStatus / Priority / IngestHooks |
 | SourceVaultRecordImportance | RefCount / RecentReferenceScore / CurrentImportance |
 | SourceVaultWebImportance | Priority / CombinedScore / CurrentImportance |
 | SourceVaultWebComputePriority | Priority / Components{DomainWeight,RankAdj,ScoreAdj,DirectAdj,QualityAdj} |

@@ -49,6 +49,27 @@ SourceVaultWebSearchSubmit::usage =
   "$SourceVaultWebSearchAsync (既定 True) なら SessionSubmit で非同期実行し即 Status->\"Running\" を返す。\n" <>
   "結果は SourceVaultWebJobResult[jobId] で取得する (完了まで Ready->False)。";
 
+$SourceVaultWebJobExecutor::usage =
+  "$SourceVaultWebJobExecutor は web job の実行体を選ぶ。\n" <>
+  "  Automatic (既定) = サブカーネルが確保できれば \"Subkernel\"、駄目なら \"Session\" に縮退\n" <>
+  "  \"Subkernel\" = 永続サブカーネルで実行 (service カーネルを一切ブロックしない)\n" <>
+  "  \"Session\"   = SessionSubmit (同一カーネル。job 実行中は command ループが止まる)\n" <>
+  "  \"Inline\"    = 同期実行 (テスト/デバッグ用)\n" <>
+  "SessionSubmit は『非同期』でも同じカーネルのアイドル時に走るため、長い job の間\n" <>
+  "service の command ループが停止し MCP クライアントが全滅する (2026-07-28 実測 12 分)。";
+
+$SourceVaultWebJobKernelPoolMin::usage =
+  "$SourceVaultWebJobKernelPoolMin (既定 2) は job 投入時に確保するサブカーネル数の下限。\n" <>
+  "2 以上にするのは、WLMCP など他用途のサブカーネルを web job が塞がないため。";
+
+SourceVaultWebJobPump::usage =
+  "SourceVaultWebJobPump[] はサブカーネル実行中の job を進め、完了したものを回収する\n" <>
+  "非ブロッキング関数 (service ループの tick から低頻度で呼ぶ)。戻り <|Pending, Reaped|>。\n" <>
+  "ParallelSubmit した評価は queue が回らないと走り出さないため、この pump が実行の駆動輪になる。";
+
+SourceVaultWebJobKernelStatus::usage =
+  "SourceVaultWebJobKernelStatus[] は web job 実行体の状態 <|Executor, Kernels, Pending|> を返す (診断用)。";
+
 $SourceVaultWebSearchAsync::usage =
   "$SourceVaultWebSearchAsync (既定 True) は SourceVaultWebSearchSubmit を非同期 (SessionSubmit) で\n" <>
   "実行するか。True なら submit は即 Running を返し command loop / 呼び出し側を塞がない。\n" <>
@@ -442,6 +463,101 @@ iWebJobList[] := Module[{d = iWebJobsDir[], files},
   files = FileNames["job-*.json", d];
   Select[iWebGetJSON /@ files, AssociationQ]];
 
+(* ---- job 実行体: 永続サブカーネル (spec v6 §7.4 追補, 2026-07-28) ----
+   SessionSubmit は「非同期」でも同じカーネルのアイドル時に走り、走り出したら
+   最後までそのカーネルを占有する。service カーネルは command spool を 1 本の
+   ループで捌いているため、12 分の job が 12 分ぶん MCP を全滅させた (実測:
+   05:33:31 の submit 以降 05:45:23 まで CommandProcessed がゼロ、proxy は 60s で
+   504 → LM Studio に -32001)。実行体をサブカーネル (サブプロセス枠。プロセス席を
+   消費しない) に出し、service カーネルは queue を回すだけにする。
+   設計は servicemanager の WLMCP サブカーネル隔離と同型:
+     - 子は「自分が未初期化なら自分でパッケージを読む」自己修復型。どのサブカーネルに
+       割り当てられても動くので kernel の指名を要らなくした。
+     - job の正本状態は <LocalState>/jobs/<jobId>.json。子が直接書くので結果の
+       marshalling が要らず、status/result は今までどおりファイル読みで答えられる。
+     - 確保失敗時は従来の SessionSubmit へ fail-soft 縮退 (挙動が退化しない)。 *)
+
+If[! StringQ[$iWebPackageFile] || ! FileExistsQ[$iWebPackageFile],
+  $iWebPackageFile = With[{f = $InputFileName}, If[StringQ[f], f, ""]]];
+
+If[! ValueQ[SourceVault`$SourceVaultWebJobExecutor],
+  SourceVault`$SourceVaultWebJobExecutor = Automatic];
+If[! IntegerQ[SourceVault`$SourceVaultWebJobKernelPoolMin],
+  SourceVault`$SourceVaultWebJobKernelPoolMin = 2];
+If[! AssociationQ[$iWebJobPending], $iWebJobPending = <||>];
+
+iWebKernelCount[] := Quiet @ Check[Length[Kernels[]], 0];
+
+(* job 用サブカーネルの確保。既に他用途 (WLMCP 等) の kernel があってもそれを
+   塞がないよう PoolMin まで足す。ParallelSubmit は kernel を指名できないので、
+   「空いている kernel に載る」前提で子を自己修復型にしてある。 *)
+iWebEnsureJobKernel[] := Module[{need},
+  need = SourceVault`$SourceVaultWebJobKernelPoolMin - iWebKernelCount[];
+  If[need > 0, Quiet @ Check[LaunchKernels[need], $Failed]];
+  iWebKernelCount[] > 0];
+
+iWebJobExecutorMode[] := Module[{m = SourceVault`$SourceVaultWebJobExecutor},
+  Which[
+    MemberQ[{"Subkernel", "Session", "Inline"}, m], m,
+    m === Automatic, If[TrueQ[SourceVault`$SourceVaultWebSearchAsync], "Subkernel", "Inline"],
+    TrueQ[m], "Subkernel",
+    True, "Inline"]];
+
+(* サブカーネルへ投入。子は未初期化なら自分でパッケージを読み、親と同じ root を
+   焼き込まれてから job を走らせる。戻りは EvaluationObject (失敗時 $Failed)。 *)
+iWebSubmitJobToKernel[jobId_String, input_Association] := Module[{eo},
+  If[! StringQ[$iWebPackageFile] || ! FileExistsQ[$iWebPackageFile], Return[$Failed]];
+  eo = Quiet @ Check[
+    With[{jid = jobId, inp = input, pkg = $iWebPackageFile,
+          root = SourceVault`$SourceVaultCoreRoot,
+          roots = SourceVault`$SourceVaultInjectedRoots,
+          rhash = SourceVault`$SourceVaultInjectedRootHash},
+      ParallelSubmit[
+        If[! TrueQ[SourceVault`WebJobChild`$Ready],
+          Block[{$CharacterEncoding = "UTF-8"},
+            Module[{dir = DirectoryName[pkg]},
+              Quiet @ Check[Get[FileNameJoin[{dir, "SourceVault_core.wl"}]], $Failed];
+              With[{cf = FileNameJoin[{dir, "SourceVault_crypto.wl"}]},
+                If[FileExistsQ[cf], Quiet @ Check[Get[cf], $Failed]]];
+              Quiet @ Check[Get[pkg], $Failed];
+              (* mining は service manifest には無いが親では hook 登録済み。
+                 子でも読んで結線し、取り込み後の著者/タグ抽出の挙動を親と揃える。 *)
+              With[{mf = FileNameJoin[{dir, "SourceVault_mining.wl"}]},
+                If[FileExistsQ[mf], Quiet @ Check[Get[mf], $Failed]]]]];
+          SourceVault`$SourceVaultCoreRoot = root;
+          SourceVault`$SourceVaultInjectedRoots = roots;
+          SourceVault`$SourceVaultInjectedRootHash = rhash;
+          Quiet @ Check[SourceVault`SourceVaultMiningWireProductionHooks[], Null];
+          SourceVault`WebJobChild`$Ready = True];
+        iWebRunSearchJob[jid, inp]]],
+    $Failed];
+  If[Head[eo] === EvaluationObject,
+    $iWebJobPending[jobId] = <|"EO" -> eo, "SubmittedAbs" -> AbsoluteTime[]|>;
+    Quiet @ Check[Parallel`Developer`QueueRun[], Null];
+    eo,
+    $Failed]];
+
+(* 実行の駆動輪 + 回収。ParallelSubmit した評価は queue が回って初めて
+   サブカーネルへ配られるので、service tick から呼ばれるこの pump が無いと
+   job は Queued のまま進まない。完了判定は job ファイル (正本) で行う。 *)
+SourceVaultWebJobPump[] := Module[{done},
+  If[$iWebJobPending === <||>, Return[<|"Pending" -> 0, "Reaped" -> 0|>]];
+  Quiet @ Check[Parallel`Developer`QueueRun[], Null];
+  done = Select[Keys[$iWebJobPending],
+    Function[jid, Module[{rec = iWebJobRead[jid]},
+      AssociationQ[rec] && MemberQ[{"Succeeded", "Failed"}, Lookup[rec, "Status", ""]]]]];
+  Scan[Function[jid,
+    Quiet @ Check[WaitNext[{$iWebJobPending[jid]["EO"]}], Null];
+    $iWebJobPending = KeyDrop[$iWebJobPending, jid]], done];
+  <|"Pending" -> Length[$iWebJobPending], "Reaped" -> Length[done]|>];
+
+SourceVaultWebJobKernelStatus[] := <|
+  "Executor" -> iWebJobExecutorMode[],
+  "Kernels" -> iWebKernelCount[],
+  "PoolMin" -> SourceVault`$SourceVaultWebJobKernelPoolMin,
+  "Pending" -> Length[$iWebJobPending],
+  "PackageFile" -> $iWebPackageFile|>;
+
 (* ---- public: submit / status / result ---- *)
 If[! MemberQ[{True, False}, SourceVault`$SourceVaultWebSearchAsync],
   SourceVault`$SourceVaultWebSearchAsync = True];
@@ -471,21 +587,31 @@ iWebRunSearchJob[jobId_String, input_Association] := Module[{query, opts, prov, 
     iWebJobSetStatus[jobId, "Failed", <|"FailureReason" -> "ResultPersistFailed"|>]];
   jobId];
 
-SourceVaultWebSearchSubmit[input_Association] := Module[{prov, job, jobId},
+SourceVaultWebSearchSubmit[input_Association] := Module[{prov, job, jobId, mode, eo},
   prov = Lookup[input, "Provenance", <||>];
   job = iWebJobNew["WebSearch", input, prov];
   If[! AssociationQ[job],
     Return[Failure["JobCreateFailed", <|"Reason" -> "LocalState 未解決の可能性"|>]]];
   jobId = job["JobId"];
-  If[TrueQ[SourceVault`$SourceVaultWebSearchAsync],
-    (* 非同期: SessionSubmit (HoldFirst, 一回限り) で実行し即 Running を返す。
-       service kernel の heartbeat loop / main kernel の idle で task が進む。
-       proxy の短 timeout を跨ぐ長時間 fetch でもブロックしない (poll で取得)。 *)
+  mode = iWebJobExecutorMode[];
+  (* サブカーネル: 呼び出し元 (service の command ループ) を一切ブロックしない。
+     確保・投入に失敗したら Session へ fail-soft 縮退する。 *)
+  If[mode === "Subkernel",
+    eo = If[iWebEnsureJobKernel[], iWebSubmitJobToKernel[jobId, input], $Failed];
+    If[eo =!= $Failed,
+      Return[<|"JobId" -> jobId, "Status" -> "Running", "Async" -> True,
+        "Executor" -> "Subkernel"|>]];
+    mode = "Session"];
+  If[mode === "Session",
+    (* 縮退経路: SessionSubmit (HoldFirst, 一回限り)。同一カーネルのアイドルで
+       走るため、長い job の間は command ループが止まることに注意 (§7.4 追補)。 *)
     With[{jid = jobId, inp = input}, SessionSubmit[iWebRunSearchJob[jid, inp]]];
-    <|"JobId" -> jobId, "Status" -> "Running", "Async" -> True|>,
-    (* 同期: inline 実行 (テスト/デバッグ用)。 *)
-    iWebRunSearchJob[jobId, input];
-    <|"JobId" -> jobId, "Status" -> Lookup[iWebJobRead[jobId], "Status", "Unknown"], "Async" -> False|>]];
+    Return[<|"JobId" -> jobId, "Status" -> "Running", "Async" -> True,
+      "Executor" -> "Session"|>]];
+  (* 同期: inline 実行 (テスト/デバッグ用)。 *)
+  iWebRunSearchJob[jobId, input];
+  <|"JobId" -> jobId, "Status" -> Lookup[iWebJobRead[jobId], "Status", "Unknown"],
+    "Async" -> False, "Executor" -> "Inline"|>];
 
 SourceVaultWebSearchSubmit[query_String, opts : OptionsPattern[SourceVaultWebSearch]] :=
   SourceVaultWebSearchSubmit[
@@ -578,8 +704,18 @@ SourceVaultRegisterWebIngestHook[name_String, f_] :=
 SourceVaultUnregisterWebIngestHook[name_String] :=
   ($iWebIngestHooks = KeyDrop[$iWebIngestHooks, name]; <|"Status" -> "Unregistered", "Name" -> name|>);
 SourceVaultWebIngestHooks[] := Keys[$iWebIngestHooks];
+(* hook は fetch の本筋ではないので、時間も必ず区切る。無制限に伸びると
+   取り込み 1 ページが分オーダーになり、実行体が service カーネルだった頃は
+   それがそのまま MCP 全滅につながった (2026-07-28)。打ち切りは fetch を壊さず
+   HookTimedOut として観測に残す。 *)
+If[! NumericQ[SourceVault`$SourceVaultWebIngestHookTimeoutSeconds],
+  SourceVault`$SourceVaultWebIngestHookTimeoutSeconds = 30];
 iWebRunIngestHooks[ctx_Association] :=
-  Association[KeyValueMap[#1 -> Quiet@Check[#2[ctx], $Failed] &, $iWebIngestHooks]];
+  With[{to = SourceVault`$SourceVaultWebIngestHookTimeoutSeconds},
+    Association[KeyValueMap[
+      #1 -> TimeConstrained[Quiet@Check[#2[ctx], $Failed], to,
+              <|"Status" -> "HookTimedOut", "TimeoutSeconds" -> to|>] &,
+      $iWebIngestHooks]]];
 
 Options[SourceVaultWebFetch] = {"TimeoutSeconds" -> 30, "StoreEvidence" -> True,
   "Provenance" -> <||>, "RecordGap" -> True};

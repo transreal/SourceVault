@@ -915,10 +915,13 @@ SourceVaultExtractFromMailSnapshot[snapshot_Association, objectURI_String, opts 
 (* mail の正準 objectURI 規約: sv://mail/<RecordId> *)
 iSVMMailObjectURI[s_Association] := "sv://mail/" <> ToString[Lookup[s, "RecordId", CreateUUID[]]];
 
-(* 既に commit 済みの authorship を replay し {objectURI||identifierRef} の集合を作る (冪等判定用) *)
+(* 既に commit 済みの authorship を replay し {objectURI||identifierRef} の集合を作る (冪等判定用)。
+   EventClass を必ず渡すこと: core の TransactionLog は EventClass 指定時のみ「クラス名を含まない
+   本文をパース前に捨てる」pre-filter が効く (SourceVault_core.wl §Options[SourceVaultTransactionLog])。
+   既定 All のまま呼ぶと全 event を JSON パースし、event 総数に線形で分オーダーまで悪化する。 *)
 iSVMExistingAuthorshipKeys[] :=
   Module[{ev, auths},
-    ev = SourceVaultTransactionLog["Limit" -> 1000000];
+    ev = SourceVaultTransactionLog["Limit" -> 1000000, "EventClass" -> "AuthorshipObserved"];
     auths = Lookup[#, "Assertion", <||>] & /@
       Select[ev, Lookup[#, "EventClass"] === "AuthorshipObserved" &];
     Association[(
@@ -2833,9 +2836,10 @@ iSVMWebObjectURI[fetchResult_Association] :=
       StringReplace[ToString@Lookup[fetchResult, "RawBlobRef", ""], "blob:sha256:" -> ""]];
     If[StringQ[h] && StringLength[h] >= 8, "sv://web/" <> StringTake[h, UpTo[64]], "sv://web/unknown"]];
 
+(* EventClass 必須の理由は iSVMExistingAuthorshipKeys と同じ (pre-filter を効かせる) *)
 iSVMExistingTagKeys[] :=
   Module[{ev, tags},
-    ev = SourceVaultTransactionLog["Limit" -> 1000000];
+    ev = SourceVaultTransactionLog["Limit" -> 1000000, "EventClass" -> "TagAsserted"];
     tags = Lookup[#, "Assertion", <||>] & /@ Select[ev, Lookup[#, "EventClass"] === "TagAsserted" &];
     Association[((ToString@Lookup[#, "TargetURI", "?"] <> "||" <> ToString@Lookup[#, "Tag", "?"] <> "||" <>
         ToString@Lookup[#, "SourceKind", "?"]) -> True) & /@ tags]];
@@ -2865,16 +2869,26 @@ SourceVaultMiningWebIngestAssertions[fetchResult_Association, opts : OptionsPatt
 
 Options[SourceVaultMiningWebIngestExtract] = Join[Options[SourceVaultMiningWebIngestAssertions], {"SkipExisting" -> True}];
 SourceVaultMiningWebIngestExtract[fetchResult_Association, opts : OptionsPattern[]] :=
-  Module[{proj, all, existingA, existingT, fresh, skipExisting},
+  Module[{proj, auths, tags, all, existingA, existingT, fresh, skipExisting},
     proj = SourceVaultMiningWebIngestAssertions[fetchResult,
       Sequence @@ FilterRules[{opts}, Options[SourceVaultMiningWebIngestAssertions]]];
     If[Lookup[proj, "Status", ""] =!= "OK",
       Return[<|"Status" -> Lookup[proj, "Status", "Error"], "ObjectURI" -> Lookup[proj, "ObjectURI", Missing[]],
         "Committed" -> 0, "AlreadyPresent" -> 0, "Failed" -> 0|>]];
     skipExisting = TrueQ[OptionValue["SkipExisting"]];
-    all = Join[proj["AuthorshipAssertions"], proj["TagAssertions"]];
-    existingA = If[skipExisting, iSVMExistingAuthorshipKeys[], <||>];
-    existingT = If[skipExisting, iSVMExistingTagKeys[], <||>];
+    auths = Lookup[proj, "AuthorshipAssertions", {}];
+    tags  = Lookup[proj, "TagAssertions", {}];
+    all = Join[auths, tags];
+    (* 抽出 0 件なら既存キーの replay は不要 (event 走査を丸ごと回避)。web ingest フックは
+       大半がこの経路 (Committed 0 / AlreadyPresent 0) にもかかわらず全 event を 2 回走査しており、
+       1 ページあたり分オーダーで service ループを占有していた
+       (2026-07-28: LM Studio の MCP 呼び出しが 12 分間全滅した事故の主因)。 *)
+    If[all === {},
+      Return[<|"Status" -> "OK", "ObjectURI" -> proj["ObjectURI"], "AlreadyPresent" -> 0,
+        "Committed" -> 0, "Failed" -> 0, "Results" -> {}|>]];
+    (* replay も必要な種別だけに絞る (authorship しか無いのに tag 側も走査していた) *)
+    existingA = If[skipExisting && auths =!= {}, iSVMExistingAuthorshipKeys[], <||>];
+    existingT = If[skipExisting && tags  =!= {}, iSVMExistingTagKeys[], <||>];
     fresh = If[skipExisting, Select[all, ! iSVMAssertionPresentQ[#, existingA, existingT] &], all];
     Join[<|"Status" -> "OK", "ObjectURI" -> proj["ObjectURI"], "AlreadyPresent" -> (Length[all] - Length[fresh])|>,
       SourceVaultCommitAssertions[fresh]]];

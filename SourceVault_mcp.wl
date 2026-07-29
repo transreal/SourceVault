@@ -3192,10 +3192,12 @@ iSVRegisterDefaultAdapters[];
 SourceVaultMCPTools[] := {
   <|"name" -> "sourcevault_web_search",
     "description" -> "Search the local web via SearXNG and return candidate results " <>
-      "(title, url, snippet). Does NOT fetch page bodies. Use for quick lookups.",
+      "(title, url, snippet). Does NOT fetch page bodies. To read a result's page, " <>
+      "pass its url to sourcevault_get_document.",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
-        "query" -> <|"type" -> "string", "description" -> "Search query."|>,
+        "query" -> <|"type" -> "string", "description" -> "Search query. A site: filter takes a " <>
+          "bare domain only (site:example.com) — adding a path makes the query match nothing."|>,
         "maxResults" -> <|"type" -> "integer", "description" -> "Max results (default 10)."|>|>,
       "required" -> {"query"}|>|>,
   <|"name" -> "sourcevault_submit_web_search",
@@ -3204,7 +3206,8 @@ SourceVaultMCPTools[] := {
       "sourcevault_job_result.",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
-        "query" -> <|"type" -> "string", "description" -> "Search query."|>,
+        "query" -> <|"type" -> "string", "description" -> "Search query. A site: filter takes a " <>
+          "bare domain only (site:example.com) — adding a path makes the query match nothing."|>,
         "maxResults" -> <|"type" -> "integer", "description" -> "Max search results (default 10)."|>,
         "fetchPages" -> <|"type" -> "boolean", "description" -> "Fetch & clean-text top pages (default false)."|>,
         "maxFetch" -> <|"type" -> "integer", "description" -> "Max pages to fetch when fetchPages (default 3)."|>|>,
@@ -3215,14 +3218,21 @@ SourceVaultMCPTools[] := {
       "properties" -> <|"jobId" -> <|"type" -> "string", "description" -> "Job id from submit."|>|>,
       "required" -> {"jobId"}|>|>,
   <|"name" -> "sourcevault_job_result",
-    "description" -> "Get the result of a completed web search job (results + fetched documents).",
+    "description" -> "Get the result of a completed web search job. Returns the search results AND, " <>
+      "for each fetched page, its snapshot ref plus the first ~1000 characters of the page text. " <>
+      "Read that text before searching again — it is the content you asked to fetch. " <>
+      "Use sourcevault_get_document with the ref when you need the rest of a page.",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|"jobId" -> <|"type" -> "string", "description" -> "Job id from submit."|>|>,
       "required" -> {"jobId"}|>|>,
   <|"name" -> "sourcevault_get_document",
-    "description" -> "Load a stored WebDocument by snapshot ref (returns url, title, clean-text length, hash).",
+    "description" -> "Read a web page: url, title, hash, and the page text " <>
+      "(up to ~20000 characters). Accepts a WebDocument snapshot ref (as printed by " <>
+      "sourcevault_job_result) OR a plain http(s) URL, e.g. one returned by " <>
+      "sourcevault_web_search; a URL is fetched and ingested on demand.",
     "inputSchema" -> <|"type" -> "object",
-      "properties" -> <|"snapshotRef" -> <|"type" -> "string", "description" -> "WebDocument snapshot ref."|>|>,
+      "properties" -> <|"snapshotRef" -> <|"type" -> "string",
+        "description" -> "WebDocument snapshot ref, or an http(s) page URL to fetch."|>|>,
       "required" -> {"snapshotRef"}|>|>,
   <|"name" -> "sourcevault_catalog",
     "description" -> "List available SourceVault data adapters: their kinds, capabilities, " <>
@@ -3256,7 +3266,8 @@ SourceVaultMCPTools[] := {
       "are NOT returned here; resolve a URI with sourcevault_get (a grant may be required).",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
-        "query" -> <|"type" -> "string", "description" -> "Search query."|>,
+        "query" -> <|"type" -> "string", "description" -> "Search query. A site: filter takes a " <>
+          "bare domain only (site:example.com) — adding a path makes the query match nothing."|>,
         "kinds" -> <|"type" -> "array", "items" -> <|"type" -> "string"|>,
           "description" -> "Data kinds to search, e.g. [\"search\"], [\"packageapi\"] " <>
             "(Wolfram package API docs: function signatures/options), [\"llmlog\"] " <>
@@ -3430,7 +3441,8 @@ SourceVaultMCPTools[] := {
     "description" -> "Search OOPS mailing-list threads (mail sessions) by query (Japanese or English). Returns thread id, subject, score, snippet. A thread is a quote-connected mail cluster with topic structure. Use sourcevault_oops_thread to get a thread's digest.",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
-        "query" -> <|"type" -> "string", "description" -> "Search query."|>,
+        "query" -> <|"type" -> "string", "description" -> "Search query. A site: filter takes a " <>
+          "bare domain only (site:example.com) — adding a path makes the query match nothing."|>,
         "limit" -> <|"type" -> "integer", "description" -> "Max threads (default 10)."|>|>,
       "required" -> {"query"}|>|>,
   <|"name" -> "sourcevault_oops_thread",
@@ -3446,7 +3458,8 @@ SourceVaultMCPTools[] := {
     "description" -> "Search general-mail threads (quote/subject-connected mail sessions) by query (Japanese or English). Returns session id, subject, score, snippet. Use sourcevault_mail_thread for a session's digest. Private/third-party mail is excluded (cloud-safe release gate).",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
-        "query" -> <|"type" -> "string", "description" -> "Search query."|>,
+        "query" -> <|"type" -> "string", "description" -> "Search query. A site: filter takes a " <>
+          "bare domain only (site:example.com) — adding a path makes the query match nothing."|>,
         "limit" -> <|"type" -> "integer", "description" -> "Max threads (default 10)."|>|>,
       "required" -> {"query"}|>|>,
   <|"name" -> "sourcevault_mail_thread",
@@ -3478,6 +3491,87 @@ iMCPFormatResults[results_List] := StringRiffle[
       ToString @ Lookup[r, "Url", ""] <> "\n   " <>
       StringTake[ToString @ Lookup[r, "Snippet", ""], UpTo[200]]],
     results], "\n"];
+
+(* ---- 取得済み WebDocument 本文の解放 (2026-07-28) ----
+   これが無かったため fetchPages は取得コストだけ払って本文が誰にも届かず、
+   モデルは「1916 chars ある」とだけ告げられて中身を貰えず、クエリを変えて
+   延々と検索し直していた (LM Studio 実測: 同一質問で web_search 10 回超のループ)。
+   本文は B3 の per-result release gate を必ず通す。web snapshot は Privacy.Level を
+   持たない (=非数値) のが通常なので実際にはほぼ Permit だが、
+     - 監査線 (mcp_calls の ReleasedURIs / Decision) に本文解放が載る
+     - 将来 web snapshot に privacy level を付けたら即座に効く
+   という二点のために素通しにはしない。blob 読み出し (SourceVaultReadBlob) は
+   main kernel storage primitive なので MCP へは公開せず、ここで gate 済みの
+   1 文書ぶんの clean text に変換してからテキストとして返す。 *)
+
+$iMCPWebPreviewChars = 1000;    (* job_result に載せる各文書のプレビュー上限 *)
+$iMCPWebBodyChars = 20000;      (* get_document で返す本文上限 *)
+
+iMCPWebDocURI[doc_Association] := With[
+  {ref = Lookup[doc, "SnapshotRef", Missing[]], h = Lookup[doc, "ContentHash", Missing[]]},
+  Which[StringQ[ref], ref, StringQ[h], "sv://web/" <> h, True, Missing["NoURI"]]];
+
+(* WebDocument (job の Documents 要素 or snapshot 本体) を gate にかける。
+   Privacy.Level は snapshot 側に在れば拾う (無ければ Missing = 非数値 = 通過)。 *)
+iMCPWebGate[doc_Association, args_Association] := Module[{result, accessRequest},
+  result = <|
+    "URI" -> iMCPWebDocURI[doc], "Kind" -> "WebDocument",
+    "Privacy" -> <|"Level" -> Lookup[Lookup[doc, "Privacy", <||>], "Level",
+      Lookup[doc, "AccessLevel", Missing[]]]|>,
+    "Metadata" -> <|"AccessTags" -> Lookup[doc, "AccessTags", {}]|>|>;
+  (* scope は search/get と同じ解決を通す。ここを省くと未タグ material の既定が
+     MetadataOnly になり、公開 web 本文まで Screen で落ちる (§2.6 の非破壊既定は
+     iSVResolveScopeForRequest 側の Untagged -> "Allow")。 *)
+  accessRequest = SourceVaultNormalizeAccessRequest[<|
+    "Action" -> "Get", "Principal" -> SourceVaultNormalizePrincipal[args],
+    "ReleaseContext" -> Lookup[Lookup[args, "scope", <||>], "releaseContext", None],
+    "AccessLevel" -> Lookup[Lookup[args, "filters", <||>], "accessLevelMax", Automatic],
+    "ScopePolicy" -> iSVResolveScopeForRequest[args, Lookup[args, "scope", <||>], Automatic],
+    "RequestedKinds" -> {"web"}|>];
+  <|"Result" -> result, "Gate" -> SourceVaultMCPReleaseGate[result, accessRequest]|>];
+
+(* clean text を上限つきで取り出す。CleanTextRef が読めないときは
+   fetch 時に載る CleanTextPreview (300字) に縮退する。 *)
+iMCPWebCleanText[doc_Association, maxChars_Integer] := Module[{ref, blob, text},
+  ref = Lookup[doc, "CleanTextRef", Missing[]];
+  text = If[StringQ[ref],
+    blob = Quiet @ Check[SourceVault`SourceVaultReadBlob[ref], $Failed];
+    If[AssociationQ[blob] && ByteArrayQ[Lookup[blob, "Bytes", Null]],
+      Quiet @ Check[ByteArrayToString[blob["Bytes"], "UTF-8"], $Failed], $Failed],
+    $Failed];
+  If[! StringQ[text], text = ToString @ Lookup[doc, "CleanTextPreview", ""]];
+  If[! StringQ[text], text = ""];
+  If[StringLength[text] > maxChars,
+    StringTake[text, maxChars] <> "\n…(truncated; " <> ToString[StringLength[text]] <>
+      " chars total, use sourcevault_get_document for more)",
+    text]];
+
+(* job_result 用: 1 文書ぶんの表示ブロック (ref + プレビュー本文、または不解放理由) *)
+iMCPWebDocBlock[doc_Association, args_Association] := Module[{g, uri},
+  g = iMCPWebGate[doc, args];
+  uri = iMCPWebDocURI[doc];
+  "- " <> ToString @ Lookup[doc, "Title", Lookup[doc, "Url", "?"]] <> " [" <>
+  ToString @ Lookup[doc, "ExtractionStatus", "?"] <> ", " <>
+  ToString @ Lookup[doc, "CleanTextLength", 0] <> " chars]\n" <>
+  "  url: " <> ToString @ Lookup[doc, "Url", "?"] <> "\n" <>
+  If[StringQ[uri], "  ref: " <> uri <> "\n", ""] <>
+  If[Lookup[Lookup[g, "Gate", <||>], "Decision", "Deny"] === "Permit",
+    "  text: " <> iMCPWebCleanText[doc, $iMCPWebPreviewChars],
+    "  released=false (" <>
+      StringRiffle[ToString /@ Lookup[Lookup[g, "Gate", <||>], "Why", {}], ", "] <> ")"]];
+
+(* web 本文解放の監査記録 (gate を通って実際に本文を出した URI だけ載せる) *)
+iMCPRecordWebRelease[tool_String, args_Association, gated_List] :=
+  Quiet @ SourceVaultRecordMCPCall[<|
+    "Tool" -> tool,
+    "JobId" -> Lookup[args, "jobId", Missing[]],
+    "ReleasedURIs" -> Cases[Lookup[Lookup[#, "Result", <||>], "URI", Missing[]] & /@
+      Select[gated, Lookup[Lookup[#, "Gate", <||>], "Decision", ""] === "Permit" &], _String],
+    "ReleasedProjection" -> "body",
+    "MaxReleasedPrivacy" -> 0.0,
+    "Decision" -> If[AnyTrue[gated, Lookup[Lookup[#, "Gate", <||>], "Decision", ""] === "Permit" &],
+      "Permit", "Redacted"],
+    "LinkConfidence" -> If[StringQ[Lookup[args, "jobId", Null]], "Explicit", "Heuristic"]|>];
 
 (* MCP 経由の最小 provenance (spec v6 §9.3) *)
 iMCPProvenance[args_Association] := <|
@@ -3542,24 +3636,59 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
           iMCPError["Job failed: " <> ToString @ Lookup[r, "FailureReason", "?"]],
         True,
           Module[{res = Lookup[r, "Result", <||>], docs},
-            docs = Lookup[res, "Documents", {}];
+            docs = Select[Lookup[res, "Documents", {}], AssociationQ];
+            (* 本文プレビューを載せる (gate 経由)。ここで本文が返らないと、
+               モデルは取得したページの中身を永久に見られない。 *)
+            If[docs =!= {}, iMCPRecordWebRelease["sourcevault_job_result", args,
+              iMCPWebGate[#, args] & /@ docs]];
             iMCPText["Results (" <> ToString @ Lookup[res, "ResultCount", 0] <> "):\n\n" <>
               iMCPFormatResults[Lookup[res, "Results", {}]] <>
               If[docs =!= {},
                 "\n\nFetched documents (" <> ToString[Length[docs]] <> "):\n" <>
-                  StringRiffle[Function[d,
-                    "- " <> ToString @ Lookup[d, "Title", Lookup[d, "Url", "?"]] <> " [" <>
-                    ToString @ Lookup[d, "ExtractionStatus", "?"] <> ", " <>
-                    ToString @ Lookup[d, "CleanTextLength", 0] <> " chars]"] /@ docs, "\n"],
+                  StringRiffle[iMCPWebDocBlock[#, args] & /@ docs, "\n\n"],
                 ""]]]],
     "sourcevault_get_document",
-      r = SourceVault`SourceVaultLoadImmutableSnapshot[Lookup[args, "snapshotRef", ""]];
-      If[! AssociationQ[r], iMCPError["Document not found: " <> ToString @ Lookup[args, "snapshotRef", ""]],
-        iMCPText["WebDocument:\n  Url: " <> ToString @ Lookup[r, "Url", "?"] <>
-          "\n  Title: " <> ToString @ Lookup[r, "Title", ""] <>
-          "\n  ContentHash: " <> ToString @ Lookup[r, "ContentHash", "?"] <>
-          "\n  CleanTextLength: " <> ToString @ Lookup[r, "CleanTextLength", 0] <>
-          "\n  ExtractionStatus: " <> ToString @ Lookup[r, "ExtractionStatus", "?"]]],
+      Module[{ref = ToString @ Lookup[args, "snapshotRef", Lookup[args, "url", ""]], es},
+        (* URL は searxng web_url_read 相当のライブ取得に落とす (2026-07-28)。
+           sourcevault_web_search がモデルに渡すのは title/url/snippet だけなので、
+           snapshot ref 必須のままだとモデルは検索結果の全 URL で "Document not found"
+           を貰い、クエリを変えた再検索を永久に繰り返す (LM Studio 実測の堂々巡り。
+           searxng MCP が成功したのは web_url_read が URL 直読みできるため)。
+           fetch は通常の WebDocument ingest (snapshot/provenance/EvidenceGap/hook)
+           を通し、本文は従来どおり下の release gate 経由でのみ出す。hook は対話
+           応答内で走るので短く区切る (service ループ占有事故 2026-07-28 の再発防止)。 *)
+        r = If[StringStartsQ[ref, "http://" | "https://", IgnoreCase -> True],
+          Block[{SourceVault`$SourceVaultWebIngestHookTimeoutSeconds = 10},
+            SourceVault`SourceVaultWebFetch[ref,
+              "Provenance" -> prov, "TimeoutSeconds" -> 20]],
+          SourceVault`SourceVaultLoadImmutableSnapshot[ref]];
+        es = If[AssociationQ[r], ToString @ Lookup[r, "ExtractionStatus", ""], ""];
+        Which[
+          ! AssociationQ[r],
+            iMCPError["Document not found: " <> ref <>
+              " -- pass a snapshot ref printed by sourcevault_job_result, or an " <>
+              "http(s) URL to fetch the page live."],
+          MemberQ[{"FetchFailed", "Failed", "Skipped"}, es],
+            (* 本文が無い文書を「成功」で返すとモデルは空本文を延々読み直す。
+               明示エラー + 再試行抑止の文言で次の行動 (別 URL) に誘導する。 *)
+            iMCPError["No page text for " <> ToString @ Lookup[r, "Url", ref] <>
+              " (" <> es <> ": " <>
+              ToString @ Lookup[r, "Reason", Lookup[r, "ExtractionReason", "?"]] <>
+              "). Do not retry this URL; use the search snippet or a different result."],
+          True,
+            Module[{g = iMCPWebGate[r, args]},
+              iMCPRecordWebRelease["sourcevault_get_document", args, {g}];
+              iMCPText["WebDocument:\n  Url: " <> ToString @ Lookup[r, "Url", "?"] <>
+                "\n  Title: " <> ToString @ Lookup[r, "Title", ""] <>
+                "\n  ContentHash: " <> ToString @ Lookup[r, "ContentHash", "?"] <>
+                If[StringQ[Lookup[r, "SnapshotRef", Null]],
+                  "\n  SnapshotRef: " <> Lookup[r, "SnapshotRef"], ""] <>
+                "\n  CleanTextLength: " <> ToString @ Lookup[r, "CleanTextLength", 0] <>
+                "\n  ExtractionStatus: " <> ToString @ Lookup[r, "ExtractionStatus", "?"] <>
+                If[Lookup[Lookup[g, "Gate", <||>], "Decision", "Deny"] === "Permit",
+                  "\n\n" <> iMCPWebCleanText[r, $iMCPWebBodyChars],
+                  "\n  released=false (" <>
+                    StringRiffle[ToString /@ Lookup[Lookup[g, "Gate", <||>], "Why", {}], ", "] <> ")"]]]]],
     "sourcevault_catalog",
       iMCPJSONText[SourceVaultMCPCatalog[
         "IncludeUnavailable" -> TrueQ[Lookup[args, "includeUnavailable", True]]]],

@@ -46,7 +46,7 @@ TagAssertion を作り EventClass="TagAsserted" event として SourceVaultAppen
 ### SourceVaultMakeAuthorshipAssertion[objectURI, opts]
 object と著者/送信者/作成者の関係 (§2.2) を作る。EntityRef は確定 entity がある場合のみ補完し、候補段階では入れない。
 → Association
-Options: "Role" -> "Author", "IdentifierRef" -> Missing["NoIdentifier"], "EntityRef" -> Missing["Unlinked"], "ObjectClass" -> Missing, "DisplayName" -> Missing, "SourceField" -> Missing, "ExtractionSource" -> "parser", "Confidence" -> 1.0, "EvidenceRefs" -> {}, "AccessLevel" -> 0.85, "CreatedAtUTC" -> Automatic, "AuthorshipID" -> Automatic, "Status" -> "active"
+Options: "Role" -> "Author", "IdentifierRef" -> Missing["NoIdentifier"], "EntityRef" -> Missing["Unlinked"], "ObjectClass" -> Missing["NoClass"], "DisplayName" -> Missing["NoName"], "SourceField" -> Missing["NoField"], "ExtractionSource" -> "parser", "Confidence" -> 1.0, "EvidenceRefs" -> {}, "AccessLevel" -> 0.85, "CreatedAtUTC" -> Automatic, "AuthorshipID" -> Automatic, "Status" -> "active"
 
 ### SourceVaultAuthorshipObservedEvent[assertion]
 AuthorshipAssertion を EventClass="AuthorshipObserved" の event にする。
@@ -169,7 +169,7 @@ Options: "QueryTags" -> {}, "QueryAuthor" -> None, "MaxBoost" -> 0.2, "IncludeCa
 ### SourceVaultMakeDiagnosticProbe[targetURI, question, opts]
 compiled wiki/projection が保持すべき情報を検査する probe (§10.2.1) を作る。
 → Association
-Options: "ProbeKind" -> "QA" (QA/FactPresence/LinkPresence/TagPresence/Contradiction/AccessPolicy), "ExpectedAnswer" -> Missing, "SourceEvidenceRefs" -> {}, "MustPreserve" -> False, "CreatedFrom" -> "workflow", "Status" -> "active", "ProbeID" -> Automatic, "CreatedAtUTC" -> Automatic
+Options: "ProbeKind" -> "QA" (QA/FactPresence/LinkPresence/TagPresence/Contradiction/AccessPolicy), "ExpectedAnswer" -> Missing["NoExpected"], "SourceEvidenceRefs" -> {}, "MustPreserve" -> False, "CreatedFrom" -> "workflow", "Status" -> "active", "ProbeID" -> Automatic, "CreatedAtUTC" -> Automatic
 
 ### SourceVaultDiagnosticProbeAddedEvent[probe]
 EventClass="DiagnosticProbeAdded" の event を作る。
@@ -178,7 +178,7 @@ EventClass="DiagnosticProbeAdded" の event を作る。
 ### SourceVaultMakeProbeRun[probeID, result, opts]
 probe の実行結果 (§10.2.2) を作る。result=pass/fail/partial/inconclusive。
 → Association
-Options: "RunID" -> Missing, "EvaluatedArtifactRef" -> Missing, "Score" -> 0.0, "ObservedAnswer" -> Missing, "FailureClass" -> Missing (missingFact/wrongLink/wrongTag/accessBlocked/insufficientRetrieval), "ErrorBookRef" -> Missing, "ProbeRunID" -> Automatic, "CreatedAtUTC" -> Automatic
+Options: "RunID" -> Missing["NoRun"], "EvaluatedArtifactRef" -> Missing["NoArtifact"], "Score" -> 0.0, "ObservedAnswer" -> Missing["NoAnswer"], "FailureClass" -> Missing["NoFailure"] (missingFact/wrongLink/wrongTag/accessBlocked/insufficientRetrieval), "ErrorBookRef" -> Missing["NoError"], "ProbeRunID" -> Automatic, "CreatedAtUTC" -> Automatic
 
 ### SourceVaultProbeRunRecordedEvent[run]
 EventClass="ProbeRunRecorded" の event を作る。
@@ -236,7 +236,7 @@ EventClass="PinnedFactAdded" の event を作る。
 owner/LLM/workflow の操作観測 (§8.8.4) を作る。actorKind=Owner/LLM/Workflow/System。interactionKind=Open/Read/MarkRead/SearchClick/ContextInclude/Cite/Edit/Annotate/Tag/Pin/Dismiss 等。Weight は InteractionKind 別の既定値を持ち opts で上書き可。
 → Association
 既定 Weight: ContextInclude/Cite/Edit/Pin=1.0, Annotate/Tag/Star=0.8, Accept=0.7, SearchClick=0.4, Open/Read=0.3, Reject/Dismiss=0.2..0.3
-Options: "Weight" -> Automatic, "ObjectClass" -> Missing, "ActorID" -> Missing, "QueryRef" -> Missing, "RunID" -> Missing, "ContextRef" -> Missing, "AccessLevel" -> 0.85, "InteractionID" -> Automatic, "CreatedAtUTC" -> Automatic
+Options: "Weight" -> Automatic, "ObjectClass" -> Missing["NoClass"], "ActorID" -> Missing["NoActor"], "QueryRef" -> Missing["NoQuery"], "RunID" -> Missing["NoRun"], "ContextRef" -> Missing["NoContext"], "AccessLevel" -> 0.85, "InteractionID" -> Automatic, "CreatedAtUTC" -> Automatic
 
 ### SourceVaultObjectInteractionRecordedEvent[interaction]
 EventClass="ObjectInteractionRecorded" の event を作る。
@@ -255,7 +255,7 @@ ObjectInteraction/ImportanceSet から ObjectSignals projection を再生成す�
 ### SourceVaultMakeMemoryBranch[branchKind, opts]
 少数仮説/競合を早期に消さず保持する branch (§10.2.7) を作る。branchKind=MinorityHypothesis/AlternativeEntityLink/AlternativeTag/PageRevision。
 → Association
-Options: "TargetRefs" -> {}, "Rationale" -> "", "Gravity" -> 0.5, "Status" -> "active", "ReviewAfterUTC" -> Missing, "BranchID" -> Automatic, "CreatedAtUTC" -> Automatic
+Options: "TargetRefs" -> {}, "Rationale" -> "", "Gravity" -> 0.5, "Status" -> "active", "ReviewAfterUTC" -> Missing["NoReview"], "BranchID" -> Automatic, "CreatedAtUTC" -> Automatic
 
 ### SourceVaultMemoryBranchOpenedEvent[branch]
 EventClass="MemoryBranchOpened" の event を作る。
@@ -292,7 +292,7 @@ IntrinsicUncertainty が事後正誤を弁別できたかの AUROC 近似 (§8.8
 ### SourceVaultMakeCompilationConstraint[constraintKind, opts]
 pinned fact/ErrorBook/policy 由来の workflow 制約 (§10.2.4) を作る。constraintKind=PreserveFact/PreserveMinority/AvoidLink/AvoidTag/AccessGuard/StructuralRule。
 → Association
-Options: "AppliesTo" -> "workflow", "Payload" -> <||>, "SourceRef" -> Missing, "Active" -> True, "ConstraintID" -> Automatic, "CreatedAtUTC" -> Automatic
+Options: "AppliesTo" -> "workflow", "Payload" -> <||>, "SourceRef" -> Missing["NoSource"], "Active" -> True, "ConstraintID" -> Automatic, "CreatedAtUTC" -> Automatic
 
 ### SourceVaultCompilationConstraintAddedEvent[constraint]
 EventClass="CompilationConstraintAdded" の event を作る。

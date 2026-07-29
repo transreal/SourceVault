@@ -144,7 +144,9 @@ SourceVaultRoutineAgendaData::usage =
   "SourceVaultRoutineAgendaData[from, to, opts] (or [Quantity[n,\"Days\"]]) merges the \
 owner's calendar events (NBAccess`NBCalendarEvents) with $onWork notebook deadlines and \
 NextReviews (NBAccess`NBOnWorkTasks) into one day-grouped agenda. Returns <|\"From\", \
-\"To\", \"Overdue\"->{past-due deadline/review items}, \"Days\"->{<|\"DayAbs\",\"DayKey\", \
+\"To\", \"Overdue\"->{past-due deadline/review items, each carrying \"OpenTodos\" -> its \
+not-Done/Pass todo items (injected \"Todos\" or a weak SourceVaultExtractNotebookTodos \
+read; path-less projected items disclose none)}, \"Days\"->{<|\"DayAbs\",\"DayKey\", \
 \"Weekday\",\"AllDay\"->{deadline/review/all-day-event items},\"Timed\"->{timed events}|>...}|>. \
 Each notebook item carries its \"Path\" so a view can open it in one click. Weakly bound to \
 NBAccess (empty result if unavailable). Options: PrivacySpec (AccessLevel 1.0), \
@@ -158,7 +160,10 @@ SourceVaultRoutineAgendaData as a readable vertical day-by-day timeline: an over
 then per day an all-day band (notebook Deadlines in red, NextReviews in blue, all-day \
 calendar events in green) followed by timed calendar events. Notebook rows are clickable \
 (SystemOpen, so Dropbox online-only files download and open too) to jump straight into the \
-work. Needs a Front End. Same options as SourceVaultRoutineAgendaData.";
+work, and carry a trailing folder icon that SystemOpens the containing directory; overdue \
+rows additionally show the missed review/deadline date in the time column and list the \
+notebook's open (not Done/Pass) todo items as an indented bullet list. Needs a Front \
+End. Same options as SourceVaultRoutineAgendaData.";
 
 (* forward declarations: these are DEFINED by SourceVault_mailagenda.wl but
    referenced below. Touching them here, in the package context BEFORE
@@ -707,6 +712,35 @@ iSVRPTaskName[t_] := Module[
 iSVRPAllDayRank[item_] := Switch[Lookup[item, "Kind", ""],
   "Deadline", 1, "MailDeadline", 2, "Review", 3, "AllDayEvent", 4, _, 5];
 
+(* --- open-todo disclosure for OVERDUE notebook rows (2026-07-28) ---
+   An overdue item gains "OpenTodos" -> its todo items whose Status is not
+   Done/Pass. Injected "Todos" (test seam, carried from the task record) win;
+   otherwise a WEAK live extraction via SourceVaultExtractNotebookTodos
+   (defined by SourceVault.wl; absent in standalone loads -> {}). A path-less
+   item (restricted-level projection) discloses nothing: the todo text is
+   notebook CONTENT, only disclosable where the full record already is. *)
+iSVRPOpenTodoQ[td_Association] :=
+  !MemberQ[{"Done", "Pass"}, Lookup[td, "Status", ""]];
+iSVRPOpenTodoQ[___] := False;
+iSVRPAttachOpenTodos[item_Association] := Module[
+  {td = Lookup[item, "Todos", Missing[]],
+   p = Lookup[item, "Path", Missing[]]},
+  (* runtime Symbol[] resolution, NOT a bare reference: a bare name parsed
+     here in a standalone load (SourceVault.wl absent) would mint an ORPHAN
+     SourceVault`Private` symbol and the weak call would then miss the real
+     public one forever (known orphan-symbol trap). Names first so the
+     public symbol is never created just by probing. *)
+  If[!ListQ[td] && StringQ[p] &&
+      Names["SourceVault`SourceVaultExtractNotebookTodos"] =!= {} &&
+      With[{sym = Symbol["SourceVault`SourceVaultExtractNotebookTodos"]},
+        Length[DownValues[sym]] > 0],
+    td = Quiet@Check[
+      Symbol["SourceVault`SourceVaultExtractNotebookTodos"][p], {}]];
+  If[!ListQ[td], td = {}];
+  Append[item,
+    "OpenTodos" -> Select[Cases[td, _Association], iSVRPOpenTodoQ]]];
+iSVRPAttachOpenTodos[x_] := x;
+
 Options[SourceVaultRoutineAgendaData] = {
   PrivacySpec -> <|"AccessLevel" -> 1.0|>, "CalendarEvents" -> Automatic,
   "OnWorkTasks" -> Automatic, "ModifiedWithinDays" -> 120, "IncludeOverdue" -> True,
@@ -793,6 +827,11 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
         item = <|"Kind" -> kind, "DueT" -> due, "Label" -> iSVRPTaskName[t],
           "Path" -> Lookup[t, "Path", Missing[]], "State" -> state,
           "PrivacyLevel" -> iSVRPItemPL[t], "DayAbs" -> d|>;
+        (* injected todo items (test seam / enriched callers) travel with the
+           item so the overdue post-pass below can use them without re-reading
+           the notebook *)
+        With[{td = Lookup[t, "Todos", Missing[]]},
+          If[ListQ[td], item["Todos"] = td]];
         Which[
           d < fromDay, If[TrueQ[OptionValue["IncludeOverdue"]], AppendTo[overdue, item]],
           d < toDayEnd, AppendTo[items, item]]],
@@ -800,6 +839,10 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
     {t, ow}];
 
   overdue = SortBy[overdue, #["DueT"] &];
+  (* overdue notebooks additionally disclose their OPEN (not Done/Pass) todo
+     items -- the view lists them indented under the row. Day-list items are
+     untouched (the calendar section stays as-is). *)
+  overdue = Map[iSVRPAttachOpenTodos, overdue];
 
   (* --- actionable mails (R9, weak binding to SourceVault_mailagenda) ---
      Per-mail privacy: the effective ceiling is Min[MailMaxPrivacyLevel,
@@ -883,9 +926,14 @@ iSVRPAgendaKindTag["Deadline"] = "\:3006\:5207";
 iSVRPAgendaKindTag["Review"] = "\:30ec\:30d3\:30e5\:30fc";
 iSVRPAgendaKindTag[_] = "";
 
-iSVRPAgendaItemRow[item_, tz_] := Module[
+(* the 2-arg form is a REAL definition (not an optional default) so that a
+   re-Get over a live kernel REPLACES the pre-showDue 2-arg DownValue instead
+   of leaving it to shadow 2-arg calls *)
+iSVRPAgendaItemRow[item_, tz_] := iSVRPAgendaItemRow[item, tz, False];
+iSVRPAgendaItemRow[item_, tz_, showDue_] := Module[
   {kind = Lookup[item, "Kind", ""], col, path = Lookup[item, "Path", Missing[]],
-   label = Lookup[item, "Label", "?"], tag, timepart, mand, nameCell},
+   label = Lookup[item, "Label", "?"], tag, timepart, timeCell, mand, nameCell,
+   dirCell, mainRow, todoRows},
   col = iSVRPAgendaColor[kind];
   tag = iSVRPAgendaKindTag[kind];
   mand = TrueQ[Lookup[item, "Mandatory", False]];
@@ -894,6 +942,13 @@ iSVRPAgendaItemRow[item_, tz_] := Module[
       iSVRPHM[Lookup[item, "EndT", 0], tz],
     "AllDayEvent", "\:7d42\:65e5",
     _, "\:3000\:3000"];
+  (* overdue band (showDue): the otherwise-empty time column carries the
+     missed review/deadline date, red like the band header *)
+  timeCell = With[{d = If[TrueQ[showDue],
+      iSVRPShortDate[Lookup[item, "DueT", Missing[]]], ""]},
+    If[d =!= "",
+      Style[Pane[d, 74], RGBColor[0.85, 0.2, 0.2], Bold, 10],
+      Style[Pane[timepart, 74], GrayLevel[0.45], 10]]];
   (* clickable open. Two traps fixed: (1) BaseStyle "Hyperlink" OVERRODE the
      ButtonFunction with hyperlink navigation, so clicks did nothing. (2) NotebookOpen
      cannot open a Dropbox online-only (not-yet-downloaded) placeholder, which is why
@@ -916,11 +971,34 @@ iSVRPAgendaItemRow[item_, tz_] := Module[
           SourceVaultMailAgendaOpen[r], Appearance -> None, Method -> "Queued"],
         "\:958b\:304f: \:5bfe\:5fdc\:30a6\:30a3\:30f3\:30c9\:30a6 (\:8fd4\:4fe1/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)"]],
     True, Style[label, col, 12]];
-  Row[{
-    Style[Pane[timepart, 74], GrayLevel[0.45], 10],
+  (* folder link: SystemOpen the CONTAINING DIRECTORY (goes through the OS,
+     so Dropbox online-only placeholders hydrate, same as the file link) *)
+  dirCell = With[{dir = If[StringQ[path], DirectoryName[path], ""]},
+    If[StringQ[dir] && dir =!= "",
+      Tooltip[
+        Button[Mouseover[Style[" \|01F4C1", GrayLevel[0.5], 11],
+            Style[" \|01F4C1", RGBColor[0.2, 0.45, 0.8], 11]],
+          SystemOpen[dir], Appearance -> None],
+        "\:30d5\:30a9\:30eb\:30c0\:3092\:958b\:304f: " <> dir], ""]];
+  mainRow = Row[{
+    timeCell,
     If[tag =!= "", Style["\:3010" <> tag <> "\:3011", col, Bold, 10], ""],
     If[mand, Style["\:2605", RGBColor[0.85, 0.2, 0.2], 10], ""],
-    " ", nameCell}]];
+    " ", nameCell, dirCell}];
+  (* OVERDUE BAND ONLY (showDue): the notebook's open (not Done/Pass) todo
+     items as an indented bullet list under the row. Day rows never render
+     todos even when the data carries them (calendar section stays as-is). *)
+  todoRows = If[TrueQ[showDue],
+    Map[Function[td, Row[{Pane["", 84],
+        Style["\[Bullet]\:3000" <> StringTrim[Lookup[td, "Text", ""]],
+          GrayLevel[0.35], 10]}]],
+      Select[Cases[Lookup[item, "OpenTodos", {}], _Association],
+        StringQ[Lookup[#, "Text", Missing[]]] &&
+          StringTrim[Lookup[#, "Text", ""]] =!= "" &]],
+    {}];
+  If[todoRows === {}, mainRow,
+    Column[Prepend[todoRows, mainRow], Spacings -> 0.15,
+      Alignment -> Left]]];
 
 (* --- mail band helpers (R9) --- *)
 
@@ -1161,7 +1239,7 @@ SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
     {d, days}];
   If[overdue =!= {},
     AppendTo[sections, Framed[Column[Prepend[
-        Map[iSVRPAgendaItemRow[#, tz] &, overdue],
+        Map[iSVRPAgendaItemRow[#, tz, True] &, overdue],
         Style["\:26a0 \:671f\:9650\:8d85\:904e\:30fb\:672a\:51e6\:7406", RGBColor[0.85, 0.2, 0.2],
           Bold, 12]], Alignment -> Left, Spacings -> 0.35],
       Background -> RGBColor[1, 0.95, 0.95], FrameStyle -> RGBColor[0.85, 0.55, 0.55],

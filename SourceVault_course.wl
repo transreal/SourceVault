@@ -152,6 +152,14 @@ SourceVaultExamProblemPreview::usage =
   "SourceVaultExamProblemPreview[examId, slot] は指定スロット 1 問だけを問題用紙と同じ組版で表示する (レイアウト確認用)。opts: \"Wide\" (True で段抜き幅)。";
 SourceVaultExamAnswerSheetPDF::usage =
   "SourceVaultExamAnswerSheetPDF[examId, outPath, opts] は解答用紙 PDF を生成する。ヘッダは $SourceVaultExamTemplatePDF をオーバーレイ。レイアウトは exam レコードの SheetLayout と同一 (採点切出しと共有)。opts: \"GroupLabels\" (Automatic=通し番号のときは大問の [1] [2] を出さない / True / False)。";
+SourceVaultExamFind::usage =
+  "SourceVaultExamFind[query] は「2026年度のデータ構造とアルゴリズムの試験」のような問い合わせから試験レコードを 1 件解決する。ExamId 完全一致が最優先。既定では Archived の試験 (控え・旧版) を除外し、候補が複数なら黙って選ばず AmbiguousExam で失敗する。opts: \"IncludeArchived\"。";
+SourceVaultExamSetStatus::usage =
+  "SourceVaultExamSetStatus[examId, \"Active\"|\"Archived\"] は試験の状態を設定する。原問のままの控え (…-orig 等) を \"Archived\" にすると SourceVaultExamFind の既定検索から外れ、最終版だけが返る。";
+SourceVaultExamOverview::usage =
+  "SourceVaultExamOverview[examId | query] は出題一覧 <|Printed, Slot, Unit, Field, Headline, Points, Answer, Generated, Id|> を返す。query は SourceVaultExamFind で解決する。SourceVaultExamOverviewView は表題つきの Dataset 表示。";
+SourceVaultExamOverviewView::usage =
+  "SourceVaultExamOverviewView[examId | query] は SourceVaultExamOverview の Dataset 表示 (試験名と ExamId の見出しつき)。";
 SourceVaultExamSetNumbering::usage =
   "SourceVaultExamSetNumbering[examId, \"Continuous\"|\"Group\"] は用紙に印刷する問題番号の付け方を設定する。\"Continuous\" は大問をまたいで 1..N の通し番号 (問題用紙・解答用紙の両方に効く)、\"Group\" は従来の大問ごと (問題用紙 1-4 / 解答用紙 4)。内部のスロットキー・配点・解答キー・採点の切出し座標は変わらない。";
 SourceVaultExamNumbering::usage =
@@ -184,6 +192,40 @@ SourceVaultExamScoreView::usage =
   "SourceVaultExamScoreView[examId, opts] は採点結果の Dataset 表示。";
 SourceVaultExamScoreReport::usage =
   "SourceVaultExamScoreReport[examId, opts] は採点報告 (Dataset)。opts: \"Export\"->path.xlsx でローカル書出し。";
+
+(* ---- Web レポート (一般形式フォルダ) 取込 ----
+   <udb>/webreports/<講義>/ に置かれた回収フォルダ (manifest.wxf + PDF 群;
+   学籍番号のみ PL 0.6) を、登録名簿と結合して Cerezo collection と同一
+   スキーマ (CerezoCollectionRun / SubmissionVersion / blob / イベント /
+   カタログ) の SourceVault スナップショット (PL 1.0) へ取り込む。
+   回収フォルダの生成手段 (クラウド操作) には依存しない — manifest 形式
+   だけが契約。取込後は CerezoCollectionView / CerezoAnonymizedSubmissions /
+   CerezoGradeSubmissions / CerezoAttachGrades / CerezoGradeReport が
+   run の sv:// URI に対してそのまま使える。 *)
+$SourceVaultCourseWebReportRoot::usage =
+  "$SourceVaultCourseWebReportRoot は Web レポート回収フォルダの root override。Automatic なら <udb>/webreports (udb = PrivateVault の親)。";
+$SourceVaultCourseWebStoreRoot::usage =
+  "$SourceVaultCourseWebStoreRoot は course 用ストア (名簿レジストリ等) の root override。Automatic なら <PrivateVault>/coursereports。";
+$SourceVaultCourseWebPdfTextFn::usage =
+  "$SourceVaultCourseWebPdfTextFn は PDF 本文抽出のシーム fn[bytes]->String。Automatic は ImportByteArray {PDF,Plaintext}。";
+SourceVaultCourseRosterRegister::usage =
+  "SourceVaultCourseRosterRegister[lecture, roster, opts] は講義 (例 \"ald-2026\") の名簿を登録する (PL 1.0 ローカル保存)。roster: {{学籍番号,氏名}..} / <|id->name..|> / xls(x) パス (opts は SourceVaultExamRosterImport と同じ)。学籍番号は小文字化してクラウド uid と突合する。";
+SourceVaultCourseRoster::usage =
+  "SourceVaultCourseRoster[lecture] は登録済み名簿レコードを返す (無ければ Missing)。PL 1.0。";
+SourceVaultCourseRosters::usage =
+  "SourceVaultCourseRosters[] は名簿登録済みの講義一覧を返す。";
+SourceVaultCourseWebReportFolders::usage =
+  "SourceVaultCourseWebReportFolders[] は <udb>/webreports 配下の回収フォルダ (manifest.wxf) 一覧を返す。";
+SourceVaultCourseWebReportIngest::usage =
+  "SourceVaultCourseWebReportIngest[lecture, opts] は回収フォルダを名簿と結合して Cerezo と同一形式の SourceVault スナップショット (PL 1.0) へ取り込む。再実行は内容が変わった学生だけ新バージョン。opts: \"ReportDescs\"->All|{\"0801\"..}, \"Chapters\"->All, \"ReportOptions\"->All, \"Roster\"->Automatic, \"AssignmentName\"->Automatic, \"AllowMissingNames\"->False, \"Folder\"->Automatic。";
+SourceVaultCourseWebReportRuns::usage =
+  "SourceVaultCourseWebReportRuns[] / [lecture] は取込済み Web レポート run の一覧 (正準 sv:// URI 付き) を返す。PL 1.0。";
+SourceVaultCourseWebReportLatestRun::usage =
+  "SourceVaultCourseWebReportLatestRun[lecture, reportDesc] は最新 run スナップショットを返す (SnapshotRef/URI 付き)。PL 1.0。";
+SourceVaultCourseWebReportView::usage =
+  "SourceVaultCourseWebReportView[lecture, reportDesc] / [svURI] は提出状況を表示する。Cerezo.wl ロード済みなら CerezoCollectionView へ委譲 (同一形式)。PL 1.0。";
+SourceVaultCourseWebReportGrade::usage =
+  "SourceVaultCourseWebReportGrade[lecture, reportDesc, rubric, opts] / [svURI, rubric, opts] は匿名化採点 (CerezoAnonymizedSubmissions -> CerezoGradeSubmissions) を実行する。Cerezo.wl 必須 (弱結合)。opts: \"Policy\", \"MissingPages\", \"LLMFn\" 等は Cerezo 側へ透過。結果の \"GradeAnnotationRef\" を CerezoAttachGrades / CerezoGradeReport へ渡す。";
 
 Begin["`CoursePrivate`"]
 
@@ -1315,6 +1357,94 @@ SourceVaultExamList[] := Module[{d = iEXExamDir[], files},
 SourceVaultExamList[subj_String] := Select[SourceVaultExamList[], Lookup[#, "Subject"] === subj &];
 
 iEXSaveExam[exam_Association] := iEXWriteWXF[iEXExamPath[exam["ExamId"]], exam];
+
+(* ---- どれが最終版かを記録する ----
+   下書きや原問のままの控え (…-orig 等) が同じ科目・年度に並ぶと、
+   呼び出し側が当て推量で選ぶことになる。状態を持たせて既定の検索から
+   外し、曖昧なら黙って選ばず失敗させる。 *)
+SourceVaultExamSetStatus[examId_String, status_String] := Module[
+  {exam = SourceVaultExamGet[examId]},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  If[!MemberQ[{"Active", "Archived"}, status],
+   Return[iEXFail["BadStatus", "Status" -> status,
+     "Hint" -> "\"Active\" (現行) か \"Archived\" (控え・旧版) を指定する。"]]];
+  exam["Status"] = status;
+  iEXSaveExam[exam];
+  <|"Status" -> "OK", "ExamId" -> examId, "ExamStatus" -> status|>];
+
+iEXExamStatus[exam_] := If[AssociationQ[exam],
+  ToString[Lookup[exam, "Status", "Active"]], "Active"];
+
+iEXExamSearchText[e_Association] := ToLowerCase[StringJoin[Riffle[
+  Map[ToString[Lookup[e, #, ""]] &,
+   {"ExamId", "Subject", "Title", "ExamName", "Year"}], " "]]];
+
+(* 「2026年度のデータ構造とアルゴリズムの試験」のような問い合わせを解く。
+   4 桁の年は年として、それ以外は語として全一致を要求する。 *)
+iEXExamQueryTokens[query_String] := Module[{years, rest},
+  years = Select[StringCases[query, DigitCharacter ..], StringLength[#] === 4 &];
+  rest = StringDelete[query, DigitCharacter ..];
+  rest = StringDelete[rest,
+    {"年度", "年", "の", "試験", "問題", "科目", "最終版", "版"}];
+  rest = Select[StringSplit[rest, {" ", "\t", "　", "、", "，", ","}],
+    StringLength[#] >= 2 &];
+  {years, rest}];
+
+Options[SourceVaultExamFind] = {"IncludeArchived" -> False};
+SourceVaultExamFind[query_String, OptionsPattern[]] := Module[
+  {all, pool, hit, years, words, cands},
+  all = SourceVaultExamList[];
+  pool = If[TrueQ[OptionValue["IncludeArchived"]], all,
+    Select[all, iEXExamStatus[#] =!= "Archived" &]];
+  (* ExamId の完全一致が最優先 (控えでも明示指定なら返す) *)
+  hit = SelectFirst[all, Lookup[#, "ExamId", ""] === query &, Missing[]];
+  If[AssociationQ[hit], Return[hit]];
+  {years, words} = iEXExamQueryTokens[query];
+  cands = Select[pool, Function[e, Module[{txt = iEXExamSearchText[e]},
+     AllTrue[years, StringContainsQ[txt, #] &] &&
+     AllTrue[words, StringContainsQ[txt, ToLowerCase[#]] &]]]];
+  Which[
+   Length[cands] === 1, First[cands],
+   cands === {},
+    iEXFail["ExamNotFound", "Query" -> query,
+      "Candidates" -> Map[Lookup[#, "ExamId", ""] &, pool]],
+   True,
+    (* 黙って選ばない。どれが最終版かはオーナーが決める *)
+    iEXFail["AmbiguousExam", "Query" -> query,
+      "Candidates" -> Map[Lookup[#, "ExamId", ""] &, cands],
+      "Hint" -> "SourceVaultExamSetStatus[examId, \"Archived\"] で控えを外すか、ExamId を直接指定する。"]]];
+
+iEXResolveExam[q_String] := Module[{e = SourceVaultExamGet[q]},
+  If[AssociationQ[e], e, SourceVaultExamFind[q]]];
+
+(* ---- 出題一覧 (番号 / スロット / 単元 / 見出し / 配点 / 正解) ---- *)
+SourceVaultExamOverview[query_String] := Module[{exam, disp, key, slots},
+  exam = iEXResolveExam[query];
+  If[!AssociationQ[exam], Return[exam]];
+  disp = iEXDisplayNumbers[exam];
+  key = SourceVaultExamAnswerKey[exam["ExamId"]];
+  slots = iEXExamSlots[exam];
+  Map[Function[sl, Module[{rec = SourceVaultExerciseGet[sl[[2]]]},
+     <|"Printed" -> Lookup[disp, sl[[1]], sl[[1]]], "Slot" -> sl[[1]],
+       "Unit" -> If[AssociationQ[rec], Lookup[rec, "Unit", Missing[]], Missing[]],
+       "Field" -> If[AssociationQ[rec], Lookup[rec, "Field", ""], ""],
+       "Headline" -> If[AssociationQ[rec], Lookup[rec, "Headline", ""], ""],
+       "Points" -> Lookup[Lookup[exam, "Points", <||>], sl[[1]], Missing[]],
+       "Answer" -> Lookup[key, "問" <> sl[[1]], ""],
+       "Generated" -> If[AssociationQ[rec],
+         StringQ[Lookup[rec, "BaseId", Missing[]]], False],
+       "Id" -> sl[[2]]|>]], slots]];
+
+SourceVaultExamOverviewView[query_String] := Module[
+  {exam = iEXResolveExam[query], rows},
+  If[!AssociationQ[exam], Return[exam]];
+  rows = SourceVaultExamOverview[exam["ExamId"]];
+  If[!ListQ[rows], Return[rows]];
+  Column[{
+    Style[Row[{Lookup[exam, "Title", ""], " ", Lookup[exam, "Year", ""], " ",
+       Lookup[exam, "ExamName", ""], "  (", exam["ExamId"], ")"}],
+     Bold, 13, FontFamily -> iEXFont[]],
+    Dataset[Map[KeyDrop[#, "Id"] &, rows]]}, Spacings -> 0.6]];
 
 iEXExamKeys[exam_Association] := Flatten[Map[Function[g,
   MapIndexed[Function[{id, ix}, ToString[g["Label"]] <> "-" <> ToString[First[ix]]], g["Problems"]]],
@@ -4331,6 +4461,567 @@ SourceVaultExerciseDiscardDraft[id_String] := Module[{rec = SourceVaultExerciseG
   <|"Status" -> "OK", "Id" -> id, "Deleted" -> True|>];
 
 (* ============================================================
+   Web レポート (一般形式フォルダ) 取込
+   - 入力契約: <folder>/manifest.wxf =
+       <|"Kind"->"CourseWebReportFolder", "Lecture", "LectureHeader",
+         "CourseTitle", "AcademicYear", "PrivacyLevel"->0.6,
+         "Files"->{<|"RelativePath","StudentID"(小文字uid),"Chapter",
+           "ReportOption","ReportDesc","SubmittedAt"(ISO),"ByteCount",
+           "SHA256",..|>..}|>
+     + <folder>/<ReportDesc>/<uid>.pdf
+   - 出力: Cerezo collection と同一スキーマの不変スナップショット群
+     (ObjectClass/イベント/カタログ/lock 名まで一致させ、Cerezo.wl の
+     表示・匿名化・採点をそのまま適用可能にする)。PL 1.0。
+   - クラウド操作 (回収フォルダの生成側) には一切依存しない。
+   ============================================================ *)
+
+If[!ValueQ[$SourceVaultCourseWebReportRoot], $SourceVaultCourseWebReportRoot = Automatic];
+If[!ValueQ[$SourceVaultCourseWebStoreRoot], $SourceVaultCourseWebStoreRoot = Automatic];
+If[!ValueQ[$SourceVaultCourseWebPdfTextFn], $SourceVaultCourseWebPdfTextFn = Automatic];
+If[!ValueQ[$SourceVaultCourseWebMaxTextChars], $SourceVaultCourseWebMaxTextChars = 200000];
+If[!ValueQ[$SourceVaultCourseWebSummaryMaxChars], $SourceVaultCourseWebSummaryMaxChars = 6000];
+If[!ValueQ[$SourceVaultCourseWebPrivacyLevel], $SourceVaultCourseWebPrivacyLevel = 1.0];
+
+(* ---- root 解決 ---- *)
+
+iCWRPrivateVault[] := Quiet @ Check[
+  If[Length[Names["SourceVault`SourceVaultRoot"]] > 0 &&
+     Length[DownValues[SourceVault`SourceVaultRoot]] > 0,
+    SourceVault`SourceVaultRoot["PrivateVault"], $Failed], $Failed];
+
+iCWRReportRoot[] := Which[
+  StringQ[$SourceVaultCourseWebReportRoot], $SourceVaultCourseWebReportRoot,
+  StringQ[iCWRPrivateVault[]], FileNameJoin[{DirectoryName[iCWRPrivateVault[]], "webreports"}],
+  True, $Failed];
+
+iCWRStoreRoot[] := Which[
+  StringQ[$SourceVaultCourseWebStoreRoot], $SourceVaultCourseWebStoreRoot,
+  StringQ[iCWRPrivateVault[]], FileNameJoin[{iCWRPrivateVault[], "coursereports"}],
+  True, $Failed];
+
+iCWRRosterPath[lecture_String] := With[{r = iCWRStoreRoot[]},
+  If[StringQ[r], FileNameJoin[{r, "rosters", lecture <> ".wxf"}], $Failed]];
+
+iCWRCoreReady[] :=
+  Length[Names["SourceVault`SourceVaultSaveImmutableSnapshot"]] > 0 &&
+  Length[DownValues[SourceVault`SourceVaultSaveImmutableSnapshot]] > 0;
+
+(* ---- 名簿レジストリ (氏名を含むため PL 1.0; PrivateVault 配下のみ) ---- *)
+
+iCWRNormalizeID[id_] := ToLowerCase[StringTrim[ToString[id]]];
+
+iCWRParseRoster[roster_, opts___] := Which[
+  StringQ[roster] && StringMatchQ[ToLowerCase[FileExtension[roster]], "xls" | "xlsx"],
+    Module[{pairs = SourceVaultExamRosterImport[roster, opts]},
+      If[!ListQ[pairs], Return[$Failed]];
+      iCWRParseRoster[pairs]],
+  AssociationQ[roster],
+    iCWRParseRoster[KeyValueMap[List, roster]],
+  ListQ[roster] && AllTrue[roster, ListQ[#] && Length[#] >= 2 &],
+    Association @ Map[
+      iCWRNormalizeID[#[[1]]] -> <|"StudentID" -> StringTrim[ToString[#[[1]]]],
+        "StudentName" -> StringTrim[ToString[#[[2]]]]|> &, roster],
+  True, $Failed];
+
+Options[SourceVaultCourseRosterRegister] = Options[SourceVaultExamRosterImport];
+SourceVaultCourseRosterRegister[lecture_String, roster_, opts : OptionsPattern[]] := Module[
+  {parsed, path, rec},
+  parsed = iCWRParseRoster[roster, opts];
+  If[!AssociationQ[parsed] || Length[parsed] === 0,
+    Return[iEXFail["RosterParseFailed", "Lecture" -> lecture]]];
+  path = iCWRRosterPath[lecture];
+  If[!StringQ[path], Return[iEXFail["RootUnresolved"]]];
+  rec = <|"Kind" -> "CourseRoster", "Lecture" -> lecture, "PrivacyLevel" -> 1.0,
+    "Roster" -> parsed, "Count" -> Length[parsed], "Updated" -> iEXNowIso[]|>;
+  If[iEXWriteWXF[path, rec] === $Failed, Return[iEXFail["RosterWriteFailed"]]];
+  <|"Status" -> "OK", "Lecture" -> lecture, "Count" -> Length[parsed], "Path" -> path|>];
+
+SourceVaultCourseRoster[lecture_String] := With[{p = iCWRRosterPath[lecture]},
+  If[!StringQ[p], Missing["RootUnresolved"],
+    Replace[iEXReadWXF[p], Except[_Association] -> Missing["NotRegistered", lecture]]]];
+
+SourceVaultCourseRosters[] := With[{r = iCWRStoreRoot[]},
+  If[!StringQ[r] || !DirectoryQ[FileNameJoin[{r, "rosters"}]], {},
+    FileBaseName /@ FileNames["*.wxf", FileNameJoin[{r, "rosters"}]]]];
+
+(* ---- manifest ---- *)
+
+iCWRManifest[folder_String] := Replace[
+  iEXReadWXF[FileNameJoin[{folder, "manifest.wxf"}]], Except[_Association] -> $Failed];
+
+SourceVaultCourseWebReportFolders[] := Module[{root = iCWRReportRoot[], dirs},
+  If[!StringQ[root] || !DirectoryQ[root], Return[{}]];
+  dirs = Select[FileNames["*", root], DirectoryQ];
+  DeleteCases[Map[Function[d, Module[{m = iCWRManifest[d]},
+    If[!AssociationQ[m], Nothing,
+      <|"Lecture" -> Lookup[m, "Lecture", FileBaseName[d]], "Folder" -> d,
+        "CourseTitle" -> Lookup[m, "CourseTitle", ""],
+        "AcademicYear" -> Lookup[m, "AcademicYear", Missing[]],
+        "PrivacyLevel" -> Lookup[m, "PrivacyLevel", Missing[]],
+        "Files" -> Length[Select[Lookup[m, "Files", {}], AssociationQ]],
+        "GeneratedAtUTC" -> Lookup[m, "GeneratedAtUTC", ""]|>]]], dirs], Nothing]];
+
+(* ---- Cerezo 同一スキーマ書込ヘルパ ---- *)
+
+iCWRCanonicalURI[ref_String] := Module[{uri, rest, pos},
+  uri = Quiet @ Check[
+    If[Length[Names["SourceVault`SourceVaultURIForObject"]] > 0 &&
+       Length[DownValues[SourceVault`SourceVaultURIForObject]] > 0,
+      SourceVault`SourceVaultURIForObject[ref], $Failed], $Failed];
+  If[StringQ[uri] && StringStartsQ[uri, "sv://"], Return[uri]];
+  If[StringStartsQ[ref, "sv://"], Return[ref]];
+  If[StringStartsQ[ref, "snapshot:"],
+    rest = StringDrop[ref, StringLength["snapshot:"]];
+    pos = StringPosition[rest, ":", 1];
+    If[pos =!= {},
+      Return["sv://snapshot/" <> StringTake[rest, pos[[1, 1]] - 1] <> "/" <>
+        StringDrop[rest, pos[[1, 1]]]]]];
+  ref];
+iCWRCanonicalURI[_] := Missing["NoCanonicalURI"];
+
+iCWRInternalRef[ref_String] := Which[
+  StringStartsQ[ref, "snapshot:"], ref,
+  StringStartsQ[ref, "sv://snapshot/"],
+    Module[{resolved, parts},
+      resolved = Quiet @ Check[
+        If[Length[Names["SourceVault`SourceVaultResolveURI"]] > 0 &&
+           Length[DownValues[SourceVault`SourceVaultResolveURI]] > 0,
+          SourceVault`SourceVaultResolveURI[ref], $Failed], $Failed];
+      If[AssociationQ[resolved] && StringQ[Lookup[resolved, "Ref", Null]],
+        Return[resolved["Ref"]]];
+      parts = StringSplit[StringDrop[ref, StringLength["sv://snapshot/"]], "/"];
+      If[Length[parts] >= 2, "snapshot:" <> parts[[1]] <> ":" <> parts[[2]],
+        Missing["NotSnapshotRef"]]],
+  True, Missing["NotSnapshotRef"]];
+
+iCWRSetPL[ref_String] := Quiet @ Check[
+  Which[
+    Length[Names["NBAccess`NBSetSnapshotPrivacyLevel"]] > 0 &&
+      Length[DownValues[NBAccess`NBSetSnapshotPrivacyLevel]] > 0,
+      NBAccess`NBSetSnapshotPrivacyLevel[ref, N[$SourceVaultCourseWebPrivacyLevel]],
+    Length[Names["SourceVault`SourceVaultSetImmutableSnapshotPrivacyLevel"]] > 0 &&
+      Length[DownValues[SourceVault`SourceVaultSetImmutableSnapshotPrivacyLevel]] > 0,
+      SourceVault`SourceVaultSetImmutableSnapshotPrivacyLevel[ref,
+        N[$SourceVaultCourseWebPrivacyLevel]],
+    True, Null], Null];
+
+iCWRDigest[payload_Association] := Module[{d},
+  d = Quiet @ Check[SourceVault`SourceVaultSnapshotDigest[payload], $Failed];
+  If[StringQ[d], d, "sha256:" <> IntegerString[Hash[payload, "SHA256"], 16, 64]]];
+
+SetAttributes[iCWRWithLock, HoldRest];
+iCWRWithLock[name_String, expr_] := If[
+  Length[Names["SourceVault`SourceVaultWithLock"]] > 0 &&
+    Length[DownValues[SourceVault`SourceVaultWithLock]] > 0,
+  SourceVault`SourceVaultWithLock[name, expr, "TimeoutSeconds" -> 15, "TTLSeconds" -> 120],
+  expr];
+
+iCWREvents[eventClass_String, collectionKey_String] := Select[
+  Replace[Quiet @ Check[SourceVault`SourceVaultTransactionLog[
+      "Limit" -> All, "EventClass" -> eventClass], {}], Except[_List] -> {}],
+  Lookup[#, "CollectionKey", ""] === collectionKey &];
+
+iCWRLatestSubmissionEvents[collectionKey_String] := Module[{groups},
+  groups = GroupBy[iCWREvents["CerezoCollectionSubmissionVersionAdded", collectionKey],
+    Lookup[#, "SubmissionKey", ""] &];
+  Association @ KeyValueMap[
+    #1 -> First @ ReverseSortBy[#2, Lookup[#, "Version", 0] &] &, groups]];
+
+(* ---- PDF 本文抽出 ---- *)
+
+iCWRPdfText[bytes_ByteArray] := Module[{raw, text},
+  If[$SourceVaultCourseWebPdfTextFn =!= Automatic,
+    raw = Quiet @ Check[$SourceVaultCourseWebPdfTextFn[bytes], $Failed];
+    Return[If[StringQ[raw], raw, $Failed]]];
+  raw = TimeConstrained[Quiet @ Check[
+    ImportByteArray[bytes, {"PDF", "Plaintext"}], $Failed], 60, $Failed];
+  text = Which[
+    StringQ[raw], raw,
+    ListQ[raw], StringRiffle[Cases[raw, _String], "\n"],
+    True, $Failed];
+  If[StringQ[text], StringTrim[text], $Failed]];
+
+iCWRTextMeta[bytes_ByteArray] := Module[{text},
+  text = iCWRPdfText[bytes];
+  Which[
+    text === $Failed,
+      <|"TextExtractionStatus" -> "Failed", "TextExtractionFormat" -> "PDF"|>,
+    StringTrim[text] === "",
+      <|"TextExtractionStatus" -> "Empty", "TextExtractionFormat" -> "PDF"|>,
+    True,
+      <|"TextExtractionStatus" -> "Ok",
+        "ExtractedText" -> StringTake[text, UpTo[$SourceVaultCourseWebMaxTextChars]],
+        "TextExtractionFormat" -> "PDF",
+        "ExtractedTextCharacters" -> StringLength[text]|>]];
+
+iCWRLocalStamp[iso_] := Quiet @ Check[
+  If[StringQ[iso] && iso =!= "",
+    DateString[TimeZoneConvert[DateObject[iso], $TimeZone],
+      {"Year", "-", "Month", "-", "Day", " ", "Hour", ":", "Minute", ":", "Second"}],
+    ""], ToString[iso]];
+
+(* ---- 提出 1 件の blob + Detail 構築 ---- *)
+
+iCWRCommitFile[folder_String, fentry_Association, sid_String] := Module[
+  {path, bytes, meta, saved, stored},
+  path = FileNameJoin[{folder, Lookup[fentry, "RelativePath", ""]}];
+  If[!FileExistsQ[path],
+    Return[<|"Status" -> "Error", "Reason" -> "FileMissing", "Path" -> path|>]];
+  bytes = Quiet @ Check[ReadByteArray[path], $Failed];
+  If[!ByteArrayQ[bytes],
+    Return[<|"Status" -> "Error", "Reason" -> "ReadFailed", "Path" -> path|>]];
+  meta = <|"ObjectClass" -> "CerezoCollectionSubmissionFile",
+    "Filename" -> sid <> ".pdf", "SourceURL" -> "",
+    "MediaType" -> "application/pdf",
+    "PrivacyLevel" -> N[$SourceVaultCourseWebPrivacyLevel]|>;
+  saved = Quiet @ Check[SourceVault`SourceVaultCommitBlob[bytes, "Meta" -> meta], $Failed];
+  If[!AssociationQ[saved],
+    Return[<|"Status" -> "Error", "Reason" -> "BlobCommitFailed", "Path" -> path|>]];
+  stored = <|"Name" -> sid <> ".pdf", "URL" -> "", "MediaType" -> "application/pdf",
+    "DownloadAttribute" -> "", "Status" -> "Ok",
+    "BlobRef" -> Lookup[saved, "BlobRef", Missing["NoBlobRef"]],
+    "URI" -> iCWRCanonicalURI[ToString @ Lookup[saved, "BlobRef", ""]],
+    "Hash" -> Lookup[saved, "Hash", Missing["NoHash"]],
+    "ByteCount" -> Length[bytes],
+    "SourceRelativePath" -> Lookup[fentry, "RelativePath", ""]|>;
+  Join[stored, iCWRTextMeta[bytes]]];
+
+(* ---- version snapshot (digest 一致なら Unchanged) ---- *)
+
+iCWRCommitRow[item_Association, latest_Association] := Module[
+  {key, oldEv, oldRef, oldRec, oldDigest, version, payload, digest, rec, saved, ev},
+  key = Lookup[item, "SubmissionKey", ""];
+  oldEv = Lookup[latest, key, <||>];
+  oldRef = Lookup[oldEv, "SnapshotRef", Missing["NoVersion"]];
+  oldRec = If[StringQ[oldRef],
+    Quiet @ Check[SourceVault`SourceVaultLoadImmutableSnapshot[oldRef], <||>], <||>];
+  oldDigest = If[AssociationQ[oldRec], Lookup[oldRec, "ContentDigest", ""], ""];
+  payload = <|"CollectionKey" -> Lookup[item["Top"], "CollectionKey", ""],
+    "SubmissionKey" -> key, "Top" -> item["Top"], "Detail" -> item["Detail"]|>;
+  digest = iCWRDigest[payload];
+  If[oldDigest === digest && StringQ[oldRef],
+    Return[<|"Status" -> "Ok", "SubmissionKey" -> key, "Top" -> item["Top"],
+      "DetailRef" -> oldRef, "DetailURI" -> iCWRCanonicalURI[oldRef],
+      "Version" -> Lookup[oldEv, "Version", 1], "Change" -> "Unchanged"|>]];
+  version = Lookup[oldEv, "Version", 0] + 1;
+  rec = Join[<|"ObjectClass" -> "CerezoCollectionSubmissionVersion",
+      "SchemaVersion" -> 1, "Version" -> version,
+      "PreviousRef" -> If[StringQ[oldRef], oldRef, Missing["NoVersion"]],
+      "ContentDigest" -> digest,
+      "CreatedAtUTC" -> iEXNowIso[],
+      "PrivacyLevel" -> N[$SourceVaultCourseWebPrivacyLevel],
+      "Source" -> "CourseWebReport"|>, payload];
+  saved = Quiet @ Check[SourceVault`SourceVaultSaveImmutableSnapshot[
+    "CerezoCollectionSubmissionVersion", rec], $Failed];
+  If[!AssociationQ[saved],
+    Return[<|"Status" -> "Error", "SubmissionKey" -> key, "Top" -> item["Top"],
+      "Reason" -> "SnapshotCommitFailed", "Change" -> "CommitFailed"|>]];
+  iCWRSetPL[saved["Ref"]];
+  ev = Quiet @ Check[SourceVault`SourceVaultAppendEvent[<|
+    "EventClass" -> "CerezoCollectionSubmissionVersionAdded",
+    "CollectionKey" -> payload["CollectionKey"], "SubmissionKey" -> key,
+    "Version" -> version, "SnapshotRef" -> saved["Ref"],
+    "PreviousRef" -> If[StringQ[oldRef], oldRef, Null],
+    "ContentDigest" -> digest, "Source" -> "CourseWebReport"|>], $Failed];
+  If[ev === $Failed || FailureQ[ev],
+    Return[<|"Status" -> "Error", "SubmissionKey" -> key, "Top" -> item["Top"],
+      "Reason" -> "VersionEventCommitFailed", "Change" -> "CommitFailed"|>]];
+  <|"Status" -> "Ok", "SubmissionKey" -> key, "Top" -> item["Top"],
+    "DetailRef" -> saved["Ref"], "DetailURI" -> iCWRCanonicalURI[saved["Ref"]],
+    "Version" -> version,
+    "Change" -> If[version === 1, "Created", "Updated"]|>];
+
+(* ---- カタログ (Cerezo と同一 alias / lock を共有) ---- *)
+
+iCWRCatalogEntry[run_Association, ref_String] := Module[{runRows, topRows, submitted},
+  runRows = Select[Lookup[run, "Rows", {}], AssociationQ];
+  topRows = Select[Lookup[runRows, "Top", {}], AssociationQ];
+  submitted = Count[topRows, row_ /; Lookup[row, "SubmissionStatus", ""] === "Submitted"];
+  <|"AcademicYear" -> Lookup[run, "AcademicYear", Missing[]],
+    "Course" -> Lookup[run, "Course", ""],
+    "AssignmentName" -> Lookup[run, "AssignmentName", ""],
+    "URI" -> iCWRCanonicalURI[ref], "RunRef" -> ref,
+    "CollectionURL" -> Lookup[run, "CollectionURL", ""],
+    "CollectionKey" -> Lookup[run, "CollectionKey", ""],
+    "RunSequence" -> Lookup[run, "RunSequence", 0],
+    "ObservedAtUTC" -> Lookup[run, "ObservedAtUTC", ""],
+    "Students" -> Length[runRows], "Submitted" -> submitted|>];
+
+iCWRUpdateCatalog[run_Association, runRef_String] := Module[{update},
+  update[] := Module[{old, entries, key, catalog, saved},
+    old = Quiet @ Check[SourceVault`SourceVaultLoadImmutableSnapshot[
+      "CerezoCollectionCatalog/latest"], <||>];
+    entries = If[AssociationQ[old] && AssociationQ[Lookup[old, "Entries", Null]],
+      Lookup[old, "Entries"], <||>];
+    key = Lookup[run, "CollectionKey", ""];
+    If[key === "", Return[$Failed]];
+    AssociateTo[entries, key -> iCWRCatalogEntry[run, runRef]];
+    catalog = <|"ObjectClass" -> "CerezoCollectionCatalog", "SchemaVersion" -> 1,
+      "PrivacyLevel" -> N[$SourceVaultCourseWebPrivacyLevel],
+      "UpdatedAtUTC" -> iEXNowIso[], "Entries" -> entries|>;
+    saved = Quiet @ Check[SourceVault`SourceVaultSaveImmutableSnapshot[
+      "CerezoCollectionCatalog", catalog, "Alias" -> "latest", "AliasOverwrite" -> True], $Failed];
+    If[AssociationQ[saved], iCWRSetPL[saved["Ref"]]];
+    saved];
+  iCWRWithLock["cerezo-collection-catalog", update[]]];
+
+(* ---- 取込本体 ---- *)
+
+iCWRAssignmentName[nameOpt_, lecture_, desc_] := Module[{chapter, ropt},
+  Which[
+    StringQ[nameOpt] && StringTrim[nameOpt] =!= "", StringTrim[nameOpt],
+    Head[nameOpt] === Function, ToString @ nameOpt[lecture, desc],
+    True,
+      chapter = Quiet @ Check[FromDigits[StringTake[desc, 2]], 0];
+      ropt = Quiet @ Check[FromDigits[StringTake[desc, -2]], 0];
+      If[ropt === 1 && chapter >= 1,
+        "第" <> ToString[chapter - 1] <> "回サマリー",
+        "課題 " <> desc]]];
+
+iCWRIngestOne[lecture_String, folder_String, manifest_Association, desc_String,
+    fentries_List, roster_Association, nameOpt_, allowMissing_] := Module[
+  {collectionKey, url, course, year, assignment, fileByNorm, missingIds, tops, prepared,
+   lockName, result},
+  collectionKey = "coursewebreport:" <> lecture <> ":" <> desc;
+  url = "coursewebreport://" <> lecture <> "/" <> desc;
+  course = ToString @ Lookup[manifest, "CourseTitle", lecture];
+  year = Lookup[manifest, "AcademicYear", Missing[]];
+  If[!IntegerQ[year], year = Quiet @ Check[FromDigits[StringTake[lecture, -4]], DateValue[Now, "Year"]]];
+  assignment = iCWRAssignmentName[nameOpt, lecture, desc];
+  fileByNorm = Association @ Map[iCWRNormalizeID[Lookup[#, "StudentID", ""]] -> # &, fentries];
+  missingIds = Complement[Keys[fileByNorm], Keys[roster]];
+  If[missingIds =!= {} && !TrueQ[allowMissing],
+    Return[<|"Status" -> "Error", "Reason" -> "StudentNotInRoster",
+      "ReportDesc" -> desc, "Missing" -> missingIds,
+      "Hint" -> "SourceVaultCourseRosterRegister で名簿を更新するか \"AllowMissingNames\"->True"|>]];
+  (* 行 = 名簿全員 (+ 許可時は名簿外の提出者) *)
+  tops = Join[
+    KeyValueMap[Function[{nid, entry}, Module[{fe = Lookup[fileByNorm, nid, Missing[]]},
+      <|"CollectionKey" -> collectionKey, "Course" -> course,
+        "StudentName" -> entry["StudentName"], "StudentID" -> entry["StudentID"],
+        "Grade" -> "", "GradedAt" -> "", "Comment" -> "", "DetailURL" -> "",
+        "SubmittedAt" -> If[AssociationQ[fe], iCWRLocalStamp[Lookup[fe, "SubmittedAt", ""]], ""],
+        "SubmissionStatus" -> If[AssociationQ[fe], "Submitted", "Unsubmitted"],
+        "SubmissionKey" -> "student:" <> entry["StudentID"],
+        "CloudUserID" -> nid|>]], roster],
+    Map[Function[nid, With[{fe = fileByNorm[nid]},
+      <|"CollectionKey" -> collectionKey, "Course" -> course,
+        "StudentName" -> "", "StudentID" -> ToString @ Lookup[fe, "StudentID", nid],
+        "Grade" -> "", "GradedAt" -> "", "Comment" -> "", "DetailURL" -> "",
+        "SubmittedAt" -> iCWRLocalStamp[Lookup[fe, "SubmittedAt", ""]],
+        "SubmissionStatus" -> "Submitted",
+        "SubmissionKey" -> "student:" <> ToString @ Lookup[fe, "StudentID", nid],
+        "CloudUserID" -> nid|>]], If[TrueQ[allowMissing], missingIds, {}]]];
+  tops = SortBy[tops, Lookup[#, "StudentID", ""] &];
+  prepared = Map[Function[top, Module[{fe, fileStored, detail},
+    fe = Lookup[fileByNorm, Lookup[top, "CloudUserID", ""], Missing[]];
+    If[Lookup[top, "SubmissionStatus", ""] =!= "Submitted" || !AssociationQ[fe],
+      detail = <|"Status" -> "Ok", "URL" -> "", "Title" -> assignment,
+        "SubmissionStatus" -> "Unsubmitted", "ReportHeader" -> "",
+        "SubmittedAt" -> "", "BodyText" -> "", "ContentBlocks" -> {}, "Files" -> {}|>;
+      <|"Status" -> "Ok", "SubmissionKey" -> top["SubmissionKey"], "Top" -> top,
+        "Detail" -> detail|>,
+      fileStored = iCWRCommitFile[folder, fe, Lookup[top, "StudentID", ""]];
+      If[Lookup[fileStored, "Status", ""] === "Error",
+        <|"Status" -> "Error", "SubmissionKey" -> top["SubmissionKey"], "Top" -> top,
+          "Reason" -> Lookup[fileStored, "Reason", "FileCommitFailed"]|>,
+        detail = <|"Status" -> "Ok", "URL" -> "", "Title" -> assignment,
+          "SubmissionStatus" -> "Submitted", "ReportHeader" -> "",
+          "SubmittedAt" -> Lookup[top, "SubmittedAt", ""], "BodyText" -> "",
+          "ContentBlocks" -> {},
+          "SummaryText" -> StringTake[
+            ToString @ Lookup[fileStored, "ExtractedText", ""],
+            UpTo[$SourceVaultCourseWebSummaryMaxChars]],
+          "Files" -> {fileStored}|>;
+        <|"Status" -> "Ok", "SubmissionKey" -> top["SubmissionKey"], "Top" -> top,
+          "Detail" -> detail|>]]]], tops];
+  lockName = "cerezo-collection:" <> IntegerString[Hash[collectionKey, "SHA256"], 16, 32];
+  result = iCWRWithLock[lockName,
+    iCWRCommitRun[collectionKey, url, lecture, desc, course, year, assignment, prepared]];
+  If[result === $Failed, <|"Status" -> "Error", "Reason" -> "CollectionCommitFailed",
+    "ReportDesc" -> desc|>, result]];
+
+iCWRCommitRun[collectionKey_, url_, lecture_, desc_, course_, year_, assignment_,
+    prepared_List] := Module[
+  {latest, rows, changes, priorRuns, runSequence, run, saved, event, catalogSaved},
+  latest = iCWRLatestSubmissionEvents[collectionKey];
+  rows = Map[If[Lookup[#, "Status", ""] === "Error",
+    Join[KeyTake[#, {"Status", "SubmissionKey", "Reason", "Top"}], <|"Change" -> "CommitFailed"|>],
+    iCWRCommitRow[#, latest]] &, prepared];
+  changes = Counts[Lookup[rows, "Change", "Unknown"]];
+  priorRuns = iCWREvents["CerezoCollectionImported", collectionKey];
+  runSequence = 1 + Max[Prepend[(Lookup[#, "RunSequence", 0] &) /@ priorRuns, 0]];
+  run = <|"ObjectClass" -> "CerezoCollectionRun", "SchemaVersion" -> 1,
+    "CollectionKey" -> collectionKey, "CollectionURL" -> url,
+    "RunSequence" -> runSequence,
+    "CourseID" -> lecture, "CollectionID" -> desc,
+    "Title" -> course <> " " <> assignment, "AcademicYear" -> year,
+    "Course" -> course, "AssignmentName" -> assignment,
+    "CollectionTitle" -> assignment, "ObservedAtUTC" -> iEXNowIso[],
+    "PrivacyLevel" -> N[$SourceVaultCourseWebPrivacyLevel],
+    "Source" -> "CourseWebReport", "Rows" -> rows|>;
+  saved = Quiet @ Check[SourceVault`SourceVaultSaveImmutableSnapshot[
+    "CerezoCollectionRun", run], $Failed];
+  If[!AssociationQ[saved],
+    Return[<|"Status" -> "Error", "Reason" -> "RunSnapshotCommitFailed"|>]];
+  iCWRSetPL[saved["Ref"]];
+  event = Quiet @ Check[SourceVault`SourceVaultAppendEvent[<|
+    "EventClass" -> "CerezoCollectionImported", "CollectionKey" -> collectionKey,
+    "CollectionURL" -> url, "RunRef" -> saved["Ref"],
+    "URI" -> iCWRCanonicalURI[saved["Ref"]],
+    "AcademicYear" -> year, "Course" -> course, "AssignmentName" -> assignment,
+    "RunSequence" -> runSequence, "RowCount" -> Length[rows],
+    "Changes" -> changes, "Source" -> "CourseWebReport"|>], $Failed];
+  If[event === $Failed || FailureQ[event],
+    Return[<|"Status" -> "Error", "Reason" -> "RunEventCommitFailed",
+      "RunRef" -> saved["Ref"]|>]];
+  catalogSaved = iCWRUpdateCatalog[run, saved["Ref"]];
+  <|"Status" -> "OK", "CollectionKey" -> collectionKey,
+    "Lecture" -> lecture, "ReportDesc" -> desc,
+    "RunRef" -> saved["Ref"], "URI" -> iCWRCanonicalURI[saved["Ref"]],
+    "AcademicYear" -> year, "Course" -> course, "AssignmentName" -> assignment,
+    "CatalogRef" -> If[AssociationQ[catalogSaved], Lookup[catalogSaved, "Ref", Missing[]],
+      Missing["CatalogUpdateFailed"]],
+    "RunSequence" -> runSequence, "Total" -> Length[rows],
+    "Submitted" -> Count[rows, r_ /; Lookup[Lookup[r, "Top", <||>], "SubmissionStatus", ""] === "Submitted"],
+    "CreatedVersions" -> Lookup[changes, "Created", 0],
+    "UpdatedVersions" -> Lookup[changes, "Updated", 0],
+    "Unchanged" -> Lookup[changes, "Unchanged", 0],
+    "Failed" -> Lookup[changes, "CommitFailed", 0]|>];
+
+Options[SourceVaultCourseWebReportIngest] = {
+  "ReportDescs" -> All, "Chapters" -> All, "ReportOptions" -> All,
+  "Roster" -> Automatic, "AssignmentName" -> Automatic,
+  "AllowMissingNames" -> False, "Folder" -> Automatic};
+SourceVaultCourseWebReportIngest[lecture_String, OptionsPattern[]] := Module[
+  {folder, manifest, files, descs, roster, rosterRec, results},
+  If[!iCWRCoreReady[],
+    Return[iEXFail["SourceVaultCoreUnavailable"]]];
+  folder = If[OptionValue["Folder"] === Automatic,
+    With[{r = iCWRReportRoot[]}, If[StringQ[r], FileNameJoin[{r, lecture}], $Failed]],
+    OptionValue["Folder"]];
+  If[!StringQ[folder] || !DirectoryQ[folder],
+    Return[iEXFail["FolderNotFound", "Folder" -> folder]]];
+  manifest = iCWRManifest[folder];
+  If[manifest === $Failed, Return[iEXFail["ManifestMissing", "Folder" -> folder]]];
+  files = Select[Lookup[manifest, "Files", {}],
+    AssociationQ[#] && StringQ[Lookup[#, "StudentID", Null]] &];
+  If[OptionValue["Chapters"] =!= All,
+    files = Select[files, MemberQ[OptionValue["Chapters"], Lookup[#, "Chapter", 0]] &]];
+  If[OptionValue["ReportOptions"] =!= All,
+    files = Select[files, MemberQ[OptionValue["ReportOptions"], Lookup[#, "ReportOption", 0]] &]];
+  If[OptionValue["ReportDescs"] =!= All,
+    files = Select[files, MemberQ[OptionValue["ReportDescs"], Lookup[#, "ReportDesc", ""]] &]];
+  If[files === {}, Return[iEXFail["NoMatchingFiles", "Folder" -> folder]]];
+  roster = If[OptionValue["Roster"] === Automatic,
+    (rosterRec = SourceVaultCourseRoster[lecture];
+     If[AssociationQ[rosterRec], Lookup[rosterRec, "Roster", $Failed], $Failed]),
+    iCWRParseRoster[OptionValue["Roster"]]];
+  If[!AssociationQ[roster] || Length[roster] === 0,
+    Return[iEXFail["RosterMissing", "Lecture" -> lecture,
+      "Hint" -> "SourceVaultCourseRosterRegister[lecture, roster] で登録"]]];
+  results = Map[
+    iCWRIngestOne[lecture, folder, manifest, #[[1]], #[[2]], roster,
+      OptionValue["AssignmentName"], OptionValue["AllowMissingNames"]] &,
+    Normal @ GroupBy[files, Lookup[#, "ReportDesc", ""] &]];
+  If[Length[results] === 1, First[results], results]];
+
+(* ---- run 一覧 / 解決 / 表示 / 採点 (Cerezo.wl へ弱結合委譲) ---- *)
+
+iCWRWebRunEvents[] := Select[
+  Replace[Quiet @ Check[SourceVault`SourceVaultTransactionLog[
+      "Limit" -> All, "EventClass" -> "CerezoCollectionImported"], {}], Except[_List] -> {}],
+  StringStartsQ[Lookup[#, "CollectionKey", ""], "coursewebreport:"] &];
+
+SourceVaultCourseWebReportRuns[] := SourceVaultCourseWebReportRuns[All];
+SourceVaultCourseWebReportRuns[lecture_] := Module[{evs, groups},
+  evs = iCWRWebRunEvents[];
+  If[lecture =!= All,
+    evs = Select[evs, StringStartsQ[Lookup[#, "CollectionKey", ""],
+      "coursewebreport:" <> lecture <> ":"] &]];
+  groups = GroupBy[evs, Lookup[#, "CollectionKey", ""] &];
+  SortBy[
+    Map[Function[g, Module[{ev = First @ ReverseSortBy[g, Lookup[#, "RunSequence", 0] &], parts},
+      parts = StringSplit[Lookup[ev, "CollectionKey", ""], ":"];
+      <|"Lecture" -> If[Length[parts] >= 2, parts[[2]], ""],
+        "ReportDesc" -> If[Length[parts] >= 3, parts[[3]], ""],
+        "AcademicYear" -> Lookup[ev, "AcademicYear", Missing[]],
+        "Course" -> Lookup[ev, "Course", ""],
+        "AssignmentName" -> Lookup[ev, "AssignmentName", ""],
+        "RunSequence" -> Lookup[ev, "RunSequence", 0],
+        "RowCount" -> Lookup[ev, "RowCount", 0],
+        "URI" -> Lookup[ev, "URI", ""], "RunRef" -> Lookup[ev, "RunRef", ""],
+        "CollectionKey" -> Lookup[ev, "CollectionKey", ""]|>]],
+      Values[groups]],
+    {#["Lecture"], #["ReportDesc"]} &]];
+
+SourceVaultCourseWebReportLatestRun[lecture_String, desc_String] := Module[{evs, ev, ref, rec},
+  evs = iCWREvents["CerezoCollectionImported", "coursewebreport:" <> lecture <> ":" <> desc];
+  If[evs === {}, Return[Missing["NotIngested", {lecture, desc}]]];
+  ev = First @ ReverseSortBy[evs, Lookup[#, "RunSequence", 0] &];
+  ref = Lookup[ev, "RunRef", ""];
+  rec = Quiet @ Check[SourceVault`SourceVaultLoadImmutableSnapshot[ref], $Failed];
+  If[AssociationQ[rec],
+    Join[rec, <|"SnapshotRef" -> ref, "URI" -> iCWRCanonicalURI[ref]|>],
+    Missing["RunUnreadable", ref]]];
+
+iCWRResolveRunURI[selector_String] := Which[
+  StringStartsQ[selector, "sv://snapshot/"] || StringStartsQ[selector, "snapshot:"],
+    iCWRCanonicalURI[iCWRInternalRef[selector] /. _Missing -> selector],
+  True, Missing["InvalidSelector", selector]];
+iCWRResolveRunURI[lecture_String, desc_String] := With[
+  {run = SourceVaultCourseWebReportLatestRun[lecture, desc]},
+  If[AssociationQ[run], Lookup[run, "URI"], run]];
+
+iCWRCerezoReady[fname_String] :=
+  Length[Names["Cerezo`" <> fname]] > 0 &&
+  Length[DownValues @@ {Symbol["Cerezo`" <> fname]}] > 0;
+
+iCWRFallbackView[run_Association] := Dataset[Map[
+  Function[row, With[{top = Lookup[row, "Top", <||>]},
+    <|"学籍番号" -> Lookup[top, "StudentID", ""],
+      "氏名" -> Lookup[top, "StudentName", ""],
+      "状態" -> Lookup[top, "SubmissionStatus", ""],
+      "提出日時" -> Lookup[top, "SubmittedAt", ""],
+      "Version" -> Lookup[row, "Version", 0],
+      "Change" -> Lookup[row, "Change", ""]|>]],
+  Select[Lookup[run, "Rows", {}], AssociationQ]]];
+
+SourceVaultCourseWebReportView[lecture_String, desc_String] := Module[{run, uri},
+  run = SourceVaultCourseWebReportLatestRun[lecture, desc];
+  If[!AssociationQ[run], Return[run]];
+  uri = Lookup[run, "URI", ""];
+  If[iCWRCerezoReady["CerezoCollectionView"] && StringQ[uri] && uri =!= "",
+    Cerezo`CerezoCollectionView[uri],
+    iCWRFallbackView[run]]];
+SourceVaultCourseWebReportView[uri_String] := Module[{ref, run},
+  ref = iCWRInternalRef[uri];
+  If[!StringQ[ref], Return[Missing["InvalidSelector", uri]]];
+  If[iCWRCerezoReady["CerezoCollectionView"],
+    Cerezo`CerezoCollectionView[iCWRCanonicalURI[ref]],
+    run = Quiet @ Check[SourceVault`SourceVaultLoadImmutableSnapshot[ref], $Failed];
+    If[AssociationQ[run], iCWRFallbackView[run], Missing["RunUnreadable", uri]]]];
+
+Options[SourceVaultCourseWebReportGrade] = {
+  "Policy" -> Automatic, "MissingPages" -> "Fail", "TargetLevel" -> Automatic,
+  "GrantRef" -> None, "Force" -> False, "LLMFn" -> Automatic};
+SourceVaultCourseWebReportGrade[lecture_String, desc_String, rubric_,
+    opts : OptionsPattern[]] := With[{uri = iCWRResolveRunURI[lecture, desc]},
+  If[!StringQ[uri], uri, SourceVaultCourseWebReportGrade[uri, rubric, opts]]];
+SourceVaultCourseWebReportGrade[uri_String, rubric_, OptionsPattern[]] := Module[{anon, graded},
+  If[!iCWRCerezoReady["CerezoAnonymizedSubmissions"] ||
+     !iCWRCerezoReady["CerezoGradeSubmissions"],
+    Return[iEXFail["CerezoUnavailable",
+      "Hint" -> "Cerezo.wl をロードしてから実行 (匿名化採点シームは Cerezo.wl 側)"]]];
+  anon = Cerezo`CerezoAnonymizedSubmissions[uri,
+    "Policy" -> OptionValue["Policy"], "MissingPages" -> OptionValue["MissingPages"],
+    "TargetLevel" -> OptionValue["TargetLevel"], "GrantRef" -> OptionValue["GrantRef"],
+    "Force" -> OptionValue["Force"]];
+  If[Lookup[anon, "Status", ""] =!= "OK", Return[anon]];
+  graded = Cerezo`CerezoGradeSubmissions[anon, rubric, "LLMFn" -> OptionValue["LLMFn"]];
+  If[AssociationQ[graded], Join[graded, <|"RunURI" -> uri|>], graded]];
+
+(* ============================================================
    プライバシー分類の宣言 (コミットゲート用)
    ・問題 DB そのものは個人情報を含まない (PL 0.3)。私的ストア
      (<PrivateVault>/exercises) には到達するが、出力に私的データは載らない
@@ -4368,6 +5059,8 @@ $iEXPrivacyPublic = {
   "SourceVaultExamDedupeSlots", "SourceVaultExamReplaceWithSimilar",
   "SourceVaultExamSetNumbering", "SourceVaultExamNumbering",
   "SourceVaultExamNumberingView",
+  "SourceVaultExamFind", "SourceVaultExamSetStatus",
+  "SourceVaultExamOverview", "SourceVaultExamOverviewView",
   "SourceVaultExamPaperPDF", "SourceVaultExamProblemPreview",
   "SourceVaultExamAnswerSheetPDF", "SourceVaultExamSheetLayout",
   (* 設定変数 (値は書体名・担当教員名・テンプレート/ストアのパス・既定 PL・
@@ -4388,7 +5081,17 @@ $iEXPrivacyPrivate = {
   {"SourceVaultExamSetMark", "Result"},
   {"SourceVaultExamScore", "Result"},
   {"SourceVaultExamScoreView", "View"},
-  {"SourceVaultExamScoreReport", "Result"}};
+  {"SourceVaultExamScoreReport", "Result"},
+  (* Web レポート (氏名結合後は PL 1.0) *)
+  {"SourceVaultCourseRosterRegister", "Result"},
+  {"SourceVaultCourseRoster", "Result"},
+  {"SourceVaultCourseRosters", "Result"},
+  {"SourceVaultCourseWebReportFolders", "Result"},
+  {"SourceVaultCourseWebReportIngest", "Result"},
+  {"SourceVaultCourseWebReportRuns", "Result"},
+  {"SourceVaultCourseWebReportLatestRun", "Result"},
+  {"SourceVaultCourseWebReportView", "View"},
+  {"SourceVaultCourseWebReportGrade", "Result"}};
 
 iEXRegisterPrivacyContracts[] :=
   Quiet@Check[

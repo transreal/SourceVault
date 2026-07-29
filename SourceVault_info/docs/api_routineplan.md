@@ -99,7 +99,7 @@ Options: PriorPlan -> (none), + SourceVaultRoutinePlacePlan の全 opts
 各可視化は pure な data 関数 + view renderer(Graphics/Graph・表示は要 FE)。TaskId は identity として保持、
 表示ラベルは Label/StepId/TaskId の順で解決(内部 `iSVRPLabel`)。
 
-### SourceVaultRoutineGanttData[plan, tasks] → {row...}
+### SourceVaultRoutineGanttData[plan, tasks, opts] → {row...}
 タスク別タイムライン行を返す(FirstDay 昇順、TaskId で安定 tie-break)。
 → `{<|"TaskId","Label","Days"->{dayAbs...},"HoursByDay","TotalHours","DueAtUTC","FirstDay","LastDay"|>...}`
 
@@ -156,7 +156,7 @@ Options: CapacityModel -> Automatic (=SourceVaultRoutineDefaultCapacityModel[]),
 
 ### SourceVaultRoutineAgendaData[from, to, opts] / [Quantity[n,"Days"], opts] / [] → agenda
 オーナーの calendar events(NBAccess`NBCalendarEvents)と $onWork の notebook 締切/NextReviews
-(NBAccess`NBOnWorkTasks)、要対応メール(SourceVaultMailAgendaItems — [SourceVault_mailagenda](https://github.com/transreal/SourceVault_mailagenda)
+(NBAccess`NBOnWorkTasks)、要対応メール([SourceVault_mailagenda](https://github.com/transreal/SourceVault_mailagenda)
 に弱結合)を日ごとにグループ化した統合アジェンダ。各 notebook item は "Path" を持ち、view から
 ワンクリックで開ける。引数なし呼び出しは `Quantity[7,"Days"]` 既定。NBAccess/mailagenda 未ロード時は
 それぞれ空。
@@ -167,7 +167,9 @@ Options: CapacityModel -> Automatic (=SourceVaultRoutineDefaultCapacityModel[]),
 (SourceVaultUpcomingSchedule は Deadline 列と NextReview 列を両方出す)と食い違う。
 締切のあるメールは `"MailDeadline"` として該当日の AllDay にも合流(クリックで対応ウィンドウを開く)。
 AllDay 内の並びは Deadline→MailDeadline→NextReview→all-day event→その他 のランク順(同ランク内は Label)。
-→ `<|"From","To","TimeZone","Overdue"->{期限超過の deadline/review item...},
+→ `<|"From","To","TimeZone","Overdue"->{期限超過の deadline/review item、各 item は "OpenTodos"->
+{open (not Done/Pass) todo Associations} を付加(注入 "Todos" フィールド優先、なければ弱結合
+SourceVaultExtractNotebookTodos 読み取り、path なし item は {} = 開示なし)},
 "Mail"->{mail agenda item...}, "MailPendingCount",
 "Days"->{<|"DayAbs","DayKey","Weekday","AllDay"->{deadline/review/all-day-event/MailDeadline item...},
 "Timed"->{timed event...}|>...}, "MaxPrivacyLevel"->Real|>`
@@ -185,8 +187,9 @@ SourceVaultRoutineAgendaData を縦型タイムラインとして描画: 日毎�
 MailDeadline=赤褐色・NextReview=青・all-day event=緑)→timed event、続いて overdue バナー(期限超過・
 赤枠)、続いて要対応メールバンド(締切超過→今後の締切→締切なし の3グループ、件数見出し付き)。
 notebook 行/メール行はクリック可能(notebook=SystemOpen — Dropbox online-only ファイルもダウンロードして
-開く。mail=SourceVaultMailAgendaOpen で対応ウィンドウ)。全セクション空なら「予定・締切・要対応メールは
-ありません」を返す。要 FE。
+開く。mail=SourceVaultMailAgendaOpen で対応ウィンドウ)。overdue 行は時刻列に missed date を赤表示し、
+notebook の open (not Done/Pass) todo items をインデント箇条書きで列挙する。全セクション空なら
+「予定・締切・要対応メールはありません」を返す。要 FE。
 → column layout (Framed/Column)
 Options: SourceVaultRoutineAgendaData と同一
 

@@ -1870,6 +1870,13 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
       (* WLMCP: サブカーネルの完了結果を回収して done を書く。pending がある間は
          0.8s まで短周期で追いポーリング (速い評価を同一 tick で返す)。 *)
       Quiet @ Check[iSMWLMCPPoll[dir, 0.8], Null];
+      (* web job: サブカーネルで走る job の駆動輪 + 完了回収 (webingest 所有・弱結合)。
+         ParallelSubmit した評価は queue が回らないと配られないので、この呼び出しが
+         無いと job が Queued のまま進まない。pending が無ければ即 return する。
+         実行体を service カーネルから追い出したのは、SessionSubmit 実行の job が
+         command ループを占有して MCP クライアントを全滅させたため (2026-07-28)。 *)
+      If[Length[DownValues[SourceVault`SourceVaultWebJobPump]] > 0,
+        iSMSafeHook[SourceVault`SourceVaultWebJobPump[], 20, Null]];
       (* #2: 低頻度で参照イベントを CoreRoot に rollup (per-event 同期を避ける; バッテリーノート配慮)。
          反映には service 再起動が必要 (rule105 §8)。 *)
       If[Length[DownValues[SourceVault`SourceVaultRollupReferenceEvents]] > 0 &&
@@ -2889,6 +2896,15 @@ def run_cmd(cmd, timeout=None):
         if os.path.exists(done):
             return rj(done).get('Result', {})
         time.sleep(0.15)
+    # timed out: drop the request so the kernel does not run it minutes later.
+    # 2026-07-28: a 12-min job blocked the loop; every queued MCP call still ran
+    # after the client had given up, so the retries piled on more work. If the
+    # kernel already picked the file up it has the command in memory and its own
+    # delete just no-ops, so removing here is safe either way.
+    try:
+        os.remove(os.path.join(cdir, fn))
+    except OSError:
+        pass
     return None
 
 def http_cmd(method, path, query, body, client_ip):

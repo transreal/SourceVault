@@ -37,6 +37,18 @@ Instructor name printed on exam papers.
 型: Automatic | String | None, 初期値: Automatic
 Path to the official blank "試験問題・解答用紙" PDF. Automatic uses `<exercises root>/templates/試験問題・解答用紙.pdf`, falling back to a built-in drawn header if absent. None always forces the built-in drawing.
 
+### $SourceVaultCourseWebReportRoot
+型: Automatic | String, 初期値: Automatic
+Web レポート回収フォルダの root override。Automatic なら `<udb>/webreports` (udb = PrivateVault の親)。
+
+### $SourceVaultCourseWebStoreRoot
+型: Automatic | String, 初期値: Automatic
+course 用ストア (名簿レジストリ等) の root override。Automatic なら `<PrivateVault>/coursereports`。
+
+### $SourceVaultCourseWebPdfTextFn
+型: Automatic | Function, 初期値: Automatic
+PDF 本文抽出のシーム `fn[bytes]->String`。Automatic は `ImportByteArray[..., {"PDF","Plaintext"}]`。
+
 ## Subject Management
 
 ### SourceVaultExerciseRegisterSubject[code, spec] → Association
@@ -152,6 +164,20 @@ Exam record.
 
 ### SourceVaultExamList[] / SourceVaultExamList[subject] → {Association...}
 Exam list, all subjects or one.
+
+### SourceVaultExamFind[query, opts] → Association
+自然言語クエリ (例: "2026年度のデータ構造とアルゴリズムの試験") から試験レコードを1件解決する。ExamId 完全一致が最優先。既定では Archived の試験 (控え・旧版) を除外し、候補が複数なら `AmbiguousExam` で失敗する。
+Options: "IncludeArchived" -> False
+
+### SourceVaultExamSetStatus[examId, status] → <|...|>
+試験の状態を設定する。`status` は "Active" | "Archived"。控えの試験 (…-orig 等) を "Archived" にすると `SourceVaultExamFind` の既定検索から外れ、最終版だけが返るようになる。
+
+### SourceVaultExamOverview[examId | query] → {Association...}
+出題一覧を返す。query は `SourceVaultExamFind` で解決する。
+→ keys: "Printed", "Slot", "Unit", "Field", "Headline", "Points", "Answer", "Generated", "Id".
+
+### SourceVaultExamOverviewView[examId | query]
+`SourceVaultExamOverview` の Dataset 表示 (試験名と ExamId の見出しつき)。
 
 ### SourceVaultExamSelectProblems[subject, opts] → {Id...}
 Chooses candidate problem ids for composing an exam.
@@ -285,3 +311,36 @@ Dataset view of `SourceVaultExamScore`.
 ### SourceVaultExamScoreReport[examId, opts]
 Score report (Dataset).
 Options: "Export" -> path.xlsx (local export)
+
+## Web レポート取込
+
+`<udb>/webreports/<講義>/` に置かれた回収フォルダ (manifest.wxf + PDF 群) を、登録名簿と結合して [Cerezo](https://github.com/transreal/Cerezo) と同一スキーマの SourceVault スナップショット (PL 1.0) へ取り込む。取込後は `CerezoCollectionView` / `CerezoAnonymizedSubmissions` / `CerezoGradeSubmissions` / `CerezoAttachGrades` / `CerezoGradeReport` が run の `sv://` URI に対してそのまま使える。
+
+### SourceVaultCourseRosterRegister[lecture, roster, opts] → report
+講義 (例 `"ald-2026"`) の名簿を登録する (PL 1.0 ローカル保存)。`roster` は `{{学籍番号,氏名}..}` / `<|id->name..|>` / xls(x) パス (opts は `SourceVaultExamRosterImport` と同じ)。学籍番号は小文字化してクラウド uid と突合する。
+
+### SourceVaultCourseRoster[lecture] → Association | Missing
+登録済み名簿レコードを返す (未登録なら Missing)。PL 1.0。
+
+### SourceVaultCourseRosters[] → {String...}
+名簿登録済みの講義一覧を返す。
+
+### SourceVaultCourseWebReportFolders[] → {Association...}
+`<udb>/webreports` 配下の回収フォルダ (manifest.wxf) 一覧を返す。
+
+### SourceVaultCourseWebReportIngest[lecture, opts] → report
+回収フォルダを名簿と結合して Cerezo と同一形式の SourceVault スナップショット (PL 1.0) へ取り込む。再実行は内容が変わった学生だけ新バージョンを作る。
+Options: "ReportDescs" -> All | {"0801"...}, "Chapters" -> All, "ReportOptions" -> All, "Roster" -> Automatic, "AssignmentName" -> Automatic, "AllowMissingNames" -> False, "Folder" -> Automatic
+
+### SourceVaultCourseWebReportRuns[] / SourceVaultCourseWebReportRuns[lecture] → {Association...}
+取込済み Web レポート run の一覧 (正準 `sv://` URI 付き) を返す。PL 1.0。
+
+### SourceVaultCourseWebReportLatestRun[lecture, reportDesc] → Association
+最新 run スナップショットを返す (SnapshotRef / URI 付き)。PL 1.0。
+
+### SourceVaultCourseWebReportView[lecture, reportDesc] / [svURI]
+提出状況を表示する。[Cerezo](https://github.com/transreal/Cerezo) がロード済みなら `CerezoCollectionView` へ委譲 (同一形式)。PL 1.0。
+
+### SourceVaultCourseWebReportGrade[lecture, reportDesc, rubric, opts] / [svURI, rubric, opts] → report
+匿名化採点 (`CerezoAnonymizedSubmissions` → `CerezoGradeSubmissions`) を実行する。[Cerezo](https://github.com/transreal/Cerezo) 必須 (弱結合)。結果の `"GradeAnnotationRef"` を `CerezoAttachGrades` / `CerezoGradeReport` へ渡す。
+Options: "Policy", "MissingPages", "LLMFn" 等は Cerezo 側へ透過。
