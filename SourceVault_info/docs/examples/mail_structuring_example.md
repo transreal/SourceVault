@@ -73,12 +73,12 @@ SelectFirst[sessions, #["MailCount"] == 9 &] //
 **期待される出力例:**
 
 ```
-{12, {{"QuoteCluster", 4}, {"ReplyThread", 1}, {"Singleton", 7}}}
-<|"MailSessionId" -> "svmailsession:4431-4449", "MailCount" -> 9,
+{14, {{"QuoteCluster", 4}, {"ReplyThread", 1}, {"Singleton", 9}}}
+<|"MailSessionId" -> "svmailsession:4431-4449", "MailCount" -> 8,
   "SessionKind" -> "QuoteCluster", "Subject" -> "Re: DV, FireWire, I-Link"|>
 ```
 
-30 通が 12 スレッドに。「Re: DV, FireWire, I-Link」は 9 通の QuoteCluster（引用で連結したスレッド）。
+30 通が 14 スレッドに。「Re: DV, FireWire, I-Link」は 8 通の QuoteCluster（引用で連結したスレッド）。異 subject への参照引用と gap 超の同名 subject はセッション併合に使われない（`MaxCounterGap`/`SameSubjectQuoteOnly`、giant component 防止）。
 
 ## 例 3: 明示トピック（◎/○/・, TopicRole）
 
@@ -149,10 +149,10 @@ SourceVaultBuildProjectionIndex["mail-search", "Chunks" -> sessionChunks,
 
 ```
 {{"svmailsession:4431-4449", 9.7,  "Permit"},
- {"svmailsession:4432-4437", 7.78, "Permit"}}
+ {"svmailsession:4432-4436", 7.78, "Permit"}}
 ```
 
-「FireWire」で DV/FireWire スレッド（9 通）が 1 件目、Adaptec スレッドが 2 件目。個別メールではなく**スレッドが検索単位**になります。（context は応用編の末尾で登録解除）
+「FireWire」で DV/FireWire スレッド（8 通）が 1 件目、Adaptec スレッドが 2 件目。個別メールではなく**スレッドが検索単位**になります。（score は目安。context は応用編の末尾で登録解除）
 
 ---
 
@@ -183,7 +183,7 @@ SelectFirst[primerItems, #["SourceVaultObjectId"] === "svmailsession:4431-4449" 
 {<|"obj" -> "svmailsession:4431-4449", "score" -> 11.07, "ev" -> "SummaryPrimer"|>,
  <|"obj" -> "svmailsession:4420-4420", "score" -> 4.22,  "ev" -> "SummaryPrimer"|>}
 
-[スレッド] Re: DV, FireWire, I-Link (9通/QuoteCluster)
+[スレッド] Re: DV, FireWire, I-Link (8通/QuoteCluster)
 話題: HandyCam, PowerPC 750, おめでた, テレビ, AltaVista
 #4431 "Katsunobu IMAI":  HandyCam  Radius EditDV  FireWire …
 #4440 "T. EBINE": やっぱり物量が必要だから，そう簡単には普及しな いか． …
@@ -193,7 +193,7 @@ digest は Subject＋話題＋各メールの `#番号 著者: 先頭段落` の
 
 ## 例 7: 私的リストの gate（§6.5.3 privacy / trust class）
 
-`X-Ml-Name` が `"OOPS Mailing List Under Ground"`（= 私的 oops-ura）のメールは `PrivacyLevel 0.6` ＋ `{"PrivateML", "NoCloudLLM", "NoPublicExport"}` タグを得ます。session は 1 通でも私的なら私的扱い（max / union）。cloud LLM / public export の release context はこれらを `DenyTags` に持つので自動除外されます。
+owner 方針 (2026-07-30 改訂=**時代依存**): ura 分裂 (#2675, 1994-11-04) 以前は全メール 0.7。分裂後は ura=0.7 (+`PrivateML`)、omote=0.0、**main(oops)=原則 0.0、ただし ura メールを引用していれば 0.7**。`EnsureLoaded` が各メールの `"PrivacyLevel"` に焼き込み、session は 1 通でも機密なら機密扱い（max / union）。PL>0.5 には `{"NoCloudLLM", "NoPublicExport"}` が付き、cloud LLM / public export の release context の `DenyTags` で自動除外されます。**部分集合ロード（本例の 1 ファイル）では引用先がファイル外の分裂後メールも fail-closed 0.7** になるため、全 corpus ロードより保守的な数字になります。
 
 ```mathematica
 (* session chunk の tags 分布（例 5 の sessionChunks）*)
@@ -213,12 +213,13 @@ SourceVault`SearchIndexPrivate`iRegistrySave[];
 **期待される出力例:**
 
 ```
-{{{"MailingList", "OOPS"}, 9},
- {{"MailingList", "NoCloudLLM", "NoPublicExport", "OOPS", "PrivateML"}, 3}}
-{{"Permit", 9}, {"Deny", 3}}
+{{{"MailingList", "NoCloudLLM", "NoPublicExport", "OOPS"}, 5},
+ {{"MailingList", "NoCloudLLM", "NoPublicExport", "OOPS", "PrivateML"}, 3},
+ {{"MailingList", "OOPS"}, 6}}
+{{"Deny", 8}, {"Permit", 6}}
 ```
 
-12 スレッド中 3 つが私的リスト由来（PrivateML）。cloud-llm context では公開 9 が Permit、私的 3 が **Deny**＝私的リストの内容が cloud LLM / 公開へ漏れません。
+14 スレッド中、ura 由来 3（`PrivateML`）＋引用先不明の fail-closed 5 が機密 (PL 0.7, `NoCloudLLM`)、公開 6 (PL 0.0)。cloud-llm context では機密 8 が **Deny**＝ura の内容（とその引用）が cloud LLM / 公開へ漏れません。
 
 ## 例 8: 受信者(To/Cc)ベース privacy（defense-in-depth）
 
@@ -232,7 +233,8 @@ KeyDrop[SourceVaultMailRecipientPrivacy[m], "Recipients"]
 (* defense-in-depth: X-Ml-Name を消しても To から私的判定できる *)
 KeyDrop[SourceVaultMailRecipientPrivacy[Append[m, "MlName" -> ""]], "Recipients"]
 
-(* 個人宛のみ / 公開リスト宛 *)
+(* 個人宛のみ / main list 宛 (文脈なし heuristics は fail-closed 0.7。
+   時代依存の正準 PL は EnsureLoaded がメールに焼き込む) *)
 KeyDrop[SourceVaultMailRecipientPrivacy[<|"To" -> "alice@example.com, bob@example.co.jp"|>], "Recipients"]
 KeyDrop[SourceVaultMailRecipientPrivacy[<|"To" -> "oops@satsuki.net"|>], "Recipients"]
 ```
@@ -240,10 +242,10 @@ KeyDrop[SourceVaultMailRecipientPrivacy[<|"To" -> "oops@satsuki.net"|>], "Recipi
 **期待される出力例:**
 
 ```
-<|"PrivacyLevel" -> 0.6, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"}, "Signal" -> "PrivateRecipient"|>
-<|"PrivacyLevel" -> 0.6, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"}, "Signal" -> "PrivateRecipient"|>
+<|"PrivacyLevel" -> 0.7, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"}, "Signal" -> "PrivateRecipient"|>
+<|"PrivacyLevel" -> 0.7, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"}, "Signal" -> "PrivateRecipient"|>
 <|"PrivacyLevel" -> 0.5, "Tags" -> {"DirectRecipients"}, "Signal" -> "IndividualRecipients"|>
-<|"PrivacyLevel" -> 0., "Tags" -> {}, "Signal" -> "None"|>
+<|"PrivacyLevel" -> 0.7, "Tags" -> {"NoCloudLLM", "NoPublicExport"}, "Signal" -> "OOPSMainRecipient"|>
 ```
 
 `SourceVaultBuildSessionChunks` / `...PrimerItems` は session の privacy を **list 名由来 ∪ 受信者由来** の max / union で採ります（`X-Ml-Name` と `To` の二重防御）。
@@ -271,17 +273,17 @@ th = SourceVaultOOPSThread["svmailsession:4431-4449"];
 
 ```
 {転勤, Adaptec 2940UW, Re: DV, FireWire, I-Link}
-{Adaptec 2940UW, Re: DV, FireWire, I-Link}
+{}
 <|"Session" -> "svmailsession:4444-4445", "Subject" -> "転勤", "SessionKind" -> "ReplyThread", "Released" -> False, "Why" -> {"PrivateList", "NoCloudLLM"}|>
 {{HandyCam, PowerPC 750, おめでた, テレビ, AltaVista},
  {コンセント, Macintosh, アポロ計画, Motorola, goo.ne.jp, quote, Radius EditDV, PowerPC 750, 何でも鑑定団, PowerBook}}
 ```
 
-私的「転勤」は CloudSafe 検索で消え、詳細も `Released -> False`。`TopicLabels`（◎ 主題のみで簡潔）と `AllTopics`（広い enrichment ＝俯瞰 / recall 用）を使い分けます。
+この 1 ファイル例では ura 3 通＋引用先不明 fail-closed により主要スレッドが機密扱いとなり、CloudSafe 検索は**空**、詳細も `Released -> False`（全 corpus ロードでは分裂後の公開 oops スレッドは CloudSafe でも出る）。ローカル (CloudSafe -> False) では常に全件見えます。`TopicLabels`（◎ 主題のみで簡潔）と `AllTopics`（広い enrichment ＝俯瞰 / recall 用）を使い分けます。
 
 ## MCP tool（ClaudeEval / LM Studio / Codex）
 
-上記の操作は MCP tool として自然文プロンプトから呼べます（実体は `SourceVaultOOPS...` の thin wrapper）。MCP は cloud 到達し得るため **3 tool すべて `CloudSafe -> True` を常用**し、私的リストスレッドを返しません。
+上記の操作は MCP tool として自然文プロンプトから呼べます（実体は `SourceVaultOOPS...` の thin wrapper）。MCP は cloud 到達し得るため **3 tool すべて `CloudSafe -> True` を常用**し、機密スレッド（分裂前・ura・ura引用・引用先不明 fail-closed）を返しません。機密を含む全アーカイブの検索・閲覧はローカルカーネル (ClaudeEval の mathematica_eval / FE) で行います。
 
 ```text
 sourcevault_oops_status                          → 冪等ロード＋状態（MailCount/SessionCount/…）

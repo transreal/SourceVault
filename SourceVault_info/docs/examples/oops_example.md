@@ -379,18 +379,18 @@ SourceVaultOOPSSessions["Limit" -> 5]   (* MailCount 降順の Dataset *)
 **期待される出力例:**
 
 ```
-<|"Loaded" -> True, "MailCount" -> 30, "SessionCount" -> 12,
+<|"Loaded" -> True, "MailCount" -> 30, "SessionCount" -> 14,
   "TopicCount" -> 4099, "Files" -> 1, "SessionIndexBuilt" -> False|>
 
 (* Dataset: Session / Subject / Kind / Mails *)
-svmailsession:4431-4449   Re: DV, FireWire, I-Link   QuoteCluster   9
-svmailsession:4432-4437   Adaptec 2940UW             QuoteCluster   6
+svmailsession:4431-4449   Re: DV, FireWire, I-Link   QuoteCluster   8
+svmailsession:4432-4436   Adaptec 2940UW             QuoteCluster   5
 svmailsession:4428-4430   LA Symposium               QuoteCluster   3
 svmailsession:4421-4424   Sorenson Video             QuoteCluster   3
 svmailsession:4444-4445   転勤                        ReplyThread    2
 ```
 
-30 通が引用連結で 12 スレッドに構造化されます（QuoteCluster / ReplyThread / Singleton）。この状態の上で以降の描画・閲覧・検索が動きます。スレッド検索（`SourceVaultOOPSSearchThreads`、`CloudSafe` 付き）とスレッド詳細（`SourceVaultOOPSThread`）は [`mail_structuring_example.md`](mail_structuring_example.md) の例 9 を参照。
+30 通が引用連結で 14 スレッドに構造化されます（QuoteCluster / ReplyThread / Singleton。異 subject への参照引用と gap 超の同名 subject は併合しない=giant component 防止）。この状態の上で以降の描画・閲覧・検索が動きます。スレッド検索（`SourceVaultOOPSSearchThreads`、`CloudSafe` 付き）とスレッド詳細（`SourceVaultOOPSThread`）は [`mail_structuring_example.md`](mail_structuring_example.md) の例 9 を参照。
 
 ## 例 9: topic item graph の描画（`SourceVaultOOPSThreadGraph`）
 
@@ -432,15 +432,15 @@ SourceVaultOOPSThreadList["Limit" -> 6]                 (* ボタン付き Grid 
 
 ```
 (* ThreadView: Framed[Column[...]] *)
-Re: DV, FireWire, I-Link  (9通 / QuoteCluster)
+Re: DV, FireWire, I-Link  (8通 / QuoteCluster)
 話題: HandyCam, PowerPC 750, おめでた, テレビ, AltaVista
 #4431 "Katsunobu IMAI":  HandyCam  Radius EditDV  FireWire …
 #4440 "T. EBINE": やっぱり物量が必要だから，そう簡単には普及しな いか． …
 
 (* ThreadList: Grid[7 行 (ヘッダ + 6 スレッド) × 3 列] *)
 Subject(ボタン)            種別           通数
-Re: DV, FireWire, I-Link   QuoteCluster   9
-Adaptec 2940UW             QuoteCluster   6
+Re: DV, FireWire, I-Link   QuoteCluster   8
+Adaptec 2940UW             QuoteCluster   5
 …
 ```
 

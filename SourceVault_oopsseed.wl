@@ -174,7 +174,10 @@ SourceVaultBuildMailSessions::usage =
   "SourceVaultBuildMailSessions[mails, quoteEdges, opts] は quote edge の連結成分＋Subject の Re:/Fwd: 正規化で" <>
   "メールをセッション(スレッド)にまとめる(§6.5 session/cluster)。戻り値 {SourceVaultMailSession...}: " <>
   "<|MailSessionId,MailCounters,MailRefs,MailCount,SessionKind(ReplyThread|QuoteCluster|Singleton),Subject,StartMailCounter,EndMailCounter|>。" <>
-  "オプション \"SubjectThreading\"(既定 True)。quote 連結が有れば QuoteCluster、Subject のみなら ReplyThread。";
+  "オプション \"SubjectThreading\"(既定 True)、\"MaxCounterGap\"(既定 200。counter 差がこれを超える辺は繋がない=" <>
+  "定型件名の再登場を分節。None で無制限)、\"SameSubjectQuoteOnly\"(既定 True。quote 辺は同一非空正規化 subject のみ" <>
+  "セッション併合に使う=異 subject への参照引用で全 corpus が giant component に percolate するのを防ぐ)。" <>
+  "quote 連結が有れば QuoteCluster、Subject のみなら ReplyThread。";
 
 SourceVaultBuildTopicItemGraph::usage =
   "SourceVaultBuildTopicItemGraph[mails, opts] は段落 auto-tag の topic をノード、同一段落共起=CoParagraph、" <>
@@ -217,9 +220,17 @@ SourceVaultOOPSTopicGraphPlot::usage =
 SourceVaultOOPSThreadGraph::usage =
   "SourceVaultOOPSThreadGraph[sessionId, opts] はそのスレッドの topic item graph を構築して描画する(SourceVaultOOPSTopicGraphPlot)。";
 SourceVaultOOPSThreadView::usage =
-  "SourceVaultOOPSThreadView[sessionId] は 1 スレッドの Subject/種別/話題/決定的 digest を Column で表示する。";
+  "SourceVaultOOPSThreadView[sessionId] は 1 スレッドの Subject/種別/話題/メール一覧(ボタン。押すと SourceVaultOOPSMailView で全文が開く)/決定的 digest を Column で表示する。";
 SourceVaultOOPSThreadList::usage =
   "SourceVaultOOPSThreadList[opts] は読み込んだスレッド一覧を Grid で表示する。Subject はボタンで、押すと SourceVaultOOPSThreadView を新規ノートブックで開く。オプション \"Limit\"(30), \"MinMails\"(1)。";
+SourceVaultOOPSMailView::usage =
+  "SourceVaultOOPSMailView[counter] は OOPS メール 1 通(X-Ml-Counter)のヘッダ+本文全文(生マーカー保持)を Column で表示する。所属スレッド/他メールへの移動ボタン付き。本文中の topic ref [ns id] は HoTaMaLe 版アーカイブ同様 [ns id](prev/next) ボタンになる: [ns id]=その topic を含むスレッド一覧、prev/next=その topic を含む前/次のメール。さらに Quote (from N) の N はそのメールを開くボタン、URL はブラウザで開く Hyperlink になる。";
+SourceVaultOOPSSearchThreadsView::usage =
+  "SourceVaultOOPSSearchThreadsView[query, opts] は SourceVaultOOPSSearchThreads の View 版。Subject ボタン(押すと SourceVaultOOPSThreadView が新規ノートブックで開く)付きの Grid を返す。検索結果からメール本体まで辿れる表示はこちらを使う。オプションは SourceVaultOOPSSearchThreads と同じ(\"Limit\"(10)/\"CloudSafe\"(False))。";
+SourceVaultOOPSMailPrivacyLevel::usage =
+  "SourceVaultOOPSMailPrivacyLevel[mail] は文脈なし(単一メール)の保守的 PL (ura=0.7/omote=0.0/他 fail-closed 0.7)。正準は owner 方針 (2026-07-30 改訂) の時代依存判定で SourceVaultOOPSEnsureLoaded が全メールの \"PrivacyLevel\" に焼き込む: ura 分裂 ($svOOPSUraSplitCounter=#2675, 1994-11-04) 以前=全て 0.7、分裂後は ura=0.7/omote=0.0/main(oops)=原則 0.0、ただし ura メールを引用する main は 0.7 (quote-table∪本文マーカー)。MailView は PL > 0.5 を NBAccess 機密セル (赤背景) で開く。";
+SourceVaultOOPSTopicThreadList::usage =
+  "SourceVaultOOPSTopicThreadList[\"ki 1358\"] はその topic item [ns id] を本文に含むメールのスレッド一覧を表示する(Subject ボタン→ThreadView、該当メール #ボタン→MailView)。MailView 本文の [ns id] ボタンから開かれる。索引は初回に lazy 構築し $svOOPSState にキャッシュ。";
 
 SourceVaultBuildSessionPrimerItems::usage =
   "SourceVaultBuildSessionPrimerItems[mails, sessions, opts] は session を SourceVaultPrimerIndex の item にする(§6.5「session summary を primer に」)。" <>
@@ -986,22 +997,44 @@ iSVNormalizeSubject[subj_] := StringTrim@StringReplace[ToString[subj],
   StartOfString ~~ Longest[(("re" | "fwd" | "fw") ~~ (WhitespaceCharacter ...) ~~ ":" ~~ (WhitespaceCharacter ...)) ..] -> "",
   IgnoreCase -> True];
 
-Options[SourceVaultBuildMailSessions] = {"SubjectThreading" -> True};
+Options[SourceVaultBuildMailSessions] = {"SubjectThreading" -> True,
+  "MaxCounterGap" -> 200, "SameSubjectQuoteOnly" -> True};
 SourceVaultBuildMailSessions[mails_List, quoteEdges_List, OptionsPattern[]] := Module[
-  {counters, byCounter, qEdges, sEdges, g, comps},
+  {counters, byCounter, cSet, subjOf, gap, sameSubj, qEdges, sEdges, g, comps},
   counters = DeleteMissing[Lookup[#, "Counter", Missing[]] & /@ mails];
   byCounter = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ mails];
-  (* quote edge (present-mail 間の無向辺) *)
+  cSet = AssociationThread[counters -> True];
+  gap = OptionValue["MaxCounterGap"];
+  If[! (IntegerQ[gap] && gap > 0), gap = Infinity];   (* None/Infinity = 無制限 (旧挙動) *)
+  sameSubj = TrueQ[OptionValue["SameSubjectQuoteOnly"]];
+  subjOf = Association[(Lookup[#, "Counter", Missing[]] ->
+    iSVNormalizeSubject[Lookup[#, "Subject", ""]]) & /@ mails];
+  (* quote edge (present-mail 間の無向辺)。
+     2026-07-30: 素朴な連結成分は全 corpus (6524通) で 3757 通の giant
+     component に percolate した (実測: 異 subject の「参照」引用がスレッド
+     同士を橋渡し + 高トラフィック ML では短距離辺だけでも連鎖が続く。
+     quote 辺のみで既に最大 2824 通)。セッション併合に使う quote 辺は
+     「同一の非空正規化 subject」かつ「counter gap <= MaxCounterGap」に
+     限定する。異 subject への引用は QuoteEdges データとしては保持され、
+     参照リンク (SourceVaultOOPSThread の QuoteEdges 等) には残る。 *)
   qEdges = DeleteDuplicates@DeleteCases[Map[Function[e,
     Module[{f = iSVMailRefNumber[e["FromMailRef"]], t = iSVMailRefNumber[e["ToMailRef"]]},
-      If[IntegerQ[f] && IntegerQ[t] && f =!= t && MemberQ[counters, f] && MemberQ[counters, t],
+      If[IntegerQ[f] && IntegerQ[t] && f =!= t &&
+         KeyExistsQ[cSet, f] && KeyExistsQ[cSet, t] && Abs[f - t] <= gap &&
+         (! sameSubj ||
+           (Lookup[subjOf, f, ""] =!= "" && Lookup[subjOf, f] === Lookup[subjOf, t])),
         UndirectedEdge @@ Sort[{f, t}], Nothing]]], quoteEdges], Nothing];
-  (* Subject 正規化スレッド (Re:/Fwd: を剥がし同一 subject を連結) *)
+  (* Subject 正規化スレッド (Re:/Fwd: を剥がし同一 subject を連結)。
+     空 subject は連結証拠にしない (無題メール同士が 1 本の鎖になる)。
+     gap 超の再登場 (数年後の同名 subject、"yotei"/"etc." 等の定型件名) は
+     別セッションに分節する。 *)
   sEdges = If[TrueQ[OptionValue["SubjectThreading"]],
-    DeleteDuplicates@Flatten@Values@GroupBy[mails,
+    DeleteDuplicates@Flatten@Values@KeyDrop[GroupBy[mails,
       iSVNormalizeSubject[Lookup[#, "Subject", ""]] &,
       Function[grp, With[{cs = Sort[Lookup[#, "Counter"] & /@ grp]},
-        If[Length[cs] > 1, UndirectedEdge @@@ Partition[cs, 2, 1], {}]]]],
+        If[Length[cs] > 1,
+          UndirectedEdge @@@ Select[Partition[cs, 2, 1], Abs[#[[1]] - #[[2]]] <= gap &],
+          {}]]]], {""}],
     {}];
   g = Graph[counters, DeleteDuplicates[Join[qEdges, sEdges]]];
   comps = ConnectedComponents[g];
@@ -1095,19 +1128,95 @@ SourceVaultBuildTopicItemGraph[mails_List, OptionsPattern[]] := Module[
    ------------------------------------------------------------ *)
 
 (* §6.5.3 ListFallbacks: 宛先 list 名 → privacy floor / trust tags。
-   実データの X-Ml-Name は "OOPS Mailing List"(公開) / "OOPS Mailing List Under Ground"(=oops-ura, 私的)。
-   短縮形 oops-ura / oops-omote にも対応。私的リストは PrivateML 等の deny tag を付ける(漏洩防止)。 *)
+   実データの X-Ml-Name は "OOPS Mailing List"(main=oops宛) /
+   "OOPS Mailing List Under Ground"(=oops-ura宛)。
+   owner 方針 (2026-07-30): 公開してよいのは oops-omote のみ (0.0)。
+   main/ura とも本文は機密 PL 0.7 で、cloud LLM/公開へ出さない deny tag を
+   付ける (oops-corpus-cloud 等の DenyTags gate が効く)。不明は fail-closed 0.7。 *)
 iSVOOPSPrivateListQ[mlName_String] :=
   StringContainsQ[mlName, "under ground", IgnoreCase -> True] ||
     StringContainsQ[mlName, "oops-ura", IgnoreCase -> True];
 iSVOOPSListPrivacy[mlName_String] := Which[
-  iSVOOPSPrivateListQ[mlName],
-    <|"PrivacyLevel" -> 0.6, "Tags" -> {"OOPS", "MailingList", "PrivateML", "NoCloudLLM", "NoPublicExport"}|>,
   StringContainsQ[mlName, "omote", IgnoreCase -> True],
-    <|"PrivacyLevel" -> 0.4, "Tags" -> {"OOPS", "MailingList"}|>,
+    <|"PrivacyLevel" -> 0.0, "Tags" -> {"OOPS", "MailingList"}|>,
+  iSVOOPSPrivateListQ[mlName],
+    <|"PrivacyLevel" -> 0.7, "Tags" -> {"OOPS", "MailingList", "PrivateML", "NoCloudLLM", "NoPublicExport"}|>,
   True,
-    <|"PrivacyLevel" -> 0.6, "Tags" -> {"OOPS", "MailingList"}|>];
-iSVOOPSListPrivacy[_] := <|"PrivacyLevel" -> 0.6, "Tags" -> {"OOPS", "MailingList"}|>;
+    <|"PrivacyLevel" -> 0.7, "Tags" -> {"OOPS", "MailingList", "NoCloudLLM", "NoPublicExport"}|>];
+iSVOOPSListPrivacy[_] := <|"PrivacyLevel" -> 0.7, "Tags" -> {"OOPS", "MailingList", "NoCloudLLM", "NoPublicExport"}|>;
+
+(* ura / omote 判定 (単一メール、X-Ml-Name と To/Cc の両方) *)
+iSVOOPSUraQ[m_Association] := Module[{ml, rcpt},
+  ml = ToLowerCase[Lookup[m, "MlName", ""]];
+  rcpt = ToLowerCase[StringRiffle[
+    {ToString @ Lookup[m, "To", ""], ToString @ Lookup[m, "Cc", ""]}, " "]];
+  StringContainsQ[ml, "under ground"] || StringContainsQ[ml, "oops-ura"] ||
+    StringContainsQ[rcpt, "oops-ura@"]];
+iSVOOPSOmoteQ[m_Association] := Module[{ml, rcpt},
+  ml = ToLowerCase[Lookup[m, "MlName", ""]];
+  rcpt = ToLowerCase[StringRiffle[
+    {ToString @ Lookup[m, "To", ""], ToString @ Lookup[m, "Cc", ""]}, " "]];
+  StringContainsQ[ml, "omote"] || StringContainsQ[rcpt, "oops-omote@"]];
+
+(* 文脈なし (単一メール) の保守的 PL。corpus 文脈 (ura 分裂点・引用) を
+   使う正準判定は iSVOOPSStampMailPrivacy (EnsureLoaded が焼き込む)。 *)
+SourceVaultOOPSMailPrivacyLevel[mail_Association] := Which[
+  iSVOOPSUraQ[mail], 0.7,
+  iSVOOPSOmoteQ[mail], 0.0,
+  True, 0.7];
+SourceVaultOOPSMailPrivacyLevel[_] := 0.7;
+
+(* owner 方針 (2026-07-30 改訂): 時代依存 PL の一括焼き込み。
+   - ura 分裂点 uraStart = 最初の oops-ura メールの counter (実測 #2675,
+     1994-11-04)。分裂以前のメールは全て 0.7 (公開/私的の区別が無い時代)。
+   - 分裂後: ura=0.7 / omote=0.0 / main(oops)=原則 0.0。ただし ura メールを
+     引用している場合 (quote-table ∪ 本文 Quote (from N) マーカー) は
+     ura 本文の断片が混入しているため 0.7 (実測 ~256 通)。 *)
+(* ura 分裂点 counter。この corpus の歴史的事実 (#2675 = 1994-11-04 の
+   最初の oops-ura メール)。部分集合ロード時にデータから誤推定しない
+   よう既定値を持つ (それより早い ura が見つかればそちらを採る)。 *)
+If[! ValueQ[$svOOPSUraSplitCounter], $svOOPSUraSplitCounter = 2675];
+
+iSVOOPSStampMailPrivacy[mails_List, quotes_Association] := Module[
+  {uraCs, uraStart, uraSet, loadedSet},
+  uraCs = Lookup[#, "Counter"] & /@ Select[mails, iSVOOPSUraQ];
+  uraStart = Min[Prepend[uraCs,
+    If[IntegerQ[$svOOPSUraSplitCounter], $svOOPSUraSplitCounter, Infinity]]];
+  uraSet = Association[(# -> True) & /@ uraCs];
+  loadedSet = Association[(Lookup[#, "Counter", 0] -> True) & /@ mails];
+  Map[Function[m, Module[{c = Lookup[m, "Counter", 0], qs, pl},
+    pl = Which[
+      iSVOOPSUraQ[m], 0.7,
+      iSVOOPSOmoteQ[m], 0.0,
+      c < uraStart, 0.7,
+      True,
+        qs = Join[
+          Lookup[#, "FromMail", -1] & /@ Lookup[quotes, c, {}],
+          Cases[SourceVaultExtractMailQuoteMarkers[m],
+            KeyValuePattern["FromMail" -> f_Integer] :> f]];
+        (* 引用先が ura、または部分集合ロードで引用先が手元に無く分裂後
+           counter (ura か判定不能) の場合は fail-closed で 0.7 *)
+        If[AnyTrue[qs, Function[q, TrueQ[Lookup[uraSet, q, False]] ||
+             (q >= uraStart && ! TrueQ[Lookup[loadedSet, q, False]])]],
+          0.7, 0.0]];
+    Append[m, "PrivacyLevel" -> pl]]], mails]];
+
+(* メール 1 通の privacy info (PL+Tags)。EnsureLoaded が焼き込んだ
+   corpus-aware な "PrivacyLevel" があればそれを正とし、無ければ従来の
+   list∪recipient heuristics (一般メール互換) に fallback する。
+   session chunk / primer / CloudSafe gate はこれを使う。 *)
+iSVOOPSMailPrivacyInfo[m_Association] := Module[{pl},
+  pl = Lookup[m, "PrivacyLevel", None];
+  If[NumericQ[pl],
+    <|"PrivacyLevel" -> N[pl],
+      "Tags" -> If[pl > 0.5,
+        Join[{"OOPS", "MailingList", "NoCloudLLM", "NoPublicExport"},
+          If[iSVOOPSUraQ[m], {"PrivateML"}, {}]],
+        {"OOPS", "MailingList"}]|>,
+    Module[{a = iSVOOPSListPrivacy[Lookup[m, "MlName", ""]],
+            b = SourceVaultMailRecipientPrivacy[m]},
+      <|"PrivacyLevel" -> Max[a["PrivacyLevel"], b["PrivacyLevel"]],
+        "Tags" -> DeleteDuplicates @ Join[a["Tags"], b["Tags"]]|>]]];
 
 (* ---- §6.5.3 recipient(To/Cc) ベース privacy (defense-in-depth, 一般メール向け) ----
    X-Ml-Name に依らず To/Cc の addr-spec だけで privacy を推定する。私的リスト宛(oops-ura 等)は
@@ -1128,8 +1237,13 @@ SourceVaultMailRecipientPrivacy[mail_Association] := Module[{rcptStr, addrs, ind
   Which[
     (* 私的リストアドレスが受信者にいる = 最強シグナル (X-Ml-Name と独立) *)
     AnyTrue[addrs, iSVOOPSPrivateListQ] || iSVOOPSPrivateListQ[rcptStr],
-      <|"PrivacyLevel" -> 0.6, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"},
+      <|"PrivacyLevel" -> 0.7, "Tags" -> {"PrivateML", "NoCloudLLM", "NoPublicExport"},
         "Signal" -> "PrivateRecipient", "Recipients" -> addrs|>,
+    (* oops main 宛 (oops@...) = owner 方針 0.7 (公開は oops-omote のみ)。
+       oops-omote@ は下の list 的アドレス扱いで neutral 0.0 に落ちる *)
+    AnyTrue[addrs, StringStartsQ[#, "oops@"] &],
+      <|"PrivacyLevel" -> 0.7, "Tags" -> {"NoCloudLLM", "NoPublicExport"},
+        "Signal" -> "OOPSMainRecipient", "Recipients" -> addrs|>,
     (* 受信者が個人アドレスのみ (list 的でない) = 個人間通信の軽いシグナル (一般メール) *)
     addrs =!= {} && AllTrue[addrs, ! iSVListLikeAddrQ[#] &],
       <|"PrivacyLevel" -> 0.5, "Tags" -> {"DirectRecipients"},
@@ -1155,9 +1269,9 @@ SourceVaultBuildSessionChunks[mails_List, sessions_List, OptionsPattern[]] := Mo
         combined = StringTake[StringRiffle[
           SourceVaultStripOOPSMarkers[Lookup[#, "Body", ""]] & /@ sessMails, "\n\n"], UpTo[maxBody]];
         authors = DeleteDuplicates[Lookup[#, "From", ""] & /@ sessMails];
-        (* §6.5.3: list 名(X-Ml-Name)由来 ∪ 受信者(To/Cc)由来 の privacy を max/union (defense-in-depth) *)
-        privInfo = Join[iSVOOPSListPrivacy[Lookup[#, "MlName", ""]] & /@ sessMails,
-          SourceVaultMailRecipientPrivacy /@ sessMails];
+        (* §6.5.3: 焼き込み済み corpus-aware PL を優先 (無ければ list∪recipient
+           heuristics に fallback)。session 内 max/union (defense-in-depth) *)
+        privInfo = iSVOOPSMailPrivacyInfo /@ sessMails;
         priv = If[plOpt === Automatic, Max[#["PrivacyLevel"] & /@ privInfo], plOpt];
         tags = DeleteDuplicates@Flatten[#["Tags"] & /@ privInfo];
         topicsText = If[AssociationQ[sidx],
@@ -1239,9 +1353,8 @@ SourceVaultBuildSessionPrimerItems[mails_List, sessions_List, OptionsPattern[]] 
             sidx, "RefLabel" -> refLabel, "RelationGraph" -> relGraph, "IncludeRelated" -> True], <||>];
         topicLabels = Lookup[enr, "TopicLabels", {}];
         authors = DeleteDuplicates[Lookup[#, "From", ""] & /@ sessMails];
-        (* §6.5.3: list 名 ∪ 受信者(To/Cc) 由来 privacy を max/union (defense-in-depth) *)
-        privInfo = Join[iSVOOPSListPrivacy[Lookup[#, "MlName", ""]] & /@ sessMails,
-          SourceVaultMailRecipientPrivacy /@ sessMails];
+        (* §6.5.3: 焼き込み済み corpus-aware PL を優先 (fallback は heuristics) *)
+        privInfo = iSVOOPSMailPrivacyInfo /@ sessMails;
         priv = Max[#["PrivacyLevel"] & /@ privInfo];
         tags = DeleteDuplicates@Join[Flatten[#["Tags"] & /@ privInfo], topicLabels];
         importance = Min[0.9, 0.3 + 0.06*sess["MailCount"]];  (* スレッド規模の決定的 proxy *)
@@ -1284,6 +1397,9 @@ SourceVaultOOPSEnsureLoaded[OptionsPattern[]] := Module[
     StringQ[mailFiles], Select[{If[FileExistsQ[mailFiles], mailFiles, FileNameJoin[{mailDir, mailFiles}]]}, FileExistsQ],
     True, FileNames["oops*.txt", mailDir]];
   mails = Flatten[SourceVaultParseOOPSMailFile[#]["Mails"] & /@ files];
+  (* owner 方針 (2026-07-30 改訂): 時代依存 PL を一括焼き込み
+     (分裂前=0.7 / ura=0.7 / omote=0.0 / 分裂後 main=0.0、ura引用は 0.7) *)
+  mails = iSVOOPSStampMailPrivacy[mails, qt];
   edges = SourceVaultBuildMailQuoteEdges[mails, "QuoteTable" -> qt];
   sessions = SourceVaultBuildMailSessions[mails, edges];
   SourceVault`$svOOPSState = <|"Loaded" -> True, "TableDir" -> tableDir, "MailDir" -> mailDir,
@@ -1323,10 +1439,10 @@ iSVOOPSEnsureReleaseContexts[] := (
 iSVOOPSSessionPrivateQ[sess_Association, st_Association] := Module[{byC, sessMails},
   byC = Association[(Lookup[#, "Counter", Missing[]] -> #) & /@ st["Mails"]];
   sessMails = DeleteMissing[Lookup[byC, Lookup[sess, "MailCounters", {}]]];
-  (* list 名 由来 ∪ 受信者(To/Cc) 由来の NoCloudLLM のどちらかで私的判定 (defense-in-depth) *)
+  (* 焼き込み済み corpus-aware PL 由来の NoCloudLLM で私的判定
+     (未焼き込みは heuristics fallback = defense-in-depth) *)
   AnyTrue[sessMails, Function[m,
-    iSVOOPSPrivateListQ[Lookup[m, "MlName", ""]] ||
-      MemberQ[Lookup[SourceVaultMailRecipientPrivacy[m], "Tags", {}], "NoCloudLLM"]]]];
+    MemberQ[Lookup[iSVOOPSMailPrivacyInfo[m], "Tags", {}], "NoCloudLLM"]]]];
 
 (* session 検索 index を lazy build (内部 release context oops-corpus) *)
 iSVOOPSEnsureSessionIndex[] := Module[{st = SourceVault`$svOOPSState, chunks, idx},
@@ -1415,16 +1531,317 @@ SourceVaultOOPSThreadGraph[sessionId_String, OptionsPattern[]] := Module[{st, se
     "RelationGraph" -> st["RelationGraph"], "RefLabel" -> st["RefLabel"], "QuoteEdges" -> qe];
   SourceVaultOOPSTopicGraphPlot[g, "MaxNodes" -> OptionValue["MaxNodes"]]];
 
-SourceVaultOOPSThreadView[sessionId_String] := Module[{det = SourceVaultOOPSThread[sessionId]},
+(* ボタンから開く新規ノートブックは Output スタイルセルで作る。
+   CreateDocument[expr] の既定セルは ShowStringCharacters が有効で、
+   文字列がすべて "..." 付きで表示される (2026-07-30 実機: MailView を
+   ボタンで開くと全行がダブルクオートで囲まれて見えた)。Output スタイル
+   は文字列の引用符を表示しない。 *)
+iSVOOPSOpenDoc[expr_] := CreateDocument[ExpressionCell[expr, "Output"]];
+
+(* topic → その topic ref [ns id] を本文に含むメール counter 列 (昇順)。
+   初回参照時に全メールを 1 回走査して $svOOPSState にキャッシュする。 *)
+iSVOOPSEnsureTopicMailIndex[] := Module[{st = SourceVault`$svOOPSState, idx, pairs},
+  If[! AssociationQ[st], Return[<||>]];
+  idx = Lookup[st, "TopicMailIndex", Missing[]];
+  If[! MissingQ[idx], Return[idx]];
+  pairs = Flatten[Map[Function[m, Module[{refs},
+    refs = DeleteDuplicates @ StringCases[Lookup[m, "Body", ""],
+      RegularExpression["\\[([A-Za-z]+)[ \\t]*([0-9]+)\\]"] -> "$1:$2"];
+    {#, Lookup[m, "Counter", 0]} & /@ refs]], st["Mails"]], 1];
+  idx = GroupBy[pairs, First -> Last, Sort @* DeleteDuplicates];
+  SourceVault`$svOOPSState["TopicMailIndex"] = idx;
+  idx];
+
+(* prev/next: その topic を含むメールのうち、現在 counter の直前/直後を開く *)
+iSVOOPSTopicStepOpen[ns_String, id_String, counter_Integer, dir_Integer] := Module[
+  {idx = iSVOOPSEnsureTopicMailIndex[], lst, cand},
+  lst = Lookup[idx, ns <> ":" <> id, {}];
+  cand = If[dir < 0, Select[lst, # < counter &], Select[lst, # > counter &]];
+  If[cand === {},
+    MessageDialog["topic [" <> ns <> " " <> id <> "] を含む" <>
+      If[dir < 0, "前", "次"] <> "のメールはありません。"],
+    iSVOOPSOpenMailDoc[If[dir < 0, Last[cand], First[cand]]]]];
+
+(* [ns id](prev/next) の 3 リンク (HoTaMaLe 版アーカイブの表示に倣う) *)
+iSVOOPSTopicRefButtons[ns_String, id_String, counter_Integer] := With[
+  {nsL = ns, idL = id, cc = counter},
+  Row[{
+    Button[Style["[" <> nsL <> " " <> idL <> "]", 10, RGBColor[0.55, 0.25, 0.65]],
+      iSVOOPSOpenDoc[SourceVaultOOPSTopicThreadList[nsL <> " " <> idL]],
+      Appearance -> "Frameless"],
+    Style["(", 10, GrayLevel[0.5]],
+    Button[Style["prev", 10, RGBColor[0.1, 0.3, 0.7]],
+      iSVOOPSTopicStepOpen[nsL, idL, cc, -1], Appearance -> "Frameless"],
+    Style["/", 10, GrayLevel[0.5]],
+    Button[Style["next", 10, RGBColor[0.1, 0.3, 0.7]],
+      iSVOOPSTopicStepOpen[nsL, idL, cc, 1], Appearance -> "Frameless"],
+    Style[")", 10, GrayLevel[0.5]]}]];
+
+(* 行内リンクトークン検出: [ns id] topic ref / Quote (from N) / URL。
+   重なりは開始位置の早い方が勝つ。 *)
+iSVOOPSLineTokens[line_String] := Module[{refs, quotes, urls, all, out = {}, lastEnd = 0},
+  refs = {#[[1]], #[[2]], "Ref"} & /@
+    StringPosition[line, RegularExpression["\\[[A-Za-z]+[ \\t]*[0-9]+\\]"]];
+  quotes = {#[[1]], #[[2]], "QuoteFrom"} & /@
+    StringPosition[line, RegularExpression["Quote[ \\t]*\\(from[ \\t]+[0-9]+\\)"]];
+  urls = {#[[1]], #[[2]], "URL"} & /@
+    StringPosition[line,
+      RegularExpression["(?:https?|ftp|gopher)://[0-9A-Za-z\\-._~:/?#@!$&*+,;=%]+"]];
+  all = SortBy[Join[refs, quotes, urls], First];
+  Do[If[t[[1]] > lastEnd, AppendTo[out, t]; lastEnd = t[[2]]], {t, all}];
+  out];
+
+(* トークン種別ごとの描画 *)
+iSVOOPSLineToken["Ref", tok_String, counter_Integer, size_] := Module[{m},
+  m = StringCases[tok, RegularExpression["\\[([A-Za-z]+)[ \\t]*([0-9]+)\\]"] -> {"$1", "$2"}];
+  If[m === {}, Style[tok, size],
+    iSVOOPSTopicRefButtons[m[[1, 1]], m[[1, 2]], counter]]];
+(* Quote (from N): N をそのメールを開くボタンに *)
+iSVOOPSLineToken["QuoteFrom", tok_String, counter_Integer, size_] := Module[{np, pre, num, post},
+  np = First[StringPosition[tok, RegularExpression["[0-9]+"]], None];
+  If[np === None, Return[Style[tok, size]]];
+  pre = StringTake[tok, np[[1]] - 1]; num = StringTake[tok, np];
+  post = StringDrop[tok, np[[2]]];
+  Row[{Style[pre, size], iSVOOPSMailButton[FromDigits[num], num],
+    Style[post, size]}]];
+(* URL: 末尾の句読点は本文に残し、Hyperlink でブラウザを開く *)
+iSVOOPSLineToken["URL", tok_String, counter_Integer, size_] := Module[{url = tok, trail = ""},
+  While[StringLength[url] > 0 && MemberQ[{".", ",", ";", ":"}, StringTake[url, -1]],
+    trail = StringTake[url, -1] <> trail; url = StringDrop[url, -1]];
+  Row[{Hyperlink[Style[url, size], url],
+    If[trail === "", Nothing, Style[trail, size]]}]];
+iSVOOPSLineToken[_, tok_String, counter_Integer, size_] := Style[tok, size];
+
+(* RAW body の 1 行を描画: 検出トークンをリンク化、他はテキスト *)
+iSVOOPSBodyLine[line_String, counter_Integer, size_: 11] := Module[
+  {toks, out = {}, last = 1},
+  toks = iSVOOPSLineTokens[line];
+  If[toks === {},
+    Return[Style[If[StringTrim[line] === "", " ", line], size]]];
+  Do[Module[{s = t[[1]], e = t[[2]]},
+    If[s > last, AppendTo[out, Style[StringTake[line, {last, s - 1}], size]]];
+    AppendTo[out, iSVOOPSLineToken[t[[3]], StringTake[line, {s, e}], counter, size]];
+    last = e + 1], {t, toks}];
+  If[last <= StringLength[line],
+    AppendTo[out, Style[StringTake[line, {last, -1}], size]]];
+  Row[out]];
+
+(* メール本文ブロック: 生本文 (◎○・/{} マーカー保持) を行分割し、
+   topic ref をリンク化して Column に積む *)
+iSVOOPSBodyBlock[body_String, counter_Integer, size_: 11] := Column[
+  iSVOOPSBodyLine[#, counter, size] & /@
+    StringSplit[StringReplace[body, {"\r\n" -> "\n", "\r" -> "\n"}], "\n"],
+  Spacings -> 0.1];
+
+(* 複数行文字列の表示ブロック。Style[長い文字列] は MakeBoxes が実改行を
+   \n エスケープとして typeset するため、Out セルでは文字どおり「\n」が
+   見えてしまう (2026-07-30 実機: MailView 本文/ThreadView digest)。
+   実改行で行分割し行ごとの Style を Column に積めば FE が改行として
+   描画する。空行は " " にして高さを保つ。 *)
+iSVOOPSTextBlock[s_String, size_: 11] := Column[
+  Style[If[# === "", " ", #], size] & /@
+    StringSplit[StringReplace[s, {"\r\n" -> "\n", "\r" -> "\n"}], "\n"],
+  Spacings -> 0.1];
+
+(* メール 1 通を開くボタン (counter 文字列を With で焼き込み、クリック時に
+   SourceVaultOOPSMailView を新規ノートブックで開く。Module シンボルを
+   焼き込むと FE ボタンが無反応になるため値のみ埋める) *)
+(* NBAccess の機密セル視覚オプション (NBAccess 未ロード時は赤背景 fallback) *)
+iSVOOPSConfCellOpts[] := With[{o = NBAccess`$NBConfidentialCellOpts},
+  If[ListQ[o], o, {Background -> RGBColor[1, 0.9, 0.9]}]];
+
+(* インライン評価 (In セルで直接 MailView を評価) の Out セルを機密マーク
+   する。Out セルは評価終了後に FE が書くため評価中は存在しない —
+   EvaluationCell を捕まえ、評価終了後の ScheduledTask で NextCell から
+   Out を見つけて NBAccess 規約のオプション/TaggingRules を適用する
+   (SetOptions は冪等なので複数回発火しても安全)。ボタン経路
+   (iSVOOPSMailDocCell) はセル式に焼き込み済みでここは通らない。 *)
+iSVOOPSMarkEvaluationOutput[pl_?NumericQ] := Quiet @ Check[
+  If[pl > 0.5 && ! TrueQ[$svOOPSInDocCell] && TrueQ[$Notebooks],
+    Module[{ec = EvaluationCell[]},
+      If[Head[ec] === CellObject,
+        With[{ecL = ec, plL = N[pl]},
+          SessionSubmit[ScheduledTask[
+            Module[{out = NextCell[ecL, CellStyle -> "Output"]},
+              If[Head[out] === CellObject,
+                SetOptions[out, Sequence @@ iSVOOPSConfCellOpts[],
+                  TaggingRules -> {"claudecode" ->
+                    {"privacyLevel" -> plL, "confidential" -> True}}]]],
+            {0.5, 4}]]]]]], Null];
+
+(* メール本文ノートブックのセル式 (headless テスト可能な純関数)。
+   owner 方針: 本文 PL > 0.5 (oops-omote 以外) は NBAccess 規約の機密セル
+   — TaggingRules "claudecode" {privacyLevel, confidential} +
+   $NBConfidentialCellOpts (赤背景+警告 dingbat) — で開く。
+   スレッド一覧等のリスト表示は対象外 (機密なのはメール本文だけ)。 *)
+iSVOOPSMailDocCell[c_Integer] := Module[{st, mail, pl, confOpts, view},
+  SourceVaultOOPSEnsureLoaded[];
+  st = SourceVault`$svOOPSState;
+  mail = SelectFirst[Lookup[st, "Mails", {}], #["Counter"] === c &, Missing[]];
+  pl = Which[
+    AssociationQ[mail] && NumericQ[Lookup[mail, "PrivacyLevel", None]],
+      N[mail["PrivacyLevel"]],
+    AssociationQ[mail], SourceVaultOOPSMailPrivacyLevel[mail],
+    True, 0.7];
+  confOpts = If[pl > 0.5, iSVOOPSConfCellOpts[], {}];
+  (* セル式に焼き込むので MailView 側の自己マーキングは抑止する *)
+  view = Block[{$svOOPSInDocCell = True}, SourceVaultOOPSMailView[c]];
+  ExpressionCell[view, "Output",
+    TaggingRules -> {"claudecode" ->
+      {"privacyLevel" -> pl, "confidential" -> (pl > 0.5)}},
+    Sequence @@ confOpts]];
+
+iSVOOPSOpenMailDoc[c_Integer] := CreateDocument[iSVOOPSMailDocCell[c]];
+
+iSVOOPSMailButton[c_Integer, label_] := With[{cc = c},
+  Button[Style[label, 10, RGBColor[0.1, 0.3, 0.7]],
+    iSVOOPSOpenMailDoc[cc], Appearance -> "Frameless",
+    Alignment -> Left]];
+
+(* DB 横断リンク層 (SourceVault_crosslink.wl) への遷移ボタン。crosslink は
+   oopsseed より後にロードされるため必ず完全修飾で参照する (裸参照だと
+   parse 時に SourceVault`Private` へ孤児シンボルが生成される罠)。 *)
+iSVOOPSCrossLinkButton[kind_String, id_String] := With[{k = kind, i = id},
+  Button[Style["\:21c4 \:95a2\:9023", 10, RGBColor[0., 0.45, 0.35]],
+    If[DownValues[SourceVault`SourceVaultCrossLinksView] === {},
+      MessageDialog["DB \:6a2a\:65ad\:30ea\:30f3\:30af\:5c64 (SourceVault_crosslink.wl) \:304c\:672a\:30ed\:30fc\:30c9\:3067\:3059\:3002"],
+      iSVOOPSOpenDoc[SourceVault`SourceVaultCrossLinksView[<|"Kind" -> k, "Id" -> i|>]]],
+    Appearance -> "Frameless", Method -> "Queued"]];
+
+SourceVaultOOPSThreadView[sessionId_String] := Module[{det, byC, mailRows},
+  det = SourceVaultOOPSThread[sessionId];
   If[MissingQ[det], Return[det]];
+  If[! TrueQ[Lookup[det, "Released", True]], Return[det]];
+  byC = Association[(#["Counter"] -> #) & /@ SourceVault`$svOOPSState["Mails"]];
+  (* 巨大スレッド (数百通の QuoteCluster) で FE が重くならないよう
+     一覧ボタンは先頭 40 通に制限し、残りは件数だけ示す *)
+  mailRows = Function[c, Module[{m = Lookup[byC, c, <||>]},
+    iSVOOPSMailButton[c, Row[{"#", c, "  ",
+      StringTake[ToString @ Lookup[m, "From", ""], UpTo[26]], " — ",
+      StringTake[ToString @ Lookup[m, "Subject", ""], UpTo[44]], "  (",
+      StringTake[ToString @ Lookup[m, "Date", ""], UpTo[17]], ")"}]]]] /@
+    Take[det["MailCounters"], UpTo[40]];
+  If[Length[det["MailCounters"]] > 40,
+    AppendTo[mailRows, Style[Row[{"… 他 ", Length[det["MailCounters"]] - 40,
+      " 通 (# を SourceVaultOOPSMailView[counter] で個別に開く)"}],
+      GrayLevel[0.5], 10]]];
   Column[{
     Style[det["Subject"], Bold, 16],
-    Style[Row[{det["SessionKind"], " — ", Length[det["MailCounters"]], " 通 (",
-      Row[det["MailCounters"], ", "], ")"}], GrayLevel[0.4]],
+    Row[{Style[Row[{det["SessionKind"], " — ", Length[det["MailCounters"]], " 通"}],
+        GrayLevel[0.4]],
+      Style["   ", 10],
+      iSVOOPSCrossLinkButton["oops-thread", sessionId]}],
     Style["話題: " <> StringRiffle[Take[det["TopicLabels"], UpTo[12]], ", "], GrayLevel[0.3]],
+    Style["メール一覧 (クリックで全文):", Bold],
+    Column[mailRows, Spacings -> 0.2],
     Style["スレッド要約:", Bold],
-    Framed[Style[det["Digest"], 11], FrameStyle -> LightGray, Background -> GrayLevel[0.97]]},
+    Framed[iSVOOPSTextBlock[det["Digest"]], FrameStyle -> LightGray,
+      Background -> GrayLevel[0.97]]},
     Spacings -> 1]];
+
+SourceVaultOOPSMailView[counter_Integer] := Module[{st, mail, sess, pl, body, bodyDisp},
+  SourceVaultOOPSEnsureLoaded[]; st = SourceVault`$svOOPSState;
+  mail = SelectFirst[st["Mails"], #["Counter"] === counter &,
+    Missing["MailNotFound", counter]];
+  If[MissingQ[mail], Return[mail]];
+  sess = SelectFirst[st["Sessions"], MemberQ[#["MailCounters"], counter] &, Missing[]];
+  pl = If[NumericQ[Lookup[mail, "PrivacyLevel", None]],
+    N[mail["PrivacyLevel"]], SourceVaultOOPSMailPrivacyLevel[mail]];
+  (* インライン評価 (In セル直接評価) でも Out セルを機密マークする *)
+  iSVOOPSMarkEvaluationOutput[pl];
+  (* 生本文を使う: ◎○・/{} マーカーを保持し、[ns id] は topic リンク化 *)
+  body = Lookup[mail, "Body", ""];
+  bodyDisp = If[StringLength[body] > 3000,
+    Pane[iSVOOPSBodyBlock[body, counter], ImageSize -> {Full, 480},
+      Scrollbars -> {False, Automatic}],
+    iSVOOPSBodyBlock[body, counter]];
+  Column[{
+    Style[Row[{"#", counter, "  ", Lookup[mail, "Subject", ""]}], Bold, 14],
+    Row[{Style[Row[{"From: ", Lookup[mail, "From", ""],
+        "    Date: ", Lookup[mail, "Date", ""],
+        "    ML: ", Lookup[mail, "MlName", ""], "    PL: "}], GrayLevel[0.4], 10],
+      Style[pl, 10, Bold,
+        If[pl > 0.5, RGBColor[0.75, 0.1, 0.1], GrayLevel[0.4]]],
+      Style["   ", 10],
+      iSVOOPSCrossLinkButton["oops-mail", ToString[counter]]}],
+    If[MissingQ[sess], Nothing,
+      Row[{Style["スレッド: ", GrayLevel[0.3], 10],
+        With[{sid = sess["MailSessionId"]},
+          Button[Style[sid, 10, RGBColor[0.1, 0.3, 0.7]],
+            iSVOOPSOpenDoc[SourceVaultOOPSThreadView[sid]],
+            Appearance -> "Frameless"]],
+        Style["   他メール: ", GrayLevel[0.3], 10],
+        Row[iSVOOPSMailButton[#, "#" <> ToString[#]] & /@
+          Take[DeleteCases[sess["MailCounters"], counter], UpTo[24]], "  "],
+        With[{rest = Length[sess["MailCounters"]] - 1 - 24},
+          If[rest > 0, Style[Row[{"  … 他 ", rest, " 通"}], GrayLevel[0.5], 10],
+            Nothing]]}]],
+    Framed[bodyDisp, FrameStyle -> LightGray, Background -> GrayLevel[0.985]]},
+    Spacings -> 1]];
+
+(* topic item を含むメールのスレッド一覧 ([ns id] ボタンの遷移先) *)
+SourceVaultOOPSTopicThreadList[topic_String] := Module[
+  {m, ns, id, idx, lst, st, label, sess, rows, capped},
+  SourceVaultOOPSEnsureLoaded[];
+  m = StringCases[topic,
+    RegularExpression["^\\[?([A-Za-z]+)[ :\\t]+([0-9]+)\\]?$"] -> {"$1", "$2"}];
+  If[m === {}, Return[Style["topic 指定は \"ki 1358\" 形式で与えてください: " <> topic,
+    Italic, GrayLevel[0.4]]]];
+  {ns, id} = First[m];
+  idx = iSVOOPSEnsureTopicMailIndex[];
+  lst = Lookup[idx, ns <> ":" <> id, {}];
+  st = SourceVault`$svOOPSState;
+  label = Lookup[Lookup[st, "RefLabel", <||>],
+    "svtopic:oops:" <> ns <> ":" <> id, ""];
+  If[lst === {},
+    Return[Style["topic [" <> ns <> " " <> id <> "] を含むメールはありません。",
+      Italic, GrayLevel[0.4]]]];
+  sess = Select[st["Sessions"], IntersectingQ[#["MailCounters"], lst] &];
+  sess = SortBy[sess, First[Intersection[#["MailCounters"], lst]] &];
+  capped = Length[sess] > 40;
+  rows = Map[Function[s, With[{sid = s["MailSessionId"]},
+    {Button[Style[If[s["Subject"] === "", sid, s["Subject"]], 12,
+        RGBColor[0.1, 0.3, 0.7]],
+      iSVOOPSOpenDoc[SourceVaultOOPSThreadView[sid]], Appearance -> "Frameless",
+      Alignment -> Left],
+     s["MailCount"],
+     Row[iSVOOPSMailButton[#, "#" <> ToString[#]] & /@
+       Take[Intersection[s["MailCounters"], lst], UpTo[12]], "  "]}]],
+    Take[sess, UpTo[40]]];
+  Column[{
+    Style[Row[{"topic [", ns, " ", id, "]",
+      If[label =!= "", Row[{" ", label}], ""],
+      " を含むスレッド (", Length[sess], " 件 / 該当 ", Length[lst], " 通)"}],
+      Bold, 13],
+    Grid[Prepend[rows,
+      Style[#, Bold] & /@ {"Subject (クリックでスレッド)", "通数", "該当メール"}],
+      Frame -> All, Alignment -> {Left, Center},
+      Background -> {None, {LightBlue, None}}],
+    If[capped, Style[Row[{"… 他 ", Length[sess] - 40, " スレッド"}],
+      GrayLevel[0.5], 10], Nothing]},
+    Spacings -> 1]];
+
+Options[SourceVaultOOPSSearchThreadsView] = {"Limit" -> 10, "CloudSafe" -> False};
+SourceVaultOOPSSearchThreadsView[query_String, OptionsPattern[]] := Module[
+  {rows, sessById},
+  SourceVaultOOPSEnsureLoaded[];
+  rows = Normal[SourceVaultOOPSSearchThreads[query,
+    "Limit" -> OptionValue["Limit"], "CloudSafe" -> OptionValue["CloudSafe"]]];
+  If[rows === {}, Return[Style["(ヒットなし)", Italic, GrayLevel[0.5]]]];
+  sessById = Association[
+    (#["MailSessionId"] -> #) & /@ SourceVault`$svOOPSState["Sessions"]];
+  Grid[Prepend[
+    Map[Function[r, With[{sid = r["Session"]},
+      {Button[Style[If[r["Subject"] === "", sid, r["Subject"]], 12,
+          RGBColor[0.1, 0.3, 0.7]],
+        iSVOOPSOpenDoc[SourceVaultOOPSThreadView[sid]], Appearance -> "Frameless",
+        Alignment -> Left],
+       Lookup[Lookup[sessById, sid, <||>], "MailCount", ""],
+       r["Score"],
+       Style[r["Snippet"], 10, GrayLevel[0.35]]}]], rows],
+    Style[#, Bold] & /@ {"Subject (クリックでスレッド)", "通数", "Score", "Snippet"}],
+    Frame -> All, Alignment -> {Left, Center},
+    Background -> {None, {LightBlue, None}}]];
 
 Options[SourceVaultOOPSThreadList] = {"Limit" -> 30, "MinMails" -> 1};
 SourceVaultOOPSThreadList[OptionsPattern[]] := Module[{sess},
@@ -1435,7 +1852,7 @@ SourceVaultOOPSThreadList[OptionsPattern[]] := Module[{sess},
   Grid[Prepend[
     Map[Function[s, {
       Button[Style[s["Subject"], 12, RGBColor[0.1, 0.3, 0.7]],
-        CreateDocument[SourceVaultOOPSThreadView[s["MailSessionId"]]], Appearance -> "Frameless"],
+        iSVOOPSOpenDoc[SourceVaultOOPSThreadView[s["MailSessionId"]]], Appearance -> "Frameless"],
       s["SessionKind"], s["MailCount"]}], sess],
     Style[#, Bold] & /@ {"Subject (クリックで詳細)", "Kind", "通数"}],
     Frame -> All, Alignment -> {Left, Center}, Background -> {None, {LightBlue, None}}]];

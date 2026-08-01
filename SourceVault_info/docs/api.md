@@ -52,7 +52,7 @@ Options: `"Limit"` -> Automatic|n, `"Kind"` -> All|`"arxiv"`|`"web"`|`"local"`, 
 注意: 対象は SourceVault ingest 済みソース (src-* record) のみ。PDF 検索索引 (PDFIndex collection。学生便覧等) は含まれない — それらの横断は SourceVaultSummaries (pdfindex provider)、本文検索は SourceVaultSearch[query, "Group" -> name] を使うこと。
 
 ### SourceVaultArXiv[query, opts]
-arXiv ソースだけを共通スキーマ表で表示する (`SourceVaultSources[query, "Kind" -> "arxiv", ...]` の薄ラッパ)。リンク開き・絞り込み検索を持ち、横断検索 SourceVaultSummaries にも相乗りする。
+arXiv ソースだけを共通スキーマ表で表示する (`SourceVaultSources[query, "Kind" -> "arxiv", ...]` の薄ラッパ)。Eagle の SourceVaultEagleSummaries / mail の SourceVaultMailSearchSummary と同じ種別専用ビューで、リンク開き・絞り込み検索を持ち、横断検索 SourceVaultSummaries にも相乗りする。
 → Grid | Dataset | List
 Options: `"On"`/`"Since"`/`"Until"`/`"Author"`/`"Limit"`/`"Format"` 等 (SourceVaultSources と同じ)
 例: `SourceVaultArXiv["reversible", "Author" -> "Bennett"]`
@@ -63,20 +63,20 @@ Options: `"On"`/`"Since"`/`"Until"`/`"Author"`/`"Limit"`/`"Format"` 等 (SourceV
 Options: `"Force"` -> False (True で既存 Summary も再生成), `"Model"` -> Automatic, `"Limit"` -> Automatic|n
 
 ### SourceVaultShowSourceSummary[sourceId, opts]
-ingest 済みソース (arXiv / web / local) のサマリーを編集可能なノートブックで開く。保存済みのユーザー追記版があればそれを開き (正本)、無ければ Title/著者/出版/URL/要約からノートを生成する。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が開く。SourceVaultSources / SourceVaultArXiv / SourceVaultSummaries の表でタイトルまたはサマリーをクリックすると呼ばれる (arxiv/web/local の既定アクション)。
+ingest 済みソース (arXiv / web / local) のサマリーを編集可能なノートブックで開く。Eagle の SourceVaultEagleShowSummary と同じ枠組み。保存済みのユーザー追記版があればそれを開き (正本)、無ければ Title/著者/出版/URL/要約からノートを生成する。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が開く。SourceVaultSources / SourceVaultArXiv / SourceVaultSummaries の表でタイトルまたはサマリーをクリックすると呼ばれる (arxiv/web/local の既定アクション)。
 → なし (NotebookOpen 副作用)
 Options: `"Fresh"` -> False (True で保存版を無視し record から新規生成)
 
 ### $SourceVaultSummaryNotebookStyle
 型: String, 初期値: `"SourceVault default.nb"`
-`SourceVaultShowSourceSummary` が開くノートの StyleDefinitions。
+`SourceVaultShowSourceSummary` が開くノートの StyleDefinitions (Eagle サマリーノートと同じスタイル)。
 
 ### SourceVaultOpenSourceFile[sourceId]
 ingest 済みソースの raw ファイルを ContentHash から現 PC の vault パスを live 再算出して SystemOpen で開く。別 PC (Dropbox 同期) でも開ける。SourceVaultSources / SourceVaultArXiv の「▶ 開く」ボタンの実体。
 → なし (SystemOpen 副作用)
 
 ### SourceVaultSourceRow[sourceId] → Association
-1 ソースの共通スキーマ行を返す。キー: `"Kind"`, `"Id"`, `"URI"` (sv://snapshot/sha256/<hex>), `"Title"`, `"Authors"`, `"Published"`, `"Summary"`, `"URL"`, `"File"`, `"Date"`, `"PrivacyLevel"`。混在データセットの join/参照キーとして URI を使う。
+1 ソースの共通スキーマ行を返す。キー: `"Kind"`, `"Id"`, `"URI"` (sv://snapshot/sha256/<hex>), `"Title"`, `"Authors"`, `"Published"`, `"Summary"`, `"URL"`, `"File"`, `"Date"`, `"PrivacyLevel"`。SourceVaultEagleSummaryRow と同じキーを共有する。混在データセットの join/参照キーとして URI を使う。
 Options: `"FetchMetadata"` -> Automatic
 
 ### SourceVaultSummaries[query, opts]

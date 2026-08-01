@@ -14906,6 +14906,14 @@ If[AssociationQ[ClaudeCode`$ClaudePackageAuxKeywordMap],
       "Claude Code", "ClaudeCode", "実行ログ", "セッションログ", "作業ログ",
       "過去のセッション", "svcclog", "SourceVaultClaudeCode",
       "claudecode_sessions", "SourceVaultIngestClaudeCodeLogs"};
+    (* api_oopsseed.md: OOPS メールアーカイブ (1992-2005 の個人 ML) の
+       検索/スレッド閲覧タスクで注入。「oopsのメール」等の自然文が maildb
+       (ライブ IMAP メール) へ誤ルートし MBox="oops" と推測して univ を
+       検索した実例への対処 (2026-07-30)。判定は大文字小文字無視の部分
+       一致なので "OOPS" 1 語で oops / oops-ura / SourceVaultOOPS* /
+       OOPSアーカイブ を全てカバーする。登録により従来の常時注入 (budget
+       末尾で脱落しがち) からキーワード時の優先注入に変わる。 *)
+    auxMap["oopsseed"] = {"OOPS"};
     ClaudeCode`$ClaudePackageAuxKeywordMap["SourceVault"] = auxMap]];
 
 (* ============================================================
@@ -15107,7 +15115,8 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        "SourceVault_contracts.wl", "SourceVault_wiring.wl",
        "SourceVault_packageapi.wl", "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
-       "SourceVault_mailstructure.wl", "SourceVault_mailsuggest.wl",
+       "SourceVault_mailstructure.wl", "SourceVault_mailbrowse.wl",
+       "SourceVault_crosslink.wl", "SourceVault_mailsuggest.wl",
        "SourceVault_searchview.wl", "SourceVault_knowledgehome.wl", "SourceVault_cognition.wl", "SourceVault_adjudication.wl", "SourceVault_capbroker.wl", "SourceVault_taint.wl", "SourceVault_anomaly.wl", "SourceVault_routine.wl", "SourceVault_routineplan.wl", "SourceVault_mailagenda.wl", "SourceVault_anonymize.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",

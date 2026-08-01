@@ -39,7 +39,9 @@
 		"SourceVault_llmlog.wl",
 		"SourceVault_simrun.wl",
 		"SourceVault_anonymize.wl",
-		"SourceVault_course.wl"
+		"SourceVault_course.wl",
+		"SourceVault_crosslink.wl",
+		"SourceVault_mailbrowse.wl"
 	],
 	"directories":[
 		"SourceVault_info",

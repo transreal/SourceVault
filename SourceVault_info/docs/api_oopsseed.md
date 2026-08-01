@@ -6,6 +6,24 @@
 ロード: `Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault_oopsseed.wl"]]`
 担当: OOPS メーリングリスト（1992–2005 の個人 ML、約 6500 通・約 4100 topic item）の seed オントロジ取り込みと、一般メールへの topic 自動付与（auto-tag）。「seed を取り込み、一般メールを同形式に変換して検索精度を上げる」方針の基盤。
 
+## OOPS アーカイブ内容の検索レシピ（最重要 — コード生成時はまずこれ）
+
+「OOPS のメールで○○を探して」のような**アーカイブ内容の検索・スレッド閲覧タスク**は、必ず utility 層（下記）を最初のツール呼び出しにする:
+
+```mathematica
+SourceVaultOOPSEnsureLoaded[]   (* 冪等・既定 MailFiles -> All。初回は全ファイル parse で
+                                   数分かかりうるため、ClaudeEval 経由では expectedSeconds: 300 を宣言 *)
+SourceVaultOOPSSearchThreadsView["httpd 公開 アーカイブ", "Limit" -> 10]
+  (* 提示は View 版既定: Subject→ThreadView→MailView とクリックで辿れる *)
+SourceVaultOOPSSearchThreads[…]                      (* データ版 Dataset。後続処理用 *)
+SourceVaultOOPSThread["svmailsession:…"]["Digest"]   (* スレッド詳細の連想 *)
+```
+
+**やってはいけないこと**（実測で失敗する）:
+
+- `FileNames`/`FindList`/`ReadString` による生ファイル手書き走査。本文は **UTF-8 + CR 行終端**で、素の読み取りは 0 件または `$Failed` になる（実測: `FindList` が全 161 ファイルで 0 件）。正しく読めるのは `SourceVaultParseOOPSMailFile` 系だけ。
+- 過去年代の検索を MCP tool（`sourcevault_oops_search_threads` 等）に頼ること。service カーネルの既定 scope は**最新 1 ファイルのみ**で 1990 年代のメールには届かない。全アーカイブ検索は上記のカーネル内 API で行う。
+
 ## 設計（レビューで確立）
 
 - index は「S式風」でなく **Common Lisp S式**。正規表現/単純行分割では読まない（深い入れ子・長大行・引用文字列のため）。
@@ -52,7 +70,10 @@ UTF-8 の `oops*.txt` を mbox として parse（CR 行終端）。`X-Ml-Counter
 OOPS の topic ID ref（`[ns n]`）・brace wrapper・`◎○・` structural marker を除去して plain text を返す。label 本文は残す（held-out 評価で cheat 防止／一般メール化）。
 
 ### SourceVaultMailRecipientPrivacy[mail] → Association
-`To`/`Cc` の addr-spec だけから privacy シグナルを導く（§6.5.3 の **defense-in-depth**。X-Ml-Name に依らない一般メール向け）。`<|"PrivacyLevel", "Tags", "Signal", "Recipients"|>`。判定: 私的リストアドレス（`oops-ura` 等、`iSVOOPSPrivateListQ`）宛 → `PrivateML`/`NoCloudLLM`/`NoPublicExport`（0.6, Signal=`PrivateRecipient`）／list 的でない個人アドレスのみ → `DirectRecipients`（0.5, `IndividualRecipients`）／それ以外 → neutral（0.0, `None`）。**X-Ml-Name が欠落・詐称されても To=`oops-ura@…` から私的判定できる**のが要点。`SourceVaultBuildSessionChunks` / `...PrimerItems` は list 名由来 privacy と max/union で結合する。
+`To`/`Cc` の addr-spec だけから privacy シグナルを導く（§6.5.3 の **defense-in-depth**。X-Ml-Name に依らない一般メール向け）。`<|"PrivacyLevel", "Tags", "Signal", "Recipients"|>`。判定: 私的リストアドレス（`oops-ura` 等、`iSVOOPSPrivateListQ`）宛 → `PrivateML`/`NoCloudLLM`/`NoPublicExport`（0.7, Signal=`PrivateRecipient`）／`oops@…`(main) 宛 → `NoCloudLLM`/`NoPublicExport`（0.7, `OOPSMainRecipient`。owner 方針: 公開は omote のみ）／list 的でない個人アドレスのみ → `DirectRecipients`（0.5, `IndividualRecipients`）／それ以外（`oops-omote@` 含む）→ neutral（0.0, `None`）。**X-Ml-Name が欠落・詐称されても To=`oops-ura@…` から私的判定できる**のが要点。`SourceVaultBuildSessionChunks` / `...PrimerItems` は list 名由来 privacy と max/union で結合する。
+
+### SourceVaultOOPSMailPrivacyLevel[mail] → Real
+文脈なし（単一メール）の保守的 PL: `ura`=0.7 / `omote`=0.0 / それ以外は fail-closed 0.7。正準判定は owner 方針（2026-07-30 改訂）の**時代依存**版で、`SourceVaultOOPSEnsureLoaded` が全メールの `"PrivacyLevel"` にこれを焼き込む（§6.5.3 参照）: ura 分裂（`$svOOPSUraSplitCounter` = #2675, 1994-11-04）以前は全メール 0.7、分裂後は ura=0.7 / omote=0.0 / main(oops)=原則 0.0（ただし ura メールを quote-table∪本文マーカーで引用する main は 0.7）。`SourceVaultOOPSMailView` は PL > 0.5 の本文を NBAccess 機密セル（赤背景）で開く。
 
 ### SourceVaultParseMailParagraphs[body] → {Association...}
 **RAW body**（明示マーカー保持）を段落に分割する（空行区切り、引用/署名/footer を分離。§6.5）。各段落は `RawText`（生・`◎○・{}[ns id]` マーカー保持）と `Text`（`SourceVaultStripOOPSMarkers` 済）を持つ。
@@ -71,7 +92,7 @@ OOPS の**明示 topic マーカー**を抽出する（§6.5 点 1「明示 topi
 `"RefLabel"`（ref→canonical label の Association）を渡すと、**同一 canonical label の SeedMatched 重複**（別 owner namespace / 重複 entry。例 ki195/e203 とも「映画」）を最高 confidence の 1 件に collapse し、他の ref を `AltRefs` に provenance として残す（軽量 owner disambiguation。曖昧は実データで 2.2% と稀）。
 Options: `"MinSurfaceLength" -> 2`, `"TopicLimit" -> 10`, `"ProseOnly" -> True`, `"RelationGraph" -> None`, `"MaxRelationTopics" -> 8`, `"MinRelationWeight" -> 2`, `"ExtractCandidates" -> False`, `"CandidateLimit" -> 8`, `"RefLabel" -> None`
 戻り値: `{<|"ParagraphIndex", "Kind", "Assignments" -> {<|"TopicItemRef", "MatchedSurfaceForms", "AssignmentKind" -> "SeedMatched"|"RelationExpanded"|"AutoExtracted", "Confidence", ("ViaSeed", "RelationWeight", "ProposedLabel", "ExtractionKind", "Status")|>...}|>...}`
-ノイズ対策（解消済み）: 短い Latin surface form の語中誤一致（例「tar」が「s**tar**ship」）は `iSVSurfaceFormPresentQ` の単語境界一致で解消（api_lexical 参照）。catch-all/退化 topic（ラベル「・」で数百 form を持つ `anonymous:0` 等）も `SourceVaultBuildSurfaceIndex` 構築時に除外済み。残: 同名 topic（例 ki195/e203 とも「映画」）は両方とも正当な topic ゆえ両マッチを許容（owner による後段 disambiguate は将来課題）。
+ノイズ対策（解消済み）: 短い Latin form の語中誤一致は `iSVSurfaceFormPresentQ` の単語境界一致で、catch-all 退化 topic（`anonymous:0`）は surface index 構築時に除外済み。同名 topic（ki195/e203 とも「映画」）は両方正当ゆえ両マッチ許容。
 
 ## relation（重み付き有向）取り込み・1-hop 拡張
 
@@ -133,7 +154,7 @@ Options: `"RefLabel" -> None`, `"RelationGraph" -> None`, `"IncludeRelated" -> T
 
 メールを「段落 topic ＋ 引用関係 ＋ スレッド」に構造化する。OOPS はスレッドヘッダ（In-Reply-To / References）を持たず Message-Id のみなので、seed の `quote-table.index` を authoritative な引用グラフとする。
 
-> **注意（S 式パース速度）**: `quote-table.index`（約 477KB、整数 ~20 万）などの大きな index は、S 式リーダの `iSVClassifyAtom` が整数を `FromDigits` で（旧 `ToExpression` は 1 整数 ms 級で数分かかり共有カーネルが wedge する）、`iSVReadAtom`/`iSVReadString` が `StringJoin[cs[[...]]]` で（旧 `StringTake[s,{...}]` は O(位置) で O(n²)）読むよう修正済み。477KB でも約 6 秒。
+> **注意（S 式パース速度）**: 大きな index（quote-table 477KB 等）は整数を `FromDigits`・文字列を `StringJoin[cs[[...]]]` で読む実装に修正済み（旧 `ToExpression`/`StringTake` は数分〜O(n²) で共有カーネルが wedge した）。477KB で約 6 秒。
 
 ### SourceVaultImportOOPSQuoteTable[path] → Association
 `quote-table.index` を読み `<|mailNumber -> {<|"Index", "FromMail", "StandardQuoteId"|>...}|>` を返す。各メールが引用している元メール（`FromMail`）と seed の standard-quote id。`<mail#> ((idx (from src) (standard-quote qid))...)` の交互ペア（`nil` は空）。
@@ -146,7 +167,7 @@ Options: `"RefLabel" -> None`, `"RelationGraph" -> None`, `"IncludeRelated" -> T
 
 ### SourceVaultBuildMailSessions[mails, quoteEdges, opts] → {SourceVaultMailSession...}
 quote edge の連結成分と Subject の `Re:`/`Fwd:` 正規化（`iSVNormalizeSubject`）による同一 subject 連結を `ConnectedComponents` でまとめ、メールをセッション（スレッド）にする。
-Options: `"SubjectThreading" -> True`
+Options: `"SubjectThreading" -> True`, `"MaxCounterGap" -> 200`（gap 超の辺は繋がない=定型件名の再登場を分節。None で無制限）, `"SameSubjectQuoteOnly" -> True`（quote 辺は同一非空正規化 subject のみ併合。異 subject 参照引用による giant component 化（実測 3757/6524 通）を防ぐ。異 subject 引用は QuoteEdges データには残る）
 戻り値: `<|"ObjectClass" -> "SourceVaultMailSession", "MailSessionId", "MailCounters", "MailRefs", "MailCount", "SessionKind" -> "QuoteCluster"|"ReplyThread"|"Singleton", "Subject", "StartMailCounter", "EndMailCounter"|>`。quote 連結が有れば `QuoteCluster`、Subject のみなら `ReplyThread`。
 
 ### SourceVaultBuildTopicItemGraph[mails, opts] → Association（§6.5 topic item graph）
@@ -163,7 +184,7 @@ session（スレッド）単位の §7.2 検索 chunk を作る。各 chunk は 
 `PrivacyLevel` / `Tags` は §6.5.3 の list 名由来（`iSVOOPSListPrivacy`）**∪ 受信者 To/Cc 由来（`SourceVaultMailRecipientPrivacy`）** を session 内で **max / union** で採る（1 通でも私的なら session 全体が私的。X-Ml-Name と To の二重防御）。
 Options: `"SurfaceIndex"`, `"RelationGraph"`, `"RefLabel"`, `"PrivacyLevel" -> Automatic`（list 由来）, `"ReleaseState" -> "Published"`, `"MaxBodyChars" -> 4000`
 
-> **§6.5.3 privacy / trust class**: `X-Ml-Name` の実値は `"OOPS Mailing List"`（公開）と `"OOPS Mailing List Under Ground"`（= oops-ura, 私的）。`iSVOOPSListPrivacy` は "under ground" / "oops-ura" を検出した list を私的とし、`PrivacyLevel 0.6` ＋ `{"PrivateML", "NoCloudLLM", "NoPublicExport"}` を付ける。cloud LLM / public export の release context は `DenyTags` にこれらを持つので、私的リスト由来のスレッドは自動的に除外される。
+> **§6.5.3 privacy / trust class (owner 方針 2026-07-30 改訂=時代依存)**: `EnsureLoaded` が全メールの `"PrivacyLevel"` に焼き込む (`iSVOOPSStampMailPrivacy`)。単一メール・文脈なしの保守的判定は `SourceVaultOOPSMailPrivacyLevel`。**ura 分裂 (`$svOOPSUraSplitCounter`=#2675, 1994-11-04) 以前は全メール 0.7**。分裂後: ura=0.7 / omote=0.0 / **main(oops)=原則 0.0、ただし ura メールを引用 (quote-table∪本文マーカー) する main は 0.7**。部分集合ロードで引用先が手元に無い分裂後 counter も fail-closed 0.7。PL>0.5 は `{"NoCloudLLM","NoPublicExport"}`（ura はさらに `PrivateML`）が付き、cloud/public context の `DenyTags` で除外される。chunk/primer/CloudSafe gate は焼き込み済み PL を優先 (未焼き込みは list∪recipient heuristics に fallback)。
 
 ### SourceVaultBuildSessionDigest[session, mails, opts] → String
 LLM を使わない**決定的なスレッド要約**を返す。`[スレッド] <Subject> (<N>通/<SessionKind>)` ＋ `話題: <topic ラベル>` ＋ 各メールの `#<counter> <著者>: <先頭 prose 段落>` のタイムライン。
@@ -213,23 +234,27 @@ utility 層の上に載る、ノートブック向けの表示関数。
 そのスレッドの topic item graph を構築して `SourceVaultOOPSTopicGraphPlot` で描画する（FireWire 等の中心トピックが大きく出る）。
 
 ### SourceVaultOOPSThreadView[sessionId] → Column
-1 スレッドの Subject / 種別 / 通数 / 話題 / 決定的 digest を `Column` + `Framed` で表示する。
+1 スレッドの Subject / 種別 / 話題 / **メール一覧 (各行ボタン → `SourceVaultOOPSMailView` で全文)** / 決定的 digest を `Column` + `Framed` で表示する。
+
+### SourceVaultOOPSMailView[counter] → Column
+OOPS メール 1 通 (X-Ml-Counter) のヘッダ+**本文全文**(生マーカー ◎○・ 保持)。所属スレッド/他メール移動ボタン付き。本文中の topic ref は HoTaMaLe 版アーカイブ同様 **`[ns id](prev/next)` の 3 リンク**になる: `[ns id]`=その topic を含むスレッド一覧 (`SourceVaultOOPSTopicThreadList`)、prev/next=その topic を含む前/次のメール。`Quote (from N)` の N はそのメールを開くボタン、URL はブラウザで開く Hyperlink。長文はスクロール Pane。**PL > 0.5 (omote 以外) の本文は、ボタン経由の新規ノートブックでもインライン評価の Out セルでも NBAccess 機密セル (赤背景+⚠) になる**(リスト表示は非機密=機密は本文のみ)。
+
+### SourceVaultOOPSTopicThreadList["ki 1358"] → Column
+その topic item を本文に含むメールのスレッド一覧 Grid (Subject→ThreadView、該当 #→MailView)。topic→メール索引は初回 lazy 構築で `$svOOPSState` にキャッシュ。
+
+### SourceVaultOOPSSearchThreadsView[query, opts] → Grid
+`SourceVaultOOPSSearchThreads` の View 版。Subject ボタン (→ThreadView) + 通数/Score/Snippet の `Grid`。**検索結果からメール本体まで辿れる提示はこちら**。Options は SearchThreads と同じ。
 
 ### SourceVaultOOPSThreadList[opts] → Grid
-読み込んだスレッド一覧を `Grid` で表示する。`Subject` はボタンで、押すと `SourceVaultOOPSThreadView` を新規ノートブックで開く。Options: `"Limit" -> 30`, `"MinMails" -> 1`。
+スレッド一覧 `Grid`。Subject ボタンで ThreadView を開く。Options: `"Limit" -> 30`, `"MinMails" -> 1`。
 
 ## 利用例
 
-```mathematica
-(* seed 辞書を build → surface index → BM25 index に entity stream を載せる *)
-dict = SourceVaultImportOOPSSeedDictionary["…/db/table/item-name.index"]["Dictionary"];
-sidx = SourceVaultBuildSurfaceIndex[dict];
+seed 辞書 build / auto-tag / KG 展開 / 可視化の実行例は
+[`examples/oops_example.md`](examples/oops_example.md)、メール構造化
+(引用グラフ・session・privacy・MCP tool) は
+[`examples/mail_structuring_example.md`](examples/mail_structuring_example.md) を参照。
 
-(* relation graph を build *)
-graph = SourceVaultBuildOOPSRelationGraph["…/db/table"]["RelationGraph"];
+---
 
-(* 一般メールを段落 topic 付与（named ＋ relation 1-hop の related） *)
-mails = SourceVaultParseOOPSMailFile["…/oops-ml-generate/oops 200506.txt"]["Mails"];
-paras = SourceVaultParseMailParagraphs[SourceVaultStripOOPSMarkers[First[mails]["Body"]]];
-SourceVaultAssignParagraphTopics[paras, sidx, "RelationGraph" -> graph]
-```
+Added `SourceVaultOOPSMailPrivacyLevel` (new public symbol found in source, was undocumented) right after `SourceVaultMailRecipientPrivacy`, and cross-referenced it from the existing §6.5.3 privacy note. Everything else was checked against the current `usage` strings and found consistent, so it was preserved as-is.
