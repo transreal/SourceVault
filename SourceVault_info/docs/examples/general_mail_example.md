@@ -1,5 +1,3 @@
----
-
 # SourceVault 一般メール構造化・検索 使用例 — maildb → session / topic / digest
 
 SourceVault の **一般メール構造化層**（`SourceVault_mailstructure.wl`）の使用例集です。OOPS 以外の一般メール（`SourceVault_maildb` の univ 受信箱等）を、**OOPS シードが無くても** 返信/引用 session・段落 topic・topic graph に構造化し、スレッド検索・要約（digest）・分析につなげます。中核は seed-optional な `TopicVocabulary` と、引用/参照を typed graph として掘る **mail relation graph mining** です。

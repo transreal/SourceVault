@@ -1,5 +1,3 @@
----
-
 # SourceVault 使用例集
 
 SourceVault パッケージは Claude 系ワークフローで「参照されるソース文書」をハッシュで一意に固定し、必要に応じて prompt や worker に抜粋を渡すための **snapshot 管理レイヤ**です。本ドキュメントは v2026-05-18-stage-3-integrated-p4 (P1〜P4 完全統合版) を起点に、その後の Stage 4〜9 拡張 (URL/arXiv ingest、PDF page 抽出、OCR、Claim 抽出、Evidence Bundle、vN diff、Compiled Registry、Notebook Management、ソース一覧・横断検索、暗号化・identity・メール管理、Claude Code セッションログ) までを順を追って示します。

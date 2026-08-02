@@ -1,5 +1,3 @@
----
-
 # SourceVault — ingest → グループ化 → 補足知識 → 検索 → ClaudeEval → Web 公開 実行例
 
 このドキュメントは、**PDF / Web ページを取り込み（ingest）、グループ化して release context と補足知識を付け、検索し、ノートブック（ClaudeEval）から問い合わせ、最後に Web で公開する**までの一連の流れを、実際に動くコードで示します。
