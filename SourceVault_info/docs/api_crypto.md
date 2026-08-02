@@ -237,3 +237,4 @@ Options: `SourceVaultAuthorizeRecordMaterialization` と同じ。
   "Derived" -> <|"PrivacyLevel"->_, "AccessTags"->{...}, "DenyTags"->{}|>,
   "Provenance" -> <|"CreatedBy"->"SourceVaultEncryptedPut"|>
 |>
+```
