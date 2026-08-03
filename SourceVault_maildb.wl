@@ -1289,6 +1289,14 @@ SourceVaultGetMailAccount::usage = "SourceVaultGetMailAccount[mbox] \:306f\:767b
 SourceVaultRemoveMailAccount::usage = "SourceVaultRemoveMailAccount[mbox] \:306f\:767b\:9332\:3092\:524a\:9664\:3059\:308b\:3002";
 SourceVaultMailAccountsLoad::usage = "SourceVaultMailAccountsLoad[] \:306f vault config \:304b\:3089\:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:3092\:8aad\:307f\:8fbc\:3080\:3002";
 $SourceVaultMailConfigRoot::usage = "IMAP \:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:306e\:4fdd\:5b58\:30eb\:30fc\:30c8(\:65e2\:5b9a PrivateVault/config)\:3002\:30c6\:30b9\:30c8\:3067\:4e0a\:66f8\:304d\:53ef\:3002";
+$SourceVaultMailDerivedAdjuster::usage =
+  "$SourceVaultMailDerivedAdjuster is the classification-feedback seam (rule 11 \
+weak binding): None (default) or a Function[{snapshot, derived}, derived2] that \
+is applied to the derived association right after inference and right after a \
+priority recomputation, BEFORE Derived.UserOverride is enforced. \
+SourceVault_mailfeedback.wl registers itself here so user corrections \
+(rules + learned posterior) shape future classification; maildb needs nothing \
+from it and behaves exactly as before when it is absent.";
 
 Begin["`Private`"];
 
@@ -1668,6 +1676,54 @@ SourceVaultMailExplainPriority[snap_Association] :=
     Quiet@Check[snap["Derived"]["WorkRequest"], Missing[]],
     Quiet@Check[With[{c = snap["Derived"]["Category"]}, If[StringQ[c], c, Missing[]]], Missing[]]];
 
+(* ---- classification-feedback seam + user override enforcement ----
+   Derived.UserOverride holds the fields a human pinned by hand
+   (SourceVaultMailCorrect). They must survive re-inference and every
+   recomputation, so the order everywhere is: structural/LLM value ->
+   $SourceVaultMailDerivedAdjuster (rules + learned posterior) -> user override
+   as the last word. Absent adjuster and absent override = old behaviour. *)
+If[! ValueQ[$SourceVaultMailDerivedAdjuster], $SourceVaultMailDerivedAdjuster = None];
+
+iSVMDDerivedOverrideOf[d_Association] :=
+  With[{o = Lookup[d, "UserOverride", <||>]}, If[AssociationQ[o], o, <||>]];
+
+iSVMDApplyDerivedAdjuster[snap_Association, d_Association] :=
+  If[$SourceVaultMailDerivedAdjuster === None, d,
+    With[{r = Quiet@Check[$SourceVaultMailDerivedAdjuster[snap, d], $Failed]},
+      If[AssociationQ[r], r, d]]];
+
+iSVMDApplyUserOverride[snap_Association, d0_Association] :=
+  Module[{d = d0, ov = iSVMDDerivedOverrideOf[d0], recompute = False, cp, adj},
+    If[ov === <||>, Return[d0]];
+    If[StringQ[Lookup[ov, "Category", Missing[]]],
+      d["Category"] = ov["Category"]; recompute = True];
+    If[NumericQ[Lookup[ov, "WorkRequest", Missing[]]],
+      d["WorkRequest"] = N@Clip[ov["WorkRequest"], {0., 1.}]; recompute = True];
+    (* a pinned category changes the structural priority term, so recompute
+       unless the priority itself is pinned; keep the learned adjustment *)
+    If[recompute && ! KeyExistsQ[ov, "Priority"],
+      cp = SourceVaultMailComputePriority[snap, Lookup[d, "WorkRequest", Missing[]],
+         With[{c = Lookup[d, "Category", Missing[]]}, If[StringQ[c], c, Missing[]]]];
+      adj = iSVMDNum[
+         Lookup[Lookup[d, "FeedbackAdjustment", <||>], "PriorityAdjust", 0], 0.];
+      d["Priority"] = Round[Clip[cp["Priority"] + adj, {0., 1.}], 0.01];
+      d["PriorityComponents"] = cp["Components"]];
+    If[NumericQ[Lookup[ov, "Priority", Missing[]]],
+      d["Priority"] = N@Clip[ov["Priority"], {0., 1.}]];
+    If[NumericQ[Lookup[ov, "PrivacyLevel", Missing[]]],
+      d["PrivacyLevel"] = N@Clip[ov["PrivacyLevel"], {0., 1.}]];
+    If[KeyExistsQ[ov, "Deadline"], d["Deadline"] = ov["Deadline"]];
+    d];
+
+(* the deterministic recipient privacy floor binds the LEARNED value too
+   (defense in depth). Only an explicit human override may go below it, and
+   that decision is recorded in the feedback ledger. *)
+iSVMDPostProcessDerived[snap_Association, d_Association] :=
+  Module[{d1 = iSVMDApplyDerivedAdjuster[snap, d], ov = iSVMDDerivedOverrideOf[d]},
+    If[! KeyExistsQ[ov, "PrivacyLevel"] && NumericQ[Lookup[d1, "PrivacyLevel", Missing[]]],
+      d1["PrivacyLevel"] = Max[d1["PrivacyLevel"], iSVMDRecipientPrivacyFloor[snap]]];
+    iSVMDApplyUserOverride[snap, d1]];
+
 (* \:512a\:5148\:5ea6\:5f0f\:306e\:5909\:66f4\:3092\:65e2\:51e6\:7406 snapshot \:306b\:53cd\:6620\:3059\:308b (LLM \:4e0d\:8981\:30fb\:9ad8\:901f)\:3002
    \:5bfe\:8c61\:306f PriorityComponents \:3092\:6301\:3064\:3082\:306e = \:904e\:53bb\:306b\:69cb\:9020\:8a08\:7b97\:3067 Priority \:3092\:51fa\:3057\:305f\:3082\:306e\:3002
    legacy maildb \:7531\:6765\:306e Priority (PriorityComponents \:7121\:3057) \:306f\:6709\:610f\:306a\:5225\:30bd\:30fc\:30b9\:306a\:306e\:3067\:89e6\:3089\:306a\:3044\:3002 *)
@@ -1675,16 +1731,20 @@ Options[SourceVaultMailRecomputePriorities] = {"Persist" -> True};
 SourceVaultMailRecomputePriorities[OptionsPattern[]] :=
   Module[{snaps = SourceVaultMailSnapshotList[], n = 0, changed = 0},
     Do[
-      Module[{d = Lookup[snap, "Derived", <||>], wr, ct, cp, s2},
+      Module[{d = Lookup[snap, "Derived", <||>], d2, wr, ct, cp, s2},
         If[! KeyExistsQ[d, "PriorityComponents"], Continue[]];
         n++;
         wr = Lookup[d, "WorkRequest", Missing[]];
         ct = With[{c = Lookup[d, "Category", Missing[]]}, If[StringQ[c], c, Missing[]]];
         cp = SourceVaultMailComputePriority[snap, wr, ct];
-        If[d["Priority"] =!= cp["Priority"] || d["PriorityComponents"] =!= cp["Components"],
-          d["Priority"] = cp["Priority"];
-          d["PriorityComponents"] = cp["Components"];
-          s2 = snap; s2["Derived"] = d;
+        d2 = d;
+        d2["Priority"] = cp["Priority"];
+        d2["PriorityComponents"] = cp["Components"];
+        (* feedback layer + user override, so a recompute never silently drops
+           a hand correction. The audit field alone is not a change (no churn). *)
+        d2 = iSVMDPostProcessDerived[snap, d2];
+        If[KeyDrop[d2, "FeedbackAdjustment"] =!= KeyDrop[d, "FeedbackAdjustment"],
+          s2 = snap; s2["Derived"] = d2;
           SourceVaultMailSnapshotPut[s2, "Persist" -> False];
           changed++]],
       {snap, snaps}];
@@ -1719,6 +1779,8 @@ iSVApplyDerived[snap_Association, res_Association] :=
     If[StringQ[res["Summary"]], d["Summary"] = res["Summary"]];
     d["DerivedStatus"] = "Processed";
     d["DerivedSource"] = "LocalLLM+Structured";
+    (* rules + learned posterior, then the user override as the last word *)
+    d = iSVMDPostProcessDerived[snap, d];
     s2["Derived"] = d; s2];
 
 (* ---- mailspec enricher \:767b\:9332 (\:62e1\:5f35\:30dd\:30a4\:30f3\:30c8) ----
@@ -2585,6 +2647,10 @@ iSVUIBodyPanel[snap_, subj_, body_, htmlQ_ : False] :=
           busy = False, Method -> "Queued"],
         Spacer[6], Dynamic[If[busy, ProgressIndicator[Appearance -> "Necklace"], ""]]},
         Spacer[6]],
+      (* classification correction strip (SourceVault_mailfeedback.wl).
+         Weak binding: absent module = the window looks exactly as before. *)
+      If[Length[DownValues[SourceVault`SourceVaultMailFeedbackPanel]] > 0,
+        Quiet@Check[SourceVault`SourceVaultMailFeedbackPanel[r], Nothing], Nothing],
       If[TrueQ[htmlQ],
         Style["(HTML \:30e1\:30fc\:30eb\:3092\:30c6\:30ad\:30b9\:30c8\:306b\:5909\:63db\:3057\:3066\:8868\:793a\:3057\:3066\:3044\:307e\:3059)", "Text", Gray, FontSlant -> Italic],
         Nothing],
@@ -2705,7 +2771,15 @@ SourceVaultMailRowActions[snap_Association] :=
         Method -> "Queued"],
       Spacer[4], iSVUIAttachMenu[snap], Spacer[4],
       Button["\:21a9", SourceVaultMailOpenReplyNotebook[r], Appearance -> "Frameless",
-        Method -> "Queued"]}, BaselinePosition -> Center]];
+        Method -> "Queued"],
+      (* correction window (weak binding to SourceVault_mailfeedback.wl) *)
+      If[Length[DownValues[SourceVault`SourceVaultMailFeedbackWindow]] > 0,
+        Sequence @@ {Spacer[4],
+          Tooltip[
+            Button["\:270e", SourceVault`SourceVaultMailFeedbackWindow[r],
+              Appearance -> "Frameless", Method -> "Queued"],
+            "\:91cd\:8981\:5ea6/\:79d8\:533f\:5ea6/\:5206\:985e\:3092\:8a02\:6b63"]},
+        Sequence @@ {}]}, BaselinePosition -> Center]];
 
 (* \:8868\:30c6\:30ad\:30b9\:30c8\:30d5\:30a9\:30f3\:30c8 (ClaudeCode`$ClaudeStandardFont\:3001\:672a\:30ed\:30fc\:30c9\:6642\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af) *)
 iSVUIFont[] :=

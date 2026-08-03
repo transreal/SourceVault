@@ -404,14 +404,30 @@ iUltraWrapPrompt[m_, prompt_String] :=
     $iUltraEconomyDirective <> "\n" <> prompt, prompt];
 iUltraWrapPrompt[_, prompt_] := prompt;
 
+(* claudecode 経路の per-call タイムアウト (秒)。ClaudeQuerySync は
+   ClaudeCode`$ClaudeTimeout (既定 1200 s) で打ち切るが、implement 呼び出しは
+   パッケージ+テスト一式の生成で 20 分を超え得る (2026-08-03: fable-5 が
+   1200 s タイムアウト -> ProviderUnavailable Blocked)。ここで引き上げる。 *)
+If[! ValueQ[$iOrchClaudeCallTimeout], $iOrchClaudeCallTimeout = 3000];
+
 iOrchQuery[m_, prompt_] := Module[{tup = iModelTuple[m], prov, p2, r},
   prov = ToLowerCase[tup[[1]]];
   p2 = iUltraWrapPrompt[m, prompt];
   If[prov === "chatgptcodex",
     iOrchCodex[tup, p2],
     r = Quiet @ Check[
-      Block[{ClaudeCode`$ClaudeModel = tup}, ClaudeCode`ClaudeQuerySync[p2]], $Failed];
-    If[StringQ[r], r, ""]]];
+      Block[{ClaudeCode`$ClaudeModel = tup,
+        ClaudeCode`$ClaudeTimeout = Max[
+          If[NumericQ[ClaudeCode`$ClaudeTimeout], ClaudeCode`$ClaudeTimeout, 1200],
+          $iOrchClaudeCallTimeout]},
+        ClaudeCode`ClaudeQuerySync[p2]], $Failed];
+    (* codex 経路 (iOrchCodex) と対称のマーカー: 呼び出し失敗や空応答を "" に
+       潰さない。"" は下流で「モデルが何も作らなかった」と区別できず、実体は
+       usage/rate limit・席数枯渇・CLI エラーであることが多い (2026-08-03 の
+       implement 3 ラウンド空振り GaveUp の教訓)。 *)
+    If[StringQ[r] && StringTrim[r] =!= "", r,
+      "[claude produced no output: the CLI call failed or returned empty -- " <>
+        "likely a usage/rate limit, seat exhaustion, or CLI error. Retry later.]"]]];
 
 (* ============================================================
    Real executors (LIVE path).  Each takes the resolved model for its role.
@@ -432,6 +448,20 @@ iConventions[name_, canon_] :=
   "  Do NOT use a manual Get with a hardcoded path or any placeholder symbol. Then call WorkflowInfo[] and the launch entry, showing the real invocation (with arguments if the launch needs them to do its work). For a LONG-RUNNING end-to-end run (network / LLM), show SourceVault`SourceVaultRunWorkflowAsync[\"" <> name <> "\", \"run\"] as the DEFAULT way to run it (it runs off the FRONT END so the notebook does not freeze; the synchronous <Launch>[\"run\"] is only for quick/offline cases). The completion writes a summary to the notebook; the result View is retrieved via SourceVault`SourceVaultRunWorkflowResult.\n" <>
   "- Extra subfiles, if any, are SVWorkflow_" <> canon <> "_<sub>.wl .\n" <>
   "- Encode in UTF-8; use only \\:XXXX style Unicode escapes inside .wl strings; do not Clear/Remove the Global` context.\n" <>
+  "EXISTING-CODE FIX CONVENTION -- apply when the spec FIXES A DEFECT IN AN EXISTING package file " <>
+  "(a bug-fix / issue-fix spec) rather than building a new standalone deliverable: the workflow is a " <>
+  "PATCH APPLIER and MUST expose exactly these launch forms so the standard issue flow " <>
+  "(SourceVault`SourceVaultIssueApplyFix) can drive it: <Launch>[\"diagnose\"] = READ-ONLY detection of " <>
+  "whether the live target file still contains the defect (Status e.g. \"Vulnerable\"|\"Fixed\"); " <>
+  "<Launch>[\"patch\"] = DRY-RUN report of what would change (never writes; Status \"DryRun\"); " <>
+  "<Launch>[\"patch\", \"apply\"] = the real application, which MUST create a timestamped backup of the " <>
+  "target file first, write, verify the written content (re-read + parse/anchor check), RESTORE the " <>
+  "backup on any verification failure, and return <|\"Status\" -> \"Applied\", \"Backup\" -> <path>, ...|> " <>
+  "on success. BOTH patch forms MUST return Status \"AlreadyPatched\" (and the apply form must refuse to " <>
+  "write) when the fix is already present in the target -- re-applying must never duplicate code. " <>
+  "CAUTION: the region anchors and the fixed-marker text must not appear verbatim inside comments of the " <>
+  "patch text itself, or post-apply diagnose/re-apply will anchor on the comment instead of the code. Keep the full replacement code also as a reviewable file under " <>
+  "SVWorkflow_<Canon>_info/docs/patch/. The no-arg launch stays a safe report and never writes.\n" <>
   "SIMULATION / HEAVY-COMPUTE CONVENTIONS -- apply ONLY when the spec has an \"## Execution Profile\" " <>
   "section with ExecutionClass \"simulation\", or otherwise requires subkernel parallelism / CUDA / " <>
   "large (reference-mode) outputs:\n" <>
@@ -999,12 +1029,28 @@ iDynHarnessLoad[targetDir_, slug_, pkgRoot_] := Module[
    the implementer, not waved through. Only an INCONCLUSIVE run (wolframscript
    unavailable / timed out: "Ran" -> False) falls back to advisory handling so
    an infrastructure problem never blocks. *)
-iRunGenTest[targetDir_] := Module[{testFiles, testRes, exitCode, stdout},
+iRunGenTest[targetDir_] := Module[{testFiles, shim, testRes, exitCode, stdout},
   testFiles = FileNames["test_*.wls", targetDir];
   If[testFiles === {}, Return[<|"Ran" -> False, "OK" -> True, "Output" -> "(no test file)"|>]];
+  (* 日本語 slug/パス対策: テストのフルパスを argv (-file) で渡すと Windows の
+     wolframscript で $InputFileName が文字化けし、テスト側の slug 解決
+     (FileNameTake[DirectoryName[$InputFileName]]) が壊れて全チェックが連鎖
+     FAIL する (2026-08-03 実測: ASCII パス経由なら同テスト 72/72 PASS)。
+     ASCII 一時シムから WL 内部文字列で Get すれば $InputFileName は正しい
+     Unicode パスになる (Get は argv を経由しない)。Exit[] は子カーネルごと
+     終了するので exit code はそのまま伝播する。 *)
+  shim = FileNameJoin[{$TemporaryDirectory,
+    "svwf_test_shim_" <> StringReplace[CreateUUID[], "-" -> ""] <> ".wls"}];
+  Quiet @ Check[
+    Export[shim,
+      "Get[" <> ToString[First[testFiles], InputForm,
+        CharacterEncoding -> "ASCII"] <> "];\n",
+      "Text", CharacterEncoding -> "ASCII"], $Failed];
   testRes = Quiet @ Check[
-    TimeConstrained[RunProcess[{$iWolframScript, "-file", First[testFiles]}, All],
+    TimeConstrained[RunProcess[{$iWolframScript, "-file",
+        If[FileExistsQ[shim], shim, First[testFiles]]}, All],
       $iDynTestTimeLimit, "TimedOut"], "Error"];
+  Quiet @ If[FileExistsQ[shim], DeleteFile[shim]];
   If[! AssociationQ[testRes],
     Return[<|"Ran" -> False, "OK" -> True, "Output" -> "(test run inconclusive: " <> ToString[testRes] <> ")"|>]];
   exitCode = Lookup[testRes, "ExitCode", 0];
@@ -1079,7 +1125,7 @@ iToImplHandler[progressFile_] := Function[binding,
     <|"Payload" -> Join[pl, <|"StageIndex" -> 1, "Round" -> 1|>]|>]];
 
 iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[binding,
-  Quiet @ Module[{pl, res, files, steps, testFiles, written, allFiles, manifestText, artifactText, ref, idx, emptyImpl, unresolved, implBlocked},
+  Quiet @ Module[{pl, res, files, steps, testFiles, written, allFiles, manifestText, artifactText, ref, idx, emptyImpl, unresolved, implBlocked, rawOut},
     pl = iPayload[binding];
     idx = Lookup[pl, "StageIndex", 1];
     iProg[progressFile, pl, "Implement", "implementer", model,
@@ -1102,30 +1148,52 @@ iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[bindin
         "spec to pin the exact integration API) and re-run.\n--- UNRESOLVED APIs ---\n" <> unresolved <>
         If[StringQ[Lookup[res, "Steps", ""]] && StringTrim[Lookup[res, "Steps", ""]] =!= "",
           "\n--- implementer step log ---\n" <> Lookup[res, "Steps", ""], ""]];
-    (* empty-LLM-response guard: when the implementer returns nothing (no files AND
-       no raw text) it is almost always a transient provider failure -- a Claude
-       usage/rate limit or an HTTP 529 overload -- NOT a fixable code defect. Record
-       a clear reason and force give-up after THIS round instead of silently looping
-       into repeated "no .wl generated" smoke rejections. *)
-    emptyImpl = (written === {} &&
-      With[{raw = Lookup[res, "Raw", ""]}, ! StringQ[raw] || StringTrim[raw] === ""]);
+    (* provider-failure guard: no files were written AND the raw output has no
+       <<<FILE block -- either a truly empty response OR a bare error text
+       (usage/rate limit, HTTP 529 overload, seat exhaustion, CLI error, or the
+       iOrchQuery "[.. produced no output ..]" marker). These are transient
+       provider failures, NOT fixable code defects: looping them into repeated
+       "no .wl generated" smoke rejections burns every round misleadingly
+       (2026-08-03: 3 rounds x NeedsRevision -> GaveUp in 10 s). Route to the
+       Blocked place (ImplBlocked) with the raw head so the cause is visible,
+       and tell the owner to simply re-run Impl later. *)
+    rawOut = With[{raw = Lookup[res, "Raw", ""]}, If[StringQ[raw], raw, ""]];
+    emptyImpl = written === {} && ! implBlocked &&
+      ! StringContainsQ[rawOut, "<<<FILE"] &&
+      (StringTrim[rawOut] === "" ||
+       StringLength[rawOut] <= 2000 ||
+       StringContainsQ[rawOut,
+         "usage limit" | "rate limit" | "overloaded" | "produced no output" |
+         "API Error" | "529", IgnoreCase -> True]);
     If[emptyImpl,
-      steps = "IMPL ERROR: the implementer model (" <> iModelLabel[model] <> ") returned an EMPTY " <>
-        "response -- no code was generated. This is almost always a transient provider issue " <>
-        "(a Claude usage/rate limit, or an HTTP 529 overload), not a spec/implementation defect. " <>
-        "Re-run later, or reduce concurrent load (close extra kernels/jobs)."];
+      steps = "IMPL ERROR: the implementer model (" <> iModelLabel[model] <> ") produced no usable " <>
+        "implementation output (no <<<FILE blocks). This is almost always a transient provider " <>
+        "failure -- a Claude usage/rate limit, an HTTP 529 overload, Wolfram license-seat " <>
+        "exhaustion, or a CLI error -- NOT a spec/implementation defect. The approved spec is " <>
+        "kept in the vault: free the resource (wait out the limit window / kill orphan kernels) " <>
+        "and simply press Impl again to restart from it." <>
+        If[StringTrim[rawOut] =!= "",
+          "\n--- raw model output (head) ---\n" <> StringTake[rawOut, UpTo[600]], ""]];
     allFiles = DeleteDuplicates[Join[Lookup[pl, "GeneratedFiles", {}], written]];
     manifestText = iManifestText[If[AssociationQ[files], files, <||>]];
     (* the artifact's stored Text begins with the code/tests/run/verify step log
-       so clicking the artifact sv:// URI shows the implementation process *)
+       so clicking the artifact sv:// URI shows the implementation process.
+       When nothing was written, also keep the raw model output head -- without
+       it a failed round stores an empty artifact and the cause is undiagnosable
+       from the vault (the 2026-08-03 case stored Text "" three times). *)
     artifactText = If[StringQ[steps] && steps =!= "",
       "=== IMPLEMENTATION STEPS (code / tests / run / verify) ===\n" <> steps <> "\n\n", ""] <> manifestText;
+    If[written === {} && StringTrim[rawOut] =!= "" &&
+        ! StringContainsQ[artifactText, "raw model output"],
+      artifactText = artifactText <>
+        "\n--- raw model output (head) ---\n" <> StringTake[rawOut, UpTo[600]]];
     iProg[progressFile, pl, "Implement", "implementer", model,
       Which[
         implBlocked,
           "stage " <> ToString[idx] <> ": BLOCKED -- a required API could not be verified (see warning); stopping",
         emptyImpl,
-          "stage " <> ToString[idx] <> ": EMPTY model response (likely usage limit / overload) -- giving up",
+          "stage " <> ToString[idx] <> ": BLOCKED -- provider failure (no usable model output; " <>
+            "usage/rate limit / overload / seat exhaustion). Re-run Impl later.",
         True,
           "stage " <> ToString[idx] <> " run: " <> iStepsRunStatus[steps] <>
           " (" <> ToString[Length[written]] <> " files, " <> ToString[Length[testFiles]] <> " test)"]];
@@ -1133,12 +1201,20 @@ iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[bindin
       written, testFiles, steps, artifactText, iModelLabel[model]];
     <|"Payload" -> Join[pl, <|"GeneratedFiles" -> allFiles, "StageFiles" -> written,
         "TestFiles" -> testFiles, "LastSteps" -> steps, "ImplEmpty" -> emptyImpl,
-        (* L2: carry the fail-closed flag + reason so the net routes to Blocked *)
-        "ImplBlocked" -> implBlocked,
-        "BlockReason" -> If[implBlocked, unresolved, Lookup[pl, "BlockReason", ""]],
-        (* on an empty response, jump Round to MaxRounds so the post-verify routing
-           gives up immediately instead of retrying into the same empty result *)
-        "Round" -> If[emptyImpl, Lookup[pl, "MaxRounds", $DefaultMaxRounds], Lookup[pl, "Round", 1]],
+        (* L2 + provider failure: carry the fail-closed flag + reason so the net
+           routes Implemented -> Blocked (a provider failure must stop the run
+           with a clear reason, never burn rounds as fake NeedsRevision) *)
+        "ImplBlocked" -> (implBlocked || emptyImpl),
+        "BlockReason" -> Which[
+          implBlocked, unresolved,
+          emptyImpl,
+            "ProviderUnavailable: the implementer returned no usable output " <>
+              "(usage/rate limit / overload / seat exhaustion / CLI error). " <>
+              "The approved spec is kept -- re-run Impl later." <>
+              If[StringTrim[rawOut] =!= "",
+                " head: " <> StringTake[rawOut, UpTo[200]], ""],
+          True, Lookup[pl, "BlockReason", ""]],
+        "Round" -> Lookup[pl, "Round", 1],
         "ArtifactRef" -> ref, "ArtifactURI" -> iRefToURI[ref], "ImplModel" -> iModelLabel[model]|>]|>]];
 
 iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True,

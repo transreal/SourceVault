@@ -276,7 +276,13 @@ iOrchQuery[m_, prompt_] := Module[{tup = iModelTuple[m], prov, p2, r},
     iOrchCodex[tup, p2],
     r = Quiet @ Check[
       Block[{ClaudeCode`$ClaudeModel = tup}, ClaudeCode`ClaudeQuerySync[p2]], $Failed];
-    If[StringQ[r], r, ""]]];
+    (* codex 経路 (iOrchCodex) と対称のマーカー: 呼び出し失敗や空応答を "" に
+       潰さない (usage/rate limit・席数枯渇・CLI エラーの痕跡を残す)。空の
+       まま流すと review では黙った NeedsRevision、draft では空仕様になり
+       原因が消える (spec-impl 2026-08-03 の 3 ラウンド空振りの教訓)。 *)
+    If[StringQ[r] && StringTrim[r] =!= "", r,
+      "[claude produced no output: the CLI call failed or returned empty -- " <>
+        "likely a usage/rate limit, seat exhaustion, or CLI error. Retry later.]"]]];
 
 (* ---- compute-aware spec drafting: execution profile rules + machine table ----
    The known-machine table comes from SourceVault_simrun.wl's shared store
@@ -472,9 +478,11 @@ iDraftHandler[model_, draftFn_, progressFile_:None] := Function[binding,
     text = Lookup[res, "SpecText", ""];
     (* G6 empty-response guard: a blank / "produced no output" draft is almost
        always a transient provider failure (usage/rate limit, HTTP 529), not a
-       fixable content issue -> flag it so the net routes to GiveUp (see guards). *)
+       fixable content issue -> flag it so the net routes to GiveUp (see guards).
+       iOrchQuery のマーカーは codex/claude 両方 "[<role> produced no output" 形。 *)
     emptyDraft = ! StringQ[text] || StringTrim[text] === "" ||
-      StringStartsQ[StringTrim[text], "[codex produced no output"];
+      StringStartsQ[StringTrim[text], "[codex produced no output"] ||
+      StringStartsQ[StringTrim[text], "[claude produced no output"];
     If[emptyDraft,
       iProg[progressFile, pl, "Draft", "codex", model,
         "EMPTY draft response (likely usage limit / overload) -- giving up"]];

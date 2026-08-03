@@ -675,4 +675,4 @@ HarnessMaterialization bundle の元になった Claude Directives snapshot が 
 → `<|"Stale", "Reason", "RecordedManifestHash", "CurrentManifestHash"|>`
 
 ### SourceVaultHarnessRuntimeEnvironmentChangedQ[bundle, currentEnv] → Association
-HarnessMaterialization bundle の runtime environment (permission profile / temp project path / attachments) が変化したかを報告する。currentEnv は事前計算済み PermissionProfileHash / RuntimeEnvironmentHash か、ハッシュ対象の生 PermissionProfile / RuntimeEnvironment association を持てる。runtime environment 変化は config.toml 再生成を要するが canonical snapshot を stale にはしない。
+HarnessMaterialization bundle の runtime environment (permission profile / temp project path / attachments) が変化したかを、bundle の RuntimeEnvironmentHash / PermissionProfileHash と currentEnv を比較して報告する。currentEnv は事前計算済み PermissionProfileHash / RuntimeEnvironmentHash か、ハッシュ対象の生 PermissionProfile / RuntimeEnvironment association を持てる。runtime environment 変化は config.toml 再生成を要するが canonical snapshot を stale にはしない。

@@ -32,6 +32,7 @@
 		"SourceVault_routine.wl",
 		"SourceVault_routineplan.wl",
 		"SourceVault_mailagenda.wl",
+		"SourceVault_mailfeedback.wl",
 		"SourceVault_contracts.wl",
 		"SourceVault_wiring.wl",
 		"SourceVault_mailsuggest.wl",
@@ -41,7 +42,8 @@
 		"SourceVault_anonymize.wl",
 		"SourceVault_course.wl",
 		"SourceVault_crosslink.wl",
-		"SourceVault_mailbrowse.wl"
+		"SourceVault_mailbrowse.wl",
+		"SourceVault_issues.wl"
 	],
 	"directories":[
 		"SourceVault_info",

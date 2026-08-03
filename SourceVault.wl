@@ -15036,6 +15036,9 @@ SourceVault`Private`iSVLoadPromptRouterExtension[] :=
       {"SourceVault_privacy.wl",
        "NBAccess_crypto.wl", "SourceVault_crypto.wl",
        "SourceVault_identity.wl", "SourceVault_maildb.wl",
+       (* 分類訂正/学習層: maildb の $SourceVaultMailDerivedAdjuster シームへ
+          自分を登録するので maildb より後。ソースは pure ASCII (\:xxxx)。 *)
+       "SourceVault_mailfeedback.wl",
        "SourceVault_diagnostics.wl", "SourceVault_autotrigger.wl"}];
 
     path = FileNameJoin[{base, "SourceVault_promptrouter.wl"}];
@@ -15120,7 +15123,8 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        "SourceVault_searchview.wl", "SourceVault_knowledgehome.wl", "SourceVault_cognition.wl", "SourceVault_adjudication.wl", "SourceVault_capbroker.wl", "SourceVault_taint.wl", "SourceVault_anomaly.wl", "SourceVault_routine.wl", "SourceVault_routineplan.wl", "SourceVault_mailagenda.wl", "SourceVault_anonymize.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",
-       "SourceVault_workflowcatalog.wl", "SourceVault_course.wl"}]]];
+       "SourceVault_workflowcatalog.wl", "SourceVault_course.wl",
+       "SourceVault_issues.wl"}]]];
 
 (* ============================================================
    mining 本番フック結線: maildb / mining が両方ロードされた後に、mining が
