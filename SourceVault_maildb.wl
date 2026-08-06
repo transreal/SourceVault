@@ -1288,6 +1288,14 @@ SourceVaultMailAccounts::usage = "SourceVaultMailAccounts[] \:306f\:767b\:9332\:
 SourceVaultGetMailAccount::usage = "SourceVaultGetMailAccount[mbox] \:306f\:767b\:9332\:6e08\:307f\:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:3092\:8fd4\:3059\:3002\:7121\:3051\:308c\:3070 Missing\:3002";
 SourceVaultRemoveMailAccount::usage = "SourceVaultRemoveMailAccount[mbox] \:306f\:767b\:9332\:3092\:524a\:9664\:3059\:308b\:3002";
 SourceVaultMailAccountsLoad::usage = "SourceVaultMailAccountsLoad[] \:306f vault config \:304b\:3089\:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:3092\:8aad\:307f\:8fbc\:3080\:3002";
+$SourceVaultMailSourceProviders::usage =
+  "$SourceVaultMailSourceProviders is the fetch-source provider registry: \
+AuthMethod string -> Function[{mbox, srcOpts}, records]. When a registered \
+account carries a matching \"AuthMethod\" key, SourceVaultMailFetchNew uses \
+that provider as its default MessageSource; accounts without AuthMethod (or \
+with no registered provider) keep the Python imaplib source unchanged. \
+SourceVault_mailgraph.wl registers \"Graph\" (Microsoft 365 / Exchange Online \
+via the Microsoft Graph API) here.";
 $SourceVaultMailConfigRoot::usage = "IMAP \:30a2\:30ab\:30a6\:30f3\:30c8\:8a2d\:5b9a\:306e\:4fdd\:5b58\:30eb\:30fc\:30c8(\:65e2\:5b9a PrivateVault/config)\:3002\:30c6\:30b9\:30c8\:3067\:4e0a\:66f8\:304d\:53ef\:3002";
 $SourceVaultMailDerivedAdjuster::usage =
   "$SourceVaultMailDerivedAdjuster is the classification-feedback seam (rule 11 \
@@ -1348,6 +1356,15 @@ SourceVaultRegisterMailAccount[assoc_Association, OptionsPattern[]] :=
        "CredKey" -> ToString@Lookup[assoc, "CredKey", Lookup[assoc, "credKey", ""]],
        "Server" -> ToString@Lookup[assoc, "Server", Lookup[assoc, "server", ""]],
        "Port" -> Lookup[assoc, "Port", Lookup[assoc, "port", 993]]|>;
+    (* provider extension keys (e.g. Microsoft Graph): optional, preserved as
+       strings. Plain IMAP accounts stay exactly as before (no AuthMethod key). *)
+    Scan[Function[k,
+        Module[{v = Lookup[assoc, k,
+            Lookup[assoc, ToLowerCase[StringTake[k, 1]] <> StringDrop[k, 1],
+              Missing[]]]},
+          If[! MissingQ[v] && ToString[v] =!= "",
+            AssociateTo[entry, k -> ToString[v]]]]],
+      {"AuthMethod", "TenantId", "ClientId"}];
     If[entry["CredKey"] === "" || entry["Server"] === "",
       Return[<|"Status" -> "Error", "Reason" -> "MissingCredKeyOrServer"|>]];
     AssociateTo[$iSVMDMailAccounts, mbox -> entry];
@@ -2102,6 +2119,23 @@ iSVImapDate[iso_String] :=
   Module[{d = Quiet@Check[DateObject[iso], $Failed]},
     If[Head[d] === DateObject, DateString[d, {"Day", "-", "MonthNameShort", "-", "Year"}], iso]];
 
+(* ---- source provider registry (weak coupling) ----
+   AuthMethod -> Function[{mbox, srcOpts}, records]. SourceVault_mailgraph.wl
+   registers "Graph". Accounts without AuthMethod, or with an AuthMethod that
+   has no registered provider, use the imaplib source exactly as before. *)
+If[! AssociationQ[$SourceVaultMailSourceProviders],
+  $SourceVaultMailSourceProviders = <||>];
+
+iSVMDResolveMessageSource[mbox_String] :=
+  Module[{acct, method, prov},
+    acct = iSVMDGetMailAccount[mbox];
+    method = If[AssociationQ[acct],
+       ToString@Lookup[acct, "AuthMethod", "IMAP"], "IMAP"];
+    prov = Lookup[$SourceVaultMailSourceProviders, method, Missing[]];
+    If[MissingQ[prov],
+      Function[so, iSVIMAPPythonSource[mbox, so]],
+      With[{p = prov}, Function[so, p[mbox, so]]]]];
+
 (* ---- fetch \:30a8\:30f3\:30c8\:30ea ---- *)
 Options[SourceVaultMailFetchNew] = {
    "Period" -> "Latest", "Process" -> False, "MessageSource" -> Automatic,
@@ -2111,7 +2145,12 @@ Options[SourceVaultMailFetchNew] = {
 SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
   Module[{src, msgs, errs, existsQ, newMsgs, toStore, infer, overwrite, result,
       processed = 0, stored = 0, overwritten = 0},
-    src = OptionValue["MessageSource"] /. Automatic -> Function[so, iSVIMAPPythonSource[mbox, so]];
+    src = With[{ms = OptionValue["MessageSource"]},
+      (* Automatic: dispatch on the account's AuthMethod via the provider
+         registry (Graph etc.); default/unknown methods keep imaplib.
+         Note: an explicit If, not "/. Automatic -> ...", so an injected fake
+         whose body happens to contain Automatic is never rewritten. *)
+      If[ms === Automatic, iSVMDResolveMessageSource[mbox], ms]];
     msgs = src[<|"Period" -> OptionValue["Period"], "MaxEmails" -> OptionValue["MaxEmails"], "Mbox" -> mbox|>];
     If[! ListQ[msgs],
       Return[<|"Status" -> "Error", "Reason" -> "FetchFailed", "MBox" -> mbox|>]];

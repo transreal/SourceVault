@@ -2015,6 +2015,7 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
       <|"ServiceId" -> serviceId, "Kind" -> kind, "PackageRoot" -> pkgRoot,
         "CoreRoot" -> root, "HeartbeatIntervalSeconds" -> interval,
         "Packages" -> {"SourceVault_core.wl", "SourceVault_crypto.wl", "SourceVault_searchindex.wl",
+          "SourceVault_diagnostics.wl", "SourceVault_issues.wl",
           "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
           "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl",
           "SourceVault_llmlog.wl", "SourceVault_autotrigger.wl"},
@@ -2028,6 +2029,12 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
            load。存在ガードで fail-soft (欠落時 grant 検証は CryptoUnavailable で安全側)。 *)
         "  With[{cpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_crypto.wl\"}]}, If[FileExistsQ[cpath], Get[cpath]]];\n",
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_searchindex.wl\"}]];\n",
+        (* diagnostics -> issues の順 (spec issues-v0.4 §12: core -> diagnostics
+           -> issues -> servicemanager main)。service kernel が spool ingest の
+           issue fan-out と signal reconciler を担えるようにする。存在ガードで
+           fail-soft。issueanalysis は常時ロードしない (分析 worker のみ)。 *)
+        "  With[{dpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_diagnostics.wl\"}]}, If[FileExistsQ[dpath], Get[dpath]]];\n",
+        "  With[{ipath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_issues.wl\"}]}, If[FileExistsQ[ipath], Get[ipath]]];\n",
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_servicemanager.wl\"}]];\n",
         (* webingest / mcp は存在する場合のみ load (spec v6 §4.6)。未作成段階でも安全。 *)
         "  With[{wpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_webingest.wl\"}]}, If[FileExistsQ[wpath], Get[wpath]]];\n",

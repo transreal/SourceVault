@@ -245,6 +245,10 @@ Block[{$CharacterEncoding = "UTF-8"},
       "Stages" -> Lookup[summary, "Stages", {}],
       "Rounds" -> Lookup[summary, "Rounds", Missing[]],
       "FinalVerdict" -> Lookup[summary, "FinalVerdict", Missing[]],
+      (* proven-code gate の結果を FE まで運ぶ (これが無いとノート側で
+         「テストが実際に走って通ったのか」が判別できない。2026-08-04) *)
+      "TestGate" -> ToString @ Lookup[summary, "TestGate", "NotRun"],
+      "Proven" -> TrueQ[Lookup[summary, "Proven", False]],
       "GeneratedFiles" -> Lookup[summary, "GeneratedFiles", {}],
       "ImplModel" -> ToString @ Lookup[summary, "ImplModel", ""],
       "VerifyModel" -> ToString @ Lookup[summary, "VerifyModel", ""],

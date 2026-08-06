@@ -306,6 +306,9 @@ SpecImplEpisodeWorker[ctx_Association] :=
       "Stages" -> Lookup[summary, "Stages", {}],
       "Rounds" -> Lookup[summary, "Rounds", Missing[]],
       "FinalVerdict" -> Lookup[summary, "FinalVerdict", Missing[]],
+      (* proven-code gate の結果を FE まで運ぶ (legacy driver と同一。2026-08-04) *)
+      "TestGate" -> ToString @ Lookup[summary, "TestGate", "NotRun"],
+      "Proven" -> TrueQ[Lookup[summary, "Proven", False]],
       "GeneratedFiles" -> Lookup[summary, "GeneratedFiles", {}],
       "ImplModel" -> ToString @ Lookup[summary, "ImplModel", ""],
       "VerifyModel" -> ToString @ Lookup[summary, "VerifyModel", ""],

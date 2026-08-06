@@ -124,7 +124,7 @@ True にすると `SourceVaultServiceHealth` の `"OK"` は L2(Ping 応答)必�
 health 判定閾値の単一定義 (hardening 02)。WL 側 (ServiceStatus/Health)・watchdog PS1・Python proxy health() の全てがこの値から生成/参照される。生成物 (watchdog.ps1 / proxy config.json) への反映には watchdog 再インストール / proxy 再起動が必要。
 
 ### SourceVaultInstallWatchdog[serviceId, opts]
-軽量 PowerShell ウォッチドッグを常駐起動する。wscript hidden launcher 経由で一度だけ起動し、while ループで自前 sleep しながら常駐する(フリッカなし)。WL カーネルを spawn しない(ライセンス/電力配慮)。heartbeat 失効または crash 検知時に wedge ログを退避し pid kill して既存サービスタスクを再実行(run.wls 再利用=root 再注入なし)。意図停止(status.State=Stopped)は復活させない。多重常駐は named mutex で 1 本に抑止する。
+軽量 PowerShell ウォッチドッグを常駐起動する。wscript hidden launcher 経由で一度だけ起動し、while ループで自前 sleep しながら常駐する(フリッカなし)。WL カーネルを spawn しない(ライセンス/電力配慮)。heartbeat 失効または crash 検知時に wedge ログを `stdout.wedge-*.log` へ退避し pid kill して既存サービスタスクを再実行(run.wls 再利用=root 再注入なし)。意図停止(status.State=Stopped)は復活させない。多重常駐は named mutex で 1 本に抑止する。
 Options: "StaleSeconds" -> 90 (heartbeat 失効秒), "IntervalMinutes" -> 2 (ループ巡回間隔)
 
 ### SourceVaultUninstallWatchdog[serviceId]
@@ -145,7 +145,7 @@ Ping command を送り、command queue 経由で Pong を待つ。
 `runtime/services` 配下の service とその状態を返す。
 
 ### SourceVaultListRuntimeMachines[opts] → List
-この共有 vault を実際に使っている PC の machine tag 一覧を返す。根拠は `runtime/` ツリー: 各 PC は services/proxies を `runtime/<machineTag>/` 配下に namespacing するため、`runtime/` 直下のサブディレクトリのうち共有/レガシー予約名(`locks` / `proxies` / `services`)を除いたものが実 PC。自機 tag は runtime dir が未生成でも必ず含める。手動レジストリではなく実在の runtime を正本とするので、登録漏れや古いテストエントリを返さない。
+この共有 vault を実際に使っている PC の machine tag 一覧を返す。根拠は `runtime/` ツリー: 各 PC は services/proxies を `runtime/<machineTag>/` 配下に namespacing するため、`runtime/` 直下のサブディレクトリのうち共有/レガシー予約名(`locks` / `proxies` / `services`)を除いたものが実 PC。自機 tag は runtime dir が未生成でも必ず含める。手動レジストリ(diagnostics/machines)ではなく実在の runtime を正本とするので、登録漏れや古いテストエントリを返さない。
 → List(既定は machine tag の文字列リスト)
 Options: "Details" -> False (True で `<|MachineTag, IsSelf, HasServices, HasProxies|>` の一覧を返す)
 
@@ -174,7 +174,7 @@ runtime dir / pid / heartbeat / status の整合を点検する。
 detached service process 側の runner entrypoint。生成された `run.wls` から呼ばれる。pid/status/heartbeat を書き、command queue を処理し、Stop で終了する。メインカーネルから直接呼ばない(`SourceVaultStartService` 経由)。
 
 ### SourceVaultServiceRuntimeDir[serviceId] → String | Failure
-service の runtime directory を返す。パス構成: `<CoreRoot>/runtime/<MachineName>/services/<serviceId>`。マシン固有状態を `$MachineName` 層で namespacing し Dropbox 共有 vault でも別マシンと衝突しない。
+service の runtime directory を返す。パス構成: `<CoreRoot>/runtime/<MachineTag>/services/<serviceId>`。machine tag は `$MachineName` を英数・`-`・`_` 以外を `-` に置換したもの。マシン固有状態を machine 層で namespacing し Dropbox 共有 vault でも別マシンと衝突しない。`runtime/locks` はクロスマシン排他のため共有のまま。
 
 ### $SourceVaultStreamSweepIntervalSeconds
 型: Number, 初期値: 300
@@ -353,6 +353,7 @@ Options: "Reason" -> ""
 ## Web UI / LLM バックエンド設定
 
 Web UI の HTTP は service 側で処理し、検索は必ず gate 越し(`SourceVaultSearch`)。LLM ライセンス/課金ポリシー: ClaudeCode/Codex(サブスク CLI)は契約者本人のみ = リクエスト元 IP がオーナー PC のときだけ許可、非オーナーは LM Studio(ローカル)一択(課金 OK なら課金 API も可)。client IP は proxy が実 TCP peer から付与する(X-Forwarded-For は非採用)。
+バックエンド選択は要求 ChatModel spec と policy から決まる: `"cloud"` / `"cloud:<model>"` = サブスク(オーナー かつ policy `"SubscriptionAllowed"` が真のときのみ。不可なら課金 API → LM Studio へ降格)、`"api"` / `"api:<model>"` = 課金 API(課金許可またはオーナー、それ以外はローカル)、その他の文字列 / Automatic = 常に LM Studio。proxy は「AllowOwnerSubscription かつローカルバインド」のときだけ `"SubscriptionAllowed"->True` を渡す(公開バインド既定は False)。サブスク/課金 API 失敗時は常に local へフォールバックし、非オーナーがサブスクへ昇格することはない。
 
 ### $SourceVaultWebLLMBase
 型: String, 初期値: `"http://localhost:1234"`
@@ -360,11 +361,11 @@ LM Studio (ローカル LLM) のエンドポイント base URL。
 
 ### $SourceVaultWebChatModel
 型: String | Automatic, 初期値: Automatic
-Web UI チャット用のデフォルトモデル名。Automatic で LM Studio `/api/v0/models` から loaded かつ非 thinking モデルを自動選択する。
+Web UI チャット用のデフォルトモデル名。Automatic で LM Studio `/api/v0/models` から state=loaded かつ type=llm/vlm・非 thinking のモデルを自動選択する(未ロードモデルは JIT ロードで timeout するため選ばない)。取得不能なら `/v1/models` から非 embed・非 thinking の instruct を優先し、最終 fallback は `"local-model"`。
 
 ### $SourceVaultOwnerIPs
 型: List, 初期値: `{"127.0.0.1", "::1", "localhost"}`
-オーナー PC の IP アドレスリスト。ClaudeCode/Codex(サブスク CLI)の使用可否判定に使う。
+オーナー PC の IP アドレスリスト。ClaudeCode/Codex(サブスク CLI)の使用可否判定に使う。client IP が空/未指定(proxy を介さない直接呼び出し=オーナー自身のカーネル)もオーナー扱い。
 
 ### $SourceVaultBillingAllowed
 型: True | False, 初期値: False
@@ -394,6 +395,10 @@ LLM boundary が active なら最終 envelope を `SourceVaultPrepareLLMInput` �
 boundary gate へ caller token として渡す(event の RunRef "svrun:pdfask:iWebChat" で識別)。
 plan→dispatch 間の request 改変も検出対象になる。サブスク/課金 API 失敗時の local fallback は
 backend が変わるため上流 token の対象外(境界の self-prepare に委ねる)。off 時は挙動不変。
+各 backend の boundary endpoint id は `servicemanager:iWebChatCloud`(Provider claudecode) /
+`servicemanager:iWebChatBilledAPI`(Provider anthropic, Deployment `https://api.anthropic.com/v1/messages`) /
+`servicemanager:iWebChatLocal`(Provider openai-compat, Deployment `<$SourceVaultWebLLMBase>/v1/chat/completions`)。
+capbroker 不在時は fail-open(Shadow=記録 / Warn=Message / Enforce=拒否)。
 
 ### $SourceVaultCapBrokerPruneIntervalSeconds(2026-07-15 追加)
 型: Number, 初期値: 未設定(既定 3600)
@@ -401,3 +406,11 @@ service ループが `SourceVaultPruneCapBroker`(capbroker)を呼ぶ間隔。観
 用済みレコード(prepared=consumed/期限切れ、lease=consumed|revoked かつ期限切れ。issued 未期限は残す)を
 DryRun->False+GraceSeconds->300 の安全範囲で GC する。TotalPruned>0 のときだけ CapBrokerPruned として log。
 反映には service 再起動が必要(rule105 §8)。
+
+## Web UI ルート(service 側 HTTP レンダラ、内部動作)
+
+proxy は汎用中継で、service 側レンダラが `{StatusCode, ContentType, Body}` を返す。すべて `charset=utf-8`、リンク/フォームは RoutePrefix(base)を前置する。CSS は `WebServer`Private`iCSS[]` があれば再利用し、無ければ組込み dark テーマにフォールバックする。
+- `<base>/pdfsearch` — gate 済み検索(`SourceVaultSearch` の `ReleaseContext` 必須。未指定は fail-closed)結果をカード表示。各カードから `<base>/pdfpage?p=<n>&doc=<docId>` へリンク。
+- `<base>/pdfask` — evidence + LLM 合成回答。LLM 失敗時は evidence のみへ degrade。
+- `<base>/pdfpage` — PDF 1 ページを `Import[path,{"PageImages",n}]`(headless 可、初回コールド用に 3 回リトライ)で JPEG base64 埋め込み表示。doc は docId 優先→title で解決し、特定できなければ別 PDF へフォールバックせず明示エラー。
+- `<base>/style.css` — CSS。

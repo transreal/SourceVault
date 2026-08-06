@@ -15120,6 +15120,10 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
        "SourceVault_mailstructure.wl", "SourceVault_mailbrowse.wl",
        "SourceVault_crosslink.wl", "SourceVault_mailsuggest.wl",
+       (* Microsoft Graph 取得 provider: maildb の $SourceVaultMailSourceProviders
+          へ "Graph" を登録するので maildb より後 (maildb は promptrouter 段で
+          ロード済み)。 *)
+       "SourceVault_mailgraph.wl",
        "SourceVault_searchview.wl", "SourceVault_knowledgehome.wl", "SourceVault_cognition.wl", "SourceVault_adjudication.wl", "SourceVault_capbroker.wl", "SourceVault_taint.wl", "SourceVault_anomaly.wl", "SourceVault_routine.wl", "SourceVault_routineplan.wl", "SourceVault_mailagenda.wl", "SourceVault_anonymize.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",

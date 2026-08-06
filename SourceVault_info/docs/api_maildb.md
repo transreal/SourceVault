@@ -102,7 +102,7 @@ Derived.Category と検索オプション `"Category"` で使う。日本語名 
 ### SourceVaultSearchMailSnapshots[query_String:"", opts]
 ロード済みスナップショットを subject/summary 部分一致 + フィルタ条件で検索する。
 → List[Association]
-Options: "From" -> Automatic, "To" -> Automatic, "FromContact" -> Automatic, "MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic, "HasAttachment" -> Automatic, "Category" -> Automatic, "HasDeadline" -> Automatic, "DeadlineFrom" -> Automatic, "DeadlineTo" -> Automatic, "MinPriority" -> Automatic, "MaxPriority" -> Automatic, "MinPrivacy" -> Automatic, "MaxPrivacy" -> Automatic, "Newest" -> True, "Limit" -> Automatic, "SortBy" -> Automatic ("Date"|"Priority"|"PrivacyLevel"|"Deadline"), "SortOrder" -> Automatic
+Options: "From" -> Automatic, "To" -> Automatic, "FromContact" -> Automatic, "MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic, "HasAttachment" -> Automatic, "Category" -> Automatic, "HasDeadline" -> Automatic, "DeadlineFrom" -> Automatic, "DeadlineTo" -> Automatic, "MinPriority" -> Automatic, "MaxPriority" -> Automatic, "MinPrivacy" -> Automatic, "MaxPrivacy" -> Automatic, "Newest" -> True, "Limit" -> Automatic, "SortBy" -> Automatic ("Date"|"Priority"|"PrivacyLevel"|"Deadline"), "SortOrder" -> Automatic, "ExcludeAgenda" -> False, "AgendaItems" -> Automatic
 例: `SourceVaultSearchMailSnapshots["Cerezo", "Category"->"TaskRequest", "DeadlineFrom"->今日, "DeadlineTo"->週末, "Limit"->20]`
 
 #### "ExcludeAgenda" / "AgendaItems" — アジェンダ掲載分を差し引く
@@ -134,7 +134,7 @@ mailagenda 層へは弱結合 (rule 11): 未ロード・計算失敗時は除外
 （アジェンダで処理する要対応メールを除いた「それ以外のメール」だけを確認する）
 
 ### SourceVaultMailSummaryRow[snapshot_Association]
-一覧表示用の低漏洩行を返す。From は AddressBook 解決時は表示名。
+一覧表示用の低漏洩行を返す。From は AddressBook 解決時は表示名。Category は依頼カテゴリトークン、Deadline は〆切の ISO 文字列 (無ければ Missing)。
 → Association `<|Date, From, Subject, Category, Deadline, Attach, MBox, RecordId, BodyEncrypted|>`
 
 ### SourceVaultMailSearchSummary[query_String:"", opts]
@@ -146,8 +146,8 @@ mailagenda 層へは弱結合 (rule 11): 未ロード・計算失敗時は除外
 → Dataset
 
 ### SourceVaultMailSearchIndex[query_String:"", opts]
-ディスク上の軽量メタデータ索引 (.svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担）。
-→ List[Association] (SummaryRow 形 + Summary + FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey/AccessTags/IndexSchemaVersion)
+ディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担）。
+→ List[Association] (SummaryRow 形 + Summary + AccessTags/FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey/IndexSchemaVersion(=2))
 例: `SourceVaultMailSearchIndex["報告", "MBox"->"imai", "Limit"->50]`
 
 ### SourceVaultMailSearchIndexView[query_String:"", opts]
@@ -300,7 +300,7 @@ snapshot の暗号化本文を復号して文字列で返す。
 
 ### SourceVaultMailTranslateBody[recordId_String]
 メール本文を $Language (表示言語) に翻訳して返す (LLM, headless テスト可)。本文は readable 化 (HTML/改行正規化) してから翻訳する。
-→ Association `<|Status->"Ok", Text->訳文, Translated->True, Lang->...|>` または `<|Status->"Error", Reason|>`
+→ Association `<|Status->"Ok", Text->訳文, Translated->True, Lang->...|>` または `<|Status->"Error", Reason, Lang|>`
 
 ### SourceVaultMailAttachmentDir[mbox_String, yyyymm_String]
 → String 旧 maildb 添付ディレクトリのパス (`<legacyRoot>/<mbox>/<yyyymm>_attachment`)。
@@ -328,7 +328,7 @@ Options: "ReplyAll" -> False (True で全員に返信), "Translate" -> False (Tr
 → Association `<|Status->"Sent", To, Cc, Bcc, Subject, Attachments|>` または `<|Status->"Error", Reason, ...|>`
 
 ### SourceVaultMailView[query_String:"", opts]
-検索結果を、行ごとに本文表示(✉)/添付ポップアップ(📎)/返信(↩) のクリック操作を備えた Dataset で返す (旧 maildb showMails 踏襲)。opts は SourceVaultSearchMailSnapshots と同じ。
+検索結果を、行ごとに本文表示(✉)/添付ポップアップ(📎)/返信(↩) のクリック操作を備えた Dataset で返す (旧 maildb showMails 踏襲)。opts は SourceVaultSearchMailSnapshots と同じ ("ExcludeAgenda"/"AgendaItems" も共有)。
 → Dataset
 
 ### SourceVaultMailRowActions[snapshot_Association]
@@ -380,7 +380,7 @@ SourceVaultMailEnableAutoConfidential[] で装着したフックを解除し、N
 
 ## 横断検索連携 (SourceVaultSummaries provider)
 
-mail は SourceVaultSummaries 横断検索 (eagle/sources 等と混在検索) の provider として自己登録する。`.svmailidx` sidecar のみを走査し本文暗号文はロードしない。共通スキーマ `<|Kind->"mail", Id, URI->"sv://record/<RecordId>", Title(=Subject), Authors(=From), Summary, Date, PrivacyLevel|>` へ投影する (PrivacyLevel 欠落は fail-safe で 1.0)。全文/サマリーの詳細取得は本 API (SourceVaultMailSearchSummary 等) を別途使う。この連携は自動登録のみで公開関数は無い。
+mail は SourceVaultSummaries 横断検索 (eagle/sources 等と混在検索) の provider として自己登録する。`.svmailidx` sidecar のみを走査し本文暗号文はロードしない。共通スキーマ `<|Kind->"mail", Id, URI->"sv://record/<RecordId>", Title(=Subject), Authors(=From), Published, Summary, URL, File, Date, PrivacyLevel|>` へ投影する (Title は件名欠落時 `"(件名無し)"` / 暗号化時 `"(件名無し・暗号化)"`、PrivacyLevel 欠落は fail-safe で 1.0)。行タイトルのクリックは索引行のみを読む窓 (Subject/From/Date/PL/URI) を開く。全文/サマリーの詳細取得は本 API (SourceVaultMailSearchSummary 等) を別途使う。この連携は自動登録のみで公開関数は無い。
 
 ## 設定変数
 

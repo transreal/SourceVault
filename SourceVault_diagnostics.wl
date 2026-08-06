@@ -107,6 +107,17 @@ offset sidecar (<file>.ingest.json) で差分読み・EventId dedup で冪等。
 $SourceVaultDiagIngestIntervalSeconds::usage =
   "$SourceVaultDiagIngestIntervalSeconds は service ループの spool ingest 周期 (秒, 既定 60)。";
 
+$SourceVaultDiagSpoolRoot::usage =
+  "$SourceVaultDiagSpoolRoot は producer spool directory の上書き (既定 Automatic = \
+$UserBaseDirectory/ApplicationData/ClaudeRuntime/diag-spool)。テストシーム。";
+
+SourceVaultDiagnosticsPublish::usage =
+  "SourceVaultDiagnosticsPublish[event] は診断 event の bus 入口 (issues spec v0.4 §4.2): \
+canonical diagnostics-log へ記録し、issue DB へ弱結合 fan-out (machine-local outbox への \
+enqueue のみ・登録/分析は writer 側 reconciler) する。mail/FE escalation は行わない \
+(それは SourceVaultDiagnosticsEscalate = Publish + mail policy)。返り値に \
+\"IssueSignalQueued\" を含む。issues 層自身の障害 event は再投入しない (reentrancy guard)。";
+
 SourceVaultDiagnosticsLog::usage =
   "SourceVaultDiagnosticsLog[record_Association] appends a structured \
 diagnostics record (reason code / component / severity / health / machine tag) \
@@ -1386,10 +1397,74 @@ iSVDiagSendMailReal[recipient_, subject_, body_] :=
       <|"Sent" -> True, "Reason" -> "Sent", "AtUTC" -> iSVDiagUTCNow[]|>,
       <|"Sent" -> False, "Reason" -> "SendMailFailed"|>]];
 
+(* ------------------------------------------------------------
+   issue DB への弱結合 fan-out (issues spec v0.4 §4)。
+   enqueue は machine-local outbox への短時間 append のみ。閾値判定・
+   Unroutable 判定は issues 側 (SourceVaultIssueSignalEnqueue) が行う。
+   reentrancy guard: issues 層自身の障害 event は再投入しない (V3-B5)。
+   ------------------------------------------------------------ *)
+
+iSVDiagIssueFanOut[event_Association] := Module[{comp, payload, e, r},
+  comp = ToString @ Lookup[event, "Component", ""];
+  If[ToString @ Lookup[event, "Producer", ""] === "issues" ||
+     comp === "IssueDB" || StringStartsQ[comp, "IssueDB:"],
+    Return[<|"Queued" -> False, "Reason" -> "Reentrant"|>]];
+  If[Names["SourceVault`SourceVaultIssueSignalEnqueue"] === {} ||
+     With[{s = Symbol["SourceVault`SourceVaultIssueSignalEnqueue"]},
+       Length[DownValues[s]]] === 0,
+    Return[<|"Queued" -> False, "Reason" -> "SinkUnavailable"|>]];
+  payload = Replace[Lookup[event, "Payload", <||>],
+    Except[_Association] -> <||>];
+  (* DiagnosticsEvent (EventClass/Payload 形) -> 汎用 event への決定論 adapter *)
+  e = <|
+    "Producer" -> With[{p = ToString @ Lookup[event, "Producer", ""]},
+      If[p === "", "diagnostics", p]],
+    "Component" -> If[comp =!= "", comp,
+      With[{c2 = ToString @ Lookup[payload, "Component",
+          Lookup[payload, "Service", ""]]},
+        If[c2 =!= "", c2, ToString @ Lookup[event, "EventClass", ""]]]],
+    "ReasonCode" -> With[{rc = ToString @ Lookup[event, "ReasonCode", ""]},
+      If[rc =!= "", rc, ToString @ Lookup[event, "EventClass", ""]]],
+    "Severity" -> Lookup[event, "Severity",
+      Lookup[event, "Priority", Missing["NotProvided"]]],
+    "Health" -> Lookup[event, "Health", Missing["NotProvided"]],
+    "Summary" -> ToString @ Lookup[event, "Summary",
+      Lookup[event, "EventClass", ""]],
+    "EventId" -> Lookup[event, "EventId", Missing["NotProvided"]],
+    "ObservedAtUTC" -> Lookup[event, "ObservedAtUTC",
+      Lookup[event, "AtUTC", Missing["NotProvided"]]],
+    "MachineTag" -> Lookup[event, "MachineTag", Missing["NotProvided"]],
+    "Escalate" -> Lookup[event, "Escalate", Missing["NotProvided"]],
+    "SignalKind" -> Lookup[event, "SignalKind", Missing["NotProvided"]],
+    "Correlation" -> Lookup[event, "Correlation", Missing["NotProvided"]]|>;
+  e = DeleteCases[e, _Missing];
+  r = Quiet @ Check[
+    Symbol["SourceVault`SourceVaultIssueSignalEnqueue"][e], $Failed];
+  Which[
+    AssociationQ[r] && TrueQ[Lookup[r, "Queued", False]],
+      <|"Queued" -> True, "Reason" -> ToString @ Lookup[r, "Reason", "Queued"],
+        "EventId" -> ToString @ Lookup[r, "EventId", ""]|>,
+    AssociationQ[r],
+      <|"Queued" -> False, "Reason" -> ToString @ Lookup[r, "Reason", "?"]|>,
+    True, <|"Queued" -> False, "Reason" -> "EnqueueFailed"|>]];
+
+(* bus 入口: log + issue fan-out のみ (mail/FE escalation は Escalate 側)。 *)
+SourceVaultDiagnosticsPublish[event_Association] :=
+  Module[{enriched, logged, issue},
+    enriched = Join[<|"AtUTC" -> iSVDiagUTCNow[],
+      "MachineTag" -> iSVDiagMachineTag[]|>, event];
+    If[! KeyExistsQ[enriched, "Type"],
+      enriched = Append[enriched, "Type" -> "DiagnosticsEvent"]];
+    logged = Quiet @ Check[SourceVaultDiagnosticsLog[enriched], $Failed];
+    issue = iSVDiagIssueFanOut[enriched];
+    <|"Logged" -> (logged =!= $Failed && ! FailureQ[logged]),
+      "IssueSignalQueued" -> TrueQ[Lookup[issue, "Queued", False]],
+      "IssueSignal" -> issue|>];
+
 SourceVaultDiagnosticsEscalate[event_Association] :=
   Module[{enriched, fe, key, prior, now = AbsoluteTime[], coalesced,
           shouldMail, recipient, body, subject, dryRun, mailResult, mailIntent,
-          forceMail},
+          forceMail, issueQ},
     iSVDiagEnsureMailConfig[];
     enriched = Join[
       <|"AtUTC" -> iSVDiagUTCNow[], "MachineTag" -> iSVDiagMachineTag[]|>, event];
@@ -1398,6 +1473,9 @@ SourceVaultDiagnosticsEscalate[event_Association] :=
     Quiet @ Check[
       SourceVaultDiagnosticsLog[Append[enriched,
         "Type" -> "DiagnosticsEscalation"]], Null];
+    (* issue DB fan-out (弱結合・enqueue のみ)。durable 化の成否は
+       IssueSignalQueued として呼び手/監査へ返す (V3-B1)。 *)
+    issueQ = iSVDiagIssueFanOut[enriched];
     (* dedup by (component, reasonCode) within the window *)
     key = {ToString @ Lookup[event, "Component", ""],
            ToString @ Lookup[event, "ReasonCode", ""]};
@@ -1411,7 +1489,8 @@ SourceVaultDiagnosticsEscalate[event_Association] :=
     If[!shouldMail,
       Return[<|"Escalated" -> False,
         "Reason" -> If[coalesced, "CoalescedWithinWindow", "BelowThreshold"],
-        "FEPresent" -> fe, "Recorded" -> True|>]];
+        "FEPresent" -> fe, "Recorded" -> True,
+        "IssueSignalQueued" -> TrueQ[Lookup[issueQ, "Queued", False]]|>]];
     recipient = $iSVDiagMailRecipient;
     body = iSVDiagMailBody[enriched];
     subject = "[SourceVault diagnostics] " <>
@@ -1447,7 +1526,8 @@ SourceVaultDiagnosticsEscalate[event_Association] :=
       "PrimaryChannel" -> mailIntent["PrimaryChannel"],
       "DryRun" -> dryRun,
       "MailResult" -> mailResult,
-      "Subject" -> subject|>];
+      "Subject" -> subject,
+      "IssueSignalQueued" -> TrueQ[Lookup[issueQ, "Queued", False]]|>];
 
 (* ------------------------------------------------------------
    Spool ingest (hardening 05 Inc2, 2026-07-08)
@@ -1470,9 +1550,13 @@ SourceVaultDiagnosticsEscalate[event_Association] :=
 
 If[! ValueQ[$SourceVaultDiagIngestIntervalSeconds],
   $SourceVaultDiagIngestIntervalSeconds = 60];
+If[! ValueQ[SourceVault`$SourceVaultDiagSpoolRoot],
+  SourceVault`$SourceVaultDiagSpoolRoot = Automatic];
 
-iSVDiagSpoolDir[] := FileNameJoin[{$UserBaseDirectory, "ApplicationData",
-  "ClaudeRuntime", "diag-spool"}];
+iSVDiagSpoolDir[] := If[StringQ[SourceVault`$SourceVaultDiagSpoolRoot],
+  SourceVault`$SourceVaultDiagSpoolRoot,
+  FileNameJoin[{$UserBaseDirectory, "ApplicationData",
+    "ClaudeRuntime", "diag-spool"}]];
 
 iSVDiagAtomicWriteJSON[path_String, assoc_Association] :=
   Module[{ba, tmp, strm},
@@ -1524,9 +1608,17 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
      (producer spool のみ)。requireTypeQ: Type=="DiagnosticsEvent" の行だけ
      取り込む (watchdog log は旧形式行が混在し得るため。旧形式は corrupt
      ではなく foreign として静かにスキップ)。 *)
+  (* V3-B1 (issues spec v0.4 §4.4): raw spool の唯一 consumer として
+     diagnostics-log と issue-outbox の両 sink へ fan-out する。
+     - consumer 別 receipt: seen[eid] = <|"t","log","issue"|> (旧形式の
+       整数値は両 sink 済みとみなす = 過去 event を遡って issue 化しない)
+     - 行単位バイト消費: 全 sink 完了行だけ offset を進め、未完の行
+       (issues 未ロード/一時 IO 失敗) で止めて次回へ。log 済み行の再読は
+       receipt が二重転記を防ぐ。
+     - prune は全行・全 sink 完了時のみ。 *)
   ingestOne = Function[{f, pruneQ, requireTypeQ}, Module[
       {sc = f <> ".ingest.json", off, size, strm, ba, bytes, lastNL = 0,
-       text, lines, newOff, dateTag},
+       text, rawLines, newOff, dateTag, stopped = False},
       off = Quiet @ Check[
         Lookup[Import[sc, "RawJSON"], "Offset", 0], 0];
       If[! IntegerQ[off] || off < 0, off = 0];
@@ -1546,31 +1638,69 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
               text = Quiet @ Check[
                 ByteArrayToString[ByteArray[bytes[[1 ;; lastNL]]], "UTF-8"],
                 ""];
-              lines = Select[StringTrim /@ StringSplit[text, "\n"],
-                # =!= "" &];
-              Scan[Function[ln, Module[{rec, eid},
-                  rec = Quiet @ Check[ImportByteArray[
-                    StringToByteArray[ln, "UTF-8"], "RawJSON"], $Failed];
-                  Which[
-                    ! AssociationQ[rec],
-                      If[requireTypeQ, foreign++, corrupt++],
-                    requireTypeQ &&
-                      Lookup[rec, "Type", ""] =!= "DiagnosticsEvent",
-                      foreign++,
-                    True,
-                      eid = Lookup[rec, "EventId", None];
-                      If[! (StringQ[eid] && KeyExistsQ[seen, eid]),
-                        Quiet @ Check[
-                          SourceVaultDiagnosticsLog[Join[rec,
-                            <|"IngestedAtUTC" -> iSVDiagUTCNow[]|>]], Null];
-                        If[StringQ[eid], seen[eid] = nowU];
-                        ingested++]]]],
-                lines];
-              newOff = off + lastNL;
+              (* All = 空行も保持 (バイト勘定のため)。text は \n 終端なので
+                 末尾の空要素を 1 個落とす *)
+              rawLines = StringSplit[text, "\n", All];
+              If[rawLines =!= {} && Last[rawLines] === "",
+                rawLines = Most[rawLines]];
+              Catch[
+                Scan[Function[raw, Module[
+                    {lnBytes, ln, rec, eid, entry, logDone, issueDone,
+                     issueRes},
+                    lnBytes = Length[StringToByteArray[raw, "UTF-8"]] + 1;
+                    ln = StringTrim[raw];
+                    If[ln === "", newOff += lnBytes; Return[Null, Module]];
+                    rec = Quiet @ Check[ImportByteArray[
+                      StringToByteArray[ln, "UTF-8"], "RawJSON"], $Failed];
+                    Which[
+                      ! AssociationQ[rec],
+                        If[requireTypeQ, foreign++, corrupt++];
+                        newOff += lnBytes,
+                      requireTypeQ &&
+                        Lookup[rec, "Type", ""] =!= "DiagnosticsEvent",
+                        foreign++; newOff += lnBytes,
+                      True,
+                        eid = Lookup[rec, "EventId", None];
+                        entry = If[StringQ[eid], Lookup[seen, eid, None], None];
+                        logDone = Which[IntegerQ[entry], True,
+                          AssociationQ[entry],
+                            TrueQ[Lookup[entry, "log", False]],
+                          True, False];
+                        issueDone = Which[IntegerQ[entry], True,
+                          AssociationQ[entry],
+                            MemberQ[{True, "NotApplicable"},
+                              Lookup[entry, "issue", False]],
+                          True, False];
+                        If[! logDone,
+                          logDone = (Quiet @ Check[
+                            SourceVaultDiagnosticsLog[Join[rec,
+                              <|"IngestedAtUTC" -> iSVDiagUTCNow[]|>]],
+                            $Failed]) =!= $Failed;
+                          If[logDone, ingested++]];
+                        If[! issueDone,
+                          issueRes = iSVDiagIssueFanOut[rec];
+                          issueDone = Which[
+                            TrueQ[Lookup[issueRes, "Queued", False]], True,
+                            MemberQ[{"BelowThreshold", "Unroutable",
+                                "Reentrant", "EventIdConflict"},
+                              ToString @ Lookup[issueRes, "Reason", ""]],
+                              "NotApplicable",
+                            True, False]];
+                        If[StringQ[eid],
+                          seen[eid] = <|"t" -> nowU,
+                            "log" -> TrueQ[logDone],
+                            "issue" -> If[issueDone === "NotApplicable",
+                              "NotApplicable", TrueQ[issueDone]]|>];
+                        If[TrueQ[logDone] && issueDone =!= False,
+                          newOff += lnBytes,
+                          stopped = True; Throw[Null, iSVDiagStopTag]]]]],
+                  rawLines],
+                iSVDiagStopTag];
               iSVDiagAtomicWriteJSON[sc, <|"Offset" -> newOff|>]]]]];
       (* 消化済みの過去日 shard は削除 (producer 名-<pid>-<yyyymmdd>.jsonl)。
-         watchdog log は長寿命ファイルなので prune しない (pruneQ=False)。 *)
-      If[pruneQ,
+         watchdog log は長寿命ファイルなので prune しない (pruneQ=False)。
+         未完 sink が残る間 (stopped) は prune しない (V3-B1)。 *)
+      If[pruneQ && ! stopped,
         dateTag = Last[StringCases[FileBaseName[f],
           RegularExpression["(\\d{8})$"] -> "$1"], ""];
         If[newOff >= size && size === Quiet @ Check[FileByteCount[f], -1] &&
@@ -1582,7 +1712,11 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
   wdFiles = iSVDiagWatchdogLogFiles[];
   Scan[ingestOne[#, False, True] &, wdFiles];
   If[Length[seen] > 20000,
-    seen = Association @ Take[SortBy[Normal[seen], Last], -20000]];
+    (* receipt 値は旧形式 (整数 timestamp) と新形式 (<|"t",..|>) が混在 *)
+    seen = Association @ Take[
+      SortBy[Normal[seen],
+        Function[kv, With[{v = Last[kv]},
+          If[AssociationQ[v], Lookup[v, "t", 0], v]]]], -20000]];
   If[StringQ[seenPath], iSVDiagAtomicWriteJSON[seenPath, seen]];
   If[corrupt > 0,
     Quiet @ Check[SourceVaultDiagnosticsLog[<|

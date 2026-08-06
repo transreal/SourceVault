@@ -707,13 +707,30 @@ iRealImplement[model_, payload_] := Module[
     "SourceVault`SourceVaultLoadWorkflow, its no-arg launch entry is CALLED, and your test file is RUN. So " <>
     "(a) the package must load with NO error messages; (b) the no-arg launch must be a network-free safe " <>
     "report that returns cleanly (never $Failed / Missing); (c) \"test_" <> canon <> ".wls\" MUST be " <>
-    "standalone-runnable via `wolframscript -file` -- self-bootstrap SourceVault (compute pkgRoot by walking " <>
+    "standalone-runnable in a PRISTINE kernel (`wolfram -noinit -script`, nothing preloaded) -- " <>
+    "self-bootstrap SourceVault (compute pkgRoot by walking " <>
     "up to SourceVault.wl then Get it), use NETWORK-FREE unit tests of the core logic INCLUDING data-shape " <>
     "handling (feed a sample TimeSeries / sample {date,value} pairs instead of calling the network), Print " <>
     "PASS/FAIL counts, and Exit[1] on ANY failure.\n" <>
     "THE TEST FILE IS A HARD GATE: a missing test file, or a test run that exits non-zero, deterministically " <>
     "forces NeedsRevision -- approval is impossible until the generated test actually passes (exit 0) in a " <>
     "fresh kernel AND the verifier agrees. Never ship a knowingly failing or placeholder test.\n" <>
+    "TEST KERNEL CONTRACT (read carefully -- most gate failures come from breaking it):\n" <>
+    "- The test runs in a PRISTINE kernel started as `wolfram -noinit -script <file>`: the developer's " <>
+    "init.m is NOT read, so NOTHING is preloaded -- no ClaudeCode`, no SourceVault`, no NBAccess`, no " <>
+    "PDFIndex`, and Global`$packageDirectory is UNSET. Bootstrap everything you need from $InputFileName " <>
+    "(walk up to SourceVault.wl and Get it, then SourceVaultLoadWorkflow).\n" <>
+    "- NEVER let an assertion depend on whether some package happens to be loaded in the author's session. " <>
+    "If a check needs a package LOADED, load it explicitly inside the test (Needs/Get) right before the " <>
+    "check. If a check needs it ABSENT (e.g. a guard must not auto-load or must not create a phantom " <>
+    "symbol), run that check BEFORE anything loads it, and state that ordering in a comment. A suite that " <>
+    "requires the same package to be both loaded and absent is self-contradictory and can never pass: " <>
+    "split it, or establish each state explicitly.\n" <>
+    "- Every launch action must be INDEPENDENTLY runnable and ORDER-INDEPENDENT. Never assert global kernel " <>
+    "state (loaded packages, existing symbols, cached values) that an earlier action in the same kernel may " <>
+    "have changed; if an action needs a clean slate, it must create it itself.\n" <>
+    "- The same rules apply to any shipped MUnit .wlt: it must set up its own preconditions, because it is " <>
+    "run both standalone and through the workflow's own action in an already-used kernel.\n" <>
     If[existing =!= {}, "\nAlready-generated files (relative paths): " <>
       StringRiffle[existing, ", "] <> "\n", ""] <>
     If[StringQ[lastVerify] && lastVerify =!= "",
@@ -1029,7 +1046,25 @@ iDynHarnessLoad[targetDir_, slug_, pkgRoot_] := Module[
    the implementer, not waved through. Only an INCONCLUSIVE run (wolframscript
    unavailable / timed out: "Ran" -> False) falls back to advisory handling so
    an infrastructure problem never blocks. *)
-iRunGenTest[targetDir_] := Module[{testFiles, shim, testRes, exitCode, stdout},
+(* 素のカーネル (ユーザーの init.m を読まない) の実行体。
+   wolframscript は -noinit を渡しても init.m を読むため、テストゲートは
+   カーネル実体 wolfram.exe を -noinit -script で直接起動する。
+   これがないと開発機の localInit.wl が PDFIndex/ClaudeCode/SourceVault 等を
+   先にロードしてしまい、「未ロードであること」を検査するテストが原理的に
+   通らない一方、「ロード済み前提」のテストは開発機でだけ通る、という
+   環境依存の偽陽性/偽陰性が出る (2026-08-04 実測)。 *)
+iPristineKernelExe[] := iPristineKernelExe[] = Module[{dir, cands},
+  dir = Quiet @ Check[DirectoryName[$iWolframScript], ""];
+  cands = Join[
+    If[StringQ[dir] && dir =!= "",
+      Quiet @ Check[FileNames["wolfram.exe" | "WolframKernel.exe",
+        ParentDirectory[dir], 4], {}], {}],
+    Quiet @ Check[{FileNameJoin[{$InstallationDirectory, "SystemFiles", "Kernel",
+      "Binaries", $SystemID, "wolfram.exe"}]}, {}]];
+  SelectFirst[Flatten[{cands}], StringQ[#] && FileExistsQ[#] &, None]];
+
+iRunGenTest[targetDir_] := Module[
+  {testFiles, shim, kernel, cmd, testRes, exitCode, stdout},
   testFiles = FileNames["test_*.wls", targetDir];
   If[testFiles === {}, Return[<|"Ran" -> False, "OK" -> True, "Output" -> "(no test file)"|>]];
   (* 日本語 slug/パス対策: テストのフルパスを argv (-file) で渡すと Windows の
@@ -1046,19 +1081,35 @@ iRunGenTest[targetDir_] := Module[{testFiles, shim, testRes, exitCode, stdout},
       "Get[" <> ToString[First[testFiles], InputForm,
         CharacterEncoding -> "ASCII"] <> "];\n",
       "Text", CharacterEncoding -> "ASCII"], $Failed];
+  kernel = iPristineKernelExe[];
+  cmd = Which[
+    StringQ[kernel] && FileExistsQ[shim], {kernel, "-noinit", "-script", shim},
+    StringQ[kernel], {kernel, "-noinit", "-script", First[testFiles]},
+    FileExistsQ[shim], {$iWolframScript, "-file", shim},
+    True, {$iWolframScript, "-file", First[testFiles]}];
   testRes = Quiet @ Check[
-    TimeConstrained[RunProcess[{$iWolframScript, "-file",
-        If[FileExistsQ[shim], shim, First[testFiles]]}, All],
-      $iDynTestTimeLimit, "TimedOut"], "Error"];
+    TimeConstrained[RunProcess[cmd, All], $iDynTestTimeLimit, "TimedOut"], "Error"];
   Quiet @ If[FileExistsQ[shim], DeleteFile[shim]];
   If[! AssociationQ[testRes],
     Return[<|"Ran" -> False, "OK" -> True, "Output" -> "(test run inconclusive: " <> ToString[testRes] <> ")"|>]];
   exitCode = Lookup[testRes, "ExitCode", 0];
   stdout = StringTrim[Lookup[testRes, "StandardOutput", ""] <> "\n" <> Lookup[testRes, "StandardError", ""]];
+  (* 失敗行を必ず残す: 先頭 1200 字だけ切り出すと PASS 行で埋まって肝心の
+     FAIL 行が消え、次ラウンドの実装役にもオーナーにも原因が伝わらない
+     (2026-08-04 実測: 保存出力から失敗内容が判らず手動再実行が必要だった)。 *)
   <|"Ran" -> True, "OK" -> (exitCode === 0), "ExitCode" -> exitCode,
     "Output" -> (If[exitCode === 0, "test PASS (exit 0)\n",
         "test exited " <> ToString[exitCode] <> " (some assertions failed)\n"] <>
-      StringTake[stdout, UpTo[1200]])|>];
+      If[exitCode === 0, "",
+        With[{fails = Select[StringSplit[stdout, "\n"],
+            StringContainsQ[#, "FAIL" | "failed" | "Error" | "::", IgnoreCase -> False] &&
+              ! StringMatchQ[StringTrim[#],
+                RegularExpression["(?i).*FAIL(URES)?\\s*[:=]\\s*0.*"]] &]},
+          If[fails =!= {},
+            "--- failing lines ---\n" <>
+              StringTake[StringRiffle[Take[fails, UpTo[40]], "\n"], UpTo[1400]] <> "\n", ""]]] <>
+      "--- output tail ---\n" <>
+      StringTake[stdout, -Min[900, StringLength[stdout]]])|>];
 
 (* ============================================================
    Handler factories (close over the role's resolved model + fn + progress)

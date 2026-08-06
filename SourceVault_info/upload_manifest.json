@@ -43,7 +43,8 @@
 		"SourceVault_course.wl",
 		"SourceVault_crosslink.wl",
 		"SourceVault_mailbrowse.wl",
-		"SourceVault_issues.wl"
+		"SourceVault_issues.wl",
+		"SourceVault_mailgraph.wl"
 	],
 	"directories":[
 		"SourceVault_info",
