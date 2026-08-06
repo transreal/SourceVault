@@ -1562,7 +1562,9 @@ SourceVault`SourceVaultIssueWriterHandoff[toTag_String,
 iSVISApprovalKey[] := Module[{k, path},
   If[StringQ[$SourceVaultIssueApprovalKey],
     Return[$SourceVaultIssueApprovalKey]];
-  k = Quiet @ Check[SystemCredential["SourceVaultIssueApprovalKey"], $Failed];
+  (* 2026-08-06: SystemCredential \:76f4\:63a5\:547c\:3073\:51fa\:3057\:3092\:3084\:3081 NBAccess \:306e\:6b63\:898f\:53e3\:3092\:901a\:3059 *)
+  k = Quiet @ Check[
+    NBAccess`NBGetCredential["SourceVaultIssueApprovalKey"], $Failed];
   If[StringQ[k] && k =!= "", Return[k]];
   path = FileNameJoin[{$UserBaseDirectory, "ApplicationData", "SourceVault",
     "issue-approval.key"}];

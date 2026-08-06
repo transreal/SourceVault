@@ -146,9 +146,14 @@ iSVMGCredBackend[] :=
   If[TrueQ[Quiet@Check[NBAccess`$NBCredentialBackend === "Memory", False]],
     "Memory", "SystemCredential"];
 
-iSVMGSysCredGet[key_String] := Quiet@Check[SystemCredential[key], $Failed];
+(* 2026-08-06: SystemCredential \:76f4\:63a5\:547c\:3073\:51fa\:3057\:3092\:3084\:3081 NBAccess \:306e\:6b63\:898f\:53e3\:3092\:901a\:3059\:3002
+   \:623b\:308a\:5024\:306e\:5951\:7d04 (\:5931\:6557\:3067 $Failed) \:306f\:5f93\:6765\:3068\:540c\:3058\:306b\:4fdd\:3064\:3002 *)
+iSVMGSysCredGet[key_String] :=
+  With[{v = Quiet@Check[NBAccess`NBGetCredential[key], $Failed]},
+    If[StringQ[v], v, $Failed]];
 iSVMGSysCredSet[key_String, val_String] :=
-  Quiet@Check[(SystemCredential[key] = val); val, $Failed];
+  If[TrueQ[Quiet@Check[NBAccess`NBSetCredential[key, val], $Failed]],
+    val, $Failed];
 
 iSVMGCredRead[key_String] :=
   Module[{v, n, parts},

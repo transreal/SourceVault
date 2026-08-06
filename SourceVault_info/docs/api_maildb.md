@@ -89,7 +89,7 @@ period: `"YYYYMM"` | `{fromYYYYMM, toYYYYMM}` | `"Latest"` / Automatic | 整数n
 → Association `<|Status, Snapshots, Shards, OldFile|>`
 
 ### SourceVaultMailInteractionStats[recordId_String]
-メール操作記録 `<|"OpenCount","LastOpened","RepliedCount","RepliedAt"|>` を返す。本文表示で開封回数、返信送信で返信済を記録する。引数なし版 `SourceVaultMailInteractionStats[]` は全件 (RecordId キー) を返す。記録は `<storeRoot>/interaction.json` (Dropbox 共有)。
+メール操作記録 `<|"OpenCount","LastOpened","RepliedCount","RepliedAt"|>` を返す。本文表示で開封回数、返信送信で返信済を記録する。引数なし版 `SourceVaultMailInteractionStats[]` は全件 (RecordId キー) を返す。記録は `<storeRoot>/interaction.json` (Dropbox 共有、書込前に再読込してマージするので複数 PC で累積する。本文・ヘッダは一切含めない)。
 → Association
 
 ## 検索・索引
@@ -148,6 +148,7 @@ mailagenda 層へは弱結合 (rule 11): 未ロード・計算失敗時は除外
 ### SourceVaultMailSearchIndex[query_String:"", opts]
 ディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担）。
 → List[Association] (SummaryRow 形 + Summary + AccessTags/FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey/IndexSchemaVersion(=2))
+索引行の実体は 1 行 = `BaseEncode[BinarySerialize[row]]`。PayloadRefs (本文・ヘッダ暗号文) は一切含まない。`AccessTags` は Derived.AccessTags を surface したもので (既定 `{}` = untagged)、本文を読まずに MCP の scope gate に使える。
 例: `SourceVaultMailSearchIndex["報告", "MBox"->"imai", "Limit"->50]`
 
 ### SourceVaultMailSearchIndexView[query_String:"", opts]
@@ -180,7 +181,7 @@ mailagenda 層へは弱結合 (rule 11): 未ロード・計算失敗時は除外
 ### SourceVaultMailFetchNew[mbox_String, opts]
 IMAP から新着のみ取得し snapshot 化して store に保存する。RecordId で既存と重複排除する。既定は LLM 処理なし。
 → Association `<|Status, MBox, ...|>`
-Options: "Period" -> Automatic ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> (実IMAP, 注入可), "Inferencer" -> (実LLM, 注入可), "Persist" -> True, "MaxEmails" -> Automatic
+Options: "Period" -> Automatic ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> (実IMAP=Python imaplib, 注入可), "Inferencer" -> (実LLM=LM Studio, 注入可), "Persist" -> True, "MaxEmails" -> Automatic
 
 ### SourceVaultRegisterPostFetchHook[name_String, f]
 SourceVaultMailFetchNew の取り込み完了時に呼ぶフック `f[mbox, fetchResult]` を登録する。フック失敗は fetch を壊さない。
@@ -211,7 +212,7 @@ mailspec (date/subject/from/to/cc/body) からローカル LLM で派生を推�
 > **受信者ベースの決定的 privacy フロア (defense-in-depth)**: snapshot に派生を適用する際、LLM 推論 PrivacyLevel に **受信者(To/Cc)由来の下限**を `Max` で additive 適用する。**オーナーが直接の To/Cc 受信者・非 bulk・少数宛 (≤ 4 名)** のメール = 個人/小グループ通信とみなし `PrivacyLevel` を `$SourceVaultMailPersonalPrivacyFloor` (既定 0.6) 以上に保証する (LLM が個人メールの privacy を下げ過ぎて cloud gate を漏れるのを防ぐ)。ML/一斉配信はオーナーが To/Cc に入らず (position=Bulk)・bulk/多数宛は対象外 (floor 0.0)。フロアは privacy を**上げるだけ** (高い LLM 値は下げない)。`$SourceVaultMailPersonalPrivacyFloor = 0.0` で無効化。owner 未設定時は無効。
 
 ### SourceVaultInferMailDerivedBatch[opts]
-未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。CheckpointEvery 件ごとに dirty シャードを保存する (中断耐性)。
+未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。CheckpointEvery 件ごとに dirty シャードを保存する (中断耐性: 強制終了しても "Processed" 済みは pending に戻らず再処理されない)。
 **「<mbox> の (期間) メールにサマリーを追加」は SourceVaultMailAddSummaries[mbox, period] を使うこと** (EnsureLoaded を内包し外部ジョブでも自己完結)。本関数を直接呼ぶときは "MBox" で対象 mbox を必ず絞る — 無指定だとロード済み全 mbox を処理する。
 → Association `<|Status, Processed, Skipped, ...|>`
 Options: "MBox" -> Automatic (文字列でその mbox に限定 / Automatic=ロード済み全 mbox), "Limit" -> 50 (フィルタ後の件数上限。範囲内全件なら Infinity), "DateFrom" -> Automatic, "DateTo" -> Automatic (DateObject/文字列/{y,m,d} で対象を日付範囲に限定、日単位包含), "Refresh" -> None (None=Pending のみ / "MissingCategory"=Category 未生成の処理済み旧 snapshot も再処理 / All=全件 / Function=述語一致を再処理), "Inferencer" -> (実LLM, 注入可), "CheckpointEvery" -> 20, "Persist" -> True
@@ -299,7 +300,7 @@ snapshot の暗号化本文を復号して文字列で返す。
 → Association `<|Status->"Shown"|>`
 
 ### SourceVaultMailTranslateBody[recordId_String]
-メール本文を $Language (表示言語) に翻訳して返す (LLM, headless テスト可)。本文は readable 化 (HTML/改行正規化) してから翻訳する。
+メール本文を $Language (表示言語) に翻訳して返す (LLM, headless テスト可)。本文は readable 化 (HTML/改行正規化) してから翻訳する。訳文のみを出力させ、人名・団体名・固有名詞は原文表記のまま残す。
 → Association `<|Status->"Ok", Text->訳文, Translated->True, Lang->...|>` または `<|Status->"Error", Reason, Lang|>`
 
 ### SourceVaultMailAttachmentDir[mbox_String, yyyymm_String]
@@ -321,7 +322,7 @@ Options: "ReplyAll" -> False (True で Cc 含む), "Body" -> "" (本文初期値
 ### SourceVaultMailOpenReplyNotebook[recordId_String, opts]
 返信用ウインドウ (To/Cc/件名/本文編集・ファイル添付・確認付き送信) を開く (front end 必須)。
 → Association `<|Status->"ReplyNotebookOpened", Draft|>`
-Options: "ReplyAll" -> False (True で全員に返信), "Translate" -> False (True で日本語で書いて元メールの言語に翻訳して送る。旧 maildb replyMailTr 踏襲)
+Options: "ReplyAll" -> False (True で全員に返信), "Translate" -> False (True で日本語で書いて元メールの言語に翻訳して送る。元メールの言語とフォーマル度を LLM で判定し、返信文の敬体/常体も加味する。旧 maildb replyMailTr 踏襲)
 
 ### SourceVaultMailSend[spec_Association]
 メールを送信する。spec=`<|"To","Cc","Bcc","Subject","Body","Attachments"->{パス...}|>`。Bcc 省略時、$SourceVaultMailSendBccSelf が True ならオーナー主アドレス宛に控えを送る。$SourceVaultMailSignature が非空なら本文末尾に署名付加。存在しない添付は送信前に弾く。Mathematica の SendMail 設定が必要。
@@ -380,7 +381,7 @@ SourceVaultMailEnableAutoConfidential[] で装着したフックを解除し、N
 
 ## 横断検索連携 (SourceVaultSummaries provider)
 
-mail は SourceVaultSummaries 横断検索 (eagle/sources 等と混在検索) の provider として自己登録する。`.svmailidx` sidecar のみを走査し本文暗号文はロードしない。共通スキーマ `<|Kind->"mail", Id, URI->"sv://record/<RecordId>", Title(=Subject), Authors(=From), Published, Summary, URL, File, Date, PrivacyLevel|>` へ投影する (Title は件名欠落時 `"(件名無し)"` / 暗号化時 `"(件名無し・暗号化)"`、PrivacyLevel 欠落は fail-safe で 1.0)。行タイトルのクリックは索引行のみを読む窓 (Subject/From/Date/PL/URI) を開く。全文/サマリーの詳細取得は本 API (SourceVaultMailSearchSummary 等) を別途使う。この連携は自動登録のみで公開関数は無い。
+mail は SourceVaultSummaries 横断検索 (eagle/sources 等と混在検索) の provider として自己登録する (`$SourceVaultSummaryProviders["mail"]`、行タイトルアクションは `$iSVRowTitleActions["mail"]`)。`.svmailidx` sidecar のみを走査し本文暗号文はロードしない。共通スキーマ `<|Kind->"mail", Id, URI->"sv://record/<RecordId>", Title(=Subject), Authors(=From), Published, Summary, URL, File, Date, PrivacyLevel|>` へ投影する (Title は件名欠落時 `"(件名無し)"` / 暗号化時 `"(件名無し・暗号化)"`、PrivacyLevel 欠落は fail-safe で 1.0)。行タイトルのクリックは索引行のみを読む窓 (Subject/From/Date/PL/URI) を開く。全文/サマリーの詳細取得は本 API (SourceVaultMailSearchSummary 等) を別途使う。この連携は自動登録のみで公開関数は無い。
 
 ## 設定変数
 

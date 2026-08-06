@@ -9,7 +9,7 @@
 
 外部依存はヘッドレステスト用に注入可能:
 - `$SourceVaultGraphHTTPHandler` (None = 実 `URLRead`)
-- 資格情報バックエンドは [NBAccess](https://github.com/transreal/NBAccess) の `NBAccess`$NBCredentialBackend` に従う ("Memory" ならカーネル内ストア、`SystemCredential` に書き込まない)
+- 資格情報バックエンドは [NBAccess](https://github.com/transreal/NBAccess) の `NBAccess`$NBCredentialBackend` に従う ("Memory" ならカーネル内ストア、`SystemCredential` に書き込まない)。SystemCredential 側の読み書きは `NBAccess`NBGetCredential` / `NBAccess`NBSetCredential` の正規口を経由する (直接 `SystemCredential` は呼ばない)
 
 ## セットアップ (メールボックスごとに一度)
 ```wolfram
@@ -29,7 +29,7 @@ Microsoft 365 / Exchange Online メールボックスを `AuthMethod -> "Graph"`
 → Association (`SourceVaultRegisterMailAccount` の戻り値、または `<|"Status" -> "Error", "Reason" -> ...|>`)
 assoc のキー:
 - `"MBox"` (必須, 別名 `"mbox"`) — 未指定なら `Reason -> "MissingMBox"`
-- `"ClientId"` (必須, 別名 `"clientId"`) — Entra ID アプリケーション (クライアント) ID。空なら `Reason -> "MissingClientId"`
+- `"ClientId"` (必須, 別名 `"clientId"`) — Entra ID アプリケーション (クライアント) ID。空なら `Reason -> "MissingClientId"` (+ `"Hint"`)
 - `"Email"` / `"User"` — 相互にフォールバック
 - `"TenantId"` — 既定 `"organizations"`
 - `"CredKey"` — refresh token を保持する資格情報名。既定 `"SV_GRAPH_REFRESH_<mbox>"`
@@ -50,7 +50,7 @@ Options: "MaxWait" -> 900 (最大待機秒数。device code の `expires_in` と
 戻り値パターン:
 - `<|"Status" -> "Ok", "MBox" -> ..., "HasRefreshToken" -> True, "ProbeMessages" -> _Integer, "CredentialWriteError" -> _|Missing["None"]|>`
 - `<|"Status" -> "NotAuthorized", "MBox", "HasRefreshToken" -> False, "CredKey", "Hint"|>`
-- `<|"Status" -> "Error", "Reason" -> "UnregisteredMailbox"|"NotGraphAccount"|"TokenRefreshFailed"|"GraphProbeFailed", ...|>`
+- `<|"Status" -> "Error", "Reason" -> "UnregisteredMailbox"|"NotGraphAccount"|"TokenRefreshFailed"|"GraphProbeFailed", ...|>` (`"TokenRefreshFailed"` は `"Detail"` と `"HasRefreshToken" -> True` を伴う)
 `"CredentialWriteError"` には、直近の fetch 中に発生した refresh token ローテーション書き込み失敗が入る (fetch 自体は中断させずに可視化する設計)。
 
 ## メール取得
@@ -59,7 +59,7 @@ Options: "MaxWait" -> 900 (最大待機秒数。device code の `expires_in` と
 `$SourceVaultMailSourceProviders["Graph"]` に登録される MessageSource provider。Microsoft Graph からメッセージ (およびファイル添付) を取得し、maildb 形状のレコードリストを返す。通常は `SourceVaultMailFetchNew` 経由で呼ばれ、直接呼ぶ必要はない。
 srcOpts (Association) のキー:
 - `"Period"` — 既定 `"Latest"`。imap source と同一の文法 (`SourceVault`Private`iSVIMAPDateRange` を再利用)。ローカル日境界を UTC 瞬時に変換して Graph の `$filter` に渡す
-- `"MaxEmails"` — 既定 `Automatic`。Integer なら `$top` は `Min[50, Max[1, maxN]]`、収集数が maxN に達した時点で打ち切り
+- `"MaxEmails"` — 既定 `Automatic`。Integer なら `$top` は `Min[50, Max[1, maxN]]`、収集数が maxN に達した時点で打ち切り、最後に `Take[..., UpTo[maxN]]`
 
 レコード形状:
 ```
@@ -70,15 +70,16 @@ srcOpts (Association) のキー:
   "rawheader" -> "Name: Value" を改行連結,
   ("Authentication-Results" -> ヘッダ値; 取得できた場合のみ)|>
 ```
+アドレスの整形: `name` と `address` が両方あり異なるなら `"name <address>"`、`address` のみなら `address`、それ以外は `name`。`to` / `cc` は `", "` 連結。
 エラー時は 1 要素リスト `{<|"_error" -> "..."|>}` を返す。`_error` の種別: `"UnregisteredMailbox: ..."`, `"NoRefreshToken (...): run SourceVaultMailGraphAuthorize[...] once"`, `"TokenRefreshFailed: ..."`, `"BadPeriod: ..."`, `"GraphListFailed: ..."`。
 
 動作上の注意 (非自明):
 - 一覧は `$orderby receivedDateTime desc` で取得するが、返す前に `Reverse` するので **古い順** (imap source と同じ)。
-- `$select` に `internetMessageHeaders` を含めて一覧取得を試み、テナントが HTTP 400 を返した場合は自動的にヘッダ抜きで再取得し、メッセージごとに `/me/messages/<id>?$select=internetMessageHeaders` でヘッダを個別取得する。
+- `$select` に `internetMessageHeaders` を含めて一覧取得を試み、テナントが HTTP 400 を返した場合 (かつまだ 1 件も収集していない場合) は自動的にヘッダ抜きで再取得し、メッセージごとに `/me/messages/<id>?$select=internetMessageHeaders` でヘッダを個別取得する。
 - `@odata.nextLink` を辿ってページングする (ガード上限 500 ページ)。
 - `receivedDateTime` は UTC なので `$TimeZone` へ変換する。これにより ISO 日付と添付の `yyyymm` バケットが、imap source が送信者の `Date` ヘッダから作ったものと一致する。
-- 添付は imap source と同じレイアウト `<legacyRoot>/<mbox>/<yyyymm>_attachment/<name>` に保存する。`legacyRoot` は `$SourceVaultLegacyMailRoot`、未設定なら `PrivateVault` ルートの親配下の `mails`。
-- `contentBytes` を持たない添付 (`itemAttachment` / `referenceAttachment`) はスキップする。
+- 添付は imap source と同じレイアウト `<legacyRoot>/<mbox>/<yyyymm>_attachment/<name>` に保存する。`legacyRoot` は `$SourceVaultLegacyMailRoot`、未設定なら `PrivateVault` ルートの親配下の `mails`。日付が取れない場合の `yyyymm` は `"000000"`。
+- `contentBytes` を持たない添付 (`itemAttachment` / `referenceAttachment`) はスキップする。添付一覧取得が 200 以外なら添付なし扱い。
 - 本文は Graph の `body.content` をそのまま格納する (HTML の場合は HTML のまま)。
 
 例:
@@ -112,7 +113,7 @@ JSON デコードは `BodyBytes` があれば `ImportByteArray[..., "RawJSON"]` 
 Microsoft Entra ID に要求する OAuth スコープ文字列。device-code 要求と refresh token 交換の両方で使われる。
 
 ## 資格情報保存の設計メモ
-refresh token の保存先は `NBAccess`$NBCredentialBackend` に従う。`"Memory"` (テスト用) ならカーネル内 Association、それ以外は `SystemCredential`。
+refresh token の保存先は `NBAccess`$NBCredentialBackend` に従う。`"Memory"` (テスト用) ならカーネル内 Association、それ以外は NBAccess 経由の `SystemCredential` (`NBGetCredential` / `NBSetCredential`; 失敗時は `$Failed`)。
 
 Windows の資格情報 BLOB にはサイズ上限があり、書き込みが**無言で失敗しうる** (NBAccess key-index の事故)。このため:
 - 値は 800 文字 (`$iSVMGChunk`) ごとに分割し、`<key>#1`, `<key>#2`, ... に保存、`<key>` 本体には `"SVMGCHUNKED:<n>"` を書く
@@ -125,3 +126,4 @@ Windows の資格情報 BLOB にはサイズ上限があり、書き込みが**�
 - authority: `https://login.microsoftonline.com/<TenantId>/oauth2/v2.0` (`/devicecode`, `/token`)
 - Graph base: `https://graph.microsoft.com/v1.0`
 - 一覧の `$select`: `id,internetMessageId,receivedDateTime,subject,from,toRecipients,ccRecipients,body,hasAttachments` (+ 可能なら `,internetMessageHeaders`)
+- 添付: `/me/messages/<id>/attachments`、個別ヘッダ: `/me/messages/<id>?$select=internetMessageHeaders`

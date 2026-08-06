@@ -1,3 +1,6 @@
+## TargetType 別実行系（概要）
+
+TargetType | 実行系 | AutoEligible
 --- | --- | ---
 `"PureComputation"` | サブカーネル非同期（SubprocessPool） | True
 `"WorkflowRoute"` | メインカーネル非同期（ClaudeOrchestrator） | True（FE不要時）
@@ -5,7 +8,7 @@
 `"PromptRoute"` | メインカーネル・手動起動のみ（`SourceVaultAutoTriggerDispatchJobs` から手動呼び出し時のみゲート付き実行、ティックからは自動起動しない） | False
 `"CatalogWorkflow"` | 外部プロセス（`SourceVaultRunWorkflowAsync`）・`SpecificMachine` 配置限定。FE main kernel のスケジューラ、または FE なしコンピュートノードのヘッドレスディスパッチ（下記）のどちらでも拾われる | True
 
-**TriggerSpec 主要キー**: `TriggerId`(String), `Name`(String), `Enabled`(Bool), `Type`(String), `Owner`(Association), `Schedule`(Association), `Condition`(Association), `Target`(Association), `ExecutionPlacement`(Association), `DiagnosticsPolicy`(Association), `RunPolicy`(Association), `CreatedBy`(String)
+**TriggerSpec 主要キー**: `TriggerId`(String), `Name`(String), `Enabled`(Bool), `Type`(String), `Owner`(Association), `Schedule`(Association), `Condition`(Association), `Target`(Association), `ExecutionPlacement`(Association), `DiagnosticsPolicy`(Association), `RunPolicy`(Association), `CreatedBy`(String), `ExpiresAt`(String|Missing, AT-1), `EnabledAudit`(Association|Missing, AT-1)
 
 ## バージョン / 定数
 
@@ -32,15 +35,50 @@ TriggerSpec を構造的にバリデートする（必須キー・Type / TargetT
 **共有 PC 一覧の正本は `SourceVaultListRuntimeMachines[]`（`SourceVault_servicemanager.wl`）**: `runtime/<machineTag>/` サブディレクトリのうち共有/レガシー予約名（`locks`/`proxies`/`services`）を除いたもの + 自機。手動レジストリ（`diagnostics/machines`）は健全性・heartbeat 用の別レイヤーで、登録漏れ（例: rapterlake4t）や実在しないテストエントリ（例: ProArtPX13-test）を含みうるため PC 一覧の権威にはしない。`"Details" -> True` で `<|MachineTag, IsSelf, HasServices, HasProxies|>` の一覧を返す。
 
 ### SourceVaultRegisterAutoTrigger[spec_Association, opts]
-TriggerSpec をバリデートし、`"DryRun" -> False` のときのみ `compiled/auto-triggers/<TriggerId>.wxf` にアトミック書き込みする。
+TriggerSpec をバリデートし、`"DryRun" -> False` のときのみ `compiled/auto-triggers/<TriggerId>.wxf` にアトミック書き込みする。`$SourceVaultAutoTriggerEnforcePermit -> True` のとき、`"DryRun" -> False` での書き込みには有効な一発パーミット（Option `"Permit"`。`SourceVaultAutoTriggerMintPermit`/`Verify`/`Consume` 参照）が必須で、さらに `Enabled -> True` で登録・更新する場合は非空の `EnabledAudit` も必須になる（AT-1、spec v0.4 8.3 / P0-6）。`$SourceVaultAutoTriggerEnforcePermit` が既定の False のままなら従来どおりゲートなしで動作する。
 → Association（ステータス）
-Options: `"DryRun" -> True` (True のときバリデートと対象パス報告のみ・書き込みなし)
+Options: `"DryRun" -> True` (True のときバリデートと対象パス報告のみ・書き込みなし), `"Permit" -> None`（`$SourceVaultAutoTriggerEnforcePermit -> True` のときのみ参照される一発パーミット Association）
 
 ### SourceVaultListAutoTriggers[opts] → List
 登録済みトリガーのサマリー（TriggerId / Name / Enabled / TargetType / UpdatedAt）を per-trigger レジストリファイルから読み取ってリストで返す。
 
 ### SourceVaultGetAutoTrigger[triggerId_String] → Association | Missing
 指定 triggerId の完全な TriggerSpec Association を返す。存在しない場合は `Missing["NotFound"]`。
+
+## 実行許可（AT-1: 一発パーミット + ExpiresAt + EnabledAudit）
+
+routine spec v0.4 8.3 / P0-6 に対応する追加レイヤー。既定オフ（`$SourceVaultAutoTriggerEnforcePermit -> False`）で、有効化しない限り既存の登録/有効化フローに影響しない。オーナー（人間）が署名する一発パーミットを `SourceVaultAutoTriggerMintPermit` で発行し、`SourceVaultRegisterAutoTrigger` の書き込み境界がそれを検証・消費する。LLM/外部コンテンツはパーミット発行経路に到達できない（オーナー専用）。
+
+### $SourceVaultAutoTriggerEnforcePermit
+型: Bool, 初期値: `False`
+AT-1 パーミットゲートの有効/無効。True のとき `SourceVaultRegisterAutoTrigger["DryRun" -> False]` に有効・未消費・未失効・対象一致のパーミットを要求し、`Enabled -> True` での登録/更新には非空の `EnabledAudit` も要求する。False のままなら AT-1 導入前の挙動を維持する。
+
+### $SourceVaultAutoTriggerPermitKeyRef
+型: `Missing["None"] | String`, 初期値: `Missing["None"]`
+AT-1 パーミットの署名（HMAC）に使う鍵を保持する `SystemCredential` のキー参照（他の鍵とは別枠）。未設定（既定）だと「無鍵」の決定論的署名になる（開発/テスト専用）。本番では偽造不能にするため必ず実鍵を設定すること。
+
+### $SourceVaultAutoTriggerPermitStore
+型: `Automatic | String`, 初期値: `Automatic`
+消費済みパーミット nonce の追記専用ストアへのパス。`Automatic` は `<registry>/permits/consumed.jsonl` に解決される。テストでは一時ファイルを指す。
+
+### SourceVaultAutoTriggerSpecHash[spec_Association] → String
+TriggerSpec の意味的部分（`UpdatedAt`/`CreatedAt`/`LastSeen`/`LastError`/`LastDoctor`/`Validation`/`EnabledAudit` などの揮発フィールドを除く）から安定ハッシュを計算する。パーミットをこの spec に厳密に束縛するために使う（SpecHash 不一致は拒否、AC-027）。
+
+### SourceVaultAutoTriggerMintPermit[req_Association, opts] → Association
+一発パーミットを発行・署名する（オーナー専用。LLM/外部コンテンツからは到達不可）。`Nonce`（ULID）と `ExpiresAtAbs`、HMAC `Sig` を付与して返す。返り値をそのまま `SourceVaultRegisterAutoTrigger` の `"Permit"` オプションに渡す。
+→ Association（パーミット本体）
+Options: `"OwnerAuthorization" -> True`（オーナー権限確認フラグ）
+req キー: `"SpecHash"`, `"ProposalId"`, `"Action" -> "Register" | "Enable"`, `"ExpiresInSeconds"`（既定300）
+
+### SourceVaultAutoTriggerVerifyPermit[permit_Association, action_String, specHash_String] → Association
+HMAC署名・`ExpiresAtAbs > now`・`Action === action`・`SpecHash === specHash`・Nonce 未消費を検証する（消費はしない、`SourceVaultAutoTriggerConsumePermit` 参照）。偽造/失効/リプレイ/不一致のパーミットを拒否する（AC-027）。
+→ `<|"Valid" -> Bool, "Reason" -> _|>`
+
+### SourceVaultAutoTriggerConsumePermit[permit_Association] → Bool
+パーミットの Nonce を消費済みとして追記記録し、再利用不能にする（一発性）。初回消費なら True、署名不正または消費済みなら False を返す。
+
+### SourceVaultAutoTriggerExpiredQ[spec_Association, now_] → Bool
+spec の `ExpiresAt` が過去のタイムスタンプなら True（`Missing`/`None` は「無期限」で常に False）。`iSVATLoadEnabledSpecs`（`SourceVaultAutoTriggerTick` が使う登録読み込み層）はこれが True の spec を除外するため、`Enabled -> True` のままでも期限切れトリガーはディスパッチされない（AC-031）。`ExpiresAt` を持たない従来のトリガー（AT-1導入前の既定）には影響しない。
 
 ## スケジュール照合
 
@@ -110,7 +148,7 @@ context キー（全て省略可・安全なデフォルトあり）: `"Now"` (I
 ## ティック / ジョブ管理
 
 ### SourceVaultAutoTriggerTick[opts]
-有効トリガーをレジストリから読み込み、ライブコンテキスト（now / per-trigger LastCheck 状態 / ライブソースイベント / 機械ローカル doctor）に対して各トリガーを `SourceVaultAutoTriggerEvaluateTrigger` で評価し、通過したトリガーのジョブを追記専用ジョブログ（`autotrigger/jobs/<machineTag>.jsonl`）に追記し、per-trigger LastCheck 状態を進める。ディスパッチ・実行は行わない。同一 DispatchSlotKey は既存ログに対してデデュープされる。AsyncActive 中は no-op（defers）。初回ティックでは評価ウィンドウが空のため発火しない（`LastCheckOverride` で過去ウィンドウを指定可能）。
+有効かつ未失効（AT-1: `ExpiresAt` が未到来。`SourceVaultAutoTriggerExpiredQ` 参照）のトリガーをレジストリから読み込み、ライブコンテキスト（now / per-trigger LastCheck 状態 / ライブソースイベント / 機械ローカル doctor）に対して各トリガーを `SourceVaultAutoTriggerEvaluateTrigger` で評価し、通過したトリガーのジョブを追記専用ジョブログ（`autotrigger/jobs/<machineTag>.jsonl`）に追記し、per-trigger LastCheck 状態を進める。ディスパッチ・実行は行わない。同一 DispatchSlotKey は既存ログに対してデデュープされる。AsyncActive 中は no-op（defers）。初回ティックでは評価ウィンドウが空のため発火しない（`LastCheckOverride` で過去ウィンドウを指定可能）。
 → ティックサマリー Association
 Options: `"DryRun" -> False` (True のとき評価のみ・書き込みなし), `"LastCheckOverride" -> Automatic` (ISO文字列で全トリガーの評価ウィンドウ下限を強制・テスト/手動キャッチアップ用)
 

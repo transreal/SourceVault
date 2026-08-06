@@ -2030,7 +2030,11 @@ iSVIMAPPythonSource[mbox_String, srcOpts_Association] :=
     If[! AssociationQ[acct],
       Return[{<|"_error" -> "UnregisteredMailbox: " <> mbox <>
          " \[LongDash] SourceVaultRegisterMailAccount \:3067\:767b\:9332\:3057\:3066\:304f\:3060\:3055\:3044"|>}]];
-    pw = Quiet@Check[ToString[SystemCredential[acct["CredKey"]]], "$Failed"];
+    (* 2026-08-06: SystemCredential \:76f4\:63a5\:547c\:3073\:51fa\:3057\:3092\:3084\:3081 NBAccess \:306e\:6b63\:898f\:53e3\:3092\:901a\:3059\:3002
+       NBGetCredential \:306f\:672a\:8a2d\:5b9a\:3092 Missing \:3067\:8fd4\:3059\:306e\:3067\:3001\:5f93\:6765\:306e\:6587\:5b57\:5217\:5224\:5b9a\:3082\:6b8b\:3057\:3066\:304a\:304f\:3002 *)
+    pw = Quiet@Check[
+      With[{v = NBAccess`NBGetCredential[acct["CredKey"]]},
+        If[StringQ[v], v, "$Failed"]], "$Failed"];
     If[pw === "" || pw === "Null" || pw === "$Failed" || StringContainsQ[pw, "Missing"],
       Return[{<|"_error" -> "NoCredential: SystemCredential[\"" <> acct["CredKey"] <> "\"] \:672a\:8a2d\:5b9a"|>}]];
     range = iSVIMAPDateRange[Lookup[srcOpts, "Period", "Latest"]];

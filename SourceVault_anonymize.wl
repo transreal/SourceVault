@@ -3582,11 +3582,10 @@ If[Names["SourceVault`SourceVaultRegisterPrivacyContract"] =!= {},
 (* NBAccess action registry: declassification effect class (仕様 §5.13 / G0b)。
    承認操作と (将来の) Execute ヘッドを承認ゲート対象に登録する。LLM/agent 経由の
    評価では Hold -> Approve UI を通る (自己承認防止)。ロード順・未ロード耐性のため弱結合。 *)
-If[TrueQ[Quiet @ Check[ListQ[NBAccess`$NBApprovalHeads], False]],
-  Scan[
-    Function[h,
-      If[!MemberQ[NBAccess`$NBApprovalHeads, h],
-        NBAccess`$NBApprovalHeads = Append[NBAccess`$NBApprovalHeads, h]]],
-    {"SourceVaultApproveDeclassification", "SourceVaultAnonymize"}]];
+(* 2026-08-06: NBAccess \:7ba1\:7406\:5909\:6570\:3078\:306e\:76f4\:63a5\:8ffd\:52a0\:3092\:3084\:3081\:3001\:767b\:9332 API \:3092\:901a\:3059 *)
+Quiet @ Check[
+  NBAccess`NBRegisterApprovalHeads[
+    {"SourceVaultApproveDeclassification", "SourceVaultAnonymize"}],
+  Null];
 
 EndPackage[]

@@ -15081,11 +15081,9 @@ If[!TrueQ[SourceVault`Private`$iSVDisablePromptRouterAutoLoad],
 (* SourceVaultSetModelIntent \:3092 $NBApprovalHeads \:306b\:767b\:9332\:3059\:308b\:3002
    ClaudeEval \:3067\:30e2\:30c7\:30eb\:9078\:629e\:3092\:5909\:66f4\:3059\:308b\:30d7\:30ed\:30f3\:30d7\:30c8\:3092\:5b9f\:884c\:3059\:308b\:3068
    Hold -> Approve UI \:304c\:51fa\:308b (\:30e2\:30c7\:30eb\:5909\:66f4\:306f\:691c\:8a3c\:5bfe\:8c61)\:3002 *)
-If[TrueQ[Quiet @ Check[
-    ListQ[NBAccess`$NBApprovalHeads], False]],
-  If[!MemberQ[NBAccess`$NBApprovalHeads, "SourceVaultSetModelIntent"],
-    NBAccess`$NBApprovalHeads = Append[
-      NBAccess`$NBApprovalHeads, "SourceVaultSetModelIntent"]]];
+(* 2026-08-06: NBAccess \:7ba1\:7406\:5909\:6570\:3078\:306e\:76f4\:63a5\:8ffd\:52a0\:3092\:3084\:3081\:3001\:767b\:9332 API \:3092\:901a\:3059 *)
+Quiet @ Check[
+  NBAccess`NBRegisterApprovalHeads[{"SourceVaultSetModelIntent"}], Null];
 
 (* \:30ed\:30fc\:30c9\:6642\:306b\:30e2\:30c7\:30eb\:5909\:6570\:3092\:81ea\:52d5\:5272\:308a\:5f53\:3066 (Q1: \:81ea\:52d5\:5b9f\:884c\:53ef)\:3002
    \:5b9f\:4ee3\:5165\:306f NBAccess`NBSyncClaudeModelVars \:304c\:62c5\:3046 (\:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:5883\:754c)\:3002

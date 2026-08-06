@@ -721,11 +721,10 @@ iSVATHMAC[key_String, msg_String] := Module[{b = 64, kb, k0, ipad, opad, inner},
 iSVATPermitKey[] := Module[
   {ref = $SourceVaultAutoTriggerPermitKeyRef, cred},
   If[!StringQ[ref] || ref === "", Return["unkeyed-at-permit-key"]];
-  cred = Quiet @ Check[SystemCredential[ref], $Failed];
-  Which[
-    StringQ[cred] && cred =!= "", cred,
-    True, With[{s = Quiet @ Check[cred["Secret"], $Failed]},
-      If[StringQ[s] && s =!= "", s, "unkeyed-at-permit-key"]]]];
+  (* 2026-08-06: SystemCredential \:76f4\:63a5\:547c\:3073\:51fa\:3057\:3092\:3084\:3081 NBAccess \:306e\:6b63\:898f\:53e3\:3092\:901a\:3059\:3002
+     "Secret" \:30ad\:30fc\:5f62\:5f0f\:306e\:5c55\:958b\:306f NBGetCredential \:5074\:304c\:62c5\:3046\:3002 *)
+  cred = Quiet @ Check[NBAccess`NBGetCredential[ref], $Failed];
+  If[StringQ[cred] && cred =!= "", cred, "unkeyed-at-permit-key"]];
 
 iSVATPermitPayload[p_] := StringRiffle[{
   ToString[Lookup[p, "SpecHash", ""]], ToString[Lookup[p, "ProposalId", ""]],
