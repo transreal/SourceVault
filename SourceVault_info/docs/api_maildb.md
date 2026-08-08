@@ -68,7 +68,7 @@ snapshot の暗号化 body を復号して返す (MAC 検証経由)。
 
 ### SourceVaultMailEnsureLoaded[mbox_String, period_:Automatic]
 指定 mbox の必要分シャードのみをメモリへ遅延ロードする。既ロードは再読込しない。
-period: `"YYYYMM"` | `{fromYYYYMM, toYYYYMM}` | `"Latest"` / Automatic | 整数n (直近n月) | All
+period: `"YYYYMM"` | `{fromYYYYMM, toYYYYMM}` | `"Latest"` / Automatic | 整数n (直近n月) | All。period は位置引数だが `"Latest"->n` の Rule 形でも受け付ける (SourceVaultMailView の `"Latest"` オプションと続けて書いても黙って 0 件にならないための互換)。
 → Association `<|Status, MBox, Period, Shards, NewlyLoaded, InMemory|>`
 例: `SourceVaultMailEnsureLoaded["imai", 3]` (直近3月ロード)
 **注**: 検索して表示するだけなら EnsureLoaded は不要 — `SourceVaultMailSearchIndexView`（索引 sidecar 検索＋✉/☰ で必要シャードだけ遅延ロード）を使う。`All` の全ロードは全期間の一括処理（サマリー付与・identity backfill 等）専用。
@@ -102,7 +102,7 @@ Derived.Category と検索オプション `"Category"` で使う。日本語名 
 ### SourceVaultSearchMailSnapshots[query_String:"", opts]
 ロード済みスナップショットを subject/summary 部分一致 + フィルタ条件で検索する。
 → List[Association]
-Options: "From" -> Automatic, "To" -> Automatic, "FromContact" -> Automatic, "MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic, "HasAttachment" -> Automatic, "Category" -> Automatic, "HasDeadline" -> Automatic, "DeadlineFrom" -> Automatic, "DeadlineTo" -> Automatic, "MinPriority" -> Automatic, "MaxPriority" -> Automatic, "MinPrivacy" -> Automatic, "MaxPrivacy" -> Automatic, "Newest" -> True, "Limit" -> Automatic, "SortBy" -> Automatic ("Date"|"Priority"|"PrivacyLevel"|"Deadline"), "SortOrder" -> Automatic, "ExcludeAgenda" -> False, "AgendaItems" -> Automatic
+Options: "From" -> Automatic, "To" -> Automatic, "FromContact" -> Automatic, "MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic, "HasAttachment" -> Automatic, "Category" -> Automatic, "HasDeadline" -> Automatic, "DeadlineFrom" -> Automatic, "DeadlineTo" -> Automatic, "MinPriority" -> Automatic, "MaxPriority" -> Automatic, "MinPrivacy" -> Automatic, "MaxPrivacy" -> Automatic, "Newest" -> True, "Limit" -> Automatic, "SortBy" -> Automatic ("Date"|"Priority"|"PrivacyLevel"|"Deadline"), "SortOrder" -> Automatic, "ExcludeAgenda" -> False, "AgendaItems" -> Automatic, "Resolved" -> All (False=未対応のみ表示 / True=対応済みのみ表示 / 既定 All=両方)
 例: `SourceVaultSearchMailSnapshots["Cerezo", "Category"->"TaskRequest", "DeadlineFrom"->今日, "DeadlineTo"->週末, "Limit"->20]`
 
 #### "ExcludeAgenda" / "AgendaItems" — アジェンダ掲載分を差し引く
@@ -133,6 +133,22 @@ mailagenda 層へは弱結合 (rule 11): 未ロード・計算失敗時は除外
 例: `SourceVaultMailSearchIndexView["", "MBox"->"univ", "ExcludeAgenda"->True]`
 （アジェンダで処理する要対応メールを除いた「それ以外のメール」だけを確認する）
 
+#### "Resolved" — 対応済み/未対応で絞り込む
+`SourceVaultSearchMailSnapshots` / `MailSearchSummary` / `MailDataset` / `MailView` /
+`MailSearchIndex` / `MailSearchIndexView` が共有するもう1つのフィルタ。「対応済み」判定は
+agenda.json の Dismissed/NotebookCreated、または返信送信済み (`SourceVaultMailInteractionStats`
+の RepliedCount>0) のいずれかを指す。
+
+| "Resolved" | 動作 |
+|---|---|
+| `All` (既定) | フィルタなし = 未対応・対応済み両方表示 |
+| `False` | 対応済みを除き、未対応メールのみ表示 |
+| `True` | 対応済みメールのみ表示 |
+
+`"ExcludeAgenda"` が「アジェンダに載っている要対応メール」を除くのに対し、`"Resolved"` は
+「対応が済んだかどうか」で絞る補完オプションで、併用できる (例: `"ExcludeAgenda"->True,
+"Resolved"->False` で「アジェンダにも載らず・未対応の」メールだけを見る)。
+
 ### SourceVaultMailSummaryRow[snapshot_Association]
 一覧表示用の低漏洩行を返す。From は AddressBook 解決時は表示名。Category は依頼カテゴリトークン、Deadline は〆切の ISO 文字列 (無ければ Missing)。
 → Association `<|Date, From, Subject, Category, Deadline, Attach, MBox, RecordId, BodyEncrypted|>`
@@ -146,13 +162,13 @@ mailagenda 層へは弱結合 (rule 11): 未ロード・計算失敗時は除外
 → Dataset
 
 ### SourceVaultMailSearchIndex[query_String:"", opts]
-ディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担）。
+ディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担）。
 → List[Association] (SummaryRow 形 + Summary + AccessTags/FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey/IndexSchemaVersion(=2))
 索引行の実体は 1 行 = `BaseEncode[BinarySerialize[row]]`。PayloadRefs (本文・ヘッダ暗号文) は一切含まない。`AccessTags` は Derived.AccessTags を surface したもので (既定 `{}` = untagged)、本文を読まずに MCP の scope gate に使える。
 例: `SourceVaultMailSearchIndex["報告", "MBox"->"imai", "Limit"->50]`
 
 ### SourceVaultMailSearchIndexView[query_String:"", opts]
-`SourceVaultMailSearchIndex` の **View 版**。索引 sidecar だけで検索し（**SourceVaultMailEnsureLoaded 不要・シャード非ロード＝速い/省メモリ**）、結果を UI つき Dataset で表示する。行ごとに **✉**（本文表示: その行の shard だけを遅延ロードして復号・別窓表示）と **☰**（スレッド窓: `SourceVaultMailThreadNotebook`）。表示件数は `$SourceVaultMailViewMaxRows` で制限。PL≥0.5 を含む結果は機密ラップ。索引 sidecar 必須 (無ければ `SourceVaultMailRebuildMetadataIndex[]` で構築)。**メール検索のノートブック表示はまずこれを使う**（全シャードロードが不要）。opts は SourceVaultMailSearchIndex と同じ。
+`SourceVaultMailSearchIndex` の **View 版**。索引 sidecar だけで検索し（**SourceVaultMailEnsureLoaded 不要・シャード非ロード＝速い/省メモリ**）、結果を UI つき Dataset で表示する。行ごとに **✉**（本文表示: その行の shard だけを遅延ロードして復号・別窓表示）と **☰**（スレッド窓: `SourceVaultMailThreadNotebook`）。表示件数は `$SourceVaultMailViewMaxRows` で制限。PL≥0.5 を含む結果は機密ラップ。索引 sidecar 必須 (無ければ `SourceVaultMailRebuildMetadataIndex[]` で構築)。**メール検索のノートブック表示はまずこれを使う**（全シャードロードが不要）。opts は SourceVaultMailSearchIndex と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。
 → Pane[Dataset] (UI)
 例: `SourceVaultMailSearchIndexView["Zoom", "MBox"->"univ", "SortBy"->"Date", "SortOrder"->"Desc"]`
 
@@ -296,7 +312,7 @@ snapshot の暗号化本文を復号して文字列で返す。
 → Association `<|Status->"Ok", Body->String|>` または `<|Status->"Error", Reason->String|>`
 
 ### SourceVaultMailShowBody[recordId_String]
-本文を新規ノートブックで表示する (front end 必須)。
+本文を新規ノートブックで表示する (front end 必須)。本文パネルには返信/全員に返信/翻訳して返信/翻訳表示に加えて、アジェンダ操作 (スレッド全体を表示 / ノートブックを作成して継承 / 確認のみ・対応済みにする) も常時付くので、`SourceVaultMailView` 等から開いたメールでも要対応メールと同じ操作ができる (継承・対応済みマークは SourceVault_mailagenda.wl ロード時のみ有効)。
 → Association `<|Status->"Shown"|>`
 
 ### SourceVaultMailTranslateBody[recordId_String]
@@ -329,7 +345,10 @@ Options: "ReplyAll" -> False (True で全員に返信), "Translate" -> False (Tr
 → Association `<|Status->"Sent", To, Cc, Bcc, Subject, Attachments|>` または `<|Status->"Error", Reason, ...|>`
 
 ### SourceVaultMailView[query_String:"", opts]
-検索結果を、行ごとに本文表示(✉)/添付ポップアップ(📎)/返信(↩) のクリック操作を備えた Dataset で返す (旧 maildb showMails 踏襲)。opts は SourceVaultSearchMailSnapshots と同じ ("ExcludeAgenda"/"AgendaItems" も共有)。
+検索結果を、行ごとに本文表示(✉)/添付ポップアップ(📎)/返信(↩) のクリック操作を備えた Dataset で返す (旧 maildb showMails 踏襲)。opts は SourceVaultSearchMailSnapshots と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有) + `"Latest"`。
+
+`"Latest"` -> period は SourceVaultMailEnsureLoaded と同じ期間語彙 (`"YYYYMM"` | `{from,to}` | `"Latest"` | 整数n (直近nヶ月) | All)。該当シャードを自動ロードした上で、**表示をその期間のシャードに限定**する (既に他ルートでロード済みの他月が混ざらない)。`"MBox"` を指定すればその mbox のみ、未指定ならディスク上の全 mbox に適用。既定 Automatic = 従来どおり (ロードもフィルタもしない)。`"Limit"` は期間で絞ったあとに適用される。`"Resolved"` は対応済み/未対応の絞り込み (既定 All=両方、False=未対応のみ、True=対応済みのみ)。
+例: `SourceVaultMailView["", "MBox" -> "imai", "Latest" -> 3]` (直近3ヶ月をロードして表示)
 → Dataset
 
 ### SourceVaultMailRowActions[snapshot_Association]

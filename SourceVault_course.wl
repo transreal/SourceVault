@@ -174,18 +174,56 @@ SourceVaultExamRosterImport::usage =
   "SourceVaultExamRosterImport[path, opts] は受講者リスト (xls/xlsx) から {{学籍番号, 氏名}..} を読む。opts: \"HeaderRows\" (6), \"IDColumn\" (2), \"NameColumn\" (3)。";
 SourceVaultExamSheetIngest::usage =
   "SourceVaultExamSheetIngest[examId, pdfPathOrImages, opts] は回収済み解答用紙 (マルチページ PDF または画像リスト) を取り込み保存する (PL 1.0 ローカル)。opts: \"Roster\", \"ImageWidth\" (2200)。";
+SourceVaultExamSheetVerify::usage =
+  "SourceVaultExamSheetVerify[examId, pdfOrImages, opts] は回収した答案のヘッダ (試験科目・試験時間・年月日時限の印字) が、その試験用に生成した解答用紙のヘッダと一致するかを照合する。\n" <>
+  "全候補の試験と突き合わせて順位をつけるので、別の試験の答案を取り込もうとすると Mismatch で止まる (ページごとに判定するので束の中の紛れも見つかる)。\n" <>
+  "学生番号・氏名の欄は照合領域に含めない (印字部分だけを見る)。opts: \"Pages\"->All|{n..}, \"DiffX\", \"DiffY\", \"Candidates\", \"MinScore\" (0.4), \"Tolerance\" (0.02)。";
+SourceVaultExamSheetVerifyView::usage =
+  "SourceVaultExamSheetVerifyView[examId, pdfOrImages, opts] は照合結果を目視確認用に並べて表示する (期待するヘッダ / 実物のヘッダ / 候補の順位)。";
+SourceVaultExamSheetIdentify::usage =
+  "SourceVaultExamSheetIdentify[pdfOrImages, opts] は答案のヘッダがどの試験のものかを候補全件と突き合わせて順位で返す (取り違えの特定用)。";
+SourceVaultExamSyncRoster::usage =
+  "SourceVaultExamSyncRoster[examId] は取り込み済みの答案が持つ名簿スナップショットを現在の履修者レジストリで更新する (履修者 csv を配り直した後に使う)。\n" <>
+  "突合せは学籍番号で持っているので割当は壊れない。履修者でなくなった学生に割り当てられている答案は \"UnenrolledAssignments\" に列挙する。opts: \"Lecture\", \"DryRun\" (False)。";
 SourceVaultExamMatches::usage =
   "SourceVaultExamMatches[examId, opts] は答案突合せデータ {番号, {学籍番号画像, 氏名画像}, 受講者} の core リストを返す。opts: \"DiffX\", \"DiffY\" (切出し較正)。";
 SourceVaultExamMatchView::usage =
   "SourceVaultExamMatchView[examId, opts] は答案突合せのオーナー確認ビュー (スキャンの学籍番号・氏名画像と受講者リストを並置)。必ず目視で確認すること。";
 SourceVaultExamSetMatch::usage =
-  "SourceVaultExamSetMatch[examId, <|スキャン番号->受講者番号|>] は突合せ対応を修正する。";
+  "SourceVaultExamSetMatch[examId, <|スキャン番号->学籍番号|>] は突合せ対応を設定する。値は学籍番号 (\"5422018\") でも名簿の行番号 (2) でもよい。None を渡すとその答案の割当を外す。";
+SourceVaultExamProposeMatches::usage =
+  "SourceVaultExamProposeMatches[examId, opts] は各答案の学生番号欄を読み取って突合せ候補を作り、既定でそのまま割り当てる (最終確認は SourceVaultExamAssignView での目視)。\n" <>
+  "読み取り結果は名簿の学籍番号へ最短編集距離で寄せ、1 人 1 枚になるよう確信度の高い順に確定する。競合・読取不能・距離の大きいものは割り当てず \"Uncertain\" に残す。\n" <>
+  "既定の読み取りはクラウド vision (学生番号欄の切出しのみ送信。氏名欄・解答欄は送らない) で、$SourceVaultExamAllowCloudIDRecognition = True が必要。\n" <>
+  "opts: \"RecognizerFn\" (シーム: fn[{crop..}]->{文字列..}), \"Scans\"->All|{i..}, \"Apply\" (True), \"Overwrite\" (False), \"BatchSize\" (8), \"MaxDistance\" (2), \"DiffX\", \"DiffY\"。";
+$SourceVaultExamAllowCloudIDRecognition::usage =
+  "$SourceVaultExamAllowCloudIDRecognition は学生番号欄の切出しをクラウド vision へ送ることを許可するフラグ (既定 False)。学籍番号は個人情報 (PL 1.0) なので、送信は明示的な許可のときだけ行う。\"RecognizerFn\" を自分で渡す場合はこのフラグは不要。";
+SourceVaultExamMatchStatus::usage =
+  "SourceVaultExamMatchStatus[examId] は突合せの進捗を返す (割当済/未割当の答案・重複割当・答案の無い履修者・名簿にない割当)。";
+SourceVaultExamAssignView::usage =
+  "SourceVaultExamAssignView[examId, opts] は答案の学生番号欄・氏名欄の切出しを見ながら、名簿からクリックで割り当てるビュー (front end)。\n" <>
+  "答案は提出順で名簿順ではないので、1 枚ずつ目視で確定する。割当済みの学生は候補から外れ、重複と未割当は上部に表示される。\n" <>
+  "opts: \"Unassigned\"->False (True で未割当のみ), \"DiffX\", \"DiffY\", \"MaxRows\" (60)。";
 SourceVaultExamRecognize::usage =
   "SourceVaultExamRecognize[examId, opts] は各答案の解答欄領域 (個人情報領域を除外した crop) から解答を読み取る。opts: \"RecognizerFn\" (シーム; fn[crop, keys]->Association), \"Scans\"->All|{i..}。既定はクラウド vision (ClaudeQueryBg)。";
 SourceVaultExamSetAnswer::usage =
   "SourceVaultExamSetAnswer[examId, scanIdx, key, value] は認識結果を手動修正する (key は \"1-1\" 形式)。";
 SourceVaultExamSetMark::usage =
-  "SourceVaultExamSetMark[examId, scanIdx, key, mark] は採点記号 (○/△/×/?) を手動設定する (自動判定の上書き)。";
+  "SourceVaultExamSetMark[examId, scanIdx, key, mark] は採点記号 (○/△/×/?) を手動設定する (自動判定の上書き)。None を渡すと手動設定を外して自動判定に戻す。";
+SourceVaultExamUnresolved::usage =
+  "SourceVaultExamUnresolved[examId, opts] は採点記号が確定していない設問 (?) を一覧する core 関数。? は解答欄が空/読み取れなかったか、模範解答が無い設問。\n" <>
+  "各行: 答案番号・学生・スロット・印刷番号・認識結果・模範解答・配点。opts: \"Filter\"->\"Unresolved\" (既定) | \"Wrong\" (×も含む) | All, \"Scans\"。";
+SourceVaultExamResolveView::usage =
+  "SourceVaultExamResolveView[examId, opts] は確定していない設問を、その解答欄の切出し画像を見ながらクリックで確定するビュー (front end)。\n" <>
+  "解答の値を選ぶと模範解答と照合して ○/× が決まり、○/△/× を直接指定することもできる (△ は Ceiling[配点/2])。\n" <>
+  "opts: \"Filter\" (\"Unresolved\"), \"Scans\", \"MaxRows\" (40), \"DiffX\", \"DiffY\"。";
+SourceVaultExamItemAnalysis::usage =
+  "SourceVaultExamItemAnalysis[examId, opts] は設問ごとの正答率・誤答の散らばり・識別力を返す core 関数 (PL 1.0: 個々の学生は含まず設問単位の集計)。\n" <>
+  "各行: Slot / Printed / Unit / Headline / Generated (改変問題か) / Recipe / Points / Answered / Correct / CorrectRate / Blank / WrongCounts / WrongSpread / EffectiveChoices / TopDistractor / TopShare / Discrimination。\n" <>
+  "WrongSpread は誤答分布の正規化エントロピー (1=誤答が均等に散る=あてずっぽう, 0=特定の誤答に集中)。EffectiveChoices はその指数で「誤答が実質何択に散ったか」。\n" <>
+  "Discrimination は設問の正誤と合計点の点双列相関 (高いほどよく弁別している)。opts: \"Scans\"->All, \"Assigned\"->True (割当済みの答案のみ)。";
+SourceVaultExamItemAnalysisView::usage =
+  "SourceVaultExamItemAnalysisView[examId, opts] は SourceVaultExamItemAnalysis の Dataset 表示 (日本語見出し)。opts: \"SortBy\"->\"Rate\" (正答率の低い順、既定) | \"Slot\" | \"Discrimination\", \"Export\"->path.xlsx。";
 SourceVaultExamScore::usage =
   "SourceVaultExamScore[examId, opts] は突合せ + 認識結果 + 模範解答 + 配点から採点する core 関数 (Association リスト)。○=満点, △=Ceiling[配点/2], ×/未=0。";
 SourceVaultExamScoreView::usage =
@@ -226,6 +264,55 @@ SourceVaultCourseWebReportView::usage =
   "SourceVaultCourseWebReportView[lecture, reportDesc] / [svURI] は提出状況を表示する。Cerezo.wl ロード済みなら CerezoCollectionView へ委譲 (同一形式)。PL 1.0。";
 SourceVaultCourseWebReportGrade::usage =
   "SourceVaultCourseWebReportGrade[lecture, reportDesc, rubric, opts] / [svURI, rubric, opts] は匿名化採点 (CerezoAnonymizedSubmissions -> CerezoGradeSubmissions) を実行する。Cerezo.wl 必須 (弱結合)。opts: \"Policy\", \"MissingPages\", \"LLMFn\" 等は Cerezo 側へ透過。結果の \"GradeAnnotationRef\" を CerezoAttachGrades / CerezoGradeReport へ渡す。";
+
+(* ---- 履修者 (enrollment) ---- *)
+SourceVaultCourseEnrollmentRegister::usage =
+  "SourceVaultCourseEnrollmentRegister[lecture, sources, opts] は科目履修者を登録する (PL 1.0 ローカル)。\n" <>
+  "sources: csv/xls(x) パス, sv://object/eagle-<id> (Eagle 内の csv), {{学籍番号,氏名}..}, <|id->name|>, またはそれらのリスト (複数ファイルは 1 つの名簿にマージ)。\n" <>
+  "csv は既定で 1 列目=学籍番号 / 2 列目=氏名。ヘッダ行と空行は自動判別 (\"HeaderRows\"->n で明示)。\n" <>
+  "既定 \"Mode\"->\"Replace\" は与えた集合を完全な履修者名簿とみなし、含まれない既存学生を Withdrawn (履修取消) にする (レコードは消さない・再登録で復帰)。\"Mode\"->\"Add\" は追加のみ。\n" <>
+  "\"Reset\"->True は以前の登録を全部捨ててから登録し直す (別科目の名簿を誤って登録したときの後始末。履歴には残る)。\n" <>
+  "opts: \"IDColumn\" (1), \"NameColumn\" (2), \"HeaderRows\" (Automatic), \"Encoding\" (Automatic), \"Mode\", \"DryRun\" (False), \"Reset\" (False)。";
+SourceVaultCourseEnrollment::usage =
+  "SourceVaultCourseEnrollment[lecture, opts] は履修者行 {<|StudentID, StudentName, Status, ...|>..} を返す core 関数 (PL 1.0)。opts: \"Status\"->\"Enrolled\" (既定) | \"Withdrawn\" | All。";
+SourceVaultCourseEnrollmentView::usage =
+  "SourceVaultCourseEnrollmentView[lecture, opts] は履修者名簿の Dataset 表示 (PL 1.0)。";
+SourceVaultCourseEnrollmentRecord::usage =
+  "SourceVaultCourseEnrollmentRecord[lecture] は履修者レコード全体 (Students / Version / History) を返す。無ければ Missing。PL 1.0。";
+SourceVaultCourseEnrollmentHistory::usage =
+  "SourceVaultCourseEnrollmentHistory[lecture] は登録の履歴 (版ごとの Added / Removed / Restored / Sources) を返す。";
+SourceVaultCourseEnrollmentHistoryView::usage =
+  "SourceVaultCourseEnrollmentHistoryView[lecture] は登録履歴の Dataset 表示。";
+SourceVaultCourseEnrollments::usage =
+  "SourceVaultCourseEnrollments[] は履修者登録済みの講義一覧 (件数・版・更新日時) を返す。";
+SourceVaultCourseSetEnrollmentStatus::usage =
+  "SourceVaultCourseSetEnrollmentStatus[lecture, idOrIds, status] は履修状態を手動訂正する (status: \"Enrolled\" | \"Withdrawn\")。";
+SourceVaultCourseStudent::usage =
+  "SourceVaultCourseStudent[lecture, id] は学籍番号から履修者レコードを引く (表記ゆれを正規化)。無ければ Missing。";
+
+(* ---- 成績簿 (assessment / gradebook) ---- *)
+SourceVaultCourseAssessmentRegister::usage =
+  "SourceVaultCourseAssessmentRegister[lecture, itemId, spec] は採点項目 (定期試験・レポート・小テスト等) を登録する。spec keys: \"Title\", \"Kind\" (\"Exam\"|\"Report\"|\"Quiz\"|\"Other\"), \"MaxScore\", \"Weight\", \"Source\", \"Note\"。既存項目はスコアを保ったまま更新される。";
+SourceVaultCourseAssessments::usage =
+  "SourceVaultCourseAssessments[lecture] は登録済み採点項目 (配点・重み・入力済み件数) を返す。";
+SourceVaultCourseAssessmentsView::usage =
+  "SourceVaultCourseAssessmentsView[lecture] は採点項目の Dataset 表示。";
+SourceVaultCourseAssessmentRemove::usage =
+  "SourceVaultCourseAssessmentRemove[lecture, itemId] は採点項目をスコアごと削除する。";
+SourceVaultCourseSetScores::usage =
+  "SourceVaultCourseSetScores[lecture, itemId, scores] は素点を投入する。scores: <|学籍番号->点|> または {{学籍番号,点}..}。既定 \"Mode\"->\"Merge\" (既存に上書きマージ)、\"Replace\" で総入替え。名簿にない学籍番号は \"Unknown\" として報告する (投入はしない)。";
+SourceVaultCourseImportExamScores::usage =
+  "SourceVaultCourseImportExamScores[lecture, examId, opts] は SourceVaultExamScore の結果を採点項目として取り込む (項目 id 既定 = examId、MaxScore 既定 = 配点合計)。opts: \"ItemId\", \"Title\", \"Weight\", \"MaxScore\", \"Mode\"。突合せ未確定の答案は取り込まず \"Unassigned\" に列挙する。";
+SourceVaultCourseWeights::usage =
+  "SourceVaultCourseWeights[lecture] は総合点の重み連想 <|itemId->weight|> を返す (登録済み項目から自動生成。未設定は 1)。この連想を編集して SourceVaultCourseSetWeights で更新する。";
+SourceVaultCourseSetWeights::usage =
+  "SourceVaultCourseSetWeights[lecture, weights] は総合点の重みを更新する。weights は <|itemId->weight|> (一部だけでもよい)。未知の itemId は拒否。スコアは変更しないので、成績が出そろってから何度でも重みを変えて再計算できる。";
+SourceVaultCourseGradebook::usage =
+  "SourceVaultCourseGradebook[lecture, opts] は全採点項目のスコア表と総合点を返す core 関数 (PL 1.0)。総合点 = 100 * Sum[素点/満点 * 重み] / Sum[重み]。opts: \"Missing\"->\"Zero\" (既定) | \"Exclude\" (その項目を重みから外す), \"Status\"->\"Enrolled\" (既定) | All, \"Round\" (1)。";
+SourceVaultCourseGradebookView::usage =
+  "SourceVaultCourseGradebookView[lecture, opts] は成績表の Dataset 表示 (PL 1.0)。";
+SourceVaultCourseGradeReport::usage =
+  "SourceVaultCourseGradeReport[lecture, opts] は成績報告 (日本語見出しの Dataset)。opts: \"Export\"->path.xlsx でローカル書出し。opts は SourceVaultCourseGradebook と共通。";
 
 Begin["`CoursePrivate`"]
 
@@ -1908,16 +1995,72 @@ iEXGrading[examId_String] := Module[{p = iEXGradingPath[examId]},
 
 iEXSaveGrading[examId_String, g_Association] := iEXWriteWXF[iEXGradingPath[examId], g];
 
-Options[SourceVaultExamSheetIngest] = {"Roster" -> Automatic, "ImageWidth" -> 2200};
-SourceVaultExamSheetIngest[examId_String, source_, OptionsPattern[]] := Module[
-  {exam = SourceVaultExamGet[examId], imgs, dir, files, g, w = OptionValue["ImageWidth"]},
-  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+(* 試験 -> 講義キー (履修者名簿のキー)。明示指定が無ければ <科目>-<年> を導く。
+   例: exam "ald-2026-kimatsu" (Subject "ald", DateSpec {2026,..}) -> "ald-2026" *)
+iEXExamLecture[exam_Association] := Module[{lec = Lookup[exam, "Lecture", Missing[]], subj, ds},
+  If[StringQ[lec] && lec =!= "", Return[lec]];
+  subj = ToString[Lookup[exam, "Subject", ""]];
+  ds = Lookup[exam, "DateSpec", {}];
+  Which[
+    subj === "", Missing["NoLecture"],
+    ListQ[ds] && Length[ds] >= 1 && IntegerQ[First[ds]], subj <> "-" <> ToString[First[ds]],
+    True, subj]];
+
+iEXExamLecture[_] := Missing["NoLecture"];
+
+(* 名簿指定 ({{id,name}..} / <|id->name|> / CourseRoster 形式 / csv パス) を
+   {{学籍番号, 氏名}..} へ正規化する *)
+iEXRosterPairs[r_] := Which[
+  ListQ[r] && r =!= {} && AllTrue[r, ListQ[#] && Length[#] >= 2 &],
+    Map[{iEXRosterId[#[[1]]], StringTrim[ToString[#[[2]]]]} &, r],
+  AssociationQ[r] && r =!= <||> && AllTrue[Values[r], AssociationQ],
+    Map[{iEXRosterId[Lookup[#, "StudentID", ""]], ToString[Lookup[#, "StudentName", ""]]} &,
+      Values[r]],
+  AssociationQ[r], KeyValueMap[{iEXRosterId[#1], StringTrim[ToString[#2]]} &, r],
+  StringQ[r],
+    Module[{p = iCWRSourcePairs[r, 1, 2, Automatic, Automatic]}, If[ListQ[p], p, {}]],
+  True, {}];
+
+(* 答案の入力 (Eagle URI / PDF パス / 画像リスト) をページ画像へ *)
+iEXResolveSheetSource[source_] := Module[{src = source},
+  If[StringQ[src] && iCWREagleURIQ[src],
+    src = iCWREaglePath[iCWREagleId[src]];
+    If[!StringQ[src],
+      Return[iEXFail["EagleItemUnresolved", "Source" -> source,
+        "Hint" -> "SourceVault_eagle.wl がロードされているか、item が存在するかを確認してください。"]]]];
+  src];
+
+iEXSheetImages[source_] := Module[{src = iEXResolveSheetSource[source], imgs},
+  If[FailureQ[src], Return[src]];
   imgs = Which[
-    StringQ[source] && FileExistsQ[source],
-      Quiet @ Check[Import[source, "PageImages"], $Failed],
-    ListQ[source] && AllTrue[source, ImageQ], source,
+    StringQ[src] && FileExistsQ[src], Quiet @ Check[Import[src, "PageImages"], $Failed],
+    ListQ[src] && src =!= {} && AllTrue[src, ImageQ], src,
+    ImageQ[src], {src},
     True, $Failed];
-  If[!ListQ[imgs] || imgs === {}, Return[iEXFail["NoImages"]]];
+  If[!ListQ[imgs] || imgs === {}, iEXFail["NoImages", "Source" -> src], imgs]];
+
+Options[SourceVaultExamSheetIngest] = {"Roster" -> Automatic, "ImageWidth" -> 2200,
+  "Lecture" -> Automatic, "VerifyHeader" -> True, "DiffX" -> 0, "DiffY" -> 0};
+SourceVaultExamSheetIngest[examId_String, source_, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], imgs, dir, files, g, w = OptionValue["ImageWidth"],
+   src = source, lecture, roster, verify = Missing["NotChecked"]},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  lecture = If[StringQ[OptionValue["Lecture"]], OptionValue["Lecture"], iEXExamLecture[exam]];
+  (* Eagle に取り込んだ答案 PDF (sv://object/eagle-<id>) も直接指定できる *)
+  src = iEXResolveSheetSource[source];
+  If[FailureQ[src], Return[src]];
+  imgs = iEXSheetImages[src];
+  If[FailureQ[imgs], Return[imgs]];
+  (* 取り違え防止: 印字ヘッダが この試験の解答用紙と一致するかを取り込む前に確認する *)
+  If[TrueQ[OptionValue["VerifyHeader"]],
+    verify = SourceVaultExamSheetVerify[examId, imgs,
+      "DiffX" -> OptionValue["DiffX"], "DiffY" -> OptionValue["DiffY"]];
+    If[!AssociationQ[verify] || Lookup[verify, "Status", ""] =!= "OK",
+      Return[iEXFail["HeaderMismatch", "ExamId" -> examId,
+        "Verify" -> If[AssociationQ[verify], KeyDrop[verify, "Pages"], verify],
+        "Hint" -> "この答案のヘッダは指定した試験の解答用紙と一致しません。" <>
+          "SourceVaultExamSheetVerifyView[examId, source] で見比べてください。" <>
+          "照合が誤りだと分かっている場合だけ \"VerifyHeader\" -> False で取り込めます。"]]]];
   imgs = Map[If[ImageDimensions[#][[1]] =!= w, ImageResize[#, w], #] &, imgs];
   dir = iEXEnsureDir[iEXScanDir[examId]];
   files = MapIndexed[Function[{img, ix}, Module[{f = FileNameJoin[{dir,
@@ -1926,14 +2069,290 @@ SourceVaultExamSheetIngest[examId_String, source_, OptionsPattern[]] := Module[
   g = iEXGrading[examId];
   g["Scans"] = files;
   g["ScanCount"] = Length[files];
-  If[OptionValue["Roster"] =!= Automatic, g["Roster"] = OptionValue["Roster"]];
+  (* 用紙の較正 (縮小・ずれ) はページ幅に対する割合で持つので、
+     ここで 1 回求めておけば以後の切出し (突合せ・解答欄) がそのまま合う *)
+  g["Calib"] = If[AssociationQ[verify] && ListQ[Lookup[verify, "Pages", None]] &&
+      Length[verify["Pages"]] === Length[imgs],
+    Association @ Map[#["Page"] -> Lookup[#, "Calibration", $iEXIdentityCalib] &,
+      verify["Pages"]],
+    Association @ MapIndexed[First[#2] -> iEXSheetCalibration[#1] &, imgs]];
+  (* 名簿は履修者レジストリから自動取得 (明示指定があればそちら) *)
+  roster = If[OptionValue["Roster"] === Automatic,
+    If[StringQ[lecture], iCWREnrollmentPairs[lecture], {}],
+    iEXRosterPairs[OptionValue["Roster"]]];
+  If[ListQ[roster] && roster =!= {}, g["Roster"] = roster];
+  If[StringQ[lecture], g["Lecture"] = lecture];
   If[!KeyExistsQ[g, "Matches"], g["Matches"] = <||>];
+  If[!KeyExistsQ[g, "Assign"], g["Assign"] = <||>];
   If[!KeyExistsQ[g, "Answers"], g["Answers"] = <||>];
   If[!KeyExistsQ[g, "Marks"], g["Marks"] = <||>];
   g["PrivacyLevel"] = 1.0;  (* 答案は個人情報 (ローカルのみ) *)
   iEXSaveGrading[examId, g];
   <|"Status" -> "OK", "ExamId" -> examId, "ScanCount" -> Length[files],
-    "RosterCount" -> Length[Lookup[g, "Roster", {}]]|>];
+    "Lecture" -> lecture, "Source" -> src,
+    "RosterCount" -> Length[Lookup[g, "Roster", {}]],
+    "RosterSource" -> If[OptionValue["Roster"] === Automatic, "Enrollment", "Given"],
+    "HeaderVerified" -> If[AssociationQ[verify], Lookup[verify, "Score", Missing[]], verify],
+    "Calibrated" -> Count[Values[g["Calib"]], c_ /; Lookup[c, "Status", ""] === "OK"],
+    "ScaleRel" -> Median[Map[Lookup[#, "ScaleRel", {1., 1.}] &, Values[g["Calib"]]]],
+    "OffsetPt" -> Median[Map[Lookup[#, "OffsetPt", {0., 0.}] &, Values[g["Calib"]]]]|>];
+
+(* ============================================================
+   解答用紙ヘッダの照合 (試験の取り違え防止)
+   ・「この束は本当にこの試験の答案か」を取り込む前に機械で確かめる。
+   ・見るのは印字部分だけ (試験科目 / 試験時間 / 年月日曜時限)。
+     学生番号・氏名の欄は照合領域に入れない。
+   ・判定は絶対値のしきい値ではなく全候補との順位で行う (同じ様式の
+     用紙なので、差が出るのは印字された科目名などだけ)。
+   ============================================================ *)
+
+(* pt 座標 (y は上から)。学生番号欄 (x 326-396) / 氏名欄 (414-514) は除く *)
+$iEXHeaderRegions = <|
+  "Subject" -> {{76., 83.5}, {162.5, 106.}},    (* 試験科目 *)
+  "Duration" -> {{179., 104.}, {223., 128.5}},  (* 試験時間 *)
+  "Date" -> {{386., 53.}, {562., 73.}}|>;       (* 年月日曜時限 (表より上) *)
+
+$iEXHeaderWeights = <|"Subject" -> 0.6, "Duration" -> 0.2, "Date" -> 0.2|>;
+
+$iEXHeaderImageCache = <||>;
+
+iEXRenderSheetHeader[exam_Association, width_Integer] := Module[{key, g, img},
+  key = {Lookup[exam, "ExamId", ""], Lookup[exam, "Title", ""],
+    Lookup[exam, "DateSpec", {}], Lookup[exam, "Duration", 0], width};
+  If[KeyExistsQ[$iEXHeaderImageCache, key], Return[$iEXHeaderImageCache[key]]];
+  g = Graphics[iEXHeaderPrims[exam, Lookup[exam, "SheetLayout", <||>]],
+    PlotRange -> {{0, $iEXPage[[1]]}, {0, $iEXPage[[2]]}},
+    ImageSize -> $iEXPage, AspectRatio -> Automatic, PlotRangePadding -> 0];
+  img = Quiet @ Check[Rasterize[g, "Image", ImageSize -> width, Background -> White], $Failed];
+  If[!ImageQ[img], Return[$Failed]];
+  img = ImageResize[RemoveAlphaChannel[img],
+    {width, Round[width*$iEXPage[[2]]/$iEXPage[[1]]]}];
+  $iEXHeaderImageCache[key] = img;
+  img];
+
+(* 照合の作り (実データで 2 度外して確定した形):
+   ・罫線を含めると「どの試験でも同じ表」が相関を押し上げて差が出ない
+     (別科目との相関 0.92) → 領域を内側へ詰めて印字だけを見る。
+   ・**印刷された用紙 (FE 出力) と headless 再描画では字の大きさ・位置が
+     違う** (実測: 同じ科目名でも生の相関は 0.35 しか出ず、別科目 0.29 と
+     区別できなかった) → 各領域の**インクの外接矩形で正規化**してから
+     比べる。位置と大きさの違いが落ち、字並びの形だけが残る
+     (実測: 正 0.73/0.59 ↔ 誤 0.04/0.08)。
+   ・外接矩形の縦横比そのものも強い特徴 (離散数学 4.1 / データ構造と
+     アルゴリズム 13.3) なので、相関に掛けて使う。 *)
+$iEXHeaderPatchSize = {64, 24};
+$iEXHeaderInset = 3.;
+
+iEXInsetRect[r_, d_] := {{r[[1, 1]] + d, r[[1, 2]] + d}, {r[[2, 1]] - d, r[[2, 2]] - d}};
+
+(* インクの外接矩形 (かすれ・点は無視する) *)
+iEXInkBox[img_] := Module[{d, thr, mask, rs, cs, ri, ci, minR, minC},
+  If[!ImageQ[img] || Min[ImageDimensions[img]] < 4, Return[$Failed]];
+  d = Quiet @ Check[
+    1. - ImageData[ColorConvert[RemoveAlphaChannel[img], "Grayscale"]], $Failed];
+  If[!MatrixQ[d, NumericQ], Return[$Failed]];
+  thr = Max[0.3, 0.5*Max[d]];
+  mask = UnitStep[d - thr];
+  rs = Total /@ mask; cs = Total /@ Transpose[mask];
+  minC = Max[1, Round[0.02*Length[rs]]]; minR = Max[1, Round[0.02*Length[cs]]];
+  ri = Flatten[Position[rs, x_ /; x >= minR]];
+  ci = Flatten[Position[cs, x_ /; x >= minC]];
+  If[ri === {} || ci === {}, Return[$Failed]];
+  {{Min[ci], Min[ri]}, {Max[ci], Max[ri]}}];
+
+(* 領域の特徴 = 外接矩形で正規化したパッチ + 縦横比 *)
+iEXRegionFeature[img_, calib_, rect_, dx_, dy_] := Module[{c, b, im, v},
+  c = Quiet @ Check[iEXCropCal[img, calib, iEXInsetRect[rect, $iEXHeaderInset], dx, dy],
+    $Failed];
+  If[!ImageQ[c], Return[$Failed]];
+  b = iEXInkBox[c];
+  If[b === $Failed, Return[$Failed]];
+  im = Quiet @ Check[
+    ImageTake[c, {b[[1, 2]], b[[2, 2]]}, {b[[1, 1]], b[[2, 1]]}], $Failed];
+  If[!ImageQ[im] || Min[ImageDimensions[im]] < 2, Return[$Failed]];
+  v = Quiet @ Check[Flatten[1. - ImageData[ColorConvert[
+     ImageResize[RemoveAlphaChannel[im], $iEXHeaderPatchSize], "Grayscale"]]], $Failed];
+  If[!ListQ[v], Return[$Failed]];
+  <|"Vector" -> v,
+    "Aspect" -> (b[[2, 1]] - b[[1, 1]] + 1.)/(b[[2, 2]] - b[[1, 2]] + 1.)|>];
+
+(* 正規化相互相関 (明るさ・コントラストの違いに依存しない) *)
+iEXNCC[a_List, b_List] := Module[{x, y, na, nb},
+  If[Length[a] =!= Length[b] || Length[a] < 4, Return[0.]];
+  x = a - Mean[a]; y = b - Mean[b];
+  na = Norm[x]; nb = Norm[y];
+  If[na == 0. || nb == 0., 0., N[(x . y)/(na*nb)]]];
+
+iEXFeatureScore[f1_, f2_] := Module[{r},
+  If[!AssociationQ[f1] || !AssociationQ[f2], Return[0.]];
+  r = Min[f1["Aspect"], f2["Aspect"]]/Max[f1["Aspect"], f2["Aspect"]];
+  Max[0., iEXNCC[f1["Vector"], f2["Vector"]]*r]];
+
+iEXHeaderCrops[img_Image, calib_, dx_, dy_] :=
+  Association @ KeyValueMap[Function[{name, rect},
+    name -> Quiet @ Check[iEXCropCal[img, calib, rect, dx, dy], $Failed]],
+    $iEXHeaderRegions];
+
+iEXHeaderFeatures[img_, calib_, dx_, dy_] :=
+  Association @ KeyValueMap[Function[{name, rect},
+    name -> iEXRegionFeature[img, calib, rect, dx, dy]], $iEXHeaderRegions];
+
+iEXHeaderRegionScores[fExp_Association, fAct_Association] :=
+  Association @ Map[Function[name,
+    name -> iEXFeatureScore[Lookup[fExp, name, $Failed], Lookup[fAct, name, $Failed]]],
+    Keys[$iEXHeaderRegions]];
+
+iEXHeaderCombined[scores_Association] := Module[{w = $iEXHeaderWeights},
+  Total[KeyValueMap[Lookup[w, #1, 0.]*#2 &, scores]]/Total[Values[w]]];
+
+(* 照合対象の試験 (控え -orig も含めて全件。ヘッダが同じものは同点になる) *)
+iEXHeaderCandidates[] := Select[SourceVaultExamList[],
+  AssociationQ[#] && AssociationQ[Lookup[#, "SheetLayout", Missing[]]] &];
+
+(* MinScore は「用紙がまるで読めていない」検出用の下限 (実測: 正しい組で 0.47、
+   別科目で 0.13)。判定の主役は候補間の順位なので低めに置く。 *)
+Options[SourceVaultExamSheetVerify] = {"Pages" -> All, "DiffX" -> 0, "DiffY" -> 0,
+  "Candidates" -> Automatic, "MinScore" -> 0.25, "Tolerance" -> 0.02, "ImageWidth" -> 1200};
+
+iEXSheetScoreTable[imgs_List, opts_List] := Module[
+  {w = OptionValue[SourceVaultExamSheetVerify, opts, "ImageWidth"],
+   dx = OptionValue[SourceVaultExamSheetVerify, opts, "DiffX"],
+   dy = OptionValue[SourceVaultExamSheetVerify, opts, "DiffY"],
+   cands = OptionValue[SourceVaultExamSheetVerify, opts, "Candidates"],
+   expected, pages, layout},
+  cands = Which[
+    cands === Automatic, iEXHeaderCandidates[],
+    ListQ[cands] && AllTrue[cands, StringQ],
+      Select[Map[SourceVaultExamGet, cands], AssociationQ],
+    ListQ[cands], Select[cands, AssociationQ],
+    True, iEXHeaderCandidates[]];
+  If[cands === {}, Return[iEXFail["NoCandidateExams"]]];
+  (* 実物より高い解像度で期待側を描くと、拡大補間でぼけた実物と噛み合わず
+     判別できなくなる (実測: 900px のスキャンを 1200 に拡大すると科目名の
+     相関が 0.86 -> 0.68 に落ち、別科目と逆転した)。両者を必ず同じ幅に揃え、
+     実物は縮小しかしない。 *)
+  w = Min[Append[Map[First[ImageDimensions[#]] &, imgs], w]];
+  (* 期待側のテンプレートは試験ごとに 1 回、探索範囲はページごとに 1 回だけ作る *)
+  expected = Association @ Map[Function[ex, Module[{img = iEXRenderSheetHeader[ex, w]},
+    Lookup[ex, "ExamId", ""] -> If[ImageQ[img],
+      (* 期待側は生成したままなのでページ比例 (較正不要) *)
+      <|"Exam" -> ex, "Features" -> iEXHeaderFeatures[img, $iEXIdentityCalib, 0, 0],
+        "Image" -> img|>, Missing["RenderFailed"]]]], cands];
+  expected = Select[expected, AssociationQ];
+  If[expected === <||>, Return[iEXFail["HeaderRenderFailed"]]];
+  (* 実物は印刷・スキャンで縮小/平行移動しているので、罫線から較正してから切る *)
+  pages = MapIndexed[Function[{img, ix}, Module[{scaled, feats, scores, cal},
+    scaled = If[ImageDimensions[img][[1]] =!= w, ImageResize[img, w], img];
+    cal = iEXSheetCalibration[scaled];
+    feats = iEXHeaderFeatures[scaled, cal, dx, dy];
+    scores = Association @ KeyValueMap[Function[{eid, e},
+      eid -> iEXHeaderCombined[iEXHeaderRegionScores[e["Features"], feats]]], expected];
+    <|"Page" -> First[ix], "Scores" -> scores, "Calibration" -> cal|>]], imgs];
+  <|"Expected" -> expected, "Pages" -> pages|>];
+
+SourceVaultExamSheetVerify[examId_String, source_, opts : OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], imgs, sel, tbl, minScore = OptionValue["MinScore"],
+   tol = OptionValue["Tolerance"], pages, ranking, bad, targetScores, status},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  imgs = iEXSheetImages[source];
+  If[FailureQ[imgs], Return[imgs]];
+  sel = OptionValue["Pages"];
+  If[ListQ[sel], imgs = Part[imgs, Select[sel, IntegerQ[#] && 1 <= # <= Length[imgs] &]]];
+  If[imgs === {}, Return[iEXFail["NoPages"]]];
+  tbl = iEXSheetScoreTable[imgs, Flatten[{opts}]];
+  If[FailureQ[tbl], Return[tbl]];
+  If[!KeyExistsQ[tbl["Expected"], examId],
+    Return[iEXFail["ExamNotAmongCandidates", "ExamId" -> examId]]];
+  pages = Map[Function[p, Module[{sc = p["Scores"], best, bestScore, mine},
+    mine = Lookup[sc, examId, 0.];
+    bestScore = Max[Values[sc]];
+    best = First[Keys[Select[sc, # >= bestScore - 10.^-9 &]]];
+    <|"Page" -> p["Page"], "Score" -> mine, "Best" -> best, "BestScore" -> bestScore,
+      "Calibration" -> Lookup[p, "Calibration", $iEXIdentityCalib],
+      (* 判定は順位が主。他の試験の方が明確に良ければ、点の高低によらず不一致。
+         最有力ではあるが点が低いときだけ「用紙が読めていない」扱いにする。 *)
+      "Status" -> Which[
+        mine < bestScore - tol, "Mismatch",
+        mine < minScore, "LowScore",
+        True, "OK"]|>]], tbl["Pages"]];
+  targetScores = Map[#["Score"] &, pages];
+  (* 罠: 入れ子の純関数だと内側の # が外側のキーを隠すので名前つき Function で書く *)
+  ranking = ReverseSortBy[
+    KeyValueMap[Function[{eid, e}, <|"ExamId" -> eid,
+      "Title" -> ToString[Lookup[e["Exam"], "Title", ""]],
+      "Score" -> Mean[Map[Function[p, Lookup[p["Scores"], eid, 0.]], tbl["Pages"]]]|>],
+      tbl["Expected"]], #["Score"] &];
+  bad = Select[pages, #["Status"] =!= "OK" &];
+  status = Which[
+    bad === {}, "OK",
+    AnyTrue[bad, #["Status"] === "Mismatch" &], "Mismatch",
+    True, "Uncertain"];
+  <|"Status" -> status, "ExamId" -> examId, "Title" -> ToString[Lookup[exam, "Title", ""]],
+    "Score" -> If[targetScores === {}, 0., Mean[targetScores]],
+    "Best" -> First[ranking]["ExamId"], "BestScore" -> First[ranking]["Score"],
+    "PageCount" -> Length[pages], "BadPages" -> Map[#["Page"] &, bad],
+    (* スキャンの縮小・ずれ (罫線から推定)。用紙が読めていない目安にもなる *)
+    "Calibrated" -> Count[pages, p_ /; Lookup[p["Calibration"], "Status", ""] === "OK"],
+    "ScaleRel" -> Median[Map[Lookup[#["Calibration"], "ScaleRel", {1., 1.}] &, pages]],
+    "OffsetPt" -> Median[Map[Lookup[#["Calibration"], "OffsetPt", {0., 0.}] &, pages]],
+    "Ranking" -> ranking, "Pages" -> pages|>];
+
+Options[SourceVaultExamSheetVerifyView] = Options[SourceVaultExamSheetVerify];
+SourceVaultExamSheetVerifyView[examId_String, source_, opts : OptionsPattern[]] := Module[
+  {res, imgs, exam = SourceVaultExamGet[examId], expImg, page, actImg, ff = iEXFont[],
+   names, cal, w = OptionValue["ImageWidth"], row},
+  res = SourceVaultExamSheetVerify[examId, source, opts];
+  If[!AssociationQ[res], Return[res]];
+  imgs = iEXSheetImages[source];
+  If[FailureQ[imgs], Return[imgs]];
+  page = If[res["BadPages"] =!= {}, First[res["BadPages"]], 1];
+  w = Min[Append[Map[First[ImageDimensions[#]] &, imgs], w]];
+  actImg = imgs[[Min[page, Length[imgs]]]];
+  If[ImageDimensions[actImg][[1]] =!= w, actImg = ImageResize[actImg, w]];
+  (* 照合に使ったのと同じ較正で切り出して見せる *)
+  row = SelectFirst[res["Pages"], #["Page"] === page &, <||>];
+  cal = Lookup[row, "Calibration", iEXSheetCalibration[actImg]];
+  expImg = iEXRenderSheetHeader[exam, w];
+  names = Keys[$iEXHeaderRegions];
+  Column[{
+    Style[Row[{"照合: ", examId, " (", res["Title"], ")　判定 ",
+      Switch[res["Status"], "OK", Style["一致", Darker[Green], Bold],
+        "Mismatch", Style["不一致", Red, Bold], _, Style["要確認", Orange, Bold]],
+      "　スコア ", NumberForm[res["Score"], {3, 2}],
+      "　最有力 ", res["Best"]}], 13, FontFamily -> ff],
+    Style[Row[{"用紙の較正: ", Lookup[cal, "Status", "?"],
+      "　倍率 ", Lookup[cal, "ScaleRel", {1., 1.}],
+      "　ずれ(pt) ", Lookup[cal, "OffsetPt", {0., 0.}],
+      "　縦罫一致 ", Lookup[cal, "VRuleHits", 0], "/12"}],
+      If[Lookup[cal, "Status", ""] === "OK", GrayLevel[0.35], Red], 10, FontFamily -> ff],
+    If[res["BadPages"] =!= {},
+      Style[Row[{"一致しないページ: ", Short[res["BadPages"], 3]}], Red, 11, FontFamily -> ff], ""],
+    Grid[Join[
+      {Prepend[Map[Style[#, Bold, 10, FontFamily -> ff] &, names], ""]},
+      {Prepend[Map[Framed[Lookup[iEXHeaderCrops[expImg, $iEXIdentityCalib, 0, 0], #, ""]] &,
+        names], Style["生成した用紙", 10, FontFamily -> ff]]},
+      {Prepend[Map[Framed[Lookup[iEXHeaderCrops[actImg, cal,
+          OptionValue["DiffX"], OptionValue["DiffY"]], #, ""]] &, names],
+        Style[Row[{"回収した答案 (", page, "頁)"}], 10, FontFamily -> ff]]}],
+      Alignment -> Left, Spacings -> {1, 1}],
+    Dataset[res["Ranking"]]}, Spacings -> 1.2]];
+
+Options[SourceVaultExamSheetIdentify] = Options[SourceVaultExamSheetVerify];
+SourceVaultExamSheetIdentify[source_, opts : OptionsPattern[]] := Module[{imgs, sel, tbl},
+  imgs = iEXSheetImages[source];
+  If[FailureQ[imgs], Return[imgs]];
+  sel = OptionValue["Pages"];
+  If[ListQ[sel], imgs = Part[imgs, Select[sel, IntegerQ[#] && 1 <= # <= Length[imgs] &]]];
+  If[imgs === {}, Return[iEXFail["NoPages"]]];
+  tbl = iEXSheetScoreTable[imgs, Flatten[{opts}]];
+  If[FailureQ[tbl], Return[tbl]];
+  ReverseSortBy[
+    KeyValueMap[Function[{eid, e}, <|"ExamId" -> eid,
+      "Title" -> ToString[Lookup[e["Exam"], "Title", ""]],
+      "Score" -> Mean[Map[Lookup[#["Scores"], eid, 0.] &, tbl["Pages"]]],
+      "Pages" -> Count[tbl["Pages"],
+        p_ /; Max[Values[p["Scores"]]] - Lookup[p["Scores"], eid, 0.] < 10.^-9]|>],
+      tbl["Expected"]], #["Score"] &]];
 
 iEXScanImage[g_Association, i_Integer] := Module[{files = Lookup[g, "Scans", {}]},
   If[1 <= i <= Length[files], Quiet @ Import[files[[i]]], $Failed]];
@@ -1948,22 +2367,196 @@ iEXCropRect[img_Image, layout_Association, rect_, diffx_, diffy_] := Module[
   r2 = Clip[Round[rect[[2, 2]]*sy + diffy], {1, dims[[2]]}];
   ImageTake[img, {r1, r2}, {c1, c2}]];
 
+(* 履修者 csv を配り直したら、取り込み済みの答案が持つ名簿スナップショットも
+   更新する。突合せは学籍番号で持っているので割当は壊れない。 *)
+Options[SourceVaultExamSyncRoster] = {"Lecture" -> Automatic, "DryRun" -> False};
+SourceVaultExamSyncRoster[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], g, lecture, pairs, before, beforeIds, afterIds,
+   assigns, index, unenrolled},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  g = iEXGrading[examId];
+  If[g === <||>, Return[iEXFail["NoGradingState", "ExamId" -> examId]]];
+  lecture = Which[
+    StringQ[OptionValue["Lecture"]], OptionValue["Lecture"],
+    StringQ[Lookup[g, "Lecture", Missing[]]], g["Lecture"],
+    True, iEXExamLecture[exam]];
+  If[!StringQ[lecture], Return[iEXFail["NoLecture", "ExamId" -> examId]]];
+  pairs = iCWREnrollmentPairs[lecture];
+  If[pairs === {},
+    Return[iEXFail["EnrollmentNotFound", "Lecture" -> lecture,
+      "Hint" -> "SourceVaultCourseEnrollmentRegister[lecture, csv] で登録してください。"]]];
+  before = Lookup[g, "Roster", {}];
+  beforeIds = Map[iCWRNormalizeID[First[#]] &, Select[before, ListQ]];
+  afterIds = Map[iCWRNormalizeID[First[#]] &, pairs];
+  (* 割当先が履修者でなくなっていないか (退学・履修取消の答案) *)
+  assigns = iEXAssignments[g];
+  index = If[AssociationQ[SourceVaultCourseEnrollmentRecord[lecture]],
+    Lookup[SourceVaultCourseEnrollmentRecord[lecture], "Students", <||>], <||>];
+  unenrolled = KeyValueMap[Function[{scan, nid},
+    If[Lookup[Lookup[index, nid, <||>], "Status", "NotEnrolled"] === "Enrolled", Nothing,
+      <|"Scan" -> scan, "StudentID" -> nid,
+        "Status" -> Lookup[Lookup[index, nid, <||>], "Status", "NotEnrolled"]|>]], assigns];
+  If[!TrueQ[OptionValue["DryRun"]],
+    g["Roster"] = pairs; g["Lecture"] = lecture;
+    iEXSaveGrading[examId, g]];
+  <|"Status" -> If[TrueQ[OptionValue["DryRun"]], "DryRun", "OK"],
+    "ExamId" -> examId, "Lecture" -> lecture,
+    "RosterCount" -> Length[pairs], "Before" -> Length[before],
+    "Added" -> Complement[afterIds, beforeIds], "Removed" -> Complement[beforeIds, afterIds],
+    "Assignments" -> Length[assigns], "UnenrolledAssignments" -> unenrolled|>];
+
+(* ---- 答案 <-> 履修者の対応 ----
+   対応は「スキャン番号 -> 学籍番号」で持つ (g["Assign"])。名簿の行番号で
+   持つと履修者を再登録して並びが変わったときに全部ずれるため。
+   旧形式 g["Matches"] = <|scan -> 名簿の行番号|> は読むときに変換する。 *)
+
+iEXAssignments[g_Association] := Module[
+  {roster = Lookup[g, "Roster", {}], assign = Lookup[g, "Assign", <||>],
+   legacy = Lookup[g, "Matches", <||>], out = <||>},
+  If[AssociationQ[legacy],
+    KeyValueMap[Function[{k, v}, Which[
+      IntegerQ[v] && ListQ[roster] && 1 <= v <= Length[roster],
+        out[k] = iCWRNormalizeID[roster[[v, 1]]],
+      StringQ[v] && v =!= "", out[k] = iCWRNormalizeID[v]]], legacy]];
+  If[AssociationQ[assign],
+    KeyValueMap[Function[{k, v}, If[StringQ[v] && v =!= "", out[k] = iCWRNormalizeID[v]]], assign]];
+  out];
+
+(* 明示指定が無いスキャンは「並び順どおり」を既定にする (MatchView での
+   目視確認が前提。名簿より多い分は未割当)。 *)
+iEXAssignedId[g_Association, assigns_Association, i_Integer] := Module[
+  {roster = Lookup[g, "Roster", {}]},
+  Lookup[assigns, i,
+    If[ListQ[roster] && 1 <= i <= Length[roster], iCWRNormalizeID[roster[[i, 1]]],
+      Missing["NoAssignment", i]]]];
+
+(* 履修者レジストリを 1 回だけ読む (答案 1 枚ごとに読み直さない) *)
+iEXEnrollmentIndex[g_Association] := Module[
+  {lecture = Lookup[g, "Lecture", Missing[]], rec},
+  If[!StringQ[lecture], Return[<||>]];
+  rec = SourceVaultCourseEnrollmentRecord[lecture];
+  If[AssociationQ[rec], Replace[Lookup[rec, "Students", <||>], Except[_Association] -> <||>], <||>]];
+
+(* 学籍番号 -> 氏名・履修状態。履修者レジストリを第一選択にして、
+   取込時に保存した名簿スナップショットへ落とす。 *)
+iEXStudentInfo[g_Association, index_Association, normId_] := Module[
+  {roster = Lookup[g, "Roster", {}], rec, hit},
+  If[!StringQ[normId],
+    Return[<|"StudentID" -> Missing["NoAssignment"], "StudentName" -> Missing["NoAssignment"],
+      "Status" -> "Unassigned"|>]];
+  rec = Lookup[index, normId, Missing[]];
+  If[AssociationQ[rec],
+    Return[<|"StudentID" -> Lookup[rec, "StudentID", normId],
+      "StudentName" -> Lookup[rec, "StudentName", Missing[]],
+      "Status" -> Lookup[rec, "Status", "Enrolled"]|>]];
+  hit = SelectFirst[roster, ListQ[#] && iCWRNormalizeID[#[[1]]] === normId &, Missing[]];
+  If[ListQ[hit],
+    <|"StudentID" -> hit[[1]], "StudentName" -> hit[[2]], "Status" -> "Unverified"|>,
+    <|"StudentID" -> normId, "StudentName" -> Missing["NotInRoster"], "Status" -> "NotEnrolled"|>]];
+
+(* ============================================================
+   スキャンの自動較正 (用紙の罫線から pt -> 画素の対応を求める)
+   ・回収した答案は印刷・スキャンの過程で必ず縮小と平行移動を受ける
+     (実測: 2026 年度の解答用紙は 96.4% 縮小 + 上から約 17pt ずれ)。
+     ページ寸法から比例配分するだけでは header も解答欄も外す。
+   ・公式様式の罫線 (全幅の横罫 83.5 / 128.5 / 157pt と表の縦罫 12 本)
+     を検出して pt -> 画素のアフィン変換を推定する。
+   ・較正は「ページ幅に対する割合」で持つので、画像を縮小しても効く。
+   ============================================================ *)
+
+$iEXExpectedVRules = {32., 76., 162.5, 179., 223., 308., 326., 396., 414., 514., 532., 576.};
+$iEXIdentityCalib = <|"X" -> {0., 1./595.}, "Y" -> {0., 1./842.},
+  "Status" -> "Identity", "VRuleHits" -> 0, "ScaleRel" -> {1., 1.}, "OffsetPt" -> {0., 0.}|>;
+
+iEXSheetCalibration[img_] := Module[
+  {im, dd, hh, ww, rowc, hs, pairs, best, r1, r2, sy, oy, band, colc, vs, sx, ox, hits,
+   sxRel, syRel},
+  If[!ImageQ[img], Return[$iEXIdentityCalib]];
+  im = Quiet @ Check[ColorConvert[RemoveAlphaChannel[
+     If[ImageDimensions[img][[1]] > 900, ImageResize[img, 900], img]], "Grayscale"], $Failed];
+  If[!ImageQ[im], Return[$iEXIdentityCalib]];
+  dd = ImageData[im];
+  If[!MatrixQ[dd, NumericQ], Return[$iEXIdentityCalib]];
+  dd = 1. - dd;
+  {hh, ww} = Dimensions[dd];
+  rowc = (Total /@ dd)/ww;
+  (* 全幅の横罫 (上から 45% 以内) *)
+  hs = Mean /@ Split[Select[Range[Round[0.45 hh]], rowc[[#]] > 0.3 &], #2 - #1 <= 3 &];
+  If[Length[hs] < 2, Return[Join[$iEXIdentityCalib, <|"Status" -> "Fallback"|>]]];
+  hs = Take[hs, UpTo[6]];
+  (* 2 本を表の上下 (83.5 / 128.5) と仮定して当てはめ、157 の線が出るかで選ぶ *)
+  pairs = Select[Subsets[hs, {2}], #[[2]] > #[[1]] &];
+  best = MaximalBy[pairs, Function[p, Module[{s = (p[[2]] - p[[1]])/45., pred},
+      pred = p[[1]] - s*83.5 + s*157.;
+      If[s < 0.75*hh/842. || s > 1.25*hh/842., -1.,
+        10.*Count[hs, x_ /; Abs[x - pred] <= 0.004 hh] - Abs[s - hh/842.]]]], 1];
+  If[best === {}, Return[Join[$iEXIdentityCalib, <|"Status" -> "Fallback"|>]]];
+  {r1, r2} = First[best];
+  sy = (r2 - r1)/45.; oy = r1 - sy*83.5;
+  (* 表の帯の中で縦罫を拾う *)
+  band = Range[Ceiling[Max[r1 + 2, 1]], Floor[Min[r2 - 2, hh]]];
+  If[Length[band] < 4, Return[Join[$iEXIdentityCalib, <|"Status" -> "Fallback"|>]]];
+  colc = (Total /@ Transpose[dd[[band]]])/Length[band];
+  vs = Mean /@ Split[Select[Range[ww], colc[[#]] > 0.5 &], #2 - #1 <= 3 &];
+  If[Length[vs] < 2, Return[Join[$iEXIdentityCalib, <|"Status" -> "Fallback"|>]]];
+  sx = (Last[vs] - First[vs])/(576. - 32.); ox = First[vs] - sx*32.;
+  hits = Count[$iEXExpectedVRules, x_ /; Min[Abs[vs - (ox + sx*x)]] <= 0.004 ww];
+  sxRel = sx/(ww/595.); syRel = sy/(hh/842.);
+  (* 明らかに外れた推定は使わない (白紙・様式違いのページ) *)
+  If[hits < 6 || sxRel < 0.85 || sxRel > 1.15 || syRel < 0.85 || syRel > 1.15,
+    Return[Join[$iEXIdentityCalib, <|"Status" -> "Fallback", "VRuleHits" -> hits|>]]];
+  <|"X" -> {ox/ww, sx/ww}, "Y" -> {oy/hh, sy/hh}, "Status" -> "OK", "VRuleHits" -> hits,
+    "ScaleRel" -> Round[{sxRel, syRel}, 0.001],
+    "OffsetPt" -> Round[{ox*595./ww, oy*595./ww}, 0.1]|>];
+
+iEXCalibQ[c_] := AssociationQ[c] && MatchQ[Lookup[c, "X", None], {_?NumericQ, _?NumericQ}] &&
+  MatchQ[Lookup[c, "Y", None], {_?NumericQ, _?NumericQ}];
+
+(* 較正つきの切出し (較正が無ければページ比例 = 従来どおり) *)
+iEXCropCal[img_Image, calib_, rect_, dx_, dy_] := Module[
+  {c = If[iEXCalibQ[calib], calib, $iEXIdentityCalib], dims = ImageDimensions[img],
+   ax, bx, ay, by, c1, c2, r1, r2},
+  {ax, bx} = c["X"]; {ay, by} = c["Y"];
+  c1 = Clip[Round[(ax + bx*rect[[1, 1]])*dims[[1]] + dx], {1, dims[[1]]}];
+  c2 = Clip[Round[(ax + bx*rect[[2, 1]])*dims[[1]] + dx], {1, dims[[1]]}];
+  r1 = Clip[Round[(ay + by*rect[[1, 2]])*dims[[2]] + dy], {1, dims[[2]]}];
+  r2 = Clip[Round[(ay + by*rect[[2, 2]])*dims[[2]] + dy], {1, dims[[2]]}];
+  If[c2 <= c1 || r2 <= r1, Return[$Failed]];
+  ImageTake[img, {r1, r2}, {c1, c2}]];
+
+(* 取り込み時に求めた較正を使う (無ければその場で求める) *)
+iEXScanCalib[g_Association, i_Integer, img_] := Module[{cs = Lookup[g, "Calib", <||>]},
+  If[AssociationQ[cs] && iEXCalibQ[Lookup[cs, i, None]], cs[i],
+    If[ImageQ[img], iEXSheetCalibration[img], $iEXIdentityCalib]]];
+
 Options[SourceVaultExamMatches] = {"DiffX" -> 0, "DiffY" -> 0};
 SourceVaultExamMatches[examId_String, OptionsPattern[]] := Module[
-  {exam = SourceVaultExamGet[examId], g, layout, roster, matches, dx = OptionValue["DiffX"], dy = OptionValue["DiffY"]},
+  {exam = SourceVaultExamGet[examId], g, layout, roster, assigns, index,
+   dx = OptionValue["DiffX"], dy = OptionValue["DiffY"]},
   If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
   g = iEXGrading[examId];
   If[Lookup[g, "Scans", {}] === {}, Return[iEXFail["NoScans", "ExamId" -> examId]]];
   layout = exam["SheetLayout"];
   roster = Lookup[g, "Roster", {}];
-  matches = Lookup[g, "Matches", <||>];
-  Table[Module[{img = iEXScanImage[g, i], ri, student},
-    ri = Lookup[matches, i, i];
-    student = If[1 <= ri <= Length[roster], roster[[ri]], Missing["NoRosterEntry", ri]];
+  assigns = iEXAssignments[g];
+  index = iEXEnrollmentIndex[g];
+  Table[Module[{img = iEXScanImage[g, i], nid, info, ri, cal},
+    nid = iEXAssignedId[g, assigns, i];
+    info = iEXStudentInfo[g, index, nid];
+    cal = iEXScanCalib[g, i, img];
+    ri = If[StringQ[nid],
+      FirstPosition[roster, {x_, _} /; iCWRNormalizeID[x] === nid, Missing["NotInRoster"], {1}],
+      Missing["NoAssignment", i]];
     <|"Scan" -> i,
-      "IDImage" -> If[ImageQ[img], iEXCropRect[img, layout, layout["IDRect"], dx, dy], Missing[]],
-      "NameImage" -> If[ImageQ[img], iEXCropRect[img, layout, layout["NameRect"], dx, dy], Missing[]],
-      "RosterIndex" -> ri, "Student" -> student|>],
+      "IDImage" -> If[ImageQ[img], iEXCropCal[img, cal, layout["IDRect"], dx, dy], Missing[]],
+      "NameImage" -> If[ImageQ[img], iEXCropCal[img, cal, layout["NameRect"], dx, dy], Missing[]],
+      "Calibration" -> Lookup[cal, "Status", "Identity"],
+      "RosterIndex" -> Replace[ri, {p_List :> First[p]}],
+      "StudentID" -> info["StudentID"], "StudentName" -> info["StudentName"],
+      "Status" -> info["Status"],
+      "Assigned" -> KeyExistsQ[assigns, i],
+      "Student" -> If[MissingQ[info["StudentName"]],
+        Missing["NoRosterEntry", i], {info["StudentID"], info["StudentName"]}]|>],
     {i, Lookup[g, "ScanCount", 0]}]];
 
 SourceVaultExamMatchView[examId_String, opts : OptionsPattern[SourceVaultExamMatches]] := Module[
@@ -1977,24 +2570,300 @@ SourceVaultExamMatchView[examId_String, opts : OptionsPattern[SourceVaultExamMat
       "  ",
       Replace[r["Student"], {
         {sid_, nm_} :> Style[Row[{sid, "　", nm}], 12],
-        _Missing :> Style["(受講者未対応)", Red]}]
+        _Missing :> Style["(受講者未対応)", Red]}],
+      Switch[Lookup[r, "Status", ""],
+        "Withdrawn", Style["  [履修取消]", Red, 11],
+        "NotEnrolled", Style["  [名簿にない]", Red, 11],
+        "Unverified", Style["  [履修者未登録]", Orange, 11],
+        _, ""]
     }]];
   Column[Map[mkRow, rows], Spacings -> 1.5]];
 
-SourceVaultExamSetMatch[examId_String, overrides_Association] := Module[{g = iEXGrading[examId]},
+(* overrides の値は学籍番号 ("5422018") でも名簿の行番号 (2) でもよい。
+   保存は必ず学籍番号に正規化する。 *)
+SourceVaultExamSetMatch[examId_String, overrides_Association] := Module[
+  {g = iEXGrading[examId], roster, assign, bad = {}},
   If[g === <||>, Return[iEXFail["NoGradingState", "ExamId" -> examId]]];
-  g["Matches"] = Join[Lookup[g, "Matches", <||>], overrides];
+  roster = Lookup[g, "Roster", {}];
+  assign = Lookup[g, "Assign", <||>];
+  If[!AssociationQ[assign], assign = <||>];
+  KeyValueMap[Function[{k, v}, Which[
+    v === None || v === "" || MissingQ[v], assign = KeyDrop[assign, k],
+    StringQ[v] && StringTrim[v] =!= "", assign[k] = iCWRNormalizeID[v],
+    IntegerQ[v] && ListQ[roster] && 1 <= v <= Length[roster],
+      assign[k] = iCWRNormalizeID[roster[[v, 1]]],
+    True, AppendTo[bad, k]]], overrides];
+  g["Assign"] = assign;
+  (* 旧形式のキーは新しい割当で置き換わったので落とす *)
+  g["Matches"] = KeyDrop[Lookup[g, "Matches", <||>], Keys[assign]];
   iEXSaveGrading[examId, g];
-  <|"Status" -> "OK", "Matches" -> g["Matches"]|>];
+  <|"Status" -> If[bad === {}, "OK", "Partial"], "ExamId" -> examId,
+    "Assign" -> assign, "Rejected" -> bad|>];
+
+(* ============================================================
+   目視割当 (答案は提出順で名簿順ではない)
+   ・学生番号の自動認識はローカルでは実用にならなかった (実測: MNIST 学習済み
+     ネットで 1 桁目の正解率 15/25、Tesseract は 25 枚中 13 枚が読取不能)。
+     個人情報をクラウドへ出さない方針なので、認識に頼らず目視で確定する。
+   ・そのかわり手数を減らす: 割当済みの学生は候補から外し、重複・未割当・
+     答案の無い履修者を常に表示する。
+   ============================================================ *)
+
+(* ---- 学生番号の読み取りによる突合せ候補 ----
+   送るのは学生番号欄の切出しだけ (氏名欄 x414-514 / 解答欄は含まない)。
+   読み取りは名簿へ寄せてから使うので、多少の誤読は編集距離で吸収できる。
+   最終確認は必ずオーナーの目視 (AssignView)。 *)
+
+If[!ValueQ[$SourceVaultExamAllowCloudIDRecognition],
+  $SourceVaultExamAllowCloudIDRecognition = False];
+
+$iEXIDPrompt = "Each image is a crop of ONE handwritten student ID number from a \
+university exam answer sheet. It is a 7-digit number (no letters, no name). \
+Read the digits as written.\n\
+Output exactly one line per image, in order, in the form\n\
+k=<digits>\n\
+where k is the image number starting at 1. If an image is unreadable or empty, \
+output k=UNKNOWN. Output nothing else.";
+
+iEXIDVisionFn[] := If[Length[Names["ClaudeCode`ClaudeQueryBg"]] > 0 &&
+    Length[DownValues[ClaudeCode`ClaudeQueryBg]] > 0,
+  Function[crops, iEXParseIDLines[
+     ToString[ClaudeCode`ClaudeQueryBg[Join[{$iEXIDPrompt}, crops]]], Length[crops]]],
+  $Failed];
+
+(* "1=5422018" 形式を n 行ぶん取り出す (全角数字・余計な行に耐える) *)
+iEXParseIDLines[resp_String, n_Integer] := Module[{norm, lines, pairs},
+  (* 罠: StringReplace のルール列に入れ子のリストを混ぜると無効になる (Join で平らに) *)
+  norm = StringReplace[resp, Join[{"＝" -> "=", "：" -> ":", "　" -> " "},
+    Thread[CharacterRange["０", "９"] -> CharacterRange["0", "9"]]]];
+  lines = Select[StringSplit[norm, "\n"], StringContainsQ[#, "="] &];
+  pairs = Map[Function[l, Module[{p = StringSplit[l, "=", 2]},
+     If[Length[p] < 2, Nothing,
+      Quiet@Check[ToExpression[StringTrim[StringDelete[p[[1]], Except[DigitCharacter]]]], $Failed] ->
+        StringJoin[Select[Characters[p[[2]]], DigitQ]]]]], lines];
+  pairs = Association[Select[pairs, IntegerQ[First[#]] &]];
+  Table[Lookup[pairs, i, ""], {i, n}]];
+
+iEXNearestStudent[read_String, ids_List] := Module[{ds, best},
+  If[read === "" || ids === {}, Return[<|"StudentID" -> Missing["Unread"], "Distance" -> Infinity|>]];
+  ds = Map[{#, EditDistance[read, #]} &, ids];
+  best = MinimalBy[ds, Last];
+  <|"StudentID" -> If[Length[best] === 1, best[[1, 1]], Missing["Ambiguous"]],
+    "Distance" -> best[[1, 2]],
+    "Candidates" -> Map[First, best]|>];
+
+Options[SourceVaultExamProposeMatches] = {"RecognizerFn" -> Automatic, "Scans" -> All,
+  "Apply" -> True, "Overwrite" -> False, "BatchSize" -> 8, "MaxDistance" -> 2,
+  "DiffX" -> 0, "DiffY" -> 0};
+SourceVaultExamProposeMatches[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], g, layout, students, ids, fn, target, assigns,
+   crops, reads, rows, taken, apply = TrueQ[OptionValue["Apply"]],
+   maxD = OptionValue["MaxDistance"], batch = OptionValue["BatchSize"], props},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  g = iEXGrading[examId];
+  If[Lookup[g, "Scans", {}] === {}, Return[iEXFail["NoScans", "ExamId" -> examId]]];
+  layout = exam["SheetLayout"];
+  students = iEXAssignRoster[g];
+  If[students === {}, Return[iEXFail["EnrollmentNotFound", "ExamId" -> examId]]];
+  ids = Map[iCWRNormalizeID[First[#]] &, students];
+  fn = OptionValue["RecognizerFn"];
+  If[fn === Automatic,
+    If[!TrueQ[$SourceVaultExamAllowCloudIDRecognition],
+      Return[iEXFail["CloudRecognitionNotAllowed",
+        "Hint" -> "学生番号欄の切出しをクラウドへ送ります (氏名欄・解答欄は送りません)。" <>
+          "許可する場合は SourceVault`$SourceVaultExamAllowCloudIDRecognition = True を評価してください。" <>
+          "自前の読み取りを使う場合は \"RecognizerFn\" -> fn[{crop..}]->{文字列..} を指定します。"]]];
+    fn = iEXIDVisionFn[];
+    If[fn === $Failed, Return[iEXFail["NoRecognizer",
+      "Hint" -> "ClaudeCode が未ロードです。\"RecognizerFn\" を指定してください。"]]]];
+  assigns = iEXAssignments[g];
+  target = If[OptionValue["Scans"] === All, Range[Lookup[g, "ScanCount", 0]],
+    Select[OptionValue["Scans"], IntegerQ]];
+  If[!TrueQ[OptionValue["Overwrite"]],
+    target = Select[target, !KeyExistsQ[assigns, #] &]];
+  If[target === {}, Return[<|"Status" -> "NoChange", "ExamId" -> examId,
+    "Hint" -> "未割当の答案がありません (\"Overwrite\" -> True で読み直せます)。"|>]];
+  (* 学生番号欄だけを切り出す *)
+  crops = Map[Function[i, Module[{img = iEXScanImage[g, i]},
+     If[ImageQ[img],
+      iEXCropCal[img, iEXScanCalib[g, i, img], layout["IDRect"],
+       OptionValue["DiffX"], OptionValue["DiffY"]], $Failed]]], target];
+  reads = Join @@ Map[Function[part, Module[{cs = Map[Last, part], r},
+      r = Quiet@Check[fn[Select[cs, ImageQ]], $Failed];
+      If[!ListQ[r] || Length[r] =!= Length[Select[cs, ImageQ]],
+        ConstantArray["", Length[part]],
+        (* 画像でなかったものは空扱いで埋め戻す *)
+        Module[{it = r}, Map[Function[c, If[ImageQ[c], Module[{v = First[it]},
+           it = Rest[it]; ToString[v]], ""]], cs]]]]],
+    Partition[Transpose[{target, crops}], UpTo[Max[1, batch]]]];
+  (* 名簿へ寄せて、確信度の高い順に 1 人 1 枚で確定する *)
+  rows = MapThread[Function[{scan, read}, Module[{m = iEXNearestStudent[read, ids]},
+      <|"Scan" -> scan, "Read" -> read, "StudentID" -> m["StudentID"],
+        "Distance" -> m["Distance"], "Candidates" -> Lookup[m, "Candidates", {}]|>]],
+    {target, reads}];
+  taken = Values[KeyDrop[assigns, target]];
+  props = <||>;
+  rows = Map[Function[r, Module[{sid = r["StudentID"], st},
+      st = Which[
+        r["Read"] === "", "Unread",
+        !StringQ[sid], "Ambiguous",   (* 同じ距離の候補が複数 *)
+        r["Distance"] > maxD, "TooFar",
+        MemberQ[taken, sid], "Conflict",
+        True, If[r["Distance"] === 0, "Exact", "Near"]];
+      If[MemberQ[{"Exact", "Near"}, st], AppendTo[taken, sid]];
+      props[r["Scan"]] = <|"Read" -> r["Read"], "StudentID" -> sid,
+        "Distance" -> r["Distance"], "Status" -> st|>;
+      Join[r, <|"Status" -> st|>]]],
+    SortBy[rows, {Lookup[#, "Distance", Infinity] &, #["Scan"] &}]];
+  If[apply,
+    Module[{set = Association[Map[#["Scan"] -> #["StudentID"] &,
+        Select[rows, MemberQ[{"Exact", "Near"}, #["Status"]] &]]]},
+      If[set =!= <||>, SourceVaultExamSetMatch[examId, set]]];
+    g = iEXGrading[examId];
+    g["Proposals"] = Join[Replace[Lookup[g, "Proposals", <||>],
+      Except[_Association] -> <||>], props];
+    iEXSaveGrading[examId, g]];
+  <|"Status" -> "OK", "ExamId" -> examId, "Scanned" -> Length[target],
+    "Exact" -> Count[rows, r_ /; r["Status"] === "Exact"],
+    "Near" -> Count[rows, r_ /; r["Status"] === "Near"],
+    "Uncertain" -> Map[KeyTake[#, {"Scan", "Read", "Status", "Distance", "Candidates"}] &,
+      Select[rows, !MemberQ[{"Exact", "Near"}, #["Status"]] &]],
+    "Applied" -> apply, "Rows" -> SortBy[rows, #["Scan"] &]|>];
+
+SourceVaultExamMatchStatus[examId_String] := Module[
+  {exam = SourceVaultExamGet[examId], g, assigns, index, n, ids, dupes, unknown, noSheet},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  g = iEXGrading[examId];
+  If[Lookup[g, "Scans", {}] === {}, Return[iEXFail["NoScans", "ExamId" -> examId]]];
+  n = Lookup[g, "ScanCount", 0];
+  assigns = iEXAssignments[g];
+  index = iEXEnrollmentIndex[g];
+  ids = Values[assigns];
+  dupes = Select[Tally[ids], Last[#] > 1 &];
+  unknown = Select[Keys[assigns],
+    Lookup[Lookup[index, assigns[#], <||>], "Status", "NotEnrolled"] =!= "Enrolled" &];
+  noSheet = Complement[
+    Keys[Select[index, Lookup[#, "Status", ""] === "Enrolled" &]], ids];
+  <|"ExamId" -> examId, "Scans" -> n, "Assigned" -> Length[assigns],
+    "Unassigned" -> Complement[Range[n], Keys[assigns]],
+    (* 割当の作られ方に依存しないよう答案番号は昇順に揃える *)
+    "Duplicates" -> Map[Function[t, <|"StudentID" -> t[[1]], "Count" -> t[[2]],
+       "Scans" -> Sort[Keys[Select[assigns, Function[v, v === t[[1]]]]]]|>], dupes],
+    "UnenrolledAssignments" -> unknown,
+    "StudentsWithoutSheet" -> Map[Lookup[Lookup[index, #, <||>], "StudentID", #] &, noSheet],
+    "Enrolled" -> Count[Values[index], _?(Lookup[#, "Status", ""] === "Enrolled" &)]|>];
+
+(* 名簿 (Enrolled のみ) を {学籍番号, 氏名} の並びで *)
+iEXAssignRoster[g_Association] := Module[{lecture = Lookup[g, "Lecture", Missing[]], pairs},
+  pairs = If[StringQ[lecture], iCWREnrollmentPairs[lecture], {}];
+  If[pairs === {}, pairs = Select[Lookup[g, "Roster", {}], ListQ]];
+  SortBy[pairs, First]];
+
+Options[SourceVaultExamAssignView] = {"DiffX" -> 0, "DiffY" -> 0,
+  "Unassigned" -> False, "Uncertain" -> False, "MaxRows" -> 60};
+SourceVaultExamAssignView[examId_String, OptionsPattern[]] := Module[
+  {g, rows, students, ff = iEXFont[], data, props},
+  rows = SourceVaultExamMatches[examId, "DiffX" -> OptionValue["DiffX"],
+    "DiffY" -> OptionValue["DiffY"]];
+  If[!ListQ[rows], Return[rows]];
+  g = iEXGrading[examId];
+  students = iEXAssignRoster[g];
+  If[students === {}, Return[iEXFail["EnrollmentNotFound", "ExamId" -> examId,
+    "Hint" -> "SourceVaultCourseEnrollmentRegister で履修者を登録し、SourceVaultExamSyncRoster を実行してください。"]]];
+  props = Replace[Lookup[g, "Proposals", <||>], Except[_Association] -> <||>];
+  If[TrueQ[OptionValue["Unassigned"]], rows = Select[rows, !TrueQ[#["Assigned"]] &]];
+  (* 読み取りが完全一致でなかったものだけ = 目で見る価値のある行 *)
+  If[TrueQ[OptionValue["Uncertain"]],
+    rows = Select[rows,
+      Lookup[Lookup[props, #["Scan"], <||>], "Status", "None"] =!= "Exact" &]];
+  rows = Take[rows, UpTo[OptionValue["MaxRows"]]];
+  data = Map[{#["Scan"], #["IDImage"], #["NameImage"],
+     Lookup[props, #["Scan"], <||>]} &, rows];
+  With[{eid = examId, ds = data, sts = students, fnt = ff},
+   DynamicModule[{tick = 0},
+    Column[{
+     Dynamic[tick; iEXAssignStatusPanel[eid, fnt], TrackedSymbols :> {tick}],
+     Grid[Map[Function[r,
+        With[{scan = r[[1]], idImg = r[[2]], nmImg = r[[3]], pr = r[[4]]},
+         {Style[scan, Bold, 13, FontFamily -> fnt],
+          Framed[Row[{idImg, "  ", nmImg}]],
+          iEXProposalLabel[pr, fnt],
+          Dynamic[tick; iEXAssignLabel[eid, scan, fnt], TrackedSymbols :> {tick}],
+          Dynamic[tick;
+           ActionMenu[Style["割り当てる", 11, FontFamily -> fnt],
+            Append[
+             Map[Function[s,
+               With[{sid = s[[1]], lbl = s[[1]] <> "　" <> s[[2]]},
+                lbl :> (SourceVaultExamSetMatch[eid, <|scan -> sid|>]; tick++)]],
+              iEXAssignCandidates[eid, sts, scan]],
+             Style["(割当を外す)", Italic] :> (
+               SourceVaultExamSetMatch[eid, <|scan -> None|>]; tick++)],
+            Appearance -> "PopupMenu"], TrackedSymbols :> {tick}]}]],
+       ds], Alignment -> Left, Dividers -> Center, Spacings -> {1, 1.2}]},
+     Spacings -> 1.2]]]];
+
+(* まだ他の答案に割り当てられていない学生 (その答案に今割り当てている本人は残す) *)
+iEXAssignCandidates[examId_String, students_List, scan_Integer] := Module[
+  {assigns = iEXAssignments[iEXGrading[examId]], used, mine},
+  mine = Lookup[assigns, scan, None];
+  used = Complement[Values[assigns], {mine}];
+  Select[students, !MemberQ[used, iCWRNormalizeID[First[#]]] &]];
+
+(* 読み取り結果の表示 (何をどう読んだか一目で分かるように) *)
+iEXProposalLabel[pr_, ff_] := If[!AssociationQ[pr] || pr === <||>,
+  Style["—", GrayLevel[0.6], 11, FontFamily -> ff],
+  Column[{
+    Style[Row[{"読取 ", If[Lookup[pr, "Read", ""] === "", "(不能)", pr["Read"]]}],
+      11, FontFamily -> ff],
+    Switch[Lookup[pr, "Status", ""],
+     "Exact", Style["一致", Darker[Green], 10, FontFamily -> ff],
+     "Near", Style[Row[{"近似 (差 ", pr["Distance"], ")"}], Orange, 10, FontFamily -> ff],
+     "Conflict", Style["重複のため未割当", Red, 10, FontFamily -> ff],
+     "TooFar", Style[Row[{"候補と離れすぎ (差 ", pr["Distance"], ")"}], Red, 10, FontFamily -> ff],
+     "Ambiguous", Style["候補が複数", Red, 10, FontFamily -> ff],
+     _, Style["読取不能", Red, 10, FontFamily -> ff]]}, Spacings -> 0.2]];
+
+iEXAssignLabel[examId_String, scan_Integer, ff_] := Module[
+  {g = iEXGrading[examId], assigns, nid, info},
+  assigns = iEXAssignments[g];
+  nid = Lookup[assigns, scan, Missing["NoAssignment"]];
+  If[!StringQ[nid], Return[Style["(未割当)", Red, 12, FontFamily -> ff]]];
+  info = iEXStudentInfo[g, iEXEnrollmentIndex[g], nid];
+  Row[{Style[Row[{info["StudentID"], "　",
+      Replace[info["StudentName"], _Missing -> "?"]}], 12, FontFamily -> ff],
+    Switch[info["Status"],
+     "Enrolled", "",
+     "Withdrawn", Style["  [履修取消]", Red, 11],
+     _, Style["  [名簿にない]", Red, 11]]}]];
+
+iEXAssignStatusPanel[examId_String, ff_] := Module[{st = SourceVaultExamMatchStatus[examId]},
+  If[!AssociationQ[st], Return[st]];
+  Column[{
+    Style[Row[{"答案 ", st["Scans"], " 枚中 割当済 ", st["Assigned"],
+      "　未割当 ", Length[st["Unassigned"]],
+      "　履修者 ", st["Enrolled"], " 名"}], 13, FontFamily -> ff],
+    If[st["Unassigned"] =!= {},
+      Style[Row[{"未割当の答案: ", Short[st["Unassigned"], 3]}], Red, 11, FontFamily -> ff], ""],
+    If[st["Duplicates"] =!= {},
+      Style[Row[{"同じ学生に 2 枚以上: ",
+        Row[Riffle[Map[#["StudentID"] &, st["Duplicates"]], ", "]]}], Red, 11, FontFamily -> ff], ""],
+    If[st["UnenrolledAssignments"] =!= {},
+      Style[Row[{"履修者でない学生への割当 (答案番号): ",
+        Short[st["UnenrolledAssignments"], 3]}], Red, 11, FontFamily -> ff], ""],
+    If[st["StudentsWithoutSheet"] =!= {},
+      Style[Row[{"答案の無い履修者 (欠席候補) ",
+        Length[st["StudentsWithoutSheet"]], " 名: ",
+        Short[st["StudentsWithoutSheet"], 3]}], GrayLevel[0.35], 11, FontFamily -> ff], ""]},
+   Spacings -> 0.4]];
 
 (* ============================================================
    解答認識 (解答欄領域のみ切出し / 個人情報領域はクラウドへ送らない)
    ============================================================ *)
 
-iEXAnswerRegionCrop[img_Image, layout_Association] := Module[{top, bottom},
+iEXAnswerRegionCrop[img_Image, layout_Association, calib_] := Module[{top, bottom},
   top = layout["AnswerAreaTop"] - 6;
   bottom = layout["AnswerAreaBottom"] + 6;
-  iEXCropRect[img, layout, {{0, top}, {layout["PageSize"][[1]], bottom}}, 0, 0]];
+  iEXCropCal[img, calib, {{0, top}, {layout["PageSize"][[1]], bottom}}, 0, 0]];
 
 iEXRecognitionPrompt[keys_List] := StringJoin[
   "This is the answer grid region of a university exam answer sheet (no personal information).\n",
@@ -2036,7 +2905,7 @@ SourceVaultExamRecognize[examId_String, OptionsPattern[]] := Module[
   target = If[OptionValue["Scans"] === All, Range[Lookup[g, "ScanCount", 0]], OptionValue["Scans"]];
   Scan[Function[i, Module[{img = iEXScanImage[g, i], crop, res},
     If[!ImageQ[img], AppendTo[failed, i],
-      crop = iEXAnswerRegionCrop[img, layout];
+      crop = iEXAnswerRegionCrop[img, layout, iEXScanCalib[g, i, img]];
       res = Quiet @ Check[fn[crop, keys], $Failed];
       If[AssociationQ[res],
         g["Answers"] = Append[Lookup[g, "Answers", <||>], i -> res]; done++,
@@ -2054,23 +2923,138 @@ SourceVaultExamSetAnswer[examId_String, scanIdx_Integer, key_String, value_Strin
   iEXSaveGrading[examId, g];
   <|"Status" -> "OK"|>];
 
-SourceVaultExamSetMark[examId_String, scanIdx_Integer, key_String, mark_String] := Module[
+SourceVaultExamSetMark[examId_String, scanIdx_Integer, key_String, mark_] := Module[
   {g = iEXGrading[examId], m},
   If[g === <||>, Return[iEXFail["NoGradingState", "ExamId" -> examId]]];
   m = Lookup[Lookup[g, "Marks", <||>], scanIdx, <||>];
-  m[key] = mark;
+  (* None / "" は手動設定の取消し (自動判定に戻す) *)
+  If[mark === None || mark === "", m = KeyDrop[m, key], m[key] = ToString[mark]];
   g["Marks"] = Append[Lookup[g, "Marks", <||>], scanIdx -> m];
   iEXSaveGrading[examId, g];
-  <|"Status" -> "OK"|>];
+  <|"Status" -> "OK", "Scan" -> scanIdx, "Key" -> key,
+    "Mark" -> If[mark === None || mark === "", Missing["Cleared"], ToString[mark]]|>];
+
+(* ============================================================
+   未確定 (?) の設問を目視で確定する
+   ・? = 解答欄が空/読み取れなかった、または模範解答が無い設問。
+     0 点扱いのままにせず、必ず人が見て決める。
+   ・答案の突合せと同じで、切出し画像を見てクリックで確定する。
+   ============================================================ *)
+
+Options[SourceVaultExamUnresolved] = {"Filter" -> "Unresolved", "Scans" -> All};
+SourceVaultExamUnresolved[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], rows, disp, pts, filt = ToString[OptionValue["Filter"]],
+   scans = OptionValue["Scans"], want},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  rows = SourceVaultExamScore[examId];
+  If[!ListQ[rows], Return[rows]];
+  If[ListQ[scans], rows = Select[rows, MemberQ[scans, #["Scan"]] &]];
+  disp = iEXDisplayNumbers[exam];
+  pts = Lookup[exam, "Points", <||>];
+  want = Switch[filt,
+    "Unresolved", {"?"},
+    "Wrong", {"?", "×"},
+    _, {"?", "×", "△", "○"}];
+  Join @@ Map[Function[r,
+    Map[Function[k, <|"Scan" -> r["Scan"], "StudentID" -> r["StudentID"],
+        "Name" -> r["Name"], "Key" -> k, "Printed" -> Lookup[disp, k, k],
+        "Mark" -> r["Marks"][k], "Recognized" -> Lookup[r["Answers"], k, ""],
+        "Answer" -> ToString[Lookup[KeyMap[StringDrop[#, 1] &,
+           SourceVaultExamAnswerKey[examId]], k, ""]],
+        "Points" -> Lookup[pts, k, 0]|>],
+      Select[Keys[r["Marks"]], MemberQ[want, r["Marks"][#]] &]]], rows]];
+
+(* 解答欄 1 マスの切出し (較正込み) *)
+iEXCellCrop[img_, calib_, layout_Association, key_String, pad_] := Module[
+  {cell = Lookup[Lookup[layout, "Cells", <||>], key, Missing[]], r},
+  If[!AssociationQ[cell], Return[$Failed]];
+  r = cell["Rect"];
+  iEXCropCal[img, calib,
+    {{r[[1, 1]] - pad, r[[1, 2]] - pad}, {r[[2, 1]] + pad, r[[2, 2]] + pad}}, 0, 0]];
+
+(* 試験全体で使われている解答値 (選択肢番号) *)
+iEXAnswerValues[examId_String] := Module[{key = SourceVaultExamAnswerKey[examId]},
+  Sort[DeleteDuplicates[Select[Map[ToString, Values[key]], StringLength[#] === 1 &]]]];
+
+Options[SourceVaultExamResolveView] = {"Filter" -> "Unresolved", "Scans" -> All,
+  "MaxRows" -> 40, "DiffX" -> 0, "DiffY" -> 0};
+SourceVaultExamResolveView[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], g, layout, rows, ff = iEXFont[], imgs = <||>,
+   data, vals},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  rows = SourceVaultExamUnresolved[examId, "Filter" -> OptionValue["Filter"],
+    "Scans" -> OptionValue["Scans"]];
+  If[!ListQ[rows], Return[rows]];
+  g = iEXGrading[examId];
+  layout = exam["SheetLayout"];
+  vals = iEXAnswerValues[examId];
+  If[vals === {}, vals = {"1", "2", "3", "4"}];
+  rows = Take[SortBy[rows, {#["Scan"] &, #["Key"] &}], UpTo[OptionValue["MaxRows"]]];
+  data = Map[Function[r, Module[{img, cal},
+     If[!KeyExistsQ[imgs, r["Scan"]], imgs[r["Scan"]] = iEXScanImage[g, r["Scan"]]];
+     img = imgs[r["Scan"]];
+     cal = iEXScanCalib[g, r["Scan"], img];
+     {r, If[ImageQ[img], iEXCellCrop[img, cal, layout, r["Key"], 3.], $Failed]}]], rows];
+  With[{eid = examId, ds = data, vs = vals, fnt = ff},
+   DynamicModule[{tick = 0},
+    Column[{
+     Dynamic[tick; iEXResolveStatusPanel[eid, fnt], TrackedSymbols :> {tick}],
+     Grid[Map[Function[d,
+        With[{r = d[[1]], crop = d[[2]], scan = d[[1]]["Scan"], key = d[[1]]["Key"]},
+         {Style[Row[{scan, " / 問", r["Printed"]}], Bold, 12, FontFamily -> fnt],
+          Style[Row[{r["StudentID"], "　",
+            Replace[r["Name"], _Missing -> "?"]}], 11, FontFamily -> fnt],
+          If[ImageQ[crop], Framed[crop], Style["(切出し不可)", Red, 10]],
+          Column[{
+            Style[Row[{"認識 ",
+              If[StringTrim[ToString[r["Recognized"]]] === "", "(空)", r["Recognized"]]}],
+              11, FontFamily -> fnt],
+            Style[Row[{"正解 ", If[r["Answer"] === "", "(無し)", r["Answer"]],
+              "　配点 ", r["Points"]}], 10, GrayLevel[0.35], FontFamily -> fnt]},
+           Spacings -> 0.2],
+          Dynamic[tick; iEXResolveMarkLabel[eid, scan, key, fnt], TrackedSymbols :> {tick}],
+          (* 解答の値を選ぶと模範解答と照合して ○/× が決まる *)
+          Row[Join[
+            Map[Function[v, Button[Style[v, 11, FontFamily -> fnt],
+               SourceVaultExamSetAnswer[eid, scan, key, v];
+               SourceVaultExamSetMark[eid, scan, key, None]; tick++,
+               ImageSize -> {28, 24}]], vs],
+            {Button[Style["空", 11, FontFamily -> fnt],
+              SourceVaultExamSetAnswer[eid, scan, key, ""];
+              SourceVaultExamSetMark[eid, scan, key, "×"]; tick++, ImageSize -> {28, 24}]}]],
+          (* 記述問題などは記号を直接指定する *)
+          Row[Map[Function[mk, Button[Style[mk, 12, FontFamily -> fnt],
+              SourceVaultExamSetMark[eid, scan, key, mk]; tick++,
+              ImageSize -> {28, 24}]], {"○", "△", "×"}]]}]],
+       ds], Alignment -> Left, Dividers -> Center, Spacings -> {0.8, 1}]},
+     Spacings -> 1.2]]]];
+
+iEXResolveMarkLabel[examId_String, scan_Integer, key_String, ff_] := Module[
+  {rows = SourceVaultExamScore[examId], r, mk},
+  r = SelectFirst[rows, #["Scan"] === scan &, <||>];
+  mk = Lookup[Lookup[r, "Marks", <||>], key, "?"];
+  Style[mk, Which[mk === "○", Darker[Green], mk === "△", Orange, mk === "×", Red,
+    True, Red], 16, FontFamily -> ff]];
+
+iEXResolveStatusPanel[examId_String, ff_] := Module[{u = SourceVaultExamUnresolved[examId]},
+  If[!ListQ[u], Return[u]];
+  Style[Row[{"未確定 ", Length[u], " 問",
+    If[u === {}, "　(すべて確定しました)",
+     Row[{"　答案 ", Length[DeleteDuplicates[Map[#["Scan"] &, u]]], " 枚に分布"}]]}],
+   13, If[u === {}, Darker[Green], Red], FontFamily -> ff]];
 
 (* ============================================================
    採点
    ============================================================ *)
 
+(* 認識結果の表記ゆれ ((3) や （3）) を落として比較用の値にする *)
+iEXNormAnswer[s_] := If[!StringQ[s], "",
+  StringTrim[StringReplace[s, {"(" -> "", ")" -> "", "（" -> "", "）" -> "", "." -> ""}]]];
+
 iEXAutoMark[recognized_, correct_String] := Which[
   !StringQ[recognized] || StringTrim[recognized] === "", "?",
   correct === "", "?",
-  StringTrim[StringReplace[recognized, {"(" -> "", ")" -> "", "（" -> "", "）" -> ""}]] === correct, "○",
+  iEXNormAnswer[recognized] === correct, "○",
   True, "×"];
 
 iEXMarkPoints[mark_String, pts_] := Which[
@@ -2081,17 +3065,17 @@ iEXMarkPoints[mark_String, pts_] := Which[
 
 Options[SourceVaultExamScore] = {};
 SourceVaultExamScore[examId_String, OptionsPattern[]] := Module[
-  {exam = SourceVaultExamGet[examId], g, keys, keyAns, roster, matches},
+  {exam = SourceVaultExamGet[examId], g, keys, keyAns, assigns, index},
   If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
   g = iEXGrading[examId];
   If[Lookup[g, "Scans", {}] === {}, Return[iEXFail["NoScans", "ExamId" -> examId]]];
   keys = iEXExamKeys[exam];
   keyAns = KeyMap[StringDrop[#, 1] &, SourceVaultExamAnswerKey[examId]];  (* "問1-1"->"1-1" *)
-  roster = Lookup[g, "Roster", {}];
-  matches = Lookup[g, "Matches", <||>];
-  Table[Module[{ri, student, recog, manual, marks, scores, unresolved},
-    ri = Lookup[matches, i, i];
-    student = If[1 <= ri <= Length[roster], roster[[ri]], {Missing["NoRoster"], Missing["NoRoster"]}];
+  assigns = iEXAssignments[g];
+  index = iEXEnrollmentIndex[g];
+  Table[Module[{nid, info, recog, manual, marks, scores, unresolved},
+    nid = iEXAssignedId[g, assigns, i];
+    info = iEXStudentInfo[g, index, nid];
     recog = Lookup[Lookup[g, "Answers", <||>], i, <||>];
     manual = Lookup[Lookup[g, "Marks", <||>], i, <||>];
     marks = Association[Map[Function[k, k -> Lookup[manual, k,
@@ -2099,10 +3083,124 @@ SourceVaultExamScore[examId_String, OptionsPattern[]] := Module[
     scores = Association[Map[Function[k, k -> iEXMarkPoints[marks[k],
       Lookup[exam["Points"], k, 0]]], keys]];
     unresolved = Count[Values[marks], "?"];
-    <|"Scan" -> i, "StudentID" -> student[[1]], "Name" -> student[[2]],
+    <|"Scan" -> i, "StudentID" -> info["StudentID"], "Name" -> info["StudentName"],
+      "Status" -> info["Status"], "Assigned" -> KeyExistsQ[assigns, i],
       "Total" -> Total[Values[scores]], "Unresolved" -> unresolved,
       "Marks" -> marks, "Scores" -> scores, "Answers" -> recog|>],
     {i, Lookup[g, "ScanCount", 0]}]];
+
+(* ============================================================
+   設問ごとの分析 (正答率 / 誤答の散らばり / 識別力)
+   ・誤答の散らばり = 誤答分布の正規化エントロピー。
+     1 に近い  … 誤答が全選択肢に均等 = 当てずっぽう (難問・手がかりなし)
+     0 に近い  … 特定の誤答に集中 = 二択まで絞って外した / 共通の誤解
+     指数を取った EffectiveChoices が「誤答が実質何択に散ったか」で読みやすい。
+   ・識別力 = 設問の正誤と合計点の点双列相関。低い/負なら設問を疑う。
+   ============================================================ *)
+
+iEXEntropy[counts_List] := Module[{tot = Total[counts], p},
+  If[tot <= 0, Return[Missing["NoWrongAnswers"]]];
+  p = Select[counts/tot, # > 0 &];
+  -Total[p*Log[p]]];
+
+iEXPointBiserial[xs_List, ys_List] := Module[{sx, sy},
+  If[Length[xs] < 3, Return[Missing["TooFewScans"]]];
+  sx = StandardDeviation[N[xs]]; sy = StandardDeviation[N[ys]];
+  If[sx == 0. || sy == 0., Missing["NoVariance"], Correlation[N[xs], N[ys]]]];
+
+Options[SourceVaultExamItemAnalysis] = {"Scans" -> All, "Assigned" -> True};
+SourceVaultExamItemAnalysis[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], rows, keys, keyAns, disp, pts, slots, totals},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  rows = SourceVaultExamScore[examId];
+  If[!ListQ[rows], Return[rows]];
+  If[ListQ[OptionValue["Scans"]],
+    rows = Select[rows, MemberQ[OptionValue["Scans"], #["Scan"]] &]];
+  (* 突合せの済んだ答案だけを母集団にする (誰の答案か不明なものは除く) *)
+  If[TrueQ[OptionValue["Assigned"]], rows = Select[rows, StringQ[#["StudentID"]] &]];
+  If[rows === {}, Return[iEXFail["NoScoredSheets", "ExamId" -> examId]]];
+  keys = iEXExamKeys[exam];
+  keyAns = KeyMap[StringDrop[#, 1] &, SourceVaultExamAnswerKey[examId]];
+  disp = iEXDisplayNumbers[exam];
+  pts = Lookup[exam, "Points", <||>];
+  slots = SourceVaultExamSlots[examId];
+  totals = Map[#["Total"] &, rows];
+  Map[Function[k, Module[
+     {ans = ToString[Lookup[keyAns, k, ""]], marks, resp, answered, correct, blank,
+      rec, nChoices, distractors, wrongCounts, ent, spread, eff, top, item, id},
+     marks = Map[#["Marks"][k] &, rows];
+     resp = Map[iEXNormAnswer[Lookup[#["Answers"], k, ""]] &, rows];
+     answered = Count[resp, s_ /; s =!= ""];
+     blank = Length[resp] - answered;
+     correct = Count[marks, "○"];
+     id = Lookup[slots, k, Missing[]];
+     rec = If[StringQ[id], SourceVaultExerciseGet[id], Missing[]];
+     nChoices = If[AssociationQ[rec], Length[Lookup[rec, "Choices", {}]], 0];
+     If[nChoices < 2, nChoices = Max[4, Length[DeleteDuplicates[Select[resp, # =!= "" &]]]]];
+     (* 誤答の分布 (正解以外の選択肢すべてを 0 込みで数える) *)
+     distractors = DeleteCases[Map[ToString, Range[nChoices]], ans];
+     wrongCounts = Association[Map[# -> Count[resp, #] &, distractors]];
+     (* 選択肢番号でない誤答 (読み取り値が想定外) も拾う *)
+     Scan[Function[v, If[v =!= "" && v =!= ans && !KeyExistsQ[wrongCounts, v],
+        wrongCounts[v] = Count[resp, v]]], DeleteDuplicates[resp]];
+     ent = iEXEntropy[Values[wrongCounts]];
+     spread = If[MissingQ[ent] || Length[wrongCounts] < 2, Missing["NotApplicable"],
+       N[ent/Log[Length[wrongCounts]]]];
+     eff = If[MissingQ[ent], Missing["NoWrongAnswers"], N[Exp[ent]]];
+     top = If[Total[Values[wrongCounts]] > 0, First[Keys[TakeLargest[wrongCounts, 1]]],
+       Missing["NoWrongAnswers"]];
+     item = Map[If[# === "○", 1, 0] &, marks];
+     <|"Slot" -> k, "Printed" -> Lookup[disp, k, k], "Id" -> id,
+       "Unit" -> If[AssociationQ[rec], Lookup[rec, "Unit", Missing[]], Missing[]],
+       "Headline" -> If[AssociationQ[rec], Lookup[rec, "Headline", ""], ""],
+       "Generated" -> If[AssociationQ[rec], StringQ[Lookup[rec, "BaseId", Missing[]]], False],
+       "Recipe" -> If[AssociationQ[rec],
+         With[{fs = Lookup[rec, "FigureSpec", Missing[]]},
+          If[AssociationQ[fs], Lookup[fs, "Recipe", Missing[]], Missing[]]], Missing[]],
+       "Points" -> Lookup[pts, k, 0], "Answer" -> ans, "Choices" -> nChoices,
+       "Scans" -> Length[rows], "Answered" -> answered, "Blank" -> blank,
+       "Correct" -> correct,
+       "CorrectRate" -> If[Length[rows] > 0, N[correct/Length[rows]], Missing[]],
+       "WrongCounts" -> Select[wrongCounts, # > 0 &],
+       "WrongSpread" -> spread, "EffectiveChoices" -> eff,
+       "TopDistractor" -> top,
+       "TopShare" -> If[Total[Values[wrongCounts]] > 0,
+         N[Max[Values[wrongCounts]]/Total[Values[wrongCounts]]], Missing[]],
+       "Discrimination" -> iEXPointBiserial[item, totals]|>]], keys]];
+
+Options[SourceVaultExamItemAnalysisView] = Join[Options[SourceVaultExamItemAnalysis],
+  {"SortBy" -> "Rate", "Export" -> None}];
+SourceVaultExamItemAnalysisView[examId_String, opts : OptionsPattern[]] := Module[
+  {rows, table, r2, path},
+  rows = SourceVaultExamItemAnalysis[examId,
+    FilterRules[{opts}, Options[SourceVaultExamItemAnalysis]]];
+  If[!ListQ[rows], Return[rows]];
+  rows = Switch[ToString[OptionValue["SortBy"]],
+    "Slot", rows,
+    "Discrimination", SortBy[rows, Replace[#["Discrimination"], _Missing -> -99] &],
+    _, SortBy[rows, Replace[#["CorrectRate"], _Missing -> 99] &]];
+  r2 = Function[x, If[MissingQ[x] || !NumericQ[x], "", NumberForm[N[x], {3, 2}]]];
+  table = Map[Function[r, <|
+     "問" -> r["Printed"], "スロット" -> r["Slot"], "単元" -> r["Unit"],
+     "出題" -> If[TrueQ[r["Generated"]], "改変", "原問"],
+     "レシピ" -> Replace[r["Recipe"], _Missing -> ""],
+     "配点" -> r["Points"], "正解" -> r["Answer"],
+     "受験" -> r["Scans"], "正答" -> r["Correct"],
+     "正答率" -> r2[r["CorrectRate"]], "無答" -> r["Blank"],
+     "誤答分布" -> Row[Riffle[KeyValueMap[Row[{#1, ":", #2}] &, r["WrongCounts"]], " "]],
+     "誤答の散らばり" -> r2[r["WrongSpread"]],
+     "実効選択肢" -> r2[r["EffectiveChoices"]],
+     "最多誤答" -> Replace[r["TopDistractor"], _Missing -> ""],
+     "識別力" -> r2[r["Discrimination"]],
+     "見出し" -> r["Headline"]|>], rows];
+  path = OptionValue["Export"];
+  If[StringQ[path],
+    Export[path, Prepend[Map[Function[row, Map[
+        Function[v, Replace[v, {n_NumberForm :> ToString[n], _Row :> ToString[v, InputForm],
+          _Missing -> ""}]], Values[row]]], table], Keys[First[table]]]];
+    <|"Status" -> "OK", "Exported" -> path, "Rows" -> Length[table]|>,
+    (* 設問分析は全行・全列を見たいので省略表示にしない *)
+    Dataset[table, MaxItems -> {All, All}]]];
 
 SourceVaultExamScoreView[examId_String, opts : OptionsPattern[SourceVaultExamScore]] := Module[
   {rows = SourceVaultExamScore[examId, opts]},
@@ -4536,13 +5634,23 @@ SourceVaultCourseRosterRegister[lecture_String, roster_, opts : OptionsPattern[]
   If[iEXWriteWXF[path, rec] === $Failed, Return[iEXFail["RosterWriteFailed"]]];
   <|"Status" -> "OK", "Lecture" -> lecture, "Count" -> Length[parsed], "Path" -> path|>];
 
-SourceVaultCourseRoster[lecture_String] := With[{p = iCWRRosterPath[lecture]},
+(* 履修者レジストリ (SourceVaultCourseEnrollmentRegister) があればそれが正本。
+   無い講義だけ旧 rosters/<lecture>.wxf を読む (後方互換)。 *)
+SourceVaultCourseRoster[lecture_String] := Module[{enr = iCWREnrollmentRoster[lecture], p},
+  If[AssociationQ[enr] && Length[enr] > 0,
+    Return[<|"Kind" -> "CourseRoster", "Lecture" -> lecture, "PrivacyLevel" -> 1.0,
+      "Roster" -> enr, "Count" -> Length[enr], "Source" -> "Enrollment",
+      "Updated" -> Lookup[Replace[SourceVaultCourseEnrollmentRecord[lecture],
+        Except[_Association] -> <||>], "Updated", ""]|>]];
+  p = iCWRRosterPath[lecture];
   If[!StringQ[p], Missing["RootUnresolved"],
     Replace[iEXReadWXF[p], Except[_Association] -> Missing["NotRegistered", lecture]]]];
 
-SourceVaultCourseRosters[] := With[{r = iCWRStoreRoot[]},
-  If[!StringQ[r] || !DirectoryQ[FileNameJoin[{r, "rosters"}]], {},
-    FileBaseName /@ FileNames["*.wxf", FileNameJoin[{r, "rosters"}]]]];
+SourceVaultCourseRosters[] := Module[{r = iCWRStoreRoot[], legacy = {}, enr},
+  If[StringQ[r] && DirectoryQ[FileNameJoin[{r, "rosters"}]],
+    legacy = FileBaseName /@ FileNames["*.wxf", FileNameJoin[{r, "rosters"}]]];
+  enr = Map[Lookup[#, "Lecture", ""] &, SourceVaultCourseEnrollments[]];
+  Sort @ DeleteDuplicates @ Select[Join[enr, legacy], StringQ[#] && # =!= "" &]];
 
 (* ---- manifest ---- *)
 
@@ -5022,6 +6130,509 @@ SourceVaultCourseWebReportGrade[uri_String, rubric_, OptionsPattern[]] := Module
   If[AssociationQ[graded], Join[graded, <|"RunURI" -> uri|>], graded]];
 
 (* ============================================================
+   履修者 (enrollment) レジストリ
+   ・学籍番号と氏名を持つので PL 1.0 (PrivateVault 配下のみ)。
+   ・履修は後から増減するので登録のたびに版を作る。名簿から消えた
+     学生はレコードを消さず Withdrawn にする (答案・スコアは残り、
+     集計から外れるだけ。再登録で Enrolled に復帰する)。
+   ・入力は大学から配布される csv (1 列目=学籍番号, 2 列目=氏名) で、
+     Eagle に取り込んだものは sv://object/eagle-<id> でも指定できる。
+   ============================================================ *)
+
+iCWREnrollmentDir[] := With[{r = iCWRStoreRoot[]},
+  If[StringQ[r], FileNameJoin[{r, "enrollment"}], $Failed]];
+
+iCWREnrollmentPath[lecture_String] := With[{d = iCWREnrollmentDir[]},
+  If[StringQ[d], FileNameJoin[{d, lecture <> ".wxf"}], $Failed]];
+
+(* ---- 入力ソースの解決 (Eagle / csv / xlsx / 生データ) ---- *)
+
+iCWREagleURIQ[s_String] := StringStartsQ[s, "sv://object/eagle-"] || StringStartsQ[s, "eagle:"];
+
+iCWREagleId[s_String] := Which[
+  StringStartsQ[s, "sv://object/eagle-"], StringDrop[s, StringLength["sv://object/eagle-"]],
+  StringStartsQ[s, "eagle:"], StringDrop[s, StringLength["eagle:"]],
+  True, s];
+
+(* Eagle は弱結合 (SourceVault_eagle.wl 未ロードでも csv パス指定は動く) *)
+iCWREaglePath[id_String] := Module[{p},
+  p = Quiet @ Check[
+    If[Length[Names["SourceVault`SourceVaultEagleItemPath"]] > 0 &&
+       Length[DownValues[SourceVault`SourceVaultEagleItemPath]] > 0,
+      SourceVault`SourceVaultEagleItemPath[id], $Failed], $Failed];
+  If[StringQ[p] && FileExistsQ[p], p, $Failed]];
+
+(* 大学配布 csv は Shift-JIS のことが多い。UTF-8 で読めなければ ShiftJIS。
+   BOM は落とす。判定は置換文字 (U+FFFD) の有無で行う。 *)
+iCWRDecodeBytes[bytes_, enc_] := Module[{s, try},
+  If[!ByteArrayQ[bytes], Return[$Failed]];
+  try = Function[e, Quiet @ Check[ByteArrayToString[bytes, e], $Failed]];
+  s = If[StringQ[enc], try[enc],
+    Module[{u = try["UTF8"]},
+      If[StringQ[u] && !StringContainsQ[u, "\:fffd"], u, try["ShiftJIS"]]]];
+  If[!StringQ[s], Return[$Failed]];
+  If[StringStartsQ[s, "\:feff"], StringDrop[s, 1], s]];
+
+iCWRReadTable[path_String, enc_] := Module[{ext = ToLowerCase[FileExtension[path]], data, text},
+  If[MemberQ[{"xls", "xlsx"}, ext],
+    data = Quiet @ Check[Import[path], $Failed];
+    (* xlsx は {sheet1, sheet2..} で返るので先頭シートを取る *)
+    If[ListQ[data] && Length[data] > 0 && ListQ[First[data]] && Depth[data] >= 4,
+      data = First[data]];
+    Return[If[ListQ[data], data, $Failed]]];
+  text = iCWRDecodeBytes[Quiet @ Check[ReadByteArray[path], $Failed], enc];
+  If[!StringQ[text], Return[$Failed]];
+  data = Quiet @ Check[ImportString[text, If[ext === "tsv", "TSV", "CSV"]], $Failed];
+  If[ListQ[data], data, $Failed]];
+
+(* 学籍番号らしさ = 英数字 (と - _) だけで数字を含む 3 文字以上。
+   これでヘッダ行・小計行・空行を明示指定なしで落とせる。 *)
+iCWRIdLikeQ[s_] := StringQ[s] && StringLength[StringTrim[s]] >= 3 &&
+  StringMatchQ[StringTrim[s], (LetterCharacter | DigitCharacter | "-" | "_") ..] &&
+  StringContainsQ[s, DigitCharacter];
+
+iCWRTableToPairs[rows_List, idc_Integer, nmc_Integer, hdr_] := Module[{rs},
+  rs = Select[rows, ListQ[#] && Length[#] >= Max[idc, nmc] &];
+  If[IntegerQ[hdr] && hdr > 0, rs = Drop[rs, Min[hdr, Length[rs]]]];
+  rs = Map[{iEXRosterId[#[[idc]]], StringTrim[ToString[#[[nmc]]]]} &, rs];
+  Select[rs, iCWRIdLikeQ[#[[1]]] && #[[2]] =!= "" && #[[2]] =!= "Null" &]];
+
+iCWRSourcePairs[src_, idc_Integer, nmc_Integer, hdr_, enc_] := Which[
+  AssociationQ[src], iCWRSourcePairs[KeyValueMap[List, src], idc, nmc, hdr, enc],
+  ListQ[src] && src =!= {} && AllTrue[src, ListQ[#] && Length[#] >= 2 &],
+    Select[Map[{iEXRosterId[#[[1]]], StringTrim[ToString[#[[2]]]]} &, src], #[[2]] =!= "" &],
+  StringQ[src],
+    Module[{path, tbl},
+      path = If[iCWREagleURIQ[src], iCWREaglePath[iCWREagleId[src]], src];
+      If[!StringQ[path] || !FileExistsQ[path], Return[$Failed]];
+      tbl = iCWRReadTable[path, enc];
+      If[!ListQ[tbl], $Failed, iCWRTableToPairs[tbl, idc, nmc, hdr]]],
+  True, $Failed];
+
+(* 単一ソースか複数ソースのリストかを判定する。{{id,name}..} は単一 *)
+iCWRSourceList[sources_] := Which[
+  StringQ[sources] || AssociationQ[sources], {sources},
+  ListQ[sources] && sources =!= {} && AllTrue[sources, ListQ[#] && Length[#] >= 2 &],
+    {sources},
+  ListQ[sources], sources,
+  True, {sources}];
+
+(* ---- 登録 ---- *)
+
+iCWRStudentEntry[id_String, name_String, now_String] := <|
+  "StudentID" -> id, "StudentName" -> name, "Status" -> "Enrolled",
+  "FirstRegistered" -> now, "LastRegistered" -> now, "WithdrawnAt" -> Missing["NotWithdrawn"]|>;
+
+Options[SourceVaultCourseEnrollmentRegister] = {
+  "IDColumn" -> 1, "NameColumn" -> 2, "HeaderRows" -> Automatic,
+  "Encoding" -> Automatic, "Mode" -> "Replace", "DryRun" -> False, "Reset" -> False};
+
+SourceVaultCourseEnrollmentRegister[lecture_String, sources_, OptionsPattern[]] := Module[
+  {idc = OptionValue["IDColumn"], nmc = OptionValue["NameColumn"],
+   hdr = OptionValue["HeaderRows"], enc = OptionValue["Encoding"],
+   mode = ToString[OptionValue["Mode"]], dry = TrueQ[OptionValue["DryRun"]],
+   srcs, labels, pairs, failedSources = {}, incoming, prev, students, now, path, rec,
+   added = {}, removed = {}, restored = {}, renamed = {}, ver, dupCount = 0},
+  If[!MemberQ[{"Replace", "Add"}, mode],
+    Return[iEXFail["BadMode", "Mode" -> mode, "Hint" -> "\"Replace\" (既定) か \"Add\""]]];
+  If[!IntegerQ[idc] || !IntegerQ[nmc] || idc < 1 || nmc < 1,
+    Return[iEXFail["BadColumns", "IDColumn" -> idc, "NameColumn" -> nmc]]];
+  srcs = iCWRSourceList[sources];
+  labels = Map[Function[s, Which[
+    StringQ[s], s,
+    AssociationQ[s], "inline:<|" <> ToString[Length[s]] <> "|>",
+    ListQ[s], "inline:{" <> ToString[Length[s]] <> "}",
+    True, ToString[Head[s]]]], srcs];
+  pairs = MapThread[Function[{s, lbl}, Module[{p = iCWRSourcePairs[s, idc, nmc,
+      If[IntegerQ[hdr], hdr, Automatic], If[StringQ[enc], enc, Automatic]]},
+    If[!ListQ[p] || p === {}, AppendTo[failedSources, lbl]; {}, p]]], {srcs, labels}];
+  pairs = Join @@ pairs;
+  If[pairs === {},
+    Return[iEXFail["NoStudentsParsed", "Lecture" -> lecture, "Sources" -> labels,
+      "Failed" -> failedSources,
+      "Hint" -> "csv の 1 列目=学籍番号 / 2 列目=氏名 を想定。列が違う場合は \"IDColumn\" / \"NameColumn\" を指定してください。"]]];
+  dupCount = Length[pairs] - Length[DeleteDuplicates[Map[iCWRNormalizeID[#[[1]]] &, pairs]]];
+  (* 同一学籍番号が複数ソースに現れたら後勝ち (名簿の更新版が後ろに来る想定) *)
+  incoming = Association @ Map[iCWRNormalizeID[#[[1]]] ->
+    <|"StudentID" -> #[[1]], "StudentName" -> #[[2]]|> &, pairs];
+  prev = SourceVaultCourseEnrollmentRecord[lecture];
+  (* "Reset" は別科目の名簿を登録してしまったときの後始末。以前の学生を
+     Withdrawn として残さず、まっさらから登録し直す (履歴には残す)。 *)
+  If[TrueQ[OptionValue["Reset"]] && AssociationQ[prev],
+    prev = Join[prev, <|"Students" -> <||>,
+      "History" -> Append[Lookup[prev, "History", {}],
+        <|"Version" -> Lookup[prev, "Version", 0], "RegisteredAt" -> iEXNowIso[],
+          "Mode" -> "Reset", "Sources" -> {}, "Count" -> 0, "Added" -> {},
+          "Removed" -> Map[Lookup[#, "StudentID", ""] &,
+            Values[Lookup[prev, "Students", <||>]]],
+          "Restored" -> {}, "Renamed" -> {}, "FailedSources" -> {}|>]|>]];
+  students = If[AssociationQ[prev], Lookup[prev, "Students", <||>], <||>];
+  If[!AssociationQ[students], students = <||>];
+  now = iEXNowIso[];
+  KeyValueMap[Function[{k, v}, Module[{old = Lookup[students, k, Missing[]]},
+    If[!AssociationQ[old],
+      AppendTo[added, v["StudentID"]];
+      students[k] = iCWRStudentEntry[v["StudentID"], v["StudentName"], now],
+      (* 既存: 氏名の更新と復帰を記録 *)
+      If[Lookup[old, "StudentName", ""] =!= v["StudentName"],
+        AppendTo[renamed, <|"StudentID" -> v["StudentID"],
+          "From" -> Lookup[old, "StudentName", ""], "To" -> v["StudentName"]|>]];
+      If[Lookup[old, "Status", "Enrolled"] =!= "Enrolled",
+        AppendTo[restored, v["StudentID"]]];
+      students[k] = Join[old, <|"StudentID" -> v["StudentID"],
+        "StudentName" -> v["StudentName"], "Status" -> "Enrolled",
+        "LastRegistered" -> now, "WithdrawnAt" -> Missing["NotWithdrawn"]|>]]]],
+    incoming];
+  If[mode === "Replace",
+    KeyValueMap[Function[{k, v},
+      If[Lookup[v, "Status", "Enrolled"] === "Enrolled" && !KeyExistsQ[incoming, k],
+        AppendTo[removed, Lookup[v, "StudentID", k]];
+        students[k] = Join[v, <|"Status" -> "Withdrawn", "WithdrawnAt" -> now|>]]],
+      students]];
+  If[added === {} && removed === {} && restored === {} && renamed === {} && AssociationQ[prev],
+    Return[<|"Status" -> "NoChange", "Lecture" -> lecture,
+      "Version" -> Lookup[prev, "Version", 1], "Count" -> Length[incoming],
+      "Enrolled" -> Count[Values[students], _?(Lookup[#, "Status", ""] === "Enrolled" &)],
+      "Sources" -> labels, "FailedSources" -> failedSources|>]];
+  ver = If[AssociationQ[prev], Lookup[prev, "Version", 0], 0] + 1;
+  rec = <|"Kind" -> "CourseEnrollment", "Lecture" -> lecture, "PrivacyLevel" -> 1.0,
+    "Version" -> ver, "Updated" -> now, "Students" -> students,
+    "History" -> Append[If[AssociationQ[prev], Lookup[prev, "History", {}], {}],
+      <|"Version" -> ver, "RegisteredAt" -> now, "Mode" -> mode, "Sources" -> labels,
+        "Count" -> Length[incoming], "Added" -> added, "Removed" -> removed,
+        "Restored" -> restored, "Renamed" -> renamed,
+        "FailedSources" -> failedSources|>]|>;
+  If[dry,
+    Return[<|"Status" -> "DryRun", "Lecture" -> lecture, "Version" -> ver,
+      "Count" -> Length[incoming], "Added" -> added, "Removed" -> removed,
+      "Restored" -> restored, "Renamed" -> renamed, "Sources" -> labels,
+      "FailedSources" -> failedSources, "DuplicateIds" -> dupCount|>]];
+  path = iCWREnrollmentPath[lecture];
+  If[!StringQ[path], Return[iEXFail["RootUnresolved"]]];
+  If[iEXWriteWXF[path, rec] === $Failed, Return[iEXFail["EnrollmentWriteFailed", "Path" -> path]]];
+  <|"Status" -> "OK", "Lecture" -> lecture, "Version" -> ver,
+    "Count" -> Length[incoming],
+    "Enrolled" -> Count[Values[students], _?(Lookup[#, "Status", ""] === "Enrolled" &)],
+    "Withdrawn" -> Count[Values[students], _?(Lookup[#, "Status", ""] === "Withdrawn" &)],
+    "Added" -> added, "Removed" -> removed, "Restored" -> restored, "Renamed" -> renamed,
+    "Sources" -> labels, "FailedSources" -> failedSources, "DuplicateIds" -> dupCount,
+    "Path" -> path|>];
+
+SourceVaultCourseEnrollmentRecord[lecture_String] := With[{p = iCWREnrollmentPath[lecture]},
+  If[!StringQ[p], Missing["RootUnresolved"],
+    Replace[iEXReadWXF[p], Except[_Association] -> Missing["NotRegistered", lecture]]]];
+
+Options[SourceVaultCourseEnrollment] = {"Status" -> "Enrolled"};
+SourceVaultCourseEnrollment[lecture_String, OptionsPattern[]] := Module[
+  {rec = SourceVaultCourseEnrollmentRecord[lecture], st = OptionValue["Status"], rows},
+  If[!AssociationQ[rec],
+    Return[iEXFail["EnrollmentNotFound", "Lecture" -> lecture,
+      "Hint" -> "SourceVaultCourseEnrollmentRegister[lecture, csv または sv://object/eagle-<id>] で登録してください。"]]];
+  rows = Values[Lookup[rec, "Students", <||>]];
+  rows = If[st === All || st === "All", rows,
+    Select[rows, Lookup[#, "Status", "Enrolled"] === ToString[st] &]];
+  SortBy[rows, Lookup[#, "StudentID", ""] &]];
+
+Options[SourceVaultCourseEnrollmentView] = Options[SourceVaultCourseEnrollment];
+SourceVaultCourseEnrollmentView[lecture_String, opts : OptionsPattern[]] := Module[
+  {rows = SourceVaultCourseEnrollment[lecture, opts]},
+  If[!ListQ[rows], Return[rows]];
+  Dataset[Map[<|"学籍番号" -> Lookup[#, "StudentID", ""], "氏名" -> Lookup[#, "StudentName", ""],
+    "履修" -> If[Lookup[#, "Status", "Enrolled"] === "Enrolled", "○", "取消"],
+    "登録" -> Lookup[#, "FirstRegistered", ""], "最終確認" -> Lookup[#, "LastRegistered", ""]|> &,
+    rows]]];
+
+SourceVaultCourseEnrollmentHistory[lecture_String] := Module[
+  {rec = SourceVaultCourseEnrollmentRecord[lecture]},
+  If[!AssociationQ[rec], Return[iEXFail["EnrollmentNotFound", "Lecture" -> lecture]]];
+  Lookup[rec, "History", {}]];
+
+SourceVaultCourseEnrollmentHistoryView[lecture_String] := Module[
+  {hist = SourceVaultCourseEnrollmentHistory[lecture]},
+  If[!ListQ[hist], Return[hist]];
+  Dataset[Map[<|"版" -> Lookup[#, "Version", 0], "日時" -> Lookup[#, "RegisteredAt", ""],
+    "方式" -> Lookup[#, "Mode", ""], "人数" -> Lookup[#, "Count", 0],
+    "追加" -> Length[Lookup[#, "Added", {}]], "取消" -> Length[Lookup[#, "Removed", {}]],
+    "復帰" -> Length[Lookup[#, "Restored", {}]], "改名" -> Length[Lookup[#, "Renamed", {}]],
+    "ソース" -> StringRiffle[Map[ToString, Lookup[#, "Sources", {}]], " / "]|> &, hist]]];
+
+SourceVaultCourseEnrollments[] := Module[{d = iCWREnrollmentDir[], files},
+  If[!StringQ[d] || !DirectoryQ[d], Return[{}]];
+  files = FileNames["*.wxf", d];
+  SortBy[Map[Function[f, Module[{rec = iEXReadWXF[f], students},
+    students = If[AssociationQ[rec], Lookup[rec, "Students", <||>], <||>];
+    <|"Lecture" -> FileBaseName[f],
+      "Enrolled" -> Count[Values[students], _?(Lookup[#, "Status", ""] === "Enrolled" &)],
+      "Withdrawn" -> Count[Values[students], _?(Lookup[#, "Status", ""] === "Withdrawn" &)],
+      "Version" -> If[AssociationQ[rec], Lookup[rec, "Version", 0], 0],
+      "Updated" -> If[AssociationQ[rec], Lookup[rec, "Updated", ""], ""]|>]], files],
+    Lookup[#, "Lecture", ""] &]];
+
+SourceVaultCourseSetEnrollmentStatus[lecture_String, idOrIds_, status_String] := Module[
+  {rec = SourceVaultCourseEnrollmentRecord[lecture], ids, students, now, changed = {}, unknown = {}, path},
+  If[!AssociationQ[rec], Return[iEXFail["EnrollmentNotFound", "Lecture" -> lecture]]];
+  If[!MemberQ[{"Enrolled", "Withdrawn"}, status],
+    Return[iEXFail["BadStatus", "Status" -> status, "Hint" -> "\"Enrolled\" か \"Withdrawn\""]]];
+  ids = If[ListQ[idOrIds], idOrIds, {idOrIds}];
+  students = Lookup[rec, "Students", <||>];
+  now = iEXNowIso[];
+  Scan[Function[id, Module[{k = iCWRNormalizeID[id]},
+    If[!KeyExistsQ[students, k], AppendTo[unknown, ToString[id]],
+      students[k] = Join[students[k], <|"Status" -> status,
+        "WithdrawnAt" -> If[status === "Withdrawn", now, Missing["NotWithdrawn"]]|>];
+      AppendTo[changed, ToString[id]]]]], ids];
+  If[changed =!= {},
+    path = iCWREnrollmentPath[lecture];
+    If[!StringQ[path], Return[iEXFail["RootUnresolved"]]];
+    If[iEXWriteWXF[path, Join[rec, <|"Students" -> students, "Updated" -> now|>]] === $Failed,
+      Return[iEXFail["EnrollmentWriteFailed", "Path" -> path]]]];
+  <|"Status" -> If[unknown === {}, "OK", "Partial"], "Lecture" -> lecture,
+    "Changed" -> changed, "Unknown" -> unknown, "NewStatus" -> status|>];
+
+SourceVaultCourseStudent[lecture_String, id_] := Module[
+  {rec = SourceVaultCourseEnrollmentRecord[lecture], k = iCWRNormalizeID[id]},
+  If[!AssociationQ[rec], Return[Missing["EnrollmentNotFound", lecture]]];
+  Lookup[Lookup[rec, "Students", <||>], k, Missing["NotEnrolled", ToString[id]]]];
+
+(* 履修者名簿 (Enrolled のみ) を旧 CourseRoster 形式 <|normId -> <|StudentID, StudentName|>|>
+   で返す。Web レポート取込・答案突合せの両方がこれを使う。 *)
+iCWREnrollmentRoster[lecture_String] := Module[{rows = Quiet @ SourceVaultCourseEnrollment[lecture]},
+  If[!ListQ[rows] || rows === {}, Missing["NotRegistered", lecture],
+    Association @ Map[iCWRNormalizeID[Lookup[#, "StudentID", ""]] ->
+      <|"StudentID" -> Lookup[#, "StudentID", ""],
+        "StudentName" -> Lookup[#, "StudentName", ""]|> &, rows]]];
+
+(* 答案突合せ用の {{学籍番号, 氏名}..} *)
+iCWREnrollmentPairs[lecture_String] := Module[{r = iCWREnrollmentRoster[lecture]},
+  If[!AssociationQ[r], {}, Map[{#["StudentID"], #["StudentName"]} &, Values[r]]]];
+
+(* ============================================================
+   成績簿 (採点項目 + スコア表 + 重み付き総合点)
+   ・定期試験・レポート・小テストを同じ形で持ち、重みは後から何度でも
+     変えて再計算できる (スコアと重みを分離して保存する)。
+   ・総合点 = 100 * Sum[素点/満点 * 重み] / Sum[重み]
+   ============================================================ *)
+
+iCWRGradebookPath[lecture_String] := With[{r = iCWRStoreRoot[]},
+  If[StringQ[r], FileNameJoin[{r, "gradebook", lecture <> ".wxf"}], $Failed]];
+
+iCWRGradebook[lecture_String] := Module[{p = iCWRGradebookPath[lecture], rec},
+  If[!StringQ[p], Return[$Failed]];
+  rec = iEXReadWXF[p];
+  If[!AssociationQ[rec],
+    <|"Kind" -> "CourseGradebook", "Lecture" -> lecture, "PrivacyLevel" -> 1.0,
+      "Items" -> <||>, "Updated" -> iEXNowIso[]|>,
+    rec]];
+
+iCWRSaveGradebook[lecture_String, gb_Association] := Module[{p = iCWRGradebookPath[lecture]},
+  If[!StringQ[p], Return[$Failed]];
+  iEXWriteWXF[p, Join[gb, <|"Updated" -> iEXNowIso[]|>]]];
+
+$iCWRItemKinds = {"Exam", "Report", "Quiz", "Other"};
+
+SourceVaultCourseAssessmentRegister[lecture_String, itemId_String, spec_Association : <||>] := Module[
+  {gb = iCWRGradebook[lecture], items, old, kind, maxScore, weight, item},
+  If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
+  If[StringTrim[itemId] === "", Return[iEXFail["BadItemId"]]];
+  items = Lookup[gb, "Items", <||>];
+  old = Lookup[items, itemId, <||>];
+  kind = ToString[Lookup[spec, "Kind", Lookup[old, "Kind", "Other"]]];
+  If[!MemberQ[$iCWRItemKinds, kind],
+    Return[iEXFail["BadKind", "Kind" -> kind, "Allowed" -> $iCWRItemKinds]]];
+  maxScore = Lookup[spec, "MaxScore", Lookup[old, "MaxScore", 100]];
+  weight = Lookup[spec, "Weight", Lookup[old, "Weight", 1]];
+  If[!NumericQ[maxScore] || maxScore <= 0,
+    Return[iEXFail["BadMaxScore", "MaxScore" -> maxScore]]];
+  If[!NumericQ[weight] || weight < 0, Return[iEXFail["BadWeight", "Weight" -> weight]]];
+  item = <|"ItemId" -> itemId,
+    "Title" -> ToString[Lookup[spec, "Title", Lookup[old, "Title", itemId]]],
+    "Kind" -> kind, "MaxScore" -> maxScore, "Weight" -> weight,
+    "Source" -> Lookup[spec, "Source", Lookup[old, "Source", Missing["Manual"]]],
+    "Note" -> Lookup[spec, "Note", Lookup[old, "Note", ""]],
+    "Scores" -> Lookup[old, "Scores", <||>],
+    "Created" -> Lookup[old, "Created", iEXNowIso[]], "Updated" -> iEXNowIso[]|>;
+  items[itemId] = item;
+  If[iCWRSaveGradebook[lecture, Join[gb, <|"Items" -> items|>]] === $Failed,
+    Return[iEXFail["GradebookWriteFailed"]]];
+  <|"Status" -> "OK", "Lecture" -> lecture, "ItemId" -> itemId, "Kind" -> kind,
+    "MaxScore" -> maxScore, "Weight" -> weight,
+    "Scored" -> Length[item["Scores"]], "Existed" -> AssociationQ[old] && old =!= <||>|>];
+
+SourceVaultCourseAssessments[lecture_String] := Module[{gb = iCWRGradebook[lecture], items},
+  If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
+  items = Lookup[gb, "Items", <||>];
+  Map[Function[it, <|"ItemId" -> it["ItemId"], "Title" -> it["Title"], "Kind" -> it["Kind"],
+    "MaxScore" -> it["MaxScore"], "Weight" -> it["Weight"],
+    "Scored" -> Length[Lookup[it, "Scores", <||>]],
+    "Source" -> Lookup[it, "Source", Missing["Manual"]],
+    "Updated" -> Lookup[it, "Updated", ""]|>], Values[items]]];
+
+SourceVaultCourseAssessmentsView[lecture_String] := Module[
+  {rows = SourceVaultCourseAssessments[lecture]},
+  If[!ListQ[rows], Return[rows]];
+  Dataset[Map[<|"項目" -> #["ItemId"], "名称" -> #["Title"], "種別" -> #["Kind"],
+    "満点" -> #["MaxScore"], "重み" -> #["Weight"], "入力済" -> #["Scored"]|> &, rows]]];
+
+SourceVaultCourseAssessmentRemove[lecture_String, itemId_String] := Module[
+  {gb = iCWRGradebook[lecture], items},
+  If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
+  items = Lookup[gb, "Items", <||>];
+  If[!KeyExistsQ[items, itemId], Return[iEXFail["ItemNotFound", "ItemId" -> itemId]]];
+  items = KeyDrop[items, itemId];
+  If[iCWRSaveGradebook[lecture, Join[gb, <|"Items" -> items|>]] === $Failed,
+    Return[iEXFail["GradebookWriteFailed"]]];
+  <|"Status" -> "OK", "Lecture" -> lecture, "Removed" -> itemId, "Items" -> Length[items]|>];
+
+iCWRScorePairs[scores_] := Which[
+  AssociationQ[scores], KeyValueMap[List, scores],
+  ListQ[scores] && AllTrue[scores, ListQ[#] && Length[#] >= 2 &], scores,
+  True, $Failed];
+
+Options[SourceVaultCourseSetScores] = {"Mode" -> "Merge", "AllowUnknown" -> False};
+SourceVaultCourseSetScores[lecture_String, itemId_String, scores_, OptionsPattern[]] := Module[
+  {gb = iCWRGradebook[lecture], items, item, pairs, roster, cur, unknown = {}, bad = {}, mode},
+  If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
+  mode = ToString[OptionValue["Mode"]];
+  If[!MemberQ[{"Merge", "Replace"}, mode], Return[iEXFail["BadMode", "Mode" -> mode]]];
+  items = Lookup[gb, "Items", <||>];
+  If[!KeyExistsQ[items, itemId],
+    Return[iEXFail["ItemNotFound", "ItemId" -> itemId,
+      "Hint" -> "SourceVaultCourseAssessmentRegister[lecture, itemId, spec] で先に項目を登録してください。"]]];
+  item = items[itemId];
+  pairs = iCWRScorePairs[scores];
+  If[!ListQ[pairs], Return[iEXFail["BadScores"]]];
+  roster = iCWREnrollmentRoster[lecture];
+  cur = If[mode === "Replace", <||>, Lookup[item, "Scores", <||>]];
+  Scan[Function[p, Module[{k = iCWRNormalizeID[p[[1]]], v = p[[2]]},
+    Which[
+      !NumericQ[v], AppendTo[bad, ToString[p[[1]]]],
+      AssociationQ[roster] && !KeyExistsQ[roster, k] && !TrueQ[OptionValue["AllowUnknown"]],
+        AppendTo[unknown, ToString[p[[1]]]],
+      True, cur[k] = v]]], pairs];
+  item["Scores"] = cur;
+  item["Updated"] = iEXNowIso[];
+  items[itemId] = item;
+  If[iCWRSaveGradebook[lecture, Join[gb, <|"Items" -> items|>]] === $Failed,
+    Return[iEXFail["GradebookWriteFailed"]]];
+  <|"Status" -> If[unknown === {} && bad === {}, "OK", "Partial"],
+    "Lecture" -> lecture, "ItemId" -> itemId, "Scored" -> Length[cur],
+    "Unknown" -> unknown, "NonNumeric" -> bad, "Mode" -> mode|>];
+
+Options[SourceVaultCourseImportExamScores] = {
+  "ItemId" -> Automatic, "Title" -> Automatic, "Weight" -> Automatic,
+  "MaxScore" -> Automatic, "Mode" -> "Replace"};
+SourceVaultCourseImportExamScores[lecture_String, examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], rows, itemId, maxScore, weight, title,
+   scores = <||>, unassigned = {}, reg, set},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  rows = SourceVaultExamScore[examId];
+  If[!ListQ[rows], Return[rows]];
+  itemId = If[StringQ[OptionValue["ItemId"]], OptionValue["ItemId"], examId];
+  maxScore = If[NumericQ[OptionValue["MaxScore"]], OptionValue["MaxScore"],
+    Total[Select[Values[Lookup[exam, "Points", <||>]], NumericQ]]];
+  If[!NumericQ[maxScore] || maxScore <= 0,
+    Return[iEXFail["BadMaxScore", "MaxScore" -> maxScore,
+      "Hint" -> "配点が未設定です。SourceVaultExamSetPoints で配点を入れてください。"]]];
+  weight = If[NumericQ[OptionValue["Weight"]], OptionValue["Weight"], 1];
+  title = If[StringQ[OptionValue["Title"]], OptionValue["Title"],
+    ToString[Lookup[exam, "Title", examId]]];
+  Scan[Function[r, Module[{sid = Lookup[r, "StudentID", Missing[]]},
+    If[StringQ[sid] && sid =!= "", scores[iCWRNormalizeID[sid]] = Lookup[r, "Total", 0],
+      AppendTo[unassigned, Lookup[r, "Scan", 0]]]]], rows];
+  reg = SourceVaultCourseAssessmentRegister[lecture, itemId,
+    <|"Title" -> title, "Kind" -> "Exam", "MaxScore" -> maxScore, "Weight" -> weight,
+      "Source" -> <|"Type" -> "Exam", "ExamId" -> examId|>|>];
+  If[!AssociationQ[reg] || Lookup[reg, "Status", ""] =!= "OK", Return[reg]];
+  set = SourceVaultCourseSetScores[lecture, itemId, scores, "Mode" -> OptionValue["Mode"]];
+  If[!AssociationQ[set], Return[set]];
+  <|"Status" -> If[unassigned === {} && Lookup[set, "Unknown", {}] === {}, "OK", "Partial"],
+    "Lecture" -> lecture, "ExamId" -> examId, "ItemId" -> itemId,
+    "MaxScore" -> maxScore, "Weight" -> weight, "Imported" -> Length[scores],
+    "Unassigned" -> unassigned, "Unknown" -> Lookup[set, "Unknown", {}],
+    "Unresolved" -> Total[Map[Lookup[#, "Unresolved", 0] &, rows]]|>];
+
+SourceVaultCourseWeights[lecture_String] := Module[{gb = iCWRGradebook[lecture]},
+  If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
+  Association @ Map[#["ItemId"] -> Lookup[#, "Weight", 1] &, Values[Lookup[gb, "Items", <||>]]]];
+
+SourceVaultCourseSetWeights[lecture_String, weights_Association] := Module[
+  {gb = iCWRGradebook[lecture], items, bad, w},
+  If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
+  items = Lookup[gb, "Items", <||>];
+  w = KeyMap[ToString, weights];
+  bad = Complement[Keys[w], Keys[items]];
+  If[bad =!= {},
+    Return[iEXFail["UnknownItems", "Items" -> bad, "Known" -> Keys[items]]]];
+  bad = Select[Keys[w], !NumericQ[w[#]] || w[#] < 0 &];
+  If[bad =!= {}, Return[iEXFail["BadWeight", "Items" -> bad]]];
+  KeyValueMap[Function[{k, v}, items[k] = Join[items[k],
+    <|"Weight" -> v, "Updated" -> iEXNowIso[]|>]], w];
+  If[iCWRSaveGradebook[lecture, Join[gb, <|"Items" -> items|>]] === $Failed,
+    Return[iEXFail["GradebookWriteFailed"]]];
+  <|"Status" -> "OK", "Lecture" -> lecture,
+    "Weights" -> Association @ Map[#["ItemId"] -> #["Weight"] &, Values[items]],
+    "Updated" -> Keys[w]|>];
+
+iCWRRoundTo[x_, d_] := If[IntegerQ[d] && d >= 0 && NumericQ[x], N @ Round[x, 10.^(-d)], x];
+
+Options[SourceVaultCourseGradebook] = {
+  "Missing" -> "Zero", "Status" -> "Enrolled", "Round" -> 1};
+SourceVaultCourseGradebook[lecture_String, OptionsPattern[]] := Module[
+  {gb = iCWRGradebook[lecture], items, students, missMode = ToString[OptionValue["Missing"]],
+   rnd = OptionValue["Round"], ids},
+  If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
+  If[!MemberQ[{"Zero", "Exclude"}, missMode],
+    Return[iEXFail["BadMissingMode", "Missing" -> missMode, "Hint" -> "\"Zero\" か \"Exclude\""]]];
+  items = Values[Lookup[gb, "Items", <||>]];
+  students = SourceVaultCourseEnrollment[lecture, "Status" -> OptionValue["Status"]];
+  If[!ListQ[students], Return[students]];
+  ids = Map[#["ItemId"] &, items];
+  Map[Function[st, Module[{k = iCWRNormalizeID[Lookup[st, "StudentID", ""]],
+      scores = <||>, missing = {}, wsum = 0., acc = 0., total},
+    Scan[Function[it, Module[{v = Lookup[Lookup[it, "Scores", <||>], k, Missing["NotScored"]],
+        w = Lookup[it, "Weight", 1], mx = Lookup[it, "MaxScore", 100]},
+      scores[it["ItemId"]] = v;
+      If[NumericQ[v],
+        wsum += w; acc += w*(v/mx),
+        AppendTo[missing, it["ItemId"]];
+        If[missMode === "Zero", wsum += w]]]], items];
+    total = If[wsum > 0, iCWRRoundTo[100.*acc/wsum, rnd], Missing["NoScores"]];
+    <|"StudentID" -> Lookup[st, "StudentID", ""], "StudentName" -> Lookup[st, "StudentName", ""],
+      "Status" -> Lookup[st, "Status", "Enrolled"], "Scores" -> scores,
+      "MissingItems" -> missing, "WeightUsed" -> wsum, "Total" -> total|>]], students]];
+
+Options[SourceVaultCourseGradebookView] = Options[SourceVaultCourseGradebook];
+SourceVaultCourseGradebookView[lecture_String, opts : OptionsPattern[]] := Module[
+  {rows = SourceVaultCourseGradebook[lecture, opts]},
+  If[!ListQ[rows], Return[rows]];
+  Dataset[Map[Join[KeyTake[#, {"StudentID", "StudentName", "Status"}],
+    Map[If[MissingQ[#], "-", #] &, #["Scores"]],
+    <|"Total" -> #["Total"]|>] &, rows]]];
+
+Options[SourceVaultCourseGradeReport] = Join[Options[SourceVaultCourseGradebook], {"Export" -> None}];
+SourceVaultCourseGradeReport[lecture_String, opts : OptionsPattern[]] := Module[
+  {rows, items, keys, table, path},
+  rows = SourceVaultCourseGradebook[lecture,
+    FilterRules[{opts}, Options[SourceVaultCourseGradebook]]];
+  If[!ListQ[rows], Return[rows]];
+  items = SourceVaultCourseAssessments[lecture];
+  If[!ListQ[items], Return[items]];
+  keys = Map[#["ItemId"] &, items];
+  table = Map[Function[r, Join[
+    <|"学籍番号" -> r["StudentID"], "氏名" -> r["StudentName"]|>,
+    Association @ Map[Function[k, k -> Replace[Lookup[r["Scores"], k, Missing[]],
+      _Missing -> ""]], keys],
+    <|"未入力" -> Length[r["MissingItems"]], "総合点" -> Replace[r["Total"], _Missing -> ""]|>]],
+    rows];
+  path = OptionValue["Export"];
+  If[StringQ[path],
+    Export[path, Prepend[Map[Values, table],
+      Join[{"学籍番号", "氏名"}, keys, {"未入力", "総合点"}]]];
+    <|"Status" -> "OK", "Lecture" -> lecture, "Exported" -> path, "Rows" -> Length[table],
+      "Items" -> keys|>,
+    Dataset[table]]];
+
+(* ============================================================
    プライバシー分類の宣言 (コミットゲート用)
    ・問題 DB そのものは個人情報を含まない (PL 0.3)。私的ストア
      (<PrivateVault>/exercises) には到達するが、出力に私的データは載らない
@@ -5066,6 +6677,7 @@ $iEXPrivacyPublic = {
   (* 設定変数 (値は書体名・担当教員名・テンプレート/ストアのパス・既定 PL・
      表示件数。受講者に関する情報は持たない) *)
   "$SourceVaultExamFontFamily", "$SourceVaultExamInstructor",
+  "$SourceVaultExamAllowCloudIDRecognition",
   "$SourceVaultExamTemplatePDF", "$SourceVaultExerciseDefaultPrivacyLevel",
   "$SourceVaultExercisesRoot", "$SourceVaultExercisesViewLimit"};
 
@@ -5073,13 +6685,24 @@ $iEXPrivacyPublic = {
 $iEXPrivacyPrivate = {
   {"SourceVaultExamRosterImport", "Result"},
   {"SourceVaultExamSheetIngest", "Result"},
+  {"SourceVaultExamSyncRoster", "Result"},
+  {"SourceVaultExamSheetVerify", "Result"},
+  {"SourceVaultExamSheetVerifyView", "View"},
+  {"SourceVaultExamSheetIdentify", "Result"},
   {"SourceVaultExamMatches", "Result"},
   {"SourceVaultExamMatchView", "View"},
   {"SourceVaultExamSetMatch", "Result"},
+  {"SourceVaultExamMatchStatus", "Result"},
+  {"SourceVaultExamProposeMatches", "Result"},
+  {"SourceVaultExamAssignView", "View"},
   {"SourceVaultExamRecognize", "Result"},
   {"SourceVaultExamSetAnswer", "Result"},
   {"SourceVaultExamSetMark", "Result"},
+  {"SourceVaultExamUnresolved", "Result"},
+  {"SourceVaultExamResolveView", "View"},
   {"SourceVaultExamScore", "Result"},
+  {"SourceVaultExamItemAnalysis", "Result"},
+  {"SourceVaultExamItemAnalysisView", "View"},
   {"SourceVaultExamScoreView", "View"},
   {"SourceVaultExamScoreReport", "Result"},
   (* Web レポート (氏名結合後は PL 1.0) *)
@@ -5091,7 +6714,29 @@ $iEXPrivacyPrivate = {
   {"SourceVaultCourseWebReportRuns", "Result"},
   {"SourceVaultCourseWebReportLatestRun", "Result"},
   {"SourceVaultCourseWebReportView", "View"},
-  {"SourceVaultCourseWebReportGrade", "Result"}};
+  {"SourceVaultCourseWebReportGrade", "Result"},
+  (* 履修者レジストリ (学籍番号 + 氏名) *)
+  {"SourceVaultCourseEnrollmentRegister", "Result"},
+  {"SourceVaultCourseEnrollment", "Result"},
+  {"SourceVaultCourseEnrollmentView", "View"},
+  {"SourceVaultCourseEnrollmentRecord", "Result"},
+  {"SourceVaultCourseEnrollmentHistory", "Result"},
+  {"SourceVaultCourseEnrollmentHistoryView", "View"},
+  {"SourceVaultCourseEnrollments", "Result"},
+  {"SourceVaultCourseSetEnrollmentStatus", "Result"},
+  {"SourceVaultCourseStudent", "Result"},
+  (* 成績簿 (学籍番号ごとの点数) *)
+  {"SourceVaultCourseAssessmentRegister", "Result"},
+  {"SourceVaultCourseAssessments", "Result"},
+  {"SourceVaultCourseAssessmentsView", "View"},
+  {"SourceVaultCourseAssessmentRemove", "Result"},
+  {"SourceVaultCourseSetScores", "Result"},
+  {"SourceVaultCourseImportExamScores", "Result"},
+  {"SourceVaultCourseWeights", "Result"},
+  {"SourceVaultCourseSetWeights", "Result"},
+  {"SourceVaultCourseGradebook", "Result"},
+  {"SourceVaultCourseGradebookView", "View"},
+  {"SourceVaultCourseGradeReport", "Result"}};
 
 iEXRegisterPrivacyContracts[] :=
   Quiet@Check[
@@ -5108,6 +6753,19 @@ iEXRegisterPrivacyContracts[] :=
       $iEXPrivacyPrivate]];
     Null, Null];
 iEXRegisterPrivacyContracts[];
+
+(* ---- 機密生成ヘッド (NBAccess レジストリ) ----
+   claudecode の CellEpilog は「手入力セルの入力テキストが機密ヘッドを
+   使っているか」で Output セルの機密マークを決める。ここに登録していないと、
+   答案・履修者・成績を返す関数の出力がマークされないままセルに残る。
+   Private 宣言 ($iEXPrivacyPrivate) と同じ表から作るので、関数を足したときに
+   登録漏れが起きない。NBAccess 未ロードの部分環境では skip。 *)
+iEXRegisterConfidentialHeads[] :=
+  Quiet@Check[
+    If[Length[DownValues[NBAccess`NBRegisterConfidentialHead]] > 0,
+      Scan[NBAccess`NBRegisterConfidentialHead[First[#], 1.0] &, $iEXPrivacyPrivate]];
+    Null, Null];
+iEXRegisterConfidentialHeads[];
 
 End[]
 

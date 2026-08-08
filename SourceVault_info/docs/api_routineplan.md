@@ -187,7 +187,8 @@ SourceVaultRoutineAgendaData を縦型タイムラインとして描画: 日毎�
 MailDeadline=赤褐色・NextReview=青・all-day event=緑)→timed event、続いて overdue バナー(期限超過・
 赤枠)、続いて要対応メールバンド(締切超過→今後の締切→締切なし の3グループ、件数見出し付き)。
 notebook 行/メール行はクリック可能(notebook=SystemOpen — Dropbox online-only ファイルもダウンロードして
-開く。mail=SourceVaultMailAgendaOpen で対応ウィンドウ)。overdue 行は時刻列に missed date を赤表示し、
+開く。行末のフォルダアイコンは格納ディレクトリを SystemOpen する。mail=SourceVaultMailAgendaOpen で
+対応ウィンドウ)。overdue 行は時刻列に missed date を赤表示し、
 notebook の open (not Done/Pass) todo items をインデント箇条書きで列挙する。全セクション空なら
 「予定・締切・要対応メールはありません」を返す。要 FE。
 → column layout (Framed/Column)

@@ -12,16 +12,21 @@ SourceVaultInferMailDerivedBatch が事前計算)を**索引だけ**で読む(�
 窓内(既定 45 日)の索引行を、①カテゴリゲート(TaskRequest/AttendanceRequest/Confirmation
 または推定 Deadline あり)→ ②SPAM/無関係ゲート(Priority < $SourceVaultMailAgendaMinPriority
 を除外)→ ③プライバシーゲート(派生 PrivacyLevel > "MaxPrivacyLevel" を除外、PL 欠落は 1.0
-扱い= fail-safe)→ ④**オーナー宛て判定**(To ∋ owner address → 1.0、To ∋ org address → 0.6、
-不足時のみ遅延 snapshot probe: Cc ∋ owner → 0.7、OrgTo → 0.6、本文冒頭に宛名パターン(既定
-「今井」)→ +0.3。閾値 $SourceVaultMailAgendaDirectionThreshold=0.7 以上のみ)→
-⑤解決済み除外(interaction.json の RepliedAt / agenda.json の Dismissed・NotebookCreated)
-の順に絞る。owner/org アドレスとアドレス宛名パターンは identity 側の owner entity
-(下記「設定」参照)を第一権威とし、$SourceVaultMailAgenda* 変数・config ファイルはフォール
-バック。item = <|RecordId, Subject, From, Date(abs), Category, Priority, Deadline, Summary,
-DirectionScore, DirectionEvidence, MBox, PrivacyLevel, ThreadCount, ThreadRecordIds|>、
-新しい順。Category/Priority 未生成のメールは除外せず PendingCount で返す(見逃し防止。要約
-計算は SourceVaultMailAddSummaries[mbox] を明示実行)。
+扱い= fail-safe)→ ④スレッド集約+解決済み除外(スレッド最新メールより後の解決があれば
+そのスレッド全体をスキップ; interaction.json の RepliedAt / agenda.json の Dismissed・
+NotebookCreated)→ ⑤**オーナー宛て判定**(未解決スレッド内を新しい順に走査し、最初に閾値
+$SourceVaultMailAgendaDirectionThreshold=0.7 以上になったメールをスレッド代表として採用。
+To ∋ owner address → 1.0、To ∋ org address → 0.6、不足時のみ遅延 snapshot probe:
+Cc ∋ owner → 0.7 に引き上げ、OrgTo → 0.6 に引き上げ、本文冒頭に宛名パターン(既定「今井」)が
+一致すると +0.3(上限 0.95)。ただし本文パターンは DirectTo/OrgTo/CcOwner のいずれかでベース
+スコアが 0 より大きいときのみ加算される(To/Cc とも owner/org と無関係なメールは本文パターン
+だけでは浮上しない)。閾値未満のメンバーしかいないスレッドは丸ごと除外)の順に絞る。owner/org
+アドレスとアドレス宛名パターンは identity 側の owner entity(下記「設定」参照)を第一権威とし、
+$SourceVaultMailAgenda* 変数・config ファイルはフォールバック。item = <|RecordId, Subject,
+From, Date(abs), Category, Priority, Deadline, Summary, DirectionScore, DirectionEvidence,
+MBox, PrivacyLevel, ThreadCount, ThreadRecordIds|>、新しい順。Category/Priority 未生成の
+メールは除外せず PendingCount で返す(見逃し防止。要約計算は SourceVaultMailAddSummaries[mbox]
+を明示実行)。
 **スレッド(セッション)集約**: 同一スレッド(Re/Fwd を剥いだ正規化件名+MBox、
 "ThreadKeyFunction" で mailstructure セッション等に差替可)は 1 項目に集約。代表=
 オーナー宛て条件を満たす最新メール(ThreadCount/ThreadRecordIds 付き)。スレッドの
@@ -50,12 +55,16 @@ Options: "NotebookPath" -> None。
 ## アクション UI (R9-4)
 
 ### SourceVaultMailAgendaOpen[recordId | item] → NotebookObject
-対応ウィンドウ(FE)を開く: 件名+From/Date+Summary+明示アクション
-**[↩ 返信する]**(シャード遅延ロード後 SourceVaultMailOpenReplyNotebook; 送信で自動 Done)
-**[📓 ノートブックを作成して継承]**(下記 Inherit)
-**[✓ 確認のみ・対応済み]**(Resolve Dismissed+ウィンドウ閉)
-+ スレッド全体表示(SourceVaultMailThreadNotebook)/ 本文表示(SourceVaultMailShowBody、
-シャード遅延ロード後)。
+要対応メールの**本文ウィンドウ**を開く: シャードを遅延ロードしたうえで
+SourceVaultMailShowBody[recordId] を呼ぶだけの 1 窓構成(旧・「要約→本文」の 2 段階ウィンドウ
+は廃止)。**[返信]/[全員に返信]/[翻訳して返信]**(SourceVaultMailOpenReplyNotebook; 送信で
+自動 Done)・**[スレッド全体を表示]**(SourceVaultMailThreadNotebook)・
+**[ノートブックを作成して継承]**(下記 Inherit)・**[確認のみ・対応済み]**(Resolve Dismissed)
+は本文パネル側(maildb 層、SourceVaultMailView 経由で開いたメールと共通)に集約されている。
+maildb の UI 層(SourceVaultMailShowBody)が未ロードのとき、またはその呼び出しが失敗した
+ときのみ、件名+From/Date+Summary+[↩ 返信する]/[📓 ノートブックを作成して継承]/
+[✓ 確認のみ・対応済み]+[☰ スレッド全体を表示]/[✉ 本文を表示] の旧・簡易操作窓に
+フォールバックする。
 アジェンダ(SourceVaultRoutineAgendaView の ✉ バンド)の項目クリックがここに来る。
 
 ## 継承ノートブック (R9-6)

@@ -1780,7 +1780,10 @@ iSVATExecutePromptRoute[job_Association, spec_Association, tcSeconds_] :=
         "Backend" -> "MainKernelGated", "StartedAtUTC" -> started,
         "FinishedAtUTC" -> iSVATUTCNow[]|>]];
     safety = Lookup[route, "ReplaySafety", "Unknown"];
-    held = Quiet @ Check[ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    (* 複数式 (";" の直後で改行した保存式) は 1 つの CompoundExpression に畳む。
+       畳まないと ReleaseHold が Sequence を返し、呼び元の Return[…] が
+       Return[Null, 値] という 2 引数形に化ける (promptrouter 側と同じ規則)。 *)
+    held = iSVPRParseHeld[exprStr];
     If[!MatchQ[held, _HoldComplete],
       Return[<|"Status" -> "Failed", "Reason" -> "ParseFailed",
         "Backend" -> "MainKernelGated", "StartedAtUTC" -> started,

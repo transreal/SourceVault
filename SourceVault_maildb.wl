@@ -26,7 +26,7 @@ SourceVaultBackfillMailBodies::usage = "SourceVaultBackfillMailBodies[opts] \:30
 SourceVaultMailSnapshotGet::usage = "SourceVaultMailSnapshotGet[recordId] \:306f\:4fdd\:5b58\:6e08\:307f snapshot \:3092\:8fd4\:3059\:3002";
 SourceVaultMailSnapshotList::usage = "SourceVaultMailSnapshotList[] \:306f\:4fdd\:5b58\:6e08\:307f snapshot \:3092\:8fd4\:3059\:3002";
 SourceVaultIdentityBackfillFromMail::usage = "SourceVaultIdentityBackfillFromMail[] \:306f\:73fe\:5728\:30ed\:30fc\:30c9\:6e08\:307f\:306e snapshot \:306e\:5e73\:6587 From/To/Cc \:3092\:8d70\:67fb\:3057\:3066\:8b58\:5225\:5b50(2\:5c64\:30a2\:30c9\:30ec\:30b9\:5e33)\:3092\:4e00\:62ec\:751f\:6210\:3059\:308b\:3002\:518d\:53d6\:8fbc\:4e0d\:8981\:3002\:30b9\:30b3\:30fc\:30d7\:306f\:5148\:306b SourceVaultMailEnsureLoaded \:3067\:6c7a\:3081\:308b\:3002";
-SourceVaultSearchMailSnapshots::usage = "SourceVaultSearchMailSnapshots[query_String:\"\", opts] \:306f subject/summary \:90e8\:5206\:4e00\:81f4 + From / To / FromContact / MBox / DateFrom / DateTo / HasAttachment / Category / HasDeadline / DeadlineFrom / DeadlineTo \:3067\:691c\:7d22\:3057\:3001Newest(\:65e2\:5b9a True)\:3067\:65e5\:4ed8\:964d\:9806\:3001Limit \:3067\:4ef6\:6570\:5236\:9650\:3059\:308b\:3002Category \:306f $SourceVaultMailCategories \:306e\:30c8\:30fc\:30af\:30f3(\:65e5\:672c\:8a9e\:540d \"\:4f5c\:696d\:4f9d\:983c\" \:7b49\:3067\:3082\:53ef)\:3002DeadlineFrom/DeadlineTo \:306f\:3006\:5207\:65e5\:3092\:65e5\:5358\:4f4d\:5305\:542b\:3067\:7bc4\:56f2\:6307\:5b9a(\:4f8b: \:4eca\:9031\:3006\:5207\:306e\:4f5c\:696d\:4f9d\:983c = \"Category\"->\"TaskRequest\", \"DeadlineFrom\"->\:4eca\:65e5, \"DeadlineTo\"->\:9031\:672b)\:3002SortBy \:306f \"Date\"|\"Priority\"|\"PrivacyLevel\"|\"Deadline\"\:3002ExcludeAgenda->True \:3067\:30eb\:30fc\:30c1\:30f3\:30a2\:30b8\:30a7\:30f3\:30c0(SourceVaultRoutineAgendaView/Data \:306e\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb \:2709 \:30d0\:30f3\:30c9)\:304c\:65e2\:306b\:62fe\:3063\:3066\:3044\:308b\:30e1\:30fc\:30eb\:3068\:305d\:306e\:30b9\:30ec\:30c3\:30c9\:3092\:4e00\:89a7\:304b\:3089\:9664\:5916\:3059\:308b(\:4e8c\:5ea6\:624b\:9593\:56de\:907f)\:3002\"Item\" \:3067\:4ee3\:8868\:30e1\:30fc\:30eb\:306e\:307f\:9664\:5916\:3001{rid,..} \:3067\:660e\:793a\:6307\:5b9a\:3002AgendaItems \:306b\:8a08\:7b97\:6e08\:307f\:30a2\:30b8\:30a7\:30f3\:30c0(MailAgendaItems/RoutineAgendaData \:306e\:623b\:308a\:5024)\:3092\:6ce8\:5165\:3059\:308c\:3070\:518d\:8a08\:7b97\:3057\:306a\:3044\:3002";
+SourceVaultSearchMailSnapshots::usage = "SourceVaultSearchMailSnapshots[query_String:\"\", opts] \:306f subject/summary \:90e8\:5206\:4e00\:81f4 + From / To / FromContact / MBox / DateFrom / DateTo / HasAttachment / Category / HasDeadline / DeadlineFrom / DeadlineTo \:3067\:691c\:7d22\:3057\:3001Newest(\:65e2\:5b9a True)\:3067\:65e5\:4ed8\:964d\:9806\:3001Limit \:3067\:4ef6\:6570\:5236\:9650\:3059\:308b\:3002Category \:306f $SourceVaultMailCategories \:306e\:30c8\:30fc\:30af\:30f3(\:65e5\:672c\:8a9e\:540d \"\:4f5c\:696d\:4f9d\:983c\" \:7b49\:3067\:3082\:53ef)\:3002DeadlineFrom/DeadlineTo \:306f\:3006\:5207\:65e5\:3092\:65e5\:5358\:4f4d\:5305\:542b\:3067\:7bc4\:56f2\:6307\:5b9a(\:4f8b: \:4eca\:9031\:3006\:5207\:306e\:4f5c\:696d\:4f9d\:983c = \"Category\"->\"TaskRequest\", \"DeadlineFrom\"->\:4eca\:65e5, \"DeadlineTo\"->\:9031\:672b)\:3002SortBy \:306f \"Date\"|\"Priority\"|\"PrivacyLevel\"|\"Deadline\"\:3002ExcludeAgenda->True \:3067\:30eb\:30fc\:30c1\:30f3\:30a2\:30b8\:30a7\:30f3\:30c0(SourceVaultRoutineAgendaView/Data \:306e\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb \:2709 \:30d0\:30f3\:30c9)\:304c\:65e2\:306b\:62fe\:3063\:3066\:3044\:308b\:30e1\:30fc\:30eb\:3068\:305d\:306e\:30b9\:30ec\:30c3\:30c9\:3092\:4e00\:89a7\:304b\:3089\:9664\:5916\:3059\:308b(\:4e8c\:5ea6\:624b\:9593\:56de\:907f)\:3002\"Item\" \:3067\:4ee3\:8868\:30e1\:30fc\:30eb\:306e\:307f\:9664\:5916\:3001{rid,..} \:3067\:660e\:793a\:6307\:5b9a\:3002AgendaItems \:306b\:8a08\:7b97\:6e08\:307f\:30a2\:30b8\:30a7\:30f3\:30c0(MailAgendaItems/RoutineAgendaData \:306e\:623b\:308a\:5024)\:3092\:6ce8\:5165\:3059\:308c\:3070\:518d\:8a08\:7b97\:3057\:306a\:3044\:3002Resolved->False \:3067\:5bfe\:5fdc\:6e08\:307f(agenda.json \:306e Dismissed/NotebookCreated \:307e\:305f\:306f\:8fd4\:4fe1\:6e08\:307f)\:3092\:9664\:304d\:3001True \:3067\:5bfe\:5fdc\:6e08\:307f\:3060\:3051\:3092\:8868\:793a\:3059\:308b(\:65e2\:5b9a All = \:4e21\:65b9)\:3002ExcludeAgenda \:304c\:300c\:672a\:5bfe\:5fdc\:306e\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb\:300d\:3092\:9664\:304f\:306e\:3068\:88dc\:5b8c\:95a2\:4fc2\:3067\:3001\:4f75\:7528\:3067\:304d\:308b\:3002";
 SourceVaultMailSummaryRow::usage = "SourceVaultMailSummaryRow[snapshot] \:306f\:4e00\:89a7\:8868\:793a\:7528\:306e\:4f4e\:6f0f\:6d29\:884c <|Date, From, Subject, Category, Deadline, Attach, MBox, RecordId, BodyEncrypted|> \:3092\:8fd4\:3059\:3002From \:306f AddressBook \:89e3\:6c7a\:6642\:306f\:8868\:793a\:540d\:3002Category \:306f\:4f9d\:983c\:30ab\:30c6\:30b4\:30ea\:30c8\:30fc\:30af\:30f3\:3001Deadline \:306f\:3006\:5207\:306e ISO \:6587\:5b57\:5217 (\:7121\:3051\:308c\:3070 Missing)\:3002";
 $SourceVaultMailCategories::usage = "\:30e1\:30fc\:30eb\:6d3e\:751f\:30ab\:30c6\:30b4\:30ea\:306e\:8a9e\:5f59: InfoProvision=\:60c5\:5831\:63d0\:4f9b, AttendanceRequest=(\:4f1a\:8b70\:7b49\:3078\:306e)\:51fa\:5e2d\:4f9d\:983c, TaskRequest=\:4f5c\:696d\:30fb\:4ed5\:4e8b\:306e\:4f9d\:983c, Confirmation=\:78ba\:8a8d\:30fb\:627f\:8a8d\:4f9d\:983c, Report=\:5831\:544a, Notice=\:901a\:77e5\:30fb\:4e00\:6589\:914d\:4fe1, Other=\:305d\:306e\:4ed6\:3002Derived.Category \:3068\:691c\:7d22\:30aa\:30d7\:30b7\:30e7\:30f3 \"Category\" \:3067\:4f7f\:3046\:3002";
 SourceVaultMailSearchSummary::usage = "SourceVaultMailSearchSummary[query_String:\"\", opts] \:306f\:691c\:7d22\:7d50\:679c\:3092 SummaryRow \:306e\:30ea\:30b9\:30c8(\:65b0\:7740\:9806\:30fbLimit \:9069\:7528)\:3067\:8fd4\:3059\:3002";
@@ -34,7 +34,7 @@ SourceVaultMailDataset::usage = "SourceVaultMailDataset[query_String:\"\", opts]
 SourceVaultMailStoreSave::usage = "SourceVaultMailStoreSave[\"All\"->False] \:306f\:5909\:66f4\:306e\:3042\:3063\:305f\:6708\:6b21\:30b7\:30e3\:30fc\:30c9\:306e\:307f (All->True \:3067\:5168\:30b7\:30e3\:30fc\:30c9) \:3092 byte-exact \:4fdd\:5b58\:3059\:308b\:3002";
 SourceVaultMailStoreLoad::usage = "SourceVaultMailStoreLoad[] \:306f\:5168\:30b7\:30e3\:30fc\:30c9\:3092\:8aad\:307f\:8fbc\:3080(\:91cd\:3044)\:3002\:901a\:5e38\:306f SourceVaultMailEnsureLoaded \:3067\:5fc5\:8981\:5206\:3060\:3051\:9045\:5ef6\:30ed\:30fc\:30c9\:3059\:308b\:3002";
 SourceVaultMailAvailableShards::usage = "SourceVaultMailAvailableShards[mbox_:All] \:306f\:30c7\:30a3\:30b9\:30af\:4e0a\:306e\:30b7\:30e3\:30fc\:30c9 {mbox, yyyymm} \:306e\:4e00\:89a7\:3092\:30ed\:30fc\:30c9\:305b\:305a\:306b\:8fd4\:3059\:3002";
-SourceVaultMailEnsureLoaded::usage = "SourceVaultMailEnsureLoaded[mbox_String, period_:Automatic] \:306f\:6307\:5b9a mbox \:306e\:671f\:9593\:5206\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:3092\:30e1\:30e2\:30ea\:3078\:9045\:5ef6\:30ed\:30fc\:30c9\:3059\:308b\:3002period: \"YYYYMM\" | {from,to} | \"Latest\"/Automatic | n(\:76f4\:8fd1n\:6708) | All\:3002\:65e2\:30ed\:30fc\:30c9\:306f\:518d\:8aad\:8fbc\:3057\:306a\:3044\:3002";
+SourceVaultMailEnsureLoaded::usage = "SourceVaultMailEnsureLoaded[mbox_String, period_:Automatic] \:306f\:6307\:5b9a mbox \:306e\:671f\:9593\:5206\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:3092\:30e1\:30e2\:30ea\:3078\:9045\:5ef6\:30ed\:30fc\:30c9\:3059\:308b\:3002period: \"YYYYMM\" | {from,to} | \"Latest\"/Automatic | n(\:76f4\:8fd1n\:6708) | All\:3002period \:306f\:4f4d\:7f6e\:5f15\:6570\:3060\:304c \"Latest\"->n \:306e Rule \:5f62\:3067\:3082\:53d7\:3051\:308b (SourceVaultMailView \:306e \"Latest\" \:30aa\:30d7\:30b7\:30e7\:30f3\:3068\:7d9a\:3051\:3066\:66f8\:3044\:3066\:3082\:9ed9\:3063\:3066 0 \:4ef6\:306b\:306a\:3089\:306a\:3044)\:3002\:65e2\:30ed\:30fc\:30c9\:306f\:518d\:8aad\:8fbc\:3057\:306a\:3044\:3002";
 SourceVaultMailLoadShard::usage = "SourceVaultMailLoadShard[\"mbox/yyyymm\"] \:306f1\:30b7\:30e3\:30fc\:30c9\:3092\:30ed\:30fc\:30c9\:3059\:308b\:3002";
 SourceVaultMailUnloadAll::usage = "SourceVaultMailUnloadAll[] \:306f\:30e1\:30e2\:30ea\:4e0a\:306e snapshot \:3092\:89e3\:653e\:3059\:308b\:3002";
 SourceVaultMailLoadedCount::usage = "SourceVaultMailLoadedCount[] \:306f\:73fe\:5728\:30e1\:30e2\:30ea\:306b\:3042\:308b snapshot \:6570\:3092\:8fd4\:3059\:3002";
@@ -509,6 +509,65 @@ iSVMDAgendaExcludeSet[spec_, agendaItems_] :=
 iSVMDNotExcludedQ[None, _] := True;
 iSVMDNotExcludedQ[excl_Association, rid_] := ! KeyExistsQ[excl, rid];
 
+(* ══════════ "Resolved" — 対応済みメールを含める/除く ══════════
+   「対応済み」の判定は **RecordId 単位** で、次のいずれかが立っていること:
+     (a) agenda.json の解決記録 (SourceVaultMailAgendaResolve が書く
+         State: "Dismissed" / "NotebookCreated")。SourceVault_mailagenda.wl
+         未ロードなら (a) は空 (rule 11 の弱結合)。
+         ※ 同じファイルには direction probe のキャッシュ ("Probe" だけの
+           エントリ) も同居するので、**State を持つものだけ**を数える。
+     (b) interaction.json の返信記録 (RepliedCount > 0 / RepliedAt)。
+         返信送信時に iSVMDRecordReplied が書く。
+   ExcludeAgenda との関係: ExcludeAgenda は「**未対応の**要対応メール」を除く
+   (SourceVaultMailAgendaItems が未対応しか返さないため)。Resolved は対応済み
+   そのものを対象にするので両者は補完関係で、併用もできる。
+   判定集合はクエリ 1 回につき 1 度だけ読む (行ごとではない) のでキャッシュ
+   しない = 対応済みにした直後の再評価で即反映される。 *)
+
+(* rid -> <|State, At, ...|>。State を持つ (= 実際に解決された) ものだけ。
+   一覧の「対応」列 (iSVUIResolvedCell) もこの表を 1 回だけ読んで使う。 *)
+iSVMDAgendaResolutionMap[] :=
+  Module[{res},
+    res = If[Length[DownValues[SourceVault`SourceVaultMailAgendaResolutions]] === 0, <||>,
+      Quiet@Check[SourceVault`SourceVaultMailAgendaResolutions[], <||>]];
+    If[! AssociationQ[res], Return[<||>]];
+    KeyTake[res,
+      Select[Keys[res],
+        StringQ[#] && AssociationQ[res[#]] &&
+          MemberQ[{"Dismissed", "NotebookCreated"},
+            Lookup[res[#], "State", Missing[]]] &]]];
+
+iSVMDAgendaResolvedIds[] := AssociationMap[True &, Keys[iSVMDAgendaResolutionMap[]]];
+
+iSVMDInteractionRepliedQ[e_] :=
+  AssociationQ[e] &&
+    Or[
+      With[{c = Lookup[e, "RepliedCount", 0]}, IntegerQ[c] && c > 0],
+      With[{a = Lookup[e, "RepliedAt", ""]}, StringQ[a] && StringTrim[a] =!= ""]];
+
+iSVMDRepliedIds[] :=
+  (iSVMDInteractionLoad[];   (* 他セッション/別 PC の返信も拾うためディスクから *)
+   If[! AssociationQ[$iSVMDInteraction], <||>,
+     AssociationMap[True &,
+       Select[Keys[$iSVMDInteraction],
+         StringQ[#] && iSVMDInteractionRepliedQ[$iSVMDInteraction[#]] &]]]);
+
+iSVMDResolvedIds[] := Join[iSVMDAgendaResolvedIds[], iSVMDRepliedIds[]];
+
+(* "Resolved" の値 -> フィルタ (None = 絞らない)
+     All | Automatic : 対応済みも未対応も出す (既定・従来動作)
+     False           : 対応済みを **除く** (未対応だけ)
+     True            : 対応済み **だけ** *)
+iSVMDResolvedFilter[spec_] :=
+  Which[
+    TrueQ[spec], <|"Keep" -> True, "Ids" -> iSVMDResolvedIds[]|>,
+    spec === False, <|"Keep" -> False, "Ids" -> iSVMDResolvedIds[]|>,
+    True, None];
+
+iSVMDResolvedPassQ[None, _] := True;
+iSVMDResolvedPassQ[f_Association, rid_] :=
+  TrueQ[f["Keep"]] === KeyExistsQ[f["Ids"], rid];
+
 Options[SourceVaultSearchMailSnapshots] = {
   "FromContact" -> Automatic, "From" -> Automatic, "To" -> Automatic, "MBox" -> Automatic,
   "DateFrom" -> Automatic, "DateTo" -> Automatic, "HasAttachment" -> Automatic,
@@ -516,7 +575,7 @@ Options[SourceVaultSearchMailSnapshots] = {
   "DeadlineFrom" -> Automatic, "DeadlineTo" -> Automatic,
   "MinPriority" -> Automatic, "MaxPriority" -> Automatic,
   "MinPrivacy" -> Automatic, "MaxPrivacy" -> Automatic,
-  "ExcludeAgenda" -> False, "AgendaItems" -> Automatic,
+  "ExcludeAgenda" -> False, "AgendaItems" -> Automatic, "Resolved" -> All,
   "SortBy" -> Automatic, "SortOrder" -> "Desc", "Newest" -> True, "Limit" -> Automatic};
 
 iSVMDSnapDate[s_] := Lookup[s["MailMetadataPublic"], "Date", ""];
@@ -550,8 +609,9 @@ iSVMDSortKey[by_][s_] := Switch[by,
 
 SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
   Module[{q, fc, fr, toQ, mb, df, dt, ha, cat, hd, ddf, ddt, hits, lim,
-      minP, maxP, minPr, maxPr, by, ord, excl},
+      minP, maxP, minPr, maxPr, by, ord, excl, resv},
     excl = iSVMDAgendaExcludeSet[OptionValue["ExcludeAgenda"], OptionValue["AgendaItems"]];
+    resv = iSVMDResolvedFilter[OptionValue["Resolved"]];
     q = StringTrim[query]; fc = OptionValue["FromContact"]; fr = OptionValue["From"];
     toQ = OptionValue["To"]; mb = OptionValue["MBox"];
     df = iSVMDDayListOf[OptionValue["DateFrom"]]; dt = iSVMDDayListOf[OptionValue["DateTo"]];
@@ -568,6 +628,7 @@ SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
     hits = Select[Values[$iSVMDStore], Function[s,
        And[
          iSVMDNotExcludedQ[excl, Lookup[s, "RecordId", Missing[]]],
+         iSVMDResolvedPassQ[resv, Lookup[s, "RecordId", Missing[]]],
          q === "" ||
            AnyTrue[{Lookup[s["MailMetadataPublic"], "Subject", ""],
                     Lookup[s["Derived"], "Summary", ""]},
@@ -975,8 +1036,9 @@ iSVMDIxDeadlineInRange[row_, fromDay_, toDay_] :=
 Options[SourceVaultMailSearchIndex] = Options[SourceVaultSearchMailSnapshots];
 SourceVaultMailSearchIndex[query_String : "", OptionsPattern[]] :=
   Module[{q, fr, toQ, fc, mb, df, dt, ha, cat, hd, ddf, ddt, minP, maxP, minPr, maxPr,
-      by, ord, lim, rows, hits, excl},
+      by, ord, lim, rows, hits, excl, resv},
     excl = iSVMDAgendaExcludeSet[OptionValue["ExcludeAgenda"], OptionValue["AgendaItems"]];
+    resv = iSVMDResolvedFilter[OptionValue["Resolved"]];
     q = StringTrim[query]; fr = OptionValue["From"]; toQ = OptionValue["To"];
     fc = OptionValue["FromContact"]; mb = OptionValue["MBox"];
     df = iSVMDDayListOf[OptionValue["DateFrom"]]; dt = iSVMDDayListOf[OptionValue["DateTo"]];
@@ -992,6 +1054,7 @@ SourceVaultMailSearchIndex[query_String : "", OptionsPattern[]] :=
     hits = Select[rows, Function[r,
        And[
          iSVMDNotExcludedQ[excl, Lookup[r, "RecordId", Missing[]]],
+         iSVMDResolvedPassQ[resv, Lookup[r, "RecordId", Missing[]]],
          q === "" ||
            AnyTrue[{Lookup[r, "Subject", ""], Lookup[r, "Summary", ""]},
              StringQ[#] && StringContainsQ[#, q, IgnoreCase -> True] &],
@@ -1074,8 +1137,15 @@ SourceVaultMailLoadShard[shardKey_String] :=
     AssociateTo[$iSVMDLoadedShards, shardKey -> True];
     Length[snaps]];
 
-iSVMDResolvePeriod[avail_List, period_] :=
-  Module[{mbox, yms, sel},
+(* period は位置引数だが "Latest" -> n / "Period" -> n の Rule 形でも受ける
+   (View 側の "Latest" オプションと綴りを揃えて書かれた呼び出しが、黙って
+   「該当シャード0件」に落ちてロードされない事故を防ぐ)。 *)
+iSVMDNormalizePeriod[Rule["Latest" | "Period", v_]] := v;
+iSVMDNormalizePeriod[RuleDelayed["Latest" | "Period", v_]] := v;
+iSVMDNormalizePeriod[p_] := p;
+
+iSVMDResolvePeriod[avail_List, periodIn_] :=
+  Module[{mbox, yms, sel, period = iSVMDNormalizePeriod[periodIn]},
     If[avail === {}, Return[{}]];
     mbox = avail[[1, 1]]; yms = Sort[DeleteDuplicates[avail[[All, 2]]]];
     sel = Which[
@@ -2230,14 +2300,14 @@ EndPackage[];
 BeginPackage["SourceVault`", {"NBAccess`"}];
 
 SourceVaultMailGetBody::usage = "SourceVaultMailGetBody[recordId] \:306f snapshot \:306e\:6697\:53f7\:5316\:672c\:6587\:3092\:5fa9\:53f7\:3057\:3066\:6587\:5b57\:5217\:3067\:8fd4\:3059\:3002";
-SourceVaultMailShowBody::usage = "SourceVaultMailShowBody[recordId] \:306f\:672c\:6587\:3092\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3067\:8868\:793a\:3059\:308b (front end)\:3002";
+SourceVaultMailShowBody::usage = "SourceVaultMailShowBody[recordId] \:306f\:672c\:6587\:3092\:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3067\:8868\:793a\:3059\:308b (front end)\:3002\:672c\:6587\:30d1\:30cd\:30eb\:306b\:306f \:8fd4\:4fe1/\:5168\:54e1\:306b\:8fd4\:4fe1/\:7ffb\:8a33\:3057\:3066\:8fd4\:4fe1/\:7ffb\:8a33\:8868\:793a \:306b\:52a0\:3048\:3066\:3001\:30a2\:30b8\:30a7\:30f3\:30c0\:64cd\:4f5c (\:30b9\:30ec\:30c3\:30c9\:5168\:4f53\:3092\:8868\:793a / \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:4f5c\:6210\:3057\:3066\:7d99\:627f / \:78ba\:8a8d\:306e\:307f\:30fb\:5bfe\:5fdc\:6e08\:307f) \:3082\:5e38\:6642\:4ed8\:304f\:306e\:3067\:3001SourceVaultMailView \:7b49\:304b\:3089\:958b\:3044\:305f\:30e1\:30fc\:30eb\:3067\:3082\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb\:3068\:540c\:3058\:64cd\:4f5c\:304c\:3067\:304d\:308b (\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f\:306f SourceVault_mailagenda.wl \:30ed\:30fc\:30c9\:6642\:306e\:307f)\:3002";
 SourceVaultMailAttachmentDir::usage = "SourceVaultMailAttachmentDir[mbox, yyyymm] \:306f\:65e7 maildb \:6dfb\:4ed8\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:306e\:30d1\:30b9\:3092\:8fd4\:3059\:3002";
 SourceVaultMailAttachments::usage = "SourceVaultMailAttachments[recordId] \:306f\:6dfb\:4ed8 {Name, Path, Exists} \:306e\:30ea\:30b9\:30c8\:3092\:8fd4\:3059\:3002";
 SourceVaultMailOpenAttachment::usage = "SourceVaultMailOpenAttachment[recordId, name] \:306f\:6dfb\:4ed8\:30d5\:30a1\:30a4\:30eb\:3092\:958b\:304f (front end / SystemOpen)\:3002";
 SourceVaultMailComposeReply::usage = "SourceVaultMailComposeReply[recordId, opts] \:306f\:8fd4\:4fe1\:30c9\:30e9\:30d5\:30c8 <|To,Cc,Subject,InReplyToToken,Quoted,Body|> \:3092\:751f\:6210\:3059\:308b\:3002\"ReplyAll\"->True \:3067 Cc \:542b\:3080\:3002";
 SourceVaultMailOpenReplyNotebook::usage = "SourceVaultMailOpenReplyNotebook[recordId, opts] \:306f\:8fd4\:4fe1\:7528\:30a6\:30a4\:30f3\:30c9\:30a6 (To/Cc/\:4ef6\:540d/\:672c\:6587\:7de8\:96c6\:30fb\:30d5\:30a1\:30a4\:30eb\:6dfb\:4ed8\:30fb\:78ba\:8a8d\:4ed8\:304d\:9001\:4fe1) \:3092\:958b\:304f (front end)\:3002opts: \"ReplyAll\"->True \:3067\:5168\:54e1\:306b\:8fd4\:4fe1\:3001\"Translate\"->True \:3067\:65e5\:672c\:8a9e\:3067\:66f8\:3044\:3066\:5143\:30e1\:30fc\:30eb\:306e\:8a00\:8a9e\:306b\:7ffb\:8a33\:3057\:3066\:9001\:308b (\:65e7 maildb replyMailTr \:8e0f\:8972)\:3002";
-SourceVaultMailView::usage = "SourceVaultMailView[query_String:\"\", opts] \:306f\:691c\:7d22\:7d50\:679c\:3092\:3001\:884c\:3054\:3068\:306b \:672c\:6587\:8868\:793a(\:2709)/\:6dfb\:4ed8\:30dd\:30c3\:30d7\:30a2\:30c3\:30d7(\|01f4ce)/\:8fd4\:4fe1(\:21a9) \:306e\:30af\:30ea\:30c3\:30af\:64cd\:4f5c\:3092\:5099\:3048\:305f\:8868 (Dataset) \:3067\:8fd4\:3059\:3002\:65e7 maildb showMails \:8e0f\:8972\:3002ExcludeAgenda->True \:3067\:30a2\:30b8\:30a7\:30f3\:30c0(\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb)\:63b2\:8f09\:5206\:3092\:9664\:3044\:305f\:300c\:305d\:308c\:4ee5\:5916\:306e\:30e1\:30fc\:30eb\:300d\:3060\:3051\:3092\:8868\:793a\:3067\:304d\:308b\:3002";
-SourceVaultMailSearchIndexView::usage = "SourceVaultMailSearchIndexView[query_String:\"\", opts] \:306f SourceVaultMailSearchIndex (sidecar \:7d22\:5f15\:691c\:7d22\:3001\:30b7\:30e3\:30fc\:30c9\:975e\:30ed\:30fc\:30c9) \:306e View \:7248\:3002\:9023\:60f3\:30ea\:30b9\:30c8\:3092 Dataset+UI \:5316\:3057\:3001\:884c\:3054\:3068\:306b \:672c\:6587(\:2709: \:5fc5\:8981\:30b7\:30e3\:30fc\:30c9\:3092\:9045\:5ef6\:30ed\:30fc\:30c9\:3057\:3066\:8868\:793a)/\:30b9\:30ec\:30c3\:30c9(\:2630: \:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:7a93) \:30dc\:30bf\:30f3\:3092\:5099\:3048\:308b\:3002\:8868\:793a\:4ef6\:6570\:306f $SourceVaultMailViewMaxRows \:3067\:5236\:9650\:3002SourceVaultMailEnsureLoaded \:4e0d\:8981 (\:7d22\:5f15 sidecar \:5fc5\:9808: \:7121\:3051\:308c\:3070 SourceVaultMailRebuildMetadataIndex[] \:3067\:69cb\:7bc9)\:3002opts \:306f SourceVaultMailSearchIndex \:3068\:540c\:3058\:3002ExcludeAgenda->True \:3067\:30a2\:30b8\:30a7\:30f3\:30c0(\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb)\:63b2\:8f09\:5206\:3092\:9664\:3044\:305f\:300c\:305d\:308c\:4ee5\:5916\:306e\:30e1\:30fc\:30eb\:300d\:3060\:3051\:3092\:8868\:793a\:3067\:304d\:308b\:3002";
+SourceVaultMailView::usage = "SourceVaultMailView[query_String:\"\", opts] \:306f\:691c\:7d22\:7d50\:679c\:3092\:3001\:884c\:3054\:3068\:306b \:672c\:6587\:8868\:793a(\:2709)/\:6dfb\:4ed8\:30dd\:30c3\:30d7\:30a2\:30c3\:30d7(\|01f4ce)/\:8fd4\:4fe1(\:21a9) \:306e\:30af\:30ea\:30c3\:30af\:64cd\:4f5c\:3092\:5099\:3048\:305f\:8868 (Dataset) \:3067\:8fd4\:3059\:3002\:65e7 maildb showMails \:8e0f\:8972\:3002ExcludeAgenda->True \:3067\:30a2\:30b8\:30a7\:30f3\:30c0(\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb)\:63b2\:8f09\:5206\:3092\:9664\:3044\:305f\:300c\:305d\:308c\:4ee5\:5916\:306e\:30e1\:30fc\:30eb\:300d\:3060\:3051\:3092\:8868\:793a\:3067\:304d\:308b\:3002Resolved->False \:3067\:5bfe\:5fdc\:6e08\:307f(\:5bfe\:5fdc\:6e08\:307f\:30de\:30fc\:30af\:30fb\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:7d99\:627f\:30fb\:8fd4\:4fe1\:6e08\:307f)\:3092\:9664\:304d\:3001True \:3067\:5bfe\:5fdc\:6e08\:307f\:3060\:3051\:3092\:8868\:793a\:3059\:308b(\:65e2\:5b9a All)\:3002\:52a0\:3048\:3066 \"Latest\"->period \:3067 SourceVaultMailEnsureLoaded \:3068\:540c\:3058\:671f\:9593\:8a9e\:5f59 (\"YYYYMM\" | {from,to} | \"Latest\" | \:6574\:6570n(\:76f4\:8fd1n\:30f6\:6708) | All) \:3092\:6307\:5b9a\:3067\:304d\:3001\:8a72\:5f53\:30b7\:30e3\:30fc\:30c9\:3092\:81ea\:52d5\:30ed\:30fc\:30c9\:3057\:305f\:4e0a\:3067\:8868\:793a\:3092\:305d\:306e\:671f\:9593\:306b\:9650\:5b9a\:3059\:308b (\"MBox\" \:672a\:6307\:5b9a\:306a\:3089\:5168 mbox)\:3002";
+SourceVaultMailSearchIndexView::usage = "SourceVaultMailSearchIndexView[query_String:\"\", opts] \:306f SourceVaultMailSearchIndex (sidecar \:7d22\:5f15\:691c\:7d22\:3001\:30b7\:30e3\:30fc\:30c9\:975e\:30ed\:30fc\:30c9) \:306e View \:7248\:3002\:9023\:60f3\:30ea\:30b9\:30c8\:3092 Dataset+UI \:5316\:3057\:3001\:884c\:3054\:3068\:306b \:672c\:6587(\:2709: \:5fc5\:8981\:30b7\:30e3\:30fc\:30c9\:3092\:9045\:5ef6\:30ed\:30fc\:30c9\:3057\:3066\:8868\:793a)/\:30b9\:30ec\:30c3\:30c9(\:2630: \:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:7a93) \:30dc\:30bf\:30f3\:3092\:5099\:3048\:308b\:3002\:8868\:793a\:4ef6\:6570\:306f $SourceVaultMailViewMaxRows \:3067\:5236\:9650\:3002SourceVaultMailEnsureLoaded \:4e0d\:8981 (\:7d22\:5f15 sidecar \:5fc5\:9808: \:7121\:3051\:308c\:3070 SourceVaultMailRebuildMetadataIndex[] \:3067\:69cb\:7bc9)\:3002opts \:306f SourceVaultMailSearchIndex \:3068\:540c\:3058\:3002ExcludeAgenda->True \:3067\:30a2\:30b8\:30a7\:30f3\:30c0(\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb)\:63b2\:8f09\:5206\:3092\:9664\:3044\:305f\:300c\:305d\:308c\:4ee5\:5916\:306e\:30e1\:30fc\:30eb\:300d\:3060\:3051\:3092\:8868\:793a\:3067\:304d\:308b\:3002Resolved->False/True \:3067\:5bfe\:5fdc\:6e08\:307f\:3092\:9664\:304f/\:5bfe\:5fdc\:6e08\:307f\:3060\:3051\:306b\:3067\:304d\:308b(\:65e2\:5b9a All)\:3002";
 SourceVaultMailThreadNotebook::usage = "SourceVaultMailThreadNotebook[recordIdOrRow, opts] \:306f\:30b9\:30ec\:30c3\:30c9\:5168\:4f53 (\:540c\:4e00\:6b63\:898f\:5316\:4ef6\:540d\:30fb\:540c\:4e00 MBox) \:3092 1 \:3064\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:7a93\:306b\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:8868\:793a\:3059\:308b (front end)\:3002\:5404\:30e1\:30fc\:30eb = Section \:30bb\:30eb (\:65e5\:4ed8+\:5dee\:51fa\:4eba) + \:672c\:6587 Text \:30bb\:30eb\:306e\:30bb\:30eb\:30b0\:30eb\:30fc\:30d7=\:6298\:308a\:305f\:305f\:307f/\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:64cd\:4f5c\:53ef\:3002\:7d22\:5f15 sidecar \:3067\:30e1\:30f3\:30d0\:30fc\:3092\:7279\:5b9a\:3057\:3001\:5fc5\:8981\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:9045\:5ef6\:30ed\:30fc\:30c9\:3057\:3066\:672c\:6587\:5fa9\:53f7\:3002\:30bb\:30eb\:306f\:6700\:5927 PrivacyLevel \:3067\:6a5f\:5bc6\:30de\:30fc\:30af\:3002opts: \"MaxMails\"(50)\:3002\:623b\:308a\:5024 <|Status, Mails, PrivacyLevel, LoadedShards|>\:3002";
 SourceVaultMailRowActions::usage = "SourceVaultMailRowActions[snapshot] \:306f1\:884c\:5206\:306e\:30a2\:30af\:30b7\:30e7\:30f3 (Body/Attachments/Reply \:30dc\:30bf\:30f3) \:3092\:8fd4\:3059\:3002";
 SourceVaultMailSend::usage = "SourceVaultMailSend[spec] \:306f\:30e1\:30fc\:30eb\:3092\:9001\:4fe1\:3059\:308b\:3002spec=<|\"To\",\"Cc\",\"Bcc\",\"Subject\",\"Body\",\"Attachments\"->{\:30d1\:30b9...}|>\:3002Bcc \:3092\:7701\:7565\:3059\:308b\:3068 $SourceVaultMailSendBccSelf \:304c True \:306e\:3068\:304d\:30aa\:30fc\:30ca\:30fc\:306e\:4e3b\:30a2\:30c9\:30ec\:30b9\:5b9b\:306b\:81ea\:5206\:306e\:63a7\:3048\:3092\:9001\:308b\:3002$SourceVaultMailSignature \:304c\:975e\:7a7a\:306a\:3089\:672c\:6587\:672b\:5c3e\:306b\:7f72\:540d\:3092\:4ed8\:52a0\:3059\:308b\:3002\:8fd4\:308a\:5024 <|\"Status\"->\"Sent\"|...|> / \:5931\:6557\:6642 <|\"Status\"->\"Error\",\"Reason\"->...|>\:3002Mathematica \:306e SendMail \:8a2d\:5b9a (Preferences > Internet Connectivity > Mail Settings) \:304c\:5fc5\:8981\:3002";
@@ -2250,7 +2320,7 @@ SourceVaultEntityView::usage = "SourceVaultEntityView[] \:306f\:5b9f\:4f53(\:4eb
 SourceVaultEntityEditUI::usage = "SourceVaultEntityEditUI[entityIdOrUid] \:306f\:5b9f\:4f531\:4ef6\:306e\:7de8\:96c6\:30d5\:30a9\:30fc\:30e0(front end)\:3002\:8868\:793a\:540d/\:7a2e\:5225/\:6f22\:5b57/\:30ed\:30fc\:30de\:5b57/\:304b\:306a/\:5206\:985e/\:30b0\:30eb\:30fc\:30d7/\:91cd\:307f/\:6240\:5c5e/\:4fe1\:983c \:3092\:7de8\:96c6\:3057\:4fdd\:5b58\:3002";
 $SourceVaultLegacyMailRoot::usage = "\:65e7 maildb \:306e\:30e1\:30fc\:30eb\:30eb\:30fc\:30c8 (\:6dfb\:4ed8\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:306e\:89aa)\:3002\:65e2\:5b9a\:306f PrivateVault \:3068\:540c\:968e\:5c64\:306e udb/mails\:3002";
 $SourceVaultMailNotebookStyle::usage = "\:672c\:6587\:8868\:793a\:30fb\:8fd4\:4fe1\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e StyleDefinitions\:3002\:65e2\:5b9a \"SourceVault default.nb\"\:3002";
-$SourceVaultMailViewColumnWidths::usage = "$SourceVaultMailViewColumnWidths \:306f \:30e1\:30fc\:30eb\:4e00\:89a7 View (SourceVaultMailView / SourceVaultMailSearchIndexView) \:306e\:5217\:5e45\:3092 \:5217 ID -> \:5e45 \:306e\:9023\:60f3\:3067\:6307\:5b9a\:3059\:308b (\:6587\:5b57\:5e45\:5358\:4f4d\:3001px \:3067\:306f\:306a\:3044)\:3002ID = Act(\:2709)/Thread(\:30b9\:30ec)/Att(\:6dfb\:4ed8)/Reply(\:8fd4\:4fe1)/Opens(\:958b\:5c01)/Replied(\:8fd4\:4fe1\:6e08)/Date/Pri/Sec/Cat/Deadline/Subject/From/Summary\:3002Automatic \:307e\:305f\:306f\:672a\:767b\:9332\:306e\:5217\:306f\:81ea\:52d5\:5e45\:3002Dataset \:306e ItemSize \:306f {\:884c, \:5217} \:306e\:9806 (Grid \:3068\:306f\:9006) \:3067\:3001\:9006\:9806\:306b\:3059\:308b\:3068\:5217\:5e45\:304c\:52b9\:304b\:305a\:8868\:304c\:6a2a\:306b\:81a8\:5f35\:3057\:3066\:53f3\:5074\:306e\:5217\:304c\:898b\:3048\:306a\:304f\:306a\:308b\:3002\:5024\:3092\:5909\:3048\:308b\:3068\:5373\:53cd\:6620 (\:8981\:518d\:8a55\:4fa1)\:3002";
+$SourceVaultMailViewColumnWidths::usage = "$SourceVaultMailViewColumnWidths \:306f \:30e1\:30fc\:30eb\:4e00\:89a7 View (SourceVaultMailView / SourceVaultMailSearchIndexView) \:306e\:5217\:5e45\:3092 \:5217 ID -> \:5e45 \:306e\:9023\:60f3\:3067\:6307\:5b9a\:3059\:308b (\:6587\:5b57\:5e45\:5358\:4f4d\:3001px \:3067\:306f\:306a\:3044)\:3002ID = Act(\:2709)/Thread(\:30b9\:30ec)/Att(\:6dfb\:4ed8)/Reply(\:8fd4\:4fe1)/Opens(\:958b\:5c01)/Replied(\:8fd4\:4fe1\:6e08)/Resolved(\:5bfe\:5fdc)/Date/Pri/Sec/Cat/Deadline/Subject/From/Summary\:3002Automatic \:307e\:305f\:306f\:672a\:767b\:9332\:306e\:5217\:306f\:81ea\:52d5\:5e45\:3002Dataset \:306e ItemSize \:306f {\:884c, \:5217} \:306e\:9806 (Grid \:3068\:306f\:9006) \:3067\:3001\:9006\:9806\:306b\:3059\:308b\:3068\:5217\:5e45\:304c\:52b9\:304b\:305a\:8868\:304c\:6a2a\:306b\:81a8\:5f35\:3057\:3066\:53f3\:5074\:306e\:5217\:304c\:898b\:3048\:306a\:304f\:306a\:308b\:3002\:5024\:3092\:5909\:3048\:308b\:3068\:5373\:53cd\:6620 (\:8981\:518d\:8a55\:4fa1)\:3002";
 $SourceVaultMailViewMaxRows::usage = "$SourceVaultMailViewMaxRows \:306f\:30e1\:30fc\:30eb\:4e00\:89a7 Dataset (SourceVaultMailView \:7b49) \:304c\:4e00\:5ea6\:306b\:63cf\:753b\:3059\:308b\:6700\:5927\:884c\:6570\:3002Windows \:7248 FrontEnd \:306f\:9805\:76ee\:6570\:306e\:591a\:3044 Dataset \:306e\:63cf\:753b\:304c\:91cd\:3044\:305f\:3081\:65e2\:5b9a 25 (Pane \:30b9\:30af\:30ed\:30fc\:30eb + Dataset \:30da\:30fc\:30b8\:30f3\:30b0\:524d\:63d0)\:3002All \:3067\:7121\:5236\:9650\:3002\:6574\:6570\:3092\:8a2d\:5b9a\:3059\:308b\:3068\:5373\:53cd\:6620\:3002";
 SourceVaultMarkConfidentialViewCells::usage = "SourceVaultMarkConfidentialViewCells[nb] \:306f notebook \:5185\:306e\:300c\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:751f\:30c7\:30fc\:30bf\:3092\:8868\:793a\:3059\:308b\:51fa\:529b\:30bb\:30eb\:300d(\:30e1\:30fc\:30eb View=SourceVaultMailView/MailDataset/MailSearchSummary\:3001Todo \:751f\:30c6\:30ad\:30b9\:30c8=SourceVaultFindTodos) \:3092\:3001\:542b\:307e\:308c\:308b\:9805\:76ee\:306e\:6700\:5927\:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:3067\:6a5f\:5bc6\:30de\:30fc\:30af\:3059\:308b\:3002\:30e1\:30fc\:30eb\:306f Derived.PrivacyLevel\:3001Todo \:306f\:30bd\:30fc\:30b9\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e Publishable (\:5168 Public \:306a\:3089 0.0=\:30de\:30fc\:30af\:305b\:305a\:30011 \:3064\:3067\:3082\:975e Public \:306a\:3089 1.0)\:3002\:30af\:30e9\:30a6\:30c9 LLM (\:95be\:50240.5) \:3078\:306f\:30b9\:30ad\:30fc\:30de\:306e\:307f\:3001\:30ed\:30fc\:30ab\:30eb LLM (\:95be\:50241.0) \:3078\:306f\:5168\:6587\:3002\:30b5\:30de\:30ea\:30fc/\:4e88\:5b9a\:8868 (SourceVaultUpcomingSchedule \:7b49) \:306f\:30af\:30e9\:30a6\:30c9\:5b89\:5168\:306a\:306e\:3067\:5bfe\:8c61\:5916\:3002\:691c\:51fa\:5bfe\:8c61\:306f\:5171\:6709\:30ec\:30b8\:30b9\:30c8\:30ea\:3067\:62e1\:5f35\:3055\:308c\:308b (SourceVault_eagle.wl \:30ed\:30fc\:30c9\:6642\:306f Eagle View/Dataset/Search/GeoView \:3082\:5bfe\:8c61)\:3002nb \:7701\:7565\:6642\:306f EvaluationNotebook[]\:3002\:8fd4\:308a\:5024: {<|\"Cell\"->idx,\"PrivacyLevel\"->pl|>...}\:3002";
 SourceVaultMailMarkViewCells::usage = "SourceVaultMailMarkViewCells[nb] \:306f SourceVaultMarkConfidentialViewCells \:306e\:5225\:540d (\:5f8c\:65b9\:4e92\:63db)\:3002\:30e1\:30fc\:30eb\:30fbTodo \:306a\:3069\:751f\:30c7\:30fc\:30bf\:51fa\:529b\:30bb\:30eb\:3092\:6a5f\:5bc6\:30de\:30fc\:30af\:3059\:308b\:3002";
@@ -2278,7 +2348,10 @@ If[! ValueQ[$SourceVaultMailViewMaxRows],
    \:5217\:306f\:7e2e\:307e\:306a\:3044\:305f\:3081\:7121\:52b9 (\:5b9f\:6a5f\:78ba\:8a8d\:6e08\:307f)\:3002 *)
 If[! AssociationQ[$SourceVaultMailViewColumnWidths],
   $SourceVaultMailViewColumnWidths = <|
-    "Act" -> 8, "Opens" -> 3, "Replied" -> 3, "Date" -> 13, "Pri" -> 4,
+    (* Act 列には 本文/添付/返信 の 3 つが入るので 8 では窮屈。
+       なお「添付有りの行が "..." になる」のは幅ではなくセル式の大きさが原因
+       (iSVUIAttachCell のコメント参照)。幅を広げても直らない *)
+    "Act" -> 10, "Opens" -> 3, "Replied" -> 3, "Resolved" -> 3, "Date" -> 13, "Pri" -> 4,
     "Sec" -> 4, "Cat" -> 5, "Deadline" -> 12, "Subject" -> 26, "From" -> 14,
     "Summary" -> 40|>];
 
@@ -2668,8 +2741,119 @@ iSVUIBodyHeader[snap_] :=
       Row[{Style["Date: ", Bold], iSVUIFormatDateJST@Lookup[md, "Date", Missing[]]}]},
       Spacing -> 0.3], "Text", Gray, FontFamily -> ff]];
 
+(* ── 本文中の URL をクリック可能にする ─────────────────────────────────
+   Panel 側 (iSVUILinkifyBody): URL を含まない行は連結して 1 つの文字列のまま
+   残し (Pane 内でそのまま折り返す)、URL を含む行だけ Row + Hyperlink に分解
+   する。全行を Column の要素にすると Windows FE の描画が重くなるため。
+   URL 行は Row なので折り返さないが、メール本文の URL はほぼ独立行。
+   Notebook セル側 (iSVUILinkifyCellContent): TextData + ButtonBox = FE 標準の
+   ハイパーリンクなので、折り返しは元のまま効く。 *)
+
+$iSVUIURLRegex = RegularExpression[
+  "https?://[^\\s<>\"'()\:3001\:3002\:ff08\:ff09\:300c\:300d\:3010\:3011]+"];
+
+iSVUIHasURLQ[s_] := StringQ[s] && StringContainsQ[s, $iSVUIURLRegex];
+
+(* 文末の句読点は URL に含めない ("...html\:3002" / "...html," 対策) *)
+iSVUITrimURLTail[u_String] :=
+  Module[{s = u, t = ""},
+    While[StringLength[s] > 1 &&
+        StringMatchQ[StringTake[s, -1], "." | "," | ";" | ":" | "!" | "?" | ">"],
+      t = StringTake[s, -1] <> t; s = StringDrop[s, -1]];
+    {s, t}];
+
+(* 文字列 -> {文字列 | Hyperlink[...] ...} *)
+iSVUILinkifyParts[s_String] :=
+  Module[{pos = StringPosition[s, $iSVUIURLRegex], out = {}, last = 1},
+    If[pos === {}, Return[{s}]];
+    Do[Module[{i = p[[1]], j = p[[2]], ut},
+        ut = iSVUITrimURLTail[StringTake[s, {i, j}]];
+        If[i > last, AppendTo[out, StringTake[s, {last, i - 1}]]];
+        AppendTo[out, Hyperlink[ut[[1]], ut[[1]]]];
+        If[ut[[2]] =!= "", AppendTo[out, ut[[2]]]];
+        last = j + 1], {p, pos}];
+    If[last <= StringLength[s], AppendTo[out, StringTake[s, {last, -1}]]];
+    out];
+
+iSVUILinkifyBody[body_] :=
+  If[! iSVUIHasURLQ[body], Style[body, "Text"],
+    Module[{lines = StringSplit[body, "\n", All], blocks = {}, buf = {}},
+      Do[If[iSVUIHasURLQ[ln],
+          If[buf =!= {}, AppendTo[blocks, StringRiffle[buf, "\n"]]; buf = {}];
+          AppendTo[blocks, Row[iSVUILinkifyParts[ln]]],
+          AppendTo[buf, ln]],
+        {ln, lines}];
+      If[buf =!= {}, AppendTo[blocks, StringRiffle[buf, "\n"]]];
+      Style[Column[blocks, Alignment -> Left, Spacings -> 0], "Text"]]];
+
+iSVUIURLButtonBox[u_String] :=
+  ButtonBox[u, BaseStyle -> "Hyperlink", ButtonData -> {URL[u], None},
+    ButtonNote -> u];
+
+iSVUILinkifyCellContent[body_] :=
+  If[! iSVUIHasURLQ[body], body,
+    TextData[Replace[iSVUILinkifyParts[body],
+      Hyperlink[u_, _] :> iSVUIURLButtonBox[u], {1}]]];
+
+(* ── アジェンダ操作 (SourceVault_mailagenda.wl) ──────────────────────────
+   本文ウインドウは「要対応メールの操作窓」も兼ねる。以前は
+   SourceVaultMailAgendaOpen が要約+操作ボタンだけの中間窓を出し、そこから
+   「本文を表示」でもう 1 枚開く 2 段階だったので、操作ボタンをこちら
+   (本文パネル) に集約し、どこから開いた本文でも常に使えるようにする。
+   弱結合 (rule-11): mailagenda 未ロードなら maildb 内で完結する
+   「スレッド全体を表示」だけが出る。 *)
+
+iSVUIAgendaAvailableQ[] :=
+  Length[DownValues[SourceVault`SourceVaultMailAgendaResolve]] > 0 &&
+  Length[DownValues[SourceVault`SourceVaultMailAgendaInherit]] > 0;
+
+(* 既に処理済みのメールを開き直したときに現在の状態を出す (sidecar 参照) *)
+iSVUIAgendaStateLabel[r_String] :=
+  Module[{res},
+    If[Length[DownValues[SourceVault`SourceVaultMailAgendaResolutions]] === 0,
+      Return[""]];
+    res = Quiet@Check[SourceVault`SourceVaultMailAgendaResolutions[], <||>];
+    If[! AssociationQ[res], Return[""]];
+    Switch[Lookup[Lookup[res, r, <||>], "State", Missing[]],
+      "Dismissed", "\:5bfe\:5fdc\:6e08\:307f",
+      "NotebookCreated", "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:4f5c\:6210\:6e08\:307f",
+      _, ""]];
+
+(* st の初期値は With で先に算出してリテラルとして焼き込む: DynamicModule の
+   初期化式は FE 側の表示予算内で評価されるので、そこで sidecar 読みをさせない *)
+iSVUIAgendaActions[r_String] :=
+  If[StringTrim[r] === "", Nothing,
+   With[{st0 = iSVUIAgendaStateLabel[r], avail = iSVUIAgendaAvailableQ[],
+     reopenQ = Length[DownValues[SourceVault`SourceVaultMailAgendaReopen]] > 0},
+    DynamicModule[{st = st0},
+      Column[{
+        Row[Join[
+          {Button["\:2630 \:30b9\:30ec\:30c3\:30c9\:5168\:4f53\:3092\:8868\:793a",
+             SourceVaultMailThreadNotebook[r], Method -> "Queued"]},
+          If[avail,
+            {Button["\|01f4d3 \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:4f5c\:6210\:3057\:3066\:7d99\:627f",
+               With[{res = SourceVault`SourceVaultMailAgendaInherit[r]},
+                 st = If[Lookup[res, "Status", ""] === "OK",
+                   "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:4f5c\:6210\:6e08\:307f",
+                   "\:4f5c\:6210\:5931\:6557: " <> ToString@Lookup[res, "Reason", ""]]],
+               Method -> "Queued"],
+             Button["\:2713 \:78ba\:8a8d\:306e\:307f\:30fb\:5bfe\:5fdc\:6e08\:307f",
+               (SourceVault`SourceVaultMailAgendaResolve[r, "Dismissed"];
+                st = "\:5bfe\:5fdc\:6e08\:307f"), Method -> "Queued"]},
+            {}]],
+          Spacer[6]],
+        Dynamic[If[st === "", "",
+          Row[{Style["\[Checkmark] " <> st, Darker@Green],
+            If[reopenQ,
+              Button["\:53d6\:6d88",
+                (SourceVault`SourceVaultMailAgendaReopen[r]; st = ""),
+                Method -> "Queued", ImageSize -> Automatic], Nothing]},
+            Spacer[6]]]]},
+        Spacings -> 0.4]]]];
+
 (* \:672c\:6587\:8868\:793a\:30d1\:30cd\:30eb: \:8fd4\:4fe1/\:5168\:54e1\:306b\:8fd4\:4fe1/\:7ffb\:8a33\:3057\:3066\:8fd4\:4fe1/\:7ffb\:8a33\:8868\:793a/\:6dfb\:4ed8 \:30dc\:30bf\:30f3\:4ed8\:304d\:3002
-   \:7ffb\:8a33\:8868\:793a\:306f\:672c\:6587\:3092\:30a4\:30f3\:30e9\:30a4\:30f3\:306b $Language \:8a33\:3067\:8ffd\:8a18\:3059\:308b\:3002 *)
+   \:7ffb\:8a33\:8868\:793a\:306f\:672c\:6587\:3092\:30a4\:30f3\:30e9\:30a4\:30f3\:306b $Language \:8a33\:3067\:8ffd\:8a18\:3059\:308b\:3002
+   2 \:6bb5\:76ee\:306e\:884c\:306f\:30a2\:30b8\:30a7\:30f3\:30c0\:64cd\:4f5c (\:30b9\:30ec\:30c3\:30c9/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)\:3002 *)
 iSVUIBodyPanel[snap_, subj_, body_, htmlQ_ : False] :=
   DynamicModule[{trans = "", busy = False, r = ToString@Lookup[snap, "RecordId", ""]},
     Panel@Column[{
@@ -2690,6 +2874,7 @@ iSVUIBodyPanel[snap_, subj_, body_, htmlQ_ : False] :=
           busy = False, Method -> "Queued"],
         Spacer[6], Dynamic[If[busy, ProgressIndicator[Appearance -> "Necklace"], ""]]},
         Spacer[6]],
+      iSVUIAgendaActions[r],
       (* classification correction strip (SourceVault_mailfeedback.wl).
          Weak binding: absent module = the window looks exactly as before. *)
       If[Length[DownValues[SourceVault`SourceVaultMailFeedbackPanel]] > 0,
@@ -2697,11 +2882,12 @@ iSVUIBodyPanel[snap_, subj_, body_, htmlQ_ : False] :=
       If[TrueQ[htmlQ],
         Style["(HTML \:30e1\:30fc\:30eb\:3092\:30c6\:30ad\:30b9\:30c8\:306b\:5909\:63db\:3057\:3066\:8868\:793a\:3057\:3066\:3044\:307e\:3059)", "Text", Gray, FontSlant -> Italic],
         Nothing],
-      Pane[Style[body, "Text"], {Full, UpTo[460]}, Scrollbars -> Automatic],
+      Pane[iSVUILinkifyBody[body], {Full, UpTo[460]}, Scrollbars -> Automatic],
       Dynamic[If[trans === "", "",
         Column[{
           Style["\:3010" <> iSVUIReadingLang[] <> "\:8a33\:3011", "Text", Bold],
-          Pane[Style[trans, "Text"], {Full, UpTo[360]}, Scrollbars -> Automatic]}]]]
+          Pane[iSVUILinkifyBody[trans], {Full, UpTo[360]},
+            Scrollbars -> Automatic]}]]]
     }, Spacer[8]]];
 
 SourceVaultMailShowBody[record_] :=
@@ -2792,20 +2978,69 @@ iSVUIFormatDateJST[d_] :=
 
 iSVUINumCell[x_] := If[NumericQ[x], ToString@NumberForm[Round[N[x], 0.01], {3, 2}], ""];
 
-(* \:6dfb\:4ed8 ActionMenu: \:540d\:524d\:3054\:3068\:306b\:958b\:304f Popup\:3002\:540d\:524d\:304c\:7121\:3044\:65e7 snapshot \:306f\:518d import \:3092\:4fc3\:3059\:3002 *)
+(* \:6dfb\:4ed8 ActionMenu: \:540d\:524d\:3054\:3068\:306b\:958b\:304f Popup\:3002\:540d\:524d\:304c\:7121\:3044\:65e7 snapshot \:306f\:518d import \:3092\:4fc3\:3059\:3002
+   これは Panel/Row など **Dataset 以外** 用。Dataset のセルには
+   iSVUIAttachCell (下) を使うこと (理由はそちらのコメント)。 *)
 iSVUIAttachMenu[snap_Association] :=
-  Module[{rid = Lookup[snap, "RecordId", ""], names, cnt},
+  Module[{rid = Lookup[snap, "RecordId", ""], names, cnt, lbl},
     names = Lookup[snap["MailMetadataPublic"], "Attachments", Missing[]];
     cnt = Lookup[snap["MailMetadataPublic"], "AttachmentCount", 0];
+    lbl = "\[FilledSquare]" <> ToString[cnt];
     Which[
       cnt === 0, "",
       ! ListQ[names],
-        Tooltip["\[FilledSquare]" <> ToString[cnt], iSVL["AttachNamesHint"]],
+        Tooltip[lbl, iSVL["AttachNamesHint"]],
       True,
-        With[{r = rid},
-          ActionMenu["\[FilledSquare]" <> ToString[cnt],
-            (# :> SourceVaultMailOpenAttachment[r, #]) & /@ names,
+        (* Tooltip は **ラベルの内側** に置く: 外側に巻くと head が Tooltip に
+           なり、ActionMenu を前提にした呼び出し側/テストが壊れる *)
+        With[{r = rid, nm = Select[names, StringQ]},
+          ActionMenu[Tooltip[lbl, StringRiffle[nm, "\n"]],
+            (# :> SourceVaultMailOpenAttachment[r, #]) & /@ nm,
             Appearance -> "Popup"]]]];
+
+(* Dataset セル用の添付コントロール。record id / 件数だけで組める形にしてある
+   (スナップショットを表示時に触らない)。 *)
+iSVUIAttachControl[rid_String, cnt_, namesKnown_] :=
+  Module[{lbl},
+    If[! IntegerQ[cnt] || cnt === 0, Return[""]];
+    lbl = "\[FilledSquare]" <> ToString[cnt];
+    If[! TrueQ[namesKnown], Return[Tooltip[lbl, iSVL["AttachNamesHint"]]]];
+    With[{r = rid, l = lbl},
+      Button[l, iSVUIAttachOpen[r], Appearance -> "Frameless",
+        Method -> "Queued"]]];
+
+iSVUIAttachControl[snap_Association] :=
+  With[{md = snap["MailMetadataPublic"]},
+    iSVUIAttachControl[ToString@Lookup[snap, "RecordId", ""],
+      Lookup[md, "AttachmentCount", 0],
+      ListQ[Lookup[md, "Attachments", Missing[]]]]];
+
+(* クリック時に添付一覧を解決する (セル式を小さく保つための遅延経路) *)
+iSVUIAttachOpen[rid_String] :=
+  Module[{atts, ok},
+    atts = Quiet@Check[SourceVaultMailAttachments[rid], {}];
+    If[! ListQ[atts], atts = {}];
+    ok = Select[atts, AssociationQ[#] && StringQ[Lookup[#, "Name", Missing[]]] &];
+    Which[
+      ok === {},
+        Quiet@Check[MessageDialog[iSVL["AttachNamesHint"]], Null],
+      Length[ok] === 1,
+        SourceVaultMailOpenAttachment[rid, First[ok]["Name"]],
+      True,
+        Quiet@Check[
+          CreateDialog[
+            Column[
+              Join[
+                {Style[iSVL["Attachments"], "Subsubsection"]},
+                Function[a,
+                  With[{r = rid, n = a["Name"], ex = TrueQ[a["Exists"]]},
+                    Button[If[ex, n, n <> " (\:2717)"],
+                      (SourceVaultMailOpenAttachment[r, n]; DialogReturn[]),
+                      Enabled -> ex, Method -> "Queued",
+                      ImageSize -> Automatic]]] /@ ok,
+                {Button[iSVL["Close"], DialogReturn[], ImageSize -> Automatic]}],
+              Alignment -> Left, Spacings -> 0.6],
+            WindowTitle -> iSVL["Attachments"]], Null]]];
 
 SourceVaultMailRowActions[snap_Association] :=
   With[{r = Lookup[snap, "RecordId", ""]},
@@ -2841,6 +3076,12 @@ $iSVUILabels = <|
   "Reply" -> <|"Japanese" -> "\:8fd4\:4fe1", "English" -> "Reply"|>,
   "Opens" -> <|"Japanese" -> "\:958b\:5c01", "English" -> "Opens"|>,
   "Replied" -> <|"Japanese" -> "\:8fd4\:4fe1\:6e08", "English" -> "Replied"|>,
+  "Resolved" -> <|"Japanese" -> "\:5bfe\:5fdc", "English" -> "Done"|>,
+  "ResolvedDismissed" -> <|"Japanese" -> "\:78ba\:8a8d\:306e\:307f\:30fb\:5bfe\:5fdc\:6e08\:307f",
+     "English" -> "Confirmed / done"|>,
+  "ResolvedNotebook" -> <|"Japanese" -> "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:4f5c\:6210\:3057\:3066\:7d99\:627f",
+     "English" -> "Notebook created"|>,
+  "ResolvedReplied" -> <|"Japanese" -> "\:8fd4\:4fe1\:6e08\:307f", "English" -> "Replied"|>,
   "Date" -> <|"Japanese" -> "\:65e5\:4ed8", "English" -> "Date"|>,
   "Pri" -> <|"Japanese" -> "\:91cd\:8981", "English" -> "Pri"|>,
   "Sec" -> <|"Japanese" -> "\:79d8\:533f", "English" -> "Sec"|>,
@@ -2871,6 +3112,9 @@ $iSVUILabels = <|
      "English" -> "This mail's snapshot is not loaded in memory (not a key problem). Run SourceVaultMailEnsureLoaded[mbox, \"YYYYMM\"] for its month and retry."|>,
   "AttachNamesHint" -> <|"Japanese" -> "\:6dfb\:4ed8\:30d5\:30a1\:30a4\:30eb\:540d\:306f\:518d import \:3067\:6709\:52b9\:5316",
      "English" -> "Attachment names require re-import"|>,
+  "Attachments" -> <|"Japanese" -> "\:6dfb\:4ed8\:30d5\:30a1\:30a4\:30eb",
+     "English" -> "Attachments"|>,
+  "Close" -> <|"Japanese" -> "\:9589\:3058\:308b", "English" -> "Close"|>,
   "New" -> <|"Japanese" -> "\:65b0\:898f", "English" -> "New"|>,
   "Merge" -> <|"Japanese" -> "\:30de\:30fc\:30b8", "English" -> "Merge"|>,
   "Unlink" -> <|"Japanese" -> "\:89e3\:9664", "English" -> "Unlink"|>,
@@ -2928,6 +3172,46 @@ iSVUIItemSize[ids_List] := {Automatic, iSVUIColW /@ ids};
 iSVUIActionRow[items_List] :=
   Row[Riffle[DeleteCases[items, Null | ""], Spacer[5]]];
 
+(* ══════════ Dataset のアクション列が "..." になる問題 (実機で確定) ══════════
+   Dataset は **セル値の LeafCount が 32 を超えると中身を描画せず "..." に
+   省略する**。列幅 (ItemSize) とは無関係で、ItemSize を外しても、幅を
+   8/10/12 と広げても同じ。FE ラスタライズで境界を二分探索した実測値:
+     LeafCount 32 -> 描画 / 33 -> "..."  (Row/Grid/Item/Pane/Framed いずれも同じ)
+   \:2709+\:21a9 の 2 ボタン行は 25 前後で収まるが、添付ボタンが入る 3 ボタン行は
+   Spacer 込みで 36 になり閾値を超える = 「添付があるメールだけボタンが
+   消える」症状の正体。ActionMenu かどうかは無関係 (小さい Button に変えても
+   3 つ並べれば超える)。
+
+   対策: **セルには小さいタグ (iSVUIActMail/iSVUIActIndex) だけを入れ、実際の
+   コントロールは Dataset の ItemDisplayFunction で表示時に組む**。省略判定は
+   ItemDisplayFunction を通す前の値に対して行われるので、表示側がどれだけ
+   大きくても "..." にならない (実機確認済み)。
+   アクション列に要素を足すときは、必ずタグ側 (小さいまま) に足すこと。 *)
+
+iSVUIActMailRow[r_String, cnt_, namesKnown_] :=
+  iSVUIActionRow[{
+    Button["\:2709", SourceVaultMailShowBody[r],
+      Appearance -> "Frameless", Method -> "Queued"],
+    iSVUIAttachControl[r, cnt, namesKnown],
+    Button["\:21a9", SourceVaultMailOpenReplyNotebook[r],
+      Appearance -> "Frameless", Method -> "Queued"]}];
+
+iSVUIActIndexRow[r_String, sk_] :=
+  iSVUIActionRow[{
+    Button["\:2709", iSVMDIxShowBody[r, sk],
+      Appearance -> "Frameless", Method -> "Queued"],
+    Button["\:30b9\:30ec", SourceVaultMailThreadNotebook[r],
+      Appearance -> "Frameless", Method -> "Queued"]}];
+
+(* Dataset の ItemDisplayFunction 本体。タグ以外の値はそのまま返す。
+   **可変長引数で受けること**: Dataset は表示関数を 1 引数で呼ぶとは限らず、
+   1 引数定義のシンボルを渡すと未評価の f[item, ...] がそのままセルに
+   文字列として描画される (全セルが "SourceVault`Private`iSVUIActDisplay..."
+   になる)。呼び出し側も (iSVUIActDisplay[#] &) の純関数形で渡す。 *)
+iSVUIActDisplay[x_, ___] := Replace[x, {
+  iSVUIActMail[r_, cnt_, known_] :> iSVUIActMailRow[r, cnt, known],
+  iSVUIActIndex[r_, sk_] :> iSVUIActIndexRow[r, sk]}];
+
 (* Missing/Null \:306f\:7a7a\:6587\:5b57\:306b *)
 iSVUIShow[x_] := Which[MissingQ[x] || x === Null, "", StringQ[x], x, True, ToString[x]];
 
@@ -2959,7 +3243,28 @@ iSVUIFormatDeadline[dl_] :=
     StringReplace[If[StringLength[dl] >= 16, StringTake[dl, 16], dl],
       {"-" -> "/", "T" -> " "}]];
 
-Options[SourceVaultMailView] = Options[SourceVault`SourceVaultSearchMailSnapshots];
+(* ---- "Latest" (View 層の期間スコープ) ------------------------------------
+   SourceVaultMailEnsureLoaded と同じ period 語彙 ("YYYYMM" / {from,to} / "Latest" /
+   整数n=直近nシャード月 / All) を View から直接指定できるようにする。
+   対象 mbox のシャードをロードし、表示をそのシャード群だけに絞る。
+   絞り込みは日付範囲ではなく shard key 一致で行う: shard key は UTC の年月、
+   検索側の日付フィルタはローカル TZ 日なので、月境界で EnsureLoaded とずれるため。
+   "MBox" 未指定 (Automatic) のときはディスク上の全 mbox に適用する。 *)
+iSVMDLatestShardKeys[mboxOpt_, period_] :=
+  Module[{avail, mboxes},
+    avail = SourceVaultMailAvailableShards[All];
+    If[avail === {}, Return[{}]];
+    mboxes = If[StringQ[mboxOpt], {mboxOpt}, DeleteDuplicates[avail[[All, 1]]]];
+    Join @@ (Function[mb,
+        iSVMDResolvePeriod[Select[avail, First[#] === mb &], period]] /@ mboxes)];
+
+iSVMDEnsureShardKeys[keys_List] := (
+  Scan[If[! TrueQ[Lookup[$iSVMDLoadedShards, #, False]],
+      Quiet@Check[SourceVaultMailLoadShard[#], 0]] &, keys];
+  keys);
+
+Options[SourceVaultMailView] =
+  Join[Options[SourceVault`SourceVaultSearchMailSnapshots], {"Latest" -> Automatic}];
 (* \:8fd4\:4fe1\:6e08\:30bb\:30eb: \:8fd4\:4fe1\:56de\:6570>0 \:306a\:3089\:7dd1\:30c1\:30a7\:30c3\:30af (Tooltip \:306b\:65e5\:6642\:30fb\:56de\:6570)\:3001\:306a\:3051\:308c\:3070\:7a7a\:3002
    Dataset \:30bb\:30eb\:3067\:306f ShowStringCharacters \:304c\:52b9\:304d\:7d20\:306e\:6587\:5b57\:5217\:306b\:5f15\:7528\:7b26\:304c\:4ed8\:304f\:305f\:3081\:660e\:793a False\:3002 *)
 iSVUIRepliedCell[rid_, ff_] :=
@@ -2976,24 +3281,64 @@ iSVUIOpensCell[rid_, ff_] :=
     If[IntegerQ[n] && n > 0,
       Style[ToString[n], FontFamily -> ff, ShowStringCharacters -> False], ""]];
 
+(* 対応セル: "Resolved" オプションと同じ判定を 1 文字で示す。
+     \[Checkmark] = 確認のみ・対応済み (agenda "Dismissed")
+     絵文字      = ノートブックを作成して継承 (agenda "NotebookCreated")
+     \:21a9      = 返信済み (interaction RepliedAt)
+   resMap は iSVMDAgendaResolutionMap[] を **一覧 1 回につき 1 度** 読んだもの
+   (行ごとに agenda.json を読み直さない)。返信済みは返信列と重なるが、
+   「対応済みかどうか」を 1 列で判断できることを優先する。 *)
+iSVUIResolvedCell[rid_, resMap_, ff_] :=
+  Module[{e = Lookup[resMap, rid, Missing[]], st, at, n},
+    If[AssociationQ[e],
+      st = Lookup[e, "State", ""];
+      at = With[{a = Lookup[e, "At", ""]}, If[StringQ[a], a, ""]];
+      Return[Tooltip[
+        Style[If[st === "NotebookCreated", "\|01f4d3", "\[Checkmark]"],
+          Darker@Green, Bold, FontFamily -> ff, ShowStringCharacters -> False],
+        If[st === "NotebookCreated", iSVL["ResolvedNotebook"],
+           iSVL["ResolvedDismissed"]] <> If[at =!= "", ": " <> at, ""]]]];
+    n = iSVMDRepliedCountOf[rid];
+    If[IntegerQ[n] && n > 0,
+      Tooltip[
+        Style["\:21a9", Darker@Green, Bold, FontFamily -> ff,
+          ShowStringCharacters -> False],
+        iSVL["ResolvedReplied"] <> With[{a = iSVMDRepliedAtOf[rid]},
+          If[StringQ[a] && a =!= "", ": " <> a, ""]]],
+      ""]];
+
 SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
-  Module[{snaps, rows, ff = iSVUIFont[]},
-    snaps = SourceVault`SourceVaultSearchMailSnapshots[query, opts];
+  Module[{latest, keys, lim, baseOpts, searchOpts, snaps, rows, resMap,
+      ff = iSVUIFont[]},
+    latest = OptionValue["Latest"];
+    baseOpts = FilterRules[Flatten[{opts}],
+       Options[SourceVault`SourceVaultSearchMailSnapshots]];
+    keys = If[MatchQ[latest, Automatic | None], None,
+       iSVMDEnsureShardKeys[iSVMDLatestShardKeys[OptionValue["MBox"], latest]]];
+    (* Limit は shard 絞り込みの後に効かせる (core が先に打ち切ると期間外で枠を使う) *)
+    lim = OptionValue["Limit"];
+    searchOpts = If[keys === None, baseOpts,
+       Join[{"Limit" -> Automatic}, FilterRules[baseOpts, Except["Limit"]]]];
+    snaps = SourceVault`SourceVaultSearchMailSnapshots[query, Sequence @@ searchOpts];
+    If[keys =!= None,
+      snaps = Select[snaps, MemberQ[keys, iSVMDShardKey[#]] &];
+      If[IntegerQ[lim] && lim >= 0, snaps = Take[snaps, UpTo[lim]]]];
     (* \:958b\:5c01\:56de\:6570\:30fb\:8fd4\:4fe1\:6e08\:306f\:6700\:65b0\:3092\:30c7\:30a3\:30b9\:30af\:304b\:3089\:8aad\:3080 (\:4ed6\:30bb\:30c3\:30b7\:30e7\:30f3/\:5225 PC \:53cd\:6620) *)
     iSVMDInteractionLoad[];
+    (* 対応列用の解決記録も 1 回だけ読む (行ごとに agenda.json を開かない) *)
+    resMap = iSVMDAgendaResolutionMap[];
     (* \:30a2\:30af\:30b7\:30e7\:30f3\:306f maildb \:540c\:69d8\:306b\:5217\:3092\:5206\:3051\:308b (1 \:30bb\:30eb\:306b\:8a70\:3081\:308b\:3068\:5e45\:8d85\:904e\:3067 "..." \:306b\:306a\:308b)\:3002
        \:30d5\:30a9\:30f3\:30c8\:306f Dataset \:306e BaseStyle \:304c\:7121\:3044\:306e\:3067\:30bb\:30eb\:3054\:3068\:306b\:9069\:7528\:3059\:308b\:3002 *)
     rows = Function[s,
        With[{r = Lookup[s, "RecordId", ""], md = s["MailMetadataPublic"], dv = s["Derived"]},
-         <|(* \:2709 \:672c\:6587 / \|01f4ce \:6dfb\:4ed8 / \:21a9 \:8fd4\:4fe1 \:3092 1 \:5217\:76ee\:306b\:307e\:3068\:3081\:308b (\:4e0a\:8a18 iSVUIActionRow \:53c2\:7167) *)
-           "" -> iSVUIActionRow[{
-              Button["\:2709", SourceVaultMailShowBody[r],
-                Appearance -> "Frameless", Method -> "Queued"],
-              iSVUIAttachMenu[s],
-              Button["\:21a9", SourceVaultMailOpenReplyNotebook[r],
-                Appearance -> "Frameless", Method -> "Queued"]}],
+         <|(* \:2709 \:672c\:6587 / \|01f4ce \:6dfb\:4ed8 / \:21a9 \:8fd4\:4fe1 \:3092 1 \:5217\:76ee\:306b\:307e\:3068\:3081\:308b (\:4e0a\:8a18 iSVUIActionRow \:53c2\:7167)\:3002
+              \:30bb\:30eb\:306b\:306f\:5c0f\:3055\:3044\:30bf\:30b0\:3060\:3051\:3092\:5165\:308c\:3001\:30dc\:30bf\:30f3\:306f ItemDisplayFunction \:3067\:7d44\:3080
+              (LeafCount 32 \:8d85\:3067 "..." \:306b\:306a\:308b\:56de\:907f\:3002iSVUIActDisplay \:306e\:30b3\:30e1\:30f3\:30c8\:53c2\:7167) *)
+           "" -> iSVUIActMail[r, Lookup[md, "AttachmentCount", 0],
+              ListQ[Lookup[md, "Attachments", Missing[]]]],
            iSVL["Opens"] -> iSVUIOpensCell[r, ff],
            iSVL["Replied"] -> iSVUIRepliedCell[r, ff],
+           iSVL["Resolved"] -> iSVUIResolvedCell[r, resMap, ff],
            iSVL["Date"] -> Style[iSVUIFormatDateJST[Lookup[md, "Date", Missing[]]], FontFamily -> ff],
            iSVL["Pri"] -> Style[iSVUINumCell[Lookup[dv, "Priority", Missing[]]], FontFamily -> ff],
            iSVL["Sec"] -> Style[iSVUINumCell[Lookup[dv, "PrivacyLevel", Missing[]]], FontFamily -> ff],
@@ -3011,8 +3356,9 @@ SourceVaultMailView[query_String : "", opts : OptionsPattern[]] :=
       Pane[
         Dataset[rows,
           (* \:5217\:5e45 = $SourceVaultMailViewColumnWidths\:3002ItemSize \:306f {\:884c, \:5217} \:306e\:9806 *)
-          ItemSize -> iSVUIItemSize[{"Act", "Opens", "Replied",
+          ItemSize -> iSVUIItemSize[{"Act", "Opens", "Replied", "Resolved",
              "Date", "Pri", "Sec", "Cat", "Deadline", "Subject", "From", "Summary"}],
+          ItemDisplayFunction -> (iSVUIActDisplay[#] &),
           Alignment -> {Left, Center},
           (* MaxItems -> {\:6700\:5927\:884c\:6570, \:6700\:5927\:5217\:6570}\:3002\:7b2c2\:8981\:7d20\:3092\:884c\:6570\:306b\:7e1b\:308b\:3068
              \:5c11\:4ef6\:6570\:6642\:306b\:5217\:304c\:96a0\:308c\:308b\:306e\:3067 All (\:5168\:5217\:30fb\:5168\:884c) \:306b\:3059\:308b\:3002 *)
@@ -3065,15 +3411,11 @@ SourceVaultMailSearchIndexView[query_String : "", opts : OptionsPattern[]] :=
     If[rows === {}, Return[Style[iSVL["NoMail"], "Text"]]];
     urows = Function[r,
        With[{rid = ToString@Lookup[r, "RecordId", ""], sk = Lookup[r, "ShardKey", Missing[]]},
-         <|(* action \:306b\:306f\:5c0f\:3055\:3044\:30ea\:30c6\:30e9\:30eb\:3060\:3051\:3092\:57cb\:3081\:8fbc\:3080 (\:884c\:306e\:9023\:60f3\:3092\:57cb\:3081\:8fbc\:3080\:3068
-              Dataset \:304c\:30bb\:30eb\:3092\:5927\:304d\:3059\:304e\:308b\:5f0f\:3068\:3057\:3066 "..." \:306b\:7701\:7565\:3057\:30dc\:30bf\:30f3\:304c\:62bc\:305b\:306a\:3044)\:3002
-              \:2709 \:672c\:6587 \:3068 \:30b9\:30ec \:30b9\:30ec\:30c3\:30c9 \:306f 1 \:5217\:76ee\:306b\:307e\:3068\:3081\:308b (\:4e0a\:8a18 iSVUIActionRow \:53c2\:7167\:3002
-              2 \:5217\:76ee\:306b\:7f6e\:304f\:3068 ItemSize \:3068\:306e\:4f75\:7528\:3067\:62bc\:305b\:306a\:304f\:306a\:308b) *)
-           "" -> iSVUIActionRow[{
-              Button["\:2709", iSVMDIxShowBody[rid, sk],
-                Appearance -> "Frameless", Method -> "Queued"],
-              Button["\:30b9\:30ec", SourceVaultMailThreadNotebook[rid],
-                Appearance -> "Frameless", Method -> "Queued"]}],
+         <|(* action \:306b\:306f\:5c0f\:3055\:3044\:30bf\:30b0\:3060\:3051\:3092\:57cb\:3081\:8fbc\:307f\:3001\:2709 \:672c\:6587 / \:30b9\:30ec \:30b9\:30ec\:30c3\:30c9 \:306e
+              \:30dc\:30bf\:30f3\:306f ItemDisplayFunction \:3067\:7d44\:3080 (LeafCount 32 \:8d85\:3067 "..." \:306b
+              \:306a\:308b\:56de\:907f\:3002iSVUIActDisplay \:306e\:30b3\:30e1\:30f3\:30c8\:53c2\:7167)\:3002
+              2 \:5217\:76ee\:306b\:7f6e\:304f\:3068 ItemSize \:3068\:306e\:4f75\:7528\:3067\:62bc\:305b\:306a\:304f\:306a\:308b\:306e\:3067 1 \:5217\:76ee\:306b\:96c6\:3081\:308b *)
+           "" -> iSVUIActIndex[rid, sk],
            iSVL["Date"] -> Style[iSVUIFormatDateJST[Lookup[r, "Date", Missing[]]], FontFamily -> ff],
            iSVL["Pri"] -> Style[iSVUINumCell[Lookup[r, "Priority", Missing[]]], FontFamily -> ff],
            iSVL["Sec"] -> Style[iSVUINumCell[Lookup[r, "PrivacyLevel", Missing[]]], FontFamily -> ff],
@@ -3093,6 +3435,7 @@ SourceVaultMailSearchIndexView[query_String : "", opts : OptionsPattern[]] :=
         Dataset[urows,
           ItemSize -> iSVUIItemSize[{"Act", "Date", "Pri", "Sec",
              "Cat", "Deadline", "Subject", "From", "Summary"}],
+          ItemDisplayFunction -> (iSVUIActDisplay[#] &),
           Alignment -> {Left, Center},
           MaxItems -> {$SourceVaultMailViewMaxRows, All}],
         ImageSize -> Full],
@@ -3142,7 +3485,7 @@ SourceVaultMailThreadNotebook[record_, OptionsPattern[]] :=
          {Cell[ToString@iSVUIFormatDateJST[Lookup[r, "Date", Missing[]]] <> "   " <>
              ToString@Lookup[r, "From", Lookup[r, "FromRaw", ""]], "Section"],
           Cell[ToString@Lookup[r, "Subject", ""], "Subsection"],
-          Cell[body, "Text"]}]], thread]];
+          Cell[iSVUILinkifyCellContent[body], "Text"]}]], thread]];
     nb = Quiet@Check[
       CreateDocument[cells,
         WindowTitle -> "Thread: " <> ToString@Lookup[seed, "Subject", subjN],

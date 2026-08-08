@@ -969,7 +969,7 @@ iSVRPAgendaItemRow[item_, tz_, showDue_] := Module[
       Tooltip[
         Button[Mouseover[Style[lbl, c, 12], Style[lbl, c, 12, Underlined]],
           SourceVaultMailAgendaOpen[r], Appearance -> None, Method -> "Queued"],
-        "\:958b\:304f: \:5bfe\:5fdc\:30a6\:30a3\:30f3\:30c9\:30a6 (\:8fd4\:4fe1/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)"]],
+        "\:958b\:304f: \:30e1\:30fc\:30eb\:672c\:6587 (\:8fd4\:4fe1/\:30b9\:30ec\:30c3\:30c9/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)"]],
     True, Style[label, col, 12]];
   (* folder link: SystemOpen the CONTAINING DIRECTORY (goes through the OS,
      so Dropbox online-only placeholders hydrate, same as the file link) *)
@@ -1158,7 +1158,7 @@ iSVRPMailRow[item_Association, nowAbs_, tz_ : Automatic] := Module[
         Mouseover[Style[lbl, GrayLevel[0.1], 12],
           Style[lbl, GrayLevel[0.1], 12, Underlined]],
         SourceVaultMailAgendaOpen[r], Appearance -> None, Method -> "Queued"],
-        "\:958b\:304f: \:5bfe\:5fdc\:30a6\:30a3\:30f3\:30c9\:30a6 (\:8fd4\:4fe1/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)"]],
+        "\:958b\:304f: \:30e1\:30fc\:30eb\:672c\:6587 (\:8fd4\:4fe1/\:30b9\:30ec\:30c3\:30c9/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)"]],
     Style[subject, GrayLevel[0.1], 12]];
   Column[{
     Row[{Style["\:3010" <> kind[[1]] <> "\:3011", kind[[2]], Bold, 10], " ",

@@ -1414,8 +1414,7 @@ iSVPRClassifyReplay[exprStr_String] :=
     If[trimmed === "" ||
        StringStartsQ[trimmed, "(" <> "*"],
       Return["HeavyLLM"]];
-    held = Quiet @ Check[
-      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    held = iSVPRParseHeld[exprStr];
     If[held === $Failed || !MatchQ[held, _HoldComplete],
       Return["HeavyLLM"]];
     (* \:30ef\:30fc\:30af\:30d5\:30ed\:30fc\:547c\:3073\:51fa\:3057\:5f0f (SourceVaultLoadWorkflow + SourceVaultWorkflow` \:6587\:8108\:306e
@@ -1463,8 +1462,7 @@ iSVPRClassifyReplay[_] := "HeavyLLM";
    LLM \:4e0d\:8981\:306e\:7d14\:69cb\:6587\:51e6\:7406\:3002 *)
 iSVPRParameterize[exprStr_String] :=
   Module[{held, dateNodes, slots, template, idx},
-    held = Quiet @ Check[
-      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    held = iSVPRParseHeld[exprStr];
     If[held === $Failed || !MatchQ[held, _HoldComplete],
       Return[<|"Template" -> exprStr, "Slots" -> {}|>]];
     (* \:5f0f\:4e2d\:306e DateObject[...] \:30ce\:30fc\:30c9\:3092 InputForm \:6587\:5b57\:5217\:3068\:3057\:3066\:5217\:6319 (\:672a\:8a55\:4fa1) *)
@@ -3994,9 +3992,7 @@ SourceVaultAddSavedPrompt[prompt_String, exprString_String,
   If[StringTrim[prompt] === "",
     Return[<|"Status" -> "Failed", "Reason" -> "EmptyPrompt"|>]];
   (* the expression must at least parse (non-evaluating check) *)
-  If[!MatchQ[Quiet@Check[
-      ToExpression[exprString, InputForm, HoldComplete], $Failed],
-      _HoldComplete],
+  If[!MatchQ[iSVPRParseHeld[exprString], _HoldComplete],
     Return[<|"Status" -> "Failed", "Reason" -> "ExprParseFailed",
       "Hint" -> "TargetExprString \:304c InputForm \:3068\:3057\:3066\:69cb\:6587\:89e3\:6790\:3067\:304d\:307e\:305b\:3093\:3002",
       "TargetExprString" -> exprString|>]];
@@ -4783,6 +4779,29 @@ $iSVPRDeicticPatterns = {
   "last result", "the result above"};
 
 (* head names applied somewhere in a held expression (un-evaluated) *)
+(* ── 保存式の parse は必ずこれを通す ──────────────────────────────────
+   ToExpression[str, InputForm, HoldComplete] は「文字列に含まれる式の並び」を
+   そのまま保持する。TargetExprString が
+
+     SourceVaultMailEnsureLoaded["univ", 1];⏎SourceVaultMailView[...]
+
+   のように「; の直後で改行」していると、"…;" と "…View[…]" が別々の式として
+   数えられ HoldComplete[…;, …View[…]] (要素 2 つ) になる。これを ReleaseHold
+   すると Sequence[Null, 表] に化け、呼び元の Return[実行結果] が引数 2 個の
+   Return[Null, 表] に変わって Return::nofunc を出し、セルの出力が
+   Hold[Return[Null, 表]] になる (表自体は描画されるので「結果は返るがエラー」)。
+   1 個の CompoundExpression に畳んでから扱う。CompoundExpression は
+   $iSVPRAutoExecSafeHeads にあるので自動実行ゲートの判定は変わらない。 *)
+iSVPRHeldNormalize[HoldComplete[]] := HoldComplete[Null];
+iSVPRHeldNormalize[HoldComplete[e_]] := HoldComplete[e];
+iSVPRHeldNormalize[HoldComplete[es__]] := HoldComplete[CompoundExpression[es]];
+iSVPRHeldNormalize[x_] := x;
+
+iSVPRParseHeld[exprStr_String] :=
+  iSVPRHeldNormalize[
+    Quiet @ Check[ToExpression[exprStr, InputForm, HoldComplete], $Failed]];
+iSVPRParseHeld[___] := $Failed;
+
 iSVPRHeldHeadNames[held_] :=
   Module[{heads},
     If[!MatchQ[held, _HoldComplete], Return[{}]];
@@ -4798,8 +4817,7 @@ iSVPRHeldHeadNames[___] := {};
 
 iSVPRExprHeadNamesFromString[exprStr_String] :=
   Module[{held},
-    held = Quiet @ Check[
-      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    held = iSVPRParseHeld[exprStr];
     If[MatchQ[held, _HoldComplete], iSVPRHeldHeadNames[held], {}]];
 iSVPRExprHeadNamesFromString[_] := {};
 
@@ -5141,8 +5159,7 @@ iSVPRRouteAutoExecutableQ[route_Association] :=
     If[!StringQ[exprStr] || StringTrim[exprStr] === "", Return[False]];
     safety = Lookup[route, "ReplaySafety", "Unknown"];
     If[safety =!= "EnvironmentIndependent", Return[False]];
-    held = Quiet @ Check[
-      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    held = iSVPRParseHeld[exprStr];
     iSVPRAutoExecutableQ[held]];
 iSVPRRouteAutoExecutableQ[_] := False;
 
@@ -5434,8 +5451,7 @@ SourceVaultRunPrimaryRoute[groupId_String, opts:OptionsPattern[]] :=
     If[!StringQ[exprStr] || StringTrim[exprStr] === "",
       Return[iSVPRAutoExecNotice["\:5f0f\:306a\:3057", groupId, primary]]];
     safety = Lookup[primary, "ReplaySafety", "Unknown"];
-    held = Quiet @ Check[
-      ToExpression[exprStr, InputForm, HoldComplete], $Failed];
+    held = iSVPRParseHeld[exprStr];
     If[!MatchQ[held, _HoldComplete],
       Return[iSVPRAutoExecNotice["\:30d1\:30fc\:30b9\:4e0d\:80fd", groupId, primary]]];
     If[!(iSVPRAutoExecutableQ[held] && safety === "EnvironmentIndependent"),

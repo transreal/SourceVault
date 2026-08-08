@@ -7,8 +7,9 @@ Exercise database, exam paper generation, and grading support, organized by subj
 - Exercise store per subject: ingest from problem notebooks (held-expression structural decomposition, no cell evaluation, no FE required), field/unit(syllabus-aligned)/difficulty/exam-history metadata.
 - Exam composition (`SourceVaultExamCompose`) → question-paper PDF + answer-sheet PDF. Answer-sheet layout is stored as data on the exam record and shared with scanned-answer cropping (grading) — same geometry both places.
 - LLM-generated similar problems (Draft → owner approval via `SourceVaultExerciseApproveDraft`).
-- Scanned-answer ingest / roster matching (owner visually verifies) / recognition / scoring / re-weighting.
-- Privacy: exercise records carry no personal info → default PrivacyLevel 0.3 (cloud-eligible). Scans, matching, and grading results are PL 1.0 (local only). Only answer-cell crops go to cloud LLM (student-ID/name regions excluded by geometry); ID/name recognition and matching is done by owner visual check, never automated.
+- Scanned-answer ingest / header verification / roster matching (owner visually verifies, or `SourceVaultExamProposeMatches` proposes from ID-crop recognition) / answer recognition / scoring / item analysis / re-weighting.
+- Per-lecture enrollment registry and gradebook (履修者 / 成績簿) — separate from the exercise store, keyed by lecture code; supports importing `SourceVaultExamScore` results as a weighted grading item.
+- Privacy: exercise records carry no personal info → default PrivacyLevel 0.3 (cloud-eligible). Scans, matching, grading results, enrollment, and gradebook data are PL 1.0 (local only). Only answer-cell crops (and, if explicitly allowed, student-ID crops) go to cloud LLM; ID/name recognition and matching defaults to owner visual check unless a recognizer is explicitly enabled.
 - Held-expression idiom: notebook cells are parsed via `ToExpression[..., Hold]` without evaluating, then decomposed with `Hold[{a,b,...}] -> {Hold[a], Hold[b], ...}` so images/graphics/math never get rasterized or evaluated during ingest.
 
 ## Config Variables
@@ -36,6 +37,10 @@ Instructor name printed on exam papers.
 ### $SourceVaultExamTemplatePDF
 型: Automatic | String | None, 初期値: Automatic
 Path to the official blank "試験問題・解答用紙" PDF. Automatic uses `<exercises root>/templates/試験問題・解答用紙.pdf`, falling back to a built-in drawn header if absent. None always forces the built-in drawing.
+
+### $SourceVaultExamAllowCloudIDRecognition
+型: Boolean, 初期値: False
+Permission flag to send student-ID crop images to cloud vision (personal info, PL 1.0) for `SourceVaultExamProposeMatches`. Not required if a "RecognizerFn" is supplied explicitly.
 
 ### $SourceVaultCourseWebReportRoot
 型: Automatic | String, 初期値: Automatic
@@ -281,6 +286,20 @@ Options: "HeaderRows" -> 6, "IDColumn" -> 2, "NameColumn" -> 3
 Ingests and saves collected answer sheets (multi-page PDF or image list). PL 1.0, local only.
 Options: "Roster", "ImageWidth" -> 2200
 
+### SourceVaultExamSheetVerify[examId, pdfOrImages, opts] → {Association...}
+Checks whether collected answer sheets' headers (subject/duration/date-time-period print) match the sheet generated for this exam. Ranks against every candidate exam, so answer sheets belonging to a different exam trigger `Mismatch` (checked per page, so a stray sheet mixed into the bundle is still caught). Student-ID/name regions are excluded from the compared area (print-only).
+Options: "Pages" -> All | {n...}, "DiffX", "DiffY" (crop calibration), "Candidates", "MinScore" -> 0.4, "Tolerance" -> 0.02
+
+### SourceVaultExamSheetVerifyView[examId, pdfOrImages, opts]
+Owner-verification display of `SourceVaultExamSheetVerify` (expected header / actual scanned header / candidate ranking, side-by-side).
+
+### SourceVaultExamSheetIdentify[pdfOrImages, opts] → {Association...}
+Ranks a scanned sheet's header against all candidate exams to identify which exam it belongs to (for resolving mixed-up bundles).
+
+### SourceVaultExamSyncRoster[examId, opts] → report
+Refreshes the roster snapshot carried by already-ingested answer sheets against the current enrollment registry (use after re-distributing an enrollment CSV). Matching is keyed by student ID, so existing assignments are preserved; sheets assigned to a student no longer enrolled are listed under "UnenrolledAssignments".
+Options: "Lecture", "DryRun" -> False
+
 ### SourceVaultExamMatches[examId, opts] → {{number, {idImage, nameImage}, roster}...}
 Core answer-sheet-to-roster match data.
 Options: "DiffX", "DiffY" (crop calibration)
@@ -290,7 +309,18 @@ Owner-verification view of the matching (scanned ID/name images side-by-side wit
 Options: same as `SourceVaultExamMatches`.
 
 ### SourceVaultExamSetMatch[examId, <|scanNumber -> rosterNumber|>] → <|...|>
-Corrects a match assignment.
+Corrects a match assignment. Value can be a student ID or a roster row number; `None` clears the assignment.
+
+### SourceVaultExamProposeMatches[examId, opts] → report
+Reads each sheet's student-ID region and proposes match candidates, applying them by default (final check still via visual inspection, e.g. `SourceVaultExamAssignView`). Recognized text is fuzzy-matched to roster student IDs by edit distance; assignments are confirmed one-student-one-sheet in confidence order — conflicts, unreadable reads, or large edit distances are left unassigned in "Uncertain". Default recognizer is cloud vision (sends only the student-ID crop, never name/answer regions) and requires `$SourceVaultExamAllowCloudIDRecognition` -> True; not required if "RecognizerFn" is supplied.
+Options: "RecognizerFn" (seam: fn[{crop...}]->{String...}), "Scans" -> All | {i...}, "Apply" -> True, "Overwrite" -> False, "BatchSize" -> 8, "MaxDistance" -> 2, "DiffX", "DiffY"
+
+### SourceVaultExamMatchStatus[examId] → Association
+Matching progress: assigned/unassigned answer sheets, duplicate assignments, roster students with no sheet, and assignments not present in the roster.
+
+### SourceVaultExamAssignView[examId, opts]
+FE view for assigning answer sheets to roster entries by clicking, next to the scanned student-ID/name crops. Sheets arrive in submission order (not roster order), so each is confirmed by eye; already-assigned students drop out of the candidate list, and duplicates/unassigned surface at the top.
+Options: "Unassigned" -> False (True for unassigned only), "DiffX", "DiffY", "MaxRows" -> 60
 
 ### SourceVaultExamRecognize[examId, opts] → report
 Reads answers from each sheet's answer-cell regions (personal-info regions excluded by crop). Default recognizer is cloud vision (ClaudeQueryBg).
@@ -300,7 +330,24 @@ Options: "RecognizerFn" (test seam; `fn[crop, keys] -> Association`), "Scans" ->
 Manually corrects a recognized answer (key like "1-1").
 
 ### SourceVaultExamSetMark[examId, scanIdx, key, mark] → <|...|>
-Manually sets a grading mark (○/△/×/?), overriding auto-judgment.
+Manually sets a grading mark (○/△/×/?), overriding auto-judgment. Pass `None` to clear the manual override and fall back to auto-judgment.
+
+### SourceVaultExamUnresolved[examId, opts] → {Association...}
+Core: lists questions whose grading mark is not yet settled (?) — a blank/unrecognized answer cell, or a missing model answer. Each row: scan number, student, slot, printed number, recognized value, model answer, points.
+Options: "Filter" -> "Unresolved" (default) | "Wrong" (also include ×) | All, "Scans"
+
+### SourceVaultExamResolveView[examId, opts]
+FE view for settling unresolved questions by clicking, next to each answer-cell crop. Picking a value re-checks it against the model answer to set ○/×; ○/△/× can also be set directly (△ = `Ceiling[points/2]`).
+Options: "Filter" -> "Unresolved", "Scans", "MaxRows" -> 40, "DiffX", "DiffY"
+
+### SourceVaultExamItemAnalysis[examId, opts] → {Association...}
+Core per-question correct-rate, wrong-answer-spread, and discrimination analysis (PL 1.0 — question-level aggregates only, no per-student data).
+→ each row: Slot, Printed, Unit, Headline, Generated, Recipe, Points, Answered, Correct, CorrectRate, Blank, WrongCounts, WrongSpread, EffectiveChoices, TopDistractor, TopShare, Discrimination. WrongSpread is the normalized entropy of the wrong-answer distribution (1 = evenly spread / guessing, 0 = concentrated on one distractor); EffectiveChoices is the corresponding "effective number of distractors" implied by that entropy. Discrimination is the point-biserial correlation between correctness on this item and total score.
+Options: "Scans" -> All, "Assigned" -> True (assigned sheets only)
+
+### SourceVaultExamItemAnalysisView[examId, opts]
+Dataset view of `SourceVaultExamItemAnalysis` (Japanese headings).
+Options: "SortBy" -> "Rate" (ascending correct rate, default) | "Slot" | "Discrimination", "Export" -> path.xlsx
 
 ### SourceVaultExamScore[examId, opts] → {Association...}
 Core scoring from match + recognition + answer key + points. ○ = full points, △ = `Ceiling[points/2]`, ×/unmarked = 0.
@@ -311,6 +358,79 @@ Dataset view of `SourceVaultExamScore`.
 ### SourceVaultExamScoreReport[examId, opts]
 Score report (Dataset).
 Options: "Export" -> path.xlsx (local export)
+
+## Enrollment (履修者)
+
+Per-lecture enrollment registry, independent of the exercise store. All data here is PL 1.0 (personal info).
+
+### SourceVaultCourseEnrollmentRegister[lecture, sources, opts] → report
+Registers course enrollment (PL 1.0, local). `sources`: csv/xls(x) path, `sv://object/eagle-<id>` (csv inside Eagle), `{{studentId,name}...}`, `<|id->name|>`, or a list of these (multiple files merge into one roster). CSV defaults to column 1 = student ID, column 2 = name; header/blank rows are auto-detected (override with "HeaderRows"). Default "Mode"->"Replace" treats the given set as the complete roster and marks students not included as Withdrawn (not deleted; re-registering restores them). "Reset"->True discards all prior registrations first (for cleaning up after registering the wrong course's roster by mistake; history is preserved).
+Options: "IDColumn" -> 1, "NameColumn" -> 2, "HeaderRows" -> Automatic, "Encoding" -> Automatic, "Mode" -> "Replace" | "Add", "DryRun" -> False, "Reset" -> False
+
+### SourceVaultCourseEnrollment[lecture, opts] → {Association...}
+Core: enrollment rows `<|"StudentID","StudentName","Status",...|>`.
+Options: "Status" -> "Enrolled" (default) | "Withdrawn" | All
+
+### SourceVaultCourseEnrollmentView[lecture, opts]
+Dataset view of `SourceVaultCourseEnrollment`.
+
+### SourceVaultCourseEnrollmentRecord[lecture] → Association | Missing
+Full enrollment record (Students / Version / History).
+
+### SourceVaultCourseEnrollmentHistory[lecture] → {Association...}
+Registration history (per-version Added / Removed / Restored / Sources).
+
+### SourceVaultCourseEnrollmentHistoryView[lecture]
+Dataset view of `SourceVaultCourseEnrollmentHistory`.
+
+### SourceVaultCourseEnrollments[] → {Association...}
+Lectures with a registered enrollment (count, version, last update).
+
+### SourceVaultCourseSetEnrollmentStatus[lecture, idOrIds, status] → <|...|>
+Manually corrects enrollment status. `status`: "Enrolled" | "Withdrawn".
+
+### SourceVaultCourseStudent[lecture, id] → Association | Missing
+Looks up an enrollment record by student ID (normalizes notation variants).
+
+## Gradebook (成績簿)
+
+### SourceVaultCourseAssessmentRegister[lecture, itemId, spec] → Association
+Registers a grading item (final exam, report, quiz, etc.). Re-registering an existing itemId updates its spec while keeping any scores already entered.
+Spec keys: "Title", "Kind" -> "Exam" | "Report" | "Quiz" | "Other", "MaxScore", "Weight", "Source", "Note"
+
+### SourceVaultCourseAssessments[lecture] → {Association...}
+Registered grading items (max score, weight, number of scores entered).
+
+### SourceVaultCourseAssessmentsView[lecture]
+Dataset view of `SourceVaultCourseAssessments`.
+
+### SourceVaultCourseAssessmentRemove[lecture, itemId] → <|...|>
+Deletes a grading item along with its entered scores.
+
+### SourceVaultCourseSetScores[lecture, itemId, scores] → report
+Enters raw scores. `scores`: `<|studentId->score|>` or `{{studentId,score}...}`. Students not in the roster are reported under "Unknown" (not entered).
+Options: "Mode" -> "Merge" (default, overlays onto existing) | "Replace" (replaces the whole set)
+
+### SourceVaultCourseImportExamScores[lecture, examId, opts] → report
+Imports `SourceVaultExamScore` results as a grading item (item id defaults to `examId`; MaxScore defaults to the exam's total points). Scans without a confirmed match are skipped and listed under "Unassigned".
+Options: "ItemId", "Title", "Weight", "MaxScore", "Mode"
+
+### SourceVaultCourseWeights[lecture] → Association
+Overall-grade weight association `<|itemId->weight|>` (auto-generated from registered items; unset items default to 1). Edit and pass to `SourceVaultCourseSetWeights` to update.
+
+### SourceVaultCourseSetWeights[lecture, weights] → <|...|>
+Updates overall-grade weights. `weights`: `<|itemId->weight|>` (a partial update is fine). An unknown itemId is rejected. Scores are untouched, so weights can be revised repeatedly once all grades are in.
+
+### SourceVaultCourseGradebook[lecture, opts] → {Association...}
+Core: score table across all grading items plus the overall grade (PL 1.0). Overall = `100 * Sum[score/maxScore * weight] / Sum[weight]`.
+Options: "Missing" -> "Zero" (default) | "Exclude" (drop that item's weight for the student instead of scoring 0), "Status" -> "Enrolled" (default) | All, "Round" -> 1
+
+### SourceVaultCourseGradebookView[lecture, opts]
+Dataset view of `SourceVaultCourseGradebook` (PL 1.0).
+
+### SourceVaultCourseGradeReport[lecture, opts]
+Grade report (Dataset, Japanese headings). Options shared with `SourceVaultCourseGradebook`, plus:
+Options: "Export" -> path.xlsx
 
 ## Web レポート取込
 

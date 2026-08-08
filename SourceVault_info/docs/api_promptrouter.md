@@ -71,7 +71,7 @@ Options: "StorePrompt" -> "HashOnly" ("PrivateRaw"|"Off"も可), "PrivacyLevel" 
 Options: "MaxResults" -> Automatic, "RouteId" -> Automatic, "Decision" -> Automatic, "Since" -> Automatic (ISO日時文字列; Timestamp >= Sinceのレコードのみ保持)
 
 ### SourceVaultCaptureLastPromptRun[opts]
-追記専用履歴から最新のPromptRunを返す。履歴が空の場合はStatus "NoPromptRun"。
+追記専用履歴から最新のPromptRunを返す。履歴が空の場合はStatus "NoPromptRun"。オプションなし(Options[...]={})。
 → <|"Status"->"OK","PromptRun"->_|> または <|"Status"->"NoPromptRun",...|>
 
 ## PromptRouteレジストリ
@@ -111,7 +111,7 @@ Options: "DryRun" -> True, "Confirm" -> False, "Channel" -> "public"
 ## プライバシー
 
 ### SourceVaultResolvePromptPrivacy[components_Association, opts]
-プロンプトのプライバシー寄与を結合してPrivacyLevel(各コンポーネントのMax、spec 11.2)とAllowedTrustDomains/CloudFallback/CloudRouterAllowedメタデータを返す。SecretCellまたはPrivateModelExecutionコンポーネントでlevel >= 0.75に引き上げ、AllowedTrustDomainsをLocal/Privateに制限、CloudFallbackをDenyに設定(spec 11.3/11.4)。0.5境界はクラウド送信閾値(spec 11.5)。生プロンプトは保存しない。
+プロンプトのプライバシー寄与を結合してPrivacyLevel(各コンポーネントのMax、spec 11.2)とAllowedTrustDomains/CloudFallback/CloudRouterAllowedメタデータを返す。SecretCellまたはPrivateModelExecutionコンポーネントでlevel >= 0.75に引き上げ、AllowedTrustDomainsをLocal/Privateに制限、CloudFallbackをDenyに設定(spec 11.3/11.4)。0.5境界はクラウド送信閾値(spec 11.5)。生プロンプトは保存しない。オプションなし(Options[...]={})。
 → Association
 コンポーネントキー(全て数値0.0～1.0): "PromptCellPrivacyLevel", "PromptTextPrivacyLevel", "NotebookDependencyPrivacyLevel", "ModelExecutionPrivacyFloor", "ResultPrivacyLevel", "UserSpecifiedPrivacyLevel"。ブール特殊キー: "SecretCell", "PrivateModelExecution"
 

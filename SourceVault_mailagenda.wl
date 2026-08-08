@@ -49,11 +49,15 @@ SourceVaultMailAgendaResolutions::usage =
 (RecordId -> <|State, At, NotebookPath?|>).";
 
 SourceVaultMailAgendaOpen::usage =
-  "SourceVaultMailAgendaOpen[recordId] opens the mail-action window for an agenda \
-item (front end): summary + explicit actions [返信する] (SourceVaultMailOpenReplyNotebook; \
-sending records RepliedAt -> auto-Done), [ノートブックを作成して継承] \
-(SourceVaultMailAgendaInherit), [確認のみ・対応済み] (Resolve Dismissed), plus \
-thread view (SourceVaultMailThreadNotebook) and body display.";
+  "SourceVaultMailAgendaOpen[recordId] opens the mail BODY window for an agenda item \
+(front end, SourceVaultMailShowBody after a lazy shard load) -- one window, not the \
+old two-step summary-then-body pair. Every action lives in that body panel: \
+[返信]/[全員に返信]/[翻訳して返信] (SourceVaultMailOpenReplyNotebook; sending records \
+RepliedAt -> auto-Done), [スレッド全体を表示] (SourceVaultMailThreadNotebook), \
+[ノートブックを作成して継承] (SourceVaultMailAgendaInherit) and [確認のみ・対応済み] \
+(Resolve Dismissed) -- so the same actions are available on any mail opened from \
+SourceVaultMailView / SourceVaultMailSearchIndexView too. Falls back to the legacy \
+summary+action window only when the maildb UI layer is not loaded.";
 
 SourceVaultMailAgendaInherit::usage =
   "SourceVaultMailAgendaInherit[recordId, opts] creates an inheriting work notebook \
@@ -638,7 +642,22 @@ iSVMAKindLabel[cat_, deadline_] := Which[
   StringQ[deadline], "\:3006\:5207",
   True, "\:8981\:5bfe\:5fdc"];
 
-SourceVault`SourceVaultMailAgendaOpen[rid_String] := Module[
+(* 要対応メールを開く = 本文ウインドウそのもの。
+   以前は「要約+操作ボタンだけの中間窓」→[本文を表示]→「本文窓」の 2 段階だった。
+   操作ボタン (スレッド全体/ノートブック継承/確認のみ・対応済み) は本文パネル側
+   (SourceVault_maildb.wl iSVUIAgendaActions) に集約したので、ここでは本文が
+   出せるようシャードを確実にロードして本文窓を開くだけでよい。
+   maildb の UI 層が無いときだけ旧・操作窓 (iSVMAActionWindow) に落ちる。 *)
+SourceVault`SourceVaultMailAgendaOpen[rid_String] := Module[{res},
+  iSVMAEnsureShard[rid];
+  If[Length[DownValues[SourceVault`SourceVaultMailShowBody]] > 0,
+    res = Quiet@Check[SourceVault`SourceVaultMailShowBody[rid], $Failed];
+    (* ShowBody は復号失敗時にも診断ウインドウを自分で出すので、$Failed
+       (= 呼び出し自体が壊れた) のときだけフォールバックする *)
+    If[res =!= $Failed, Return[res]]];
+  iSVMAActionWindow[rid]];
+
+iSVMAActionWindow[rid_String] := Module[
   {row, subject, summary, nb},
   row = If[Length[DownValues[SourceVault`SourceVaultMailIndexGet]] > 0,
     Quiet@Check[SourceVault`SourceVaultMailIndexGet[rid], <||>], <||>];
@@ -658,7 +677,9 @@ SourceVault`SourceVaultMailAgendaOpen[rid_String] := Module[
          SourceVault`SourceVaultMailOpenReplyNotebook[rid]), Method -> "Queued",
         ImageSize -> Automatic],
       "  ",
-      Button[Style["\:1f4d3 \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:4f5c\:6210\:3057\:3066\:7d99\:627f", Bold],
+      (* 絵文字は BMP 外なので 6 桁エスケープ形式を使う。4 桁形式だと
+         U+1F4D + "3" に割れて画面に "3" が出る (旧実装のバグ) *)
+      Button[Style["\|01f4d3 \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:4f5c\:6210\:3057\:3066\:7d99\:627f", Bold],
         SourceVault`SourceVaultMailAgendaInherit[rid], Method -> "Queued",
         ImageSize -> Automatic],
       "  ",
