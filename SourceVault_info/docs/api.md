@@ -480,8 +480,8 @@ Options: `"ExtractHeader"` -> True, `"ExtractTodos"` -> True, `"ForceReindex"` -
 
 ### SourceVaultIndexNotebookFolder[dir, opts]
 指定 folder 配下の `.nb` を全て index する。
-→ `<|"Status" -> _, "Processed" -> _Integer, "Failed" -> _Integer, "Results" -> {...}|>`
-Options: `"Recursive"` -> False, `"ExcludePatterns"` -> `{"*.bak.nb", "Untitled*.nb"}` (既定)
+→ `<|"Status" -> _, "TotalFiles" -> _Integer, "Processed" -> _Integer, "Failed" -> _Integer, "Cached" -> _Integer, "Slimmed" -> _Integer, "Skipped" -> _Integer, "AssetCount" -> _Integer, "Results" -> {...}|>`
+Options: `"Recursive"` -> False, `"ExcludePatterns"` -> `{"*.bak.nb", "Untitled*.nb"}` (既定), `"ForceReindex"` -> False (True で mtime キャッシュを無視し全件再索引。notebook を編集したのに結果が古い場合に使う)
 
 ### SourceVaultExtractNotebookHeader[path]
 notebook の先頭 Input セルから Header Association を safe parse する。HoldComplete + whitelist で RunProcess / Get / Import 等の危険式を拒否する。

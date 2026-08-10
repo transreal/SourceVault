@@ -301,7 +301,9 @@ SourceVaultIssueVerifyCode::usage =
 SourceVaultIssueNotebook::usage =
   "SourceVaultIssueNotebook[issueId] はイシュー専用ノートブックを開く (無ければ\n" <>
   "udb/issues/yyyymmdd-<題名>.nb を NotebookStatus ヘッダー (Deadline/NextReview) と\n" <>
-  "アクションボタン付きで新規作成)。オプション: \"Open\" -> True。";
+  "アクションボタン付きで新規作成)。既存ノートの実体は可搬な NotebookFileName と\n" <>
+  "埋め込み IssueRecordId で現 PC 解決するため、別 PC で作られたノート (絶対パスが\n" <>
+  "食い違う) でも再作成せず既存を開く。オプション: \"Open\" -> True。";
 SourceVaultIssueForNotebook::usage =
   "SourceVaultIssueForNotebook[nb|path] はイシューノートブックから IssueRecordId を\n" <>
   "非評価で読み取り返す (ボタンのクリック時解決用)。";
@@ -707,6 +709,8 @@ iSVISIndexEntry[recIn_Association] := Module[
   "AuthorLogin" -> Lookup[Replace[Lookup[rec, "Author", <||>],
     Except[_Association] -> <||>], "Login", ""],
   "NotebookPath" -> Lookup[rec, "NotebookPath", ""],
+  (* 可搬キー: 絶対パスは PC ごとに違うので、実体解決はこちらを基準にする *)
+  "NotebookFileName" -> iSVISStr[Lookup[rec, "NotebookFileName", ""]],
   (* 修正適用/GitHub 通知メタ (View の状態表示用)。既存 index は
      SourceVaultIssueRebuildIndex で再構築すると反映される。 *)
   "FixAppliedAt" -> iSVISStr[Lookup[Replace[Lookup[rec, "Fix", <||>],
@@ -3361,10 +3365,11 @@ iSVISIsoUTC[d_?DateObjectQ] := Quiet @ Check[
   DateString[TimeZoneConvert[d, 0], "ISODateTime"] <> "Z", ""];
 iSVISIsoUTC[___] := "";
 
-(* 保存済みノートブックを (開いていなければ開いて) 取得する *)
+(* 保存済みノートブックを (開いていなければ開いて) 取得する。
+   実体解決は iSVISResolveNotebookFile 経由 (記録された絶対パスは別 PC で外れる)。 *)
 iSVISFindOrOpenNotebook[rec_Association] := Module[{path, nbs, hit},
-  path = iSVISStr[Lookup[rec, "NotebookPath", ""]];
-  If[path === "" || !FileExistsQ[path], Return[Missing["NoNotebookFile"]]];
+  path = iSVISResolveNotebookFile[rec];
+  If[!StringQ[path], Return[Missing["NoNotebookFile"]]];
   nbs = Quiet @ Check[Notebooks[], {}];
   hit = SelectFirst[Replace[nbs, Except[_List] -> {}],
     Quiet @ Check[NotebookFileName[#], ""] === path &, None];
@@ -3780,25 +3785,112 @@ iSVISNotebookCells[rec_Association] := Module[
      Nothing],
    Cell["作業ログ", "Subsection"]}];
 
-Options[SourceVault`SourceVaultIssueNotebook] = {"Open" -> True};
+(* ---------------- ノート実体の解決 (クロス PC) ----------------
+   罠: NotebookPath はマシン固有の絶対パス (PC により F:\Dropbox\udb\... と
+   C:\Users\<name>\Dropbox\udb\... で食い違う)。生の FileExistsQ だけで
+   「ノートが無い」と判定すると、別 PC で作った既存ノートを見落として新規作成し、
+   作業内容の入ったノートへのリンクを失う (実害: 2026-08-08)。
+   ノート置き場 (udb/issues) は共有されているので、可搬な basename
+   (NotebookFileName) と埋め込み IssueRecordId で現 PC の実体を解決する。 *)
 
-SourceVault`SourceVaultIssueNotebook[id_String, opts : OptionsPattern[]] := Module[
-  {rec, dir, nbPath, cells, res, datePart},
-  rec = SourceVault`SourceVaultIssueGet[id];
-  If[!AssociationQ[rec], Return[Missing["NotFound", id]]];
-  nbPath = Lookup[rec, "NotebookPath", ""];
-  If[StringQ[nbPath] && nbPath =!= "" && FileExistsQ[nbPath],
-    If[TrueQ[OptionValue["Open"]], Quiet @ SystemOpen[nbPath]];
-    Return[<|"Status" -> "Opened", "NotebookPath" -> nbPath, "IssueId" -> id|>]];
-  dir = iSVISEnsureDir[SourceVault`SourceVaultIssueNotebookDirectory[]];
+(* record が指す可搬なノート名 (絶対パスしか無い旧レコードは basename を採る) *)
+iSVISRecordNotebookFileName[rec_Association] := Module[
+  {fn = iSVISStr[Lookup[rec, "NotebookFileName", ""]],
+   p = iSVISStr[Lookup[rec, "NotebookPath", ""]]},
+  Which[fn =!= "", fn, p =!= "", FileNameTake[p], True, ""]];
+iSVISRecordNotebookFileName[___] := "";
+
+(* record から決定論的に作る正準ノート名 (作成時と同じ規則) *)
+iSVISNotebookBaseName[rec_Association] := Module[{datePart},
   datePart = StringReplace[
     StringTake[iSVISStr[Lookup[rec, "RegisteredAt", ""], iSVISNowIso[]], UpTo[10]],
     "-" -> ""];
-  nbPath = FileNameJoin[{dir,
-    datePart <> "-" <> iSVISSafeFileName[Lookup[rec, "Title", "issue"]] <> ".nb"}];
+  datePart <> "-" <>
+    iSVISSafeFileName[iSVISStr[Lookup[rec, "Title", "issue"], "issue"]] <> ".nb"];
+iSVISNotebookBaseName[___] := "";
+
+iSVISNotebookIdMatchQ[path_String, id_String] :=
+  id =!= "" && iSVISStr[Quiet @ Check[iSVISIdFromNotebookPath[path], $Failed], ""] === id;
+iSVISNotebookIdMatchQ[___] := False;
+
+(* 名前から辿り着いた候補の採用可否。別イシューの ID が入っていれば拒否。
+   NotebookStatus を持たない旧ノート/リンク未記入は名前一致で採用する
+   (壊れて読めないものは採用しない)。 *)
+iSVISNotebookAdoptableQ[path_String, id_String] := Module[{got},
+  got = Quiet @ Check[iSVISIdFromNotebookPath[path], Missing["Unreadable"]];
+  Which[
+    StringQ[got], got === id,
+    MatchQ[got, Missing["NoMetadata"] | Missing["NoIssueLink"] |
+                Missing["ParseFailed"]], True,
+    True, False]];
+iSVISNotebookAdoptableQ[___] := False;
+
+(* 走査 fallback の上限 (置き場が育っても FE を止めない) *)
+If[!ValueQ[$SourceVaultIssueNotebookScanLimit],
+  $SourceVaultIssueNotebookScanLimit = 400];
+
+(* -<UnixTime> 付きの重複作成物は、素の名前より後回しにする *)
+iSVISTimestampSuffixQ[path_String] := StringMatchQ[FileBaseName[path],
+  ___ ~~ "-" ~~ DigitCharacter ~~ DigitCharacter ~~ DigitCharacter ~~
+    DigitCharacter ~~ DigitCharacter ~~ DigitCharacter ~~ DigitCharacter ~~
+    DigitCharacter ~~ DigitCharacter ~~ DigitCharacter];
+iSVISTimestampSuffixQ[___] := False;
+
+iSVISResolveNotebookFile[rec_Association] := Module[
+  {id, stored, base, dir, cands, hit, files},
+  id = iSVISStr[Lookup[rec, "IssueId", ""]];
+  stored = iSVISStr[Lookup[rec, "NotebookPath", ""]];
+  base = iSVISRecordNotebookFileName[rec];
+  dir = iSVISStr[Quiet @ Check[
+    SourceVault`SourceVaultIssueNotebookDirectory[], $Failed], ""];
+  (* 1. 可搬名を現 PC の置き場で解決 2. 記録された絶対パス 3. 正準名 *)
+  cands = DeleteDuplicates[Select[{
+      If[dir =!= "" && base =!= "", FileNameJoin[{dir, base}], Nothing],
+      stored,
+      If[dir =!= "", FileNameJoin[{dir, iSVISNotebookBaseName[rec]}], Nothing]},
+    StringQ[#] && # =!= "" && Quiet @ Check[FileExistsQ[#], False] &]];
+  hit = SelectFirst[cands, iSVISNotebookAdoptableQ[#, id] &, Missing["NoNotebook"]];
+  If[StringQ[hit], Return[hit]];
+  (* 4. 最後の手段: 置き場を走査して埋め込み IssueRecordId 一致を探す
+        (題名変更や過去の重複作成からの復旧)。素の名前 -> 大きい方を優先。 *)
+  If[dir === "" || !DirectoryQ[dir], Return[Missing["NoNotebook"]]];
+  files = Quiet @ Check[FileNames["*.nb", dir], {}];
+  If[!ListQ[files] || files === {} ||
+     Length[files] > $SourceVaultIssueNotebookScanLimit,
+    Return[Missing["NoNotebook"]]];
+  files = SortBy[files, {Boole[iSVISTimestampSuffixQ[#]] &,
+    -Quiet @ Check[FileByteCount[#], 0] &}];
+  Quiet @ Check[TimeConstrained[
+    SelectFirst[files, iSVISNotebookIdMatchQ[#, id] &, Missing["NoNotebook"]],
+    60, Missing["NoNotebook"]], Missing["NoNotebook"]]];
+iSVISResolveNotebookFile[___] := Missing["BadArgs"];
+
+Options[SourceVault`SourceVaultIssueNotebook] = {"Open" -> True};
+
+SourceVault`SourceVaultIssueNotebook[id_String, opts : OptionsPattern[]] := Module[
+  {rec, dir, nbPath, base, cells, res, found},
+  rec = SourceVault`SourceVaultIssueGet[id];
+  If[!AssociationQ[rec], Return[Missing["NotFound", id]]];
+  found = iSVISResolveNotebookFile[rec];
+  If[StringQ[found],
+    (* 可搬キーを一度だけ backfill (絶対パスは書き戻さない: PC 間で
+       書き合いになりレコードが往復するため) *)
+    If[iSVISStr[Lookup[rec, "NotebookFileName", ""]] =!= FileNameTake[found],
+      Quiet @ Check[SourceVault`SourceVaultIssueUpdate[id,
+        <|"NotebookFileName" -> FileNameTake[found]|>], Null]];
+    If[TrueQ[OptionValue["Open"]], Quiet @ SystemOpen[found]];
+    Return[<|"Status" -> "Opened", "NotebookPath" -> found, "IssueId" -> id|>]];
+  dir = iSVISEnsureDir[SourceVault`SourceVaultIssueNotebookDirectory[]];
+  base = iSVISNotebookBaseName[rec];
+  nbPath = FileNameJoin[{dir, base}];
+  (* ここまで来た時点で「同名だが別イシュー (または壊れて読めない)」ノート。
+     上書きせず退避名で作るが、黙って作らない (取り違えを見えるようにする)。 *)
   If[FileExistsQ[nbPath],
-    nbPath = StringReplace[nbPath, ".nb" ~~ EndOfString ->
-      "-" <> ToString[UnixTime[]] <> ".nb"]];
+    base = StringReplace[base, ".nb" ~~ EndOfString ->
+      "-" <> ToString[UnixTime[]] <> ".nb"];
+    nbPath = FileNameJoin[{dir, base}];
+    Print[Style["[SourceVault issues] 同名の別ノートがあるため新規名で作成します: " <>
+      base, Darker[Orange], FontSize -> 10]]];
   cells = iSVISNotebookCells[rec];
   (* 外部由来本文を含むため非公開を明示 (未宣言でも PL 1.0 fail-safe だが明示する) *)
   res = Quiet @ Check[Export[nbPath,
@@ -3809,7 +3901,8 @@ SourceVault`SourceVaultIssueNotebook[id_String, opts : OptionsPattern[]] := Modu
   If[res === $Failed,
     Return[Failure["IssueNotebook",
       <|"MessageTemplate" -> "ノートブック作成に失敗しました。", "Path" -> nbPath|>]]];
-  SourceVault`SourceVaultIssueUpdate[id, <|"NotebookPath" -> nbPath|>];
+  SourceVault`SourceVaultIssueUpdate[id,
+    <|"NotebookPath" -> nbPath, "NotebookFileName" -> base|>];
   If[TrueQ[OptionValue["Open"]], Quiet @ SystemOpen[nbPath]];
   <|"Status" -> "Created", "NotebookPath" -> nbPath, "IssueId" -> id|>];
 
@@ -4046,7 +4139,7 @@ iSVISResolveFixSlug[rec_Association, explicit_] := Module[{slug, base, rows, can
   If[StringQ[explicit] && explicit =!= "", Return[explicit]];
   slug = Lookup[rec, "ImplWorkflowSlug", ""];
   If[StringQ[slug] && slug =!= "", Return[slug]];
-  base = iSVISAlnum[FileBaseName[iSVISStr[Lookup[rec, "NotebookPath", ""]]]];
+  base = iSVISAlnum[FileBaseName[iSVISRecordNotebookFileName[rec]]];
   If[base === "", base = iSVISAlnum[Lookup[rec, "Title", ""]]];
   If[base === "", Return[Missing["NoFixWorkflow"]]];
   rows = If[Length[DownValues[SourceVault`SourceVaultWorkflows]] > 0,

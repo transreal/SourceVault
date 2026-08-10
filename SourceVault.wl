@@ -601,6 +601,10 @@ SourceVaultIndexNotebook::usage =
   "  \"DeadlineState\" -> _, \"Lint\" -> {...}|>";
 
 SourceVaultIndexNotebookFolder::usage =
+  "\:30aa\:30d7\:30b7\:30e7\:30f3: Recursive / ExcludePatterns / ForceReindex\:3002\n" <>
+  "ForceReindex -> True \:306f mtime \:30ad\:30e3\:30c3\:30b7\:30e5\:3092\:7121\:8996\:3057\:5168\:4ef6\:518d\:7d22\:5f15\:3059\:308b\:3002\n" <>
+  "\:623b\:308a\:5024\:306b\:306f TotalFiles / Processed / Failed \:306b\:52a0\:3048\:3066\n" <>
+  "Cached / Slimmed / Skipped / AssetCount \:306e\:96c6\:8a08\:304c\:5165\:308b\:3002\n" <>
   "SourceVaultIndexNotebookFolder[dir, opts] \:306f\:6307\:5b9a folder \:914d\:4e0b\:306e .nb \:3092\:5168\:3066 index \:3059\:308b\:3002\n" <>
   "Options:\n" <>
   "  \"Recursive\" -> True | False (\:30c7\:30d5\:30a9\:30eb\:30c8 False)\n" <>
@@ -739,8 +743,22 @@ SourceVaultNotebookSummary::usage =
   "Stage 9 Phase 2 (P1) Step 5 \:3067\:8ffd\:52a0\:3055\:308c\:305f\:3001LLM \:7d4c\:7531\:306e notebook \:8981\:7d04 API\:3002\n" <>
   "Step 4 \:306e SourceVaultRegisterNotebookSummary \:3092\:5185\:90e8\:3067\:547c\:3076\:305f\:3081\:3001snapshot \:30fb SemanticHash \:7d10\:3065\:3051\:30fb lifecycle \:7ba1\:7406\:306f\:81ea\:52d5\:3002\n" <>
   "\:30d7\:30e9\:30a4\:30d0\:30b7\:30fc: \:9ed8\:8a8d\:3067 PrivacyLevel -> 1.0 (\:30ed\:30fc\:30ab\:30eb LM \:7d4c\:7531\:3067 notebook \:5185\:5bb9\:3092 API \:306b\:9001\:3089\:306a\:3044)\:3002\n" <>
+  "\:8981\:7d04\:30ec\:30b3\:30fc\:30c9\:306e PrivacyLevel (\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e\:516c\:958b\:5ba3\:8a00\:3067\:6c7a\:307e\:308b):\n" <>
+  "  Public (CloudPublishable -> True)  -> 0.0\n" <>
+  "  Unspecified (\:5ba3\:8a00\:306a\:3057)              -> 0.2\n" <>
+  "  Private (CloudPublishable -> False) -> 0.4\n" <>
+  "  Private \:306e\:30ce\:30fc\:30c8\:3067\:3082\:8981\:7d04\:306f\:751f\:6210\:3059\:308b\:304c\:3001\:751f\:6210\:306f\:30ed\:30fc\:30ab\:30eb LLM \:306b\:9650\:3089\:308c\:3001\n" <>
+  "  \:533f\:540d\:5316\:3068\:30d1\:30bf\:30fc\:30f3\:7167\:5408\:306b\:3088\:308b\:30c0\:30d6\:30eb\:30c1\:30a7\:30c3\:30af\:3092\:901a\:3063\:305f\:3082\:306e\:3060\:3051\:304c\:4fdd\:5b58\:3055\:308c\:308b\:3002\n" <>
+  "\:30d7\:30ed\:30f3\:30d7\:30c8\:6750\:6599\:306e\:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:5236\:5fa1:\n" <>
+  "  \:30af\:30e9\:30a6\:30c9\:7d4c\:8def\:304c\:3042\:308a\:5f97\:308b notebook (CloudPublishable \:5ba3\:8a00\:6e08\:307f) \:3067\:306f\:3001\n" <>
+  "  confidential / dependent \:30bb\:30eb\:3092\:30d7\:30ed\:30f3\:30d7\:30c8\:306b\:5165\:308c\:306a\:3044\:3002\n" <>
+  "  \:30ed\:30fc\:30ab\:30eb LLM \:56fa\:5b9a\:306e notebook \:3067\:306f confidential \:30bb\:30eb\:3082\:6750\:6599\:306b\:3059\:308b\:304c\:3001\n" <>
+  "  \:305d\:306e\:5834\:5408 summary record \:306e PrivacyLevel \:3092 1.0 \:306b\:3057\:3066\:30af\:30e9\:30a6\:30c9\:8ee2\:9001\:3092\:7981\:3058\:308b\:3002\n" <>
   "\:30aa\:30d7\:30b7\:30e7\:30f3:\n" <>
   "  \"ForceRefresh\" -> False    - \:65e2\:5b58 summary \:304c Current \:3067\:3082\:5f37\:5236\:518d\:751f\:6210\n" <>
+  "  \"UpdateExisting\" -> False   - True: \:65e2\:5b58\:8981\:7d04\:304c\:3042\:308b\:3082\:306e\:3060\:3051\:518d\:751f\:6210\n" <>
+  "                                \"Outdated\": PromptVersion \:304c\:53e4\:3044\:3082\:306e\:3060\:3051\:518d\:751f\:6210\n" <>
+  "  \"MaxCells\" -> 8             - \:30d7\:30ed\:30f3\:30d7\:30c8\:306b\:5165\:308c\:308b\:5148\:982d\:30bb\:30eb\:6570\n" <>
   "  \"MaxLength\" -> 500          - \:8981\:7d04\:306e\:6700\:5927\:6587\:5b57\:6570 (LLM prompt \:7d4c\:7531\:3067\:6307\:5b9a)\n" <>
   "  \"Language\" -> Automatic     - \:8981\:7d04\:8a00\:8a9e (Automatic / \"Japanese\" / \"English\")\n" <>
   "  \"Model\" -> Automatic        - {\"provider\", \"model\"} \:660e\:793a\:6307\:5b9a\:53ef\n" <>
@@ -861,10 +879,25 @@ SourceVaultResetStore::usage =
   "\:623b\:308a\:5024: <|\"Status\" -> \"OK\"|\"DryRun\"|\"Failed\", \"Deleted\" -> _List, \"NotebooksDir\" -> _|>";
 
 $SourceVaultMaxFileSizeMB::usage =
-  "$SourceVaultMaxFileSizeMB \:306f index \:6642\:306b .nb \:3092 Import \:3059\:308b\:30d5\:30a1\:30a4\:30eb\:30b5\:30a4\:30ba\:306e\:4e0a\:9650 (MB)\:3002\n" <>
-  "\:65e2\:5b9a: 50\:3002\:3053\:308c\:3092\:8d85\:3048\:308b .nb (\:30b7\:30df\:30e5\:30ec\:30fc\:30b7\:30e7\:30f3\:7d50\:679c\:7b49\:306e\:5de8\:5927\:30d5\:30a1\:30a4\:30eb) \:306f\n" <>
-  "Import \:305b\:305a\:3001\:30d5\:30a1\:30a4\:30eb\:60c5\:5831\:3060\:3051\:306e\:8efd\:91cf snapshot \:3092\:4f5c\:308b (Skipped \:30de\:30fc\:30af)\:3002\n" <>
-  "\:5de8\:5927\:30d5\:30a1\:30a4\:30eb\:306e Import \:306b\:3088\:308b\:30e1\:30e2\:30ea\:67af\:6e07\:30fb\:30cf\:30f3\:30b0\:3092\:9632\:3050\:3002";
+  "$SourceVaultMaxFileSizeMB \:306f index \:6642\:306e\:30b5\:30a4\:30ba\:4e0a\:9650 (MB)\:3002\:65e2\:5b9a: 50\:3002\n" <>
+  "\:91cd\:8981: \:3053\:306e\:95be\:5024\:306f\:300c\:30b0\:30e9\:30d5\:30a3\:30c3\:30af payload \:3092\:5265\:96e2\:3057\:305f\:5f8c\:306e\:30b5\:30a4\:30ba\:300d\:306b\:5bfe\:3057\:3066\n" <>
+  "\:9069\:7528\:3055\:308c\:308b (NBAccess`NBFileLoadSlim \:7d4c\:7531)\:3002\:5265\:96e2\:306b\:3088\:308a 100MB \:8d85\:306e\:30b9\:30e9\:30a4\:30c9\:30ce\:30fc\:30c8\:3082\n" <>
+  "\:6570 MB \:306b\:306a\:308b\:305f\:3081\:3001\:5b9f\:8cea\:7684\:306b\:3053\:306e\:95be\:5024\:3067 skip \:3055\:308c\:308b .nb \:306f\:307b\:307c\:7121\:3044\:3002\n" <>
+  "\:8aad\:307f\:8fbc\:307f\:81ea\:4f53\:306e\:4e0a\:9650\:306f $SourceVaultMaxRawFileSizeMB \:5074\:3067\:6307\:5b9a\:3059\:308b\:3002";
+
+$SourceVaultSummaryForbiddenPatterns::usage =
+  "$SourceVaultSummaryForbiddenPatterns \:306f\:8981\:7d04\:306e\:533f\:540d\:5316\:30c0\:30d6\:30eb\:30c1\:30a7\:30c3\:30af\:306b\n" <>
+  "\:8ffd\:52a0\:3059\:308b\:7981\:6b62\:30d1\:30bf\:30fc\:30f3\:306e\:30ea\:30b9\:30c8\:3002{\"\:540d\:524d\" -> \"PCRE \:6587\:5b57\:5217\", ...} \:5f62\:5f0f\:3002\n" <>
+  "1 \:4ef6\:3067\:3082\:8a72\:5f53\:3059\:308c\:3070\:751f\:6210\:3055\:308c\:305f\:8981\:7d04\:306f\:7834\:68c4\:3055\:308c\:308b (SchemaViolation)\:3002\n" <>
+  "\:65e2\:5b9a\:3067\:306f\:30e1\:30fc\:30eb\:30fb\:96fb\:8a71\:756a\:53f7\:30fb\:90f5\:4fbf\:756a\:53f7\:30fb\:30de\:30a4\:30ca\:30f3\:30d0\:30fc\:30fb\:8a8d\:8a3c\:60c5\:5831\:30fb\n" <>
+  "\:5b66\:7c4d\:756a\:53f7\:3089\:3057\:304d ID \:3092\:898b\:308b\:3002\:6240\:5c5e\:6a5f\:95a2\:56fa\:6709\:306e\:66f8\:5f0f\:306f\:3053\:3053\:306b\:8ffd\:52a0\:3059\:308b\:3002\n" <>
+  "\:4f8b: $SourceVaultSummaryForbiddenPatterns = {\"StudentIDFukuyama\" -> \"(?<![0-9A-Za-z])[A-Z]{2}\\\\d{6}(?![0-9A-Za-z])\"};";
+
+$SourceVaultMaxRawFileSizeMB::usage =
+  "$SourceVaultMaxRawFileSizeMB \:306f index \:6642\:306b .nb \:3092\:305d\:3082\:305d\:3082\:8aad\:307f\:8fbc\:3080\:304b\:306e\:4e0a\:9650 (MB)\:3002\n" <>
+  "\:65e2\:5b9a: 500\:3002\:3053\:308c\:3092\:8d85\:3048\:308b\:30d5\:30a1\:30a4\:30eb\:306f\:4e00\:5207\:8aad\:307e\:305a\:3001\:30d5\:30a1\:30a4\:30eb\:60c5\:5831\:3060\:3051\:306e\n" <>
+  "\:8efd\:91cf snapshot \:3092\:4f5c\:308b (Skipped \:30de\:30fc\:30af)\:3002\:5265\:96e2\:304c\:5931\:6557\:3057\:3066\:539f\:6587 parse \:306b\n" <>
+  "fallback \:3057\:305f\:5834\:5408\:306e\:30e1\:30e2\:30ea\:67af\:6e07\:3092\:9632\:3050\:305f\:3081\:306e\:30cf\:30fc\:30c9\:4e0a\:9650\:3002";
 
 (* \[HorizontalLine]\[HorizontalLine] Stage 3: Context retrieval / ClaudeAttach \:4e92\:63db \[HorizontalLine]\[HorizontalLine] *)
 
@@ -1142,6 +1175,26 @@ SourceVaultDirectiveSnapshotStaleQ::usage =
 SourceVaultHarnessRuntimeEnvironmentChangedQ::usage =
   "SourceVaultHarnessRuntimeEnvironmentChangedQ[bundle, currentEnv] reports whether the runtime environment (permission profile, temp project path, attachments) of a HarnessMaterialization bundle has changed. currentEnv may carry precomputed PermissionProfileHash / RuntimeEnvironmentHash, or raw PermissionProfile / RuntimeEnvironment associations to be hashed. A runtime-environment change requires config.toml regeneration but does NOT make the canonical snapshot stale.";
 
+(* --- 要約 LLM ヘルパの文脈固定 -------------------------------------
+   iCallSummaryLLM / iCallSummaryLLMWithFallback は内部ヘルパだが、別の
+   Private 文脈を持つサブパッケージ (SourceVault_llmlog.wl の
+   `PrivateLLMLog` 文脈) から SourceVault`iCallSummaryLLMWithFallback と
+   完全修飾で参照される。公開文脈に先に作っておかないと、下の ClearAll[...]
+   が SourceVault`Private` 側に同名シンボルを作ってしまい、ロード回数で
+   「生きている定義」がどちらか入れ替わる:
+     1 回目のロード : 定義は Private 側に入る。llmlog が見る公開側は
+                      DownValues 空の死んだシンボル (fallback 経路が無効)
+     2 回目以降     : $ContextPath (公開) が $Context より優先されるので
+                      定義も呼び出し側も公開シンボルへ移り、Private 側に
+                      古い定義が取り残される
+   ファイル冒頭 (Stage 9 P1 Step 5 pkgfix) の ClaudeQuerySync shadow と同種
+   の問題。公開文脈へ一本化し、スタブ・差し替えが確実に効く単一シンボルに
+   する。ルーティング仕様 (PrivacyLevel / モデル選択 / cloud fallback) は
+   一切変更しない。
+   ::usage は付けない — 下の ClearAll がリロード時に消してしまうため。 *)
+SourceVault`iCallSummaryLLM;
+SourceVault`iCallSummaryLLMWithFallback;
+
 Begin["`Private`"];
 
 (* iL: $Language-based JA/EN switch *)
@@ -1239,7 +1292,13 @@ ClearAll[
   (* Step 5: cross-PC path normalization *)
   iSVCloudRootValue, iSVSymbolicPath, iSVResolvePath, iSVSymbolicPathString,
   iSVRelinkSources, iSVValidateSummarySchema, iSVSnapshotPrivacyLevel,
-  iSVLightRecord, iSVMaxFileSizeMB,
+  iSVLightRecord, iSVMaxFileSizeMB, iSVMaxRawFileSizeMB,
+  iSVIndexNotebookSkipRecord, iNotebookAssetPath,
+  iSVAssetCellIndex, iSVAssetPrivacyFromSnapshot, iSVWriteNotebookAsset,
+  $iSVAssetTokenPattern, iExtractTodoCellsFromExpr,
+  iNotebookHeaderParseFromStatusCellExpr,
+  $iSVSummaryCellStyles, $iSVSummaryPromptVersion,
+  $iSVSummaryBuiltinForbidden, iSVSummaryPrivacyTier,
   iSVSnapshotKindOf, iSVTitleButtonSym, iSVDirButtonSym,
   iSVSyncDir, iSVSyncHistoryPath, iSVSyncLastPath, iSVMakeSyncId,
   iSVFreshnessToken, iSVSnapshotInfoForSource,
@@ -7392,6 +7451,15 @@ iNotebookSnapshotPath[snapshotId_String] :=
     FileNameJoin[{d, snapshotId <> ".json"}]
   ];
 
+(* \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:304b\:3089\:5265\:96e2\:3057\:305f\:30b0\:30e9\:30d5\:30a3\:30c3\:30af\:8cc7\:7523\:306e\:683c\:7d0d\:5148\:3002
+   AssetId \:306f\:5185\:5bb9\:30cf\:30c3\:30b7\:30e5\:306a\:306e\:3067\:3001\:7248\:9055\:3044\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:9593\:3067\:81ea\:52d5\:7684\:306b dedup \:3055\:308c\:308b\:3002 *)
+iNotebookAssetPath[assetId_String] :=
+  Module[{d},
+    d = FileNameJoin[{iNotebooksDir[], "assets"}];
+    iEnsureDir[d];
+    FileNameJoin[{d, assetId <> ".json"}]
+  ];
+
 iNotebookTodosByNotebookPath[nbRef_String] :=
   Module[{d},
     d = FileNameJoin[{iNotebooksDir[], "todos", "by-notebook"}];
@@ -7708,10 +7776,88 @@ iNotebookRefFromPath[path_String] :=
    \:30b7\:30df\:30e5\:30ec\:30fc\:30b7\:30e7\:30f3\:7d50\:679c\:3092\:53ce\:3081\:305f\:5de8\:5927\:30ce\:30fc\:30c8 (\:6570\:767e MB\:ff5eGB) \:5bfe\:7b56\:3002 *)
 If[!ValueQ[$SourceVaultMaxFileSizeMB], $SourceVaultMaxFileSizeMB = 50];
 
-(* \:73fe\:5728\:306e\:95be\:5024 (MB) \:3092\:8fd4\:3059\:3002\:4e0d\:6b63\:5024\:306a\:3089 50 \:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3002 *)
+(* \:73fe\:5728\:306e\:95be\:5024 (MB) \:3092\:8fd4\:3059\:3002\:4e0d\:6b63\:5024\:306a\:3089 50 \:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3002
+   \:5265\:96e2\:5c0e\:5165\:5f8c\:306f\:300c\:5265\:96e2\:5f8c\:30b5\:30a4\:30ba\:300d\:306b\:5bfe\:3059\:308b\:95be\:5024\:3002 *)
 iSVMaxFileSizeMB[] :=
   If[NumericQ[$SourceVaultMaxFileSizeMB] && $SourceVaultMaxFileSizeMB > 0,
     N[$SourceVaultMaxFileSizeMB], 50.];
+
+(* \:8aad\:307f\:8fbc\:307f\:81ea\:4f53\:306e\:30cf\:30fc\:30c9\:4e0a\:9650 (MB)\:3002\:3053\:308c\:3092\:8d85\:3048\:308b .nb \:306f\:958b\:304b\:306a\:3044\:3002
+   \:5265\:96e2\:304c parse \:3067\:304d\:305a\:539f\:6587 Import \:306b fallback \:3057\:305f\:5834\:5408\:306e\:6700\:60aa\:30b1\:30fc\:30b9\:3092\:62bc\:3055\:3048\:308b\:3002 *)
+If[!ValueQ[$SourceVaultMaxRawFileSizeMB], $SourceVaultMaxRawFileSizeMB = 500];
+
+iSVMaxRawFileSizeMB[] :=
+  If[NumericQ[$SourceVaultMaxRawFileSizeMB] && $SourceVaultMaxRawFileSizeMB > 0,
+    N[$SourceVaultMaxRawFileSizeMB], 500.];
+
+(* \:5de8\:5927 .nb \:7528\:306e\:8efd\:91cf skip \:30ec\:30b3\:30fc\:30c9\:3002
+   \:5143\:306f SourceVaultIndexNotebook \:5185\:306e\:30a4\:30f3\:30e9\:30a4\:30f3\:30d6\:30ed\:30c3\:30af\:3060\:3063\:305f\:304c\:3001
+   \:5265\:96e2\:5c0e\:5165\:3067 (1) \:8aad\:307f\:8fbc\:307f\:524d\:306e raw \:4e0a\:9650 (2) \:5265\:96e2\:5f8c\:30b5\:30a4\:30ba\:4e0a\:9650
+   \:306e 2 \:7b87\:6240\:304b\:3089\:547c\:3076\:5fc5\:8981\:304c\:3067\:304d\:305f\:305f\:3081\:95a2\:6570\:306b\:5207\:308a\:51fa\:3057\:305f\:3002
+   SymbolicPath \:306f cross-PC \:691c\:7d22 (iSVResolvePath) \:3067\:4f7f\:3046\:306e\:3067 skip \:7d4c\:8def\:3067\:3082\:5fc5\:9808\:3002
+   SourceUUID \:306f\:30ce\:30fc\:30c8\:3092\:958b\:304f\:5fc5\:8981\:304c\:3042\:308a\:8da3\:65e8\:306b\:53cd\:3059\:308b\:306e\:3067\:53d6\:5f97\:3057\:306a\:3044\:3002 *)
+iSVIndexNotebookSkipRecord[abs_String, nbRef_String, currentMTime_,
+    reason_String, sizeMB_] :=
+  Module[{ts, snapshotId, srcRec, srcPath, snapRec, snapPath, json, strm},
+    ts = DateString[DateObject[]];
+    snapshotId = "snap-toolarge-" <>
+      IntegerString[Hash[abs, "SHA256"], 16, 16];
+    srcRec = <|
+      "Type" -> "NotebookSource",
+      "NotebookRef" -> nbRef,
+      "OriginalPath" -> abs,
+      "SymbolicPath" -> iSVSymbolicPath[abs],
+      "Title" -> FileBaseName[abs],
+      "FileMTime" -> Quiet[DateString[FileDate[abs]]],
+      "CurrentSnapshotId" -> snapshotId,
+      "SourceUUID" -> Missing["SkippedTooLarge"],
+      "RegisteredAt" -> ts,
+      "LastIndexedAt" -> ts|>;
+    srcPath = iNotebookSourcePath[nbRef];
+    json = Quiet @ ExportString[iSanitizeForJSON[srcRec],
+      "RawJSON", "Compact" -> False];
+    strm = Quiet[OpenWrite[srcPath, BinaryFormat -> True]];
+    If[Head[strm] === OutputStream,
+      BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
+      Close[strm]];
+    snapRec = <|
+      "Type" -> "NotebookSnapshot",
+      "SnapshotId" -> snapshotId,
+      "NotebookRef" -> nbRef,
+      "LifecycleStatus" -> "Current",
+      "SourceMTime" -> If[IntegerQ[currentMTime], currentMTime,
+        Missing["NotPresent"]],
+      "SourceSize" -> Quiet @ Check[FileByteCount[abs],
+        Missing["NotPresent"]],
+      "Skipped" -> True,
+      "SkipReason" -> reason,
+      "FileSizeMB" -> sizeMB,
+      "PrivacyLevel" -> 1.0,
+      "PrivacyLevelSource" -> "Default",
+      "AcquisitionContext" -> "LocalFile",
+      "CreatedAt" -> ts|>;
+    snapPath = iNotebookSnapshotPath[snapshotId];
+    json = Quiet @ ExportString[iSanitizeForJSON[snapRec],
+      "RawJSON", "Compact" -> False];
+    strm = Quiet[OpenWrite[snapPath, BinaryFormat -> True]];
+    If[Head[strm] === OutputStream,
+      BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
+      Close[strm]];
+    <|"Status" -> "OK",
+      "Skipped" -> True,
+      "SkipReason" -> reason,
+      "FileSizeMB" -> sizeMB,
+      "NotebookRef" -> nbRef,
+      "SnapshotId" -> snapshotId,
+      "Path" -> abs,
+      "Header" -> <|"ParseStatus" -> "SkippedTooLarge"|>,
+      "TodoCount" -> 0,
+      "OpenTodoCount" -> 0,
+      "DoneTodoCount" -> 0,
+      "PassTodoCount" -> 0,
+      "AssetCount" -> 0,
+      "SourceMTime" -> currentMTime|>
+  ];
 
 (* Stage 9 P1 Step 6: snapshot \:306e\:4ee3\:8868 PrivacyLevel \:3092\:6c7a\:5b9a\:3002
    \:30ed\:30fc\:30ab\:30eb .nb \:306f NBAccess \:306e NBFileSpec \:5224\:5b9a\:3092\:7d99\:627f\:3002
@@ -7738,13 +7884,25 @@ iSVSnapshotPrivacyLevel[path_String] :=
    - Get[path] \:306f .nb \:306b\:5bfe\:3057\:3066 NotebookObject \:5316\:7b49\:306e\:7279\:6b8a\:52d5\:4f5c\:3092\:8d77\:3053\:3057\:5f97\:308b\:305f\:3081\:4f7f\:308f\:306a\:3044
 *)
 iReadNotebookExpr[path_String] :=
-  Module[{nbExpr},
+  Module[{loaded, nbExpr},
     If[!FileExistsQ[path],
       Return[<|"Status" -> "Failed", "Reason" -> "FileNotFound", "Path" -> path|>]];
-    nbExpr = Quiet[Import[path, "Notebook"]];
-    If[FailureQ[nbExpr] || !MatchQ[nbExpr, Notebook[_List, ___]],
+    (* NBFileLoadSlim strips graphics payloads before parsing when the file
+       is large (NBAccess`$NBSlimNotebookThresholdMB, \:65e2\:5b9a 5MB)\:3002
+       \:5265\:96e2\:3055\:308c\:305f payload \:306f "<<SVAsset:id>>" \:6587\:5b57\:5217\:306b\:5909\:308f\:308b\:3060\:3051\:3067\:3001
+       \:30bb\:30eb\:69cb\:9020\:30fb\:30b9\:30bf\:30a4\:30eb\:30fb TaggingRules \:30fb\:30c6\:30ad\:30b9\:30c8\:306f\:4fdd\:305f\:308c\:308b\:306e\:3067\:3001
+       header / todo / \:6a5f\:5bc6\:5224\:5b9a\:306f\:5f93\:6765\:3068\:540c\:3058\:7d50\:679c\:306b\:306a\:308b\:3002 *)
+    loaded = Quiet @ Check[NBAccess`NBFileLoadSlim[path], $Failed];
+    If[!AssociationQ[loaded] || Lookup[loaded, "Status", ""] =!= "OK",
       Return[<|"Status" -> "Failed", "Reason" -> "NotANotebookFile", "Path" -> path|>]];
-    <|"Status" -> "OK", "Expr" -> HoldComplete[nbExpr], "Path" -> path|>
+    nbExpr = Lookup[loaded, "NotebookExpr"];
+    If[!MatchQ[nbExpr, Notebook[_List, ___]],
+      Return[<|"Status" -> "Failed", "Reason" -> "NotANotebookFile", "Path" -> path|>]];
+    <|"Status" -> "OK", "Expr" -> HoldComplete[nbExpr], "Path" -> path,
+      "Slimmed" -> TrueQ[Lookup[loaded, "Slimmed", False]],
+      "Assets" -> Replace[Lookup[loaded, "Assets", {}], Except[_List] -> {}],
+      "OriginalChars" -> Lookup[loaded, "OriginalChars", Missing["NotPresent"]],
+      "SlimChars" -> Lookup[loaded, "SlimChars", Missing["NotPresent"]]|>
   ];
 
 (* Cell content \:304b\:3089\:30c6\:30ad\:30b9\:30c8\:3092\:53d6\:308a\:51fa\:3059 (BoxData / TextData / plain string \:7b49):
@@ -7854,21 +8012,34 @@ iNotebookHeaderParseFromBoxes[nbExpr_HoldComplete] :=
    \:305d\:306e BoxData \:3092 MakeExpression \:3067\:5b89\:5168\:306b\:5f0f\:5316\:3059\:308b (\:7f60 #22 \:7d4c\:8def\:3001\:526f\:4f5c\:7528\:7121\:3057)\:3002
    \:898b\:3064\:304b\:3089\:306a\:3051\:308c\:3070 Missing["NoStatusCell"] \:3092\:8fd4\:3057\:3001\:547c\:3073\:51fa\:3057\:5074\:304c
    \:5f93\:6765\:65b9\:5f0f (MakeExpression \:521d\:671f\:5316\:30bb\:30eb / Initialization) \:306b fallback \:3059\:308b\:3002 *)
+(* \:65e7\:5b9f\:88c5\:306f NotebookImport \:3092 (\:6700\:5927 2 \:56de) \:547c\:3093\:3067\:751f\:30d5\:30a1\:30a4\:30eb\:3092\:8aad\:307f\:76f4\:3057\:3066\:3044\:305f\:3002
+   NotebookStatus \:30bb\:30eb\:304c\:7121\:3044\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3067\:3082\:5fc5\:305a 2 \:56de\:8d70\:308b\:305f\:3081\:3001
+   378MB \:306e .nb \:3067\:5b9f\:6e2c 28 \:79d2\:304c\:7121\:99c4\:306b\:306a\:3063\:3066\:3044\:305f\:3002iReadNotebookExpr \:306f
+   \:5265\:96e2\:6e08\:307f\:306e\:5f0f\:3092\:30ad\:30e3\:30c3\:30b7\:30e5\:3054\:3057\:306b\:8fd4\:3059\:306e\:3067\:305d\:3061\:3089\:304b\:3089\:63a2\:3059\:3002 *)
 iNotebookHeaderParseFromStatusCell[path_String] :=
-  Module[{imported, boxData, held, assoc, parseStatus = "OK"},
+  Module[{readResult},
     If[!FileExistsQ[path], Return[Missing["FileNotFound"]]];
-    (* NotebookStatus \:30b9\:30bf\:30a4\:30eb\:306e\:30bb\:30eb\:5185\:5bb9\:3092 BoxData \:3068\:3057\:3066\:53d6\:5f97 *)
-    imported = Quiet @ Check[
-      NotebookImport[path, "NotebookStatus" -> "BoxData"], $Failed];
-    (* "NotebookStatus" -> "BoxData" \:304c\:7121\:52b9\:306a\:74b0\:5883\:5411\:3051\:306b\:7d20\:306e\:30b9\:30bf\:30a4\:30eb\:6307\:5b9a\:3082\:8a66\:3059 *)
-    If[!ListQ[imported] || imported === {},
-      imported = Quiet @ Check[
-        NotebookImport[path, "NotebookStatus"], $Failed]];
-    If[!ListQ[imported] || imported === {},
+    readResult = iReadNotebookExpr[path];
+    If[Lookup[readResult, "Status", ""] =!= "OK",
       Return[Missing["NoStatusCell"]]];
-    (* \:6700\:521d\:306e BoxData (\:8907\:6570\:3042\:308c\:3070\:5148\:982d) \:3092\:4f7f\:3046 *)
-    boxData = SelectFirst[imported,
-      SymbolName[Head[#]] === "BoxData" &, First[imported]];
+    iNotebookHeaderParseFromStatusCellExpr[Lookup[readResult, "Expr"]]
+  ];
+
+iNotebookHeaderParseFromStatusCellExpr[nbExpr_HoldComplete] :=
+  Module[{cells, statusCell, boxData, held, assoc, parseStatus = "OK"},
+    cells = iFlattenCells[nbExpr];
+    If[!ListQ[cells] || cells === {}, Return[Missing["NoStatusCell"]]];
+    (* \:6700\:521d\:306e NotebookStatus \:30b9\:30bf\:30a4\:30eb\:30bb\:30eb\:3092\:4f7f\:3046 *)
+    statusCell = SelectFirst[cells,
+      Function[c,
+        Module[{args = List @@ c},
+          Length[args] >= 2 && StringQ[args[[2]]] &&
+            args[[2]] === "NotebookStatus"]],
+      None];
+    If[statusCell === None, Return[Missing["NoStatusCell"]]];
+    boxData = First[List @@ statusCell];
+    If[SymbolName[Head[boxData]] =!= "BoxData",
+      Return[Missing["StatusCellNotAssociation"]]];
     held = Quiet[MakeExpression[boxData, StandardForm]];
     If[!MatchQ[held, HoldComplete[_Association]],
       Return[Missing["StatusCellNotAssociation"]]];
@@ -7965,6 +8136,82 @@ iFlattenCellRec[c_] :=
         Return[Flatten[Map[iFlattenCellRec, innerCells]]]];
       Return[{}]];
     {c}
+  ];
+
+(* ============================================================
+   \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:8cc7\:7523 (\:5265\:96e2\:3055\:308c\:305f\:30b0\:30e9\:30d5\:30a3\:30c3\:30af)
+   NBAccess \:304c parse \:524d\:306b\:5265\:96e2\:3057\:305f payload \:306f\:5f0f\:306e\:4e2d\:3067
+   "<<SVAsset:id>>" \:6587\:5b57\:5217\:306b\:306a\:3063\:3066\:3044\:308b\:3002\:305d\:308c\:3092\:30bb\:30eb\:3054\:3068\:306b\:63a2\:3057\:3066
+   \:300c\:3069\:306e\:30bb\:30eb\:306e\:56f3\:304b\:300d\:3092\:5fa9\:5143\:3059\:308b = \:30c6\:30ad\:30b9\:30c8\:7d22\:5f15\:3068\:753b\:50cf\:7d22\:5f15\:306e\:30de\:30fc\:30b8\:70b9\:3002
+   ============================================================ *)
+
+$iSVAssetTokenPattern = "<<SVAsset:(asset-sha256-[0-9a-f]+)>>";
+
+(* <|assetId -> cellIndex|>\:3002\:540c\:3058 asset \:304c\:8907\:6570\:30bb\:30eb\:306b\:51fa\:308b\:5834\:5408\:306f\:6700\:521d\:306e\:30bb\:30eb\:3002 *)
+iSVAssetCellIndex[nbExpr_HoldComplete] :=
+  Module[{cells, res = <||>},
+    cells = iFlattenCells[nbExpr];
+    If[!ListQ[cells], Return[<||>]];
+    MapIndexed[
+      Function[{c, i},
+        Scan[
+          Function[id, If[!KeyExistsQ[res, id], res[id] = First[i]]],
+          Quiet @ Check[
+            StringCases[ToString[c, InputForm],
+              RegularExpression[$iSVAssetTokenPattern] -> "$1"],
+            {}]]],
+      cells];
+    res
+  ];
+
+(* PrivacyLevel \:306f snapshot \:306e\:5024\:3092\:7d99\:627f\:3059\:308b (\:6df7\:5728 {0.5,1.0} \:306a\:3089\:6700\:5927\:5024)\:3002
+   \:56f3\:3092\:30bb\:30eb\:5358\:4f4d\:3067\:5224\:5b9a\:3057\:76f4\:3059\:3068\:904e\:5c0f\:8a55\:4fa1\:306e\:4f59\:5730\:304c\:3067\:304d\:308b\:305f\:3081\:3001
+   \:5e38\:306b\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:5168\:4f53\:306e\:6700\:3082\:53b3\:3057\:3044\:5024\:3092\:63a1\:308b (\:5b89\:5168\:5074)\:3002 *)
+iSVAssetPrivacyFromSnapshot[pl_] :=
+  Which[
+    NumericQ[pl], N[pl],
+    ListQ[pl] && Length[pl] > 0 && AllTrue[pl, NumericQ], N[Max[pl]],
+    True, 1.0];
+
+(* 1 \:8cc7\:7523 = 1 JSON\:3002\:65e2\:5b58\:306e\:5834\:5408\:306f\:66f8\:304d\:76f4\:3055\:305a\:3001PrivacyLevel \:3060\:3051
+   \:53b3\:3057\:3044\:65b9\:306b\:5f15\:304d\:4e0a\:3052\:308b (\:540c\:3058\:56f3\:304c\:516c\:958b\:30bb\:30eb\:3068\:6a5f\:5bc6\:30bb\:30eb\:306e\:4e21\:65b9\:306b
+   \:73fe\:308c\:305f\:5834\:5408\:306b\:6f0f\:6d29\:3055\:305b\:306a\:3044\:305f\:3081)\:3002 *)
+iSVWriteNotebookAsset[asset_Association, nbRef_String, snapshotId_String,
+    cellIdx_, privacy_, ts_String] :=
+  Module[{id, path, existing, pl, oldPl, rec, json, strm, status = "Created"},
+    id = Lookup[asset, "AssetId", ""];
+    If[!StringQ[id] || id === "", Return[$Failed]];
+    path = iNotebookAssetPath[id];
+    pl = iSVAssetPrivacyFromSnapshot[privacy];
+    If[FileExistsQ[path],
+      existing = Quiet @ iLoadJSONFromFile[path];
+      If[ListQ[existing] && !AssociationQ[existing],
+        existing = Association[Cases[existing, _Rule]]];
+      If[AssociationQ[existing],
+        oldPl = Lookup[existing, "PrivacyLevel", 0.];
+        If[NumericQ[oldPl] && oldPl >= pl, Return["Cached"]];
+        pl = If[NumericQ[oldPl], Max[pl, oldPl], pl];
+        status = "PrivacyRaised"]];
+    rec = <|
+      "Type" -> "NotebookAsset",
+      "AssetId" -> id,
+      "Kind" -> Lookup[asset, "Kind", "Unknown"],
+      "Chars" -> Lookup[asset, "Chars", 0],
+      "NotebookRef" -> nbRef,
+      "SnapshotId" -> snapshotId,
+      "CellIndex" -> If[IntegerQ[cellIdx], cellIdx, Missing["NotLocated"]],
+      "PrivacyLevel" -> pl,
+      "PrivacyLevelSource" -> "InheritedFromSnapshot",
+      "AcquisitionContext" -> "NotebookGraphics",
+      "RegisteredAt" -> ts|>;
+    json = Quiet @ ExportString[iSanitizeForJSON[rec], "RawJSON",
+      "Compact" -> False];
+    strm = Quiet[OpenWrite[path, BinaryFormat -> True]];
+    If[Head[strm] === OutputStream && StringQ[json],
+      BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
+      Close[strm],
+      Return[$Failed]];
+    status
   ];
 
 (* Cell \:306e options Association \:3092\:53d6\:308a\:51fa\:3059 (context \:975e\:4f9d\:5b58) *)
@@ -8097,41 +8344,46 @@ iExtractTodoCells[nbExpr_HoldComplete] :=
    - \:30d1\:30bf\:30fc\:30f3\:30de\:30c3\:30c1\:30f3\:30b0\:4e0d\:8981\:3001Notebook \:306e\:69cb\:9020\:5909\:66f4\:306b\:5f37\:3044
    - TodoItem_1 / TodoItem_2 / TodoItem_3 \:306e 3 \:30b9\:30bf\:30a4\:30eb\:3092\:9806\:306b\:8a66\:3059
    - \:9650\:5b9a\:7684\:30b9\:30bf\:30a4\:30eb\:3060\:3051\:3092\:7279\:5b9a\:3057\:3066\:53d6\:308a\:51fa\:3059\:306e\:3067\:9ad8\:901f *)
+(* \:65e7\:5b9f\:88c5\:306f style \:3054\:3068\:306b NotebookImport[path, style -> "Cell"] \:3092\:547c\:3093\:3067\:3044\:305f\:305f\:3081\:3001
+   1 \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3042\:305f\:308a\:751f\:30d5\:30a1\:30a4\:30eb\:3092 3 \:56de\:8aad\:307f\:76f4\:3057\:3066\:3044\:305f
+   (378MB \:306e .nb \:3067\:5b9f\:6e2c 43.5 \:79d2)\:3002iReadNotebookExpr \:306f\:5265\:96e2\:6e08\:307f\:306e\:5f0f\:3092
+   \:8fd4\:3057\:30ad\:30e3\:30c3\:30b7\:30e5\:3082\:52b9\:304f\:306e\:3067\:3001\:305d\:3061\:3089\:304b\:3089\:8d70\:67fb\:3059\:308b\:3002
+   \:5224\:5b9a\:30ed\:30b8\:30c3\:30af (style \:540d\:30fbiTodoStatusFromOptions\:30fbiCellTextExtract) \:306f\:5909\:3048\:306a\:3044\:3002 *)
 iExtractTodoCellsFromPath[path_String] :=
-  Module[{styles, results = {}, idx = 0},
+  Module[{readResult},
     If[!FileExistsQ[path], Return[{}]];
+    readResult = iReadNotebookExpr[path];
+    If[Lookup[readResult, "Status", ""] =!= "OK", Return[{}]];
+    iExtractTodoCellsFromExpr[Lookup[readResult, "Expr"]]
+  ];
+
+iExtractTodoCellsFromExpr[nbExpr_HoldComplete] :=
+  Module[{styles, cells, results = {}, idx = 0},
     styles = {"TodoItem_1", "TodoItem_2", "TodoItem_3"};
+    cells = iFlattenCells[nbExpr];
+    If[!ListQ[cells], Return[{}]];
+    (* \:65e7\:5b9f\:88c5\:3068\:540c\:3058\:304f style \:3054\:3068\:306b\:307e\:3068\:3081\:3066\:756a\:53f7\:3092\:632f\:308b *)
     Scan[
       Function[style,
-        Module[{cells},
-          cells = Quiet[NotebookImport[path, style -> "Cell"]];
-          If[ListQ[cells],
-            Scan[
-              Function[c,
-                If[SymbolName[Head[c]] === "Cell" && Length[c] >= 2,
-                  Module[{args = List @@ c, txt, opts, status},
-                    idx = idx + 1;
-                    txt = iCellTextExtract[args[[1]]];
-                    opts = Association[Cases[Drop[args, 2], _Rule]];
-                    status = iTodoStatusFromOptions[opts];
-                    AppendTo[results, <|
-                      "Index" -> idx,
-                      "CellStyle" -> style,
-                      "Text" -> txt,
-                      "Status" -> status["Status"],
-                      "StatusSource" -> status["StatusSource"],
-                      "StrikeThrough" -> iStrikeThroughQ[opts]
-                    |>]
-                  ]
-                ]
-              ],
-              cells
-            ]
-          ]
-        ]
-      ],
-      styles
-    ];
+        Scan[
+          Function[c,
+            If[SymbolName[Head[c]] === "Cell" && Length[c] >= 2,
+              Module[{args = List @@ c, txt, opts, status},
+                If[StringQ[args[[2]]] && args[[2]] === style,
+                  idx = idx + 1;
+                  txt = iCellTextExtract[args[[1]]];
+                  opts = Association[Cases[Drop[args, 2], _Rule]];
+                  status = iTodoStatusFromOptions[opts];
+                  AppendTo[results, <|
+                    "Index" -> idx,
+                    "CellStyle" -> style,
+                    "Text" -> txt,
+                    "Status" -> status["Status"],
+                    "StatusSource" -> status["StatusSource"],
+                    "StrikeThrough" -> iStrikeThroughQ[opts]
+                  |>]]]]],
+          cells]],
+      styles];
     results
   ];
 
@@ -8739,13 +8991,25 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
          (mtime/size \:4e00\:81f4\:3067\:3082)\:3002skip snapshot \:306f\:305d\:306e\:307e\:307e cached \:3068\:3057\:3066\:8fd4\:3059\:3002 *)
       If[TrueQ[Lookup[snapshotRec, "Skipped", False]] ||
           StringMatchQ[snapshotId, "snap-toolarge-*"],
+        (* \:81ea\:52d5\:79fb\:884c: \:5265\:96e2\:5c0e\:5165\:524d\:306b\:66f8\:304b\:308c\:305f "FileTooLarge" \:306f\:3001\:751f\:30d5\:30a1\:30a4\:30eb\:30b5\:30a4\:30ba\:3060\:3051\:3067
+           50MB \:3067\:5207\:3063\:3066\:3044\:305f\:3082\:306e\:3002\:73fe\:884c\:30b2\:30fc\:30c8\:306a\:3089\:901a\:308b\:53ef\:80fd\:6027\:304c\:9ad8\:3044\:306e\:3067\:3001
+           raw \:4e0a\:9650\:5185\:306a\:3089 1 \:5ea6\:3060\:3051 cache miss \:306b\:3057\:3066\:518d\:7d22\:5f15\:3055\:305b\:308b\:3002
+           \:73fe\:884c\:30ed\:30b8\:30c3\:30af\:304c\:66f8\:304f\:7406\:7531 (RawFileTooLarge / SlimTooLarge) \:306f\:518d\:8a55\:4fa1\:3057\:3066\:3082
+           \:7d50\:8ad6\:304c\:5909\:308f\:3089\:306a\:3044\:306e\:3067 cached \:306e\:307e\:307e\:8fd4\:3059 (\:6bce\:56de\:518d\:8aad\:307f\:8fbc\:307f\:3055\:305b\:306a\:3044)\:3002 *)
+        If[Lookup[snapshotRec, "SkipReason", ""] === "FileTooLarge" &&
+            TrueQ[Quiet @ Check[
+              FileByteCount[abs] <= iSVMaxRawFileSizeMB[] * 1024.^2, False]],
+          Return[<|"Cached" -> False,
+            "CacheMissReason" -> "LegacySkipRecordRevisit",
+            "SkipReason" -> "FileTooLarge"|>]];
         Return[<|"Status" -> "OK", "Cached" -> True, "Skipped" -> True,
           "SkipReason" -> Lookup[snapshotRec, "SkipReason", "FileTooLarge"],
           "FileSizeMB" -> Lookup[snapshotRec, "FileSizeMB", Missing["NotPresent"]],
           "NotebookRef" -> nbRef, "SnapshotId" -> snapshotId, "Path" -> abs,
           "Header" -> <|"ParseStatus" -> "SkippedTooLarge"|>, "Todos" -> {},
           "TodoCount" -> 0, "OpenTodoCount" -> 0, "DoneTodoCount" -> 0,
-          "PassTodoCount" -> 0, "SourceMTime" -> currentMTime|>]];
+          "PassTodoCount" -> 0, "Slimmed" -> False, "AssetCount" -> 0,
+          "SourceMTime" -> currentMTime|>]];
       hdrC = Lookup[snapshotRec, "HeaderCompressed", Missing[]];
       todoC = Lookup[snapshotRec, "TodosCompressed", Missing[]];
       hdrRestored = If[StringQ[hdrC],
@@ -8809,6 +9073,12 @@ iSVCheckMTimeCache[abs_String, nbRef_String, currentMTime_Integer] :=
       "DeadlineState" -> deadlineState,
       "Lint" -> lint,
       "IndexedAt" -> ts,
+      (* cache hit \:3067\:3082\:65b0\:898f index \:3068\:540c\:3058\:5f62\:306b\:63c3\:3048\:308b\:3002snapshot \:306b\:65e2\:306b
+         \:5165\:3063\:3066\:3044\:308b\:306e\:3067 .nb \:3092\:8aad\:307f\:76f4\:3055\:305a\:306b\:53d6\:308c\:308b\:3002\:5265\:96e2\:5c0e\:5165\:524d\:306e\:65e7 snapshot
+         \:306b\:306f\:7121\:3044\:30ad\:30fc\:306a\:306e\:3067\:65e2\:5b9a\:5024\:3092\:7f6e\:304f\:3002 *)
+      "Slimmed" -> TrueQ[Lookup[snapshotRec, "Slimmed", False]],
+      "AssetCount" -> Replace[Lookup[snapshotRec, "AssetCount", 0],
+        Except[_Integer] -> 0],
       "SourceMTime" -> currentMTime|>
   ];
 
@@ -8826,7 +9096,8 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
           openTodoLines, doneTodoLines, lintLines,
           extractHeader, extractTodos, forceReindex,
           headerVal, deadlineVal, nextReviewVal, todoCount,
-          currentMTime, cachedResult, cacheCheckDebug},
+          currentMTime, cachedResult, cacheCheckDebug,
+          assets, assetCells, assetIds, snapshotPrivacy, slimmed},
     iEnsureRoots[];
     extractHeader = TrueQ[OptionValue["ExtractHeader"]];
     extractTodos = TrueQ[OptionValue["ExtractTodos"]];
@@ -8850,89 +9121,39 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
         cacheCheckDebug = cachedResult,
         cacheCheckDebug = <|"CacheMissReason" -> "ReturnedNone"|>]];
     
-    (* Stage 9 P1 Step 8 Hotfix 2: \:30d5\:30a1\:30a4\:30eb\:30b5\:30a4\:30ba\:95be\:5024\:3002
-       \:30b7\:30df\:30e5\:30ec\:30fc\:30b7\:30e7\:30f3\:7d50\:679c\:3092\:53ce\:3081\:305f .nb \:306f\:6570\:767e MB\:ff5eGB \:306b\:306a\:308a\:5f97\:3001
-       Import \:3059\:308b\:3068\:30e1\:30e2\:30ea\:67af\:6e07\:30fb\:51e6\:7406\:30cf\:30f3\:30b0\:306e\:539f\:56e0\:306b\:306a\:308b\:3002
-       \:95be\:5024\:8d85\:3048\:306e\:30d5\:30a1\:30a4\:30eb\:306f .nb \:3092 Import \:305b\:305a\:3001
-       \:30d5\:30a1\:30a4\:30eb\:60c5\:5831\:3060\:3051\:306e\:8efd\:91cf snapshot \:3092\:4f5c\:3063\:3066\:8fd4\:3059\:3002 *)
-    Module[{sizeBytes, maxBytes, sizeMB},
+    (* \:8aad\:307f\:8fbc\:307f\:524d\:306e raw \:4e0a\:9650\:3002\:3053\:308c\:3092\:8d85\:3048\:308b .nb \:306f\:4e00\:5207\:958b\:304b\:306a\:3044\:3002
+       \:5265\:96e2 (NBFileLoadSlim) \:5c0e\:5165\:524d\:306f\:3053\:3053\:304c 50MB \:3060\:3063\:305f\:305f\:3081\:30b9\:30e9\:30a4\:30c9\:7cfb\:306e
+       .nb \:304c\:307e\:3068\:3081\:3066 skip \:3055\:308c\:3066\:3044\:305f\:304c\:3001\:73fe\:5728\:306f\:5265\:96e2\:5f8c\:30b5\:30a4\:30ba\:3067\:5224\:5b9a\:3059\:308b\:306e\:3067
+       \:3053\:3053\:306f\:30e1\:30e2\:30ea\:5b89\:5168\:6027\:306e\:305f\:3081\:306e\:30cf\:30fc\:30c9\:4e0a\:9650 (\:65e2\:5b9a 500MB) \:3060\:3051\:3092\:6301\:3064\:3002 *)
+    Module[{sizeBytes, rawMaxBytes},
       sizeBytes = Quiet @ Check[FileByteCount[abs], 0];
-      maxBytes = iSVMaxFileSizeMB[] * 1024.^2;
-      If[NumericQ[sizeBytes] && sizeBytes > maxBytes,
-        sizeMB = Round[sizeBytes / 1024.^2, 0.1];
-        ts = DateString[DateObject[]];
-        snapshotId = "snap-toolarge-" <>
-          IntegerString[Hash[abs, "SHA256"], 16, 16];
-        Module[{srcRec, srcPath, snapRec, snapPath, json, strm},
-          (* too-large \:7d4c\:8def\:3067\:3082 SymbolicPath \:306f\:5fc5\:9808: cross-PC \:691c\:7d22
-             (SourceVaultFindNotebooks \:306e iSVResolvePath \:89e3\:6c7a) \:3067\:4f7f\:3046\:3002
-             iSVSymbolicPath \:306f\:30d1\:30b9\:6587\:5b57\:5217\:3060\:3051\:3067\:8a08\:7b97\:3057\:30d5\:30a1\:30a4\:30eb\:3092\:958b\:304b\:306a\:3044\:306e\:3067
-             \:5de8\:5927\:30ce\:30fc\:30c8\:3067\:3082\:5b89\:5168\:3002\:4e00\:65b9 SourceUUID \:306f\:30ce\:30fc\:30c8\:3092\:958b\:304f\:5fc5\:8981\:304c\:3042\:308a
-             too-large \:7d4c\:8def\:306e\:8da3\:65e8 (\:5de8\:5927 .nb \:3092 Import \:3057\:306a\:3044) \:306b\:53cd\:3059\:308b\:305f\:3081\:3001
-             \:3053\:3053\:3067\:306f\:53d6\:5f97\:305b\:305a Missing["SkippedTooLarge"] \:3068\:3059\:308b\:3002
-             \:901a\:5e38\:7d4c\:8def\:306e sourceRecord \:3068\:30d5\:30a3\:30fc\:30eb\:30c9\:69cb\:9020\:3092\:63c3\:3048\:308b\:3002 *)
-          srcRec = <|
-            "Type" -> "NotebookSource",
-            "NotebookRef" -> nbRef,
-            "OriginalPath" -> abs,
-            "SymbolicPath" -> iSVSymbolicPath[abs],
-            "Title" -> FileBaseName[abs],
-            "FileMTime" -> Quiet[DateString[FileDate[abs]]],
-            "CurrentSnapshotId" -> snapshotId,
-            "SourceUUID" -> Missing["SkippedTooLarge"],
-            "RegisteredAt" -> ts,
-            "LastIndexedAt" -> ts|>;
-          srcPath = iNotebookSourcePath[nbRef];
-          json = Quiet @ ExportString[iSanitizeForJSON[srcRec],
-            "RawJSON", "Compact" -> False];
-          strm = Quiet[OpenWrite[srcPath, BinaryFormat -> True]];
-          If[Head[strm] === OutputStream,
-            BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
-            Close[strm]];
-          snapRec = <|
-            "Type" -> "NotebookSnapshot",
-            "SnapshotId" -> snapshotId,
-            "NotebookRef" -> nbRef,
-            "LifecycleStatus" -> "Current",
-            "SourceMTime" -> If[IntegerQ[currentMTime], currentMTime,
-              Missing["NotPresent"]],
-            "SourceSize" -> Quiet @ Check[FileByteCount[abs],
-              Missing["NotPresent"]],
-            "Skipped" -> True,
-            "SkipReason" -> "FileTooLarge",
-            "FileSizeMB" -> sizeMB,
-            "PrivacyLevel" -> 1.0,
-            "PrivacyLevelSource" -> "Default",
-            "AcquisitionContext" -> "LocalFile",
-            "CreatedAt" -> ts|>;
-          snapPath = iNotebookSnapshotPath[snapshotId];
-          json = Quiet @ ExportString[iSanitizeForJSON[snapRec],
-            "RawJSON", "Compact" -> False];
-          strm = Quiet[OpenWrite[snapPath, BinaryFormat -> True]];
-          If[Head[strm] === OutputStream,
-            BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
-            Close[strm]]];
-        Return[<|"Status" -> "OK",
-          "Skipped" -> True,
-          "SkipReason" -> "FileTooLarge",
-          "FileSizeMB" -> sizeMB,
-          "NotebookRef" -> nbRef,
-          "SnapshotId" -> snapshotId,
-          "Path" -> abs,
-          "Header" -> <|"ParseStatus" -> "SkippedTooLarge"|>,
-          "TodoCount" -> 0,
-          "OpenTodoCount" -> 0,
-          "DoneTodoCount" -> 0,
-          "PassTodoCount" -> 0,
-          "SourceMTime" -> currentMTime|>]]
-    ];
+      rawMaxBytes = iSVMaxRawFileSizeMB[] * 1024.^2;
+      If[NumericQ[sizeBytes] && sizeBytes > rawMaxBytes,
+        Return[iSVIndexNotebookSkipRecord[abs, nbRef, currentMTime,
+          "RawFileTooLarge", Round[sizeBytes / 1024.^2, 0.1]]]]];
 
-    (* notebook \:3092\:8aad\:3080 *)
+    (* notebook \:3092\:8aad\:3080 (\:5927\:304d\:3044\:30d5\:30a1\:30a4\:30eb\:306f\:30b0\:30e9\:30d5\:30a3\:30c3\:30af payload \:5265\:96e2\:6e08\:307f) *)
     readResult = iReadNotebookExpr[abs];
     If[Lookup[readResult, "Status", ""] =!= "OK",
       Return[<|"Status" -> "Failed",
         "Reason" -> Lookup[readResult, "Reason", "ReadFailed"],
         "Path" -> abs|>]];
+
+    (* \:5265\:96e2\:5f8c\:30b5\:30a4\:30ba\:306e\:4e0a\:9650\:3002\:5265\:96e2\:304c\:52b9\:304b\:306a\:304b\:3063\:305f (fallback \:3057\:305f) \:5834\:5408\:306f
+       \:5f93\:6765\:3069\:304a\:308a\:751f\:30d5\:30a1\:30a4\:30eb\:30b5\:30a4\:30ba\:3067\:5224\:5b9a\:3059\:308b\:3002 *)
+    Module[{maxBytes, slimChars, sizeBytes},
+      maxBytes = iSVMaxFileSizeMB[] * 1024.^2;
+      slimChars = Lookup[readResult, "SlimChars", Missing["NotPresent"]];
+      sizeBytes = Quiet @ Check[FileByteCount[abs], 0];
+      Which[
+        NumericQ[slimChars] && slimChars > maxBytes,
+          Return[iSVIndexNotebookSkipRecord[abs, nbRef, currentMTime,
+            "SlimTooLarge", Round[slimChars / 1024.^2, 0.1]]],
+        !TrueQ[Lookup[readResult, "Slimmed", False]] &&
+          NumericQ[sizeBytes] && sizeBytes > maxBytes,
+          Return[iSVIndexNotebookSkipRecord[abs, nbRef, currentMTime,
+            "FileTooLarge", Round[sizeBytes / 1024.^2, 0.1]]]]];
+
     nbExpr = Lookup[readResult, "Expr"];
     
     (* SnapshotId: content hash *)
@@ -8987,6 +9208,18 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
         BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
         Close[strm]]];
     
+    (* \:30b0\:30e9\:30d5\:30a3\:30c3\:30af\:8cc7\:7523\:306e\:96c6\:8a08\:3002
+       NBAccess \:304c parse \:524d\:306b\:5265\:96e2\:3057\:305f payload \:306f\:3001\:5f0f\:306e\:4e2d\:3067
+       "<<SVAsset:id>>" \:6587\:5b57\:5217\:306b\:306a\:3063\:3066\:5143\:306e\:30bb\:30eb\:4f4d\:7f6e\:306b\:6b8b\:3063\:3066\:3044\:308b\:306e\:3067\:3001
+       \:3053\:3053\:3067\:30bb\:30eb\:756a\:53f7\:3092\:5f15\:304d\:5f53\:3066\:3066\:30c6\:30ad\:30b9\:30c8\:7d22\:5f15\:3068\:7d10\:3065\:3051\:308b\:3002 *)
+    slimmed = TrueQ[Lookup[readResult, "Slimmed", False]];
+    assets = Replace[Lookup[readResult, "Assets", {}], Except[_List] -> {}];
+    assets = DeleteDuplicatesBy[
+      Select[assets, AssociationQ], Lookup[#, "AssetId", ""] &];
+    assetIds = Select[Lookup[#, "AssetId", ""] & /@ assets, StringQ[#] && # =!= "" &];
+    assetCells = If[assets === {}, <||>, iSVAssetCellIndex[nbExpr]];
+    snapshotPrivacy = iSVSnapshotPrivacyLevel[abs];
+
     (* SnapshotRecord \:4fdd\:5b58 *)
     snapshotRecord = <|
       "Type" -> "NotebookSnapshot",
@@ -9011,7 +9244,7 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
       (* Stage 9 P1 Step 6: snapshot \:5358\:4f4d\:306e PrivacyLevel\:3002
          \:30ed\:30fc\:30ab\:30eb .nb \:306f NBAccess \:306e\:5224\:5b9a\:3092\:7d99\:627f (\:30bb\:30eb\:6df7\:5728\:306f\:6700\:3082\:53b3\:3057\:3044\:5024)\:3002
          \:6982\:8981 (Summary) \:306f\:30b9\:30ad\:30fc\:30de\:5316\:5236\:7d04\:306b\:3088\:308a\:5e38\:306b 0.0 \:6271\:3044\:3002 *)
-      "PrivacyLevel" -> iSVSnapshotPrivacyLevel[abs],
+      "PrivacyLevel" -> snapshotPrivacy,
       "PrivacyLevelSource" -> "Inherited",
       "AcquisitionContext" -> "LocalFile",
       (* Stage 9 P1 Step 8: \:518d\:8d77\:52d5\:5f8c\:9ad8\:901f\:5316\:3002
@@ -9021,6 +9254,12 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
          Compress \:306f DateObject / Quantity / Missing \:3092\:542b\:3080\:4efb\:610f\:5f0f\:3092\:5b89\:5168\:306b\:5f80\:5fa9\:3067\:304d\:308b\:3002 *)
       "HeaderCompressed" -> Quiet @ Check[Compress[header], Missing[]],
       "TodosCompressed" -> Quiet @ Check[Compress[todos], Missing[]],
+      (* \:5265\:96e2\:3057\:305f\:30b0\:30e9\:30d5\:30a3\:30c3\:30af\:8cc7\:7523\:3068\:306e\:30de\:30fc\:30b8\:70b9\:3002
+         AssetId \:306f\:5185\:5bb9\:30cf\:30c3\:30b7\:30e5\:306a\:306e\:3067\:3001\:56f3\:3060\:3051\:5dee\:3057\:66ff\:308f\:3063\:305f\:7248\:3082\:3053\:3053\:3067\:5224\:5225\:3067\:304d\:308b\:3002 *)
+      "Slimmed" -> slimmed,
+      "Assets" -> assetIds,
+      "AssetCount" -> Length[assetIds],
+      "AssetBytes" -> Total[Lookup[#, "Chars", 0] & /@ assets],
       "CreatedAt" -> ts
     |>;
     snapshotPath = iNotebookSnapshotPath[snapshotId];
@@ -9031,7 +9270,17 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
       If[Head[strm] === OutputStream,
         BinaryWrite[strm, StringToByteArray[json, "ISO8859-1"]];
         Close[strm]]];
-    
+
+    (* NotebookAsset \:30ec\:30b3\:30fc\:30c9\:3002AssetId \:306f\:5185\:5bb9\:30cf\:30c3\:30b7\:30e5\:306a\:306e\:3067\:3001
+       -bak.nb \:3084\:7248\:9055\:3044\:30b9\:30e9\:30a4\:30c9\:304c\:540c\:3058\:56f3\:3092\:5171\:6709\:3057\:3066\:3044\:308b\:5834\:5408\:306f
+       1 \:30ec\:30b3\:30fc\:30c9\:306b\:96c6\:7d04\:3055\:308c\:308b\:3002 *)
+    Scan[
+      Function[a,
+        Quiet @ iSVWriteNotebookAsset[a, nbRef, snapshotId,
+          Lookup[assetCells, Lookup[a, "AssetId", ""], Missing["NotLocated"]],
+          snapshotPrivacy, ts]],
+      assets];
+
     (* Todo records \:3092 by-notebook JSONL \:306b *)
     todoRecords = MapIndexed[Function[{t, i},
       <|"Type" -> "NotebookTodo",
@@ -9122,6 +9371,8 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
       "DeadlineState" -> deadlineState,
       "Lint" -> lint,
       "IndexedAt" -> ts,
+      "Slimmed" -> slimmed,
+      "AssetCount" -> Length[assetIds],
       "SourceMTime" -> If[IntegerQ[currentMTime], currentMTime,
         Missing["NotPresent"]],
       "CacheCheck" -> cacheCheckDebug|>
@@ -9129,15 +9380,19 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
 
 Options[SourceVaultIndexNotebookFolder] = {
   "Recursive" -> False,
-  "ExcludePatterns" -> {"*.bak.nb", "Untitled*.nb"}
+  "ExcludePatterns" -> {"*.bak.nb", "Untitled*.nb"},
+  (* mtime \:30ad\:30e3\:30c3\:30b7\:30e5\:3092\:7121\:8996\:3057\:3066\:5168\:4ef6\:518d\:7d22\:5f15\:3059\:308b\:3002
+     \:65e2\:5b58\:30b9\:30c8\:30a2\:3092\:30a2\:30bb\:30c3\:30c8\:7d22\:5f15\:4ed8\:304d\:306b\:79fb\:884c\:3055\:305b\:308b\:3068\:304d\:306b\:4f7f\:3046\:3002 *)
+  "ForceReindex" -> False
 };
 
 SourceVaultIndexNotebookFolder[dir_String, opts:OptionsPattern[]] :=
-  Module[{abs, recursive, excludes, files, results = {},
+  Module[{abs, recursive, excludes, forceReindex, files, results = {},
           processed = 0, failed = 0},
     iEnsureRoots[];
     recursive = TrueQ[OptionValue["Recursive"]];
     excludes = OptionValue["ExcludePatterns"];
+    forceReindex = TrueQ[OptionValue["ForceReindex"]];
     abs = ExpandFileName[dir];
     If[!DirectoryQ[abs],
       Return[<|"Status" -> "Failed", "Reason" -> "DirectoryNotFound",
@@ -9154,7 +9409,8 @@ SourceVaultIndexNotebookFolder[dir_String, opts:OptionsPattern[]] :=
       With[{name = FileNameTake[f]},
         !AnyTrue[excludes, StringMatchQ[name, #] &]]]];
     Scan[Function[f,
-      Module[{r = Quiet[SourceVaultIndexNotebook[f]]},
+      Module[{r = Quiet[SourceVaultIndexNotebook[f,
+          "ForceReindex" -> forceReindex]]},
         If[AssociationQ[r] && Lookup[r, "Status", ""] === "OK",
           processed = processed + 1,
           failed = failed + 1];
@@ -9164,6 +9420,15 @@ SourceVaultIndexNotebookFolder[dir_String, opts:OptionsPattern[]] :=
       "TotalFiles" -> Length[files],
       "Processed" -> processed,
       "Failed" -> failed,
+      "Cached" -> Count[results,
+        r_Association /; TrueQ[Lookup[r, "Cached", False]]],
+      "Slimmed" -> Count[results,
+        r_Association /; TrueQ[Lookup[r, "Slimmed", False]]],
+      "Skipped" -> Count[results,
+        r_Association /; TrueQ[Lookup[r, "Skipped", False]]],
+      "AssetCount" -> Total[
+        Cases[results, r_Association :> Replace[
+          Lookup[r, "AssetCount", 0], Except[_Integer] -> 0]]],
       "Results" -> results|>
   ];
 
@@ -9597,7 +9862,18 @@ SourceVaultNotebookSemanticHash[path_String, opts:OptionsPattern[]] :=
 
 Options[SourceVaultRegisterNotebookSummary] = {
   "SummaryFormat" -> "text",
-  "GeneratedBy" -> "manual"
+  "GeneratedBy" -> "manual",
+  (* \:8981\:7d04\:81ea\:4f53\:306e PrivacyLevel\:3002\:8981\:7d04\:306f\:539f\:5247\:30b9\:30ad\:30fc\:30de\:30ec\:30d9\:30eb\:60c5\:5831 (0.0) \:3060\:304c\:3001
+     confidential \:30bb\:30eb\:3092\:6750\:6599\:306b\:3057\:3066\:751f\:6210\:3057\:305f\:5834\:5408\:306f 1.0 \:3092\:5165\:308c\:3001
+     \:305d\:306e\:8981\:7d04\:3092\:30af\:30e9\:30a6\:30c9\:3078\:8ee2\:9001\:3057\:306a\:3044\:3053\:3068\:3092\:8a18\:9332\:3059\:308b\:3002 *)
+  "PrivacyLevel" -> 0.0,
+  (* \:30d7\:30ed\:30f3\:30d7\:30c8\:306b\:5b9f\:969b\:306b\:6295\:5165\:3057\:305f\:30bb\:30eb\:306e PrivacyLevel \:6700\:5927\:5024\:3002
+     \:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:81ea\:4f53\:306e\:30ec\:30d9\:30eb\:3067\:306f\:306a\:3044 (\:305d\:308c\:306f NotebookPrivacyLevel)\:3002 *)
+  "PromptCellMaxPrivacyLevel" -> 0.0,
+  (* Public | Private | Unspecified\:3002Automatic \:306a\:3089 path \:304b\:3089\:6c7a\:5b9a\:3059\:308b\:3002 *)
+  "NotebookDeclaration" -> Automatic,
+  "PromptVersion" -> 0,
+  "CellsUsed" -> 0
 };
 
 SourceVaultRegisterNotebookSummary[path_String, summary_String,
@@ -9608,6 +9884,11 @@ SourceVaultRegisterNotebookSummary[path_String, summary_String,
     abs = ExpandFileName[path];
     If[!FileExistsQ[abs],
       Return[<|"Status" -> "Failed", "Reason" -> "FileNotFound",
+        "Path" -> abs|>]];
+    (* FileExistsQ はディレクトリでも True。Index を経由して初めて失敗する
+       のではなく、ここで .nb 以外を弾く。 *)
+    If[DirectoryQ[abs] || ToLowerCase[FileExtension[abs]] =!= "nb",
+      Return[<|"Status" -> "Failed", "Reason" -> "NotANotebookFile",
         "Path" -> abs|>]];
     summaryFormat = OptionValue["SummaryFormat"];
     generatedBy = OptionValue["GeneratedBy"];
@@ -9644,6 +9925,27 @@ SourceVaultRegisterNotebookSummary[path_String, summary_String,
       "Summary" -> summary,
       "SummaryFormat" -> summaryFormat,
       "GeneratedBy" -> generatedBy,
+      (* SourceVault \:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:4e0d\:5909\:6761\:4ef6: \:5168\:30aa\:30d6\:30b8\:30a7\:30af\:30c8\:306b privacy \:5024\:3092\:6301\:305f\:305b\:308b\:3002
+         \:3053\:308c\:306f\:300c\:8981\:7d04\:6587\:81ea\:4f53\:300d\:306e\:30ec\:30d9\:30eb\:3067\:3042\:308a\:3001\:5143\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e\:30ec\:30d9\:30eb\:3067\:306f\:306a\:3044\:3002 *)
+      "PrivacyLevel" -> N[Replace[OptionValue["PrivacyLevel"],
+        Except[_?NumericQ] -> 1.0]],
+      (* \:5143\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e\:5ba3\:8a00\:3068\:30ec\:30d9\:30eb\:3002\:5f8c\:8005\:306f snapshot \:304b\:3089\:305d\:306e\:307e\:307e\:5f15\:304f\:306e\:3067\:3001
+         snapshot \:30ec\:30b3\:30fc\:30c9\:306e PrivacyLevel \:3068\:5fc5\:305a\:4e00\:81f4\:3059\:308b (BasedOnSnapshot \:6642\:70b9\:306e\:5024)\:3002
+         \:8981\:7d04\:30ec\:30b3\:30fc\:30c9\:3060\:3051\:3092\:898b\:3066\:3082\:5143\:30ce\:30fc\:30c8\:306e\:6271\:3044\:304c\:8aa4\:8aad\:3055\:308c\:306a\:3044\:3088\:3046\:306b\:6301\:305f\:305b\:308b\:3002 *)
+      "NotebookDeclaration" -> Module[{d = OptionValue["NotebookDeclaration"]},
+        If[MemberQ[{"Public", "Private", "Unspecified"}, d], d,
+          Switch[Quiet @ Check[NBAccess`NBGetCloudPublishable[abs], Missing[]],
+            True, "Public", False, "Private", _, "Unspecified"]]],
+      "NotebookPrivacyLevel" -> If[AssociationQ[snapshotRec],
+        Lookup[snapshotRec, "PrivacyLevel", Missing["NotPresent"]],
+        Missing["SnapshotRecordNotFound"]],
+      (* \:30d7\:30ed\:30f3\:30d7\:30c8\:306b\:5165\:308c\:305f\:30bb\:30eb\:306e\:6700\:5927\:30ec\:30d9\:30eb\:3002\:65e7\:540d: InputPrivacyLevel *)
+      "PromptCellMaxPrivacyLevel" ->
+        N[Replace[OptionValue["PromptCellMaxPrivacyLevel"],
+          Except[_?NumericQ] -> 1.0]],
+      "PromptVersion" -> Replace[OptionValue["PromptVersion"],
+        Except[_Integer] -> 0],
+      "CellsUsed" -> Replace[OptionValue["CellsUsed"], Except[_Integer] -> 0],
       "CreatedAt" -> ts
     |>;
     saveResult = iSaveNotebookSummaryRecord[record];
@@ -9681,6 +9983,26 @@ SourceVaultGetNotebookSummary[path_String, opts:OptionsPattern[]] :=
       "BasedOnSemanticHash" -> Lookup[record, "BasedOnSemanticHash",
         Missing["NotPresent"]],
       "GeneratedBy" -> Lookup[record, "GeneratedBy", ""],
+      (* \:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:3068\:4e16\:4ee3\:60c5\:5831\:3002\:3053\:3053\:3067\:843d\:3068\:3059\:3068\:547c\:3073\:51fa\:3057\:5074\:304c
+         PromptVersion \:3092\:5224\:5b9a\:3067\:304d\:305a "Outdated" \:6307\:5b9a\:304c\:5e38\:306b\:518d\:751f\:6210\:306b\:306a\:308b\:3002
+         \:65e7 record \:306b\:306f\:7121\:3044\:30ad\:30fc\:306a\:306e\:3067\:5b89\:5168\:5074\:306e\:65e2\:5b9a\:5024\:3092\:7f6e\:304f\:3002 *)
+      "PrivacyLevel" -> Replace[Lookup[record, "PrivacyLevel", 0.0],
+        Except[_?NumericQ] -> 0.0],
+      "NotebookDeclaration" -> Replace[
+        Lookup[record, "NotebookDeclaration", "Unknown"],
+        Except["Public" | "Private" | "Unspecified"] -> "Unknown"],
+      "NotebookPrivacyLevel" -> Lookup[record, "NotebookPrivacyLevel",
+        Missing["NotPresent"]],
+      (* \:65e7\:30ec\:30b3\:30fc\:30c9\:306f InputPrivacyLevel \:3068\:3044\:3046\:8aa4\:89e3\:3092\:62db\:304f\:540d\:524d\:3067\:6301\:3063\:3066\:3044\:308b\:306e\:3067
+         \:8aad\:307f\:6642\:306b\:65b0\:540d\:3078\:5bc4\:305b\:308b\:3002 *)
+      "PromptCellMaxPrivacyLevel" -> Replace[
+        Lookup[record, "PromptCellMaxPrivacyLevel",
+          Lookup[record, "InputPrivacyLevel", 0.0]],
+        Except[_?NumericQ] -> 0.0],
+      "PromptVersion" -> Replace[Lookup[record, "PromptVersion", 0],
+        Except[_Integer] -> 0],
+      "CellsUsed" -> Replace[Lookup[record, "CellsUsed", 0],
+        Except[_Integer] -> 0],
       "CreatedAt" -> Lookup[record, "CreatedAt", ""]|>
   ];
 
@@ -9748,39 +10070,67 @@ iSVCellConfidentialTag[c_] :=
     conf
   ];
 
-iExtractFirstCellTexts[path_String, maxCells_Integer:8] :=
-  Module[{readResult, nbExpr, cells, texts = {}, count = 0},
+$iSVSummaryCellStyles = {"Title", "Subtitle", "Chapter", "Section",
+  "Subsection", "Subsubsection", "Text", "Input", "Code",
+  "InitializationCell"};
+
+(* \:8981\:7d04\:30d7\:30ed\:30f3\:30d7\:30c8\:306e\:6750\:6599\:306b\:306a\:308b\:5148\:982d\:30bb\:30eb\:3092\:62bd\:51fa\:3059\:308b\:3002
+
+   maxPrivacy: \:3053\:308c\:3092\:8d85\:3048\:308b PrivacyLevel \:306e\:30bb\:30eb\:306f\:4e00\:5207\:63a1\:7528\:3057\:306a\:3044\:3002
+     \:30af\:30e9\:30a6\:30c9\:7d4c\:8def\:304c\:3042\:308a\:5f97\:308b notebook \:3067\:306f 0.49 \:3092\:6e21\:3059 (= \:516c\:958b\:30bb\:30eb\:306e\:307f)\:3001
+     \:30ed\:30fc\:30ab\:30eb LLM \:56fa\:5b9a\:306e notebook \:3067\:306f 1.0 \:3092\:6e21\:3059 (= confidential \:30bb\:30eb\:3082\:542b\:3081\:308b)\:3002
+     \:30eb\:30fc\:30c8\:5224\:5b9a\:306f\:547c\:3073\:51fa\:3057\:5074\:3067 NBFileSpec + NBPrivacyLevelToRoutes \:304b\:3089\:884c\:3046\:3002
+
+   \:65e7\:5b9f\:88c5\:306e\:4e0d\:5177\:5408 2 \:4ef6\:3092\:540c\:6642\:306b\:4fee\:6b63\:3057\:3066\:3044\:308b:
+     (1) Replace[nbExpr, HoldComplete[Notebook[c_List, ___]] :> c, {0}] \:306f
+         iReadNotebookExpr \:304c\:8fd4\:3059 HoldComplete[<\:30b7\:30f3\:30dc\:30eb>] \:306b\:30de\:30c3\:30c1\:305b\:305a\:3001
+         \:5e38\:306b {} \:3092\:8fd4\:3057\:3066\:3044\:305f (= \:8981\:7d04\:304c\:672c\:6587\:3092\:4e00\:5ea6\:3082\:898b\:3066\:3044\:306a\:304b\:3063\:305f)\:3002
+         iFlattenCells \:306f HoldComplete[x_] :> x \:7d4c\:7531\:306a\:306e\:3067\:6b63\:3057\:304f\:5c55\:958b\:3067\:304d\:3001
+         \:3055\:3089\:306b CellGroupData \:5185\:306e\:30bb\:30eb\:3082\:62fe\:3048\:308b\:3002
+     (2) iCellTextExtract[c] \:306f Cell \:5f0f\:5168\:4f53\:3092\:6e21\:3057\:3066\:304a\:308a\:3001InputForm \:6587\:5b57\:5217
+         (CellChangeTimes \:3084 TaggingRules \:3054\:3068) \:304c\:30d7\:30ed\:30f3\:30d7\:30c8\:306b\:5165\:308b\:3002
+         todo \:62bd\:51fa\:5074\:3068\:540c\:3058\:304f\:30bb\:30eb\:5185\:5bb9 (\:7b2c 1 \:5f15\:6570) \:3060\:3051\:3092\:6e21\:3059\:3002 *)
+iExtractFirstCellTexts[path_String, maxCells_Integer:8, maxPrivacy_:1.0] :=
+  Module[{readResult, cells, texts = {}, count = 0},
     readResult = iReadNotebookExpr[path];
     If[Lookup[readResult, "Status", ""] =!= "OK", Return[{}]];
-    nbExpr = Lookup[readResult, "Expr"];
-    cells = Replace[nbExpr, HoldComplete[Notebook[c_List, ___]] :> c, {0}];
+    cells = iFlattenCells[Lookup[readResult, "Expr"]];
     If[!ListQ[cells], Return[{}]];
     Scan[
       Function[c,
         If[count < maxCells &&
             SymbolName[Head[c]] === "Cell" && Length[c] >= 2,
-          Module[{style = c[[2]], text},
-            (* style \:304c String \:307e\:305f\:306f String \:30ea\:30b9\:30c8 *)
-            If[(StringQ[style] || (ListQ[style] && Length[style] > 0 && StringQ[First[style]])) &&
-                MemberQ[{"Title", "Subtitle", "Chapter", "Section", "Subsection",
-                  "Subsubsection", "Text", "Input", "Code", "InitializationCell"},
-                  If[StringQ[style], style, First[style]]] &&
-                iSVCellConfidentialTag[c] =!= True,
-              text = iCellTextExtract[c];
-              If[StringQ[text] && StringLength[text] > 0,
-                AppendTo[texts, <|
-                  "Style" -> If[StringQ[style], style, First[style]],
-                  "Text" -> text|>];
-                count = count + 1]]]]],
+          Module[{style = c[[2]], styleName, level, text},
+            styleName = Which[
+              StringQ[style], style,
+              ListQ[style] && Length[style] > 0 && StringQ[First[style]],
+                First[style],
+              True, Null];
+            If[StringQ[styleName] && MemberQ[$iSVSummaryCellStyles, styleName],
+              (* \:6a5f\:5bc6\:5224\:5b9a\:306f NBAccess \:306b\:5bc4\:305b\:308b (FE \:4e0d\:8981\:306e\:5f0f\:30d9\:30fc\:30b9 API)\:3002
+                 \:660e\:793a\:306e confidential \:30bf\:30b0\:306f\:5b89\:5168\:5074\:306b\:5012\:3057\:3066\:5e38\:306b 1.0 \:6271\:3044\:3002 *)
+              level = Quiet @ Check[NBAccess`NBCellExprPrivacyLevel[c], 1.0];
+              If[!NumericQ[level], level = 1.0];
+              If[iSVCellConfidentialTag[c] === True, level = 1.0];
+              If[N[level] <= N[maxPrivacy],
+                text = iCellTextExtract[First[List @@ c]];
+                If[StringQ[text] && StringLength[text] > 0,
+                  AppendTo[texts, <|
+                    "Style" -> styleName,
+                    "Text" -> text,
+                    "PrivacyLevel" -> N[level]|>];
+                  count = count + 1]]]]]],
       cells];
     texts
   ];
 
 (* notebook \:306e\:5185\:5bb9\:304b\:3089 LLM prompt \:3092\:69cb\:7bc9 *)
+(* firstCells \:306f\:547c\:3073\:51fa\:3057\:5074\:3067\:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:30d5\:30a3\:30eb\:30bf\:3092\:304b\:3051\:305f\:5f8c\:306e\:30bb\:30eb\:30ea\:30b9\:30c8\:3002
+   \:3053\:3053\:3067\:518d\:62bd\:51fa\:3059\:308b\:3068\:30eb\:30fc\:30c8\:5224\:5b9a\:3092\:8db3\:98db\:3055\:305b\:308b\:306e\:3067\:5f15\:6570\:3067\:53d7\:3051\:53d6\:308b\:3002 *)
 iBuildNotebookSummaryPrompt[path_String, header_Association,
-    todos_List, lint_List, maxLength_Integer, language_] :=
+    todos_List, lint_List, maxLength_Integer, language_, firstCells_List] :=
   Module[{title, keywords, status, deadline, nextReview,
-          openTodos, doneTodos, passTodos, firstCells,
+          openTodos, doneTodos, passTodos,
           effectiveLang, langInstruction, prompt},
     title = FileBaseName[path];
     keywords = Lookup[header, "Keywords", {}];
@@ -9790,7 +10140,6 @@ iBuildNotebookSummaryPrompt[path_String, header_Association,
     openTodos = Select[todos, Lookup[#, "Status", ""] === "Open" &];
     doneTodos = Select[todos, Lookup[#, "Status", ""] === "Done" &];
     passTodos = Select[todos, Lookup[#, "Status", ""] === "Pass" &];
-    firstCells = iExtractFirstCellTexts[path, 8];
     (* Stage 9 P1.5: $Language \:304b\:3089\:65e2\:5b9a\:8a00\:8a9e\:3092\:89e3\:6c7a\:3057\:3001
        Japanese \:306a\:3089\:5e38\:4f53 (da/dearu) \:9650\:5b9a\:3067\:66f8\:304b\:305b\:308b\:3002\:305d\:308c\:4ee5\:5916\:306f\:82f1\:6587\:3002
        Automatic \:6307\:5b9a\:6642\:306e\:307f $Language \:3092\:53c2\:7167\:3059\:308b (\:660e\:793a\:6307\:5b9a\:3055\:308c\:305f\:8a00\:8a9e\:306f\:5c0a\:91cd)\:3002 *)
@@ -9885,27 +10234,65 @@ iBuildNotebookSummaryPrompt[path_String, header_Association,
 (* Stage 9 P1 Step 6: \:6982\:8981\:30c6\:30ad\:30b9\:30c8\:306e\:30b9\:30ad\:30fc\:30de\:9069\:5408\:6027\:691c\:8a3c\:3002
    \:500b\:4eba\:60c5\:5831\:30fb\:9023\:7d61\:5148\:30fb\:8a8d\:8a3c\:60c5\:5831\:304c\:6df7\:5165\:3057\:3066\:3044\:306a\:3044\:304b\:6b63\:898f\:8868\:73fe\:3067\:30c1\:30a7\:30c3\:30af\:3002
    \:8fd4\:308a\:5024: <|"Valid" -> True|False, "Violations" -> {_String, ...}|> *)
+(* 要約の匿名化ダブルチェック。
+
+   これは飾りではなく本質的な安全装置である。非 Public ノートブックは原則
+   クラウド LLM 投入不可であり、それでも要約をクラウドに出せるようにする
+   根拠が「ローカル LLM で匿名化し、さらに機械的なパターン照合で秘匿情報が
+   残っていないことを再確認した」という二段構えだからである。
+   LLM 側の指示 (プロンプトの CRITICAL PRIVACY CONSTRAINT) だけに頼らない。
+
+   1 件でも該当したら要約は破棄する (SchemaViolation)。
+   所属機関の学籍番号書式などは $SourceVaultSummaryForbiddenPatterns で
+   追加する。既定パターンは誤検出を抑えるため保守的にしてある。 *)
+$iSVSummaryBuiltinForbidden = {
+  "EmailAddress"     -> "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
+  (* 区切りありの電話番号 *)
+  "PhoneNumber"      -> "\\d{2,4}[-()]\\d{2,4}[-()]?\\d{3,4}",
+  (* 区切りなしの国内電話番号 (0 始まり 10-11 桁) *)
+  "PhoneNumberBare"  -> "(?<![0-9])0\\d{9,10}(?![0-9])",
+  (* 郵便番号 *)
+  "PostalCodeJP"     -> "(?<![0-9])\\d{3}-\\d{4}(?![0-9])",
+  (* マイナンバー *)
+  "MyNumber"         -> "(?<![0-9])\\d{12}(?![0-9])",
+  (* 学籍番号らしき ID: 英字 1 文字 + 数字 6-9、または区切りなしの 7 桁 / 9 桁。
+     8 桁は yyyymmdd (ノート名によくある) と衝突するため既定では見ない。 *)
+  "StudentIDLike"    ->
+    "(?<![0-9A-Za-z])([A-Za-z]\\d{6,9}|\\d{7}|\\d{9})(?![0-9A-Za-z])",
+  "AuthURLParameter" -> "[?&](token|key|password|passwd|auth|secret)=",
+  "PossibleAPIKey"   -> "\\b[A-Za-z0-9_-]{32,}\\b"
+};
+
+If[!ListQ[$SourceVaultSummaryForbiddenPatterns],
+  $SourceVaultSummaryForbiddenPatterns = {}];
+
 iSVValidateSummarySchema[summary_String] :=
-  Module[{violations = {}},
-    (* \:30e1\:30fc\:30eb\:30a2\:30c9\:30ec\:30b9 *)
-    If[StringContainsQ[summary,
-        RegularExpression["[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"]],
-      AppendTo[violations, "EmailAddress"]];
-    (* \:96fb\:8a71\:756a\:53f7\:3089\:3057\:304d\:6570\:5b57\:5217 (\:30cf\:30a4\:30d5\:30f3 / \:62ec\:5f27\:533a\:5207\:308a\:306e 9 \:6841\:4ee5\:4e0a) *)
-    If[StringContainsQ[summary,
-        RegularExpression["\\d{2,4}[-()]\\d{2,4}[-()]?\\d{3,4}"]],
-      AppendTo[violations, "PhoneNumber"]];
-    (* URL \:306e\:8a8d\:8a3c\:30d1\:30e9\:30e1\:30fc\:30bf (token / key / password / auth \:3092\:542b\:3080 query) *)
-    If[StringContainsQ[summary,
-        RegularExpression["[?&](token|key|password|passwd|auth|secret)="]],
-      AppendTo[violations, "AuthURLParameter"]];
-    (* API \:30ad\:30fc\:3089\:3057\:304d\:9577\:3044\:82f1\:6570\:5b57\:5217 (32 \:6841\:4ee5\:4e0a\:306e hex / base64 \:7247) *)
-    If[StringContainsQ[summary,
-        RegularExpression["\\b[A-Za-z0-9_-]{32,}\\b"]],
-      AppendTo[violations, "PossibleAPIKey"]];
+  Module[{violations = {}, patterns},
+    patterns = Join[$iSVSummaryBuiltinForbidden,
+      Select[$SourceVaultSummaryForbiddenPatterns,
+        MatchQ[#, _Rule] && StringQ[Last[#]] &]];
+    Scan[
+      Function[rule,
+        If[TrueQ[Quiet @ Check[
+            StringContainsQ[summary, RegularExpression[Last[rule]]], False]],
+          AppendTo[violations, First[rule]]]],
+      patterns];
     <|"Valid" -> (violations === {}),
-      "Violations" -> violations|>
+      "Violations" -> DeleteDuplicates[violations]|>
   ];
+
+(* 要約レコードに付ける PrivacyLevel。ノートブックの公開宣言で決まる。
+     Public      (CloudPublishable -> True)  \[Rule] 0.0
+     Unspecified (宣言なし)                   \[Rule] 0.2
+     Private     (CloudPublishable -> False) \[Rule] 0.4
+   Private のノートは要約であっても低レベル値のクラウド LLM には流さない、
+   という意思表示。いずれもローカル LLM で生成し匿名化+ダブルチェックを
+   通ったものだけが記録される。 *)
+iSVSummaryPrivacyTier[declared_] :=
+  Which[
+    declared === True,  0.0,
+    declared === False, 0.4,
+    True,               0.2];
 
 (* LLM \:547c\:3073\:51fa\:3057 (ClaudeQuerySync \:7d4c\:7531)
    \:91cd\:8981\:306a\:6559\:8a13: ClaudeCode\`PrivacyLevel \:30aa\:30d7\:30b7\:30e7\:30f3\:540d\:306e\:30b3\:30f3\:30c6\:30ad\:30b9\:30c8\:89e3\:6c7a\:306b\:983c\:308b\:3068\:3001
@@ -10012,62 +10399,122 @@ iSVLooksLikeLLMError[_] := False;
 
 (* === Public API: SourceVaultNotebookSummary === *)
 
+(* \:30d7\:30ed\:30f3\:30d7\:30c8\:4e16\:4ee3\:3002\:6750\:6599\:306e\:53d6\:308a\:65b9\:304c\:5909\:308f\:3063\:305f\:3089\:4e0a\:3052\:308b\:3002
+   1: header / todo / lint \:306e\:307f (iExtractFirstCellTexts \:304c\:5e38\:306b\:7a7a\:3060\:3063\:305f\:6642\:4ee3)
+   2: \:5148\:982d\:30bb\:30eb\:672c\:6587\:3092\:30d7\:30e9\:30a4\:30d0\:30b7\:30fc\:5224\:5b9a\:4ed8\:304d\:3067\:6295\:5165 *)
+$iSVSummaryPromptVersion = 2;
+
 Options[SourceVaultNotebookSummary] = {
   "ForceRefresh" -> False,
+  (* \:65e2\:5b58\:8981\:7d04\:3060\:3051\:3092\:66f4\:65b0\:3059\:308b\:305f\:3081\:306e\:30aa\:30d7\:30b7\:30e7\:30f3\:3002
+       False      : \:5192\:7b49 (\:65e2\:5b58\:304c Current \:306a\:3089\:305d\:306e\:307e\:307e\:8fd4\:3059) \[LongDash] \:65e2\:5b9a
+       True       : \:65e2\:5b58\:8981\:7d04\:304c\:3042\:308b\:3068\:304d\:3060\:3051\:518d\:751f\:6210 (\:7121\:3044 notebook \:306f\:305d\:306e\:307e\:307e\:751f\:6210)
+       "Outdated" : \:65e2\:5b58\:8981\:7d04\:306e PromptVersion \:304c\:73fe\:884c\:3068\:9055\:3046\:3068\:304d\:3060\:3051\:518d\:751f\:6210
+     ForceRefresh \:3068\:9055\:3044\:3001\:8981\:7d04\:672a\:751f\:6210\:306e notebook \:306b\:4f59\:5206\:306a LLM \:547c\:3073\:51fa\:3057\:3092\:3057\:306a\:3044\:3002 *)
+  "UpdateExisting" -> False,
   "MaxLength" -> 500,
   "Language" -> Automatic,
   "Model" -> Automatic,
   "PrivacyLevel" -> 1.0,
-  "FallbackToCloud" -> "Ask"     (* Step 3: \"Ask\" | \"Allow\" | \"Deny\" *)
+  "FallbackToCloud" -> "Ask",    (* Step 3: \"Ask\" | \"Allow\" | \"Deny\" *)
+  "MaxCells" -> 8
 };
 
 SourceVaultNotebookSummary[path_String, opts:OptionsPattern[]] :=
-  Module[{abs, forceRefresh, maxLength, language, model, privacyLevel,
-          fallback, statusResult, existingRec, header, todos, lint,
+  Module[{abs, forceRefresh, updateExisting, maxLength, language, model,
+          privacyLevel, fallback, maxCells, statusResult, existingRec,
+          hasExisting, regenerate, cloudPossible, maxCellPrivacy,
+          declaredPublishable, summaryTier,
+          header, todos, lint, firstCells, inputPrivacy,
           prompt, llmResult, summaryText, generatedBy, modelString,
           registerResult},
     abs = ExpandFileName[path];
     If[!FileExistsQ[abs],
       Return[<|"Status" -> "Failed", "Reason" -> "FileNotFound",
         "Path" -> abs|>]];
-    (* Stage 9 P1 ext: refuse summary generation for a notebook
-       explicitly declared NOT cloud-publishable. The summary is, by
-       design, schema-level info that may reach cloud services, so a
-       deny-declared notebook must not get one at all. *)
-    If[Quiet @ Check[NBAccess`NBGetCloudPublishable[abs],
-         Missing["ReadFailed"]] === False,
-      Return[<|"Status" -> "Refused",
-        "Reason" -> "CloudPublishDenied",
+    (* FileExistsQ はディレクトリに対しても True を返す。ここで弾かないと
+       header / todo / 先頭セルが空のまま LLM を呼び、保存段階 (Register →
+       IndexNotebook) で初めて NotANotebookFile として失敗する。
+       つまり必ず 1 回分の LLM 呼び出しが無駄になるので、入口で止める。 *)
+    If[DirectoryQ[abs] || ToLowerCase[FileExtension[abs]] =!= "nb",
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "NotANotebookFile",
         "Path" -> abs,
-        "Detail" -> "This notebook is marked Private (CloudPublishable=False); summary generation is skipped."|>]];
+        "Detail" -> If[DirectoryQ[abs],
+          "SourceVaultNotebookSummary は .nb ファイル 1 個を受け取る。フォルダを一括で処理する場合は FileNames[\"*.nb\", dir, Infinity] を回す。",
+          "拡張子が .nb ではない。"]|>]];
+    (* ノートブックの公開宣言を 3 値で取る (Public / Private / Unspecified)。
+       Private でも要約は作る。ただし生成はローカル LLM に限られ、匿名化と
+       ダブルチェックを通ったうえで、要約レコードには 0.4 が付く
+       (= 低レベル値しか受け付けないクラウド LLM には流さない)。 *)
+    declaredPublishable = Quiet @ Check[NBAccess`NBGetCloudPublishable[abs],
+      Missing["ReadFailed"]];
+    summaryTier = iSVSummaryPrivacyTier[declaredPublishable];
     forceRefresh = OptionValue["ForceRefresh"];
+    updateExisting = OptionValue["UpdateExisting"];
     maxLength = OptionValue["MaxLength"];
     language = OptionValue["Language"];
     model = OptionValue["Model"];
     privacyLevel = OptionValue["PrivacyLevel"];
     fallback = OptionValue["FallbackToCloud"];
+    maxCells = Replace[OptionValue["MaxCells"], Except[_Integer?Positive] -> 8];
 
-    (* \:65e2\:5b58 summary \:304c Current \:304b\:3064 ForceRefresh \:7121\:3057\:306a\:3089\:65e2\:5b58\:3092\:8fd4\:3059 *)
-    If[forceRefresh =!= True,
+    existingRec = Quiet @ Check[SourceVaultGetNotebookSummary[abs], Null];
+    hasExisting = AssociationQ[existingRec] &&
+      Lookup[existingRec, "Status", ""] === "OK";
+
+    (* \:518d\:751f\:6210\:3059\:308b\:304b\:3069\:3046\:304b\:3002\:65e2\:5b9a\:306f\:5192\:7b49 (\:518d\:751f\:6210\:3057\:306a\:3044)\:3002 *)
+    regenerate = Which[
+      TrueQ[forceRefresh], True,
+      updateExisting === True, hasExisting,
+      updateExisting === "Outdated",
+        hasExisting && Replace[Lookup[existingRec, "PromptVersion", 0],
+          Except[_Integer] -> 0] =!= $iSVSummaryPromptVersion,
+      True, False];
+
+    (* \:65e2\:5b58 summary \:304c Current \:304b\:3064\:518d\:751f\:6210\:6307\:5b9a\:7121\:3057\:306a\:3089\:65e2\:5b58\:3092\:8fd4\:3059 *)
+    If[!TrueQ[regenerate],
       statusResult = SourceVaultNotebookSummaryStatus[abs];
       If[AssociationQ[statusResult] &&
-          Lookup[statusResult, "Status", ""] === "Current",
-        existingRec = SourceVaultGetNotebookSummary[abs];
+          Lookup[statusResult, "Status", ""] === "Current" && hasExisting,
         (* \:904e\:53bb\:306b LLM \:30a8\:30e9\:30fc/\:5229\:7528\:5236\:9650\:672c\:6587\:304c\:305d\:306e\:307e\:307e\:4fdd\:5b58\:3055\:308c\:305f
            record \:306f\:6709\:52b9\:306a\:6982\:8981\:3068\:307f\:306a\:3055\:305a\:3001\:518d\:751f\:6210\:3078\:9032\:3080\:3002 *)
-        If[AssociationQ[existingRec] &&
-            Lookup[existingRec, "Status", ""] === "OK" &&
-            ! iSVLooksLikeLLMError[ToString@Lookup[existingRec, "Summary", ""]],
+        If[! iSVLooksLikeLLMError[ToString@Lookup[existingRec, "Summary", ""]],
           Return[Join[existingRec, <|"Cached" -> True|>]]]]];
 
-    (* notebook \:306e header / todo / lint \:3092\:53d6\:5f97 *)
+    (* --- \:30eb\:30fc\:30c8\:5224\:5b9a --------------------------------------------
+       LLM \:547c\:3073\:51fa\:3057\:5074 (iCallSummaryLLMWithFallback) \:3068\:307e\:3063\:305f\:304f\:540c\:3058\:6839\:62e0\:3067
+       \:30af\:30e9\:30a6\:30c9\:7d4c\:8def\:304c\:3042\:308a\:5f97\:308b\:304b\:3092\:6c7a\:3081\:308b\:3002
+         \:30af\:30e9\:30a6\:30c9\:3042\:308a\:5f97 (= notebook \:304c CloudPublishable \:5ba3\:8a00\:6e08\:307f)
+           \[RightArrow] \:30d7\:30ed\:30f3\:30d7\:30c8\:306b\:306f\:516c\:958b\:30bb\:30eb\:3057\:304b\:5165\:308c\:306a\:3044\:3002
+              confidential / dependent \:30bb\:30eb\:306f\:9664\:5916\:3059\:308b\:3002
+         \:30ed\:30fc\:30ab\:30eb\:56fa\:5b9a (\:5ba3\:8a00\:7121\:3057\:30fb\:975e\:516c\:958b\:30d1\:30b9\:30fb\:6df7\:5728)
+           \[RightArrow] \:30d7\:30ed\:30f3\:30d7\:30c8\:306f\:30ed\:30fc\:30ab\:30eb LLM \:306b\:3057\:304b\:6e21\:3089\:306a\:3044\:306e\:3067
+              confidential \:30bb\:30eb\:3082\:6750\:6599\:306b\:3067\:304d\:308b\:3002
+       \:305f\:3060\:3057 confidential \:3092\:6750\:6599\:306b\:3057\:305f\:5834\:5408\:3001\:751f\:6210\:3055\:308c\:305f\:8981\:7d04\:81ea\:4f53\:3092
+       \:30b9\:30ad\:30fc\:30de\:30ec\:30d9\:30eb (\:30af\:30e9\:30a6\:30c9\:9001\:4fe1\:53ef) \:3068\:307f\:306a\:3059\:308f\:3051\:306b\:306f\:3044\:304b\:306a\:3044\:306e\:3067\:3001
+       summary record \:306e PrivacyLevel \:3092 1.0 \:306b\:3057\:3066\:6b8b\:3059\:3002 *)
+    Module[{fileSpec, routes},
+      fileSpec = Quiet @ Check[NBAccess`NBFileSpec[abs], <||>];
+      routes = Quiet @ Check[
+        NBAccess`NBPrivacyLevelToRoutes[
+          Lookup[fileSpec, "PrivacyLevel", privacyLevel]], {"local"}];
+      If[!ListQ[routes], routes = {"local"}];
+      cloudPossible = MemberQ[routes, "cloud"]];
+    maxCellPrivacy = If[TrueQ[cloudPossible], 0.49, 1.0];
+
+    (* notebook \:306e header / todo / lint / \:5148\:982d\:30bb\:30eb\:3092\:53d6\:5f97 *)
     header = SourceVaultExtractNotebookHeader[abs];
     todos = SourceVaultExtractNotebookTodos[abs];
     lint = SourceVaultNotebookLint[abs];
+    firstCells = iExtractFirstCellTexts[abs, maxCells, maxCellPrivacy];
+    inputPrivacy = If[firstCells === {}, 0.,
+      Max[Replace[Lookup[#, "PrivacyLevel", 1.0], Except[_?NumericQ] -> 1.0] & /@
+        firstCells]];
 
     (* prompt \:69cb\:7bc9 + LLM \:547c\:3073\:51fa\:3057 (Step 3: fallback \:5bfe\:5fdc\:7248) *)
     prompt = iBuildNotebookSummaryPrompt[abs, header, todos, lint,
-      maxLength, language];
+      maxLength, language, firstCells];
     llmResult = iCallSummaryLLMWithFallback[prompt, model, privacyLevel,
       abs, fallback];
 
@@ -10115,13 +10562,34 @@ SourceVaultNotebookSummary[path_String, opts:OptionsPattern[]] :=
     (* Step 4 \:306e Register \:7d4c\:7531\:3067\:4fdd\:5b58 (lifecycle \:7ba1\:7406\:306b\:81ea\:52d5\:3067\:4e57\:308b) *)
     registerResult = SourceVaultRegisterNotebookSummary[abs, summaryText,
       "SummaryFormat" -> "text",
-      "GeneratedBy" -> generatedBy];
+      "GeneratedBy" -> generatedBy,
+      (* ノートブックの公開宣言で決まる 3 段階 (0.0 / 0.2 / 0.4)。
+         PromptCellMaxPrivacyLevel は「どの機密度のセルを材料にしたか」の記録で、
+         consumer 側がより厳しく扱いたいときの判断材料として残す。
+         元ノート自体のレベルは NotebookPrivacyLevel (snapshot 由来) に入る。 *)
+      "PrivacyLevel" -> summaryTier,
+      "PromptCellMaxPrivacyLevel" -> inputPrivacy,
+      "NotebookDeclaration" -> Which[
+        declaredPublishable === True, "Public",
+        declaredPublishable === False, "Private",
+        True, "Unspecified"],
+      "PromptVersion" -> $iSVSummaryPromptVersion,
+      "CellsUsed" -> Length[firstCells]];
 
     If[AssociationQ[registerResult] &&
         Lookup[registerResult, "Status", ""] === "OK",
       Join[registerResult, <|"Summary" -> summaryText,
         "Cached" -> False,
         "PromptLength" -> StringLength[prompt],
+        "CellsUsed" -> Length[firstCells],
+        "PrivacyLevel" -> summaryTier,
+        "PromptCellMaxPrivacyLevel" -> inputPrivacy,
+        "NotebookDeclaration" -> Which[
+          declaredPublishable === True, "Public",
+          declaredPublishable === False, "Private",
+          True, "Unspecified"],
+        "CloudRoutePossible" -> TrueQ[cloudPossible],
+        "PromptVersion" -> $iSVSummaryPromptVersion,
         "ResolvedModel" -> Lookup[llmResult, "ResolvedModel",
           Missing["NotPresent"]]|>],
       <|"Status" -> "Failed",
