@@ -55,7 +55,7 @@ Options: `"Limit"` -> Automatic|n, `"Kind"` -> All|`"arxiv"`|`"web"`|`"local"`, 
 arXiv ソースだけを共通スキーマ表で表示する (`SourceVaultSources[query, "Kind" -> "arxiv", ...]` の薄ラッパ)。Eagle の SourceVaultEagleSummaries / mail の SourceVaultMailSearchSummary と同じ種別専用ビューで、リンク開き・絞り込み検索を持ち、横断検索 SourceVaultSummaries にも相乗りする。
 → Grid | Dataset | List
 Options: `"On"`/`"Since"`/`"Until"`/`"Author"`/`"Limit"`/`"Format"` 等 (SourceVaultSources と同じ)
-例: `SourceVaultArXiv["reversible", "Author" -> "Bennett"]`
+例: `SourceVaultArXiv["", "On" -> Today]`、`SourceVaultArXiv["reversible", "Author" -> "Bennett"]`
 
 ### SourceVaultBackfillArXivSummaries[opts]
 既存の arXiv ソースのうち Summary が未設定 (または過去の LLM エラー本文) のものに arXiv アブストラクトを取得し `$Language` へ翻訳して付与する。cloud LLM 使用 (arXiv は公開データなので PrivacyLevel 0.0)。`$Language` が Japanese のセッションで実行すること (headless では英語原文のまま格納)。

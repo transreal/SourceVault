@@ -161,14 +161,15 @@ agenda.json の Dismissed/NotebookCreated、または返信送信済み (`Source
 検索結果を素の Dataset で返す (列ソート用、ボタン無し)。opts は SourceVaultSearchMailSnapshots と同じ。
 → Dataset
 
-### SourceVaultMailSearchIndex[query_String:"", opts]
-ディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担）。
+### SourceVaultMailSearchIndex[query:""|{kw1,kw2,...}, opts]
+ディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。query は文字列 (件名/要約への部分一致) のほか文字列リストも可で、リストはいずれかに部分一致する OR 検索になる (例 `{"科研","KAKENHI","学振"}`)。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担。一覧をユーザーに提示するときは戻り値を手組みの Dataset にせず View 版を使うこと）。
 → List[Association] (SummaryRow 形 + Summary + AccessTags/FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey/IndexSchemaVersion(=2))
 索引行の実体は 1 行 = `BaseEncode[BinarySerialize[row]]`。PayloadRefs (本文・ヘッダ暗号文) は一切含まない。`AccessTags` は Derived.AccessTags を surface したもので (既定 `{}` = untagged)、本文を読まずに MCP の scope gate に使える。
 例: `SourceVaultMailSearchIndex["報告", "MBox"->"imai", "Limit"->50]`
+例: `SourceVaultMailSearchIndex[{"科研","KAKENHI","学振"}, "MBox"->"univ"]` (OR 検索)
 
-### SourceVaultMailSearchIndexView[query_String:"", opts]
-`SourceVaultMailSearchIndex` の **View 版**。索引 sidecar だけで検索し（**SourceVaultMailEnsureLoaded 不要・シャード非ロード＝速い/省メモリ**）、結果を UI つき Dataset で表示する。行ごとに **✉**（本文表示: その行の shard だけを遅延ロードして復号・別窓表示）と **☰**（スレッド窓: `SourceVaultMailThreadNotebook`）。表示件数は `$SourceVaultMailViewMaxRows` で制限。PL≥0.5 を含む結果は機密ラップ。索引 sidecar 必須 (無ければ `SourceVaultMailRebuildMetadataIndex[]` で構築)。**メール検索のノートブック表示はまずこれを使う**（全シャードロードが不要）。opts は SourceVaultMailSearchIndex と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。
+### SourceVaultMailSearchIndexView[query:""|{kw1,kw2,...}, opts]
+`SourceVaultMailSearchIndex` の **View 版**。索引 sidecar だけで検索し（**SourceVaultMailEnsureLoaded 不要・シャード非ロード＝速い/省メモリ**）、結果を UI つき Dataset で表示する。行ごとに **✉**（本文表示: その行の shard だけを遅延ロードして復号・別窓表示）と **☰**（スレッド窓: `SourceVaultMailThreadNotebook`）。表示件数は `$SourceVaultMailViewMaxRows` で制限。PL≥0.5 を含む結果は機密ラップ。索引 sidecar 必須 (無ければ `SourceVaultMailRebuildMetadataIndex[]` で構築)。**メール検索のノートブック表示はまずこれを使う**（全シャードロードが不要）。opts は SourceVaultMailSearchIndex と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。query は文字列リストも可 (OR 検索、SourceVaultMailSearchIndex と同じ)。
 → Pane[Dataset] (UI)
 例: `SourceVaultMailSearchIndexView["Zoom", "MBox"->"univ", "SortBy"->"Date", "SortOrder"->"Desc"]`
 
