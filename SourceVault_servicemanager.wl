@@ -918,10 +918,13 @@ iWebChatCloud[prompt_String, model_String, tok_ : Missing["NoToken"]] := Module[
   If[StringQ[r] && StringTrim[r] =!= "" && ! StringStartsQ[r, "Error"], r, $Failed]];
 
 (* 課金API (Anthropic Messages API, 従量課金=サービス提供可)。サブスク CLI とは別ライセンス。
-   鍵は NBAccess`NBGetAPIKey 経由 (直接 SystemCredential は使わない)。 *)
+   鍵は NBAccess`NBGetAPIKey 経由 (直接 SystemCredential は使わない)。
+   NBGetAPIKey は AccessLevel >= 1.0 必須 ($NBPrivacySpec 既定 0.5 のままだと常に $Failed)
+   なので PrivacySpec を明示する (iWebLLMAPIKey と同じ流儀)。 *)
 iWebChatBilledAPI[prompt_String, model_String, tok_ : Missing["NoToken"]] := Module[
   {key, m, body, resp, j, content},
-  key = Quiet @ Check[NBAccess`NBGetAPIKey["anthropic"], $Failed];
+  key = Quiet @ Check[NBAccess`NBGetAPIKey["anthropic",
+    PrivacySpec -> <|"AccessLevel" -> 1.0|>], $Failed];
   If[! (StringQ[key] && key =!= ""), Return[$Failed]];
   m = If[model === "", SourceVault`$SourceVaultWebBilledModel, model];
   body = ExportByteArray[<|"model" -> m, "max_tokens" -> 1500,

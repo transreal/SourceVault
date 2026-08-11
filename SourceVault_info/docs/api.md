@@ -116,7 +116,11 @@ Options: `"Channel"` -> `"public"`|`"private"`, `"AllowSeed"` -> True, `"Topic"`
 
 ### $SourceVaultMaxFileSizeMB
 型: Real, 初期値: 50
-index 時に `.nb` を Import するファイルサイズの上限 (MB)。これを超える `.nb` (シミュレーション結果等の巨大ファイル) は Import せずファイル情報だけの軽量 snapshot を作る (Skipped マーク)。ingest 時の EnsureUUID でもこの閾値を超えるファイルは UUID 付与スキップ対象となる。
+index 時のサイズ上限 (MB)。`NBAccess`NBFileLoadSlim` 経由でグラフィック payload を剥離した後のサイズに適用される。これを超える `.nb` は Import せずファイル情報だけの軽量 snapshot を作る (Skipped マーク)。ingest 時の EnsureUUID でもこの閾値を超えるファイルは UUID 付与スキップ対象となる。読み込み自体 (剥離前の raw Import) の上限は $SourceVaultMaxRawFileSizeMB を参照。
+
+### $SourceVaultMaxRawFileSizeMB
+型: Real, 初期値: 500
+index 時に `.nb` をそもそも読み込む (Import する) かどうかの上限 (MB)。これを超えるファイルは一切読まずファイル情報だけの軽量 snapshot を作る (Skipped)。グラフィック剥離が失敗し原文 parse に fallback した場合のメモリ枯渇を防ぐハード上限。
 
 ### SourceVaultIngest[source, opts]
 外部 source を登録し raw snapshot を PrivateVault に保存する。source は ローカルファイルパス / HTTPS URL / arXiv ID (`arXiv:NNNN.NNNNN[vN]`) を受け付ける。arXiv ID は `arxiv.org/pdf/...` に canonicalize して URL ingest する。戻り値に content-addressed 正準 URI `"URI" -> sv://snapshot/sha256/<hex>` を含む (SourceVaultSources の行・SourceVaultParseURI/mcp との join/参照キー)。
@@ -580,9 +584,16 @@ Status 値:
 ## Stage 9 P1 Step 5: LLM 要約
 
 ### SourceVaultNotebookSummary[path, opts]
-notebook の内容を LLM で要約し Summary artifact として保存する (内部で SourceVaultRegisterNotebookSummary を SummaryFormat -> "text" 固定で呼ぶため、生成される SummaryFormat は常に text)。snapshot・SemanticHash 紐づけ・lifecycle 管理は自動。prompt は Header / Todo / Lint / 先頭複数セルのテキストから構築する。`ClaudeCode`ClaudeQuerySync` 経由 (claudecode.wl 依存)。既定で PrivacyLevel 1.0 (ローカル LM 経由で notebook 内容を API に送らない)。
-→ `<|"Status" -> "OK"|"Failed"|"Inconsistent", "Summary" -> _String, "SummaryId" -> _String, "NotebookRef" -> _String, "LifecycleStatus" -> _String, ...|>` (Current で ForceRefresh 無しなら既存 record を返す)
-Options: `"ForceRefresh"` -> False (True で Current でも強制再生成), `"MaxLength"` -> 500 (要約の最大文字数), `"Language"` -> Automatic | `"Japanese"` | `"English"`, `"Model"` -> Automatic (`{"provider","model"}` 明示可), `"PrivacyLevel"` -> 1.0 (0.0=API 許可 〜 1.0=ローカルのみ), `"FallbackToCloud"` -> `"Ask"` | `"Allow"` | `"Deny"`
+notebook の内容を LLM で要約し Summary artifact として保存する (内部で SourceVaultRegisterNotebookSummary を SummaryFormat -> "text" 固定で呼ぶため、生成される SummaryFormat は常に text)。snapshot・SemanticHash 紐づけ・lifecycle 管理は自動。prompt は Header / Todo / Lint / 先頭複数セル (MaxCells 件) のテキストから構築する。`ClaudeCode`ClaudeQuerySync` 経由 (claudecode.wl 依存)。既定で PrivacyLevel 1.0 (ローカル LM 経由で notebook 内容を API に送らない)。
+要約レコードの PrivacyLevel はノートブックの公開宣言 (CloudPublishable) で決まる: Public (True) -> 0.0, 宣言なし -> 0.2, Private (False) -> 0.4。プロンプトに入れる先頭セルは、クラウド送信が起こり得る notebook (CloudPublishable 宣言済み) では confidential/dependent セルを除外する。ローカル LLM 固定の notebook (宣言なし・非公開パス等) では confidential セルもプロンプトに含めるが、その場合は生成された要約自体をクラウド送信可としない — summary record の PrivacyLevel を 1.0 に固定して残す。
+生成された要約は $SourceVaultSummaryForbiddenPatterns (+ 組み込み既定パターン: メール・電話番号・郵便番号・マイナンバー・学籍番号らしき ID・認証URLパラメータ・APIキーらしき文字列) による匿名化ダブルチェックを通過しないと破棄される (Status -> `"SchemaViolation"`)。これは表示上の安全策ではなく、ローカル LLM 匿名化＋機械的パターン照合の二段構えで、非公開 notebook の要約をクラウドに出す根拠そのものになっている。
+→ `<|"Status" -> "OK"|"Failed"|"Inconsistent"|"SchemaViolation", "Summary" -> _String, "SummaryId" -> _String, "NotebookRef" -> _String, "LifecycleStatus" -> _String, ...|>` (Current で ForceRefresh 無しなら既存 record を返す。SchemaViolation 時は `"Violations" -> {_String, ...}` を含む)
+Options: `"ForceRefresh"` -> False (True で Current でも強制再生成), `"UpdateExisting"` -> False (True: 既存要約があるものだけ再生成、`"Outdated"`: PromptVersion が古いものだけ再生成), `"MaxCells"` -> 8 (prompt に入れる先頭セル数), `"MaxLength"` -> 500 (要約の最大文字数), `"Language"` -> Automatic | `"Japanese"` | `"English"`, `"Model"` -> Automatic (`{"provider","model"}` 明示可), `"PrivacyLevel"` -> 1.0 (0.0=API 許可 〜 1.0=ローカルのみ), `"FallbackToCloud"` -> `"Ask"` | `"Allow"` | `"Deny"`
+
+### $SourceVaultSummaryForbiddenPatterns
+型: List, 初期値: `{}`
+SourceVaultNotebookSummary の匿名化ダブルチェックに追加する禁止パターンのリスト。形式: `{"名前" -> "PCRE 文字列", ...}`。組み込み既定パターンにマージされる。1 件でも要約本文にマッチすれば、生成された要約は破棄される (Status -> `"SchemaViolation"`)。所属機関固有の学籍番号書式など、既定パターンでは拾えない ID 体系をここに追加する。
+例: `$SourceVaultSummaryForbiddenPatterns = {"StudentIDFukuyama" -> "(?<![0-9A-Za-z])[A-Z]{2}\\d{6}(?![0-9A-Za-z])"};`
 
 ## Stage 9 P1 Step 6: MarkTodo
 

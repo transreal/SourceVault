@@ -1,15 +1,12 @@
-# SourceVault_course API Reference
-
-Exercise database, exam paper generation, and grading support, organized by subject (科目). Auto-loaded from SourceVault.wl (no load banner). Public symbols live in context `SourceVault\``.
-
 ## Overview
 
 - Exercise store per subject: ingest from problem notebooks (held-expression structural decomposition, no cell evaluation, no FE required), field/unit(syllabus-aligned)/difficulty/exam-history metadata.
 - Exam composition (`SourceVaultExamCompose`) → question-paper PDF + answer-sheet PDF. Answer-sheet layout is stored as data on the exam record and shared with scanned-answer cropping (grading) — same geometry both places.
-- LLM-generated similar problems (Draft → owner approval via `SourceVaultExerciseApproveDraft`).
+- LLM-generated similar problems (Draft → owner approval via `SourceVaultExerciseApproveDraft`). Figure problems (automaton/binary-relation/set-algebra/stack-queue/binary-tree/expr-tree/float-format/graph-algo/sort-trace/venn-diagram/regex-automaton/predicate-logic recipes) generate structure only and are machine-verified; text problems are optionally re-verified for a unique correct answer.
 - Scanned-answer ingest / header verification / roster matching (owner visually verifies, or `SourceVaultExamProposeMatches` proposes from ID-crop recognition) / answer recognition / scoring / item analysis / re-weighting.
-- Per-lecture enrollment registry and gradebook (履修者 / 成績簿) — separate from the exercise store, keyed by lecture code; supports importing `SourceVaultExamScore` results as a weighted grading item.
-- Privacy: exercise records carry no personal info → default PrivacyLevel 0.3 (cloud-eligible). Scans, matching, grading results, enrollment, and gradebook data are PL 1.0 (local only). Only answer-cell crops (and, if explicitly allowed, student-ID crops) go to cloud LLM; ID/name recognition and matching defaults to owner visual check unless a recognizer is explicitly enabled.
+- Per-lecture enrollment registry and gradebook (履修者 / 成績簿) — separate from the exercise store, keyed by lecture code; supports importing `SourceVaultExamScore` results, Cerezo quiz totals, and Web summary-assignment totals as weighted grading items.
+- Web レポート取込: collected report folders (manifest + PDFs) are joined with the enrollment roster into a Cerezo-schema-compatible snapshot; submitted-summary PDFs can then be vision-graded against an owner-authored policy plus a handout excerpt (`SourceVaultCourseSummaryGrade`), with late-submission scoring handled separately.
+- Privacy: exercise records carry no personal info → default PrivacyLevel 0.3 (cloud-eligible). Scans, matching, grading results, enrollment, and gradebook data are PL 1.0 (local only). Only answer-cell crops (and, if explicitly allowed, student-ID crops) go to cloud LLM; ID/name recognition and matching defaults to owner visual check unless a recognizer is explicitly enabled. Summary-grading vision calls go through Cerezo's anonymization seam (declared-region redaction + pseudonymization) before reaching the LLM.
 - Held-expression idiom: notebook cells are parsed via `ToExpression[..., Hold]` without evaluating, then decomposed with `Hold[{a,b,...}] -> {Hold[a], Hold[b], ...}` so images/graphics/math never get rasterized or evaluated during ingest.
 
 ## Config Variables
@@ -53,6 +50,30 @@ course 用ストア (名簿レジストリ等) の root override。Automatic な
 ### $SourceVaultCourseWebPdfTextFn
 型: Automatic | Function, 初期値: Automatic
 PDF 本文抽出のシーム `fn[bytes]->String`。Automatic は `ImportByteArray[..., {"PDF","Plaintext"}]`。
+
+### $SourceVaultCourseSummaryPolicyId
+型: String, 初期値: "courseweb-summary-v1"
+Web サマリー採点の匿名化ポリシー id (SourceVault_anonymize へ登録される)。
+
+### $SourceVaultCourseSummaryRedactRegions
+型: {Association...}, 初期値: `{<|"x1"->0., "y1"->0.90, "x2"->1., "y2"->1.|>}`
+ページ画像の宣言黒塗り領域 (正規化座標・下原点)。既定は上端バンド (氏名・学籍番号の記入位置)。
+
+### $SourceVaultCourseSummaryScoreRange
+型: {Integer, Integer}, 初期値: {0, 20}
+採点レンジ (10点満点+超過許容+白紙0を許容する範囲)。
+
+### $SourceVaultCourseSummaryHandoutSpec
+型: Association, 初期値: `<|"dms"-><|"Folder"->"dms","Base"->"DiscreteMathematics-"|>, "ald"-><|"Folder"->"ald","Base"->"DataStructure-and-algorithm-"|>|>`
+科目接頭辞 (lecture の先頭3文字) -> `<|"Folder", "Base"|>` (Eagle の配布資料フォルダとファイル名接頭辞)。
+
+### $SourceVaultCourseSummaryUnitOffset
+型: Integer, 初期値: 0
+desc の章番号 -> 授業回/配布資料番号の補正 (既定 0 = chapter がそのまま回番号。実データ: 0801 = 第8回)。
+
+### $SourceVaultCourseSummaryLateFactor
+型: Real, 初期値: 0.7
+遅延提出サマリーの既定減点率 (実効点 = 素点 × 減点率)。
 
 ## Subject Management
 
@@ -125,7 +146,7 @@ Bulk-corrects the unit for one id or a list of ids (also updates "Field" via the
 
 ### SourceVaultExerciseEstimateDifficulty[subject, opts] → report
 Bulk LLM difficulty estimation for problems without a difficulty set (1=easy .. 5=hard, sets DifficultySource->"llm").
-Options: "LLMFn" (test seam), "Overwrite" -> False, "MaxItems" -> All
+Options: "LLMFn" (test seam), "Overwrite" -> False, "MaxItems" -> All, "BatchSize" -> 15
 
 ### SourceVaultExerciseUnitAuditView[subject]
 Dataset pairing syllabus topic vs. problem headlines per unit, to spot unit drift.
@@ -140,8 +161,8 @@ Options: "UnitMap" -> Automatic, "SubjectTitle" -> Automatic, "DryRun" -> False,
 ## Similar Problem Generation
 
 ### SourceVaultExerciseGenerateSimilar[id, n, opts] → report
-Generates `n` similar problems from a base problem via LLM, saved as Draft. For figure problems the LLM generates structure only (state-transition / edge-set / set expression as JSON); this package draws the figure and machine-verifies the answer: automaton = acceptance simulation (NFAPlot), binary relation = law-satisfaction check (Graph), set operation = exhaustive Venn-region tautology check. Generations that fail verification are discarded. Approve via `SourceVaultExerciseApproveDraft`.
-Options: "LLMFn" (test seam)
+Generates `n` similar problems from a base problem via LLM, saved as Draft. For figure problems the LLM (or a deterministic recipe) generates structure only — recipes: Automaton, RegexAutomaton, Relation (binary relation), SetAlgebra, VennDiagram, StackQueue, BinaryTree, ExprTree, GraphAlgo, SortTrace, FloatFormat, PredicateLogic — and this package draws the figure and machine-verifies the answer (e.g. automaton = acceptance simulation via NFAPlot, binary relation = law-satisfaction check via Graph, set operation = exhaustive Venn-region tautology check). Generations that fail verification are discarded. Text (non-figure) problems can additionally be re-verified via LLM for a unique correct answer ("VerifyText"). Approve via `SourceVaultExerciseApproveDraft`.
+Options: "LLMFn" -> Automatic (test seam), "AvoidSpecs" -> {} (dedup fingerprints to avoid re-generating, e.g. automaton languages), "AvoidForms" -> {}, "Variant" -> Automatic (recipe-specific task variant, e.g. "regex" forces Automaton->RegexAutomaton), "UseRecipes" -> Automatic (None = never use a figure recipe; All = force a recipe even for non-figure problems), "VerifyText" -> True, "PerChoice" -> False (per-choice vs. once-per-problem verification when VerifyText is on)
 
 ### SourceVaultExerciseRebuildFigure[id] → report
 Rebuilds the figure of a problem that has a FigureSpec, using the current builder (no LLM re-call) — for bulk re-render after layout tweaks. Fails with `NoFigureSpec` if absent (safe to `Scan` over a list).
@@ -186,7 +207,7 @@ Options: "IncludeArchived" -> False
 
 ### SourceVaultExamSelectProblems[subject, opts] → {Id...}
 Chooses candidate problem ids for composing an exam.
-Options: "Units", "PerUnit", "Difficulty" -> {min,max}, "RandomSeed", "Exclude"
+Options: "Units" -> All, "PerUnit" -> 2, "Difficulty" -> All (or {min,max}), "RandomSeed" -> Automatic, "Exclude" -> {}, "Status" -> "Active", "SkipIncomplete" -> True (excludes candidates with missing question/choices/answer)
 
 ### SourceVaultExamSetPoints[examId, weights] → <|...,"Total"|>
 Re-sets point weights. `weights` is `<|"g-n" -> points|>` or a flat list in question order.
@@ -218,16 +239,16 @@ Re-verifies generated (FigureSpec-bearing) problems currently in the exam.
 
 ### SourceVaultExamValidateFiguresView[examId]
 Dataset view of `SourceVaultExamValidateFigures`.
-Options: "OnlyFailures" -> True (NG rows only)
+Options: "OnlyFailures" -> False (True for NG rows only)
 
 ### SourceVaultExamVerifyText[examId, opts] → {Association...}
 For text-choice problems, independently re-asks the LLM "does this choice work as the answer?" per choice, and checks that exactly one choice qualifies.
 → keys: "Slot", "Id", "Answer", "Reported", "OK", "Negative" (whether it's a "which is NOT appropriate"-style negative question), "Notes" (per-choice rationale — verifier can be wrong; owner makes the final call), "Headline". Problems that can't be judged from text alone are skipped as Missing[reason] ("NeedsFigure" | "NotTextChoices" | "NoQuestionText" | "NoAnswer" | "NotFound") — figure problems are handled by `SourceVaultExamValidateFigures`.
-Options: "LLMFn", "Slots", "PerChoice" -> True (False asks once per problem — faster, but misses some cases)
+Options: "LLMFn" -> Automatic, "Slots" -> Automatic, "PerChoice" -> True (False asks once per problem — faster, but misses some cases)
 
 ### SourceVaultExamVerifyTextView[examId]
 Dataset view of `SourceVaultExamVerifyText`.
-Options: "OnlyFailures" -> True (default: NG rows only, e.g. multiple valid answers; False for all)
+Options: "LLMFn" -> Automatic, "Slots" -> Automatic, "PerChoice" -> True, "OnlyFailures" -> True (default: NG rows only, e.g. multiple valid answers; False for all)
 
 ### SourceVaultExamSimilarPairs[examId, opts] → {Association...}
 Finds pairs of problems that are too similar within an exam (no LLM). Matches on (1) fingerprint (recipe+task) equality and (2) character-bigram Jaccard similarity of body+choices.
@@ -248,16 +269,16 @@ Manually replaces the problem at a slot (e.g. "2-2") with any problem id in the 
 Reverts given slots (list like {"1-26",...}, or `All`) to their PreviousGroups original problem. Points/layout keys unchanged. Draft records of the reverted similar problems remain (discard separately via `SourceVaultExerciseDiscardDraft`).
 
 ### SourceVaultExamReplaceWithSimilar[examId, opts] → report
-Generates LLM similar problems for each exam problem (saved as Draft) and swaps a given fraction of slots for them. Points and answer-sheet layout are preserved; the original composition is saved to the exam record's PreviousGroups. Targets: no-image choice problems + figure-recipe problems (automaton/binary-relation graphs get structure generation + NFAPlot/Graph drawing + machine-verified answers). Other figure problems and written-response problems stay as originals.
-Options: "Fraction" -> 0.7 (0 = no LLM call, exam stays original), "RandomSeed", "Slots" -> All | {"1-26",...} (limit target slots), "LLMFn", "GenerateForAll" (True = also generate Draft stock for slots outside the swap target; only effective when Fraction>0), "DuplicateThreshold" -> 0.6 (a generation matching another slot's form (recipe+task) or with too-similar body text is rejected and the original kept; reason recorded in FailureReasons as DuplicateForm/DuplicateText — figure problems are distinguished by figure not body text so text similarity doesn't reject them; automatons are deduped via language fingerprint (AvoidSpecs) instead, exempt from this threshold), "Variant" (owner-specified task variant: SortTrace: swaps|insertion|selection|quick / BinaryTree: preorder|inorder|postorder / GraphAlgo: shortest|mst|bfs|dfs / StackQueue: Stack|Queue — forces the variant unconditionally even if already used, so combine with "Slots")
+Generates LLM similar problems for each exam problem (saved as Draft) and swaps a given fraction of slots for them. Points and answer-sheet layout are preserved; the original composition is saved to the exam record's PreviousGroups. Targets: no-image choice problems + figure-recipe problems (structure generation + machine-verified answers, per the recipe set described under `SourceVaultExerciseGenerateSimilar`). Other figure problems and written-response problems stay as originals.
+Options: "Fraction" -> 0.7 (0 = no LLM call, exam stays original), "RandomSeed" -> Automatic, "LLMFn" -> Automatic, "GenerateForAll" -> True (also generate Draft stock for slots outside the swap target; only effective when Fraction>0), "Slots" -> All | {"1-26",...} (limit target slots), "UseRecipes" -> Automatic, "VerifyText" -> True, "PerChoice" -> False, "DuplicateThreshold" -> 0.6 (a generation matching another slot's form (recipe+task) or with too-similar body text is rejected and the original kept; reason recorded in FailureReasons as DuplicateForm/DuplicateText — figure problems are distinguished by figure not body text so text similarity doesn't reject them; automatons are deduped via language fingerprint (AvoidSpecs) instead, exempt from this threshold), "Variant" -> Automatic (owner-specified task variant: SortTrace: swaps|insertion|selection|quick / BinaryTree: preorder|inorder|postorder / GraphAlgo: shortest|mst|bfs|dfs / StackQueue: Stack|Queue — forces the variant unconditionally even if already used, so combine with "Slots")
 
 ### SourceVaultExamPaperPDF[examId, outPath, opts] → report
 Generates the question-paper PDF (【g-n】 two-column layout, FE required). Header overlays `$SourceVaultExamTemplatePDF` (official blank). Multi-page export goes through Notebook printing, falling back to per-page files on failure (reported via "ExportMode").
-Options: "Resolution", "ColumnWidth", "Explanation"
+Options: "Resolution" -> 300, "ColumnWidth" -> 25, "WideSlots" -> None (force specific slots to full-width layout), "WideThreshold" -> 700 (natural content width above which a slot auto-switches to wide), "FillWide" -> True, "Explanation" -> "以下の選択問題を解き、解答用紙の回答欄に番号を記入しなさい。"
 
 ### SourceVaultExamProblemPreview[examId, slot]
 Renders a single slot exactly as it will appear on the question paper (layout check).
-Options: "Wide" -> False (True for full-width, non-column layout)
+Options: "Wide" -> False (True for full-width, non-column layout), "Resolution" -> 300, "FillWide" -> True
 
 ### SourceVaultExamAnswerSheetPDF[examId, outPath, opts] → report
 Generates the answer-sheet PDF. Header overlays `$SourceVaultExamTemplatePDF`. Layout matches the exam record's SheetLayout exactly (shared with grading crop-out).
@@ -283,26 +304,28 @@ Reads a roster (xls/xlsx).
 Options: "HeaderRows" -> 6, "IDColumn" -> 2, "NameColumn" -> 3
 
 ### SourceVaultExamSheetIngest[examId, pdfPathOrImages, opts] → report
-Ingests and saves collected answer sheets (multi-page PDF or image list). PL 1.0, local only.
-Options: "Roster", "ImageWidth" -> 2200
+Ingests and saves collected answer sheets (multi-page PDF or image list; also accepts `sv://object/eagle-<id>`). PL 1.0, local only.
+Options: "Roster" -> Automatic, "ImageWidth" -> 2200, "Lecture" -> Automatic, "VerifyHeader" -> True (runs `SourceVaultExamSheetVerify` before ingest), "DiffX" -> 0, "DiffY" -> 0
 
 ### SourceVaultExamSheetVerify[examId, pdfOrImages, opts] → {Association...}
 Checks whether collected answer sheets' headers (subject/duration/date-time-period print) match the sheet generated for this exam. Ranks against every candidate exam, so answer sheets belonging to a different exam trigger `Mismatch` (checked per page, so a stray sheet mixed into the bundle is still caught). Student-ID/name regions are excluded from the compared area (print-only).
-Options: "Pages" -> All | {n...}, "DiffX", "DiffY" (crop calibration), "Candidates", "MinScore" -> 0.4, "Tolerance" -> 0.02
+Options: "Pages" -> All | {n...}, "DiffX" -> 0, "DiffY" -> 0, "Candidates" -> Automatic, "MinScore" -> 0.25, "Tolerance" -> 0.02, "ImageWidth" -> 1200
 
 ### SourceVaultExamSheetVerifyView[examId, pdfOrImages, opts]
 Owner-verification display of `SourceVaultExamSheetVerify` (expected header / actual scanned header / candidate ranking, side-by-side).
+Options: same as `SourceVaultExamSheetVerify`.
 
 ### SourceVaultExamSheetIdentify[pdfOrImages, opts] → {Association...}
 Ranks a scanned sheet's header against all candidate exams to identify which exam it belongs to (for resolving mixed-up bundles).
+Options: same as `SourceVaultExamSheetVerify`.
 
 ### SourceVaultExamSyncRoster[examId, opts] → report
 Refreshes the roster snapshot carried by already-ingested answer sheets against the current enrollment registry (use after re-distributing an enrollment CSV). Matching is keyed by student ID, so existing assignments are preserved; sheets assigned to a student no longer enrolled are listed under "UnenrolledAssignments".
-Options: "Lecture", "DryRun" -> False
+Options: "Lecture" -> Automatic, "DryRun" -> False
 
 ### SourceVaultExamMatches[examId, opts] → {{number, {idImage, nameImage}, roster}...}
 Core answer-sheet-to-roster match data.
-Options: "DiffX", "DiffY" (crop calibration)
+Options: "DiffX" -> 0, "DiffY" -> 0 (crop calibration)
 
 ### SourceVaultExamMatchView[examId, opts]
 Owner-verification view of the matching (scanned ID/name images side-by-side with roster). Always visually confirm before proceeding.
@@ -313,18 +336,18 @@ Corrects a match assignment. Value can be a student ID or a roster row number; `
 
 ### SourceVaultExamProposeMatches[examId, opts] → report
 Reads each sheet's student-ID region and proposes match candidates, applying them by default (final check still via visual inspection, e.g. `SourceVaultExamAssignView`). Recognized text is fuzzy-matched to roster student IDs by edit distance; assignments are confirmed one-student-one-sheet in confidence order — conflicts, unreadable reads, or large edit distances are left unassigned in "Uncertain". Default recognizer is cloud vision (sends only the student-ID crop, never name/answer regions) and requires `$SourceVaultExamAllowCloudIDRecognition` -> True; not required if "RecognizerFn" is supplied.
-Options: "RecognizerFn" (seam: fn[{crop...}]->{String...}), "Scans" -> All | {i...}, "Apply" -> True, "Overwrite" -> False, "BatchSize" -> 8, "MaxDistance" -> 2, "DiffX", "DiffY"
+Options: "RecognizerFn" -> Automatic (seam: fn[{crop...}]->{String...}), "Scans" -> All | {i...}, "Apply" -> True, "Overwrite" -> False, "BatchSize" -> 8, "MaxDistance" -> 2, "DiffX" -> 0, "DiffY" -> 0
 
 ### SourceVaultExamMatchStatus[examId] → Association
 Matching progress: assigned/unassigned answer sheets, duplicate assignments, roster students with no sheet, and assignments not present in the roster.
 
 ### SourceVaultExamAssignView[examId, opts]
 FE view for assigning answer sheets to roster entries by clicking, next to the scanned student-ID/name crops. Sheets arrive in submission order (not roster order), so each is confirmed by eye; already-assigned students drop out of the candidate list, and duplicates/unassigned surface at the top.
-Options: "Unassigned" -> False (True for unassigned only), "DiffX", "DiffY", "MaxRows" -> 60
+Options: "DiffX" -> 0, "DiffY" -> 0, "Unassigned" -> False (True for unassigned only), "Uncertain" -> False (True for rows where the recognized read didn't exactly match), "MaxRows" -> 60
 
 ### SourceVaultExamRecognize[examId, opts] → report
 Reads answers from each sheet's answer-cell regions (personal-info regions excluded by crop). Default recognizer is cloud vision (ClaudeQueryBg).
-Options: "RecognizerFn" (test seam; `fn[crop, keys] -> Association`), "Scans" -> All | {i...}
+Options: "RecognizerFn" -> Automatic (test seam; `fn[crop, keys] -> Association`), "Scans" -> All | {i...}
 
 ### SourceVaultExamSetAnswer[examId, scanIdx, key, value] → <|...|>
 Manually corrects a recognized answer (key like "1-1").
@@ -334,11 +357,11 @@ Manually sets a grading mark (○/△/×/?), overriding auto-judgment. Pass `Non
 
 ### SourceVaultExamUnresolved[examId, opts] → {Association...}
 Core: lists questions whose grading mark is not yet settled (?) — a blank/unrecognized answer cell, or a missing model answer. Each row: scan number, student, slot, printed number, recognized value, model answer, points.
-Options: "Filter" -> "Unresolved" (default) | "Wrong" (also include ×) | All, "Scans"
+Options: "Filter" -> "Unresolved" (default) | "Wrong" (also include ×) | All, "Scans" -> All
 
 ### SourceVaultExamResolveView[examId, opts]
 FE view for settling unresolved questions by clicking, next to each answer-cell crop. Picking a value re-checks it against the model answer to set ○/×; ○/△/× can also be set directly (△ = `Ceiling[points/2]`).
-Options: "Filter" -> "Unresolved", "Scans", "MaxRows" -> 40, "DiffX", "DiffY"
+Options: "Filter" -> "Unresolved", "Scans" -> All, "MaxRows" -> 40, "DiffX" -> 0, "DiffY" -> 0
 
 ### SourceVaultExamItemAnalysis[examId, opts] → {Association...}
 Core per-question correct-rate, wrong-answer-spread, and discrimination analysis (PL 1.0 — question-level aggregates only, no per-student data).
@@ -357,7 +380,7 @@ Dataset view of `SourceVaultExamScore`.
 
 ### SourceVaultExamScoreReport[examId, opts]
 Score report (Dataset).
-Options: "Export" -> path.xlsx (local export)
+Options: "Export" -> None (path.xlsx for local export)
 
 ## Enrollment (履修者)
 
@@ -373,6 +396,7 @@ Options: "Status" -> "Enrolled" (default) | "Withdrawn" | All
 
 ### SourceVaultCourseEnrollmentView[lecture, opts]
 Dataset view of `SourceVaultCourseEnrollment`.
+Options: same as `SourceVaultCourseEnrollment`.
 
 ### SourceVaultCourseEnrollmentRecord[lecture] → Association | Missing
 Full enrollment record (Students / Version / History).
@@ -407,13 +431,21 @@ Dataset view of `SourceVaultCourseAssessments`.
 ### SourceVaultCourseAssessmentRemove[lecture, itemId] → <|...|>
 Deletes a grading item along with its entered scores.
 
-### SourceVaultCourseSetScores[lecture, itemId, scores] → report
-Enters raw scores. `scores`: `<|studentId->score|>` or `{{studentId,score}...}`. Students not in the roster are reported under "Unknown" (not entered).
-Options: "Mode" -> "Merge" (default, overlays onto existing) | "Replace" (replaces the whole set)
+### SourceVaultCourseSetScores[lecture, itemId, scores, opts] → report
+Enters raw scores. `scores`: `<|studentId->score|>` or `{{studentId,score}...}`. Students not in the roster are reported under "Unknown" and not entered unless "AllowUnknown" is set.
+Options: "Mode" -> "Merge" (default, overlays onto existing) | "Replace" (replaces the whole set), "AllowUnknown" -> False
 
 ### SourceVaultCourseImportExamScores[lecture, examId, opts] → report
 Imports `SourceVaultExamScore` results as a grading item (item id defaults to `examId`; MaxScore defaults to the exam's total points). Scans without a confirmed match are skipped and listed under "Unassigned".
-Options: "ItemId", "Title", "Weight", "MaxScore", "Mode"
+Options: "ItemId" -> Automatic, "Title" -> Automatic, "Weight" -> Automatic, "MaxScore" -> Automatic, "Mode" -> "Replace"
+
+### SourceVaultCourseImportCerezoQuizScores[lecture, opts] → report
+Imports CerezoExamIngest-processed quiz totals as a grading item (student total = sum of each quiz's Total across all rounds; unattempted rounds count as 0). MaxScore defaults to the sum of each quiz's max total. Cerezo.wl required (weak coupling).
+Options: "Selector" -> Automatic (default = the lecture name), "ItemId" -> "cerezoquiz", "Title" -> "小テスト", "Weight" -> Automatic, "MaxScore" -> Automatic, "Mode" -> "Replace"
+
+### SourceVaultCourseImportSummaryScores[lecture, opts] → report
+Imports Web-summary assignment totals (from `SourceVaultCourseSummaryScores`, late-effective scores included) as a grading item. MaxScore defaults to `10 * (number of graded rounds)`.
+Options: "ItemId" -> "websummary", "Title" -> "サマリー課題", "Weight" -> Automatic, "MaxScore" -> Automatic, "Mode" -> "Replace", "Descs" -> Automatic
 
 ### SourceVaultCourseWeights[lecture] → Association
 Overall-grade weight association `<|itemId->weight|>` (auto-generated from registered items; unset items default to 1). Edit and pass to `SourceVaultCourseSetWeights` to update.
@@ -422,15 +454,20 @@ Overall-grade weight association `<|itemId->weight|>` (auto-generated from regis
 Updates overall-grade weights. `weights`: `<|itemId->weight|>` (a partial update is fine). An unknown itemId is rejected. Scores are untouched, so weights can be revised repeatedly once all grades are in.
 
 ### SourceVaultCourseGradebook[lecture, opts] → {Association...}
-Core: score table across all grading items plus the overall grade (PL 1.0). Overall = `100 * Sum[score/maxScore * weight] / Sum[weight]`.
-Options: "Missing" -> "Zero" (default) | "Exclude" (drop that item's weight for the student instead of scoring 0), "Status" -> "Enrolled" (default) | All, "Round" -> 1
+Core: score table across all grading items plus the overall grade (PL 1.0). Overall = `Min[Cap, 100 * Scale * Sum[score/maxScore * weight] / Sum[weight]]` ("Scale"/"Cap" default to a no-op, so the formula reduces to the plain weighted-average percentage).
+Options: "Missing" -> "Zero" (default) | "Exclude" (drop that item's weight for the student instead of scoring 0), "Status" -> "Enrolled" (default) | All, "Round" -> 1, "Scale" -> 1 (bonus multiplier 1+α; lets each item's max score contribute up to (1+α)× its normalized weight), "Cap" -> None (numeric clips the overall grade via Min, e.g. 100)
 
 ### SourceVaultCourseGradebookView[lecture, opts]
 Dataset view of `SourceVaultCourseGradebook` (PL 1.0).
+Options: same as `SourceVaultCourseGradebook`.
 
 ### SourceVaultCourseGradeReport[lecture, opts]
 Grade report (Dataset, Japanese headings). Options shared with `SourceVaultCourseGradebook`, plus:
-Options: "Export" -> path.xlsx
+Options: "Export" -> None (path.xlsx for local export)
+
+### SourceVaultCourseStudentScoreView[lecture, studentId, opts]
+Per-student report card: Web-summary rounds (with late effective scores), Cerezo quiz rounds (weak coupling), gradebook items (raw score / max / weight / weighted contribution), and the weighted overall grade. PL 1.0.
+Options: "Scale" -> 1 (bonus multiplier 1+α), "Cap" -> None, "Missing" -> "Zero", "Round" -> 1 (same semantics as `SourceVaultCourseGradebook`)
 
 ## Web レポート取込
 
@@ -449,8 +486,8 @@ Options: "Export" -> path.xlsx
 `<udb>/webreports` 配下の回収フォルダ (manifest.wxf) 一覧を返す。
 
 ### SourceVaultCourseWebReportIngest[lecture, opts] → report
-回収フォルダを名簿と結合して Cerezo と同一形式の SourceVault スナップショット (PL 1.0) へ取り込む。再実行は内容が変わった学生だけ新バージョンを作る。
-Options: "ReportDescs" -> All | {"0801"...}, "Chapters" -> All, "ReportOptions" -> All, "Roster" -> Automatic, "AssignmentName" -> Automatic, "AllowMissingNames" -> False, "Folder" -> Automatic
+回収フォルダを名簿と結合して Cerezo と同一形式の SourceVault スナップショット (PL 1.0) へ取り込む。名簿結合は履修取消 (Withdrawn) も含む全登録履歴で行う (成績 View/成績簿は Enrolled のみ)。作業用アカウント (q*/b0000*/k.imai/imai/guest) は既定で除外し "Ignored" に報告。再実行は内容が変わった学生だけ新バージョンを作る。
+Options: "ReportDescs" -> All | {"0801"...}, "Chapters" -> All, "ReportOptions" -> All, "Roster" -> Automatic, "AssignmentName" -> Automatic, "AllowMissingNames" -> False (True で名簿外提出者を氏名なしで取込), "IgnoreIDs" -> Automatic | None | {id...} | predicate, "Folder" -> Automatic
 
 ### SourceVaultCourseWebReportRuns[] / SourceVaultCourseWebReportRuns[lecture] → {Association...}
 取込済み Web レポート run の一覧 (正準 `sv://` URI 付き) を返す。PL 1.0。
@@ -463,4 +500,53 @@ Options: "ReportDescs" -> All | {"0801"...}, "Chapters" -> All, "ReportOptions" 
 
 ### SourceVaultCourseWebReportGrade[lecture, reportDesc, rubric, opts] / [svURI, rubric, opts] → report
 匿名化採点 (`CerezoAnonymizedSubmissions` → `CerezoGradeSubmissions`) を実行する。[Cerezo](https://github.com/transreal/Cerezo) 必須 (弱結合)。結果の `"GradeAnnotationRef"` を `CerezoAttachGrades` / `CerezoGradeReport` へ渡す。
-Options: "Policy", "MissingPages", "LLMFn" 等は Cerezo 側へ透過。
+Options: "Policy" -> Automatic, "MissingPages" -> "Fail", "TargetLevel" -> Automatic, "GrantRef" -> None, "Force" -> False, "LLMFn" -> Automatic (すべて Cerezo 側へ透過)
+
+### SourceVaultCourseWebReportOpenSubmission[lecture, reportDesc, studentId, opts] → path
+取込済み提出レポート (blob) を一時ファイルへ復元して SystemOpen で開き、パスを返す。PL 1.0。
+Options: "Open" -> True (False なら復元のみで開かない)
+
+## Web サマリー課題の匿名化 vision 採点
+
+取込済み Web レポート run (Cerezo 同一形式) を、評価ポリシー (`SourceVaultCourseSummaryPolicyRegister` で登録した sv:// snapshot) + 配布資料サマリー (Eagle, 弱結合) を組んだ rubric で匿名化採点する。PDF はページ画像化 + 宣言領域黒塗り (プロンプト注入対策として本文テキストは LLM へ渡さず、画像の vision OCR で採点させる)。Cerezo.wl の匿名化採点シームへ弱結合委譲。遅延提出は別記録 (`SourceVaultCourseSummarySetLateScores`) で扱い、通常採点より優先される。
+
+### SourceVaultCourseSummaryDefaultPolicyText[] → String
+既定の評価ポリシー本文 (10点満点・白紙/単元違い打ち切り・スキャン品質2点・充実度5〜10点)。
+
+### SourceVaultCourseSummaryPolicyRegister[policyText, opts] → report
+評価ポリシーを不変 snapshot (class `CourseSummaryGradingPolicy`, alias latest, PL 0.3) として登録し sv:// URI を返す。`policyText` 省略時 (Automatic) は既定文 (`SourceVaultCourseSummaryDefaultPolicyText[]`)。
+Options: "MaxScore" -> 10, "ScoreRange" -> Automatic (falls back to `$SourceVaultCourseSummaryScoreRange`)
+
+### SourceVaultCourseSummaryPolicy[] / SourceVaultCourseSummaryPolicy[svURI] → Association
+登録済み評価ポリシー (省略形は latest) を URI 付きで返す。
+
+### SourceVaultCourseSummaryGrade[lecture, reportDesc, opts] → report
+取込済み run を匿名化 vision 採点する (Cerezo.wl 必須)。rubric = 評価ポリシー + 該当回の配布資料サマリー (Eagle)。"GrantRef"->Automatic (既定) なら plan->承認要求->ApproveDeclassification を自動実行して grant を発行する (Approve は FE 対話限定 = オーナーの実行が承認意思。headless では拒否)。結果 (GradeAnnotationRef) は registry に保存され View が参照する。
+Options: "PolicyURI" -> Automatic, "MissingPages" -> "Fail" | "Skip", "LLMFn" -> Automatic, "Force" -> False, "HandoutText" -> Automatic, "GrantRef" -> Automatic | grant, "MaxExecuteUses" -> 10
+
+### SourceVaultCourseSummaryGradeAll[lecture, opts] → report
+取込済み全回を順に採点する。skip されるのは全員パース成功済みの回のみで、途中失敗 (usage limit 等で ParsedCount < ItemCount) や全滅の回は再実行時に自動でやり直す (回単位の冪等。学生単位の途中再開はしない)。
+Options: `SourceVaultCourseSummaryGrade` のオプション全部, "Regrade" -> False (True で全回再採点)
+
+### SourceVaultCourseSummaryGrades[lecture] → Association
+採点 registry (`<|reportDesc-><|AnnotationRef,GradedAtUTC,ItemCount,ParsedCount,..|>|>`) を返す。
+
+### SourceVaultCourseSummarySetLateScores[lecture, studentId, scores, opts] → report
+遅延提出サマリーの点数を記録する (`scores` のキーは回番号 3 または desc "0301")。実効点 = 素点 × 減点率で View/合計/成績簿取込に反映され、通常採点より優先。値 `None` でその回の記録を削除。PL 1.0。
+Options: "Factor" -> Automatic (falls back to `$SourceVaultCourseSummaryLateFactor`, e.g. 0.7), "Note" -> ""
+
+### SourceVaultCourseSummaryLateScores[lecture] → Association
+遅延提出の記録 (`<|学籍番号キー-><|desc-><|Score,Factor,Effective,Note,RecordedAtUTC|>|>|>`) を返す。PL 1.0。
+
+### SourceVaultCourseSummaryScores[lecture, opts] → {Association...}
+履修者×各回の点数表 (core, PL 1.0) を返す。未提出・未採点回は 0。遅延記録があればその実効点を優先。
+Options: "Descs" -> Automatic (既定は採点済み+遅延記録済みの全回)
+
+### SourceVaultCourseSummaryScoreView[lecture, reportDesc]
+各回サマリー課題の Dataset 表示 (学籍番号/氏名/提出/点数/採点根拠。PL 1.0)。提出/遅延セルは保存済み提出物があればリンクになり、クリックで PDF を一時復元して開く。
+
+### SourceVaultCourseSummaryTotalsView[lecture, opts]
+全回の点数と合計の Dataset 表示 (採点根拠なし。PL 1.0)。
+Options: "Descs" -> Automatic
+
+Configuration notes for this section: `$SourceVaultCourseSummaryPolicyId`, `$SourceVaultCourseSummaryRedactRegions`, `$SourceVaultCourseSummaryScoreRange`, `$SourceVaultCourseSummaryHandoutSpec`, `$SourceVaultCourseSummaryUnitOffset`, `$SourceVaultCourseSummaryLateFactor` (see Config Variables above).

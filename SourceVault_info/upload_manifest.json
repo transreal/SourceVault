@@ -51,6 +51,7 @@
 		"SourceVault_workflows"
 	],
 	"excludePatterns":[
+		"SourceVault_info\/docs\/api_course_private.md",
 		"SourceVault_info\/history\/",
 		"SourceVault_info\/references\/",
 		"SourceVault_info\/runtime\/",
