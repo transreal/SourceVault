@@ -129,7 +129,7 @@ Capabilities key: Search / ReadMetadata / ReadSummary / ReadContext / ReadBody /
 `iSVRegisterDefaultAdapters[]` (ロード末尾で自動実行) が下記 7 adapter を登録する。`sourcevault_search`/`sourcevault_catalog` の kinds はこれらを指す。OOPS/一般メール/llmlog 等の他 kind は別パッケージ (SourceVault_oopsseed / SourceVault_mailstructure / SourceVault_llmlog 等) が同じ registry API で追加登録する (このファイルは登録しない)。
 
 - `packageapi` — Kinds {"packageapi","api"}。api.md chunk 索引 (SourceVault_packageapi.wl) を露出。PublicDoc (PrivacyLevel 0) につき `BodyGrantRequired->False` (view=body は grant 不要)。Capabilities: Search/ReadMetadata/ReadSummary/ResolveObjectURI/ReadBody。RequireGrantFor {}。FilterKeys: packages/package/symbolKind/freshness (例: `filters.packages=["SourceVault","ClaudeOrchestrator"]`)。ExtraViews: contract (機械可読契約)/scaffolded/guided (粒度 tier)。AvailableProbe: `SourceVaultPackageApiSearch` の DownValues 有無。
-- `search` — Kinds {"search","pdf"}。PDF 索引横断検索。Capabilities: Search/ReadMetadata/ReadSummary/MetadataFilter/ResolveObjectURI/ReadBody。RequireGrantFor {"body","raw"}。`sv://chunk/<collection>:<index>` (PDF chunk) を解決、ReadBody は grant 必須の chunk 全文。
+- `search` — Kinds {"search","pdf"}。PDF 索引横断検索。Capabilities: Search/ReadMetadata/ReadSummary/MetadataFilter/ResolveObjectURI/ReadBody。RequireGrantFor {"body","raw"}。`sv://chunk/<collection>:<index>` (PDF chunk) を解決、ReadBody は grant 必須の chunk 全文 (ただし privacy 0.0 / storageType public と宣言済みの公開ドキュメント chunk は "BodyGrantRequired" 判定関数により grant なしで解放される、下記 §MCPGet 参照)。
 - `snapshot` — Kinds {"snapshot"}。Capabilities: ReadMetadata/ReadSummary/ResolveObjectURI のみ (Search/ReadBody 非対応)。RequireGrantFor {}。`sv://snapshot/<class>/<hex>` を解決。
 - `web` — Kinds {"web"}。Capabilities: Search/ReadMetadata/ReadSummary のみ (Resolve/ReadBody 未配線)。RequireGrantFor {"body","raw"}。
 - `eagle` — Kinds {"eagle","image","pdf"}。main-kernel only (`SourceVaultEagleSearch`/`SourceVaultEagleSummaryRow` の DownValues 有無で probe、無ければ Unavailable "MainKernelOnly")。Capabilities: Search/ReadMetadata/ReadSummary/MetadataFilter/ResolveObjectURI/ReadBody。RequireGrantFor {"body","raw","context"}。`sv://object/eagle-...` を Eagle item metadata から解決 (原本ファイルは開かない)。
@@ -258,10 +258,23 @@ SearchSpec を正規化し kinds に適合する available な search adapter �
 Options: "Principal" -> Automatic, "Trusted" -> <||>, "AccessProfile" -> Automatic (登録済み AccessProfile の ScopePolicy を §2.6 合成、`iSVResolveScopeForRequest` 経由)
 返値 key: Results / Count / TotalBeforeLimit / Warnings(adapter 別の非致命的警告、例: UnknownPackage) / ReleaseGated(Deny で除外された件数) / Screened(Screen 降格で summary/snippet を落とされ最終ページに残った件数) / EffectiveAccessLevel / Adapters / Format / Rendered / AccessRequest
 
+## Local voice privacy router (非 MCP tool、ローカル専用)
+
+OpenAI と接続された worker に PL>=0.5 の本文を返さないための、ローカル音声ブリッジ専用の read-only 検索入口。`SourceVaultMCPTools[]` には公開されず、API key を持たない private TTS broker が SourceVault service のローカル command queue からのみ呼ぶ。
+
+### $SourceVaultKBVoiceMinScore
+型: Real, 初期値: 2.0
+音声ルータが KB (Graph-RAG) のヒットを採用する生 BM25 スコアの下限。これを下回るヒットは KB の担当範囲外とみなし、通常の adapter 横断検索にフォールバックする (例: メールに関する質問が資料スライドの KB に誤って吸われるのを防ぐ)。
+
+### SourceVaultLocalVoiceSearch[spec] → Association
+ローカル音声ブリッジ専用の read-only 検索。まず KB (`SourceVaultKBAnswer`。spec の "kb" または既定 `$SourceVaultKBDefaultId`) を引き、ヒットすればそこで返す (`Source->"KB"`、数十 ms)。ヒットしない時だけ既定 kind 集合 (`{"search","packageapi","llmlog","mail","eagle","snapshot"}`) の adapter 横断検索にフォールバックする。全結果の `Privacy.Level` が 0.5 未満なら `Route->"OpenAI"` と安全な短い検索文を返し、0.5 以上または PL 不明の結果を一つでも含む場合は `Route->"LocalTTS"` とローカル読み上げ文を返す (PL 不明は 1.0 扱いで fail-closed)。
+
+## Access model per-result release gate / grant / 承認フロー (spec §2.3 / §11.2 / §11.3, Phase C/D)
+
 ### SourceVaultMCPGet[uri, opts]
 単一の sv:// URI を解決し、所有 adapter (`OwnsURIQ` で選定) の Resolve で低漏洩メタ/サマリー projection を取り、SourceVaultMCPReleaseGate で出口 gate して返す (spec §11.2)。既定 View="summary" は body/raw/attachment を含めず requiresGrant を示す。`sourcevault_get` tool の実体。
 View="body"|"raw"|"context" は `iSVMCPGetBody` に委譲し AccessGrant による本文解放を試みる (Phase D)。`iSVGrantPermitsView` が Grant の Valid、AllowedFields/AllowedActions("ReadBody")、AllowedKinds、AllowedObjectRefs を確認し、cloud sink への body 送出は有効な Grant があっても常に拒否 (Why->"CloudSinkBlockedForBody")、PrivacyLevel<=Grant.MaxAccessLevel も要る。Grant 未指定/不足時は `Why->"GrantRequired"` 等 + `HowToProceed` ヒントを返す。
-例外 (F6): adapter が "BodyGrantRequired"->False を宣言する PublicDoc 系 (packageapi) は view=body を Grant なしで解放 (`Access.Why -> {"GrantFreePublicDoc"}`、release gate は通す)。adapter の "ExtraViews" に登録された view (packageapi: contract=機械可読契約+AuditStatus / scaffolded / guided=粒度 tier 描画) はその projection を返す。
+例外 (F6): (1) adapter が "BodyGrantRequired"->False を宣言する PublicDoc 系 (packageapi) は view=body を Grant なしで解放。(2) "BodyGrantRequired" 判定関数が公開と判定した URI (pdfindex で privacy 0.0 / storageType public と宣言済みドキュメントの sv://chunk/) も同様に解放。いずれも `Access.Why -> {"GrantFreePublicDoc"}` で release gate は通す。adapter の "ExtraViews" に登録された view (packageapi: contract=機械可読契約+AuditStatus / scaffolded / guided=粒度 tier 描画) はその projection を返す。
 → Association (View/判定枝で形が可変)
 Options: "Principal" -> Automatic, "Trusted" -> <||>, "AccessLevel" -> Automatic (この呼び出し限定の access ceiling)、"ReleaseContext" -> None (`SourceVaultReleaseContextSpec` で MaxPrivacyLevel を解決し実効上限に反映)、"Grant" -> None (body/raw/context view のみ検証される AccessGrant)、"View" -> Automatic ("summary"(既定)|"body"|"raw"|"context"|adapter ExtraViews)、"AccessProfile" -> Automatic (Search と同じ §2.6 scope 合成)
 返値 key (共通): URI / Found / Released。summary 系はさらに Adapter / Result(Permit時) / Access / RequiresGrantFor / Why / EffectiveAccessLevel / AccessRequest。body/raw/context/ExtraViews はさらに Adapter / View / Result / Access / GrantId / Why(失敗時) / HowToProceed(Grant不足時)。

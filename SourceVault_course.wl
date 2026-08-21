@@ -116,6 +116,14 @@ SourceVaultExamSetPoints::usage =
   "SourceVaultExamSetPoints[examId, weights] は配点を再設定する。weights は \"g-n\"->点 の Association か、出題順の点リスト。戻り値に \"Total\" を含む。";
 SourceVaultExamAnswerKey::usage =
   "SourceVaultExamAnswerKey[examId] は <|\"問1-1\"->\"3\",...|> 形式の模範解答 Association を返す (模範解答.wl 互換)。";
+SourceVaultExamAnswerKeyView::usage =
+  "SourceVaultExamAnswerKeyView[examId] は模範解答の一覧を Dataset で返す (問番号 / スロット / 正解 / 配点 / 単元 / 原問か改変か / 見出し)。個人情報は含まない。opts: \"Export\"->path.xlsx。";
+SourceVaultExamAnswers::usage =
+  "SourceVaultExamAnswers[examId, opts] は答案ごとの読み取り結果を返す core 関数 (PL 1.0)。各行: Scan / StudentID / Name / Answers (スロット->読み取り値) / Marks / Total / Unresolved。\n" <>
+  "opts: \"Scans\"->All|{i..}, \"Assigned\"->False (True で突合せ済みのみ)。";
+SourceVaultExamAnswersView::usage =
+  "SourceVaultExamAnswersView[examId, opts] は受講者ごとの解答一覧を Dataset で返す (行=学生、列=問番号、値=OCR で読み取った解答)。\n" <>
+  "opts: \"Marks\"->False (True で採点記号 ○/△/×/? を表示), \"Assigned\", \"Scans\", \"Export\"->path.xlsx。";
 SourceVaultExamRecordHistory::usage =
   "SourceVaultExamRecordHistory[examId] は実施済み試験として各問題の ExamHistory に出題情報 (年度 / 試験名 / 問題番号 / 配点) を刻む。";
 SourceVaultExamSlots::usage =
@@ -255,7 +263,7 @@ SourceVaultCourseRosters::usage =
 SourceVaultCourseWebReportFolders::usage =
   "SourceVaultCourseWebReportFolders[] は <udb>/webreports 配下の回収フォルダ (manifest.wxf) 一覧を返す。";
 SourceVaultCourseWebReportIngest::usage =
-  "SourceVaultCourseWebReportIngest[lecture, opts] は回収フォルダを名簿と結合して Cerezo と同一形式の SourceVault スナップショット (PL 1.0) へ取り込む。名簿結合は履修取消 (Withdrawn) も含む全登録履歴で行う (成績 View/成績簿は Enrolled のみ)。作業用アカウント (q*/b0000*/k.imai/imai/guest) は既定で除外し \"Ignored\" に報告。再実行は内容が変わった学生だけ新バージョン。opts: \"ReportDescs\"->All|{\"0801\"..}, \"Chapters\"->All, \"ReportOptions\"->All, \"Roster\"->Automatic, \"AssignmentName\"->Automatic, \"AllowMissingNames\"->False (True で名簿外提出者を氏名なしで取込), \"IgnoreIDs\"->Automatic|None|{id..}|述語, \"Folder\"->Automatic。";
+  "SourceVaultCourseWebReportIngest[lecture, opts] は回収フォルダを名簿と結合して Cerezo と同一形式の SourceVault スナップショット (PL 1.0) へ取り込む。名簿結合は履修取消 (Withdrawn) も含む全登録履歴で行う (成績 View/成績簿は Enrolled のみ)。除外対象のアカウント (作業用アカウント等) は \"Ignored\" に報告する。除外条件は \"IgnoreIDs\" で指定する (公開版の Automatic は除外なし)。再実行は内容が変わった学生だけ新バージョン。opts: \"ReportDescs\"->All|{\"0801\"..}, \"Chapters\"->All, \"ReportOptions\"->All, \"Roster\"->Automatic, \"AssignmentName\"->Automatic, \"AllowMissingNames\"->False (True で名簿外提出者を氏名なしで取込), \"IgnoreIDs\"->Automatic|None|{id..}|述語, \"Folder\"->Automatic。";
 SourceVaultCourseWebReportRuns::usage =
   "SourceVaultCourseWebReportRuns[] / [lecture] は取込済み Web レポート run の一覧 (正準 sv:// URI 付き) を返す。PL 1.0。";
 SourceVaultCourseWebReportLatestRun::usage =
@@ -300,19 +308,28 @@ SourceVaultCourseAssessmentsView::usage =
 SourceVaultCourseAssessmentRemove::usage =
   "SourceVaultCourseAssessmentRemove[lecture, itemId] は採点項目をスコアごと削除する。";
 SourceVaultCourseSetScores::usage =
-  "SourceVaultCourseSetScores[lecture, itemId, scores] は素点を投入する。scores: <|学籍番号->点|> または {{学籍番号,点}..}。既定 \"Mode\"->\"Merge\" (既存に上書きマージ)、\"Replace\" で総入替え。名簿にない学籍番号は \"Unknown\" として報告する (投入はしない)。";
+  "SourceVaultCourseSetScores[lecture, itemId, scores] は素点を投入する。scores: <|学籍番号->点|> または {{学籍番号,点}..}。既定 \"Mode\"->\"Merge\" (既存に上書きマージ)、\"Replace\" で総入替え。名簿にない学籍番号は \"Unknown\" として報告する (投入はしない)。\"Counts\"-><|学籍番号->提出件数|> で提出件数も投入でき (Mode は共通)、成績簿の基礎点加算 (提出 1 件あたり) の根拠になる。";
 SourceVaultCourseImportExamScores::usage =
-  "SourceVaultCourseImportExamScores[lecture, examId, opts] は SourceVaultExamScore の結果を採点項目として取り込む (項目 id 既定 = examId、MaxScore 既定 = 配点合計)。opts: \"ItemId\", \"Title\", \"Weight\", \"MaxScore\", \"Mode\"。突合せ未確定の答案は取り込まず \"Unassigned\" に列挙する。";
+  "SourceVaultCourseImportExamScores[lecture, examId, opts] は SourceVaultExamScore の結果を採点項目として取り込む (項目 id 既定 = examId、Kind \"Exam\"、MaxScore 既定 = 配点合計。受験者は提出件数 1)。基礎点は成績簿の計算時に SourceVaultCourseGradebook 系の \"BaseScore\"->{Exam, Summary, Quiz} で適用される。opts: \"ItemId\", \"Title\", \"Weight\", \"MaxScore\", \"Mode\"。突合せ未確定の答案は取り込まず \"Unassigned\" に列挙する。";
 SourceVaultCourseWeights::usage =
   "SourceVaultCourseWeights[lecture] は総合点の重み連想 <|itemId->weight|> を返す (登録済み項目から自動生成。未設定は 1)。この連想を編集して SourceVaultCourseSetWeights で更新する。";
 SourceVaultCourseSetWeights::usage =
   "SourceVaultCourseSetWeights[lecture, weights] は総合点の重みを更新する。weights は <|itemId->weight|> (一部だけでもよい)。未知の itemId は拒否。スコアは変更しないので、成績が出そろってから何度でも重みを変えて再計算できる。";
 SourceVaultCourseGradebook::usage =
-  "SourceVaultCourseGradebook[lecture, opts] は全採点項目のスコア表と総合点を返す core 関数 (PL 1.0)。総合点 = Min[\"Cap\", \"Scale\" * 100 * Sum[素点/満点 * 重み] / Sum[重み]]。opts: \"Missing\"->\"Zero\" (既定) | \"Exclude\" (その項目を重みから外す), \"Status\"->\"Enrolled\" (既定) | All, \"Round\" (1), \"Scale\"->1 (救済係数 1+α。各項目の満点が正規化重みの 1+α 倍ぶんまで寄与), \"Cap\"->None (数値なら総合点を Min でクリップ。例 100)。";
+  "SourceVaultCourseGradebook[lecture, opts] は全採点項目のスコア表と総合点を返す core 関数 (PL 1.0)。Kind 別リスト opts は {Exam (試験), Summary (Report), Quiz (小テスト)} の順 (4 つ目で Other。値 1 つなら全種共通):\n" <>
+  "  \"BaseScore\"->{0,0,0}  提出 1 件あたりの基礎点 (素点の単位。提出件数 = item の Counts。試験は採点済み=受験 1 件)\n" <>
+  "  \"Curve\"->None         素点(+基礎点) -> 100 点換算の換算曲線。None = 100×素点/満点、数値 s = その s 倍 (線形)、点列 {{素点,換算点}..} = 最小二乗フィット (2 点は直線、3 点以上は 2 次式 = NonlinearModelFit[pts, p x^2+q x+r, {p,q,r}, x] 相当)、FittedModel / 純関数 / InterpolatingFunction / 1 変数の式 (Fit の戻り値等) = その値を 100 点換算とみなす (満点で割らない)。Kind ごとに {Exam, Summary, Quiz} のリストで与える (実際に用いる換算は運用側で指定する)\n" <>
+  "  \"Cap\"->{1,1,1}        換算点の上限 = 100 × 値 (1 なら 100 点。None で上限なし)。下限は 0\n" <>
+  "  \"Weight\"->Automatic   総合点のバランス {wE,wS,wQ} (合計で正規化。Automatic = SourceVaultCourseSetWeights の項目重み。同 Kind に複数項目があれば満点比で配分)\n" <>
+  "  \"TotalBaseScore\"->0 / \"TotalScale\"->1 / \"TotalCap\"->100  総合点のベース加点 / 倍率 / 上限 (None で上限なし)\n" <>
+  "計算: 加点後_i = 素点_i + 提出件数_i × BaseScore_k、換算点_i = Clip[Curve_k[加点後_i], {0, 100×Cap_k}]、寄与点_i = 重み_i/Σ重み × 換算点_i、構成点 (test/summary/quiz) = TotalScale × Kind 別の寄与点合計、総合点 = Min[TotalCap, TotalScale × Σ寄与点 + TotalBaseScore] (= 構成点の和 + TotalBaseScore を上限クリップ)。\n" <>
+  "行: Scores (素点) / Counts (提出件数) / Adjusted (加点後 = 素点+基礎点) / Converted (換算点 0-100) / Contributions (寄与点) / Components (<|test, summary, quiz[, other]|>) / MissingItems / WeightUsed / Total。その他 opts: \"Missing\"->\"Zero\" (既定。未入力は 0 点で重みに数える) | \"Exclude\" (重みから外す), \"Status\"->\"Enrolled\" (既定) | All, \"Round\" (1)。";
 SourceVaultCourseGradebookView::usage =
-  "SourceVaultCourseGradebookView[lecture, opts] は成績表の Dataset 表示 (PL 1.0)。";
+  "SourceVaultCourseGradebookView[lecture, opts] は成績表の Dataset 表示 (PL 1.0)。列 = StudentID / StudentName / Status / 各項目の素点 (換算前) / test・summary・quiz (Kind 別の換算後寄与点 × TotalScale。Other 種別があれば other) / Total (= test+summary+quiz(+other) + TotalBaseScore、TotalCap で上限。\"TotalRound\"->0 (既定) で整数に四捨五入 (半分は切り上げ)。桁数指定可、None で core の値のまま)。Total (四捨五入後) < \"FailBelow\" の行は背景を \"FailBackground\" (既定 LightRed) にする (既定 None = 色付けなし)。既定 MaxItems->{All, All} で全行・全列をスクロールなしで表示 (MaxItems オプションで変更可)。opts は SourceVaultCourseGradebook と共通 (\"BaseScore\"/\"Curve\"/\"Cap\"/\"Weight\" は {Exam, Summary, Quiz} のリスト、\"TotalBaseScore\"/\"TotalScale\"/\"TotalCap\")。同じ表の Excel 書出しは SourceVaultCourseGradebookExport。";
+SourceVaultCourseGradebookExport::usage =
+  "SourceVaultCourseGradebookExport[lecture, path.xlsx, opts] は SourceVaultCourseGradebookView と同じ opts・同じ列・同じ丸めの表を Excel (拡張子で形式判定) に書き出す。1 行目が列名。セルの背景色は書き出されない。戻り値 <|Status, Exported, Rows, Columns, FailRows|>。PL 1.0。";
 SourceVaultCourseGradeReport::usage =
-  "SourceVaultCourseGradeReport[lecture, opts] は成績報告 (日本語見出しの Dataset)。opts: \"Export\"->path.xlsx でローカル書出し。opts は SourceVaultCourseGradebook と共通。";
+  "SourceVaultCourseGradeReport[lecture, opts] は成績報告 (日本語見出しの Dataset。各項目の素点 + test/summary/quiz の加点後寄与点 + 未入力 + 総合点)。opts: \"Export\"->path.xlsx でローカル書出し。opts は SourceVaultCourseGradebook と共通。";
 
 (* ---- Web サマリー課題の匿名化 vision 採点 ----
    取込済み Web レポート run (Cerezo 同一形式) を、
@@ -343,13 +360,13 @@ SourceVaultCourseSummaryGradeAll::usage =
 SourceVaultCourseSummaryGrades::usage =
   "SourceVaultCourseSummaryGrades[lecture] は採点 registry (<|reportDesc-><|AnnotationRef,GradedAtUTC,..|>|>) を返す。";
 $SourceVaultCourseSummaryLateFactor::usage =
-  "$SourceVaultCourseSummaryLateFactor は遅延提出サマリーの既定減点率 (既定 0.7 = 素点×0.7)。";
+  "$SourceVaultCourseSummaryLateFactor は遅延提出サマリーの既定減点率 (実効点 = 素点 × この値)。公開版の既定は 1.0 = 減点なし。減点する場合は運用側で設定する。";
 SourceVaultCourseSummarySetLateScores::usage =
-  "SourceVaultCourseSummarySetLateScores[lecture, 学籍番号, <|回->素点..|>, opts] は遅延提出サマリーの点数を記録する (キーは回番号 3 または desc \"0301\")。実効点 = 素点 × 減点率で View/合計/成績簿取込に反映され、通常採点より優先。値 None でその回の記録を削除。opts: \"Factor\"->Automatic ($SourceVaultCourseSummaryLateFactor、例 0.7), \"Note\"。PL 1.0。";
+  "SourceVaultCourseSummarySetLateScores[lecture, 学籍番号, <|回->素点..|>, opts] は遅延提出サマリーの点数を記録する (キーは回番号 3 または desc \"0301\")。実効点 = 素点 × 減点率で View/合計/成績簿取込に反映され、通常採点より優先。値 None でその回の記録を削除。opts: \"Factor\"->Automatic ($SourceVaultCourseSummaryLateFactor を使う) | 減点率, \"Note\"。PL 1.0。";
 SourceVaultCourseSummaryLateScores::usage =
   "SourceVaultCourseSummaryLateScores[lecture] は遅延提出の記録 (<|学籍番号キー-><|desc-><|Score,Factor,Effective,Note,RecordedAtUTC|>|>|>) を返す。PL 1.0。";
 SourceVaultCourseSummaryScores::usage =
-  "SourceVaultCourseSummaryScores[lecture, opts] は履修者×各回の点数表 (core, PL 1.0) を返す。未提出・未採点回は 0。opts: \"Descs\"->Automatic。";
+  "SourceVaultCourseSummaryScores[lecture, opts] は履修者×各回の点数表 (core, PL 1.0) を返す。未提出・未採点回は 0。行に SubmittedDescs (提出のあった回 = 取込 run で Submitted / 採点行あり / 遅延記録あり) と Submitted (件数) を含む。opts: \"Descs\"->Automatic。";
 SourceVaultCourseSummaryScoreView::usage =
   "SourceVaultCourseSummaryScoreView[lecture, reportDesc] は各回サマリー課題の Dataset 表示 (学籍番号/氏名/提出/点数/採点根拠。PL 1.0)。提出/遅延セルは保存済み提出物があればリンクになり、クリックで PDF を一時復元して開く。";
 SourceVaultCourseWebReportOpenSubmission::usage =
@@ -357,11 +374,11 @@ SourceVaultCourseWebReportOpenSubmission::usage =
 SourceVaultCourseSummaryTotalsView::usage =
   "SourceVaultCourseSummaryTotalsView[lecture, opts] は全回の点数と合計の Dataset 表示 (採点根拠なし。PL 1.0)。";
 SourceVaultCourseStudentScoreView::usage =
-  "SourceVaultCourseStudentScoreView[lecture, 学籍番号, opts] は受講生 1 名の個票を表示する: サマリー各回 (遅延の実効点込み)・小テスト各回 (Cerezo.wl 弱結合)・成績簿項目 (素点/満点/重み/寄与点)・重み付き総合点。opts: \"Scale\"->1 (救済係数 1+α), \"Cap\"->None, \"Missing\", \"Round\" (SourceVaultCourseGradebook と共通)。PL 1.0。";
+  "SourceVaultCourseStudentScoreView[lecture, 学籍番号, opts] は受講生 1 名の個票を表示する: サマリー各回 (遅延の実効点込み)・小テスト各回 (素点/満点。Cerezo.wl 弱結合)・成績簿項目 (素点/提出件数/加点後/満点/換算点/重み/寄与点。既定以外の BaseScore/Curve/Cap/Weight/Total 系設定は見出しに表示)・総合点。opts は SourceVaultCourseGradebook と共通 (\"BaseScore\"/\"Curve\"/\"Cap\"/\"Weight\" は {Exam, Summary, Quiz} のリスト、\"TotalBaseScore\"/\"TotalScale\"/\"TotalCap\", \"Missing\", \"Round\")。PL 1.0。";
 SourceVaultCourseImportCerezoQuizScores::usage =
-  "SourceVaultCourseImportCerezoQuizScores[lecture, opts] は CerezoExamIngest 済みの小テスト成績 (全回合計) を成績簿の採点項目として取り込む (既定 ItemId \"cerezoquiz\"、MaxScore = 各回満点の合計)。opts: \"Selector\"->Automatic (既定 = lecture 名キーワード), \"ItemId\", \"Title\", \"Weight\", \"MaxScore\", \"Mode\"。Cerezo.wl 必須 (弱結合)。";
+  "SourceVaultCourseImportCerezoQuizScores[lecture, opts] は CerezoExamIngest 済みの小テスト成績 (全回合計の素点) と提出回数 (成績が数値の回の数) を成績簿の採点項目として取り込む (既定 ItemId \"cerezoquiz\"、Kind \"Quiz\"、MaxScore = 各回満点の合計)。基礎点は取込時でなく成績簿の計算時に SourceVaultCourseGradebook 系の \"BaseScore\"->{Exam, Summary, Quiz} で適用される。opts: \"Selector\"->Automatic (既定 = lecture 名キーワード), \"ItemId\", \"Title\", \"Weight\", \"MaxScore\", \"Mode\"。Cerezo.wl 必須 (弱結合)。";
 SourceVaultCourseImportSummaryScores::usage =
-  "SourceVaultCourseImportSummaryScores[lecture, opts] はサマリー合計点を成績簿の採点項目として取り込む (既定 ItemId \"websummary\"、MaxScore = 10×採点回数)。取り込み後は SourceVaultCourseImportExamScores 済みの定期試験と合わせて SourceVaultCourseGradebookView / SourceVaultCourseSetWeights (重み連想) で合併・再計算できる。opts: \"ItemId\", \"Title\", \"Weight\", \"MaxScore\", \"Mode\"。";
+  "SourceVaultCourseImportSummaryScores[lecture, opts] はサマリー合計点 (素点。遅延は実効点) と提出件数を成績簿の採点項目として取り込む (既定 ItemId \"websummary\"、Kind \"Report\"、MaxScore = 10×採点回数)。基礎点 (提出 1 件あたり) は取込時でなく成績簿の計算時に SourceVaultCourseGradebook 系の \"BaseScore\"->{Exam, Summary, Quiz} で適用される。取り込み後は SourceVaultCourseImportExamScores 済みの定期試験と合わせて SourceVaultCourseGradebookView / SourceVaultCourseSetWeights (重み連想) で合併・再計算できる。opts: \"ItemId\", \"Title\", \"Weight\", \"MaxScore\", \"Mode\"。";
 
 Begin["`CoursePrivate`"]
 
@@ -373,7 +390,8 @@ If[!ValueQ[$SourceVaultExercisesRoot], $SourceVaultExercisesRoot = Automatic];
 If[!ValueQ[$SourceVaultExerciseDefaultPrivacyLevel], $SourceVaultExerciseDefaultPrivacyLevel = 0.3];
 If[!ValueQ[$SourceVaultExercisesViewLimit], $SourceVaultExercisesViewLimit = 50];
 If[!ValueQ[$SourceVaultExamFontFamily], $SourceVaultExamFontFamily = Automatic];
-If[!ValueQ[$SourceVaultExamInstructor], $SourceVaultExamInstructor = "今井 勝喜"];
+(* 担当教員名は環境固有なので公開版では空 (非公開拡張または利用者が設定する) *)
+If[!ValueQ[$SourceVaultExamInstructor], $SourceVaultExamInstructor = ""];
 If[!ValueQ[$SourceVaultExamTemplatePDF], $SourceVaultExamTemplatePDF = Automatic];
 
 iEXFont[] := If[StringQ[$SourceVaultExamFontFamily], $SourceVaultExamFontFamily,
@@ -412,6 +430,37 @@ iEXReadWXF[path_String] := Module[{st, bytes},
   Quiet @ Check[BinaryDeserialize[bytes], Missing["Corrupt", path]]];
 
 iEXFail[reason_String, extra___Rule] := Failure["ExerciseStore", <|"MessageTemplate" -> reason, extra|>];
+
+(* ---- privacy の正準 exit (SourceVault_privacy.wl への弱結合) ----
+   答案・履修者・成績を返す関数は、返り値に PL を載せてから返す。
+   ・Core 系 (生データ) = SourceVaultPrivateResult: 値の形は変えず PL を記録し
+     出力セルをマークする。下流の Select/Dataset がそのまま効く。
+   ・View 系 (UI) = SourceVaultPrivateView: PL を記録し、閾値以上なら
+     SourceVaultPrivate[...] で包む (赤枠 + PL バッジ)。
+   privacy 層が無い環境 (部分ロード・headless テスト) では値をそのまま返す。 *)
+$iEXPrivacyLevel = 1.0;   (* 答案・履修者・成績はすべて PL 1.0 *)
+
+iEXPrivateResult[expr_, pl_ : Automatic] := Module[
+  {r = expr, lv = If[NumericQ[pl], N[pl], $iEXPrivacyLevel]},
+  Which[
+    Length[DownValues[SourceVault`SourceVaultPrivateResult]] > 0,
+      Quiet @ Check[SourceVault`SourceVaultPrivateResult[r, lv], r],
+    Length[DownValues[SourceVault`SourceVaultNotePrivacy]] > 0,
+      Quiet @ Check[SourceVault`SourceVaultNotePrivacy[lv], Null]; r,
+    True, r]];
+
+iEXPrivateView[expr_, pl_ : Automatic] := Module[
+  {r = expr, lv = If[NumericQ[pl], N[pl], $iEXPrivacyLevel]},
+  Which[
+    Length[DownValues[SourceVault`SourceVaultPrivateView]] > 0,
+      Quiet @ Check[SourceVault`SourceVaultPrivateView[r, lv], r],
+    Length[DownValues[SourceVault`SourceVaultNotePrivacy]] > 0,
+      Quiet @ Check[SourceVault`SourceVaultNotePrivacy[lv], Null]; r,
+    True, r]];
+
+(* 失敗 (Failure) は私的データを載せないので exit を通さない *)
+iEXPrivateResult[f_Failure, ___] := f;
+iEXPrivateView[f_Failure, ___] := f;
 
 iEXNowIso[] := DateString[TimeZoneConvert[Now, 0], "ISODateTime"] <> "Z";
 
@@ -1707,8 +1756,9 @@ iEXComputeSheetLayout[exam_Association, recs_Association] := Module[
     "Cells" -> cells,
     "GroupRows" -> groupRows,
     "LabelX" -> x0, "LabelWidth" -> labelW,
-    "IDRect" -> {{326., 83.5}, {396., 128.5}},
-    "NameRect" -> {{414., 83.5}, {514., 128.5}},
+    (* 様式依存。非公開拡張が実測値で上書きする *)
+    "IDRect" -> $iEXIDRect,
+    "NameRect" -> $iEXNameRect,
     "AnswerAreaTop" -> 200., "AnswerAreaBottom" -> y + 4.,
     "HeaderBottom" -> 157.|>];
 
@@ -1744,48 +1794,57 @@ iEXTemplateGraphic[] := Module[{p = iEXTemplatePath[], g},
   $iEXTemplateCache[p] = g;
   g];
 
-(* 記入値 (テンプレート有無に共通)。位置は公式様式実測。 *)
+(* ---- 解答用紙の様式 ----
+   公開版は「大学名の入らない一般的な解答用紙」の体裁と座標を持つ。
+   実際に使う様式 (所属機関の公式用紙の文言と実測座標) は環境固有なので、
+   非公開拡張 SourceVault_course_private.wl が下の変数と 2 つの描画関数を
+   上書きする。上書きが無くても公開版だけで用紙生成・突合せ・採点は成立する
+   (ただし公式用紙で印刷・回収した答案の較正には実測値が要る)。 *)
+
+If[!ValueQ[$iEXFormTitle], $iEXFormTitle = "試験問題・解答用紙"];
+If[!ValueQ[$iEXIDRect], $iEXIDRect = {{320., 80.}, {400., 128.}}];
+If[!ValueQ[$iEXNameRect], $iEXNameRect = {{420., 80.}, {520., 128.}}];
+
+(* 記入値 (テンプレート有無に共通) *)
 iEXHeaderValuePrims[exam_Association] := Module[{ff = iEXFont[], ds = exam["DateSpec"]},
-  {(* 科目名が欄からはみ出さないよう字数で級数を落とす (欄幅 76-162.5pt) *)
+  {(* 科目名が欄からはみ出さないよう字数で級数を落とす *)
    With[{ttl = ToString[exam["Title"]]},
     Text[Style[ttl, Which[
        StringLength[ttl] <= 6, 11, StringLength[ttl] <= 9, 9.5,
-       StringLength[ttl] <= 12, 7, True, 6], FontFamily -> ff], {119, iEXgy[95]}]],
-   Text[Style[$SourceVaultExamInstructor, 10, FontFamily -> ff], {119, iEXgy[117.5]}],
-   Text[Style[ToString[exam["Duration"]], 16, FontFamily -> ff], {196, iEXgy[113]}],
-   Text[Style[ToString[ds[[1]]], 10, FontFamily -> ff], {402, iEXgy[63.5]}, {1, 0}],
-   Text[Style[ToString[ds[[2]]], 10, FontFamily -> ff], {436, iEXgy[63.5]}, {1, 0}],
-   Text[Style[ToString[ds[[3]]], 10, FontFamily -> ff], {471, iEXgy[63.5]}, {1, 0}],
-   Text[Style[ToString[ds[[4]]], 10, FontFamily -> ff], {502, iEXgy[63.5]}, {1, 0}],
-   Text[Style[ToString[ds[[5]]], 10, FontFamily -> ff], {541, iEXgy[63.5]}, {1, 0}],
-   Circle[{209., iEXgy[145.]}, 6.5],
-   Text[Style[ToString[Lookup[exam, "Allowed", ""]], 10, FontFamily -> ff], {240, iEXgy[146]}, {-1, 0}]}];
+       StringLength[ttl] <= 12, 7, True, 6], FontFamily -> ff], {140, iEXgy[92]}]],
+   Text[Style[$SourceVaultExamInstructor, 10, FontFamily -> ff], {140, iEXgy[116]}],
+   Text[Style[ToString[exam["Duration"]], 16, FontFamily -> ff], {230, iEXgy[112]}],
+   MapThread[Text[Style[ToString[#1], 10, FontFamily -> ff], {#2, iEXgy[62]}, {1, 0}] &,
+    {Take[ds, UpTo[5]], Take[{400, 435, 470, 500, 540}, UpTo[Length[Take[ds, UpTo[5]]]]]}],
+   Text[Style[ToString[Lookup[exam, "Allowed", ""]], 10, FontFamily -> ff],
+    {240, iEXgy[145]}, {-1, 0}]}];
 
-(* テンプレートが無い場合の内蔵描画 (公式様式を同一座標で模す) *)
-iEXDrawnHeaderPrims[exam_Association] := Module[{ff = iEXFont[], t = 83.5, m = 106., b = 128.5, vx},
-  vx = {32, 76, 162.5, 179, 223, 308, 326, 396, 414, 514, 532, 576};
+(* テンプレートが無い場合の内蔵描画 (一般的な体裁) *)
+iEXDrawnHeaderPrims[exam_Association] := Module[
+  {ff = iEXFont[], t = 80., m = 104., b = 128., vx},
+  vx = {30, 90, 190, 210, 250, 300, 320, 400, 420, 520, 540, 570};
   Join[
-   {Text[Style["福山大学試験問題・解答用紙", Bold, 15, FontFamily -> ff], {42, iEXgy[60]}, {-1, 0}]},
-   MapThread[Text[Style[#1, 10, FontFamily -> ff], {#2, iEXgy[63.5]}] &,
-    {{"年", "月", "日", "曜日", "時限"}, {408, 442, 477, 512, 553}}],
-   {Line[{{32, iEXgy[t]}, {576, iEXgy[t]}}],
-    Line[{{32, iEXgy[b]}, {576, iEXgy[b]}}],
-    Line[{{32, iEXgy[m]}, {162.5, iEXgy[m]}}]},
+   {Text[Style[$iEXFormTitle, Bold, 15, FontFamily -> ff], {40, iEXgy[58]}, {-1, 0}]},
+   MapThread[Text[Style[#1, 10, FontFamily -> ff], {#2, iEXgy[62]}] &,
+    {{"年", "月", "日", "曜日", "時限"}, {406, 441, 476, 506, 546}}],
+   {Line[{{30, iEXgy[t]}, {570, iEXgy[t]}}],
+    Line[{{30, iEXgy[b]}, {570, iEXgy[b]}}],
+    Line[{{30, iEXgy[m]}, {190, iEXgy[m]}}]},
    Map[Line[{{#, iEXgy[t]}, {#, iEXgy[b]}}] &, vx],
-   {Text[Style["試験科目", 8, FontFamily -> ff], {54, iEXgy[95]}],
-    Text[Style["担当教員", 8, FontFamily -> ff], {54, iEXgy[117.5]}],
-    Text[Style["試\n験\n時\n間", 6.5, FontFamily -> ff], {170.7, iEXgy[106]}],
-    Text[Style["分", 9, FontFamily -> ff], {214, iEXgy[118]}],
-    Text[Style["学科", 8, FontFamily -> ff], {289, iEXgy[96]}],
-    Text[Style["年次", 8, FontFamily -> ff], {289, iEXgy[117.5]}],
-    Text[Style["学\n生\n番\n号", 6.5, FontFamily -> ff], {317, iEXgy[106]}],
-    Text[Style["氏", 8, FontFamily -> ff], {405, iEXgy[96]}],
-    Text[Style["名", 8, FontFamily -> ff], {405, iEXgy[117.5]}],
-    Text[Style["採", 8, FontFamily -> ff], {523, iEXgy[96]}],
-    Text[Style["点", 8, FontFamily -> ff], {523, iEXgy[117.5]}],
+   {Text[Style["試験科目", 8, FontFamily -> ff], {60, iEXgy[92]}],
+    Text[Style["担当教員", 8, FontFamily -> ff], {60, iEXgy[116]}],
+    Text[Style["試\n験\n時\n間", 6.5, FontFamily -> ff], {200, iEXgy[104]}],
+    Text[Style["分", 9, FontFamily -> ff], {242, iEXgy[117]}],
+    Text[Style["学科", 8, FontFamily -> ff], {285, iEXgy[92]}],
+    Text[Style["年次", 8, FontFamily -> ff], {285, iEXgy[116]}],
+    Text[Style["学\n生\n番\n号", 6.5, FontFamily -> ff], {310, iEXgy[104]}],
+    Text[Style["氏", 8, FontFamily -> ff], {410, iEXgy[92]}],
+    Text[Style["名", 8, FontFamily -> ff], {410, iEXgy[116]}],
+    Text[Style["採", 8, FontFamily -> ff], {530, iEXgy[92]}],
+    Text[Style["点", 8, FontFamily -> ff], {530, iEXgy[116]}],
     Text[Style["（注）筆記用具以外の持込品　　1. なし　　2. あり（　　　　　　　　　　　　　　）",
-      9, FontFamily -> ff], {42, iEXgy[146]}, {-1, 0}],
-    Line[{{32, iEXgy[157]}, {576, iEXgy[157]}}]}]];
+      9, FontFamily -> ff], {40, iEXgy[145]}, {-1, 0}],
+    Line[{{30, iEXgy[155]}, {570, iEXgy[155]}}]}]];
 
 iEXHeaderPrims[exam_Association, layout_Association] := Module[{tpl = iEXTemplateGraphic[]},
   Join[
@@ -2155,11 +2214,13 @@ SourceVaultExamSheetIngest[examId_String, source_, OptionsPattern[]] := Module[
      用紙なので、差が出るのは印字された科目名などだけ)。
    ============================================================ *)
 
-(* pt 座標 (y は上から)。学生番号欄 (x 326-396) / 氏名欄 (414-514) は除く *)
-$iEXHeaderRegions = <|
-  "Subject" -> {{76., 83.5}, {162.5, 106.}},    (* 試験科目 *)
-  "Duration" -> {{179., 104.}, {223., 128.5}},  (* 試験時間 *)
-  "Date" -> {{386., 53.}, {562., 73.}}|>;       (* 年月日曜時限 (表より上) *)
+(* pt 座標 (y は上から)。学生番号欄・氏名欄は照合領域に入れない。
+   様式依存なので非公開拡張が実測値で上書きする (公開版は一般的な体裁の座標)。 *)
+If[!ValueQ[$iEXHeaderRegions],
+  $iEXHeaderRegions = <|
+    "Subject" -> {{92., 80.}, {188., 104.}},    (* 試験科目 *)
+    "Duration" -> {{212., 102.}, {248., 128.}}, (* 試験時間 *)
+    "Date" -> {{384., 52.}, {560., 72.}}|>];    (* 年月日曜時限 (表より上) *)
 
 $iEXHeaderWeights = <|"Subject" -> 0.6, "Duration" -> 0.2, "Date" -> 0.2|>;
 
@@ -2513,7 +2574,9 @@ iEXStudentInfo[g_Association, index_Association, normId_] := Module[
    ・較正は「ページ幅に対する割合」で持つので、画像を縮小しても効く。
    ============================================================ *)
 
-$iEXExpectedVRules = {32., 76., 162.5, 179., 223., 308., 326., 396., 414., 514., 532., 576.};
+(* 表の縦罫 (較正の照合先)。様式依存なので非公開拡張が実測値で上書きする *)
+If[!ValueQ[$iEXExpectedVRules],
+  $iEXExpectedVRules = {30., 90., 190., 210., 250., 300., 320., 400., 420., 520., 540., 570.}];
 $iEXIdentityCalib = <|"X" -> {0., 1./595.}, "Y" -> {0., 1./842.},
   "Status" -> "Identity", "VRuleHits" -> 0, "ScaleRel" -> {1., 1.}, "OffsetPt" -> {0., 0.}|>;
 
@@ -3137,6 +3200,78 @@ SourceVaultExamScore[examId_String, OptionsPattern[]] := Module[
       "Total" -> Total[Values[scores]], "Unresolved" -> unresolved,
       "Marks" -> marks, "Scores" -> scores, "Answers" -> recog|>],
     {i, Lookup[g, "ScanCount", 0]}]];
+
+(* ============================================================
+   模範解答の一覧 / 読み取った答案の一覧
+   ・模範解答は出題内容なので個人情報を含まない (Public)。
+   ・答案の読み取り結果は受講者に紐づくので PL 1.0 (Private)。
+   ・どちらも用紙の印刷番号 (通し番号なら 1..34) で並べる。
+   ============================================================ *)
+
+Options[SourceVaultExamAnswerKeyView] = {"Export" -> None};
+SourceVaultExamAnswerKeyView[examId_String, OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], keys, disp, pts, key, slots, table, path},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  keys = iEXExamKeys[exam];
+  disp = iEXDisplayNumbers[exam];
+  pts = Lookup[exam, "Points", <||>];
+  key = KeyMap[StringDrop[#, 1] &, SourceVaultExamAnswerKey[examId]];
+  slots = SourceVaultExamSlots[examId];
+  table = Map[Function[k, Module[{id = Lookup[slots, k, Missing[]], rec},
+     rec = If[StringQ[id], SourceVaultExerciseGet[id], Missing[]];
+     <|"問" -> Lookup[disp, k, k], "スロット" -> k,
+       "正解" -> ToString[Lookup[key, k, ""]],
+       "配点" -> Lookup[pts, k, 0],
+       "単元" -> If[AssociationQ[rec], Replace[Lookup[rec, "Unit", ""], _Missing -> ""], ""],
+       "出題" -> If[AssociationQ[rec] && StringQ[Lookup[rec, "BaseId", Missing[]]],
+         "改変", "原問"],
+       "見出し" -> If[AssociationQ[rec],
+         ToString[Replace[Lookup[rec, "Headline", ""], _Missing -> ""]], ""]|>]], keys];
+  If[table === {}, Return[iEXFail["NoProblems", "ExamId" -> examId]]];
+  path = OptionValue["Export"];
+  If[StringQ[path],
+    Export[path, Prepend[Map[Values, table], Keys[First[table]]]];
+    <|"Status" -> "OK", "Exported" -> path, "Rows" -> Length[table]|>,
+    Dataset[table, MaxItems -> {All, All}]]];
+
+Options[SourceVaultExamAnswers] = {"Scans" -> All, "Assigned" -> False};
+SourceVaultExamAnswers[examId_String, OptionsPattern[]] := Module[
+  {rows = SourceVaultExamScore[examId]},
+  If[!ListQ[rows], Return[rows]];
+  If[ListQ[OptionValue["Scans"]],
+    rows = Select[rows, MemberQ[OptionValue["Scans"], #["Scan"]] &]];
+  If[TrueQ[OptionValue["Assigned"]], rows = Select[rows, StringQ[#["StudentID"]] &]];
+  SortBy[Map[KeyTake[#, {"Scan", "StudentID", "Name", "Status", "Assigned",
+      "Answers", "Marks", "Total", "Unresolved"}] &, rows],
+    {Replace[#["StudentID"], _Missing -> "zzz"] &, #["Scan"] &}]];
+
+Options[SourceVaultExamAnswersView] = Join[Options[SourceVaultExamAnswers],
+  {"Marks" -> False, "Export" -> None}];
+SourceVaultExamAnswersView[examId_String, opts : OptionsPattern[]] := Module[
+  {exam = SourceVaultExamGet[examId], rows, keys, disp, labels, showMarks, table, path},
+  If[!AssociationQ[exam], Return[iEXFail["ExamNotFound", "ExamId" -> examId]]];
+  rows = SourceVaultExamAnswers[examId,
+    FilterRules[{opts}, Options[SourceVaultExamAnswers]]];
+  If[!ListQ[rows], Return[rows]];
+  keys = iEXExamKeys[exam];
+  disp = iEXDisplayNumbers[exam];
+  labels = Map[ToString[Lookup[disp, #, #]] &, keys];
+  showMarks = TrueQ[OptionValue["Marks"]];
+  table = Map[Function[r, Join[
+     <|"学籍番号" -> Replace[r["StudentID"], _Missing -> "(未割当)"],
+       "氏名" -> Replace[r["Name"], _Missing -> ""],
+       "答案" -> r["Scan"]|>,
+     Association[MapThread[Function[{k, lbl},
+        lbl -> If[showMarks, Lookup[r["Marks"], k, "?"],
+          Replace[ToString[Lookup[r["Answers"], k, ""]], "" -> "-"]]], {keys, labels}]],
+     <|"合計" -> r["Total"], "未確定" -> r["Unresolved"]|>]], rows];
+  If[table === {}, Return[iEXFail["NoScoredSheets", "ExamId" -> examId]]];
+  path = OptionValue["Export"];
+  If[StringQ[path],
+    Export[path, Prepend[Map[Values, table], Keys[First[table]]]];
+    <|"Status" -> "OK", "Exported" -> path, "Rows" -> Length[table],
+      "Columns" -> Length[Keys[First[table]]]|>,
+    Dataset[table, MaxItems -> {All, All}]]];
 
 (* ============================================================
    設問ごとの分析 (正答率 / 誤答の散らばり / 識別力)
@@ -5946,8 +6081,10 @@ iCWRAssignmentName[nameOpt_, lecture_, desc_] := Module[{unit, ropt},
         "課題 " <> desc]]];
 
 (* 非学生アカウント (オーナー作業用/ゲスト) は取込対象から既定で除外する *)
-iCWRIgnoredIDQ[nid_String] := StringStartsQ[nid, "q"] || StringStartsQ[nid, "b0000"] ||
-  MemberQ[{"k.imai", "imai", "guest"}, nid];
+(* 取込から除外するアカウントの述語。公開版は「除外なし」が既定。
+   実運用の除外リスト (学内の作業用アカウント) は非公開拡張が上書きする。
+   呼び出し側で "IgnoreIDs" -> {id..} / 述語 を渡しても指定できる。 *)
+iCWRIgnoredIDQ[_String] := False;
 
 (* 名簿結合キー: クラウド uid は「英字接頭辞+学籍番号」(t5425016)、
    履修登録簿は素の学籍番号 (5425016)。先頭英字を剥がした数字部 (5 桁以上の
@@ -6552,6 +6689,7 @@ SourceVaultCourseAssessmentRegister[lecture_String, itemId_String, spec_Associat
     "Source" -> Lookup[spec, "Source", Lookup[old, "Source", Missing["Manual"]]],
     "Note" -> Lookup[spec, "Note", Lookup[old, "Note", ""]],
     "Scores" -> Lookup[old, "Scores", <||>],
+    "Counts" -> Lookup[old, "Counts", <||>],
     "Created" -> Lookup[old, "Created", iEXNowIso[]], "Updated" -> iEXNowIso[]|>;
   items[itemId] = item;
   If[iCWRSaveGradebook[lecture, Join[gb, <|"Items" -> items|>]] === $Failed,
@@ -6600,9 +6738,13 @@ iCWRScorePairs[scores_] := Which[
   ListQ[scores] && AllTrue[scores, ListQ[#] && Length[#] >= 2 &], scores,
   True, $Failed];
 
-Options[SourceVaultCourseSetScores] = {"Mode" -> "Merge", "AllowUnknown" -> False};
+(* "Counts" = 提出件数 <|学籍番号->n|> (基礎点加算の根拠。Mode は Scores と共通。
+   None のとき Replace なら旧 Counts も捨てる = 素点と件数の整合を保つ) *)
+Options[SourceVaultCourseSetScores] = {"Mode" -> "Merge", "AllowUnknown" -> False,
+  "Counts" -> None};
 SourceVaultCourseSetScores[lecture_String, itemId_String, scores_, OptionsPattern[]] := Module[
-  {gb = iCWRGradebook[lecture], items, item, pairs, roster, cur, unknown = {}, bad = {}, mode},
+  {gb = iCWRGradebook[lecture], items, item, pairs, roster, cur, unknown = {}, bad = {}, mode,
+   cpairs, curCounts},
   If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
   mode = ToString[OptionValue["Mode"]];
   If[!MemberQ[{"Merge", "Replace"}, mode], Return[iEXFail["BadMode", "Mode" -> mode]]];
@@ -6613,6 +6755,8 @@ SourceVaultCourseSetScores[lecture_String, itemId_String, scores_, OptionsPatter
   item = items[itemId];
   pairs = iCWRScorePairs[scores];
   If[!ListQ[pairs], Return[iEXFail["BadScores"]]];
+  cpairs = If[OptionValue["Counts"] === None, None, iCWRScorePairs[OptionValue["Counts"]]];
+  If[cpairs === $Failed, Return[iEXFail["BadCounts"]]];
   roster = iCWREnrollmentRoster[lecture];
   cur = If[mode === "Replace", <||>, Lookup[item, "Scores", <||>]];
   Scan[Function[p, Module[{k = iCWRNormalizeID[p[[1]]], v = p[[2]]},
@@ -6622,12 +6766,23 @@ SourceVaultCourseSetScores[lecture_String, itemId_String, scores_, OptionsPatter
         AppendTo[unknown, ToString[p[[1]]]],
       True, cur[k] = v]]], pairs];
   item["Scores"] = cur;
+  curCounts = Which[
+    ListQ[cpairs], If[mode === "Replace", <||>, Lookup[item, "Counts", <||>]],
+    mode === "Replace", <||>,
+    True, Lookup[item, "Counts", <||>]];
+  If[ListQ[cpairs],
+    Scan[Function[p, Module[{k = iCWRNormalizeID[p[[1]]], v = p[[2]]},
+      If[NumericQ[v] && v >= 0 &&
+          !(AssociationQ[roster] && !KeyExistsQ[roster, k] && !TrueQ[OptionValue["AllowUnknown"]]),
+        curCounts[k] = v]]], cpairs]];
+  item["Counts"] = curCounts;
   item["Updated"] = iEXNowIso[];
   items[itemId] = item;
   If[iCWRSaveGradebook[lecture, Join[gb, <|"Items" -> items|>]] === $Failed,
     Return[iEXFail["GradebookWriteFailed"]]];
   <|"Status" -> If[unknown === {} && bad === {}, "OK", "Partial"],
     "Lecture" -> lecture, "ItemId" -> itemId, "Scored" -> Length[cur],
+    "Counted" -> Length[curCounts],
     "Unknown" -> unknown, "NonNumeric" -> bad, "Mode" -> mode|>];
 
 Options[SourceVaultCourseImportExamScores] = {
@@ -6655,7 +6810,9 @@ SourceVaultCourseImportExamScores[lecture_String, examId_String, OptionsPattern[
     <|"Title" -> title, "Kind" -> "Exam", "MaxScore" -> maxScore, "Weight" -> weight,
       "Source" -> <|"Type" -> "Exam", "ExamId" -> examId|>|>];
   If[!AssociationQ[reg] || Lookup[reg, "Status", ""] =!= "OK", Return[reg]];
-  set = SourceVaultCourseSetScores[lecture, itemId, scores, "Mode" -> OptionValue["Mode"]];
+  (* 受験 = 1 件 (基礎点加算の根拠。Counts が無い旧項目でも Exam は採点済み=1 で扱う) *)
+  set = SourceVaultCourseSetScores[lecture, itemId, scores, "Mode" -> OptionValue["Mode"],
+    "Counts" -> Map[1 &, scores]];
   If[!AssociationQ[set], Return[set]];
   <|"Status" -> If[unassigned === {} && Lookup[set, "Unknown", {}] === {}, "OK", "Partial"],
     "Lecture" -> lecture, "ExamId" -> examId, "ItemId" -> itemId,
@@ -6687,70 +6844,285 @@ SourceVaultCourseSetWeights[lecture_String, weights_Association] := Module[
 
 iCWRRoundTo[x_, d_] := If[IntegerQ[d] && d >= 0 && NumericQ[x], N @ Round[x, 10.^(-d)], x];
 
-(* "Scale" = 総合点にかける倍率 (救済係数 1+α: 各項目の満点が
-   正規化重みの (1+α) 倍ぶんまで寄与する)。"Cap" = 総合点の上限クリップ
-   (Min[総合点, Cap])。既定 (Scale 1 / Cap None) は従来と同一。 *)
+(* ---- 総合点の計算 (Kind 別リスト opts = {Exam, Summary(Report), Quiz[, Other]}) ----
+   加点後_i = 素点_i + 提出件数_i × BaseScore_k        (素点の単位。保存済み素点は変えない。
+              提出件数 = item Counts。Exam は採点済み = 受験 1 件)
+   換算点_i = Clip[Curve_k[加点後_i], {0, Cap_k × 100}]  (100 点換算。Curve None なら
+              100 × 加点後/満点、数値 s なら s 倍の線形、点列なら最小二乗フィット、
+              関数 (FittedModel / Function / 1 変数の式) ならその値 = 100 点換算とみなす。
+              Cap None で上限なし)
+   重み_i   = "Weight" Automatic なら項目重み (SourceVaultCourseSetWeights)。
+              {wE,wS,wQ} なら Kind の重みを同 Kind の項目へ満点比で配分 (Other は 4 つ目、
+              無ければ 0)。項目の無い Kind は Σ重み に入らない
+   寄与点_i = 重み_i/Σ重み × 換算点_i
+              ("Missing"->"Zero": 未入力は 0 点で重みに数える / "Exclude": 重みから外す)
+   構成点_k = TotalScale × Σ_{i∈k} 寄与点_i   (test / summary / quiz / other)
+   総合点   = Min[TotalCap, TotalScale × Σ寄与点 + TotalBaseScore] *)
+
+$iCWRKindOrder = {"Exam", "Report", "Quiz", "Other"};
+$iCWRComponentKeys = <|"Exam" -> "test", "Report" -> "summary", "Quiz" -> "quiz", "Other" -> "other"|>;
+iCWRComponentKey[kind_] := Lookup[$iCWRComponentKeys, ToString[kind], "other"];
+iCWRKindOf[item_Association] := With[{k = ToString @ Lookup[item, "Kind", "Other"]},
+  If[MemberQ[$iCWRKindOrder, k], k, "Other"]];
+
+(* Kind 別リスト opt -> <|"Exam"->v, "Report"->v, "Quiz"->v, "Other"->v|>。
+   値 1 つなら全種共通、{e,s,q} は Other = otherDefault、{e,s,q,o} はそのまま。
+   allowNone: None / Infinity (上限なし) を許す (Cap 用) *)
+iCWRKindList[opt_, name_String, otherDefault_, allowNone_ : False] := Module[
+  {okQ, vals},
+  okQ = Function[x, NumericQ[x] || (allowNone && (x === None || x === Infinity))];
+  vals = Which[
+    okQ[opt], ConstantArray[opt, 4],
+    ListQ[opt] && Length[opt] === 3 && AllTrue[opt, okQ], Append[opt, otherDefault],
+    ListQ[opt] && Length[opt] === 4 && AllTrue[opt, okQ], opt,
+    True, $Failed];
+  If[vals === $Failed,
+    iEXFail["BadOption", "Option" -> name, "Value" -> opt,
+      "Hint" -> "{Exam, Summary, Quiz} の数値リスト (4 つ目で Other) か数値 1 つ" <>
+        If[allowNone, " (None で上限なし)", ""]],
+    AssociationThread[$iCWRKindOrder, vals]]];
+
+(* 提出件数: item の Counts > (定期試験は採点済み = 受験 1 件) > 0 *)
+iCWRItemCount[item_Association, k_, score_] := Module[
+  {c = Lookup[Lookup[item, "Counts", <||>], k, Missing[]]},
+  Which[
+    NumericQ[c], c,
+    iCWRKindOf[item] === "Exam" && NumericQ[score], 1,
+    True, 0]];
+
+(* 加点後 = 素点 + 件数 × 基礎点 (素点の単位)。未採点は Missing のまま *)
+iCWRAdjustedScore[raw_, count_, base_] := If[!NumericQ[raw], raw,
+  raw + If[NumericQ[count] && count > 0 && NumericQ[base], count*base, 0]];
+
+(* ---- 換算曲線 (素点 -> 100 点換算) ----
+   spec: None|Automatic|Identity = 100×素点/満点 / 数値 s = s×100×素点/満点 (線形) /
+         点列 {{素点,換算点}..} = 2 点なら直線・3 点以上なら 2 次式 p x^2+q x+r の最小二乗
+         フィット (NonlinearModelFit[pts, p x^2+q x+r, {p,q,r}, x] と同じ) /
+         FittedModel・Function・InterpolatingFunction・関数名 = f[素点] /
+         1 変数の式 (Fit の戻り値や Normal[fittedModel]) = 代入。
+   関数・式の出力は 100 点換算とみなす (満点で割らない)。 *)
+$iCWRCurveFunctionHeads = {FittedModel, InterpolatingFunction, Function, CompiledFunction};
+
+iCWRCurveFreeSymbols[expr_] := DeleteDuplicates @ Cases[expr,
+  s_Symbol /; !NumericQ[s] && Context[s] =!= "System`", {0, Infinity}, Heads -> False];
+
+iCWRPointsSpecQ[spec_] := MatchQ[spec, {{_?NumericQ, _?NumericQ} ..}] && Length[spec] >= 2;
+
+iCWRCurveSpecQ[spec_] := spec === None || spec === Automatic || spec === Identity ||
+  NumericQ[spec] || iCWRPointsSpecQ[spec] ||
+  MemberQ[$iCWRCurveFunctionHeads, Head[spec]] ||
+  (Head[spec] === Symbol && !NumericQ[spec]) ||
+  (!ListQ[spec] && Length[iCWRCurveFreeSymbols[spec]] === 1);
+
+(* Kind 別 <|"Exam"->spec,..|>。3/4 要素の各要素が有効 spec なら Kind 別、
+   それ以外で有効 spec なら全種共通 (点列 1 つは要素 {x,y} が spec でないので全種共通になる) *)
+iCWRCurveKindList[opt_] := Which[
+  ListQ[opt] && (Length[opt] === 3 || Length[opt] === 4) && AllTrue[opt, iCWRCurveSpecQ],
+    AssociationThread[$iCWRKindOrder, PadRight[opt, 4, None]],
+  iCWRCurveSpecQ[opt], AssociationThread[$iCWRKindOrder, ConstantArray[opt, 4]],
+  True, iEXFail["BadOption", "Option" -> "Curve", "Value" -> opt,
+    "Hint" -> "{Exam, Summary, Quiz} の換算曲線 (None | 数値 | {{素点,換算点}..} | " <>
+      "FittedModel / Function / 1 変数の式) か 1 つの曲線"]];
+
+(* spec + 満点 -> 純関数 (加点後 -> 100 点換算)。作れなければ $Failed *)
+iCWRCurveFunction[spec_, max_] := Which[
+  spec === None || spec === Automatic || spec === Identity,
+    With[{m = N[max]}, Function[r, 100.*r/m]],
+  NumericQ[spec], With[{s = N[spec], m = N[max]}, Function[r, s*100.*r/m]],
+  iCWRPointsSpecQ[spec], Module[{x, poly},
+    poly = If[Length[spec] === 2, Fit[N[spec], {1, x}, x], Fit[N[spec], {1, x, x^2}, x]];
+    With[{pp = poly, xx = x}, Function[r, pp /. xx -> r]]],
+  MemberQ[$iCWRCurveFunctionHeads, Head[spec]] || (Head[spec] === Symbol && !NumericQ[spec]),
+    With[{f = spec}, Function[r, f[r]]],
+  Length[iCWRCurveFreeSymbols[spec]] === 1,
+    With[{e = spec, xx = First[iCWRCurveFreeSymbols[spec]]}, Function[r, e /. xx -> r]],
+  True, $Failed];
+
+(* 短い表示ラベル (個票の設定表示用) *)
+iCWRCurveLabel[spec_] := Which[
+  spec === None || spec === Automatic || spec === Identity, "-",
+  NumericQ[spec], "×" <> ToString[spec],
+  iCWRPointsSpecQ[spec], "fit(" <> ToString[Length[spec]] <> "点)",
+  Head[spec] === FittedModel, "FittedModel",
+  True, "fn"];
+
+(* 換算点 = Clip[curve[加点後], {0, cap×100}]。評価できなければ Throw (fail-fast) *)
+iCWRConvertScore[fn_, adjusted_, capFactor_] := Module[{y},
+  If[!NumericQ[adjusted], Return[adjusted]];
+  y = Quiet @ Check[N[fn[adjusted]], $Failed];
+  If[!NumericQ[y],
+    Throw[iEXFail["CurveEvaluationFailed", "Input" -> adjusted, "Output" -> y,
+      "Hint" -> "\"Curve\" の関数/式が数値を返しません"], "iCWRGradebook"]];
+  y = Max[y, 0.];
+  If[NumericQ[capFactor], Min[y, 100.*capFactor], y]];
+
 Options[SourceVaultCourseGradebook] = {
   "Missing" -> "Zero", "Status" -> "Enrolled", "Round" -> 1,
-  "Scale" -> 1, "Cap" -> None};
+  "BaseScore" -> {0, 0, 0}, "Curve" -> None, "Cap" -> {1, 1, 1},
+  "Weight" -> Automatic,
+  "TotalBaseScore" -> 0, "TotalScale" -> 1, "TotalCap" -> 100};
 SourceVaultCourseGradebook[lecture_String, OptionsPattern[]] := Module[
   {gb = iCWRGradebook[lecture], items, students, missMode = ToString[OptionValue["Missing"]],
-   rnd = OptionValue["Round"], scale = OptionValue["Scale"], cap = OptionValue["Cap"], ids},
+   rnd = OptionValue["Round"], base, curves, cap, weights, kindMax, itemWeight, conv,
+   tBase, tScale, tCap, compKeys},
   If[!AssociationQ[gb], Return[iEXFail["RootUnresolved"]]];
   If[!MemberQ[{"Zero", "Exclude"}, missMode],
     Return[iEXFail["BadMissingMode", "Missing" -> missMode, "Hint" -> "\"Zero\" か \"Exclude\""]]];
-  If[!NumericQ[scale] || scale <= 0, scale = 1];
+  base = iCWRKindList[OptionValue["BaseScore"], "BaseScore", 0];
+  If[FailureQ[base], Return[base]];
+  curves = iCWRCurveKindList[OptionValue["Curve"]];
+  If[FailureQ[curves], Return[curves]];
+  cap = iCWRKindList[OptionValue["Cap"], "Cap", 1, True];
+  If[FailureQ[cap], Return[cap]];
+  weights = If[OptionValue["Weight"] === Automatic, Automatic,
+    iCWRKindList[OptionValue["Weight"], "Weight", 0]];
+  If[FailureQ[weights], Return[weights]];
+  tBase = OptionValue["TotalBaseScore"]; If[!NumericQ[tBase], tBase = 0];
+  tScale = OptionValue["TotalScale"]; If[!NumericQ[tScale] || tScale <= 0, tScale = 1];
+  tCap = OptionValue["TotalCap"];
   items = Values[Lookup[gb, "Items", <||>]];
   students = SourceVaultCourseEnrollment[lecture, "Status" -> OptionValue["Status"]];
   If[!ListQ[students], Return[students]];
-  ids = Map[#["ItemId"] &, items];
+  (* Kind 別重みは同 Kind の項目へ満点比で配分 *)
+  kindMax = Merge[Map[iCWRKindOf[#] -> Lookup[#, "MaxScore", 100] &, items], Total];
+  itemWeight = Function[it, If[weights === Automatic, Lookup[it, "Weight", 1],
+    With[{kk = iCWRKindOf[it]},
+      If[Lookup[kindMax, kk, 0] > 0,
+        weights[kk]*Lookup[it, "MaxScore", 100]/kindMax[kk], 0]]]];
+  compKeys = DeleteDuplicates @ Join[{"test", "summary", "quiz"},
+    Map[iCWRComponentKey[iCWRKindOf[#]] &, items]];
+  (* 項目ごとの換算関数 (Kind の曲線 + 項目満点)。作れない/数値を返さない曲線は fail-fast *)
+  conv = Map[Function[it, Module[
+      {mx = Lookup[it, "MaxScore", 100], f},
+      f = iCWRCurveFunction[curves[iCWRKindOf[it]], mx];
+      If[f === $Failed || !AllTrue[{0, mx/2, mx},
+          NumericQ[Quiet @ Check[N[f[#]], $Failed]] &],
+        iEXFail["BadOption", "Option" -> "Curve",
+          "Kind" -> iCWRKindOf[it], "Value" -> curves[iCWRKindOf[it]],
+          "Hint" -> "曲線が数値を返しません (None | 数値 | {{素点,換算点}..} | " <>
+            "FittedModel / Function / 1 変数の式)"],
+        it["ItemId"] -> f]]], items];
+  If[AnyTrue[conv, FailureQ], Return[SelectFirst[conv, FailureQ]]];
+  conv = Association[conv];
+  Catch[
   Map[Function[st, Module[{k = iCWRNormalizeID[Lookup[st, "StudentID", ""]],
-      scores = <||>, missing = {}, wsum = 0., acc = 0., total},
+      scores = <||>, counts = <||>, adj = <||>, pct = <||>, contrib = <||>, comps,
+      missing = {}, wsum = 0., acc = 0., total},
     Scan[Function[it, Module[{v = Lookup[Lookup[it, "Scores", <||>], k, Missing["NotScored"]],
-        w = Lookup[it, "Weight", 1], mx = Lookup[it, "MaxScore", 100]},
+        kk = iCWRKindOf[it], c, w = itemWeight[it], a, p},
+      c = iCWRItemCount[it, k, v];
       scores[it["ItemId"]] = v;
-      If[NumericQ[v],
-        wsum += w; acc += w*(v/mx),
+      counts[it["ItemId"]] = c;
+      a = iCWRAdjustedScore[v, c, base[kk]];
+      adj[it["ItemId"]] = a;
+      p = iCWRConvertScore[conv[it["ItemId"]], a, cap[kk]];
+      pct[it["ItemId"]] = p;
+      If[NumericQ[p],
+        wsum += w; acc += w*(p/100.),
         AppendTo[missing, it["ItemId"]];
         If[missMode === "Zero", wsum += w]]]], items];
+    contrib = Association @ Map[Function[it, it["ItemId"] ->
+      If[NumericQ[pct[it["ItemId"]]] && wsum > 0,
+        itemWeight[it]*pct[it["ItemId"]]/wsum, 0.]], items];
+    comps = Association @ Map[Function[ck, ck -> iCWRRoundTo[
+      tScale*Total[Map[contrib[#["ItemId"]] &,
+        Select[items, iCWRComponentKey[iCWRKindOf[#]] === ck &]]], rnd]],
+      compKeys];
     total = If[wsum > 0,
-      Module[{raw = 100.*scale*acc/wsum},
-        If[NumericQ[cap], raw = Min[raw, N[cap]]];
+      Module[{raw = tScale*100.*acc/wsum + tBase},
+        If[NumericQ[tCap], raw = Min[raw, N[tCap]]];
         iCWRRoundTo[raw, rnd]],
       Missing["NoScores"]];
     <|"StudentID" -> Lookup[st, "StudentID", ""], "StudentName" -> Lookup[st, "StudentName", ""],
       "Status" -> Lookup[st, "Status", "Enrolled"], "Scores" -> scores,
-      "MissingItems" -> missing, "WeightUsed" -> wsum, "Total" -> total|>]], students]];
+      "Counts" -> counts, "Adjusted" -> adj, "Converted" -> pct,
+      "Contributions" -> contrib, "Components" -> comps,
+      "MissingItems" -> missing, "WeightUsed" -> wsum, "Total" -> total|>]], students],
+  "iCWRGradebook"]];
 
-Options[SourceVaultCourseGradebookView] = Options[SourceVaultCourseGradebook];
-SourceVaultCourseGradebookView[lecture_String, opts : OptionsPattern[]] := Module[
-  {rows = SourceVaultCourseGradebook[lecture, opts]},
+(* View 列: 素点 (換算前) の項目列 + test/summary/quiz (Kind 別換算後寄与点。
+   Other 種別があれば other) + Total。MaxItems 既定 {All, All} で全行全列表示。
+   Total は "TotalRound" 桁 (既定 0 = 整数) に四捨五入 (半分は切り上げ。None で core の値のまま)。
+   Total (四捨五入後) < "FailBelow" の行は背景 "FailBackground" (既定 LightRed)。
+   "FailBelow" の既定は None (色付けなし。閾値は運用側で指定する)。
+   Dataset の Background は {行番号 -> 色, ..} で行単位に効く (レンダラ実測)。
+   同じ表を SourceVaultCourseGradebookExport が xlsx へ書き出す (色は付かない)。 *)
+
+(* 四捨五入 (半分は切り上げ。Round は偶数丸めなので使わない)。d = 0 なら整数を返す *)
+iCWRRoundHalfUp[x_?NumericQ, d_Integer] := With[{s = 10^d},
+  If[d <= 0, Floor[x*s + 1/2 + 10^-9]/s, N[Floor[x*s + 1/2 + 10^-9]/s]]];
+iCWRRoundHalfUp[x_, _] := x;
+
+Options[SourceVaultCourseGradebookView] = Join[Options[SourceVaultCourseGradebook],
+  {MaxItems -> {All, All}, "TotalRound" -> 0,
+   (* 合格閾値は採点基準なので公開版は None (色付けなし)。非公開拡張が上書きする *)
+   "FailBelow" -> None, "FailBackground" -> LightRed}];
+
+(* View / Export 共通の表: <|"Rows" -> {<|列->値..|>..}, "Keys" -> 列名, "FailRows" -> 行番号|> *)
+iCWRGradebookViewTable[lecture_String, opts___] := Module[
+  {rows, thr, bg, tr, table, failIdx},
+  rows = SourceVaultCourseGradebook[lecture,
+    Sequence @@ FilterRules[{opts}, Options[SourceVaultCourseGradebook]]];
   If[!ListQ[rows], Return[rows]];
-  Dataset[Map[Join[KeyTake[#, {"StudentID", "StudentName", "Status"}],
+  {thr, bg, tr} = OptionValue[SourceVaultCourseGradebookView, {opts},
+    {"FailBelow", "FailBackground", "TotalRound"}];
+  table = Map[Join[KeyTake[#, {"StudentID", "StudentName", "Status"}],
     Map[If[MissingQ[#], "-", #] &, #["Scores"]],
-    <|"Total" -> #["Total"]|>] &, rows]]];
+    Lookup[#, "Components", <||>],
+    <|"Total" -> If[IntegerQ[tr], iCWRRoundHalfUp[#["Total"], tr], #["Total"]]|>] &, rows];
+  failIdx = If[NumericQ[thr] && bg =!= None,
+    Pick[Range[Length[table]],
+      Map[NumericQ[#["Total"]] && #["Total"] < thr &, table]], {}];
+  <|"Rows" -> table, "Keys" -> If[table === {}, {}, Keys[First[table]]],
+    "FailRows" -> failIdx, "FailBackground" -> bg|>];
+
+SourceVaultCourseGradebookView[lecture_String, opts : OptionsPattern[]] := Module[
+  {t = iCWRGradebookViewTable[lecture, opts]},
+  If[!AssociationQ[t], Return[t]];
+  Dataset[t["Rows"],
+    MaxItems -> OptionValue[MaxItems],
+    Sequence @@ If[t["FailRows"] === {}, {},
+      {Background -> Map[# -> t["FailBackground"] &, t["FailRows"]]}]]];
+
+(* GradebookView と同じ設定・同じ列の表を Excel (拡張子で形式判定。xlsx 推奨) へ書き出す。
+   1 行目 = 列名。セル色は書き出せない (Export の制約) *)
+Options[SourceVaultCourseGradebookExport] = Options[SourceVaultCourseGradebookView];
+SourceVaultCourseGradebookExport[lecture_String, path_String, opts : OptionsPattern[]] := Module[
+  {t = iCWRGradebookViewTable[lecture, opts], data, out},
+  If[!AssociationQ[t], Return[t]];
+  If[t["Rows"] === {}, Return[iEXFail["NoRows", "Lecture" -> lecture]]];
+  data = Prepend[Map[Values, t["Rows"]], t["Keys"]];
+  If[DirectoryName[path] =!= "", iEXEnsureDir[DirectoryName[path]]];
+  out = Quiet @ Check[Export[path, data], $Failed];
+  If[!StringQ[out], Return[iEXFail["ExportFailed", "Path" -> path]]];
+  <|"Status" -> "OK", "Lecture" -> lecture, "Exported" -> out,
+    "Rows" -> Length[t["Rows"]], "Columns" -> t["Keys"],
+    "FailRows" -> Length[t["FailRows"]]|>];
 
 Options[SourceVaultCourseGradeReport] = Join[Options[SourceVaultCourseGradebook], {"Export" -> None}];
 SourceVaultCourseGradeReport[lecture_String, opts : OptionsPattern[]] := Module[
-  {rows, items, keys, table, path},
+  {rows, items, keys, compKeys, table, path},
   rows = SourceVaultCourseGradebook[lecture,
-    FilterRules[{opts}, Options[SourceVaultCourseGradebook]]];
+    Sequence @@ FilterRules[{opts}, Options[SourceVaultCourseGradebook]]];
   If[!ListQ[rows], Return[rows]];
   items = SourceVaultCourseAssessments[lecture];
   If[!ListQ[items], Return[items]];
   keys = Map[#["ItemId"] &, items];
+  compKeys = If[rows === {}, {"test", "summary", "quiz"},
+    Keys[Lookup[First[rows], "Components", <||>]]];
   table = Map[Function[r, Join[
     <|"学籍番号" -> r["StudentID"], "氏名" -> r["StudentName"]|>,
     Association @ Map[Function[k, k -> Replace[Lookup[r["Scores"], k, Missing[]],
       _Missing -> ""]], keys],
+    Association @ Map[Function[ck, ck -> Lookup[Lookup[r, "Components", <||>], ck, 0]], compKeys],
     <|"未入力" -> Length[r["MissingItems"]], "総合点" -> Replace[r["Total"], _Missing -> ""]|>]],
     rows];
   path = OptionValue["Export"];
   If[StringQ[path],
     Export[path, Prepend[Map[Values, table],
-      Join[{"学籍番号", "氏名"}, keys, {"未入力", "総合点"}]]];
+      Join[{"学籍番号", "氏名"}, keys, compKeys, {"未入力", "総合点"}]]];
     <|"Status" -> "OK", "Lecture" -> lecture, "Exported" -> path, "Rows" -> Length[table],
-      "Items" -> keys|>,
+      "Items" -> keys, "Components" -> compKeys|>,
     Dataset[table]]];
 
 (* ============================================================
@@ -6943,8 +7315,10 @@ SourceVaultCourseSummaryGrades[lecture_String] := Lookup[
    Effective(=Score*Factor), Note, RecordedAtUTC|>|>|> として記録する。
    View / 合計 / 成績簿取込は Effective を使い、通常採点より優先される。 *)
 
+(* 遅延提出の減点率は採点基準なので公開版は 1.0 (減点なし)。
+   実運用の値は非公開拡張が上書きする。 *)
 If[!ValueQ[$SourceVaultCourseSummaryLateFactor],
-  $SourceVaultCourseSummaryLateFactor = 0.7];
+  $SourceVaultCourseSummaryLateFactor = 1.0];
 
 iCWSUnitToDesc[u_Integer] := StringPadLeft[ToString[u -
     If[IntegerQ[$SourceVaultCourseSummaryUnitOffset],
@@ -7145,9 +7519,17 @@ iCWSAllDescs[lecture_String] := Sort @ DeleteDuplicates @ Join[
   Keys @ SourceVaultCourseSummaryGrades[lecture],
   Flatten[Keys /@ Values[iCWSLateAll[lecture]]]];
 
+(* 取込 run で Submitted の学生 (join key) 集合。run が無ければ {} *)
+iCWSRunSubmittedNids[lecture_String, desc_String] := Module[
+  {run = SourceVaultCourseWebReportLatestRun[lecture, desc]},
+  If[!AssociationQ[run], {},
+    Map[iCWRJoinKey[ToString @ Lookup[Lookup[#, "Top", <||>], "StudentID", ""]] &,
+      Select[Select[Lookup[run, "Rows", {}], AssociationQ],
+        Lookup[Lookup[#, "Top", <||>], "SubmissionStatus", ""] === "Submitted" &]]]];
+
 Options[SourceVaultCourseSummaryScores] = {"Descs" -> Automatic};
 SourceVaultCourseSummaryScores[lecture_String, OptionsPattern[]] := Module[
-  {rosterRec, roster, grades, lateAll, descs, gradeRows},
+  {rosterRec, roster, grades, lateAll, descs, gradeRows, subByDesc},
   rosterRec = SourceVaultCourseRoster[lecture];
   If[!AssociationQ[rosterRec], Return[iEXFail["RosterMissing", "Lecture" -> lecture]]];
   roster = Lookup[rosterRec, "Roster", <||>];
@@ -7158,7 +7540,8 @@ SourceVaultCourseSummaryScores[lecture_String, OptionsPattern[]] := Module[
   gradeRows = Association @ Map[Function[d,
     d -> Replace[iCWSGradeRows[Lookup[Lookup[grades, d, <||>], "AnnotationRef", ""]],
       Except[_Association] -> <||>]], descs];
-  Map[Function[ent, Module[{nid, lateMine, scores, lateDescs},
+  subByDesc = Association @ Map[Function[d, d -> iCWSRunSubmittedNids[lecture, d]], descs];
+  Map[Function[ent, Module[{nid, lateMine, scores, lateDescs, submittedDescs},
     nid = iCWRJoinKey[ent["StudentID"]];
     lateMine = Lookup[lateAll, nid, <||>];
     scores = Association @ Map[Function[d, Module[
@@ -7168,9 +7551,14 @@ SourceVaultCourseSummaryScores[lecture_String, OptionsPattern[]] := Module[
         NumericQ[v], v,
         True, 0]]], descs];
     lateDescs = Intersection[Keys[lateMine], descs];
+    (* 提出のあった回 = 遅延記録 / run で Submitted / 採点行あり (いずれか) *)
+    submittedDescs = Select[descs,
+      KeyExistsQ[lateMine, #] || MemberQ[subByDesc[#], nid] ||
+        KeyExistsQ[gradeRows[#], nid] &];
     <|"StudentID" -> ent["StudentID"], "StudentName" -> ent["StudentName"],
       "Scores" -> scores, "Total" -> Total[Values[scores]],
-      "LateDescs" -> lateDescs|>]],
+      "LateDescs" -> lateDescs,
+      "SubmittedDescs" -> submittedDescs, "Submitted" -> Length[submittedDescs]|>]],
     SortBy[Values[roster], Lookup[#, "StudentID", ""] &]]];
 
 (* 保存済み提出レポート (blob) を一時ファイルへ復元して開く *)
@@ -7269,12 +7657,12 @@ SourceVaultCourseSummaryTotalsView[lecture_String, opts : OptionsPattern[]] := M
 
 (* ---- 受講生個票 (サマリー各回 / 小テスト各回 / 成績簿 / 総合点) ---- *)
 
-Options[SourceVaultCourseStudentScoreView] = {
-  "Scale" -> 1, "Cap" -> None, "Missing" -> "Zero", "Round" -> 1};
+Options[SourceVaultCourseStudentScoreView] =
+  FilterRules[Options[SourceVaultCourseGradebook], Except["Status"]];
 SourceVaultCourseStudentScoreView[lecture_String, studentID_,
-    OptionsPattern[]] := Module[
+    opts : OptionsPattern[]] := Module[
   {rosterRec, roster, nid, ent, lateMine, sumRows, srow, descs, statusFor,
-   sumBlock, quizBlock, scale, cap, gbRows, grow, items, wsum, itemTable, total},
+   sumBlock, quizBlock, gbRows, grow, items, itemTable, total, settingNote},
   rosterRec = SourceVaultCourseRoster[lecture];
   If[!AssociationQ[rosterRec], Return[iEXFail["RosterMissing", "Lecture" -> lecture]]];
   roster = KeyMap[iCWRJoinKey, Lookup[rosterRec, "Roster", <||>]];
@@ -7301,7 +7689,7 @@ SourceVaultCourseStudentScoreView[lecture_String, studentID_,
     Dataset @ Map[Function[d, <|
       "回" -> iCWSDescLabel[d], "状態" -> statusFor[d],
       "点数" -> Lookup[srow["Scores"], d, 0]|>], descs]];
-  (* 小テスト各回 (Cerezo.wl 弱結合) *)
+  (* 小テスト各回 (Cerezo.wl 弱結合)。素点/満点。基礎点は成績簿側で提出回数×基礎点 *)
   quizBlock = If[!iCWRCerezoReady["CerezoExamData"],
     "（Cerezo.wl 未ロードのため小テスト明細は省略）",
     Module[{qd = Quiet @ Check[Cerezo`CerezoExamData[lecture], $Failed], mine},
@@ -7311,39 +7699,52 @@ SourceVaultCourseStudentScoreView[lecture_String, studentID_,
         If[mine === {}, "（小テスト受験記録なし）",
           Dataset @ Map[<|
             "小テスト" -> ToString @ Lookup[#, "ExamTitle", Lookup[#, "ExamKey", ""]],
-            "点数" -> Lookup[#, "Total", "—"],
+            "素点" -> Lookup[#, "Total", "—"],
             "満点" -> Lookup[#, "MaxTotal", "—"]|> &,
             SortBy[mine, Lookup[#, "ExamNo", 0] &]]]]]];
-  (* 成績簿 (重み付き寄与と総合点) *)
-  scale = OptionValue["Scale"]; If[!NumericQ[scale] || scale <= 0, scale = 1];
-  cap = OptionValue["Cap"];
-  gbRows = SourceVaultCourseGradebook[lecture, "Scale" -> scale, "Cap" -> cap,
-    "Missing" -> OptionValue["Missing"], "Round" -> OptionValue["Round"],
-    "Status" -> All];
+  (* 成績簿 (基礎点/倍率/上限 -> 重み付き寄与と総合点。Gradebook と同じ計算) *)
+  gbRows = SourceVaultCourseGradebook[lecture,
+    Sequence @@ FilterRules[{opts}, Options[SourceVaultCourseGradebook]], "Status" -> All];
   If[!ListQ[gbRows], Return[gbRows]];
   grow = SelectFirst[gbRows, iCWRJoinKey[#["StudentID"]] === nid &, <||>];
   items = Replace[SourceVaultCourseAssessments[lecture], Except[_List] -> {}];
-  wsum = Lookup[grow, "WeightUsed", 0];
   itemTable = If[items === {}, "（成績簿項目なし）",
     Dataset @ Map[Function[it, Module[
-      {v = Lookup[Lookup[grow, "Scores", <||>], it["ItemId"], Missing[]]},
+      {v = Lookup[Lookup[grow, "Scores", <||>], it["ItemId"], Missing[]],
+       c = Lookup[Lookup[grow, "Counts", <||>], it["ItemId"], 0],
+       a = Lookup[Lookup[grow, "Adjusted", <||>], it["ItemId"], Missing[]],
+       q = Lookup[Lookup[grow, "Converted", <||>], it["ItemId"], Missing[]],
+       p = Lookup[Lookup[grow, "Contributions", <||>], it["ItemId"], 0]},
       <|"項目" -> it["Title"], "素点" -> If[NumericQ[v], v, "—"],
-        "満点" -> it["MaxScore"], "重み" -> it["Weight"],
-        "寄与点" -> If[NumericQ[v] && NumericQ[wsum] && wsum > 0,
-          iCWRRoundTo[100.*scale*it["Weight"]*(v/it["MaxScore"])/wsum, 2], 0]|>]],
+        "提出" -> If[NumericQ[c] && c > 0, c, "—"],
+        "加点後" -> If[NumericQ[a], iCWRRoundTo[a, 2], "—"],
+        "満点" -> it["MaxScore"],
+        "換算点" -> If[NumericQ[q], iCWRRoundTo[q, 2], "—"],
+        "重み" -> If[OptionValue["Weight"] === Automatic, it["Weight"],
+          "Kind " <> iCWRComponentKey[iCWRKindOf[it]]],
+        "寄与点" -> iCWRRoundTo[If[NumericQ[p], p, 0], 2]|>]],
       items]];
+  (* 既定と異なる設定だけを見出しに (Curve は短いラベル) *)
+  settingNote = StringRiffle[Select[Map[Function[o,
+    With[{v = OptionValue[o], d = (o /. Options[SourceVaultCourseGradebook])},
+      Which[
+        v === d, Nothing,
+        o === "Curve", "Curve " <> ToString[Replace[iCWRCurveKindList[v],
+          a_Association :> Map[iCWRCurveLabel, Values[a][[;; 3]]]], InputForm],
+        True, o <> " " <> ToString[v, InputForm]]]],
+    {"BaseScore", "Curve", "Cap", "Weight", "TotalBaseScore", "TotalScale", "TotalCap"}],
+    StringQ], "・"];
   total = Lookup[grow, "Total", Missing["NoScores"]];
   Column[{
     Style[lecture <> "  " <> ToString @ ent["StudentID"] <> "  " <>
       ToString @ ent["StudentName"], Bold, 14],
     Style["■ サマリー課題", Bold], sumBlock,
     Style["■ 小テスト", Bold], quizBlock,
-    Style["■ 成績簿 (重み付き)", Bold], itemTable,
+    Style["■ 成績簿 (重み付き)" <> If[settingNote =!= "",
+      "  設定: " <> settingNote <> "  [{Exam, Summary, Quiz}]", ""], Bold],
+    itemTable,
     Style["総合点: " <> If[NumericQ[total], ToString[total], "—"] <>
-      Which[
-        NumericQ[cap], "  (Scale " <> ToString[scale] <> " / Cap " <> ToString[cap] <> ")",
-        scale != 1, "  (Scale " <> ToString[scale] <> ")",
-        True, ""], Bold, 13]},
+      "  (= 構成点の和 + TotalBaseScore、TotalCap で上限)", Bold, 13]},
     Spacings -> 1]];
 
 (* ---- 成績簿への取込 (定期試験と合併し重み連想で再計算) ---- *)
@@ -7352,7 +7753,7 @@ Options[SourceVaultCourseImportSummaryScores] = {
   "ItemId" -> "websummary", "Title" -> "サマリー課題", "Weight" -> Automatic,
   "MaxScore" -> Automatic, "Mode" -> "Replace", "Descs" -> Automatic};
 SourceVaultCourseImportSummaryScores[lecture_String, OptionsPattern[]] := Module[
-  {rows, descs, itemId, maxScore, weight, scores, reg, set},
+  {rows, descs, itemId, maxScore, weight, scores, counts, reg, set},
   rows = SourceVaultCourseSummaryScores[lecture, "Descs" -> OptionValue["Descs"]];
   If[!ListQ[rows], Return[rows]];
   descs = If[OptionValue["Descs"] === Automatic,
@@ -7364,28 +7765,40 @@ SourceVaultCourseImportSummaryScores[lecture_String, OptionsPattern[]] := Module
     10*Length[descs]];
   weight = iCWRResolveImportWeight[lecture, itemId, OptionValue["Weight"]];
   scores = Association @ Map[#["StudentID"] -> #["Total"] &, rows];
+  (* 提出件数 (基礎点加算の根拠。基礎点は成績簿の計算時に適用) *)
+  counts = Association @ Map[#["StudentID"] -> Lookup[#, "Submitted", 0] &, rows];
   reg = SourceVaultCourseAssessmentRegister[lecture, itemId,
     <|"Title" -> ToString[OptionValue["Title"]], "Kind" -> "Report",
       "MaxScore" -> maxScore, "Weight" -> weight,
       "Source" -> <|"Type" -> "WebSummary", "Descs" -> descs|>|>];
   If[!AssociationQ[reg] || Lookup[reg, "Status", ""] =!= "OK", Return[reg]];
   set = SourceVaultCourseSetScores[lecture, itemId, scores,
-    "Mode" -> OptionValue["Mode"]];
+    "Mode" -> OptionValue["Mode"], "Counts" -> counts];
   If[!AssociationQ[set], Return[set]];
   <|"Status" -> Lookup[set, "Status", "OK"], "Lecture" -> lecture,
     "ItemId" -> itemId, "MaxScore" -> maxScore, "Weight" -> weight,
     "Descs" -> descs, "Imported" -> Lookup[set, "Scored", 0],
+    "Submissions" -> Total[Values[counts]],
     "Unknown" -> Lookup[set, "Unknown", {}]|>];
 
 (* ---- Cerezo 小テスト (CerezoExamIngest 済み run) の成績簿取込 ----
-   学生別合計 = 全小テストの Total の和 (未受験の回は 0 加算)。
+   学生別合計 = 全小テストの Total (素点) の和 (未提出の回は 0 加算)。
+   提出回数 = 成績が数値の回の数 (Counts)。基礎点は取込時でなく成績簿の
+   計算時に 加点後 = Min[素点 + 提出回数 × 基礎点, 満点] として適用される。
    満点 = 小テストごとの MaxTotal (最頻値。無い回は観測 Total の最大) の和。 *)
+
+(* 小テストごとの満点 <|ExamKey -> max|> (MaxTotal の最頻値。無い回は観測 Total の最大) *)
+iCWRQuizExamMax[data_List] := Map[Function[rows, Module[
+    {mx = Select[Lookup[rows, "MaxTotal", Missing[]], NumericQ]},
+    If[mx =!= {}, First @ Commonest[mx],
+      Max[Prepend[Select[Lookup[rows, "Total", Missing[]], NumericQ], 0]]]]],
+  GroupBy[Select[data, AssociationQ], ToString @ Lookup[#, "ExamKey", ""] &]];
 
 Options[SourceVaultCourseImportCerezoQuizScores] = {
   "Selector" -> Automatic, "ItemId" -> "cerezoquiz", "Title" -> "小テスト",
   "Weight" -> Automatic, "MaxScore" -> Automatic, "Mode" -> "Replace"};
 SourceVaultCourseImportCerezoQuizScores[lecture_String, OptionsPattern[]] := Module[
-  {sel, data, byExam, examMax, noMax, maxScore, totals, itemId, weight, reg, set},
+  {sel, data, examMax, noMax, maxScore, byStudent, totals, counts, itemId, weight, reg, set},
   If[!iCWRCerezoReady["CerezoExamData"],
     Return[iEXFail["CerezoUnavailable",
       "Hint" -> "Cerezo.wl をロードしてから実行 (CerezoExamIngest 済みであること)"]]];
@@ -7395,21 +7808,19 @@ SourceVaultCourseImportCerezoQuizScores[lecture_String, OptionsPattern[]] := Mod
     Return[iEXFail["NoExamData", "Selector" -> sel,
       "Hint" -> "CerezoExamIngest[courseURL, \"CourseName\"->\"" <> lecture <>
         "\"] で取込済みか確認"]]];
-  byExam = GroupBy[Select[data, AssociationQ], ToString @ Lookup[#, "ExamKey", ""] &];
-  examMax = Map[Function[rows, Module[
-      {mx = Select[Lookup[rows, "MaxTotal", Missing[]], NumericQ]},
-      If[mx =!= {}, First @ Commonest[mx],
-        Max[Prepend[Select[Lookup[rows, "Total", Missing[]], NumericQ], 0]]]]],
-    byExam];
+  data = Select[data, AssociationQ];
+  examMax = iCWRQuizExamMax[data];
   noMax = Keys @ Select[examMax, # <= 0 &];
   maxScore = If[NumericQ[OptionValue["MaxScore"]], OptionValue["MaxScore"],
     Total[Values[examMax]]];
   If[!NumericQ[maxScore] || maxScore <= 0,
     Return[iEXFail["BadMaxScore", "ExamMax" -> examMax,
       "Hint" -> "満点を解決できないため \"MaxScore\" を明示指定してください"]]];
-  totals = Map[Total[Select[Lookup[#, "Total", Missing[]], NumericQ]] &,
-    GroupBy[Select[data, AssociationQ], ToString @ Lookup[#, "StudentID", ""] &]];
-  totals = KeySelect[totals, StringTrim[#] =!= "" &];
+  byStudent = KeySelect[GroupBy[data, ToString @ Lookup[#, "StudentID", ""] &],
+    StringTrim[#] =!= "" &];
+  totals = Map[Total[Select[Lookup[#, "Total", Missing[]], NumericQ]] &, byStudent];
+  (* 提出回数 = 成績が数値の回の数 (未提出は成績欄が空 -> 非数値) *)
+  counts = Map[Count[Lookup[#, "Total", Missing[]], _?NumericQ] &, byStudent];
   itemId = ToString[OptionValue["ItemId"]];
   weight = iCWRResolveImportWeight[lecture, itemId, OptionValue["Weight"]];
   reg = SourceVaultCourseAssessmentRegister[lecture, itemId,
@@ -7419,11 +7830,12 @@ SourceVaultCourseImportCerezoQuizScores[lecture_String, OptionsPattern[]] := Mod
         "Exams" -> Sort @ Keys[examMax]|>|>];
   If[!AssociationQ[reg] || Lookup[reg, "Status", ""] =!= "OK", Return[reg]];
   set = SourceVaultCourseSetScores[lecture, itemId, totals,
-    "Mode" -> OptionValue["Mode"]];
+    "Mode" -> OptionValue["Mode"], "Counts" -> counts];
   If[!AssociationQ[set], Return[set]];
   <|"Status" -> Lookup[set, "Status", "OK"], "Lecture" -> lecture,
     "ItemId" -> itemId, "MaxScore" -> maxScore, "Weight" -> weight,
     "Exams" -> Length[examMax], "Imported" -> Lookup[set, "Scored", 0],
+    "Submissions" -> Total[Values[counts]],
     "Unknown" -> Lookup[set, "Unknown", {}],
     "NoMaxFor" -> noMax|>];
 
@@ -7456,7 +7868,8 @@ $iEXPrivacyPublic = {
   (* 試験の構成・点検・用紙 *)
   "SourceVaultExamCompose", "SourceVaultExamGet", "SourceVaultExamList",
   "SourceVaultExamSelectProblems", "SourceVaultExamSetPoints",
-  "SourceVaultExamAnswerKey", "SourceVaultExamRecordHistory",
+  "SourceVaultExamAnswerKey", "SourceVaultExamAnswerKeyView",
+  "SourceVaultExamRecordHistory",
   "SourceVaultExamSlots", "SourceVaultExamSetSlot", "SourceVaultExamRevertSlots",
   "SourceVaultExamRepairSlots", "SourceVaultExamAudit", "SourceVaultExamAuditView",
   "SourceVaultExamValidateFigures", "SourceVaultExamValidateFiguresView",
@@ -7499,6 +7912,8 @@ $iEXPrivacyPrivate = {
   {"SourceVaultExamUnresolved", "Result"},
   {"SourceVaultExamResolveView", "View"},
   {"SourceVaultExamScore", "Result"},
+  {"SourceVaultExamAnswers", "Result"},
+  {"SourceVaultExamAnswersView", "View"},
   {"SourceVaultExamItemAnalysis", "Result"},
   {"SourceVaultExamItemAnalysisView", "View"},
   {"SourceVaultExamScoreView", "View"},
@@ -7534,6 +7949,7 @@ $iEXPrivacyPrivate = {
   {"SourceVaultCourseSetWeights", "Result"},
   {"SourceVaultCourseGradebook", "Result"},
   {"SourceVaultCourseGradebookView", "View"},
+  {"SourceVaultCourseGradebookExport", "Result"},
   {"SourceVaultCourseGradeReport", "Result"},
   (* Web サマリー課題の匿名化採点 (実名復元後の表示は PL 1.0) *)
   {"SourceVaultCourseSummaryGrade", "Result"},
@@ -7577,6 +7993,45 @@ iEXRegisterConfidentialHeads[] :=
       Scan[NBAccess`NBRegisterConfidentialHead[First[#], 1.0] &, $iEXPrivacyPrivate]];
     Null, Null];
 iEXRegisterConfidentialHeads[];
+
+(* ---- privacy の正準 exit を一括で取り付ける ----
+   宣言表 ($iEXPrivacyPrivate) にある公開関数の返り値を Result/View の正準 exit
+   へ通す。関数ごとに手で書くと必ず書き漏れる (実際、これまで 1 つも通って
+   いなかった) ので、契約・機密ヘッド・exit の 3 つを同じ表から作る。
+   仕組み: DownValues の先頭に総称規則を差し込み、$iEXInExit で二重適用を防ぐ。
+   本体の定義には手を触れないので、内部呼び出し・Options・複数シグネチャは不変。
+   ロードのたびに古い規則を消してから入れ直す (再 Get で個別規則が
+   総称規則より前に挿入されるため、取り付けは必ずファイル末尾で行う)。 *)
+
+(* 対話ビュー (DynamicModule + Button) は表示ラッパで包むと操作が壊れうるので、
+   PL の記録とセルマークだけ行い、返り値はそのまま返す *)
+$iEXNoWrapViews = {"SourceVaultExamAssignView", "SourceVaultExamResolveView"};
+
+iEXExitApply[expr_, name_String, "View"] :=
+  If[MemberQ[$iEXNoWrapViews, name], iEXPrivateResult[expr], iEXPrivateView[expr]];
+iEXExitApply[expr_, _String, _] := iEXPrivateResult[expr];
+
+(* 罠: DownValues は HoldAll なので Module 変数に入れたシンボルを渡すと
+   「その変数自身の DownValues」(空) を見てしまい取り付けが黙って空振りする。
+   With でシンボルを実体としてコード中に埋め込むこと。 *)
+iEXInstallPrivacyExit[name_String, exit_String] := Quiet @ Check[
+  With[{s = Symbol["SourceVault`" <> name], nm = name, ex = exit},
+    If[Length[DownValues[s]] === 0, False,
+      (* 前回のロードで入れた総称規則を落としてから入れ直す *)
+      DownValues[s] = Prepend[
+        DeleteCases[DownValues[s], _?(!FreeQ[#, iEXExitApply] &)],
+        HoldPattern[s[args___]] :>
+          Block[{$iEXInExit = True}, iEXExitApply[s[args], nm, ex]] /; !TrueQ[$iEXInExit]];
+      True]],
+  False];
+
+iEXInstallPrivacyExits[] := (
+  $iEXInExit = False;
+  Select[Map[Function[e,
+     If[TrueQ[iEXInstallPrivacyExit[First[e], Last[e]]], First[e], Nothing]],
+    $iEXPrivacyPrivate], StringQ]);
+
+$iEXPrivacyExitsInstalled = iEXInstallPrivacyExits[];
 
 End[]
 

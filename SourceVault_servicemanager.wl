@@ -288,7 +288,24 @@ $SourceVaultStreamSweepIntervalSeconds::usage =
   "vault 配下の開きっぱなし stream (Abort/TimeConstrained 打ち切りのリーク) を強制 Close する間隔秒\n" <>
   "(既定 300)。開いたハンドルは Dropbox 同期を止め conflicted copy の原因になる。";
 
+$SourceVaultServiceFastPoll::usage =
+  "$SourceVaultServiceFastPoll が True (既定) のとき、service loop は heartbeat 間隔の待ち時間を\n" <>
+  "ただ寝るのではなく commands/ を $SourceVaultServiceFastPollSeconds 周期で覗き、届いた command を\n" <>
+  "即処理する。音声ブリッジ (VRCRealtime -> LocalVoiceSearch) の取り込み遅延が最大 1 秒から\n" <>
+  "~50ms に下がる。False で従来どおり tick 境界でのみ処理する。";
+$SourceVaultServiceFastPollSeconds::usage =
+  "$SourceVaultServiceFastPollSeconds は fast poll の周期秒 (既定 0.05)。";
+
 Begin["`ServiceManagerPrivate`"]
+
+If[! BooleanQ[SourceVault`$SourceVaultServiceFastPoll],
+  SourceVault`$SourceVaultServiceFastPoll = True];
+If[! NumericQ[SourceVault`$SourceVaultServiceFastPollSeconds],
+  SourceVault`$SourceVaultServiceFastPollSeconds = 0.05];
+
+iSMFastPollQ[] := TrueQ[SourceVault`$SourceVaultServiceFastPoll];
+iSMFastPollSeconds[] := With[{s = SourceVault`$SourceVaultServiceFastPollSeconds},
+  If[NumericQ[s] && 0.01 <= N[s] <= 1., N[s], 0.05]];
 
 (* ============================================================
    local config root
@@ -1725,6 +1742,79 @@ iDispatchServiceCommand[cmd_Association] := Switch[Lookup[cmd, "Command"],
         If[FailureQ[res],
           <|"Status" -> "Error", "Reason" -> ToString[res]|>,
           <|"Status" -> "OK", "Results" -> res, "Count" -> Length[res]|>]]],
+  "LocalVoiceSearch",
+    (* VRCRealtime private TTS broker 専用。public MCP transport には公開しない。
+       LocalVoiceSearch 自身が PL<0.5 / PL>=0.5 を fail-closed で分岐する。
+       command log には Command/CommandId しか残らず、broker は done JSON を読後削除する。 *)
+    Module[{scope = <||>, filters = <||>, kinds, lim, r},
+      If[StringQ[Lookup[cmd, "ReleaseContext", None]],
+        scope["releaseContext"] = Lookup[cmd, "ReleaseContext"]];
+      If[StringQ[Lookup[cmd, "Group", None]],
+        scope["group"] = Lookup[cmd, "Group"]];
+      If[AssociationQ[Lookup[cmd, "Filters", None]],
+        filters = Lookup[cmd, "Filters"]];
+      kinds = Lookup[cmd, "Kinds", {
+        "search", "packageapi", "llmlog", "mail", "eagle", "snapshot"}];
+      If[! ListQ[kinds], kinds = {
+        "search", "packageapi", "llmlog", "mail", "eagle", "snapshot"}];
+      lim = Lookup[cmd, "Limit", 3]; If[! IntegerQ[lim], lim = 3];
+      r = Quiet @ Check[SourceVault`SourceVaultLocalVoiceSearch[Join[<|
+        "query" -> ToString @ Lookup[cmd, "Query", ""],
+        "kinds" -> kinds, "scope" -> scope, "filters" -> filters,
+        "limit" -> lim|>,
+        (* KB (Graph-RAG) 先行ルート。broker が "KB" を渡したときだけ上書きする *)
+        If[StringQ[Lookup[cmd, "KB", None]], <|"kb" -> Lookup[cmd, "KB"]|>, <||>]]], $Failed];
+      If[AssociationQ[r],
+        <|"Status" -> "OK", "Voice" -> r|>,
+        <|"Status" -> "Error", "Reason" -> "LocalVoiceSearchFailed"|>]],
+  "SlideDeckLookup",
+    (* 発表登録簿の照会。MCP tool sourcevault_slidedeck と同一関数の 2 経路目で、
+       VRCRealtime の音声ブリッジ (credential-free broker) がこちらを使う。
+       MCP エンベロープの再パースを Python 側へ持ち込まないため。
+       release gate は SourceVaultSlideDeckPresentationSpec 自身が fail-closed で
+       行う (PrivacyLevel 欠落 = 1.0 扱い、>= ceiling は原稿を返さない)。 *)
+    Module[{title = Lookup[cmd, "Title", Lookup[cmd, "Query", ""]], includeTalk, r},
+      includeTalk = TrueQ[Lookup[cmd, "IncludeTalk", True]];
+      If[! StringQ[title] || StringTrim[title] === "",
+        (* タイトル無しは一覧要求として扱う *)
+        r = Quiet @ Check[<|"found" -> False, "reason" -> "TitleRequired",
+            "decks" -> SourceVault`SourceVaultSlideDeckList[]|>, $Failed],
+        r = Quiet @ Check[
+          SourceVault`SourceVaultSlideDeckPresentationSpec[StringTrim[title],
+            "IncludeTalk" -> includeTalk], $Failed]];
+      If[AssociationQ[r],
+        <|"Status" -> "OK", "SlideDeck" -> r|>,
+        <|"Status" -> "Error", "Reason" -> "SlideDeckLookupFailed"|>]],
+  "LocalVoiceWebSearch",
+    (* 音声質疑応答のウェブ fallback。ローカル SearXNG のメタ検索だけを行い、
+       題名/URL/抜粋のみを返す (本文取得 = FetchPages はしない)。
+       高速索引 (LocalVoiceSearch) が空振りしたときだけ worker が呼ぶ。 *)
+    Module[{q = Lookup[cmd, "Query", ""], lim, r, rows, text},
+      lim = Lookup[cmd, "MaxResults", 5]; If[! IntegerQ[lim], lim = 5];
+      lim = Clip[lim, {1, 10}];
+      If[! StringQ[q] || StringTrim[q] === "",
+        <|"Status" -> "Error", "Reason" -> "QueryRequired"|>,
+        r = Quiet @ Check[SourceVault`SourceVaultWebSearch[StringTrim[q],
+          "MaxResults" -> lim, "FetchPages" -> False,
+          "RequestChannel" -> "VoiceBridge",
+          "InitiationType" -> "VoiceQuestion"], $Failed];
+        If[! AssociationQ[r],
+          <|"Status" -> "Error", "Reason" -> "WebSearchFailed"|>,
+          rows = Take[Select[Lookup[r, "Results", {}], AssociationQ],
+            UpTo[lim]];
+          text = StringRiffle[
+            MapIndexed[
+              "[" <> ToString[First[#2]] <> "] " <>
+                ToString @ Lookup[#1, "Title", "?"] <> "\n  " <>
+                ToString @ Lookup[#1, "Url", "?"] <> "\n  " <>
+                StringTake[ToString @ Lookup[#1, "Snippet", ""], UpTo[300]] &,
+              rows], "\n"];
+          <|"Status" -> "OK",
+            "Web" -> <|"count" -> Length[rows], "text" -> text|>|>]]],
+  "SlideDeckList",
+    Module[{r = Quiet @ Check[SourceVault`SourceVaultSlideDeckList[], $Failed]},
+      If[ListQ[r], <|"Status" -> "OK", "SlideDeck" -> <|"decks" -> r|>|>,
+        <|"Status" -> "Error", "Reason" -> "SlideDeckListFailed"|>]],
   (* ---- Web ingest job 二層 (spec v6 §7) ----
      job 側の "Status" (Succeeded 等) と command envelope の "Status" (OK/Error) が
      衝突しないよう、handler 結果は "Web" 配下にネストする。 *)
@@ -1992,7 +2082,21 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
               <|"Released" -> Lookup[swR, "Released", 0],
                 "Files" -> Lookup[swR, "Files", {}]|>]]]];
       If[NumericQ[maxSec] && (AbsoluteTime[] - startAbs) > maxSec, stop = True; Break[]];
-      Pause[interval]],
+      (* tick 間の待ちは「ただ寝る」のではなく commands/ を短周期で覗く。
+         音声ブリッジ (VRCRealtime -> LocalVoiceSearch) の取り込み遅延が
+         最大 1 秒 (heartbeat 間隔) から ~50ms に下がる。ディレクトリ列挙は
+         ファイルが無ければほぼ無コストなので heartbeat 負荷は増えない。 *)
+      If[TrueQ[iSMFastPollQ[]],
+        Module[{waitUntil = AbsoluteTime[] + interval, cmdDir,
+                pollSec = iSMFastPollSeconds[]},
+          cmdDir = FileNameJoin[{dir, "commands"}];
+          While[AbsoluteTime[] < waitUntil,
+            Pause[pollSec];
+            If[FileNames["*.json", cmdDir] =!= {},
+              stop = iProcessServiceCommands[dir];
+              If[stop, Break[]]]];
+          If[stop, Break[]]],
+        Pause[interval]]],
     stop = True];
   iSMWriteJSON[statusPath, <|"ServiceId" -> serviceId, "Kind" -> kind,
     "State" -> "Stopped", "PID" -> $ProcessID, "StoppedAtUTC" -> iSMUTCNow[],
@@ -2017,8 +2121,10 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
     iSMWriteJSON[FileNameJoin[{dir, "manifest.resolved.wl"}],
       <|"ServiceId" -> serviceId, "Kind" -> kind, "PackageRoot" -> pkgRoot,
         "CoreRoot" -> root, "HeartbeatIntervalSeconds" -> interval,
-        "Packages" -> {"SourceVault_core.wl", "SourceVault_crypto.wl", "SourceVault_searchindex.wl",
+        "Packages" -> {"SourceVault_core.wl", "SourceVault_crypto.wl",
+          "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_kb.wl",
           "SourceVault_diagnostics.wl", "SourceVault_issues.wl",
+          "SourceVault_slidedeck.wl",
           "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
           "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl",
           "SourceVault_llmlog.wl", "SourceVault_autotrigger.wl"},
@@ -2031,13 +2137,22 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
         (* crypto は grant 検証 (sourcevault_get / D3 本文解放) に必要。core 後・他より前に
            load。存在ガードで fail-soft (欠落時 grant 検証は CryptoUnavailable で安全側)。 *)
         "  With[{cpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_crypto.wl\"}]}, If[FileExistsQ[cpath], Get[cpath]]];\n",
+        (* lexical は searchindex の BM25 arm と KB が使う。存在ガードで fail-soft *)
+        "  With[{xpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_lexical.wl\"}]}, If[FileExistsQ[xpath], Get[xpath]]];\n",
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_searchindex.wl\"}]];\n",
+        (* KB (Graph-RAG 低遅延応答層): 音声ブリッジ/MCP の高速応答口。
+           lexical + searchindex の後。存在ガードで fail-soft。 *)
+        "  With[{bpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_kb.wl\"}]}, If[FileExistsQ[bpath], Get[bpath]]];\n",
         (* diagnostics -> issues の順 (spec issues-v0.4 §12: core -> diagnostics
            -> issues -> servicemanager main)。service kernel が spool ingest の
            issue fan-out と signal reconciler を担えるようにする。存在ガードで
            fail-soft。issueanalysis は常時ロードしない (分析 worker のみ)。 *)
         "  With[{dpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_diagnostics.wl\"}]}, If[FileExistsQ[dpath], Get[dpath]]];\n",
         "  With[{ipath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_issues.wl\"}]}, If[FileExistsQ[ipath], Get[ipath]]];\n",
+        (* slidedeck (発表登録簿): 音声ブリッジの SlideDeckLookup / MCP tool が
+           service kernel で答えられるようにする。core の root 解決だけに依存。
+           存在ガードで fail-soft。 *)
+        "  With[{spath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_slidedeck.wl\"}]}, If[FileExistsQ[spath], Get[spath]]];\n",
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_servicemanager.wl\"}]];\n",
         (* webingest / mcp は存在する場合のみ load (spec v6 §4.6)。未作成段階でも安全。 *)
         "  With[{wpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_webingest.wl\"}]}, If[FileExistsQ[wpath], Get[wpath]]];\n",
@@ -3426,12 +3541,18 @@ iRegisterSourceVaultCLIMCP[] := If[
           <|"Url" -> "http://127.0.0.1:" <> ToString[port] <> "/sv/mcp",
             "Headers" -> If[StringQ[tok] && tok =!= "",
               <|"X-SourceVault-Token" -> tok|>, <||>]|>]],
-      (* read-only 情報取得 tool のみ pre-allow (書き込み/deposit は除外) *)
+      (* read-only 情報取得 tool のみ pre-allow (書き込み/deposit は除外)。
+         sourcevault_request_access / sourcevault_access_status も pre-allow する:
+         申請は append-only な queue への記録だけで何も解放せず、実際の解放は人間が
+         Mathematica 側で承認した grant に限られる。ここに無いと --print モード
+         (対話承認不可) では申請そのものが拒否され、MCP が案内する
+         「grant を申請してから本文を取得」経路が構造的に成立しなかった。 *)
       "AllowedTools" -> {
         "sourcevault_catalog", "sourcevault_search", "sourcevault_get",
         "sourcevault_commit_log", "sourcevault_directives",
         "sourcevault_fs_list", "sourcevault_fs_read",
         "sourcevault_web_search",
+        "sourcevault_request_access", "sourcevault_access_status",
         "sourcevault_oops_status", "sourcevault_oops_search_threads",
         "sourcevault_oops_thread",
         "sourcevault_mail_status", "sourcevault_mail_search_threads",

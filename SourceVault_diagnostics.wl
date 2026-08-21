@@ -51,6 +51,7 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultDiagnosticsSinkAvailableQ",
   "SourceVault`SourceVaultDiagnosticsRegisterProbe",
   "SourceVault`SourceVaultDiagnosticsListProbes",
+  "SourceVault`SourceVaultShadowedSystemSymbols",
   "SourceVault`SourceVaultDiagnosticsLightweightDoctor",
   "SourceVault`SourceVaultDiagnosticsTick",
   "SourceVault`SourceVaultDiagnosticsStartTick",
@@ -254,6 +255,22 @@ SourceVaultDiagnosticsListProbes::usage =
   "SourceVaultDiagnosticsListProbes[] returns the list of registered diagnostics \
 probe ids.";
 
+SourceVaultShadowedSystemSymbols::usage =
+  "SourceVaultShadowedSystemSymbols[] lists symbols that shadow a System` symbol \
+in this kernel: a symbol Ctx`Name (Ctx != System`) with the same short name as a \
+built-in, where Ctx precedes System` on $ContextPath ($ContextPath is searched in \
+order; $Context / Global` (last) never shadows built-ins), so that a notebook's \
+`Name` resolves to Ctx`Name (shown red in the Front End) and the built-in option / \
+function silently stops working. Typical cause: a qualified \
+reference such as GitHubREST`MaxItems written in another package, which CREATES \
+that symbol on parse (broke Dataset[..., MaxItems -> ...]). Returns a list of \
+<|\"Name\", \"Context\", \"Active\", \"Defined\"|> (empty when healthy; \"Defined\" \
+False means an empty accidental symbol). Options: \"Contexts\" -> Automatic | {ctx..}; \
+\"IncludeInactive\" -> True also lists same-name symbols in contexts after System`. \
+Registered as diagnostics probe \"system-symbol-shadow\" (Degraded when non-empty). \
+Fix = remove the qualified reference in source and restart the kernel (or Remove[] \
+the accidental symbol and reload the package that defined its options).";
+
 SourceVaultDiagnosticsLightweightDoctor::usage =
   "SourceVaultDiagnosticsLightweightDoctor[] runs a cheap doctor: license probe + \
 service health + registered probes, but SKIPS the kernel-topology CIM probe \
@@ -438,6 +455,99 @@ iSVDiagRunRegisteredProbes[] :=
                 iSVDiagNormalizeProbeResult[id, res]]]]],
       $iSVDiagProbes];
     out];
+
+(* ------------------------------------------------------------
+   System-symbol shadow probe (2026-08-18).
+   A symbol Ctx`Name (Ctx != System`) whose short name equals a System`
+   symbol shadows the built-in when Ctx precedes System` on $ContextPath:
+   a notebook's `Name` then resolves to Ctx`Name (red in the FE) and
+   built-in options / functions silently stop working.
+   Usual cause: a qualified reference Ctx`Name written from ANOTHER
+   package (e.g. GitHubREST`MaxItems in SourceVault_mcp.wl), which
+   creates the symbol at parse time although Ctx never defines it.
+   Read-only; touches only Names / $ContextPath.
+   ------------------------------------------------------------ *)
+
+(* short names of the symbols living directly in ctx. Names[] returns a
+   short name when the symbol is reachable via $ContextPath and a qualified
+   name otherwise (and may include sub-context symbols); normalize both and
+   keep only symbols whose context is exactly ctx. Vectorized: this runs on
+   the 60 s lightweight tick, so per-name Module/Function calls are avoided. *)
+iSVDiagContextShortNames[ctx_String] :=
+  Module[{names = Quiet @ Check[Names[ctx <> "*"], {}], short, qual, len},
+    If[!ListQ[names] || names === {}, Return[{}]];
+    len = StringLength[ctx];
+    short = Pick[names, StringFreeQ[names, "`"]];
+    qual = Pick[names, StringStartsQ[names, ctx]];
+    qual = StringDrop[qual, len];
+    qual = Pick[qual, StringFreeQ[qual, "`"]];
+    DeleteDuplicates @ Join[short, qual]];
+
+(* does the (fully qualified) symbol carry any definition? False for an
+   accidental empty symbol created by a mere qualified reference. *)
+iSVDiagSymbolDefinedQ[full_String] :=
+  Quiet @ Check[
+    ToExpression[full, InputForm,
+      Function[s,
+        TrueQ[Length[OwnValues[s]] + Length[DownValues[s]] + Length[SubValues[s]] +
+          Length[UpValues[s]] + Length[Options[s]] > 0], HoldAll]],
+    False];
+
+Options[SourceVaultShadowedSystemSymbols] =
+  {"Contexts" -> Automatic, "IncludeInactive" -> False};
+
+(* Lookup rule (measured, WL 15.0): a short name is resolved by walking
+   $ContextPath IN ORDER; $Context is consulted only when nothing on the
+   path matches (and is where new symbols are created). Hence a same-name
+   symbol shadows the built-in iff its context precedes System` on
+   $ContextPath; Global` (last) or an unlisted Private` context never does. *)
+SourceVaultShadowedSystemSymbols[OptionsPattern[]] :=
+  Module[{path = $ContextPath, sysNames, ctxs, sysPos, out},
+    sysNames = DeleteDuplicates[Last[StringSplit[#, "`"]] & /@ Names["System`*"]];
+    ctxs = Replace[OptionValue["Contexts"],
+      Automatic :> DeleteDuplicates[Append[path, $Context]]];
+    ctxs = DeleteCases[Select[Flatten[{ctxs}], StringQ], "System`"];
+    sysPos = FirstPosition[path, "System`", {Infinity}][[1]];
+    out = Flatten @ Map[
+      Function[ctx, Module[{hits, pos, active},
+        hits = Intersection[iSVDiagContextShortNames[ctx], sysNames];
+        pos = FirstPosition[path, ctx, {Infinity}][[1]];
+        active = TrueQ[pos < sysPos];
+        Map[<|"Name" -> #, "Context" -> ctx, "Active" -> active,
+              "Defined" -> iSVDiagSymbolDefinedQ[ctx <> #]|> &, hits]]],
+      ctxs];
+    If[TrueQ[OptionValue["IncludeInactive"]], out, Select[out, TrueQ[#Active] &]]];
+
+(* core probe: Degraded while any active shadow exists (fix source, restart
+   the kernel). Registered here (not by a producer) because the symbol table
+   is the kernel's own; re-registration on repeated Get[] just replaces.
+   The scan walks the whole symbol table once per context (~0.6 s with the
+   full package set), so the probe caches its result for 10 min, keyed on
+   $ContextPath (a newly loaded package invalidates it at once); the public
+   function itself always computes fresh. *)
+If[!ValueQ[$iSVDiagShadowProbeCache], $iSVDiagShadowProbeCache = <||>];
+$iSVDiagShadowProbeTTL = 600;
+
+iSVDiagShadowProbeResult[] :=
+  Module[{c = $iSVDiagShadowProbeCache, now = AbsoluteTime[], sh},
+    If[AssociationQ[c] && Lookup[c, "Path", None] === $ContextPath &&
+         NumberQ[Lookup[c, "At", None]] && now - c["At"] < $iSVDiagShadowProbeTTL,
+      Return[c["Result"]]];
+    sh = Quiet @ Check[SourceVaultShadowedSystemSymbols[], $Failed];
+    $iSVDiagShadowProbeCache = <|"Path" -> $ContextPath, "At" -> now, "Result" -> sh|>;
+    sh];
+
+SourceVaultDiagnosticsRegisterProbe["system-symbol-shadow",
+  Function[Module[{sh = iSVDiagShadowProbeResult[]},
+    Which[
+      sh === $Failed,
+        <|"Health" -> "Degraded", "ReasonCode" -> "ProbeError"|>,
+      sh === {},
+        <|"Health" -> "OK", "Count" -> 0|>,
+      True,
+        <|"Health" -> "Degraded", "ReasonCode" -> "SystemSymbolShadowed",
+          "Count" -> Length[sh],
+          "Symbols" -> Map[#Context <> #Name &, sh]|>]]]];
 
 (* ------------------------------------------------------------
    License capacity (measured).

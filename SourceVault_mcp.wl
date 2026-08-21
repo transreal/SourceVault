@@ -223,13 +223,27 @@ SourceVaultMCPSearch::usage =
   "AccessRequest|>。opts \"Principal\" / \"Trusted\"。sourcevault_search tool の実体。\n" <>
   "結果は per-result release gate (SourceVaultMCPReleaseGate) を通し、戻り値に ReleaseGated 件数を含む。";
 
+$SourceVaultKBVoiceMinScore::usage =
+  "$SourceVaultKBVoiceMinScore は音声ルータが KB のヒットを採用する生 BM25 の下限 (既定 2.0)。\n" <>
+  "これを下回るヒットは KB の担当範囲外と見なし、従来の adapter 横断検索へ落とす。";
+
+SourceVaultLocalVoiceSearch::usage =
+  "SourceVaultLocalVoiceSearch[spec] はローカル音声ブリッジ専用の read-only 検索を行い、\n" <>
+  "全結果の Privacy.Level が 0.5 未満なら Route->OpenAI と安全な短い検索文を返す。\n" <>
+  "0.5 以上または PL 不明の結果を一つでも含む場合は Route->LocalTTS とローカル読み上げ文を返す。\n" <>
+  "まず KB (SourceVaultKBAnswer。spec \"kb\" または $SourceVaultKBDefaultId) を引き、ヒットすれば\n" <>
+  "そこで返す (Source->KB。数十 ms)。ヒットしない時だけ従来の adapter 横断検索へ落ちる。\n" <>
+  "MCP tool 一覧には公開せず、SourceVault service のローカル command queue からのみ呼ぶ。";
+
 SourceVaultMCPGet::usage =
   "SourceVaultMCPGet[uri, opts] は単一の sv:// URI を解決し、所有 adapter の Resolve で低漏洩\n" <>
   "メタ/サマリー projection を取り、SourceVaultMCPReleaseGate (B3) で出口 gate して返す (spec §11.2)。\n" <>
   "戻り値 <|URI, Found, Released, Adapter, Result(Permit時のみ), Access, RequiresGrantFor, Why,\n" <>
   "AccessRequest|>。body/raw/attachment は含めず requiresGrant を示す (実 grant は Phase D)。\n" <>
-  "例外: adapter が \"BodyGrantRequired\"->False を宣言する PublicDoc 系 (packageapi 等) は\n" <>
-  "view=body を grant なしで解放する (release gate は通す)。adapter の \"ExtraViews\" に\n" <>
+  "例外: adapter が \"BodyGrantRequired\"->False を宣言する PublicDoc 系 (packageapi 等) と、\n" <>
+  "\"BodyGrantRequired\" 判定関数が公開と判定した URI (pdfindex で privacy 0.0 / storageType\n" <>
+  "public と宣言済みドキュメントの sv://chunk/) は view=body を grant なしで解放する\n" <>
+  "(release gate は通す)。adapter の \"ExtraViews\" に\n" <>
   "登録された view 名 (packageapi: contract/scaffolded/guided) はその projection を返す。\n" <>
   "opts \"Principal\" / \"Trusted\" / \"View\"。sourcevault_get tool の実体。";
 
@@ -1345,15 +1359,75 @@ iSVPdfChunkResolve[parsed_Association, accessRequest_Association] := Module[{p},
     "PrivacyClass" -> "Mixed"|>];
 
 iSVPdfReadBodyReadyQ[] := Length[DownValues[PDFIndex`pdfGetChunk]] > 0;
-iSVPdfChunkReadBody[parsed_Association, grant_Association, accessRequest_Association, view_ : "body"] :=
-  Module[{p, full},
+
+(* ---- chunk -> 所属ドキュメントの privacy 解決 (公開ドキュメント判定の根拠) ----
+   PDFIndex は ingest 時にドキュメント単位で "privacy" と "storageType" を確定させ、
+   privacy > 0.5 のものだけ pdfindex_private/ に置く。公開ドキュメントの索引は
+   claude_attachments/pdfindex/ (= クラウド LLM 処理可を前提とした置き場) に入る。
+   この **doc 単位の宣言が本文公開可否の正本** なので、chunk からその doc meta を引いて
+   判定する (collection 単位や search group の AssignPrivacyLevel では判定しない:
+   collection には公開/非公開が混在しうる)。
+   pdfLoadIndex は collection ごとにキャッシュされ、本文取得 (pdfGetChunk) が同じ
+   index を必ずロードするので追加コストは無い。PDFIndex 未ロード / chunk 不明 /
+   doc meta 不明はすべて Missing を返し、呼び出し側で fail-closed に倒す。 *)
+iSVPdfChunkDocMeta[coll_String, ci_Integer] := Module[{idx, chunks, docs, did},
+  If[! iSVPdfReadBodyReadyQ[], Return[Missing["PDFIndexUnavailable"]]];
+  idx = Quiet @ Check[PDFIndex`pdfLoadIndex[coll], $Failed];
+  If[! MatchQ[idx, _PDFIndex`PDFIndexObject], Return[Missing["IndexUnavailable"]]];
+  chunks = Quiet @ Check[idx["chunks"], $Failed];
+  If[! ListQ[chunks] || ci < 1 || ci > Length[chunks], Return[Missing["ChunkNotFound"]]];
+  did = ToString @ Lookup[chunks[[ci]], "docId", ""];
+  If[did === "", Return[Missing["DocIdUnknown"]]];
+  docs = Quiet @ Check[idx["docs"], $Failed];
+  If[! ListQ[docs], Return[Missing["DocsUnavailable"]]];
+  SelectFirst[docs,
+    AssociationQ[#] && ToString[Lookup[#, "docId", ""]] === did &,
+    Missing["DocMetaNotFound"]]];
+iSVPdfChunkDocMeta[___] := Missing["NotChunkURI"];
+
+(* 公開ドキュメント判定の閾値。既定 0.0 = 「完全公開と宣言されたものだけ」。
+   PDFIndex の private 振り分けは 0.5 超なので、0.3 等の中間値は公開扱いにしない。 *)
+If[! NumericQ[$svPdfPublicBodyMaxLevel], $svPdfPublicBodyMaxLevel = 0.0];
+
+(* doc meta が「公開刊行物」を宣言しているか。privacy 数値と storageType の両方を要求する
+   (どちらか欠落・非数値なら False = grant 必須)。 *)
+iSVPdfDocPublicQ[m_Association] := Module[{p, st},
+  p = Lookup[m, "privacy", Missing[]];
+  st = ToString @ Lookup[m, "storageType", "private"];
+  NumericQ[p] && N[p] <= $svPdfPublicBodyMaxLevel && st === "public"];
+iSVPdfDocPublicQ[_] := False;
+
+(* adapter hook "BodyGrantRequired": chunk の所属 doc が公開宣言済みなら False
+   (grant 不要 = release gate のみ)。判定不能はすべて True (grant 必須) に倒す。 *)
+iSVPdfChunkBodyGrantRequiredQ[parsed_Association, view_, accessRequest_] := Module[{p},
+  If[view =!= "body", Return[True]];
+  p = iSVPdfChunkParse[parsed];
+  If[! AssociationQ[p], Return[True]];
+  ! iSVPdfDocPublicQ[iSVPdfChunkDocMeta[p["Collection"], p["ChunkIndex"]]]];
+iSVPdfChunkBodyGrantRequiredQ[___] := True;
+
+(* grant_ は非 Association (公開 doc 経路の None) も受ける。grant 検証は呼び出し側が済ませている。
+   公開 doc のときは Privacy.Level / Title / Citation も返し、監査 (MaxReleasedPrivacy) と
+   引用が実際の doc meta に基づくようにする。
+   引数 pattern を grant_Association から grant_ へ広げたので、旧定義が同一カーネルに残ると
+   grant 経路で旧 rule が先に match してしまう。再ロード時に明示的に消す。 *)
+Quiet @ ClearAll[iSVPdfChunkReadBody];
+iSVPdfChunkReadBody[parsed_Association, grant_, accessRequest_Association, view_ : "body"] :=
+  Module[{p, full, meta, out},
     If[! iSVPdfReadBodyReadyQ[], Return[Missing["PDFIndexUnavailable"]]];
     p = iSVPdfChunkParse[parsed];
     If[! AssociationQ[p], Return[Missing["NotChunkURI"]]];
     full = Quiet @ Check[PDFIndex`pdfGetChunk[p["ChunkIndex"], p["Collection"]], $Failed];
-    If[StringQ[full] && StringTrim[full] =!= "",
-      <|"Body" -> full, "Kind" -> "pdfchunk"|>,
-      Missing["ChunkNotFound"]]];
+    If[! (StringQ[full] && StringTrim[full] =!= ""), Return[Missing["ChunkNotFound"]]];
+    out = <|"Body" -> full, "Kind" -> "pdfchunk"|>;
+    meta = iSVPdfChunkDocMeta[p["Collection"], p["ChunkIndex"]];
+    If[iSVPdfDocPublicQ[meta],
+      out = Join[out, <|
+        "Privacy" -> <|"Level" -> N @ Lookup[meta, "privacy", 0.0]|>,
+        "Title" -> ToString @ Lookup[meta, "title", ""],
+        "Citation" -> <|"label" -> ToString @ Lookup[meta, "title", ""],
+          "chunk" -> p["ChunkIndex"], "docId" -> ToString @ Lookup[meta, "docId", ""]|>|>]];
+    out];
 
 (* ---- web adapter: 既存 SourceVaultWebSearch (SearXNG 候補) に接続 ---- *)
 (* web 検索結果は外部 URL 候補 (未 ingest)。canonical sv:// object は持たず、URL は Citation に載せる。
@@ -1502,11 +1576,17 @@ iSVMailRowToResult[r_Association] := Module[{rid = Lookup[r, "RecordId", Missing
   "PrivacyClass" -> "Private",
   "ResultId" -> "mail-" <> If[StringQ[rid], rid, iSVUrlId[ToString[r]]]|>];
 
-iSVMailAdapterSearch[spec_Association, accessRequest_Association] := Module[{q, lim, srcLim, rows},
+iSVMailAdapterSearch[spec_Association, accessRequest_Association] := Module[
+  {q, lim, srcLim, rows, filt, dateFrom, dateTo},
   q = ToString @ Lookup[spec, "query", ""];
   lim = Lookup[spec, "limit", 20];
   srcLim = If[IntegerQ[lim] && lim > 0, Max[5*lim, 100], 200];
-  rows = Quiet @ SourceVault`SourceVaultMailSearchIndex[q, "Limit" -> srcLim];
+  filt = Lookup[spec, "filters", <||>]; If[! AssociationQ[filt], filt = <||>];
+  dateFrom = Lookup[filt, "dateFrom", Automatic];
+  dateTo = Lookup[filt, "dateTo", Automatic];
+  rows = Quiet @ SourceVault`SourceVaultMailSearchIndex[q,
+    "DateFrom" -> dateFrom, "DateTo" -> dateTo,
+    "SortBy" -> "Date", "SortOrder" -> "Desc", "Limit" -> srcLim];
   If[! ListQ[rows], Return[{}]];
   iSVMailRowToResult /@ Select[rows, AssociationQ]
 ];
@@ -1764,6 +1844,172 @@ SourceVaultMCPSearch[specIn_Association, OptionsPattern[]] := Module[
 ];
 
 (* ============================================================
+   Local voice privacy router
+   ------------------------------------------------------------
+   OpenAI と接続された worker に PL>=0.5 の本文を返さないためのローカル専用入口。
+   public MCP tool には登録しない。service command queue から、API key を持たない
+   private TTS broker が呼ぶ。PL 不明は 1.0 として fail-closed に LocalTTS へ送る。
+   ============================================================ *)
+
+$iSVLocalVoiceKinds = {
+  "search", "pdf", "packageapi", "api", "llmlog", "claudecode",
+  "mail", "eagle", "image", "snapshot", "file", "filesystem"};
+$iSVLocalVoiceDefaultKinds = {
+  "search", "packageapi", "llmlog", "mail", "eagle", "snapshot"};
+
+iSVVoiceString[Missing[___]] := "";
+iSVVoiceString[None] := "";
+iSVVoiceString[s_String] := StringTrim[s];
+iSVVoiceString[x_] := StringTrim @ ToString[x];
+
+iSVVoicePrivacyLevel[r_Association] := Module[{v},
+  v = Lookup[Lookup[r, "Privacy", <||>], "Level", Missing["Unknown"]];
+  If[NumericQ[v], N[v], 1.0]
+];
+
+iSVVoiceResultText[r_Association] := Module[{title, body},
+  title = iSVVoiceString @ Lookup[r, "Title", ""];
+  body = SelectFirst[
+    iSVVoiceString /@ {Lookup[r, "Snippet", ""], Lookup[r, "Summary", ""]},
+    StringLength[#] > 0 &, ""];
+  StringTrim @ Which[
+    title =!= "" && body =!= "", title <> "。" <> body,
+    body =!= "", body,
+    title =!= "", title,
+    True, ""]
+];
+
+iSVVoiceReportText[results_List] := Module[{parts},
+  parts = DeleteCases[iSVVoiceResultText /@ results, ""];
+  If[parts === {},
+    "SourceVaultに検索結果はありますが、読み上げ可能な要約がありません。",
+    "SourceVaultで次の情報が見つかりました。" <>
+      StringRiffle[MapIndexed[ToString[First[#2]] <> "件目。" <> #1 &, parts], " "]]
+];
+
+(* ---- KB (Graph-RAG) 先行ルート ----
+   spec の "kb" (broker の Command "KB")、無ければ $SourceVaultKBDefaultId を引く。
+   KB が無い / 未構築 / ヒット無しなら Null を返して従来の横断検索へ落とす。
+   ヒットしたら PL で経路を分ける (<0.5 はクラウド可、>=0.5 はローカル TTS)。 *)
+$iSVVoiceKBLimit = 3;
+(* 生 BM25 の下限。これを下回るヒットは「KB の担当範囲ではない」と見なし、
+   従来の横断検索へ落とす (例: メールの質問が資料スライドに吸われるのを防ぐ)。 *)
+If[! NumericQ[SourceVault`$SourceVaultKBVoiceMinScore],
+  SourceVault`$SourceVaultKBVoiceMinScore = 2.0];
+(* KB を試してよい kind。明示的に mail 等だけを指定された要求は KB を飛ばす *)
+$iSVVoiceKBKinds = {"search", "kb", "all", "pdf", "snapshot"};
+
+(* KB を採らなかったときは理由を文字列で返す。Null を返すだけだと、索引が
+   未構築の環境で音声が黙って adapter 横断検索 (llmlog = コーディング作業ログ等)
+   へ落ち、講演の質問に別件を答える — しかもどこにも痕跡が残らない。
+   実測 2026-08-15: 「第9回の計算と自然」に VRCPilot の作業ログを返した。 *)
+iSVVoiceKBAnswer[spec_Association] := Module[{kbId, q, out, pl, route, kinds, minScore},
+  If[Length[DownValues[SourceVault`SourceVaultKBAnswer]] === 0,
+    Return["KBLayerUnavailable"]];
+  q = iSVVoiceString @ Lookup[spec, "query", ""];
+  If[StringLength[q] === 0, Return["EmptyQuery"]];
+  kinds = Lookup[spec, "kinds", Automatic];
+  If[ListQ[kinds] && kinds =!= {} &&
+     Intersection[kinds, $iSVVoiceKBKinds] === {}, Return["KindsExcludeKB"]];
+  kbId = With[{k = Lookup[spec, "kb", Automatic]},
+    Which[
+      StringQ[k] && StringLength[k] > 0, k,
+      StringQ[SourceVault`$SourceVaultKBDefaultId], SourceVault`$SourceVaultKBDefaultId,
+      True, Return["NoDefaultKB", Module]]];
+  out = Quiet @ Check[
+    SourceVault`SourceVaultKBAnswer[kbId, q, "Limit" -> $iSVVoiceKBLimit], $Failed];
+  If[! AssociationQ[out],
+    Return["KBNotBuilt:" <> kbId, Module]];
+  If[Lookup[out, "Route", ""] =!= "KB", Return["KBNoRoute", Module]];
+  If[StringLength[StringTrim[Lookup[out, "ContextText", ""]]] === 0,
+    Return["KBNoContext", Module]];
+  minScore = With[{m = SourceVault`$SourceVaultKBVoiceMinScore},
+    If[NumericQ[m], N[m], 2.0]];
+  If[N[Lookup[out, "TopBM25", 0.]] < minScore, Return["KBBelowMinScore", Module]];
+  pl = With[{v = Lookup[out, "MaxPrivacyLevel", 1.0]}, If[NumericQ[v], N[v], 1.0]];
+  route = If[pl < 0.5, "OpenAI", "LocalTTS"];
+  Join[
+    <|"Status" -> "OK", "Route" -> route, "Source" -> "KB", "KBId" -> kbId,
+      "Count" -> Lookup[out, "Count", 0], "MaxPrivacyLevel" -> pl,
+      "ElapsedMs" -> Lookup[out, "ElapsedMs", 0]|>,
+    If[route === "OpenAI",
+      <|"OpenAIText" -> Lookup[out, "ContextText", ""]|>,
+      <|"LocalSpeechText" -> StringJoin["保存資料から次の内容が見つかりました。",
+        Lookup[out, "AnswerText", ""]]|>]]];
+
+SourceVaultLocalVoiceSearch[specIn_Association] := Module[
+  {requestedKinds, kinds, scope, filters, ret, lim, forced, principal,
+   out, results, levels, maxPL, report, kbRoute, publicResults, privateResults},
+  (* --- KB (Graph-RAG) 先行ルート ---
+     索引はサービスカーネル常駐なので数十 ms で返る。ヒットしたらここで終了し、
+     数十秒かかりうる adapter 横断検索には降りない。KB は build 時 + request 時の
+     release gate 済みなので、ここでは PL による経路分岐だけ行う (既存と同じ規則)。 *)
+  kbRoute = iSVVoiceKBAnswer[specIn];
+  If[AssociationQ[kbRoute], Return[Append[kbRoute, "KBStatus" -> "Hit"]]];
+  requestedKinds = Lookup[specIn, "kinds", $iSVLocalVoiceDefaultKinds];
+  If[! ListQ[requestedKinds] || requestedKinds === {},
+    requestedKinds = $iSVLocalVoiceDefaultKinds];
+  kinds = If[MemberQ[requestedKinds, "all"],
+    $iSVLocalVoiceDefaultKinds,
+    Intersection[requestedKinds, $iSVLocalVoiceKinds]];
+  If[kinds === {}, kinds = $iSVLocalVoiceDefaultKinds];
+  scope = Lookup[specIn, "scope", <||>]; If[! AssociationQ[scope], scope = <||>];
+  filters = Lookup[specIn, "filters", <||>]; If[! AssociationQ[filters], filters = <||>];
+  ret = Lookup[specIn, "return", <||>]; If[! AssociationQ[ret], ret = <||>];
+  lim = Lookup[specIn, "limit", 3];
+  If[! IntegerQ[lim], lim = 3]; lim = Clip[lim, {1, 5}];
+  forced = Join[specIn, <|
+    "kinds" -> kinds,
+    "scope" -> Join[scope, <|"untagged" -> "Allow"|>],
+    "filters" -> Join[filters, <|"accessLevelMax" -> 1.0|>],
+    "return" -> Join[ret, <|
+      "format" -> "structuredJson", "includeSnippets" -> True,
+      "includeMetadata" -> True, "maxCharsPerResult" -> 600|>],
+    "limit" -> lim,
+    "purpose" -> "Local privacy-routed VRChat speech"|>];
+  principal = SourceVaultNormalizePrincipal[<||>, "Trusted" -> <|
+    "Kind" -> "LocalTTS", "ClientName" -> "VRCRealtimePrivateTTS",
+    "ProviderClass" -> "PrivateLLM", "UserPresent" -> True|>];
+  out = Quiet @ Check[
+    SourceVaultMCPSearch[forced, "Principal" -> principal], $Failed];
+  If[! AssociationQ[out],
+    Return[<|"Status" -> "Error", "Reason" -> "SearchFailed"|>]];
+  results = Lookup[out, "Results", {}]; If[! ListQ[results], results = {}];
+  If[results === {},
+    Return[<|"Status" -> "OK", "Route" -> "NoResults", "Count" -> 0,
+      "MaxPrivacyLevel" -> Null, "Source" -> "Adapter",
+      "KBStatus" -> If[StringQ[kbRoute], kbRoute, "Skipped"],
+      "OpenAIText" -> "SourceVaultに該当する情報は見つかりませんでした。"|>]];
+  levels = iSVVoicePrivacyLevel /@ results;
+  maxPL = Max[levels];
+  (* 公開分を先に答え、非公開分は「続き」として保留する。max PL 一件で全部を
+     ローカル読み上げへ回すと、同じ質問に対する公開資料の答えまでモデルへ渡らず、
+     利用者は聞かなくてよい非公開の朗読を待たされる。 *)
+  publicResults = Pick[results, # < 0.5 & /@ levels];
+  privateResults = Pick[results, # >= 0.5 & /@ levels];
+  report = If[privateResults === {}, "", iSVVoiceReportText[privateResults]];
+  Which[
+    privateResults === {},
+      <|"Status" -> "OK", "Route" -> "OpenAI", "Count" -> Length[results],
+        "MaxPrivacyLevel" -> maxPL, "Source" -> "Adapter",
+        "KBStatus" -> If[StringQ[kbRoute], kbRoute, "Skipped"],
+        "OpenAIText" -> SourceVaultRenderSearchResults[results, "compactText"]|>,
+    publicResults === {},
+      <|"Status" -> "OK", "Route" -> "LocalTTS", "Count" -> Length[results],
+        "MaxPrivacyLevel" -> maxPL, "Source" -> "Adapter",
+        "KBStatus" -> If[StringQ[kbRoute], kbRoute, "Skipped"],
+        "LocalSpeechText" -> report|>,
+    True,
+      <|"Status" -> "OK", "Route" -> "Mixed",
+        "Count" -> Length[publicResults], "PrivateCount" -> Length[privateResults],
+        "MaxPrivacyLevel" -> Max[iSVVoicePrivacyLevel /@ publicResults],
+        "PrivateMaxPrivacyLevel" -> maxPL, "Source" -> "Adapter",
+        "KBStatus" -> If[StringQ[kbRoute], kbRoute, "Skipped"],
+        "OpenAIText" -> SourceVaultRenderSearchResults[publicResults, "compactText"],
+        "LocalSpeechText" -> report|>]
+];
+
+(* ============================================================
    Universal MCP Access -- 単一 URI 解決 (universal spec §11.2 / sourcevault_get)
    Phase C / Increment C1。adapter の OwnsURIQ で所有 adapter を選び、Resolve で
    低漏洩 projection を取り、B3 (SourceVaultMCPReleaseGate) で出口 gate して返す。
@@ -1880,14 +2126,38 @@ iSVGrantPermitsView[grant_Association, canonicalURI_String, kind_String, view_St
       "Level" -> plevel, "MaxAccessLevel" -> maxAL|>]];
   <|"Permit" -> True, "Why" -> {}, "GrantId" -> Lookup[v, "GrantId", Missing[]]|>];
 
+(* adapter hook "BodyGrantRequired" の評価。
+   False        -> adapter 全体で grant 不要 (packageapi 等の PublicDoc adapter)
+   True / 未指定 -> grant 必須 (既定)
+   関数          -> fn[parsed, view, accessRequest] を URI 単位で評価し、**厳密に False を
+                   返したときだけ** grant 不要 (pdfindex の公開ドキュメント chunk 等)。
+   fail-closed: 判定関数が非 boolean を返す / message を出す / 例外を投げる / そもそも
+   評価できない場合はすべて grant 必須 (True) に倒す。 *)
+iSVBodyGrantRequiredQ[aspec_, parsed_, view_, accessRequest_] := Module[{v},
+  If[! AssociationQ[aspec], Return[True]];
+  v = Lookup[aspec, "BodyGrantRequired", True];
+  Which[
+    v === False, False,
+    v === True, True,
+    (* 判定関数: 厳密に False を返したときだけ grant 不要。message/例外は Check が True にする *)
+    True, (Quiet @ Check[v[parsed, view, accessRequest], True]) =!= False]];
+
+(* ReadBody が公開メタ (Privacy / Title / Citation) を返したら projection に反映する。
+   監査の MaxReleasedPrivacy と引用が実データに基づくようにするため。返さない adapter では
+   normalized のまま (既存 adapter 非破壊)。 *)
+iSVMergeBodyProjection[normalized_Association, body_Association] :=
+  Join[normalized, KeyTake[body, {"Privacy", "Title", "Citation"}]];
+iSVMergeBodyProjection[normalized_Association, _] := normalized;
+
 iSVMCPGetBody[normalized_Association, parsed_Association, aspec_, aname_String, view_String,
     grant_, accessRequest_Association, canonical_String, reqGrant_] := Module[{plevel, kind, gate, fn, body},
   plevel = Lookup[Lookup[normalized, "Privacy", <||>], "Level", Missing[]];
   kind = ToString @ Lookup[normalized, "Kind", ""];
-  (* R-spec §5.6: BodyGrantRequired->False の adapter (packageapi 等、PublicDoc doc) は
-     view=body を grant なしで解放する。release gate は通す (PL 0 なので cloud 可)。 *)
+  (* R-spec §5.6: BodyGrantRequired が grant 不要と判定した view=body は grant なしで解放する
+     (packageapi 等の PublicDoc adapter、および pdfindex で公開宣言済みドキュメントの chunk)。
+     release gate は通す (PL 0 なので cloud 可)。 *)
   If[view === "body" && AssociationQ[aspec] &&
-     Lookup[aspec, "BodyGrantRequired", True] === False,
+     ! iSVBodyGrantRequiredQ[aspec, parsed, view, accessRequest],
     Module[{g2, fn2, body2},
       g2 = SourceVaultMCPReleaseGate[normalized, accessRequest];
       If[! MemberQ[{"Permit", "Screen"}, Lookup[g2, "Decision"]],
@@ -1901,7 +2171,8 @@ iSVMCPGetBody[normalized_Association, parsed_Association, aspec_, aname_String, 
       body2 = Quiet @ fn2[parsed, None, accessRequest, view];
       Return[If[AssociationQ[body2],
         Join[<|"URI" -> canonical, "Found" -> True, "Released" -> True,
-          "Adapter" -> aname, "View" -> view, "Result" -> normalized,
+          "Adapter" -> aname, "View" -> view,
+          "Result" -> iSVMergeBodyProjection[normalized, body2],
           "Access" -> <|"Decision" -> "Permit", "Why" -> {"GrantFreePublicDoc"}|>|>,
           KeyTake[body2, {"Body", "Kind", "Chars"}]],
         <|"URI" -> canonical, "Found" -> True, "Released" -> False,
@@ -2813,11 +3084,17 @@ SourceVaultPackageCommitLog[pkg_String, OptionsPattern[]] := Module[
       "Package" -> pkg|>]];
   maxN = With[{m = OptionValue["MaxItems"]},
     If[IntegerQ[m] && m > 0, Min[m, 300], 50]];
+  (* MaxItems は System`MaxItems (github.wl の Options キーは組み込みシンボル)。
+     旧コードの GitHubREST`MaxItems という修飾は存在しない別シンボルを parse 時に
+     生成し、GitHubREST` が $ContextPath 上で System` より前に来るため
+     System`MaxItems (Dataset 等の表示件数オプション) を shadow していた
+     (NB で MaxItems が赤くなり Dataset[ds, MaxItems -> {r, c}] が効かない)。
+     他パッケージの option シンボルは絶対にパッケージ名で修飾しないこと。 *)
   res = Quiet @ Check[
     GitHubREST`GitHubCommitLog[pkg,
       "Since" -> OptionValue["Since"],
       "Until" -> OptionValue["Until"],
-      GitHubREST`MaxItems -> maxN], $Failed];
+      MaxItems -> maxN], $Failed];
   Which[
     ListQ[res],
       <|"Status" -> "OK", "Package" -> pkg, "Count" -> Length[res],
@@ -3130,13 +3407,21 @@ iSVRegisterDefaultAdapters[] := (
       "guided" -> iSVPackageApiExtraView["guided"]|>|>];
   SourceVaultRegisterMCPDataAdapter["search", <|
     "Kinds" -> {"search", "pdf"}, "Available" -> True,
+    "Description" -> "PDF/document search index (PDFIndex collections, e.g. the student handbook). " <>
+      "Bodies of documents that PDFIndex itself marks public (privacy 0.0, public storage) are " <>
+      "grant-free via sourcevault_get view=body; non-public documents still need a grant.",
     "Capabilities" -> <|"Search" -> True, "ReadMetadata" -> True,
       "ReadSummary" -> True, "MetadataFilter" -> True,
       "ResolveObjectURI" -> True, "ReadBody" -> True|>,
     "RequireGrantFor" -> {"body", "raw"},
     "Search" -> iSVSearchAdapterSearch,
-    (* #3: sv://chunk/<collection>:<index> を解決 (resolve=identity, ReadBody=pdfGetChunk 全文・grant 必須) *)
+    (* #3: sv://chunk/<collection>:<index> を解決 (resolve=identity, ReadBody=pdfGetChunk 全文)。
+       本文は既定 grant 必須だが、所属ドキュメントが PDFIndex 側で公開宣言済み
+       (privacy <= 0.0 かつ storageType=public。学生便覧のような web 公開刊行物) なら
+       BodyGrantRequired 判定関数が False を返し、release gate のみで解放する。
+       判定不能 (PDFIndex 未ロード等) は fail-closed で grant 必須。 *)
     "OwnsURIQ" -> iSVPdfOwnsURIQ, "Resolve" -> iSVPdfChunkResolve,
+    "BodyGrantRequired" -> iSVPdfChunkBodyGrantRequiredQ,
     "ReadBody" -> iSVPdfChunkReadBody|>];
   SourceVaultRegisterMCPDataAdapter["snapshot", <|
     "Kinds" -> {"snapshot"}, "Available" -> True,
@@ -3288,6 +3573,43 @@ SourceVaultMCPTools[] := {
           "description" -> "format: compactText | structuredJson | referencesOnly; maxCharsPerResult."|>,
         "purpose" -> <|"type" -> "string", "description" -> "Why the data is needed."|>|>,
       "required" -> {"query"}|>|>,
+  <|"name" -> "sourcevault_kb_answer",
+    "description" -> "FAST (tens of ms) grounded lookup over the prebuilt local knowledge base: the " <>
+      "owner's lecture slide decks (text AND figure descriptions) and imported PDF collections such as " <>
+      "the university student handbook. Prefer this over sourcevault_search whenever the question is " <>
+      "about that material and a quick answer is needed (e.g. realtime voice). Returns contextText with " <>
+      "numbered citations to quote from, a short answerText, and the citation list. It does NOT call an " <>
+      "LLM and never returns local file paths; results are release-gated.",
+    "inputSchema" -> <|"type" -> "object",
+      "properties" -> <|
+        "question" -> <|"type" -> "string", "description" -> "The question, in natural language."|>,
+        "kb" -> <|"type" -> "string", "description" -> "Knowledge base id (default: the configured one)."|>,
+        "limit" -> <|"type" -> "integer", "description" -> "Max passages to ground on (default 3, max 10)."|>,
+        "sourceId" -> <|"type" -> "string",
+          "description" -> "Restrict to one source document (e.g. a single deck)."|>,
+        "maxContextCharacters" -> <|"type" -> "integer",
+          "description" -> "Cap on contextText length (default 1200)."|>,
+        "includeResults" -> <|"type" -> "boolean",
+          "description" -> "Include the per-passage records too (default false)."|>,
+        "purpose" -> <|"type" -> "string", "description" -> "Why the data is needed."|>|>,
+      "required" -> {"question"}|>|>,
+  <|"name" -> "sourcevault_slidedeck",
+    "description" -> "Look up one of the owner's registered presentations (talks) by title and get " <>
+      "everything needed to give it: the Sliden MP4 slide URL, per-slide timing, and the prepared " <>
+      "narration scenario (opening / per-slide script / closing) written by the owner. Titles match " <>
+      "loosely (\"計算と自然集会31\" finds \"計算と自然31\"), but a differing trailing number never " <>
+      "matches. action=list enumerates registered talks. Registration is done from Mathematica " <>
+      "(SlideWorkflow palette); this tool is read-only.",
+    "inputSchema" -> <|"type" -> "object",
+      "properties" -> <|
+        "action" -> <|"type" -> "string",
+          "description" -> "lookup (default) | list. lookup requires title."|>,
+        "title" -> <|"type" -> "string",
+          "description" -> "Presentation title as spoken/written, e.g. \"計算と自然31\"."|>,
+        "includeTalk" -> <|"type" -> "boolean",
+          "description" -> "Include the narration scenario text (default true). High-privacy " <>
+            "entries are withheld regardless (talkWithheld=true)."|>,
+        "purpose" -> <|"type" -> "string", "description" -> "Why the data is needed."|>|>|>|>,
   <|"name" -> "sourcevault_get",
     "description" -> "Resolve a single sv:// URI (e.g. from sourcevault_search results) to its low-privacy " <>
       "metadata/summary projection. Bodies/raw/attachments are NOT returned (they require an access grant); " <>
@@ -3297,10 +3619,12 @@ SourceVaultMCPTools[] := {
         "uri" -> <|"type" -> "string", "description" -> "The sv:// URI to resolve."|>,
         "view" -> <|"type" -> "string",
           "description" -> "metadata | summary (default) | body. body/raw/context need a valid grant " <>
-            "and a non-cloud sink; mail body is main-kernel only. Exception: sv://packageapi/ chunks " <>
-            "are public docs — body is grant-free, and extra views contract (machine-readable " <>
-            "function contract: options/arguments/requires) / scaffolded / guided (doc granularity " <>
-            "tiers for smaller models) are available."|>,
+            "and a non-cloud sink; mail body is main-kernel only. Exceptions (body is grant-free, " <>
+            "just try view=body first): sv://packageapi/ chunks, and sv://chunk/ chunks of PDF " <>
+            "documents that PDFIndex marks public (e.g. the university student handbook and other " <>
+            "published PDFs) — for those, requiresGrantFor is advisory only. sv://packageapi/ also " <>
+            "offers extra views contract (machine-readable function contract: options/arguments/" <>
+            "requires) / scaffolded / guided (doc granularity tiers for smaller models)."|>,
         "grant" -> <|"type" -> "object",
           "description" -> "An AccessGrant from sourcevault_access_status (required for body/raw/context)."|>,
         "scope" -> <|"type" -> "object", "description" -> "releaseContext (string)."|>,
@@ -3706,6 +4030,64 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
           iMCPText["Found " <> ToString @ Lookup[out, "Count", 0] <> " result(s):\n\n" <>
             Lookup[out, "Rendered", ""] <>
             iSVFormatSearchWarnings[Lookup[out, "Warnings", {}]]]]],
+    (* KB (Graph-RAG) 高速応答。索引はサービスカーネル常駐なので数十 ms で返る。
+       KB 側で build 時 + request 時の release gate を通っているので、ここでは
+       追加の adapter gate は掛けずに監査記録だけ行う。 *)
+    "sourcevault_kb_answer",
+      Module[{kbId, q, lim, out},
+        q = ToString @ Lookup[args, "question", ""];
+        If[StringLength[StringTrim[q]] === 0,
+          Return[iMCPError["question is required."], Module]];
+        kbId = With[{k = Lookup[args, "kb", Automatic]},
+          If[StringQ[k] && StringLength[k] > 0, k, SourceVault`$SourceVaultKBDefaultId]];
+        lim = With[{l = Lookup[args, "limit", 3]}, If[IntegerQ[l], Clip[l, {1, 10}], 3]];
+        out = Quiet @ Check[
+          SourceVault`SourceVaultKBAnswer[kbId, q, "Limit" -> lim,
+            "SourceId" -> With[{s = Lookup[args, "sourceId", All]},
+              If[StringQ[s] && StringLength[s] > 0, s, All]],
+            "MaxContextCharacters" -> With[{m = Lookup[args, "maxContextCharacters", 1200]},
+              If[IntegerQ[m], Clip[m, {200, 4000}], 1200]]],
+          $Failed];
+        Which[
+          FailureQ[out],
+            (* Failure は Association ではないので Lookup ではなく Part で読む *)
+            iMCPError["Knowledge base \"" <> kbId <> "\" is not available: " <>
+              ToString @ Quiet @ Check[out[[2]]["MessageTemplate"], ToString[out]] <>
+              " Available: " <> ToString @ Quiet @ SourceVault`SourceVaultKBList[]],
+          ! AssociationQ[out],
+            iMCPError["Knowledge base lookup failed."],
+          True,
+            iSVRecordToolCall["sourcevault_kb_answer", args, out];
+            iMCPJSONText[<|
+              "kb" -> kbId, "route" -> Lookup[out, "Route", "?"],
+              "count" -> Lookup[out, "Count", 0],
+              "answerText" -> Lookup[out, "AnswerText", ""],
+              "contextText" -> Lookup[out, "ContextText", ""],
+              "citations" -> Lookup[out, "Citations", {}],
+              "maxPrivacyLevel" -> Lookup[out, "MaxPrivacyLevel", Null],
+              "elapsedMs" -> Lookup[out, "ElapsedMs", 0],
+              "results" -> If[TrueQ[Lookup[args, "includeResults", False]],
+                Lookup[out, "Results", {}], {}]|>]]],
+    (* 発表登録簿 (SourceVault_slidedeck.wl)。read-only。gate は
+       SourceVaultSlideDeckPresentationSpec 自身が fail-closed で行う。 *)
+    "sourcevault_slidedeck",
+      Module[{action, title, out},
+        If[Length[DownValues[SourceVault`SourceVaultSlideDeckPresentationSpec]] === 0,
+          Return[iMCPError["Slide deck registry is not available on this kernel."], Module]];
+        action = ToLowerCase @ ToString @ Lookup[args, "action", "lookup"];
+        If[action === "list",
+          Return[iMCPJSONText[<|"decks" -> SourceVault`SourceVaultSlideDeckList[]|>], Module]];
+        title = ToString @ Lookup[args, "title", ""];
+        If[StringTrim[title] === "",
+          Return[iMCPError["title is required for action=lookup (use action=list to enumerate)."],
+            Module]];
+        out = Quiet @ Check[
+          SourceVault`SourceVaultSlideDeckPresentationSpec[StringTrim[title],
+            "IncludeTalk" -> TrueQ[Lookup[args, "includeTalk", True]]], $Failed];
+        If[! AssociationQ[out],
+          iMCPError["Slide deck lookup failed for: " <> title],
+          iSVRecordToolCall["sourcevault_slidedeck", args, out];
+          iMCPJSONText[out]]],
     "sourcevault_get",
       Module[{out, fmt},
         out = SourceVaultMCPGet[Lookup[args, "uri", ""],

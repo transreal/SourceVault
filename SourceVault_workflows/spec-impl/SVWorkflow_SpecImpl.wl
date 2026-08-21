@@ -61,7 +61,17 @@ SourceVaultWorkflow`SpecImpl`Private`$pkgRoot =
       Symbol["Global`$packageDirectory"],
     True, "F:/Dropbox/Mathematica-oneDrive/MyPackages"];
 
-(* base orchestrator (also pulls in ClaudeCode`) *)
+(* ClaudeCode: LLM 呼び出し (ClaudeQuerySync) の実体。
+   2026-08-20: 背景ドライバを init.m を読まない素のカーネルで起動するように
+   したため、ここで明示的にロードしないと ClaudeQuerySync が未定義のまま
+   「[claude produced no output ...]」になる (実測)。既ロードなら no-op。 *)
+If[Length[DownValues[ClaudeCode`ClaudeQuerySync]] === 0,
+  Block[{$CharacterEncoding = "UTF-8"},
+    Quiet @ Check[
+      Get[FileNameJoin[{SourceVaultWorkflow`SpecImpl`Private`$pkgRoot, "claudecode.wl"}]],
+      Null]]];
+
+(* base orchestrator *)
 If[Length[DownValues[ClaudeOrchestrator`ClaudePlanTasks]] === 0,
   Block[{$CharacterEncoding = "UTF-8"},
     Get[FileNameJoin[{SourceVaultWorkflow`SpecImpl`Private`$pkgRoot, "ClaudeOrchestrator.wl"}]]]];
@@ -654,7 +664,8 @@ iStyleImplementBlock[payload_] := Module[
    the file manifest (code + test files) plus a structured step log. *)
 iRealImplement[model_, payload_] := Module[
   {name, canon, spec, notes, stages, idx, multi, stageTitle, aux, lastVerify,
-   existing, prompt, out, files, steps, testFiles},
+   existing, prompt, out, files, steps, testFiles,
+   mainName, retryPrompt, retryOut, retryFiles, diag = ""},
   name = Lookup[payload, "Name", "workflow"];
   canon = Lookup[payload, "Canon", iCanonicalName[name]];
   spec = Lookup[payload, "Spec", ""];
@@ -762,15 +773,80 @@ iRealImplement[model_, payload_] := Module[
     "Use RELATIVE paths under the package folder and emit content VERBATIM (no escaping). " <>
     "Always include \"SVWorkflow_" <> canon <> ".wl\", \"SVWorkflow_" <> canon <>
       "_info/docs/examples/example.md\", and the test file.\n" <>
+    (* 2026-08-20 実測: 実装役が本体 .wl だけを emit せず step log に「作成した」と
+       書くだけの空振りを 3 ラウンド繰り返した。本体を最初に出させ、長すぎる場合の
+       逃げ道 (分割) を明示する。 *)
+    "EMIT \"SVWorkflow_" <> canon <> ".wl\" FIRST, before every other file: if your reply gets cut " <>
+    "off, the entry point must still have shipped. Never replace file content with a summary or " <>
+    "\"...\" -- what you emit is written to disk verbatim and must load as-is. " <>
+    "If the package is too large for one reply, split it into \"SVWorkflow_" <> canon <> ".wl\" plus " <>
+    "helper .wl files in the same folder that the main file loads with Get (resolve the folder from " <>
+    "$InputFileName), and emit each as its own <<<FILE ...>>> block -- but never omit the main file.\n" <>
     "\n=== APPROVED SPEC ===\n" <> spec;
   out = iOrchQuery[model, prompt];
   (* delimiter-based manifest is robust for WL code (avoids JSON escaping of
      quotes/backslashes that frequently corrupts the manifest); JSON fallback. *)
   files = iParseFileManifest[out];
   steps = iParseSteps[out];
+
+  (* ---- 本体 .wl が来なかった時の追い打ち (2026-08-20) ----
+     実測: 実装役は docs/.md と test/.wls と manifest.json だけを出し、90KB 級の
+     本体 .wl を「CODE: ... を作成」と step log に書くだけで emit しないことがある
+     (3 ラウンド連続で発生し GaveUp)。次ラウンドの差し戻しでは同じことを繰り返す
+     ので、その場で「本体 1 ファイルだけ」を要求し直す。出力予算を丸ごと本体に
+     使えるので通りやすい。追い打ちも空なら診断材料を残して次ラウンドへ回す。 *)
+  mainName = "SVWorkflow_" <> canon <> ".wl";
+  If[! KeyExistsQ[files, mainName],
+    retryPrompt =
+      iLangInstr[payload] <> "\n" <>
+      "Your previous reply did NOT contain the package file. Files received: " <>
+        If[Length[files] > 0, StringRiffle[Keys[files], ", "], "(none)"] <> ".\n" <>
+      "Output the COMPLETE content of the single file \"" <> mainName <> "\" and NOTHING else:\n" <>
+      "<<<FILE " <> mainName <> ">>>\n<the full verbatim .wl content>\n<<<ENDFILE>>>\n" <>
+      "No step log, no other files, no prose, no code fences. Do not abbreviate, do not write " <>
+      "\"...\" placeholders: the file is written to disk exactly as emitted and must load as-is.\n" <>
+      "BeginPackage[\"SourceVaultWorkflow`" <> canon <> "`\"] (ONE argument), public ::usage " <>
+      "declarations, Begin[\"`Private`\"], the implementation, End[], EndPackage[].\n" <>
+      "Keep every bracket balanced -- a single stray ] silently kills every definition after it.\n" <>
+      If[StringQ[steps] && steps =!= "",
+        "\n=== What you said you implemented (follow it) ===\n" <> steps <> "\n", ""] <>
+      "\n=== APPROVED SPEC ===\n" <> spec;
+    retryOut = iOrchQuery[model, retryPrompt];
+    retryFiles = iParseFileManifest[retryOut];
+    If[KeyExistsQ[retryFiles, mainName],
+      files = Join[files, KeyTake[retryFiles, {mainName}]],
+      (* まだ来ない: 生出力を保存し、何が返ってきたかを次ラウンドへ渡す *)
+      diag = iMainFileMissDiag[mainName, out, retryOut]]];
+
   testFiles = Select[Keys[files], StringContainsQ[#, "test", IgnoreCase -> True] &];
   <|"Files" -> files, "Steps" -> steps, "TestFiles" -> testFiles,
-    "Unresolved" -> iParseUnresolved[out], "Raw" -> out|>];
+    "Unresolved" -> iParseUnresolved[out], "Raw" -> out,
+    "MainFileDiag" -> If[StringQ[diag], diag, ""]|>];
+
+(* 本体 .wl が 2 回とも来なかったときの診断文 + 生出力のダンプ。
+   「なぜ来なかったのか」(出力が途中で切れた / 区切りが壊れた / そもそも書いて
+   いない) を次ラウンドの実装役と人間の両方に見えるようにする。 *)
+iMainFileMissDiag[mainName_String, out_, retryOut_] := Module[
+  {texts, dump, mk, endMk, mentions},
+  texts = Select[{out, retryOut}, StringQ];
+  If[texts === {}, Return["the implementer returned no text at all"]];
+  mk = Total[StringCount[#, "<<<FILE"] & /@ texts];
+  endMk = Total[StringCount[#, "<<<ENDFILE>>>"] & /@ texts];
+  mentions = Total[StringCount[#, mainName] & /@ texts];
+  dump = FileNameJoin[{$TemporaryDirectory,
+    "svimpl_rawout_" <> StringReplace[CreateUUID[], "-" -> ""] <> ".txt"}];
+  Quiet @ Check[iWriteUTF8[dump, StringRiffle[texts, "\n\n===== RETRY =====\n\n"]], Null];
+  "the implementer did NOT emit \"" <> mainName <> "\" even after a second, " <>
+    "single-file request. raw output: " <> ToString[Total[StringLength /@ texts]] <>
+    " chars, <<<FILE markers: " <> ToString[mk] <> ", <<<ENDFILE>>> markers: " <>
+    ToString[endMk] <> ", mentions of the file name: " <> ToString[mentions] <>
+    If[mk =!= endMk,
+      " -> the block delimiters do not pair up, so the reply was CUT OFF mid-file " <>
+        "(the package is too large for one reply: split it into " <> mainName <>
+        " plus <helper>.wl files that the main file Gets, or implement in stages)",
+      " -> the reply was well-formed but simply had no such block"] <>
+    ". raw reply saved to: " <> dump];
+iMainFileMissDiag[___] := "";
 
 (* extract the <<<STEPS>>> ... <<<ENDSTEPS>>> sub-step log (free-form lines) *)
 iParseSteps[out_String] := Module[{m},
@@ -929,8 +1005,147 @@ iSmokeBadEscapes[s_String] := Module[{hits},
         Min[StringLength[s], p[[2]] + 30]}] <> "..."],
     Take[hits, UpTo[5]]]];
 
+(* ---- 構文エラーの位置特定 (子カーネル不要・評価しない) ----
+   ToExpression は「parse できない」としか言えないため、生成物が数万字ある
+   ケースでは実装役が原因に到達できず round を浪費する
+   (2026-08-20 実測: round 2/3 とも "syntax error: the main .wl does not parse"
+   だけを渡され、同じ括弧落ちを 95KB の再生成で二度繰り返して GaveUp)。
+   式を 1 つずつ Read して最初に失敗した位置を「行番号 + 該当行 + 直前の
+   定義名」で返す。HoldComplete[Expression] なので中身は評価されない。 *)
+(* 注意: Check は HoldAll なので、検出対象のメッセージ列は呼び出し側に
+   リテラルで書く (シンボル経由だと評価されず Message::name が出て
+   Check が機能せず、読み進めループが止まらなくなる)。 *)
+
+(* byte offset -> 1-origin 行番号 *)
+iLineOfOffset[bytes_ByteArray, off_Integer] :=
+  1 + Count[Normal[Take[bytes, UpTo[Max[off, 0]]]], 10];
+iLineOfOffset[___] := 0;
+
+(* 直前の「トップレベル定義らしい行」= 桁 0 から始まり := / = を含む行 *)
+iEnclosingDefLine[lines_List, line_Integer] := Module[{i},
+  i = SelectFirst[Reverse[Range[Max[line - 1, 1]]],
+    With[{l = If[# <= Length[lines], lines[[#]], ""]},
+      StringQ[l] && StringLength[l] > 0 &&
+        ! StringStartsQ[l, " " | "\t" | "(*" | "*"] &&
+        StringContainsQ[l, ":=" | " = "]] &, 0];
+  If[IntegerQ[i] && i > 0, ToString[i] <> ": " <> StringTake[lines[[i]], UpTo[160]], ""]];
+
+iSyntaxScanFile[file_String] := Module[
+  {bytes, lines, strm, prevPos = 0, e, parsed = 0, badOff = -1, line, snippet},
+  bytes = Quiet @ Check[ReadByteArray[file], $Failed];
+  If[Head[bytes] =!= ByteArray, Return[<|"OK" -> True, "Checked" -> False|>]];
+  lines = StringSplit[Quiet @ Check[ByteArrayToString[bytes, "UTF-8"], ""], "\n"];
+  strm = Quiet @ Check[OpenRead[file, CharacterEncoding -> "UTF-8"], $Failed];
+  If[Head[strm] =!= InputStream, Return[<|"OK" -> True, "Checked" -> False|>]];
+  While[badOff < 0,
+    prevPos = Quiet @ Check[StreamPosition[strm], 0];
+    e = Quiet[
+      Check[Read[strm, HoldComplete[Expression]], $Failed,
+        {Read::readt, Syntax::sntx, Syntax::sntxi, Syntax::sntxb,
+         Syntax::bktmcp, Syntax::bktmop, Syntax::tsntxi, Syntax::com,
+         Syntax::snthex}],
+      {Syntax::stresc}];
+    Which[
+      e === EndOfFile, Break[],
+      e === $Failed, badOff = prevPos,
+      (* 進まなくなったら無限ループを避けて打ち切る *)
+      Quiet @ Check[StreamPosition[strm], -1] <= prevPos, Break[],
+      True, parsed++]];
+  Quiet @ Close[strm];
+  If[badOff < 0, Return[<|"OK" -> True, "Checked" -> True, "Parsed" -> parsed|>]];
+  line = iLineOfOffset[bytes, badOff];
+  (* 失敗位置は「読み始めた式の先頭」なので、その式の先頭行から数行を出す *)
+  snippet = StringRiffle[
+    Take[lines, {Max[line, 1], Min[line + 6, Length[lines]]}], "\n"];
+  <|"OK" -> False, "Checked" -> True, "Parsed" -> parsed, "Line" -> line,
+    "Snippet" -> StringTake[snippet, UpTo[600]],
+    "EnclosingDef" -> iEnclosingDefLine[lines, line], "File" -> file|>];
+iSyntaxScanFile[___] := <|"OK" -> True, "Checked" -> False|>;
+
+(* ---- 括弧の対応検査 (パーサとは独立) ----
+   パーサは最初の 1 箇所しか報告できないので、括弧落ち/余りが 2 箇所以上ある
+   生成物では 1 ラウンドに 1 個しか直せない (2026-08-20 実測: 317 行目を直すと
+   次は 1313 行目)。文字列/コメントを除いて括弧を数え、閉じ過ぎと閉じ忘れを
+   まとめて位置つきで返す。 *)
+iBracketScan[file_String] := Module[
+  {s, cs, n, i, c, nxt, line = 1, instr = False, esc = False, comm = 0,
+   stack = {}, extra = {}, opens},
+  s = Quiet @ Check[ByteArrayToString[ReadByteArray[file], "UTF-8"], $Failed];
+  If[! StringQ[s], Return[{}]];
+  cs = Characters[s]; n = Length[cs]; i = 1;
+  While[i <= n,
+    c = cs[[i]]; nxt = If[i < n, cs[[i + 1]], ""];
+    Which[
+      c === "\n", line++; i++,
+      (* コメント (入れ子可)。文字列の中は無視 *)
+      ! instr && c === "(" && nxt === "*", comm++; i += 2,
+      ! instr && comm > 0 && c === "*" && nxt === ")", comm--; i += 2,
+      comm > 0, i++,
+      instr && esc, esc = False; i++,
+      instr && c === "\\", esc = True; i++,
+      c === "\"", instr = ! instr; i++,
+      instr, i++,
+      MemberQ[{"[", "{", "("}, c], AppendTo[stack, {c, line}]; i++,
+      MemberQ[{"]", "}", ")"}, c],
+        If[stack === {},
+          AppendTo[extra, {c, line}],
+          stack = Most[stack]]; i++,
+      True, i++]];
+  opens = stack;
+  Join[
+    Map[Function[e, <|"Kind" -> "extra-close", "Char" -> First[e], "Line" -> Last[e]|>], extra],
+    Map[Function[o, <|"Kind" -> "never-closed", "Char" -> First[o], "Line" -> Last[o]|>],
+      Take[opens, UpTo[5]]]]];
+iBracketScan[___] := {};
+
+iBracketReport[file_String] := Module[{bad = iBracketScan[file], lines},
+  If[bad === {}, Return[""]];
+  lines = StringSplit[
+    Quiet @ Check[ByteArrayToString[ReadByteArray[file], "UTF-8"], ""], "\n"];
+  StringRiffle[
+    Map[Function[b,
+      "  " <> If[Lookup[b, "Kind", ""] === "extra-close",
+          "line " <> ToString[Lookup[b, "Line", 0]] <> ": one \"" <>
+            Lookup[b, "Char", "?"] <> "\" TOO MANY (it closes an enclosing " <>
+            "Module/If early, so the rest of that definition becomes orphaned)",
+          "line " <> ToString[Lookup[b, "Line", 0]] <> ": \"" <>
+            Lookup[b, "Char", "?"] <> "\" is NEVER CLOSED"] <>
+        With[{l = Lookup[b, "Line", 0]},
+          If[1 <= l <= Length[lines], "\n      " <> StringTake[lines[[l]], UpTo[150]], ""]]],
+      bad], "\n"]];
+iBracketReport[___] := "";
+
+(* 生成物 (.wl/.wls) 全部を構文検査し、実装役に渡す説明文を組み立てる。
+   テストゲートが (席不足等で) 動けない環境でも、テストファイルの構文崩れは
+   ここで確実に捕まる。 *)
+iSyntaxReport[targetDir_] := Module[{files, bad},
+  files = Join[FileNames["*.wl", targetDir], FileNames["*.wls", targetDir]];
+  bad = Select[Map[Function[f, Join[<|"File" -> f|>, iSyntaxScanFile[f]]], files],
+    ! TrueQ[Lookup[#, "OK", True]] &];
+  If[bad === {}, "",
+    StringRiffle[
+      Map[Function[b,
+        "FILE " <> FileNameTake[Lookup[b, "File", "?"]] <>
+          ": syntax error at LINE " <> ToString[Lookup[b, "Line", 0]] <>
+          " (" <> ToString[Lookup[b, "Parsed", 0]] <>
+          " expressions parsed cleanly before it). " <>
+          "Everything after this point never gets defined, so the package is dead " <>
+          "even though the file looks complete." <>
+          With[{d = Lookup[b, "EnclosingDef", ""]},
+            If[d =!= "", "\n  enclosing definition starts at line " <> d, ""]] <>
+          "\n  --- source from line " <> ToString[Lookup[b, "Line", 0]] <> " ---\n" <>
+          Lookup[b, "Snippet", ""] <> "\n  --- end ---\n" <>
+          With[{br = iBracketReport[Lookup[b, "File", ""]]},
+            If[br =!= "",
+              "  UNBALANCED BRACKETS IN THIS FILE (independent of the parser, so ALL of them " <>
+                "are listed -- fix EVERY line below in ONE revision):\n" <> br <> "\n",
+              ""]] <>
+          "  Fix these in place -- do NOT re-emit a whole new file from scratch, that only " <>
+          "moves the error."],
+        bad], "\n"]]];
+
 iSmokeTestPackage[targetDir_, pkgRoot_, ctx_] := Module[
-  {mains, mainFile, s, held, beginCtxs, emptyLists, hasWFInfo, badEsc},
+  {mains, mainFile, s, held, beginCtxs, emptyLists, hasWFInfo, badEsc, loc},
   mains = FileNames["SVWorkflow_*.wl", targetDir];
   If[mains === {}, mains = FileNames["*.wl", targetDir]];
   If[mains === {}, Return[<|"OK" -> False, "Output" -> "no .wl file was generated"|>]];
@@ -953,7 +1168,12 @@ iSmokeTestPackage[targetDir_, pkgRoot_, ctx_] := Module[
             StringRiffle[badEsc, " | "],
             "Fix whatever emits Syntax:: warnings at parse time."],
         "MainFile" -> mainFile|>]];
-    Return[<|"OK" -> False, "Output" -> "syntax error: the main .wl does not parse", "MainFile" -> mainFile|>]];
+    (* 位置つきで返す: 「parse できない」だけでは実装役が直せない *)
+    loc = iSyntaxReport[targetDir];
+    Return[<|"OK" -> False,
+      "Output" -> "syntax error: the main .wl does not parse.\n" <>
+        If[loc =!= "", loc, "(could not localize the error)"],
+      "MainFile" -> mainFile|>]];
   (* :> forms avoid evaluating the held BeginPackage[...] when extracting *)
   beginCtxs = Quiet @ Cases[held, BeginPackage[c_String, ___] :> c, Infinity];
   emptyLists = Quiet @ Cases[held, BeginPackage[_String, {}] :> "empty", Infinity];
@@ -968,7 +1188,14 @@ iSmokeTestPackage[targetDir_, pkgRoot_, ctx_] := Module[
     ! hasWFInfo,
       <|"OK" -> False, "Output" -> "no WorkflowInfo definition found", "MainFile" -> mainFile|>,
     True,
-      <|"OK" -> True, "Output" -> "static load check OK", "MainFile" -> mainFile|>]];
+      (* main .wl は通っても、同梱の .wls (テスト等) が壊れていることがある。
+         テストゲートが動けない環境ではここが最後の砦になるので全部見る。 *)
+      loc = iSyntaxReport[targetDir];
+      If[loc =!= "",
+        <|"OK" -> False,
+          "Output" -> "a generated file does not parse.\n" <> loc,
+          "MainFile" -> mainFile|>,
+        <|"OK" -> True, "Output" -> "static load check OK", "MainFile" -> mainFile|>]]];
 
 (* ---- dynamic gate: actually load + launch the package in a FRESH wolframscript
    kernel (separate process, so no sticky contexts / license-nesting in this
@@ -1063,6 +1290,63 @@ iPristineKernelExe[] := iPristineKernelExe[] = Module[{dir, cands},
       "Binaries", $SystemID, "wolfram.exe"}]}, {}]];
   SelectFirst[Flatten[{cands}], StringQ[#] && FileExistsQ[#] &, None]];
 
+(* ---- ライセンス席切れの判定 ----
+   独立プロセスのカーネル席が埋まっている機械では、子カーネルは exit 40 +
+   "No valid password found" (または wolframscript の "not activated") で即死する。
+   これを「テストが失敗した」と報告すると、実装役は壊れていないコードを直そう
+   として round を空費するので、テスト結果ではなく実行基盤の失敗として扱う
+   (2026-08-20 実測: 開発機は常時 6 カーネル稼働で席が枯渇していた)。 *)
+iLicenseFailureQ[exitCode_, out_] := TrueQ[
+  exitCode === 40 ||
+    (StringQ[out] && StringContainsQ[out,
+      "No valid password found" | "not activated" | "license-related problem" |
+      "MathLM" | "Licensing" , IgnoreCase -> True] &&
+     ! StringContainsQ[out, "PASS" | "RESULT:"])];
+iLicenseFailureQ[___] := False;
+
+(* ---- 席が無いときの代替経路: サブカーネル ----
+   subkernel は独立プロセスとは別のライセンス枠 (実測: 席枯渇中でも起動可)。
+   -noinit -subkernel で起動するので pristine 要件も満たす。テストの Exit[n] は
+   subkernel を殺してしまうため Throw に差し替えて終了コードを回収し、Print 出力は
+   $Output/$Messages をファイルに向けて捕まえる。 *)
+iRunGenTestSubkernel[testFile_String] := Module[{ks, outFile, code, out},
+  ks = Quiet @ Check[LaunchKernels[1], $Failed];
+  If[! (ListQ[ks] && ks =!= {}),
+    Return[<|"Ran" -> False, "OK" -> True, "Reason" -> "NoSubkernel",
+      "Output" -> "(no license seat for a child kernel and no subkernel available)"|>]];
+  outFile = FileNameJoin[{$TemporaryDirectory,
+    "svimpl_subtest_" <> StringReplace[CreateUUID[], "-" -> ""] <> ".txt"}];
+  code = Quiet @ Check[
+    TimeConstrained[
+      With[{f = testFile, o = outFile},
+        ParallelEvaluate[
+          Module[{strm, rc},
+            Unprotect[Exit, Quit];
+            Exit[c___] := Throw[{c}, "svimplExit"];
+            Quit[c___] := Throw[{c}, "svimplExit"];
+            strm = OpenWrite[o, CharacterEncoding -> "UTF-8"];
+            rc = Block[{$Output = {strm}, $Messages = {strm}, $CharacterEncoding = "UTF-8"},
+              Catch[Get[f]; {0}, "svimplExit"]];
+            Quiet @ Close[strm];
+            Which[
+              ListQ[rc] && rc =!= {} && IntegerQ[First[rc]], First[rc],
+              ListQ[rc], 0,
+              True, 0]],
+          First[ks]]],
+      $iDynTestTimeLimit, "TimedOut"],
+    "Error"];
+  Quiet @ Check[CloseKernels[ks], Null];
+  out = If[FileExistsQ[outFile], iReadUTF8[outFile], ""];
+  Quiet @ If[FileExistsQ[outFile], DeleteFile[outFile]];
+  If[! IntegerQ[code],
+    <|"Ran" -> False, "OK" -> True, "Reason" -> "Subkernel:" <> ToString[code],
+      "Output" -> StringTake[out, UpTo[2000]]|>,
+    <|"Ran" -> True, "OK" -> (code === 0), "ExitCode" -> code, "Via" -> "subkernel",
+      "Output" -> If[code === 0, "test PASS (exit 0, run in a subkernel)\n",
+          "test exited " <> ToString[code] <> " (subkernel run)\n"] <>
+        "--- output tail ---\n" <> StringTake[out, UpTo[2500]]|>]];
+iRunGenTestSubkernel[___] := <|"Ran" -> False, "OK" -> True, "Reason" -> "NoTestFile"|>;
+
 iRunGenTest[targetDir_] := Module[
   {testFiles, shim, kernel, cmd, testRes, exitCode, stdout},
   testFiles = FileNames["test_*.wls", targetDir];
@@ -1091,9 +1375,25 @@ iRunGenTest[targetDir_] := Module[
     TimeConstrained[RunProcess[cmd, All], $iDynTestTimeLimit, "TimedOut"], "Error"];
   Quiet @ If[FileExistsQ[shim], DeleteFile[shim]];
   If[! AssociationQ[testRes],
-    Return[<|"Ran" -> False, "OK" -> True, "Output" -> "(test run inconclusive: " <> ToString[testRes] <> ")"|>]];
+    (* 起動不能/タイムアウト: subkernel 経路を試してから諦める *)
+    Return[With[{sub = iRunGenTestSubkernel[First[testFiles]]},
+      If[TrueQ[Lookup[sub, "Ran", False]], sub,
+        <|"Ran" -> False, "OK" -> True,
+          "Reason" -> If[testRes === "TimedOut", "TimedOut", "LaunchFailed"],
+          "Output" -> "(test run inconclusive: " <> ToString[testRes] <> "; subkernel fallback: " <>
+            ToString[Lookup[sub, "Reason", "?"]] <> ")"|>]]]];
   exitCode = Lookup[testRes, "ExitCode", 0];
   stdout = StringTrim[Lookup[testRes, "StandardOutput", ""] <> "\n" <> Lookup[testRes, "StandardError", ""]];
+  (* 席切れは「テスト失敗」ではない: subkernel へ退避し、それも駄目なら
+     理由つきで inconclusive にする (壊れていないコードを直させない) *)
+  If[iLicenseFailureQ[exitCode, stdout],
+    Return[With[{sub = iRunGenTestSubkernel[First[testFiles]]},
+      If[TrueQ[Lookup[sub, "Ran", False]], sub,
+        <|"Ran" -> False, "OK" -> True, "Reason" -> "LicenseUnavailable",
+          "Output" -> "(the child kernel could not obtain a Wolfram license seat, so the test " <>
+            "was NOT executed -- this is an environment limit, not a test failure. " <>
+            "Close an idle kernel and re-run, or rely on the subkernel path. Child output: " <>
+            StringTake[stdout, UpTo[300]] <> ")"|>]]]];
   (* 失敗行を必ず残す: 先頭 1200 字だけ切り出すと PASS 行で埋まって肝心の
      FAIL 行が消え、次ラウンドの実装役にもオーナーにも原因が伝わらない
      (2026-08-04 実測: 保存出力から失敗内容が判らず手動再実行が必要だった)。 *)
@@ -1225,6 +1525,13 @@ iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[bindin
         "and simply press Impl again to restart from it." <>
         If[StringTrim[rawOut] =!= "",
           "\n--- raw model output (head) ---\n" <> StringTake[rawOut, UpTo[600]], ""]];
+    (* 本体 .wl が (追い打ち後も) 来なかった場合の診断を step log に載せる。
+       次ラウンドの実装役はこれを「前回の指摘」として読むので、同じ失敗を
+       繰り返しにくくなる (2026-08-20: 3 ラウンドとも同じ空振りだった)。 *)
+    With[{md = Lookup[res, "MainFileDiag", ""]},
+      If[StringQ[md] && md =!= "",
+        steps = If[StringQ[steps] && steps =!= "", steps <> "\n\n", ""] <>
+          "MAIN FILE NOT SHIPPED: " <> md]];
     allFiles = DeleteDuplicates[Join[Lookup[pl, "GeneratedFiles", {}], written]];
     manifestText = iManifestText[If[AssociationQ[files], files, <||>]];
     (* the artifact's stored Text begins with the code/tests/run/verify step log
@@ -1270,8 +1577,8 @@ iImplementHandler[model_, implFn_, progressFile_, targetDir_] := Function[bindin
 
 iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True,
     genTestFn_:Automatic, testGateQ_:True] := Function[binding,
-  Quiet @ Module[{pl, idx, ctx, smoke, dyn, gtFn, testsOnDisk, gentest,
-      testGate = "NotRun", filesText, res, verdict, findings, rtext, ref},
+  Quiet @ Module[{pl, idx, ctx, smoke, smokeOut = "", dyn, gtFn, testsOnDisk, gentest,
+      testGate = "NotRun", testGateReason = "", filesText, res, verdict, findings, rtext, ref},
     pl = iPayload[binding];
     idx = Lookup[pl, "StageIndex", 1];
     iProg[progressFile, pl, "Verify", "verifier", model,
@@ -1287,10 +1594,40 @@ iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True,
       <|"OK" -> True|>];
     If[! TrueQ[Lookup[smoke, "OK", False]],
       verdict = "NeedsRevision";
-      findings = "[{\"id\":\"load-smoke\",\"severity\":\"blocker\",\"title\":\"generated package fails to load standalone\"}]";
-      rtext = "LOAD SMOKE-TEST FAILED: SourceVault`SourceVaultLoadWorkflow could not load the generated package and WorkflowInfo[] was not callable with a Launch entry. " <>
-        "Likely causes: BeginPackage with an empty needed-context list (use BeginPackage[\"<ctx>`\"] with NO second argument, never {}); a syntax error; or a BeginPackage context that is not exactly \"" <> ctx <> "\". " <>
-        "Fix so the package loads cleanly. Smoke output: " <> Lookup[smoke, "Output", ""],
+      smokeOut = ToString[Lookup[smoke, "Output", ""]];
+      (* 失敗の種類ごとに実装役への指示を変える。以前は常に BeginPackage の
+         話をしていたため、「ファイルを出していない」「N 行目が括弧落ち」でも
+         見当違いの助言だけが渡り round を空費していた (2026-08-20 実測)。 *)
+      findings = Which[
+        StringContainsQ[smokeOut, "no .wl file"],
+          "[{\"id\":\"no-file-emitted\",\"severity\":\"blocker\",\"title\":\"the package file was never emitted (prose instead of a FILE block)\"}]",
+        StringContainsQ[smokeOut, "syntax error" | "does not parse"],
+          "[{\"id\":\"syntax-error\",\"severity\":\"blocker\",\"title\":\"a generated file has a syntax error and never defines anything past it\"}]",
+        True,
+          "[{\"id\":\"load-smoke\",\"severity\":\"blocker\",\"title\":\"generated package fails to load standalone\"}]"];
+      rtext = Which[
+        StringContainsQ[smokeOut, "no .wl file"],
+          "NO CODE WAS SHIPPED. Your reply described the package instead of emitting it, so nothing " <>
+          "was written to disk. Emit the FULL verbatim content of \"SVWorkflow_" <>
+          iCanonicalName[Lookup[pl, "Name", "wf"]] <> ".wl\" inside a\n" <>
+          "<<<FILE SVWorkflow_" <> iCanonicalName[Lookup[pl, "Name", "wf"]] <> ".wl>>>\n...\n<<<ENDFILE>>>\n" <>
+          "block (no code fences, no summary in place of content). A step log alone is not an implementation.\n" <>
+          "If the package is too large to fit in one reply, DO NOT drop it: split the implementation into " <>
+          "\"SVWorkflow_" <> iCanonicalName[Lookup[pl, "Name", "wf"]] <> ".wl\" plus helper .wl files in " <>
+          "the same folder, load them from the main file with Get (the main file can resolve its own " <>
+          "directory from $InputFileName), and emit EACH file as its own <<<FILE ...>>> block. " <>
+          "Emit the main file FIRST so a truncated reply still ships the entry point.\n" <>
+          "Smoke output: " <> smokeOut,
+        StringContainsQ[smokeOut, "syntax error" | "does not parse"],
+          "SYNTAX GATE FAILED -- the generated file does not parse, so the Wolfram loader stops there and " <>
+          "every definition after that point is silently missing (the file still LOOKS complete, with " <>
+          "End[]/EndPackage[] present). The exact position is given below; go to that line and fix the " <>
+          "bracket balance IN PLACE. Re-emitting a fresh full file instead of fixing the named line is what " <>
+          "made the previous rounds fail.\n" <> smokeOut,
+        True,
+          "LOAD SMOKE-TEST FAILED: SourceVault`SourceVaultLoadWorkflow could not load the generated package and WorkflowInfo[] was not callable with a Launch entry. " <>
+          "Likely causes: BeginPackage with an empty needed-context list (use BeginPackage[\"<ctx>`\"] with NO second argument, never {}); a syntax error; or a BeginPackage context that is not exactly \"" <> ctx <> "\". " <>
+          "Fix so the package loads cleanly. Smoke output: " <> smokeOut],
       (* static smoke passed -> DYNAMIC HARD GATE: really load the package + call
          its no-arg launch in a fresh wolframscript kernel. This deterministically
          catches runtime defects the static check and a static LLM review miss
@@ -1351,10 +1688,23 @@ iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True,
              (testGate = Which[
                 TrueQ[gentest["Ran"]] && TrueQ[gentest["OK"]], "Passed",
                 True, "NotRun"];
+              testGateReason = ToString[Lookup[gentest, "Reason", ""]];
               filesText = iReadGenerated[targetDir, Lookup[pl, "GeneratedFiles", {}]] <>
                 If[TrueQ[gentest["Ran"]],
-                  "\n\n=== EXECUTED TEST RESULT (the generated test was run in a fresh wolframscript kernel) ===\n" <>
-                    Lookup[gentest, "Output", ""] <> "\n", ""];
+                  "\n\n=== EXECUTED TEST RESULT (the generated test was run in a fresh kernel" <>
+                    With[{v = Lookup[gentest, "Via", ""]}, If[v =!= "", " / " <> v, ""]] <> ") ===\n" <>
+                    Lookup[gentest, "Output", ""] <> "\n",
+                  (* 実行できなかった理由を verifier に明示する。黙って「証拠なし」に
+                     すると verifier は毎ラウンド「実行未検証だから承認しない」と
+                     言い続け、実装役は直しようがないまま max rounds を使い切る
+                     (2026-08-20 実測)。 *)
+                  "\n\n=== TEST NOT EXECUTED (environment limit, NOT a defect of this code) ===\n" <>
+                    "reason: " <> If[testGateReason =!= "", testGateReason, "inconclusive"] <> "\n" <>
+                    Lookup[gentest, "Output", ""] <> "\n" <>
+                    "Judge this artifact on the source and the deterministic gates that DID run " <>
+                    "(syntax + static load). Do NOT withhold approval merely because no test output " <>
+                    "is present -- say so in reviewText instead, and only raise blockers you can " <>
+                    "actually point at in the code.\n"];
               res = verifyFn[model, pl, filesText];
               verdict = Lookup[res, "Verdict", "NeedsRevision"];
               findings = Lookup[res, "Findings", "[]"];
@@ -1365,7 +1715,7 @@ iVerifyHandler[model_, verifyFn_, progressFile_, targetDir_, smokeQ_:True,
     <|"Payload" -> Join[pl, <|"Verdict" -> verdict, "VerifyRef" -> ref,
         "VerifyURI" -> iRefToURI[ref], "LastVerifyText" -> rtext,
         "VerifyModel" -> iModelLabel[model], "SmokeOK" -> TrueQ[Lookup[smoke, "OK", False]],
-        "TestGate" -> testGate,
+        "TestGate" -> testGate, "TestGateReason" -> testGateReason,
         (* proven-code contract: BOTH the deterministic test pass AND the
            verifier's agreement are required for a Proven artifact *)
         "Proven" -> (verdict === "Approved" && testGate === "Passed")|>]|>]];
@@ -1614,6 +1964,7 @@ RunSpecImpl[name_String, opts:OptionsPattern[]] := Module[
     "FinalVerdict" -> Lookup[finalPayload, "Verdict", Missing[]],
     "ImplStyle" -> Lookup[finalPayload, "ImplStyle", ""],
     "TestGate" -> Lookup[finalPayload, "TestGate", "NotRun"],
+    "TestGateReason" -> Lookup[finalPayload, "TestGateReason", ""],
     "Proven" -> TrueQ[Lookup[finalPayload, "Proven", False]],
     "BlockReason" -> Lookup[finalPayload, "BlockReason", ""],
     "GeneratedFiles" -> Lookup[finalPayload, "GeneratedFiles", {}],

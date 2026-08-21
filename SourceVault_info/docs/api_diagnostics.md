@@ -139,6 +139,14 @@ workflow / saved-prompt リスト先頭用のコンパクトな framed status ba
 ### SourceVaultDiagnosticsListProbes[] → List
 登録済み診断プローブ id のリストを返す。
 
+## シンボル shadow 診断
+
+### SourceVaultShadowedSystemSymbols[opts] → List
+本 kernel 内で System` シンボルを shadow しているシンボルを列挙する。すなわち、built-in と同じ短名を持つ Ctx`Name（Ctx != System`）で、$ContextPath 上で Ctx が System` より前にあるもの（$ContextPath は順に検索される。$Context / Global`（最後）は built-in を shadow しない）。この状態ではノートブック中の `Name` が Ctx`Name に解決され（Front End では赤表示）、built-in のオプション / 関数が黙って効かなくなる。典型的原因は他パッケージ内に書かれた `GitHubREST`MaxItems` のような修飾参照で、parse 時にそのシンボルが生成される（`Dataset[..., MaxItems -> ...]` を壊した実例）。
+→ `<|"Name", "Context", "Active", "Defined"|>` のリスト（健全なら空。"Defined" が False なら偶発生成された空シンボル）
+Options: "Contexts" -> Automatic | {ctx..} (検査対象コンテキスト), "IncludeInactive" -> True (System` より後ろのコンテキストにある同名シンボルも列挙)
+診断プローブ "system-symbol-shadow" として登録済み（非空なら Degraded）。修正はソースの修飾参照を削除して kernel 再起動（もしくは偶発シンボルを Remove[] し、そのオプションを定義しているパッケージを再ロード）。
+
 ## Polling Tick
 
 ### SourceVaultDiagnosticsTick[] → String

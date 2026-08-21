@@ -180,6 +180,14 @@ service の runtime directory を返す。パス構成: `<CoreRoot>/runtime/<Mac
 型: Number, 初期値: 300
 service loop が `SourceVaultReleaseFileStreams[]` を呼び vault 配下の開きっぱなし stream (Abort/TimeConstrained 打ち切りによるリーク) を強制 Close する間隔秒。開いたハンドルは Dropbox 同期を止め conflicted copy の原因になる。
 
+### $SourceVaultServiceFastPoll
+型: True | False, 初期値: True
+True のとき、service loop は heartbeat 間隔の待ち時間をただ寝るのではなく `commands/` を `$SourceVaultServiceFastPollSeconds` 周期で覗き、届いた command を即処理する。音声ブリッジ(VRCRealtime → LocalVoiceSearch)の取り込み遅延が最大 1 秒から ~50ms に下がる。False で従来どおり tick 境界でのみ処理する。
+
+### $SourceVaultServiceFastPollSeconds
+型: Number, 初期値: 0.05
+fast poll の周期秒。
+
 ## Python HTTP リバースプロキシ
 
 SocketListen が headless で不可なため Python proxy を edge に置く。proxy code は SourceVault data として保存し、起動時に materialize + digest 検証して実行する。
@@ -262,11 +270,12 @@ proxy は `/sv/mcp` に加えて **`/wl/mcp`**(+`/wl/health`)を公開する。`
 ### SourceVaultMakeQuestionEnvelope[channel, inputText, opts] → Association
 統一入力 QuestionEnvelope を作る(§9.8)。
 channel: `"Web"` / `"Mail"` / `"Discord"` / `"Voice"` / `"VRSNS"`
-Options: "ReleaseContext" (必須), "Audience", "LatencyProfile", "AllowedIndexes" -> {...}, "PDFIndexProfile", "Requester"
+Options: "ReleaseContext" -> None (必須。None なら `Failure["ReleaseContextRequired", ...]`), "Audience" -> `Missing["Anonymous"]`, "LatencyProfile" -> Automatic (channel から自動決定: Web→"RealtimeWeb", Mail→"MailReplyDraft", Discord→"ChatReply", Voice→"VoiceUltraLowLatency", VRSNS→"VRSNSRealtime"), "AllowedIndexes" -> {}, "PDFIndexProfile" -> None, "Requester" -> `Missing["Anonymous"]`
 
 ### SourceVaultAnswerChannelQuery[envelope, opts] → Association
 envelope を検索 → evidence draft 化する。gate 済み `SourceVaultSearch` を使用。Mail は `NeedsHumanReview`(draft のみ)、Discord は低 risk のみ `Answered`。LLM を呼ばない(evidence ベース)。
 → `<|"Decision", "AnswerDraft", "Evidence", "Citations", ...|>`
+Options: "Limit" -> 10
 
 ### SourceVaultMakeMailReplyDraft[envelope, opts] → Association
 mail 返信 draft を作る。自動送信は一切しない(§13 Phase 6)。
@@ -284,7 +293,7 @@ Options: "Approved" -> False, "ReallySend" -> False
 ### SourceVaultMakeActionDraft[kind, payload, opts] → Association
 ActionDraft を作る(§9.9)。
 kind: `"Speak"` / `"Gesture"` / `"Expression"` / `"Move"` / `"ShowPanel"` / `"CallTool"`
-Options: "CapabilityProfile", "Audience", "ReleaseContext", "Target", "EvidenceRefs"
+Options: "CapabilityProfile" -> None, "Audience" -> `Missing["Anonymous"]`, "ReleaseContext" -> None, "Target" -> `<||>`, "EvidenceRefs" -> {}
 
 ### SourceVaultEvaluateActionGate[actionDraft, opts] → Association
 capability profile に基づき action 可否を判定する(§9.9)。world 変更(Move/CallTool)は `AllowWorldControl` が無ければ Deny。
@@ -300,7 +309,7 @@ capture source プロファイルの解決可否を fail-closed で点検する(
 
 ### SourceVaultIngestCapturedMedia[sessionId, kind, data, opts]
 capture 由来データを vault に取り込む(§17.4, §17.11)。data が `ByteArray` なら content-addressed blob に commit(PersistRaw->True 時)、`String` なら Text として記録。MultimodalEvent を append する。実 ffmpeg/ASR driver はこの関数を呼ぶ(device 非依存の取込点)。
-Options: "PersistRaw" -> True, "SourceRef", "Tags", "State", "PrivacyLevel"
+Options: "PersistRaw" -> True, "SourceRef" -> None, "Tags" -> {}, "State" -> "Captured", "PrivacyLevel" -> Automatic (既定は `SourceVaultMediaPrivacyDefault[kind]` から解決)
 
 ### SourceVaultUpdateLiveSummary[sessionId, summary]
 live summary pointer を更新し `SystemSummary` event を残す(§17.6)。
@@ -318,7 +327,7 @@ session の ASR transcript を連結して返す。
 UserQuestion を記録し command を enqueue する(§17.7)。メインカーネルは LLM を直接呼ばず、service 側が処理する。
 
 ### SourceVaultRegisterMultimodalWorkflow[name, spec] → Association
-multimodal workflow(PresentationListenerCompat 等)を登録する(§17.6)。
+multimodal workflow(PresentationListenerCompat 等)を登録する(§17.6)。既定で `"PresentationListenerCompat-v1"` が登録済み(Input: Audio->"SegmentedWhisper", Visual->"PeriodicFrameWithChangeDetection"; TranscriptPostprocess->"ASRCorrection"; Output->{"SourceVaultEvent","NotebookSummary"}; LatencyProfile->"PresentationSummary")。
 
 ### SourceVaultListMultimodalWorkflows[] → List
 登録済み multimodal workflow を返す。
@@ -349,6 +358,15 @@ Options: "Reason" -> ""
 
 ### SourceVaultCompareServiceVersions[serviceId, v1, v2] → Association
 二つの service version snapshot の主要 ref 差分を返す。
+
+## Latency baseline / deadline cascade (§10.1-10.2)
+
+deadlineMs は固定断定値でなく実測 baseline から導く budget hint。host fingerprint は個人情報を含めない非識別 system 値のハッシュ。
+
+### SourceVaultMeasureServiceLatency[serviceId, opts] → Association
+service の各種レイテンシを実測し、probe ごとの分位点(P50Ms/P95Ms 等)を返す。service が Running かつ pid alive なら既定で `"IPC"` probe(command queue 経由の Ping 往復)を自動追加する。
+Options: "Probes" -> `<||>` (probe 名 -> 事前計測 ms のリスト、または 0 引数関数。関数は "Repeats" 回 time 計測), "Repeats" -> 7
+→ `<|"<ProbeName>.P50Ms" -> ..., "<ProbeName>.P95Ms" -> ..., ...|>`(未計測 probe は `Missing["NotMeasured"]`)
 
 ## Web UI / LLM バックエンド設定
 

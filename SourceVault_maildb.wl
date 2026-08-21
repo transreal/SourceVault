@@ -392,15 +392,100 @@ $iSVMDCategorySynonyms = <|
    "\:4f5c\:696d\:306e\:4f9d\:983c" -> "TaskRequest", "\:4f9d\:983c" -> "TaskRequest", "\:4f5c\:696d" -> "TaskRequest",
    "\:78ba\:8a8d" -> "Confirmation", "\:627f\:8a8d" -> "Confirmation", "\:78ba\:8a8d\:4f9d\:983c" -> "Confirmation",
    "\:5831\:544a" -> "Report", "\:901a\:77e5" -> "Notice", "\:4e00\:6589\:914d\:4fe1" -> "Notice", "\:5e83\:544a" -> "Notice",
+   "\:5ba3\:4f1d" -> "Notice", "\:8ff7\:60d1\:30e1\:30fc\:30eb" -> "Notice", "\:30b9\:30d1\:30e0" -> "Notice",
+   "\:30e1\:30eb\:30de\:30ac" -> "Notice", "\:30cb\:30e5\:30fc\:30b9\:30ec\:30bf\:30fc" -> "Notice", "\:304a\:77e5\:3089\:305b" -> "Notice",
+   "\:62db\:5f85" -> "AttendanceRequest", "\:4f1a\:8b70" -> "AttendanceRequest",
    "\:305d\:306e\:4ed6" -> "Other"|>;
 
-iSVMDNormalizeCategory[s_String] :=
-  Module[{t = StringTrim[s], hit},
+(* \:30ed\:30fc\:30ab\:30eb LLM \:306f\:6307\:793a\:3057\:305f\:30c8\:30fc\:30af\:30f3\:3092\:7121\:8996\:3057\:3066\:81ea\:524d\:306e\:82f1\:5358\:8a9e\:3092\:8fd4\:3059\:3053\:3068\:304c\:3042\:308b
+   (\:5b9f\:6a5f: qwen3.8-27b \:306f "spam" / "notification" / "external (spam from unknown sender)")\:3002
+   \:8a9e\:5f59\:5916\:3060\:304b\:3089\:3068\:6368\:3066\:308b\:3068\:5206\:985e\:6b04\:304c\:7a7a\:306b\:306a\:308b\:306e\:3067\:3001\:65e2\:77e5\:306e\:610f\:5473\:3078\:5bc4\:305b\:308b\:3002
+   \:30ad\:30fc\:306f iSVMDCatKey \:6b63\:898f\:5316\:6e08\:307f (\:5c0f\:6587\:5b57\:30fb\:7a7a\:767d/\:30cf\:30a4\:30d5\:30f3/\:30a2\:30f3\:30c0\:30fc\:30b9\:30b3\:30a2/\:30c9\:30c3\:30c8\:9664\:53bb)\:3002 *)
+$iSVMDCategoryEnglishSynonyms = <|
+   "taskrequest" -> "TaskRequest", "task" -> "TaskRequest", "tasks" -> "TaskRequest",
+   "request" -> "TaskRequest", "actionrequest" -> "TaskRequest",
+   "actionrequired" -> "TaskRequest", "actionitem" -> "TaskRequest",
+   "assignment" -> "TaskRequest", "todo" -> "TaskRequest", "submission" -> "TaskRequest",
+   "review" -> "TaskRequest", "reviewrequest" -> "TaskRequest", "solicitation" -> "TaskRequest",
+   "attendancerequest" -> "AttendanceRequest", "attendance" -> "AttendanceRequest",
+   "invitation" -> "AttendanceRequest", "invite" -> "AttendanceRequest",
+   "meeting" -> "AttendanceRequest", "event" -> "AttendanceRequest",
+   "scheduling" -> "AttendanceRequest", "schedule" -> "AttendanceRequest",
+   "rsvp" -> "AttendanceRequest",
+   "confirmation" -> "Confirmation", "confirm" -> "Confirmation",
+   "approval" -> "Confirmation", "approve" -> "Confirmation",
+   "verification" -> "Confirmation", "inquiry" -> "Confirmation", "question" -> "Confirmation",
+   "infoprovision" -> "InfoProvision", "information" -> "InfoProvision",
+   "informational" -> "InfoProvision", "info" -> "InfoProvision", "fyi" -> "InfoProvision",
+   "announcement" -> "InfoProvision", "guidance" -> "InfoProvision",
+   "report" -> "Report", "reporting" -> "Report", "status" -> "Report",
+   "statusreport" -> "Report", "result" -> "Report", "results" -> "Report",
+   "minutes" -> "Report",
+   "notice" -> "Notice", "notification" -> "Notice", "notifications" -> "Notice",
+   "alert" -> "Notice", "automated" -> "Notice", "automatic" -> "Notice",
+   "system" -> "Notice", "broadcast" -> "Notice", "bulk" -> "Notice",
+   "newsletter" -> "Notice", "digest" -> "Notice", "advertisement" -> "Notice",
+   "advertising" -> "Notice", "ad" -> "Notice", "ads" -> "Notice",
+   "promotion" -> "Notice", "promotional" -> "Notice", "marketing" -> "Notice",
+   "spam" -> "Notice", "phishing" -> "Notice", "junk" -> "Notice",
+   "transactional" -> "Notice",
+   "other" -> "Other"|>;
+
+(* \:610f\:5473\:306e\:5f31\:3044\:8a9e\:3002\:5148\:306b\:5f37\:3044\:8a9e\:3092\:63a2\:3057\:3001\:898b\:3064\:304b\:3089\:306a\:304b\:3063\:305f\:3068\:304d\:3060\:3051 Other \:3078\:843d\:3068\:3059\:3002
+   ("external (spam from ...)" \:306f "external" \:3067\:306f\:306a\:304f\:672c\:6587\:4e2d\:306e "spam" \:3092\:62fe\:3044\:305f\:3044) *)
+$iSVMDCategoryWeakSynonyms = <|
+   "external" -> "Other", "internal" -> "Other", "personal" -> "Other",
+   "general" -> "Other", "misc" -> "Other", "miscellaneous" -> "Other",
+   "unknown" -> "Other", "uncategorized" -> "Other", "unclassified" -> "Other",
+   "none" -> "Other", "na" -> "Other"|>;
+
+(* markdown \:5f37\:8abf\:30fb\:5f15\:7528\:7b26\:30fb\:7b87\:6761\:66f8\:304d\:8a18\:53f7\:30fb\:672b\:5c3e\:53e5\:8aad\:70b9\:3092\:843d\:3068\:3059 *)
+iSVMDCatClean[s_String] :=
+  Module[{t = StringTrim[s]},
+    t = StringDelete[t, Characters["*_`\"'[]<>" <> "\:300c\:300d\:300e\:300f\:3010\:3011"]];
+    StringTrim[t, RegularExpression["[\\s>\\-\:30fb\:3002.,\:3001:;!\:ff01]+"]]];
+
+(* \:88dc\:8db3\:62ec\:5f27\:3068\:4f75\:8a18\:3092\:843d\:3068\:3057\:305f\:4e3b\:5019\:88dc ("InfoProvision(\:60c5\:5831\:63d0\:4f9b)" / "Notice / InfoProvision" \:5bfe\:7b56) *)
+iSVMDCatPrimary[s_String] :=
+  Module[{t},
+    t = StringReplace[s, {RegularExpression["\\([^)]*\\)"] -> " ",
+       RegularExpression["\:ff08[^\:ff09]*\:ff09"] -> " "}];
+    t = With[{p = StringSplit[t, {"/", "|", ",", "\:3001", "\:ff0f"}]},
+       If[p === {}, t, First[p]]];
+    iSVMDCatClean[t]];
+
+iSVMDCatKey[s_String] := ToLowerCase[StringDelete[s, RegularExpression["[\\s\\-_.]+"]]];
+
+(* \:6b63\:898f\:5316\:6e08\:307f 1 \:8a9e\:3092\:30c8\:30fc\:30af\:30f3\:3078\:3002weak=True \:306e\:3068\:304d\:3060\:3051\:5f31\:3044\:8a9e\:3082\:898b\:308b\:3002 *)
+iSVMDCatLookup[s_String, weak_] :=
+  Module[{t = iSVMDCatClean[s], k, hit},
     If[t === "", Return[Missing["UnknownCategory"]]];
-    hit = SelectFirst[$SourceVaultMailCategories,
-       StringMatchQ[t, #, IgnoreCase -> True] &, Missing[]];
+    k = iSVMDCatKey[t];
+    hit = SelectFirst[$SourceVaultMailCategories, ToLowerCase[#] === k &, Missing[]];
     If[StringQ[hit], Return[hit]];
-    Lookup[$iSVMDCategorySynonyms, t, Missing["UnknownCategory"]]];
+    hit = Lookup[$iSVMDCategorySynonyms, t, Missing[]];
+    If[StringQ[hit], Return[hit]];
+    hit = Lookup[$iSVMDCategoryEnglishSynonyms, k, Missing[]];
+    If[StringQ[hit], Return[hit]];
+    If[TrueQ[weak], Lookup[$iSVMDCategoryWeakSynonyms, k, Missing["UnknownCategory"]],
+      Missing["UnknownCategory"]]];
+
+iSVMDNormalizeCategory[s_String] :=
+  Module[{hit, words, jp},
+    (* 1. \:4e3b\:5019\:88dc (\:5148\:982d\:8a9e) \:3092\:30c8\:30fc\:30af\:30f3/\:65e5\:672c\:8a9e\:540c\:7fa9\:8a9e/\:82f1\:8a9e\:540c\:7fa9\:8a9e\:3067\:5f15\:304f *)
+    hit = iSVMDCatLookup[iSVMDCatPrimary[s], False];
+    If[StringQ[hit], Return[hit]];
+    (* 2. \:6587\:5168\:4f53\:3092\:8d70\:67fb\:3057\:3066\:65e2\:77e5\:8a9e\:3092\:62fe\:3046 (\:82f1\:8a9e=\:5358\:8a9e\:5206\:5272\:3001\:65e5\:672c\:8a9e=\:9577\:3044\:9375\:512a\:5148\:306e\:90e8\:5206\:4e00\:81f4) *)
+    words = Select[StringSplit[ToLowerCase[s], RegularExpression["[^a-z]+"]], # =!= "" &];
+    hit = SelectFirst[
+       DeleteMissing[Lookup[$iSVMDCategoryEnglishSynonyms, words, Missing[]]], StringQ, Missing[]];
+    If[StringQ[hit], Return[hit]];
+    jp = SelectFirst[SortBy[Keys[$iSVMDCategorySynonyms], -StringLength[#] &],
+       StringContainsQ[s, #] &, Missing[]];
+    If[StringQ[jp], Return[$iSVMDCategorySynonyms[jp]]];
+    (* 3. \:6700\:5f8c\:306b\:5f31\:3044\:8a9e (external/personal \:7b49) \:3092 Other \:3068\:3057\:3066\:53d7\:3051\:308b *)
+    hit = iSVMDCatLookup[iSVMDCatPrimary[s], True];
+    If[StringQ[hit], hit, Missing["UnknownCategory"]]];
 iSVMDNormalizeCategory[_] := Missing["UnknownCategory"];
 
 (* \:3006\:5207\:6587\:5b57\:5217\:306e\:6b63\:898f\:5316: "2026-06-19" / "2026-06-19 17:00" / "2026\:5e746\:670819\:65e5 17\:6642" \:7b49\:3092
@@ -936,6 +1021,29 @@ iSVMDIndexFiles[mbox_ : All] :=
     files = If[DirectoryQ[root], FileNames["*" <> iSVMDIndexExt, root, 2], {}];
     If[mbox === All, files, Select[files, FileNameTake[DirectoryName[#]] === mbox &]]];
 
+(* DateFrom/DateTo が指定された索引検索では、該当月の .svmailidx だけを読む。
+   「今日のメール」で全年度の sidecar を BinaryDeserialize する待ち時間を避ける。 *)
+iSVMDIndexFilesForDateRange[files_List, fromDay_, toDay_] := Module[
+  {fromYM, toYM, monthOf},
+  fromYM = If[MatchQ[fromDay, {_Integer, _Integer, _Integer}],
+    100 First[fromDay] + fromDay[[2]], Automatic];
+  toYM = If[MatchQ[toDay, {_Integer, _Integer, _Integer}],
+    100 First[toDay] + toDay[[2]], Automatic];
+  If[fromYM === Automatic && toYM === Automatic, Return[files]];
+  monthOf[path_String] := Module[{stem, y, m},
+    stem = StringDrop[FileNameTake[path], -StringLength[iSVMDIndexExt]];
+    If[! StringMatchQ[stem, DigitCharacter ..] || StringLength[stem] =!= 6,
+      Return[Missing["UnknownMonth"]]];
+    y = Quiet @ Check[FromDigits[StringTake[stem, 4]], $Failed];
+    m = Quiet @ Check[FromDigits[StringTake[stem, -2]], $Failed];
+    If[IntegerQ[y] && IntegerQ[m], 100 y + m, Missing["UnknownMonth"]]
+  ];
+  Select[files, With[{ym = monthOf[#]},
+    NumericQ[ym] &&
+      (fromYM === Automatic || ym >= fromYM) &&
+      (toYM === Automatic || ym <= toYM)] &]
+];
+
 (* \:7d22\:5f15\:884c: snapshot \:304b\:3089\:4f4e\:6f0f\:6d29\:6295\:5f71\:3002\:672c\:6587/\:6697\:53f7\:6587 (PayloadRefs) \:306f\:542b\:3081\:306a\:3044\:3002 *)
 iSVMDIndexRow[snap_Association] :=
   Module[{md = Lookup[snap, "MailMetadataPublic", <||>], dv = Lookup[snap, "Derived", <||>]},
@@ -1057,7 +1165,9 @@ SourceVaultMailSearchIndex[query : (_String | {__String}) : "", OptionsPattern[]
     ddf = iSVMDDayListOf[OptionValue["DeadlineFrom"]]; ddt = iSVMDDayListOf[OptionValue["DeadlineTo"]];
     minP = OptionValue["MinPriority"]; maxP = OptionValue["MaxPriority"];
     minPr = OptionValue["MinPrivacy"]; maxPr = OptionValue["MaxPrivacy"];
-    rows = Join @@ (iSVMDReadIndexFile /@ iSVMDIndexFiles[If[StringQ[mb], mb, All]]);
+    rows = Join @@ (iSVMDReadIndexFile /@
+      iSVMDIndexFilesForDateRange[
+        iSVMDIndexFiles[If[StringQ[mb], mb, All]], df, dt]);
     hits = Select[rows, Function[r,
        And[
          iSVMDNotExcludedQ[excl, Lookup[r, "RecordId", Missing[]]],
@@ -1330,11 +1440,11 @@ SourceVaultMailDerivedPending::usage =
 SourceVaultMailDerivedPendingQ::usage =
   "SourceVaultMailDerivedPendingQ[snapshot] \:306f\:6d3e\:751f\:304c\:672a\:51e6\:7406 (\"Pending\") \:306a\:3089 True\:3002";
 SourceVaultInferMailDerivedBatch::usage =
-  "SourceVaultInferMailDerivedBatch[opts] \:306f\:672a\:51e6\:7406 snapshot \:306e\:6d3e\:751f\:3092\:30ed\:30fc\:30ab\:30eb LLM \:3067\:5897\:5206\:751f\:6210\:3057 in-place \:66f4\:65b0\:3059\:308b\:3002\:4e2d\:65ad\:8010\:6027 (CheckpointEvery \:4ef6\:3054\:3068\:306b\:4fdd\:5b58)\:3002\:7279\:5b9a mbox \:306e\:6307\:5b9a\:671f\:9593\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:4ed8\:3051\:308b\:7528\:9014\:306f SourceVaultMailAddSummaries[mbox, period] \:304c\:6b63\:6e96 (EnsureLoaded \:3092\:5185\:5305\:3057\:5916\:90e8\:30b8\:30e7\:30d6\:3067\:3082\:81ea\:5df1\:5b8c\:7d50)\:3002opts: \"MBox\"(\:65e2\:5b9a Automatic\:3002\:6587\:5b57\:5217\:3092\:4e0e\:3048\:308b\:3068\:5bfe\:8c61 snapshot \:3092\:305d\:306e mbox \:306b\:9650\:5b9a\:3002Automatic=\:30ed\:30fc\:30c9\:6e08\:307f\:5168 mbox), \"Limit\"(\:65e2\:5b9a50\:3001\:30d5\:30a3\:30eb\:30bf\:5f8c\:306e\:4ef6\:6570\:4e0a\:9650\:3002\:7bc4\:56f2\:5185\:3059\:3079\:3066\:306a\:3089 Infinity), \"DateFrom\"/\"DateTo\"(\:65e2\:5b9a Automatic\:3002DateObject/\:6587\:5b57\:5217/{y,m,d} \:3067\:5bfe\:8c61\:30e1\:30fc\:30eb\:3092\:65e5\:4ed8\:7bc4\:56f2\:306b\:9650\:5b9a\:3001\:65e5\:5358\:4f4d\:5305\:542b), \"Refresh\"(\:65e2\:5b9a None=Pending \:306e\:307f\:3002\"MissingCategory\"=Category \:672a\:751f\:6210\:306e\:51e6\:7406\:6e08\:307f\:65e7 snapshot \:3082\:518d\:51e6\:7406, All=\:5168\:4ef6\:518d\:51e6\:7406, Function=\:8ff0\:8a9e\:306b\:4e00\:81f4\:3059\:308b snapshot \:3092\:518d\:51e6\:7406\:3002\:4f8b: \"Refresh\"->Function[s, StringContainsQ[ToString@s[\"MailMetadataPublic\"][\"Subject\"], \"Cerezo\"]]), \"Inferencer\"(\:65e2\:5b9a=\:5b9fLLM, \:6ce8\:5165\:53ef), \"CheckpointEvery\"(\:65e2\:5b9a20), \"Persist\"(\:65e2\:5b9aTrue)\:3002";
+  "SourceVaultInferMailDerivedBatch[opts] \:306f\:672a\:51e6\:7406 snapshot \:306e\:6d3e\:751f\:3092\:30ed\:30fc\:30ab\:30eb LLM \:3067\:5897\:5206\:751f\:6210\:3057 in-place \:66f4\:65b0\:3059\:308b\:3002\:4e2d\:65ad\:8010\:6027 (CheckpointEvery \:4ef6\:3054\:3068\:306b\:4fdd\:5b58)\:3002\:7279\:5b9a mbox \:306e\:6307\:5b9a\:671f\:9593\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:4ed8\:3051\:308b\:7528\:9014\:306f SourceVaultMailAddSummaries[mbox, period] \:304c\:6b63\:6e96 (EnsureLoaded \:3092\:5185\:5305\:3057\:5916\:90e8\:30b8\:30e7\:30d6\:3067\:3082\:81ea\:5df1\:5b8c\:7d50)\:3002opts: \"MBox\"(\:65e2\:5b9a Automatic\:3002\:6587\:5b57\:5217\:3092\:4e0e\:3048\:308b\:3068\:5bfe\:8c61 snapshot \:3092\:305d\:306e mbox \:306b\:9650\:5b9a\:3002Automatic=\:30ed\:30fc\:30c9\:6e08\:307f\:5168 mbox), \"Limit\"(\:65e2\:5b9a50\:3001\:30d5\:30a3\:30eb\:30bf\:5f8c\:306e\:4ef6\:6570\:4e0a\:9650\:3002\:7bc4\:56f2\:5185\:3059\:3079\:3066\:306a\:3089 Infinity), \"DateFrom\"/\"DateTo\"(\:65e2\:5b9a Automatic\:3002DateObject/\:6587\:5b57\:5217/{y,m,d} \:3067\:5bfe\:8c61\:30e1\:30fc\:30eb\:3092\:65e5\:4ed8\:7bc4\:56f2\:306b\:9650\:5b9a\:3001\:65e5\:5358\:4f4d\:5305\:542b), \"Refresh\"(\:65e2\:5b9a None=Pending \:306e\:307f\:3002\"MissingCategory\"=Category \:672a\:751f\:6210\:306e\:51e6\:7406\:6e08\:307f\:65e7 snapshot \:3082\:518d\:51e6\:7406, All=\:5168\:4ef6\:518d\:51e6\:7406, \"Ungrounded\"=\:4fdd\:5b58\:6e08\:307f\:30b5\:30de\:30ea\:30fc\:304c\:63a5\:5730\:5224\:5b9a (SourceVaultMailDerivedGroundingCheck) \:306b\:843d\:3061\:308b\:51e6\:7406\:6e08\:307f\:3092\:518d\:51e6\:7406 (\:3053\:306e\:30e2\:30fc\:30c9\:3067\:306f MBox/DateFrom/DateTo \:3092\:5148\:306b\:9069\:7528), Function=\:8ff0\:8a9e\:306b\:4e00\:81f4\:3059\:308b snapshot \:3092\:518d\:51e6\:7406\:3002\:4f8b: \"Refresh\"->Function[s, StringContainsQ[ToString@s[\"MailMetadataPublic\"][\"Subject\"], \"Cerezo\"]]), \"Inferencer\"(\:65e2\:5b9a=\:5b9fLLM, \:6ce8\:5165\:53ef), \"CheckpointEvery\"(\:65e2\:5b9a20), \"Persist\"(\:65e2\:5b9aTrue)\:3002\:623b\:308a\:5024\:306b FailedGrounding(\:672a\:63a5\:5730\:3067\:4fdd\:5b58\:3057\:306a\:304b\:3063\:305f\:4ef6\:6570) / GroundingRejected(\:8a66\:884c\:4e0a\:9650\:3067\:9589\:3058\:305f\:4ef6\:6570) \:3092\:542b\:3080\:3002";
 SourceVaultMailInferDerived::usage =
   "SourceVaultMailInferDerived[mailspec] \:306f mailspec(date/subject/from/to/cc/body)\:304b\:3089\:30ed\:30fc\:30ab\:30eb LLM \:3067 <|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|> \:3092\:8fd4\:3059(\:512a\:5148\:5ea6\:306f\:69cb\:9020\:7684\:306b\:5225\:8a08\:7b97)\:3002Category \:306f $SourceVaultMailCategories \:306e\:30c8\:30fc\:30af\:30f3\:3001Deadline \:306f ISO \:6587\:5b57\:5217\:307e\:305f\:306f Missing[\"None\"]\:3002";
 SourceVaultMailAddSummaries::usage =
-  "SourceVaultMailAddSummaries[mbox_String, period_:\"Latest\", opts] \:306f mbox \:306e\:6307\:5b9a\:671f\:9593\:306e\:30e1\:30fc\:30eb\:3092 SourceVaultMailEnsureLoaded \:3067\:30ed\:30fc\:30c9\:3057\:3066\:304b\:3089\:3001\:305d\:306e mbox \:306e\:672a\:51e6\:7406 snapshot \:306e\:6d3e\:751f(\:6982\:8981/\:30ab\:30c6\:30b4\:30ea/\:512a\:5148\:5ea6/\:3006\:5207)\:3092 SourceVaultInferMailDerivedBatch \:3067\:4e00\:62ec\:751f\:6210\:30fb\:4fdd\:5b58\:3059\:308b\:3002\:300c<mbox>\:306e\:65b0\:7740\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:8ffd\:52a0\:300d\:306e\:6b63\:6e96\:30a8\:30f3\:30c8\:30ea\:30dd\:30a4\:30f3\:30c8(EnsureLoaded \:3068\:30d0\:30c3\:30c1\:30921\:95a2\:6570\:306b\:5185\:5305\:3059\:308b\:306e\:3067\:3001\:5916\:90e8 WolframScript \:30b8\:30e7\:30d6\:3078\:9000\:907f\:3055\:308c\:3066\:3082\:30ed\:30fc\:30c9\:304b\:3089\:81ea\:5df1\:5b8c\:7d50\:3057\:3001\:7a7a\:30b9\:30c8\:30a2\:30670\:4ef6\:51e6\:7406\:306b\:306a\:308b\:5931\:6557\:3092\:9632\:3050)\:3002opts: \"Limit\"(\:65e2\:5b9a Infinity=\:65b0\:7740\:5168\:4ef6), \"Persist\"(\:65e2\:5b9a True)\:3002\:8fd4\:308a\:5024 <|Status, MBox, Period, Loaded, Batch|>\:3002";
+  "SourceVaultMailAddSummaries[mbox_String, period_:\"Latest\", opts] \:306f mbox \:306e\:6307\:5b9a\:671f\:9593\:306e\:30e1\:30fc\:30eb\:3092 SourceVaultMailEnsureLoaded \:3067\:30ed\:30fc\:30c9\:3057\:3066\:304b\:3089\:3001\:305d\:306e mbox \:306e\:672a\:51e6\:7406 snapshot \:306e\:6d3e\:751f(\:6982\:8981/\:30ab\:30c6\:30b4\:30ea/\:512a\:5148\:5ea6/\:3006\:5207)\:3092 SourceVaultInferMailDerivedBatch \:3067\:4e00\:62ec\:751f\:6210\:30fb\:4fdd\:5b58\:3059\:308b\:3002\:300c<mbox>\:306e\:65b0\:7740\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:8ffd\:52a0\:300d\:306e\:6b63\:6e96\:30a8\:30f3\:30c8\:30ea\:30dd\:30a4\:30f3\:30c8(EnsureLoaded \:3068\:30d0\:30c3\:30c1\:30921\:95a2\:6570\:306b\:5185\:5305\:3059\:308b\:306e\:3067\:3001\:5916\:90e8 WolframScript \:30b8\:30e7\:30d6\:3078\:9000\:907f\:3055\:308c\:3066\:3082\:30ed\:30fc\:30c9\:304b\:3089\:81ea\:5df1\:5b8c\:7d50\:3057\:3001\:7a7a\:30b9\:30c8\:30a2\:30670\:4ef6\:51e6\:7406\:306b\:306a\:308b\:5931\:6557\:3092\:9632\:3050)\:3002opts: \"Limit\"(\:65e2\:5b9a Infinity=\:65b0\:7740\:5168\:4ef6), \"Persist\"(\:65e2\:5b9a True), \"Refresh\"(\:65e2\:5b9a None=\:672a\:51e6\:7406\:306e\:307f\:3002\"MissingCategory\"=\:5206\:985e\:304c\:672a\:751f\:6210\:306e\:51e6\:7406\:6e08\:307f\:3082\:518d\:63a8\:8ad6\:3001\"Ungrounded\"=\:4fdd\:5b58\:6e08\:307f\:30b5\:30de\:30ea\:30fc\:304c\:305d\:306e\:30e1\:30fc\:30eb\:306b\:63a5\:5730\:3057\:3066\:3044\:306a\:3044\:51e6\:7406\:6e08\:307f\:3092\:518d\:63a8\:8ad6\:3001All=\:5168\:4ef6), \"DateFrom\"/\"DateTo\"(\:65e2\:5b9a Automatic=\:671f\:9593\:3067\:7d5e\:3089\:306a\:3044)\:3002\:8fd4\:308a\:5024 <|Status, MBox, Period, Loaded, Batch|>\:3002";
 SourceVaultRegisterMailspecEnricher::usage =
   "SourceVaultRegisterMailspecEnricher[name, f] \:306f\:6d3e\:751f(\:30b5\:30de\:30ea\:30fc\:4f5c\:6210)\:6642\:306b LLM \:3078\:6e21\:3059 mailspec \:3092\:62e1\:5f35\:3059\:308b enricher \:3092\:767b\:9332\:3059\:308b(Cerezo.wl \:7b49\:306e\:62e1\:5f35\:7528)\:3002f[mailspec, snapshot] \:304c\:5909\:66f4\:5f8c\:306e mailspec(Association)\:3092\:8fd4\:3059\:3068\:305d\:308c\:304c LLM \:5165\:529b\:306b\:4f7f\:308f\:308c\:3001Derived.DerivedEnrichment \:306b\:540d\:524d\:304c\:8a18\:9332\:3055\:308c\:308b\:3002\:975e\:8a72\:5f53/\:5931\:6557\:6642\:306f mailspec \:3092\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002\:53d6\:308a\:8fbc\:307f\:30fb\:4fdd\:5b58\:30ec\:30b3\:30fc\:30c9\:5f62\:5f0f\:306b\:306f\:5f71\:97ff\:305b\:305a\:3001\:672a\:767b\:9332\:306a\:3089\:5b8c\:5168\:7d20\:901a\:3057\:3002";
 SourceVaultUnregisterMailspecEnricher::usage =
@@ -1382,6 +1492,34 @@ priority recomputation, BEFORE Derived.UserOverride is enforced. \
 SourceVault_mailfeedback.wl registers itself here so user corrections \
 (rules + learned posterior) shape future classification; maildb needs nothing \
 from it and behaves exactly as before when it is absent.";
+SourceVaultMailDerivedGroundingCheck::usage =
+  "SourceVaultMailDerivedGroundingCheck[snapshot] / [mailspec, summary] \:306f\:6d3e\:751f\:30b5\:30de\:30ea\:30fc\:304c\:305d\:306e\:30e1\:30fc\:30eb\:81ea\:8eab(subject/from/to/cc/body)\:306b\:63a5\:5730\:3057\:3066\:3044\:308b\:304b\:3092\:6c7a\:5b9a\:8ad6\:7684\:306b\:5224\:5b9a\:3059\:308b\:3002<|Grounded, Score(\:30a2\:30f3\:30ab\:30fc\:8a9e\:306e\:5b9f\:6587\:4e2d\:51fa\:73fe\:7387), Found, Total, HeaderHit, LatinHits, ForeignAnchors(\:672c\:6587\:306b\:7121\:3044 6 \:5b57\:4ee5\:4e0a\:306e\:82f1\:5b57\:56fa\:6709\:540d\:8a5e=\:90e8\:5206\:6df7\:5165\:306e\:5146\:5019), Suspect, Reason|>\:30022026-08-19 \:306e LM Studio KV/prompt cache \:6df7\:5165 (Coursera \:306e\:30b5\:30de\:30ea\:30fc\:304c SIG26 \:30e1\:30fc\:30eb\:306e\:5185\:5bb9\:306b\:306a\:3063\:305f) \:3092\:691c\:51fa\:3059\:308b\:305f\:3081\:306e\:66f8\:304d\:8fbc\:307f\:95a2\:6240\:3002";
+SourceVaultMailUngroundedDerived::usage =
+  "SourceVaultMailUngroundedDerived[opts] \:306f\:51e6\:7406\:6e08\:307f snapshot \:306e\:3046\:3061\:4fdd\:5b58\:6e08\:307f\:30b5\:30de\:30ea\:30fc\:304c\:63a5\:5730\:5224\:5b9a\:306b\:843d\:3061\:308b\:3082\:306e (\:7a7a\:30b5\:30de\:30ea\:30fc / Rejected / \:4ed6\:30e1\:30fc\:30eb\:306e\:5185\:5bb9 / Suspect=\:672c\:6587\:306b\:7121\:3044\:56fa\:6709\:540d\:8a5e\:3092\:542b\:3080) \:3092\:8fd4\:3059\:3002opts: \"MBox\", \"DateFrom\", \"DateTo\"\:3002\:518d\:63a8\:8ad6\:306f SourceVaultMailAddSummaries[mbox, period, \"Refresh\" -> \"Ungrounded\"]\:3002";
+$SourceVaultMailLLMFreshContext::usage =
+  "$SourceVaultMailLLMFreshContext (\:65e2\:5b9a True) \:306f\:30e1\:30fc\:30eb\:6d3e\:751f\:306e LM Studio \:8981\:6c42\:306e\:5148\:982d\:306b\:6bce\:56de\:7570\:306a\:308b request-id \:884c\:3092\:7f6e\:304d cache_prompt:false \:3092\:4ed8\:3051\:3066\:3001\:30b5\:30fc\:30d0\:5074\:306e prompt cache (LCP \:985e\:4f3c\:5ea6\:306b\:3088\:308b slot \:518d\:5229\:7528) \:3092\:56de\:907f\:3059\:308b\:3002False \:3067\:5f93\:6765\:52d5\:4f5c\:3002";
+$SourceVaultMailGroundingGate::usage =
+  "$SourceVaultMailGroundingGate (\:65e2\:5b9a True) \:306f SourceVaultMailInferDerived \:306e\:51fa\:529b\:3092\:63a5\:5730\:5224\:5b9a\:306b\:304b\:3051\:3001\:672a\:63a5\:5730\:306a\:3089 1 \:56de\:518d\:8a66\:884c\:3057\:3001\:305d\:308c\:3067\:3082\:672a\:63a5\:5730\:306a\:3089 Status Error / Reason UngroundedOutput \:3092\:8fd4\:3059 (\:4fdd\:5b58\:3057\:306a\:3044)\:3002";
+$SourceVaultMailGroundingMinRatio::usage =
+  "$SourceVaultMailGroundingMinRatio (\:65e2\:5b9a 0.15) \:306f\:63a5\:5730\:5224\:5b9a\:306e\:30a2\:30f3\:30ab\:30fc\:8a9e\:51fa\:73fe\:7387\:306e\:4e0b\:9650\:3002\:4ef6\:540d/\:5dee\:51fa\:4eba\:306b 5 \:6587\:5b57\:4ee5\:4e0a\:306e\:82f1\:5b57\:30a2\:30f3\:30ab\:30fc\:304c\:5f53\:305f\:308c\:3070\:6bd4\:7387\:306b\:95a2\:4fc2\:306a\:304f\:63a5\:5730\:3068\:3059\:308b\:3002";
+$SourceVaultMailLLMNoThinkPrefill::usage =
+  "$SourceVaultMailLLMNoThinkPrefill (\:65e2\:5b9a Automatic) \:306f\:30e1\:30fc\:30eb\:6d3e\:751f\:306e LM Studio \:8981\:6c42\:3092 /v1/completions + ChatML \:975e\:601d\:8003 prefill (<think>\n\n</think>) \:3067\:9001\:308b\:304b\:3002Automatic=\:30e2\:30c7\:30eb\:540d\:306b qwen \:3092\:542b\:3080\:304b\:4e0d\:660e\:306a\:3089\:4f7f\:3046 / True=\:5e38\:306b / False=\:5f93\:6765\:306e chat \:7d4c\:8def\:3002\:63a8\:8ad6 1000-5000 token \:3092\:7701\:3044\:3066 1 \:901a\:6570\:5341\:79d2\:306b\:3059\:308b\:3002completions \:304c\:5931\:6557/\:66f8\:5f0f\:5916\:306a\:3089 chat \:306b\:81ea\:52d5\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3002";
+$SourceVaultMailLLMMaxTokens::usage =
+  "$SourceVaultMailLLMMaxTokens (\:65e2\:5b9a 512) \:306f prefill \:7d4c\:8def (/v1/completions) \:306e max_tokens\:3002";
+$SourceVaultMailLLMPromptTokenBudget::usage =
+  "$SourceVaultMailLLMPromptTokenBudget (\:65e2\:5b9a 4000) \:306f\:30e1\:30fc\:30eb\:6d3e\:751f\:306e LLM \:30d7\:30ed\:30f3\:30d7\:30c8\:5168\:4f53 (\:6307\:793a+\:30d8\:30c3\:30c0+\:672c\:6587) \:306e\:63a8\:5b9a\:30c8\:30fc\:30af\:30f3\:4e0a\:9650\:3002\:8d85\:904e\:5206\:306f\:672c\:6587\:672b\:5c3e\:3092\:5207\:308b\:3002LM Studio (llama.cpp) \:306e\:8a55\:4fa1\:30d0\:30c3\:30c1\:30b5\:30a4\:30ba (n_batch=2048) \:3092\:8d85\:3048\:308b\:30d7\:30ed\:30f3\:30d7\:30c8\:306f qwen35 \:7cfb\:30cf\:30a4\:30d6\:30ea\:30c3\:30c9\:30e2\:30c7\:30eb\:3067\:524d\:306e\:8981\:6c42\:306e\:5185\:5bb9\:3092\:7b54\:3048\:308b (2026-08-19 \:5b9f\:6e2c: 2118 \:307e\:3067\:6b63\:5e38 / 2197 \:4ee5\:4e0a\:6df7\:5165)\:3002\:30b5\:30fc\:30d0\:5074\:3067 n_batch \:3092\:4e0a\:3052\:305f\:3089\:5408\:308f\:305b\:3066\:4e0a\:3052\:308b\:3002";
+$SourceVaultMailLLMPromptTokenHardMax::usage =
+  "$SourceVaultMailLLMPromptTokenHardMax (\:65e2\:5b9a 4500) \:306f\:30b5\:30fc\:30d0\:304c\:5831\:544a\:3057\:305f prompt_tokens \:306e\:4e0a\:9650\:3002\:8d85\:3048\:305f\:8981\:6c42\:306e\:7b54\:3048\:306f\:6368\:3066\:3001\:672c\:6587\:3092\:6bd4\:4f8b\:7e2e\:5c0f\:3057\:3066 1 \:56de\:3060\:3051\:9001\:308a\:76f4\:3059 (\:63a8\:5b9a\:5668\:306e\:8aa4\:5dee\:5bfe\:7b56)\:3002";
+$SourceVaultMailLLMReanchor::usage =
+  "$SourceVaultMailLLMReanchor (\:65e2\:5b9a False) \:306f\:30e1\:30fc\:30eb\:6d3e\:751f\:30d7\:30ed\:30f3\:30d7\:30c8\:306e\:672b\:5c3e\:306b\:300c\:3053\:306e\:30e1\:30fc\:30eb\:306e\:4ef6\:540d\:30fb\:5dee\:51fa\:4eba\:3092\:518d\:78ba\:8a8d\:3057\:3001\:4ed6\:306e\:30e1\:30fc\:30eb\:3092\:6df7\:305c\:308b\:306a\:300d\:884c\:3092\:4ed8\:3051\:308b\:3002LM Studio (qwen35 \:30cf\:30a4\:30d6\:30ea\:30c3\:30c9) \:304c\:524d\:8981\:6c42\:306e\:72b6\:614b\:3067\:7b54\:3048\:308b\:6df7\:5165\:3092 recency \:3067\:6291\:3048\:308b (2026-08-19 \:5b9f\:6e2c 24/24 \:6b63\:7b54; \:7121\:3057\:3060\:3068\:9577\:6587\:306f\:6df7\:5165)\:3002";
+$SourceVaultMailLLMBodyMaxChars::usage =
+  "$SourceVaultMailLLMBodyMaxChars (\:65e2\:5b9a 12000) \:306f\:30e1\:30fc\:30eb\:6d3e\:751f\:306e LLM \:30d7\:30ed\:30f3\:30d7\:30c8\:306b\:5165\:308c\:308b\:672c\:6587\:306e\:4e0a\:9650\:6587\:5b57\:6570 (\:8d85\:904e\:5206\:306f\:7701\:7565\:30de\:30fc\:30ab\:30fc)\:3002\:4e0d\:53ef\:8996\:6587\:5b57 (\\p{Cf}/U+034F) \:9664\:53bb\:30fb\:7a7a\:767d\:5727\:7e2e\:5f8c\:306b\:9069\:7528\:3002\:4fdd\:5b58 body \:306f\:4e0d\:5909\:3002";
+$SourceVaultMailLLMURLTailChars::usage =
+  "$SourceVaultMailLLMURLTailChars (\:65e2\:5b9a 32) \:306f LLM \:30d7\:30ed\:30f3\:30d7\:30c8\:5185\:306e URL \:3092 (scheme \:3092\:9664\:304d) \:5148\:982d\:4f55\:6587\:5b57\:6b8b\:3057\:3066\:6b8b\:308a (24 \:6587\:5b57\:4ee5\:4e0a\:306e\:30c8\:30e9\:30c3\:30ad\:30f3\:30b0\:5c3e\:90e8) \:3092 \[Ellipsis] \:306b\:7f6e\:63db\:3059\:308b\:304b\:30020 \:3067\:7121\:52b9\:3002";
+$SourceVaultMailInferMaxAttempts::usage =
+  "$SourceVaultMailInferMaxAttempts (\:65e2\:5b9a 3) \:306f SourceVaultMailInferDerived \:304c\:672a\:63a5\:5730\:306e\:7b54\:3048\:306b\:5bfe\:3057\:3066\:540c\:4e00\:547c\:3073\:51fa\:3057\:5185\:3067\:8a66\:3059 LLM \:547c\:3073\:51fa\:3057\:56de\:6570\:306e\:4e0a\:9650 (LM Studio \:5074\:306e\:6df7\:5165\:306f\:78ba\:7387\:7684\:306a\:306e\:3067\:518d\:8a66\:884c\:304c\:52b9\:304f)\:3002";
+$SourceVaultMailDerivedMaxAttempts::usage =
+  "$SourceVaultMailDerivedMaxAttempts (\:65e2\:5b9a 6) \:306f\:672a\:63a5\:5730\:3067\:5931\:6557\:3057\:305f snapshot \:3092\:518d\:8a66\:884c\:3059\:308b\:56de\:6570\:306e\:4e0a\:9650\:3002\:5230\:9054\:3059\:308b\:3068 Summary \:7a7a\:30fbDerivedGrounding \"Rejected\" \:3067 Processed \:306b\:9589\:3058\:3001\:5374\:4e0b\:3057\:305f\:6587\:9762\:306f Derived.DerivedRejected \:306b\:6b8b\:308b\:3002";
 
 Begin["`Private`"];
 
@@ -1508,25 +1646,89 @@ iSVTmpJSON[tag_] := FileNameJoin[{$TemporaryDirectory,
    "sv_lm_" <> tag <> "_" <> IntegerString[$ProcessID] <> "_" <>
    IntegerString[RandomInteger[{0, 999999999}]] <> ".json"}];
 
-iSVQueryLMStudio[prompt_String, url_String, model_String] :=
-  Module[{reqData, reqFile, bodyBytes, resp, bytes, respFile, strm, json, content},
-    (* \:3053\:306e\:30bf\:30b9\:30af\:306f\:5206\:985e\:62bd\:51fa\:306a\:306e\:3067\:63a8\:8ad6 (thinking) \:306f\:4e0d\:8981\:3002Qwen3 \:7cfb\:306e
-       reasoning \:30e2\:30c7\:30eb\:306f\:601d\:8003\:3092 reasoning_content \:306b\:5ef6\:3005\:3068\:51fa\:529b\:3057\:3001\:9577\:6587\:30e1\:30fc\:30eb\:3067
-       TimeConstraint \:5185\:306b\:6700\:7d42 content \:3092\:51fa\:305b\:305a\:7a7a\:5fdc\:7b54\[RightArrow]FailedLLM \:306b\:306a\:308b\:3002
-       enable_thinking:False \:3067\:601d\:8003\:3092\:6291\:6b62\:3057\:3001\:76f4\:63a5 3 \:884c\:3092\:51fa\:529b\:3055\:305b\:308b\:3002 *)
-    reqData = <|"messages" -> {<|"role" -> "user", "content" -> prompt|>},
-       "stream" -> False, "temperature" -> 0.2,
-       "chat_template_kwargs" -> <|"enable_thinking" -> False|>|> ~Join~
-       If[model =!= "", <|"model" -> model|>, <||>];
+(* ---- fresh-context request marker (2026-08-19) ----
+   LM Studio (llama.cpp server) picks the KV slot / host prompt-cache entry by
+   longest-common-prefix similarity (log: "selected slot by LCP similarity ...
+   f_sim_best > 0.100 thold", "making room for prompt cache entry"). Every mail
+   prompt shares the same ~1000-token instruction prefix, so every request was
+   resumed on top of a previous mail's cached state, and on 2026-08-19 the
+   engine (LlamaV4, MTP draft, kv_unified, ROCm) leaked earlier mails' tokens
+   into later answers: the Coursera / Logitech prompts contained only their own
+   mail (verified by decrypting the stored bodies) but the model's reasoning
+   described the SIG26 / TA-SA mails and the stored summaries were those.
+   Putting a per-request marker at the very START of the user content makes the
+   common prefix a handful of template tokens (f_sim ~ 0), so the server takes
+   the LRU / from-scratch path instead of restoring a cached state; cache_prompt
+   False is the llama.cpp-native switch for servers that honour it. *)
+If[! ValueQ[$SourceVaultMailLLMFreshContext], $SourceVaultMailLLMFreshContext = True];
+
+iSVMDRequestNonce[] :=
+  "req-" <> IntegerString[RandomInteger[{0, 2^60}], 36] <> "-" <>
+    IntegerString[$ProcessID, 36] <> "-" <> IntegerString[Round[1000 AbsoluteTime[]], 36];
+
+iSVMDFreshContextPrefix[nonce_String] :=
+  "[request-id: " <> nonce <> " \[LongDash] \:3053\:306e\:884c\:306f\:6bce\:56de\:7570\:306a\:308b\:8b58\:5225\:5b50\:3067\:3042\:308a\:5185\:5bb9\:3068\:306f\:7121\:95a2\:4fc2\:3002\:7121\:8996\:3057\:3066\:3088\:3044\:3002]\n\n";
+
+(* ---- no-thinking prefill via /v1/completions (2026-08-19) ----
+   The Qwen3.8 chat template only skips reasoning when enable_thinking=false reaches
+   the Jinja render, but LM Studio ignores chat_template_kwargs / reasoning_effort for
+   this model ("No valid custom reasoning fields found"), so every mail cost 1000-5000
+   reasoning tokens (1-9 minutes each). Rendering the ChatML turn ourselves on
+   /v1/completions with the non-thinking prefill "<think>\n\n</think>\n\n" makes the
+   model answer directly: measured 8-12 s per mail instead of minutes. Automatic = use
+   it when the model name says qwen (or is unknown); the chat endpoint stays as the
+   fallback (non-200 / unparsable answer) and for other model families. *)
+If[! ValueQ[$SourceVaultMailLLMNoThinkPrefill], $SourceVaultMailLLMNoThinkPrefill = Automatic];
+If[! ValueQ[$SourceVaultMailLLMMaxTokens], $SourceVaultMailLLMMaxTokens = 512];
+
+iSVMDPrefillApplicableQ[model_String] :=
+  Switch[$SourceVaultMailLLMNoThinkPrefill,
+    True, True,
+    False, False,
+    _, model === "" || StringContainsQ[model, "qwen", IgnoreCase -> True]];
+
+iSVMDChatMLNoThink[content_String] :=
+  "<|im_start|>user\n" <> content <> "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+
+Options[iSVMDBuildLMStudioRequest] = {"Endpoint" -> Automatic};
+iSVMDBuildLMStudioRequest[prompt_String, model_String, OptionsPattern[]] :=
+  Module[{fresh = TrueQ[$SourceVaultMailLLMFreshContext], nonce, content, ep, common},
+    nonce = If[fresh, iSVMDRequestNonce[], Missing["Disabled"]];
+    content = If[fresh, iSVMDFreshContextPrefix[nonce] <> prompt, prompt];
+    ep = OptionValue["Endpoint"];
+    If[ep === Automatic, ep = If[iSVMDPrefillApplicableQ[model], "completions", "chat"]];
+    common = Join[<|"stream" -> False, "temperature" -> 0.2|>,
+      If[fresh, <|"cache_prompt" -> False|>, <||>],
+      If[model =!= "", <|"model" -> model|>, <||>]];
+    (* \:3053\:306e\:30bf\:30b9\:30af\:306f\:5206\:985e\:62bd\:51fa\:306a\:306e\:3067\:63a8\:8ad6 (thinking) \:306f\:4e0d\:8981\:3002chat \:7d4c\:8def\:3067\:306f
+       enable_thinking:False \:3092\:9001\:308b\:304c LM Studio \:306f\:7121\:8996\:3059\:308b\:3053\:3068\:304c\:3042\:308b (\:4e0a\:8a18)\:3002 *)
+    <|"Request" -> If[ep === "completions",
+        Join[<|"prompt" -> iSVMDChatMLNoThink[content],
+          "max_tokens" -> If[IntegerQ[$SourceVaultMailLLMMaxTokens], $SourceVaultMailLLMMaxTokens, 512],
+          "stop" -> {"<|im_end|>"}|>, common],
+        Join[<|"messages" -> {<|"role" -> "user", "content" -> content|>},
+          "chat_template_kwargs" -> <|"enable_thinking" -> False|>|>, common]],
+      "Endpoint" -> ep, "Nonce" -> nonce, "FreshContext" -> fresh|>];
+
+iSVMDCompletionsURL[url_String] :=
+  If[StringEndsQ[url, "/v1/chat/completions"],
+    StringReplace[url, "/v1/chat/completions" ~~ EndOfString -> "/v1/completions"], url];
+
+(* one HTTP round trip; returns the answer text or "" *)
+iSVMDPostLMStudio[url_String, reqData_Association, endpoint_String, model_String] :=
+  Module[{reqFile, bodyBytes, resp, bytes, respFile, strm, json, content, msgs},
     reqFile = iSVTmpJSON["req"];
     Quiet@Check[Export[reqFile, reqData, "RawJSON"], Return[""]];
     bodyBytes = Quiet@Check[ByteArray[BinaryReadList[reqFile]], $Failed];
     Quiet@DeleteFile[reqFile];
     If[Head[bodyBytes] =!= ByteArray, Return[""]];
+    msgs = If[endpoint === "completions",
+      {<|"role" -> "user", "content" -> Lookup[reqData, "prompt", ""]|>},
+      Lookup[reqData, "messages", {}]];
     (* 1H-S boundary gate (Shadow=record / Warn=Message / Enforce=refuse; fail-open without capbroker) *)
     If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["maildb:iSVQueryLMStudio",
         <|"Provider" -> "openai-compat", "Model" -> If[model === "", Missing["AutoDetect"], model],
-          "Deployment" -> url, "Messages" -> reqData["messages"]|>]],
+          "Deployment" -> url, "Messages" -> msgs|>]],
       Return[""]];
     resp = Quiet@Check[URLRead[HTTPRequest[url, <|
         "Method" -> "POST",
@@ -1542,12 +1744,27 @@ iSVQueryLMStudio[prompt_String, url_String, model_String] :=
     json = Quiet@Check[Import[respFile, "RawJSON"], $Failed];
     Quiet@DeleteFile[respFile];
     If[! AssociationQ[json], Return[""]];
-    content = Quiet@Check[json["choices"][[1]]["message"]["content"], ""];
+    $iSVMDLastPromptTokens = With[{n = Quiet@Check[json["usage"]["prompt_tokens"], Missing[]]},
+      If[IntegerQ[n], n, Missing["NotReported"]]];
+    content = If[endpoint === "completions",
+      Quiet@Check[json["choices"][[1]]["text"], ""],
+      Quiet@Check[json["choices"][[1]]["message"]["content"], ""]];
     (* thinking \:30e2\:30c7\:30eb\:304c content \:3092\:7a7a\:306b\:3057\:3066 reasoning_content \:306b\:51fa\:3057\:305f\:5834\:5408\:306e\:4fdd\:967a *)
-    If[! (StringQ[content] && StringTrim[content] =!= ""),
+    If[endpoint =!= "completions" && ! (StringQ[content] && StringTrim[content] =!= ""),
       content = Quiet@Check[
         json["choices"][[1]]["message"]["reasoning_content"], ""]];
     If[StringQ[content], content, ""]];
+
+iSVQueryLMStudio[prompt_String, url_String, model_String] :=
+  Module[{built, out},
+    built = iSVMDBuildLMStudioRequest[prompt, model];
+    If[built["Endpoint"] === "completions",
+      out = iSVMDPostLMStudio[iSVMDCompletionsURL[url], built["Request"], "completions", model];
+      (* fallback: server without /v1/completions, foreign chat template, or an
+         answer that does not carry the expected fields -> plain chat endpoint *)
+      If[StringQ[out] && StringContainsQ[out, "SUMMARY", IgnoreCase -> True], Return[out]];
+      built = iSVMDBuildLMStudioRequest[prompt, model, "Endpoint" -> "chat"]];
+    iSVMDPostLMStudio[url, built["Request"], "chat", model]];
 
 iSVResolveLocalLLM[] :=
   Module[{model = "", url = "http://127.0.0.1:1234/v1/chat/completions", pm, models},
@@ -1578,12 +1795,101 @@ iSVMDOwnerLLMProfile[] := Quiet@Check[
    If[Length[DownValues[SourceVault`SourceVaultOwnerLLMProfile]] > 0,
      SourceVault`SourceVaultOwnerLLMProfile[], ""], ""];
 
+(* LLM-side body hygiene (2026-08-19). HTML marketing mail carries thousands of
+   invisible "preheader" characters (U+034F U+200C U+FEFF ...) after HTML->text; the
+   Coursera/Logitech bodies were 60-90% such padding = 2000-7000 tokens of nothing.
+   Besides cost, that is exactly the attention vacuum in which LM Studio's stale-KV
+   leak won (the live re-test answered a Logitech prompt with the Coursera summary even
+   in a fresh slot). Strip zero-width/format characters, collapse whitespace runs and
+   cap the length. Only the LLM prompt is affected; stored bodies, enrichers and the
+   grounding check keep the original text. *)
+If[! ValueQ[$SourceVaultMailLLMBodyMaxChars], $SourceVaultMailLLMBodyMaxChars = 12000];
+If[! ValueQ[$SourceVaultMailLLMURLTailChars], $SourceVaultMailLLMURLTailChars = 32];
+iSVMDSanitizeLLMBody[s_String] :=
+  Module[{t, cap = $SourceVaultMailLLMBodyMaxChars, utail = $SourceVaultMailLLMURLTailChars},
+    (* format chars (ZWSP/ZWNJ/ZWJ/BOM/soft hyphen/bidi controls = \p{Cf}) + combining
+       grapheme joiner U+034F; then every Unicode space separator (\p{Zs}: nbsp, figure
+       space U+2007, ideographic space ...) run -> one space *)
+    (* two passes on purpose: the whitespace runs only appear once the invisible
+       characters between the spaces are gone (StringReplace rule lists do not cascade) *)
+    t = StringReplace[s, RegularExpression["[\\p{Cf}\\x{034F}]+"] -> ""];
+    t = StringReplace[t, {
+       RegularExpression["[\\p{Zs}\\t]{2,}"] -> " ",
+       RegularExpression["[\\p{Zs}\\t]+\\n"] -> "\n",
+       RegularExpression["\\n[\\p{Zs}\\t]+(?=\\n)"] -> "\n"}];
+    t = StringReplace[t, RegularExpression["\\n{3,}"] -> "\n\n"];
+    (* tracking URLs: keep scheme+host+path head, drop long query/opaque tails *)
+    If[IntegerQ[utail] && utail > 0,
+      t = StringReplace[t,
+        RegularExpression["(https?://[^\\s]{" <> ToString[utail] <> "})[^\\s]{24,}"] -> "$1\[Ellipsis]"];
+      (* a link farm collapses to identical trimmed heads: keep one of each run *)
+      t = StringReplace[t,
+        RegularExpression["(https?://[^\\s]*\[Ellipsis])(?:\\s+\\1)+"] -> "$1"]];
+    t = StringTrim[t];
+    If[IntegerQ[cap] && cap > 0 && StringLength[t] > cap,
+      StringTake[t, cap] <> "\n\[Ellipsis](\:4ee5\:4e0b " <> ToString[StringLength[t] - cap] <>
+        " \:5b57\:7701\:7565)", t]];
+iSVMDSanitizeLLMBody[x_] := x;
+
+(* ---- prompt token budget (2026-08-19) ----
+   Bracketed on the real server (LM Studio llama.cpp ROCm 2.29.0, Qwen3.8-27B = qwen35
+   hybrid SSM+attention, 評価バッチサイズ n_batch=2048): prompts of 1419-2118 tokens
+   answered from their own mail every time; 2197, 2298, 2392, 3686 tokens answered from
+   the PREVIOUS request's mail (or nothing at all right after a load). A prompt longer
+   than ~2100 tokens lost to the previous request's state more often than not (n_batch
+   40000, MTP/unified-KV/FA on or off, ROCm 2.29/2.28.2: no difference; the same
+   2199-token prompt flipped between answers). The decisive fix turned out to be the
+   re-anchoring trailer (iSVMDPromptTrailer: 24/24 clean at 2460-3761 tokens); the budget
+   is kept as a cost/tail-risk bound: the whole prompt (instructions + header + body) is
+   kept below $SourceVaultMailLLMPromptTokenBudget tokens; the body is what gets cut. Estimator:
+   kanji 1.0 token per char, kana 0.55, ASCII 0.32, other 0.7 (fitted against the server's prompt_tokens on real mails, conservative). *)
+If[! ValueQ[$SourceVaultMailLLMPromptTokenBudget], $SourceVaultMailLLMPromptTokenBudget = 4000];
+(* the estimator is +-15%; the server tells us the real prompt_tokens afterwards. If a
+   request came out above this hard maximum (measured safe: 2118, contaminated: 2197),
+   the answer is discarded and the mail is re-sent with the body cut proportionally. *)
+If[! ValueQ[$SourceVaultMailLLMPromptTokenHardMax], $SourceVaultMailLLMPromptTokenHardMax = 4500];
+$iSVMDLastPromptTokens = Missing["NotAvailable"];
+
+iSVMDEstimateTokens[s_String] :=
+  Module[{codes = ToCharacterCode[s], kanji, kana, ascii, other},
+    kanji = Count[codes, c_ /; (19968 <= c <= 40959) || (13312 <= c <= 19903) || (44032 <= c <= 55203)];
+    kana = Count[codes, c_ /; (12352 <= c <= 12543) || (65382 <= c <= 65439)];
+    ascii = Count[codes, c_ /; c < 128];
+    other = Length[codes] - kanji - kana - ascii;
+    Ceiling[1.0 kanji + 0.55 kana + 0.32 ascii + 0.7 other] + 4];
+iSVMDEstimateTokens[_] := 0;
+
+(* cut the body so that estimate(prompt without body) + estimate(body) <= budget *)
+iSVMDFitBodyToBudget[body_String, fixedTokens_Integer] :=
+  Module[{budget = $SourceVaultMailLLMPromptTokenBudget, room, t = body, lo, hi, mid},
+    If[! IntegerQ[budget] || budget <= 0, Return[body]];
+    room = budget - fixedTokens;
+    If[room <= 50, room = 50];
+    If[iSVMDEstimateTokens[t] <= room, Return[t]];
+    (* binary search on the character count *)
+    lo = 0; hi = StringLength[t];
+    While[hi - lo > 8,
+      mid = Quotient[lo + hi, 2];
+      If[iSVMDEstimateTokens[StringTake[t, mid]] <= room, lo = mid, hi = mid]];
+    StringTake[t, lo] <> "
+\[Ellipsis](\:4ee5\:4e0b " <> ToString[StringLength[t] - lo] <> " \:5b57\:7701\:7565)"];
+
 iSVDerivePrompt[mailspec_Association] :=
+  Module[{fld, pmail, prof, owners, ownerRef, recvLine, spec = mailspec, fixed},
+    If[StringQ[Lookup[spec, "body", Missing[]]],
+      spec["body"] = iSVMDSanitizeLLMBody[spec["body"]];
+      (* everything except the body: render once with an empty body to measure it *)
+      fixed = iSVMDEstimateTokens[iSVDerivePromptRaw[Append[spec, "body" -> ""]]] +
+        iSVMDEstimateTokens[iSVMDFreshContextPrefix["req-000000000000-0000-000000000"]] + 24;
+      spec["body"] = iSVMDFitBodyToBudget[spec["body"], fixed]];
+    iSVDerivePromptRaw[spec]];
+
+iSVDerivePromptRaw[spec_Association] :=
   Module[{fld, pmail, prof, owners, ownerRef, recvLine},
     fld = StringJoin[KeyValueMap[
        #1 <> ": " <> Which[StringQ[#2], #2, ListQ[#2], StringRiffle[Select[#2, StringQ], ", "],
           True, ToString[#2]] <> "\n" &,
-       KeyTake[mailspec, {"date", "subject", "from", "to", "cc", "body"}]]];
+       KeyTake[spec, {"date", "subject", "from", "to", "cc", "body"}]]];
     pmail = iSVMDOwnerPrimaryEmail[];
     prof = iSVMDOwnerLLMProfile[];
     owners = iSVMDOwnerEmails[];
@@ -1603,12 +1909,20 @@ iSVDerivePrompt[mailspec_Association] :=
     "0.4=\:5916\:90e8\:306e\:77e5\:4eba\:304c\:898b\:3066\:3082\:554f\:984c\:306a\:3044\:30010.0=\:3069\:3053\:306b\:958b\:793a\:3057\:3066\:3082\:554f\:984c\:306a\:3044\:65e2\:77e5\:306e\:5185\:5bb9\:3002\n" <>
     "\:6ce8\:610f: \:67fb\:8aad\:4f9d\:983c\:30fb\:6295\:7a3f\:8ad6\:6587\:95a2\:9023(\:67fb\:8aad\:8005\:3067\:3042\:308b\:3053\:3068\:81ea\:4f53\:304c\:79d8\:533f\:60c5\:5831)\:306f 0.7 \:4ee5\:4e0a\:3001" <>
     "\:5b66\:751f\:500b\:4eba\:306e\:6c0f\:540d\:30fb\:5b66\:7c4d\:30fb\:5c65\:4fee\:72b6\:6cc1\:3092\:542b\:3080\:9023\:7d61\:306f 0.8 \:4ee5\:4e0a\:3068\:3059\:308b\:3002\n\n" <>
-    "== CATEGORY ==\nfrom \:304b\:3089 to \:3078\:306e\:4f1d\:9054\:306e\:7a2e\:985e\:3092\:3001\:6b21\:306e\:30c8\:30fc\:30af\:30f3\:304b\:30891\:3064\:3060\:3051\:51fa\:529b\:3002\n" <>
-    "TaskRequest=\:4f5c\:696d\:30fb\:4ed5\:4e8b\:306e\:4f9d\:983c(\:67fb\:8aad\:3001\:539f\:7a3f\:30fb\:66f8\:985e\:306e\:63d0\:51fa\:3001\:8abf\:67fb\:30fb\:5bfe\:5fdc\:306e\:4f9d\:983c\:306a\:3069)\:3001" <>
-    "AttendanceRequest=\:4f1a\:8b70\:30fb\:884c\:4e8b\:7b49\:3078\:306e\:51fa\:5e2d\:4f9d\:983c/\:65e5\:7a0b\:8abf\:6574\:3001" <>
-    "Confirmation=\:78ba\:8a8d\:30fb\:627f\:8a8d\:3092\:6c42\:3081\:308b\:9023\:7d61\:3001" <>
-    "InfoProvision=\:60c5\:5831\:63d0\:4f9b\:30fb\:6848\:5185\:3001Report=\:7d50\:679c\:30fb\:72b6\:6cc1\:306e\:5831\:544a\:3001" <>
-    "Notice=\:6a5f\:68b0\:7684\:306a\:901a\:77e5\:30fb\:4e00\:6589\:914d\:4fe1\:30fb\:5e83\:544a\:3001Other=\:305d\:306e\:4ed6\:3002\n" <>
+    (* \:30c8\:30fc\:30af\:30f3\:5217\:6319\:306f **\:7b87\:6761\:66f8\:304d\:3067\:660e\:793a\:3059\:308b**\:3002\:65e7\:7248\:306f "\:6b21\:306e\:30c8\:30fc\:30af\:30f3\:304b\:30891\:3064" \:306e\:5f8c\:308d\:306b
+       "TaskRequest=\:8aac\:660e\:3001AttendanceRequest=\:8aac\:660e\:3001..." \:3092\:8aad\:70b9\:3067\:9023\:306d\:305f\:6563\:6587\:3060\:3063\:305f\:305f\:3081\:3001
+       qwen3.8-27b \:306f\:300c\:30c8\:30fc\:30af\:30f3\:4e00\:89a7\:304c\:793a\:3055\:308c\:3066\:3044\:306a\:3044\:300d\:3068\:8aa4\:8a8d\:3057 (\:5b9f\:6a5f log \:306e reasoning \:3067\:78ba\:8a8d)\:3001
+       spam / notification / external \:306a\:3069\:81ea\:524d\:306e\:8a9e\:3092\:8fd4\:3057\:3066\:5206\:985e\:304c\:5168\:6ec5\:3057\:305f\:3002 *)
+    "== CATEGORY ==\nfrom \:304b\:3089 to \:3078\:306e\:4f1d\:9054\:306e\:7a2e\:985e\:3092\:3001\:6b21\:306e7\:8a9e\:306e\:3046\:3061 **\:3061\:3087\:3046\:30691\:8a9e** \:3092\:82f1\:8a9e\:306e\:307e\:307e\:51fa\:529b\:3059\:308b\:3002\n" <>
+    "\:8a31\:53ef\:30c8\:30fc\:30af\:30f3(\:3053\:308c\:4ee5\:5916\:306f\:7981\:6b62): TaskRequest / AttendanceRequest / Confirmation / InfoProvision / Report / Notice / Other\n" <>
+    "- TaskRequest = \:4f5c\:696d\:30fb\:4ed5\:4e8b\:306e\:4f9d\:983c(\:67fb\:8aad\:3001\:539f\:7a3f\:30fb\:66f8\:985e\:306e\:63d0\:51fa\:3001\:8abf\:67fb\:30fb\:5bfe\:5fdc\:306e\:4f9d\:983c\:306a\:3069)\n" <>
+    "- AttendanceRequest = \:4f1a\:8b70\:30fb\:884c\:4e8b\:7b49\:3078\:306e\:51fa\:5e2d\:4f9d\:983c/\:65e5\:7a0b\:8abf\:6574\n" <>
+    "- Confirmation = \:78ba\:8a8d\:30fb\:627f\:8a8d\:3092\:6c42\:3081\:308b\:9023\:7d61\n" <>
+    "- InfoProvision = \:60c5\:5831\:63d0\:4f9b\:30fb\:6848\:5185\n" <>
+    "- Report = \:7d50\:679c\:30fb\:72b6\:6cc1\:306e\:5831\:544a\n" <>
+    "- Notice = \:6a5f\:68b0\:7684\:306a\:901a\:77e5\:30fb\:4e00\:6589\:914d\:4fe1\:30fb\:5e83\:544a\:30fb\:5ba3\:4f1d\:30fb\:8ff7\:60d1\:30e1\:30fc\:30eb(spam)\n" <>
+    "- Other = \:4e0a\:306e\:3069\:308c\:306b\:3082\:5f53\:3066\:306f\:307e\:3089\:306a\:3044\:3082\:306e\n" <>
+    "spam / notification / informational / external \:306e\:3088\:3046\:306a\:72ec\:81ea\:306e\:8a9e\:3084\:3001\:8aac\:660e\:30fb\:62ec\:5f27\:30fb\:8a33\:8a9e\:30fb\:8a18\:53f7\:3092\:4ed8\:3051\:3066\:306f\:306a\:3089\:306a\:3044\:3002\n" <>
     "\:5b9b\:5148\:304c\:30aa\:30fc\:30ca\:30fc\:306e\:6240\:5c5e\:30b0\:30eb\:30fc\:30d7(\:90e8\:7f72ML\:7b49)\:3067\:3042\:3063\:3066\:3082\:3001\:5185\:5bb9\:304c\:4f9d\:983c\:306a\:3089 TaskRequest \:307e\:305f\:306f AttendanceRequest \:3068\:5224\:5b9a\:3059\:308b\:3002\n\n" <>
     "== DEADLINE ==\n\:3006\:5207\:30fb\:671f\:9650(\:63d0\:51fa\:671f\:9650\:3001\:56de\:7b54\:671f\:9650\:3001\:7533\:8fbc\:671f\:9650\:3001\:51fa\:6b20\:56de\:7b54\:671f\:9650\:306a\:3069)\:304c\:672c\:6587\:306b\:3042\:308c\:3070\:3001" <>
     "\:30e1\:30fc\:30eb\:306e date \:3092\:57fa\:6e96\:306b\:300c\:6765\:9031\:6708\:66dc\:300d\:7b49\:306e\:76f8\:5bfe\:8868\:73fe\:3082\:7d76\:5bfe\:65e5\:6642\:3078\:5909\:63db\:3057\:3066\:3001YYYY-MM-DD \:307e\:305f\:306f YYYY-MM-DD HH:MM \:306e\:5f62\:5f0f\:3067\:51fa\:529b\:3002" <>
@@ -1616,35 +1930,249 @@ iSVDerivePrompt[mailspec_Association] :=
     "== SUMMARY ==\n\:8981\:7d04\:30921\:884c\:3067\:51fa\:529b\:3002\:5f62\:5f0f\:300c\:3014\:30ab\:30c6\:30b4\:30ea\:3015\:5185\:5bb9\:306e\:8981\:7d04\:3014\:95a2\:4fc2\:8005\:3015\:300d\:3002" <>
     "\:30ab\:30c6\:30b4\:30ea\:306f \:4f9d\:983c/\:78ba\:8a8d/\:5831\:544a/\:60c5\:5831/\:96d1\:52d9/\:3006\:5207 \:304b\:3089\:6700\:9069\:306a\:3082\:306e\:3092\:9078\:3076\:3002\n\n" <>
     "== \:51fa\:529b\:5f62\:5f0f ==\n\:4ee5\:4e0b\:306e5\:884c\:306e\:307f\:3092\:51fa\:529b\:3002\:4ed6\:306e\:30c6\:30ad\:30b9\:30c8\:306f\:4e00\:5207\:4e0d\:8981\:3002\n" <>
-    "WORKREQUEST: <\:6570\:5024>\nPRIVACY: <\:6570\:5024>\nCATEGORY: <\:30c8\:30fc\:30af\:30f3>\nDEADLINE: <YYYY-MM-DD[ HH:MM] \:307e\:305f\:306f NONE>\nSUMMARY: <\:8981\:7d04\:6587>\n\n[\:30e1\:30fc\:30eb]\n" <> fld];
+    "WORKREQUEST: <\:6570\:5024>\nPRIVACY: <\:6570\:5024>\nCATEGORY: <TaskRequest|AttendanceRequest|Confirmation|InfoProvision|Report|Notice|Other>\nDEADLINE: <YYYY-MM-DD[ HH:MM] \:307e\:305f\:306f NONE>\nSUMMARY: <\:8981\:7d04\:6587>\n\n[\:30e1\:30fc\:30eb]\n" <> fld <>
+    iSVMDPromptTrailer[spec]];
+
+(* re-anchoring trailer (2026-08-19): with the llama.cpp ROCm backend the local server
+   answered from the state of the previous request; a closing line restating THIS mail's
+   subject/sender right before generation wins that contest (24/24). It is a workaround
+   that tolerates foreign state in the context, which the privacy-barrier design does not
+   accept, so it is OFF by default; the root cause disappeared on the Vulkan runtime
+   (24/24 clean without it). Opt in with $SourceVaultMailLLMReanchor = True when stuck on
+   ROCm. *)
+If[! ValueQ[$SourceVaultMailLLMReanchor], $SourceVaultMailLLMReanchor = False];
+iSVMDPromptTrailer[spec_Association] :=
+  If[! TrueQ[$SourceVaultMailLLMReanchor], "",
+    "\n[\:518d\:78ba\:8a8d] \:4e0a\:306e[\:30e1\:30fc\:30eb]\:306e\:4ef6\:540d\:306f\:300c" <>
+      StringTake[ToString@Lookup[spec, "subject", ""], UpTo[120]] <> "\:300d\:3001\:5dee\:51fa\:4eba\:306f\:300c" <>
+      StringTake[ToString@Lookup[spec, "from", ""], UpTo[80]] <>
+      "\:300d\:3002\:3053\:306e 1 \:901a\:3060\:3051\:3092\:5bfe\:8c61\:306b\:3001\:4ed6\:306e\:30e1\:30fc\:30eb\:3084\:4ee5\:524d\:306e\:5185\:5bb9\:3092\:6df7\:305c\:305a\:306b 5 \:884c\:3092\:51fa\:529b\:305b\:3088\:3002\n"];
+
+(* <think>...</think> \:3092\:843d\:3068\:3059\:3002chat_template_kwargs \:306e enable_thinking:False \:3092\:7121\:8996\:3057\:3066
+   \:601d\:8003\:3092 content \:306b\:6df7\:305c\:308b\:30e2\:30c7\:30eb\:304c\:3042\:308a\:3001\:601d\:8003\:4e2d\:306e\:300cCATEGORY: \:3053\:308c\:306f...\:300d\:3092\:5148\:306b
+   \:62fe\:3063\:3066\:5168\:30d5\:30a3\:30fc\:30eb\:30c9\:304c\:58ca\:308c\:308b\:3002\:958b\:59cb\:30bf\:30b0\:304c\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:5074\:3067\:6d88\:3048\:9589\:3058\:30bf\:30b0\:3060\:3051\:6b8b\:308b\:5f62\:306b\:3082\:5bfe\:5fdc\:3002 *)
+iSVMDStripThinking[raw_String] :=
+  Module[{t, u},
+    t = StringReplace[raw, {
+       RegularExpression["(?is)<think>.*?</think>"] -> "",
+       RegularExpression["(?is)<thinking>.*?</thinking>"] -> "",
+       RegularExpression["(?is)<reasoning>.*?</reasoning>"] -> ""}];
+    If[StringContainsQ[t, "</think", IgnoreCase -> True],
+      u = StringReplace[t, RegularExpression["(?is)^.*</think[^>]*>"] -> ""];
+      If[StringTrim[u] =!= "", t = u]];
+    StringTrim[t]];
+
+(* "KEY: value" \:884c\:3092\:53d6\:308b\:3002\:7b87\:6761\:66f8\:304d\:8a18\:53f7\:30fbmarkdown \:5f37\:8abf ("**CATEGORY**: x")\:30fb\:5168\:89d2\:30b3\:30ed\:30f3\:3092\:8a31\:5bb9\:3002
+   \:65e7\:5b9f\:88c5\:306f\:30ea\:30c6\:30e9\:30eb "CATEGORY:" + Whitespace \:5fc5\:9808\:3060\:3063\:305f\:305f\:3081\:3053\:308c\:3089\:3067\:5916\:308c\:3066\:3044\:305f\:3002 *)
+iSVMDFieldLines[txt_String, key_String] :=
+  StringTrim /@ StringCases[txt,
+    RegularExpression["(?im)^[\\s>*_#\\-]*" <> key <> "[\\s*_]*[\:ff1a:][ \\t]*(.*)$"] :> "$1"];
+
+iSVMDFirstNumber[s_String] :=
+  With[{m = StringCases[s, RegularExpression["-?\\d+(?:\\.\\d+)?"], 1]},
+    If[m === {}, Missing[], Quiet@Check[ToExpression[First[m]], Missing[]]]];
+
+(* SUMMARY \:5148\:982d\:306e\:3014\:30ab\:30c6\:30b4\:30ea\:3015 (\:30d7\:30ed\:30f3\:30d7\:30c8\:3067\:6307\:5b9a\:3057\:305f\:8981\:7d04\:5f62\:5f0f) \[RightArrow] \:30c8\:30fc\:30af\:30f3\:3002
+   CATEGORY \:884c\:304c\:4f7f\:3044\:7269\:306b\:306a\:3089\:306a\:304b\:3063\:305f\:3068\:304d\:306e\:6700\:5f8c\:306e\:780b\:3002 *)
+$iSVMDSummaryTagCategory = <|
+   "\:4f9d\:983c" -> "TaskRequest", "\:78ba\:8a8d" -> "Confirmation",
+   "\:5831\:544a" -> "Report", "\:60c5\:5831" -> "InfoProvision",
+   "\:96d1\:52d9" -> "Other", "\:3006\:5207" -> "TaskRequest"|>;
+
+iSVMDCategoryFromSummary[sm_] :=
+  If[! StringQ[sm], Missing["UnknownCategory"],
+    With[{m = StringCases[sm, "\:3014" ~~ t : Except["\:3015"] .. ~~ "\:3015" :> t, 1]},
+      If[m === {}, Missing["UnknownCategory"],
+        Lookup[$iSVMDSummaryTagCategory, StringTrim[First[m]], Missing["UnknownCategory"]]]]];
 
 iSVParseDerived[raw_String] :=
-  Module[{wr = Missing["NotParsed"], pv = Missing["NotParsed"],
-      ct = Missing["NotParsed"], dl = Missing["NotParsed"], sm = "", m},
-    m = StringCases[raw, ("WORKREQUEST:" | "PRIORITY:") ~~ Whitespace ~~ v : NumberString :> v];
-    If[m =!= {} && StringLength[First[m]] <= 4, wr = Clip[ToExpression[First[m]], {0.0, 1.0}]];
-    m = StringCases[raw, "PRIVACY:" ~~ Whitespace ~~ v : NumberString :> v];
-    If[m =!= {} && StringLength[First[m]] <= 4, pv = Clip[ToExpression[First[m]], {0.0, 1.0}]];
-    m = StringCases[raw, "CATEGORY:" ~~ Whitespace ~~ s__ /; ! StringContainsQ[s, "\n"] :> StringTrim[s]];
-    If[m =!= {}, ct = iSVMDNormalizeCategory[First[m]]];
-    m = StringCases[raw, "DEADLINE:" ~~ Whitespace ~~ s__ /; ! StringContainsQ[s, "\n"] :> StringTrim[s]];
-    If[m =!= {}, dl = iSVMDNormalizeDeadline[First[m]]];
-    m = StringCases[raw, "SUMMARY:" ~~ Whitespace ~~ s__ /; ! StringContainsQ[s, "\n"] :> StringTrim[s]];
+  Module[{txt, wr = Missing["NotParsed"], pv = Missing["NotParsed"],
+      ct = Missing["NotParsed"], dl = Missing["NotParsed"], sm = "", m, v},
+    txt = iSVMDStripThinking[raw];
+    m = Join[iSVMDFieldLines[txt, "WORKREQUEST"], iSVMDFieldLines[txt, "PRIORITY"]];
+    v = SelectFirst[iSVMDFirstNumber /@ m, NumericQ, Missing[]];
+    If[NumericQ[v], wr = Clip[N[v], {0.0, 1.0}]];
+    m = iSVMDFieldLines[txt, "PRIVACY"];
+    v = SelectFirst[iSVMDFirstNumber /@ m, NumericQ, Missing[]];
+    If[NumericQ[v], pv = Clip[N[v], {0.0, 1.0}]];
+    (* \:884c\:304c\:8907\:6570\:3042\:308b\:3068\:304d\:306f\:300c\:6700\:521d\:306b\:8a9e\:5f59\:3078\:6b63\:898f\:5316\:3067\:304d\:305f\:884c\:300d\:3092\:63a1\:308b *)
+    m = iSVMDFieldLines[txt, "CATEGORY"];
+    If[m =!= {},
+      ct = SelectFirst[iSVMDNormalizeCategory /@ m, StringQ, Missing["UnknownCategory"]]];
+    m = iSVMDFieldLines[txt, "DEADLINE"];
+    If[m =!= {},
+      dl = SelectFirst[iSVMDNormalizeDeadline /@ m, StringQ,
+         iSVMDNormalizeDeadline[First[m]]]];
+    m = iSVMDFieldLines[txt, "SUMMARY"];
     If[m =!= {}, sm = First[m]];
+    If[! StringQ[ct], ct = iSVMDCategoryFromSummary[sm]];
     <|"WorkRequest" -> wr, "PrivacyLevel" -> pv, "Category" -> ct, "Deadline" -> dl,
       "Summary" -> sm|>];
 
-SourceVaultMailInferDerived[mailspec_Association] :=
-  Module[{llm, raw, parsed},
+(* ---- output grounding gate (2026-08-19) ----
+   A summary must be anchored in the mail it claims to describe. The 2026-08-19
+   incident stored "SIG26 ..." as the summary of a Coursera promo because the LLM
+   server answered from another request's cached tokens; nothing downstream could
+   tell. The check is deterministic and cheap: take the anchor terms of the
+   SUMMARY (Latin tokens >= 3 chars, character bigrams of kanji/katakana runs)
+   and measure how many occur in subject+from+to+cc+body (whitespace removed,
+   width-folded, case-folded). Grounded iff the hit ratio >= threshold OR one
+   distinctive Latin anchor (>= 5 chars) sits in subject/from (English mails
+   summarised in Japanese share little text but do name the sender/product).
+   Empty summary = ungrounded ("NoSummary"). Anchor-less but non-empty summaries
+   (injected test inferencers, "S") are vacuously grounded. *)
+If[! ValueQ[$SourceVaultMailGroundingGate], $SourceVaultMailGroundingGate = True];
+If[! ValueQ[$SourceVaultMailGroundingMinRatio], $SourceVaultMailGroundingMinRatio = 0.15];
+If[! ValueQ[$SourceVaultMailDerivedMaxAttempts], $SourceVaultMailDerivedMaxAttempts = 6];
+If[! ValueQ[$SourceVaultMailInferMaxAttempts], $SourceVaultMailInferMaxAttempts = 3];
+
+$iSVMDGroundingStopwords = {"the", "and", "for", "with", "from", "that", "this", "you", "your",
+   "mail", "email", "https", "http", "www", "com", "org", "net", "jp", "ac", "co", "html",
+   "info", "news", "new", "all", "are", "not", "our", "have", "has", "will", "can", "get",
+   "one", "two", "web", "url", "id", "re", "fw", "fwd"};
+
+(* width-fold (full-width ASCII -> ASCII), drop all whitespace, case-fold *)
+iSVMDGroundingNormalize[s_String] :=
+  ToLowerCase@FromCharacterCode[
+    DeleteCases[ToCharacterCode[s] /. c_Integer /; 65281 <= c <= 65374 :> c - 65248,
+      _?(MemberQ[{9, 10, 11, 12, 13, 32, 160, 12288, 847, 8203, 8204, 8205, 65279}, #] &)]];
+iSVMDGroundingNormalize[_] := "";
+
+(* summary -> anchor terms. Latin tokens are cut BEFORE whitespace is stripped (else
+   "Coursera Plus 40" glues into one unmatched token) and split on punctuation
+   ("IEICE-ESS" -> ieice, ess); bigrams come from kanji/katakana runs. *)
+iSVMDGroundingAnchors[summary_String] :=
+  Module[{folded, s, latin, runs, bigrams},
+    folded = ToLowerCase@FromCharacterCode[
+       ToCharacterCode[summary] /. c_Integer /; 65281 <= c <= 65374 :> c - 65248];
+    latin = DeleteDuplicates@Select[StringCases[folded, RegularExpression["[a-z0-9]+"]],
+       StringLength[#] >= 3 && ! MemberQ[$iSVMDGroundingStopwords, #] &&
+         ! StringMatchQ[#, DigitCharacter ..] &];
+    s = iSVMDGroundingNormalize[summary];
+    runs = StringCases[s, RegularExpression["[\\p{Han}\\p{Katakana}\:30fc]{2,}"]];
+    bigrams = DeleteDuplicates@Flatten[(StringJoin /@ Partition[Characters[#], 2, 1]) & /@ runs];
+    <|"Latin" -> latin, "Bigrams" -> bigrams|>];
+
+(* mailspec-level check: <|Grounded, Score, Found, Total, HeaderHit, LatinHits, Reason|>.
+   Grounded iff (a) anchor hit ratio >= threshold (halved when the body is empty/short:
+   the summary can then only paraphrase the subject), or (b) a Latin anchor >= 4 chars
+   sits in subject/from, or (c) >= 2 distinct Latin anchors >= 5 chars occur anywhere
+   (English mails summarised in Japanese: bigrams cannot match, names/products do). *)
+iSVMDGroundingCheck[mailspec_Association, summary_] :=
+  Module[{sm, anchors, all, hay, head, bodyN, found, total, headerHit, latinHits, foreign, thr,
+      score, grounded, reason},
+    sm = If[StringQ[summary], summary, ""];
+    If[StringTrim[sm] === "",
+      Return[<|"Grounded" -> False, "Score" -> 0., "Found" -> 0, "Total" -> 0,
+        "HeaderHit" -> False, "LatinHits" -> 0, "Reason" -> "NoSummary"|>]];
+    anchors = iSVMDGroundingAnchors[sm];
+    all = Join[anchors["Latin"], anchors["Bigrams"]];
+    total = Length[all];
+    If[total === 0,
+      Return[<|"Grounded" -> True, "Score" -> Missing["NoAnchors"], "Found" -> 0, "Total" -> 0,
+        "HeaderHit" -> False, "LatinHits" -> 0, "Reason" -> "NoAnchors"|>]];
+    head = iSVMDGroundingNormalize[
+       ToString@Lookup[mailspec, "subject", ""] <> " " <> ToString@Lookup[mailspec, "from", ""]];
+    bodyN = iSVMDGroundingNormalize[ToString@Lookup[mailspec, "body", ""]];
+    hay = head <> iSVMDGroundingNormalize[
+       ToString@Lookup[mailspec, "to", ""] <> " " <> ToString@Lookup[mailspec, "cc", ""]] <> bodyN;
+    found = Count[all, a_String /; StringContainsQ[hay, a]];
+    headerHit = AnyTrue[anchors["Latin"], StringLength[#] >= 4 && StringContainsQ[head, #] &];
+    latinHits = Count[anchors["Latin"], a_String /; StringLength[a] >= 5 && StringContainsQ[hay, a]];
+    (* foreign anchors: Latin proper-noun-like tokens (>= 3 chars, stopwords excluded)
+       that occur nowhere in the mail. Calibrated on 1468 real records: 16 hits (1.1%),
+       the contaminations among them being "Coursera"/"Owl"/"Zoom"/"manaba"/"jetro"
+       leaks; the rest (LMS, FIFA2026, Word, ...) are legitimate inference. Not a hard
+       reject but a retry trigger + Suspect mark, so the cost of a false hit is one
+       extra ~10 s call. *)
+    foreign = Select[anchors["Latin"], StringLength[#] >= 3 && ! StringContainsQ[hay, #] &];
+    thr = If[StringLength[bodyN] >= 200, $SourceVaultMailGroundingMinRatio,
+       $SourceVaultMailGroundingMinRatio/2];
+    score = N[found/total];
+    grounded = score >= thr || headerHit || latinHits >= 2;
+    reason = Which[
+      ! grounded, "Ungrounded",
+      score >= thr, "Ratio",
+      headerHit, "HeaderAnchor",
+      True, "LatinAnchors"];
+    <|"Grounded" -> grounded, "Score" -> Round[score, 0.01], "Found" -> found, "Total" -> total,
+      "HeaderHit" -> headerHit, "LatinHits" -> latinHits, "ForeignAnchors" -> foreign,
+      "Suspect" -> (grounded && foreign =!= {}), "Reason" -> reason|>];
+
+SourceVaultMailDerivedGroundingCheck[mailspec_Association, summary_] :=
+  iSVMDGroundingCheck[mailspec, summary];
+SourceVaultMailDerivedGroundingCheck[snap_Association] :=
+  Module[{spec = iSVSnapMailspecPlain[snap], sm},
+    sm = Lookup[Lookup[snap, "Derived", <||>], "Summary", ""];
+    If[Lookup[spec, "_bodyStatus", "Error"] =!= "Ok",
+      Return[<|"Grounded" -> Missing["BodyUnavailable"], "Score" -> Missing["BodyUnavailable"],
+        "Reason" -> "BodyUnavailable"|>]];
+    Append[iSVMDGroundingCheck[spec, sm], "RecordId" -> Lookup[snap, "RecordId", Missing[]]]];
+
+iSVMDInferOnce[mailspec_Association] :=
+  Module[{llm, raw, hard = $SourceVaultMailLLMPromptTokenHardMax, n, body, budget0, budget1},
     llm = iSVResolveLocalLLM[];
+    $iSVMDLastPromptTokens = Missing["NotAvailable"];
     raw = iSVQueryLMStudio[iSVDerivePrompt[mailspec], llm["URL"], llm["Model"]];
-    If[! StringQ[raw] || raw === "",
+    If[! StringQ[raw] || raw === "", Return[Missing["LLMUnavailable"]]];
+    (* the server's own count is authoritative: over the hard max the answer may be
+       another mail's (batch-boundary state leak) -> shrink the estimated budget by the
+       measured ratio and ask again once. (Cutting the raw body is not enough: the
+       estimator's own cut would land on the same point again.) *)
+    n = $iSVMDLastPromptTokens; body = Lookup[mailspec, "body", ""];
+    If[IntegerQ[hard] && hard > 0 && IntegerQ[n] && n > hard && StringQ[body] && StringLength[body] > 200,
+      budget0 = If[IntegerQ[$SourceVaultMailLLMPromptTokenBudget] && $SourceVaultMailLLMPromptTokenBudget > 0,
+        $SourceVaultMailLLMPromptTokenBudget, iSVMDEstimateTokens[iSVDerivePrompt[mailspec]]];
+      budget1 = Max[600, Floor[budget0 (hard - 200)/n]];
+      Block[{$SourceVaultMailLLMPromptTokenBudget = budget1},
+        raw = iSVQueryLMStudio[iSVDerivePrompt[mailspec], llm["URL"], llm["Model"]]];
+      If[! StringQ[raw] || raw === "", Return[Missing["LLMUnavailable"]]]];
+    iSVParseDerived[raw]];
+
+SourceVaultMailInferDerived[mailspec_Association] :=
+  Module[{parsed, gc, parsed2, gc2, rejected = {}},
+    parsed = iSVMDInferOnce[mailspec];
+    If[MissingQ[parsed],
       Return[<|"Status" -> "Error", "Reason" -> "LLMUnavailable",
         "WorkRequest" -> Missing["NotGenerated"], "PrivacyLevel" -> Missing["NotGenerated"],
         "Category" -> Missing["NotGenerated"], "Deadline" -> Missing["NotGenerated"],
         "Summary" -> Missing["NotGenerated"]|>]];
-    parsed = iSVParseDerived[raw];
-    Append[parsed, "Status" -> "Ok"]];
+    If[! TrueQ[$SourceVaultMailGroundingGate], Return[Append[parsed, "Status" -> "Ok"]]];
+    gc = iSVMDGroundingCheck[mailspec, parsed["Summary"]];
+    If[TrueQ[gc["Grounded"]] && ! TrueQ[gc["Suspect"]],
+      Return[Join[parsed, <|"Status" -> "Ok", "Grounding" -> gc|>]]];
+    If[TrueQ[gc["Grounded"]],
+      (* grounded but carrying a proper noun the mail never mentions (partial leak, e.g.
+         "Coursera Plus and Logitech ..." for a Logitech mail): one retry, keep the
+         answer with fewer foreign anchors; whichever survives with foreign anchors is
+         stored as Suspect (visible, re-derivable via Refresh -> "Ungrounded") *)
+      parsed2 = iSVMDInferOnce[mailspec];
+      If[MissingQ[parsed2],
+        Return[Join[parsed, <|"Status" -> "Ok", "Grounding" -> gc|>]]];
+      gc2 = iSVMDGroundingCheck[mailspec, parsed2["Summary"]];
+      If[TrueQ[gc2["Grounded"]] &&
+          Length[Lookup[gc2, "ForeignAnchors", {}]] < Length[Lookup[gc, "ForeignAnchors", {}]],
+        Return[Join[parsed2, <|"Status" -> "Ok", "Grounding" -> gc2,
+          "Rejected" -> {parsed["Summary"]}|>]],
+        Return[Join[parsed, <|"Status" -> "Ok", "Grounding" -> gc,
+          "Rejected" -> {parsed2["Summary"]}|>]]]];
+    (* immediate retries: the server-side leak is stochastic (the same 2199-token TA/SA
+       prompt came back as Coursera once and as TA/SA the next time), so re-asking is
+       worth ~12 s each; a genuine hallucination is usually reproduced and still ends
+       in UngroundedOutput. $SourceVaultMailInferMaxAttempts calls in total. *)
+    rejected = {parsed["Summary"]};
+    Do[
+      parsed2 = iSVMDInferOnce[mailspec];
+      If[MissingQ[parsed2],
+        Return[<|"Status" -> "Error", "Reason" -> "UngroundedOutput", "Grounding" -> gc,
+          "Rejected" -> rejected, "Attempts" -> k - 1|>, Module]];
+      gc2 = iSVMDGroundingCheck[mailspec, parsed2["Summary"]];
+      If[TrueQ[gc2["Grounded"]],
+        Return[Join[parsed2, <|"Status" -> "Ok", "Grounding" -> gc2, "Rejected" -> rejected|>], Module]];
+      rejected = Append[rejected, parsed2["Summary"]]; gc = gc2,
+      {k, 2, Max[2, $SourceVaultMailInferMaxAttempts]}];
+    <|"Status" -> "Error", "Reason" -> "UngroundedOutput", "Grounding" -> gc,
+      "Rejected" -> rejected, "Attempts" -> Length[rejected]|>];
 
 (* ---- \:91cd\:8981\:5ea6\:306e\:69cb\:9020\:7684\:8a08\:7b97: \:30b0\:30eb\:30fc\:30d7\:91cd\:307f config + To/Cc \:4f4d\:7f6e + ML \:5224\:5b9a + LLM \:4f9d\:983c\:5ea6 ---- *)
 (* \:30b0\:30eb\:30fc\:30d7\:91cd\:307f config (\:6c38\:7d9a\:5316\:3001\:30e1\:30fc\:30eb\:30a2\:30ab\:30a6\:30f3\:30c8\:3068\:540c\:3058 vault config \:65b9\:5f0f) *)
@@ -1871,6 +2399,10 @@ iSVApplyDerived[snap_Association, res_Association] :=
            MatchQ[dl, Missing["None"]], Missing["None"],
            True, Lookup[d, "Deadline", Missing["NotGenerated"]]]]];
     If[StringQ[res["Summary"]], d["Summary"] = res["Summary"]];
+    (* a fresh result supersedes any earlier grounding verdict / attempt counters;
+       iSVMDStampGrounding re-stamps them when the inferencer reports a check *)
+    d = KeyDrop[d, {"DerivedGrounding", "DerivedGroundingScore", "DerivedAttempts",
+       "DerivedLastReason", "DerivedLastAttemptAt"}];
     d["DerivedStatus"] = "Processed";
     d["DerivedSource"] = "LocalLLM+Structured";
     (* rules + learned posterior, then the user override as the last word *)
@@ -1923,10 +2455,12 @@ iSVMDStampEnrichment[snap_Association, spec_Association] :=
       Module[{s2 = snap, d = Lookup[snap, "Derived", <||>]},
         d["DerivedEnrichment"] = names; s2["Derived"] = d; s2]]];
 
-iSVSnapMailspec[snap_Association] :=
-  Module[{md = Lookup[snap, "MailMetadataPublic", <||>], bodyR, spec},
+(* plain mailspec (no enrichers): what the record itself says. Used by the grounding
+   check and as the base of iSVSnapMailspec. *)
+iSVSnapMailspecPlain[snap_Association] :=
+  Module[{md = Lookup[snap, "MailMetadataPublic", <||>], bodyR},
     bodyR = SourceVaultMailSnapshotDecryptBody[snap];
-    spec = <|"date" -> ToString@Lookup[md, "Date", ""],
+    <|"date" -> ToString@Lookup[md, "Date", ""],
       "subject" -> ToString@Lookup[md, "Subject", ""],
       "from" -> ToString@Lookup[md, "From", ""],
       "to" -> ToString@Lookup[md, "To", ""],
@@ -1934,8 +2468,10 @@ iSVSnapMailspec[snap_Association] :=
       (* \:8981\:7d04\:30fb\:30ab\:30c6\:30b4\:30ea\:30fb\:3006\:5207\:306a\:3069\:306e\:6d3e\:751f\:306f\:8aad\:3081\:308b\:5e73\:6587\:304b\:3089 (\:65e7 snapshot \:306e\:751f HTML \:5bfe\:7b56\:3002
          \:65b0 ingest \:306f\:65e2\:306b readable \:306a\:306e\:3067\:51aa\:7b49)\:3002 *)
       "body" -> If[Lookup[bodyR, "Status", ""] === "Ok", iSVUIReadableBody[bodyR["Body"]], ""],
-      "_bodyStatus" -> Lookup[bodyR, "Status", "Error"]|>;
-    iSVMDEnrichMailspec[spec, snap]];
+      "_bodyStatus" -> Lookup[bodyR, "Status", "Error"]|>];
+
+iSVSnapMailspec[snap_Association] :=
+  iSVMDEnrichMailspec[iSVSnapMailspecPlain[snap], snap];
 
 Options[SourceVaultInferMailDerivedBatch] = {
    "MBox" -> Automatic, "Limit" -> 50, "DateFrom" -> Automatic, "DateTo" -> Automatic,
@@ -1944,7 +2480,7 @@ Options[SourceVaultInferMailDerivedBatch] = {
 
 SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
   Module[{infer, lim, ck, persist, pendBefore, batch, pend, df, dt, ref, mb,
-      done = 0, failBody = 0, failLLM = 0, sinceCk = 0},
+      done = 0, failBody = 0, failLLM = 0, failGround = 0, capped = 0, sinceCk = 0},
     infer = OptionValue["Inferencer"] /. Automatic -> SourceVaultMailInferDerived;
     lim = OptionValue["Limit"]; ck = OptionValue["CheckpointEvery"];
     persist = TrueQ[OptionValue["Persist"]];
@@ -1960,12 +2496,19 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
        All=\:30ed\:30fc\:30c9\:6e08\:307f\:5168\:4ef6\:3092\:518d\:51e6\:7406\:3002Function=\:8ff0\:8a9e\:306b\:4e00\:81f4\:3059\:308b snapshot \:3092\:518d\:51e6\:7406
        (\:4f8b: Cerezo \:901a\:77e5\:3060\:3051\:30ea\:30f3\:30af\:5148\:8fbc\:307f\:3067\:518d\:6d3e\:751f)\:3002 *)
     ref = OptionValue["Refresh"];
+    (* "Ungrounded" (2026-08-19): still-Pending snapshots plus Processed ones whose
+       stored summary fails the grounding check / is Suspect (see iSVMDGroundingCheck)
+       or that were capped as Rejected. The body decrypt per record is not free, so
+       MBox/date filters are applied FIRST for this mode (below), unlike the other modes
+       where they are an orthogonal post-filter. *)
     pend = Which[
       ref === All || ref === "All", SourceVaultMailSnapshotList[],
       ref === "MissingCategory",
         Select[SourceVaultMailSnapshotList[],
           Function[s, SourceVaultMailDerivedPendingQ[s] ||
             ! StringQ[Lookup[Lookup[s, "Derived", <||>], "Category", Missing[]]]]],
+      ref === "Ungrounded",
+        SourceVaultMailSnapshotList[],   (* pending ones are trivially "not grounded" *)
       Head[ref] === Function,
         Select[SourceVaultMailSnapshotList[],
           TrueQ[Quiet@Check[ref[#], False]] &],
@@ -1973,6 +2516,10 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
     (* "MBox": \:6587\:5b57\:5217\:306a\:3089\:305d\:306e mbox \:306e snapshot \:306b\:9650\:5b9a (Refresh \:3067\:9078\:3093\:3060\:96c6\:5408\:3078\:306e\:76f4\:4ea4\:5f8c\:30d5\:30a3\:30eb\:30bf)\:3002
        SourceVaultSearchMailSnapshots \:3068\:540c\:3058 #["MailSource"]["MBox"] \:30d1\:30b9\:3067\:5224\:5b9a\:3059\:308b\:3002 *)
     If[StringQ[mb], pend = Select[pend, Lookup[#["MailSource"], "MBox", Null] === mb &]];
+    If[ref === "Ungrounded",
+      If[df =!= Automatic || dt =!= Automatic,
+        pend = Select[pend, iSVMDDateInRange[#, df, dt] &]];
+      pend = Select[pend, SourceVaultMailDerivedPendingQ[#] || iSVMDStoredDerivedUngroundedQ[#] &]];
     pendBefore = Length[pend];
     If[df =!= Automatic || dt =!= Automatic,
       pend = Select[pend, iSVMDDateInRange[#, df, dt] &]];
@@ -1982,8 +2529,19 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
         spec = iSVSnapMailspec[snap];
         If[spec["_bodyStatus"] =!= "Ok", failBody++; Continue[]];
         res = infer[KeyDrop[spec, {"_bodyStatus", "_enrichedBy"}]];
+        If[AssociationQ[res] && Lookup[res, "Reason", ""] === "UngroundedOutput",
+          (* the LLM answer was not about this mail (cache contamination / hallucination):
+             never store it. Count the attempt on the record so a persistently failing mail
+             stops being retried after $SourceVaultMailDerivedMaxAttempts. *)
+          failGround++;
+          s2 = iSVMDRecordUngroundedAttempt[snap, res];
+          If[Lookup[Lookup[s2, "Derived", <||>], "DerivedGrounding", ""] === "Rejected", capped++];
+          SourceVaultMailSnapshotPut[s2, "Persist" -> False];
+          sinceCk++;
+          If[persist && sinceCk >= ck, SourceVaultMailStoreSave["All" -> False]; sinceCk = 0];
+          Continue[]];
         If[! AssociationQ[res] || Lookup[res, "Status", "Ok"] === "Error", failLLM++; Continue[]];
-        s2 = iSVMDStampEnrichment[iSVApplyDerived[snap, res], spec];
+        s2 = iSVMDStampGrounding[iSVMDStampEnrichment[iSVApplyDerived[snap, res], spec], res];
         SourceVaultMailSnapshotPut[s2, "Persist" -> False];
         done++; sinceCk++;
         If[persist && sinceCk >= ck, SourceVaultMailStoreSave["All" -> False]; sinceCk = 0]],
@@ -1992,11 +2550,80 @@ SourceVaultInferMailDerivedBatch[OptionsPattern[]] :=
     <|"Status" -> "Ok", "PendingBefore" -> pendBefore,
       "InDateRange" -> Length[pend], "Selected" -> Length[batch],
       "Processed" -> done,
-      "Failed" -> failBody + failLLM,
+      "Failed" -> failBody + failLLM + failGround,
       "FailedBodyDecrypt" -> failBody, "FailedLLM" -> failLLM,
+      "FailedGrounding" -> failGround, "GroundingRejected" -> capped,
       "RemainingPending" -> Length[
         If[StringQ[mb], SourceVaultMailDerivedPending["MBox" -> mb],
            SourceVaultMailDerivedPending[]]]|>];
+
+(* stored-record view of the grounding gate: Processed + (empty summary | Rejected |
+   summary not anchored in the mail). Body decrypt failure => not selected (cannot judge). *)
+iSVMDStoredDerivedUngroundedQ[snap_Association] :=
+  Module[{d = Lookup[snap, "Derived", <||>], gc},
+    If[Lookup[d, "DerivedGrounding", ""] === "Rejected", Return[True]];
+    gc = Quiet@Check[SourceVaultMailDerivedGroundingCheck[snap], <||>];
+    Lookup[gc, "Grounded", True] === False || TrueQ[Lookup[gc, "Suspect", False]]];
+
+Options[SourceVaultMailUngroundedDerived] =
+  {"MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic};
+SourceVaultMailUngroundedDerived[OptionsPattern[]] :=
+  Module[{mb = OptionValue["MBox"], df, dt, cand},
+    df = iSVMDDayListOf[OptionValue["DateFrom"]];
+    dt = iSVMDDayListOf[OptionValue["DateTo"]];
+    cand = Select[SourceVaultMailSnapshotList[], ! SourceVaultMailDerivedPendingQ[#] &];
+    If[StringQ[mb], cand = Select[cand, Lookup[#["MailSource"], "MBox", Null] === mb &]];
+    If[df =!= Automatic || dt =!= Automatic, cand = Select[cand, iSVMDDateInRange[#, df, dt] &]];
+    Select[cand, iSVMDStoredDerivedUngroundedQ]];
+
+(* attempt bookkeeping on the snapshot (kept in Derived so it persists with the shard).
+   Below the cap the record stays Pending (retried by the next batch); at the cap it is
+   closed as Processed with an empty summary and DerivedGrounding -> "Rejected" so the
+   view shows a blank instead of another mail's summary, and the rejected texts stay
+   inspectable in DerivedRejected. *)
+iSVMDRecordUngroundedAttempt[snap_Association, res_Association] :=
+  Module[{s2 = snap, d = Lookup[snap, "Derived", <||>], n, rej, cap},
+    cap = If[IntegerQ[$SourceVaultMailDerivedMaxAttempts] && $SourceVaultMailDerivedMaxAttempts >= 1,
+      $SourceVaultMailDerivedMaxAttempts, 3];
+    n = Lookup[d, "DerivedAttempts", 0]; If[! IntegerQ[n], n = 0];
+    n = n + Max[1, Lookup[res, "Attempts", 1]];
+    rej = Select[Join[Replace[Lookup[d, "DerivedRejected", {}], Except[_List] -> {}],
+       Replace[Lookup[res, "Rejected", {}], Except[_List] -> {}]], StringQ];
+    (* a record re-derived because its stored summary was untrustworthy must not keep
+       showing that summary while it waits for the next attempt: move it to the
+       rejected list and reset the LLM-derived fields to not-generated *)
+    If[StringQ[Lookup[d, "Summary", ""]] && StringTrim[Lookup[d, "Summary", ""]] =!= "",
+      rej = Prepend[rej, d["Summary"]]];
+    d["Summary"] = "";
+    d["Category"] = Missing["NotGenerated"];
+    d["Deadline"] = Missing["NotGenerated"];
+    d["WorkRequest"] = Missing["NotGenerated"];
+    d = KeyDrop[d, {"DerivedGrounding", "DerivedGroundingScore", "DerivedForeignAnchors"}];
+    d["DerivedAttempts"] = n;
+    d["DerivedLastReason"] = "UngroundedOutput";
+    d["DerivedRejected"] = DeleteDuplicates[Take[rej, -Min[6, Length[rej]]]];
+    d["DerivedGroundingScore"] = Lookup[Lookup[res, "Grounding", <||>], "Score", Missing[]];
+    d["DerivedLastAttemptAt"] = DateString["ISODateTime"];
+    If[n >= cap,
+      d["DerivedStatus"] = "Processed";
+      d["DerivedSource"] = "LocalLLM+Structured";
+      d["DerivedGrounding"] = "Rejected";
+      d["Summary"] = "",
+      d["DerivedStatus"] = "Pending"];
+    s2["Derived"] = d; s2];
+
+iSVMDStampGrounding[snap_Association, res_Association] :=
+  Module[{s2 = snap, d = Lookup[snap, "Derived", <||>], gc = Lookup[res, "Grounding", Missing[]]},
+    If[! AssociationQ[gc], Return[snap]];
+    d["DerivedGrounding"] = Which[! TrueQ[gc["Grounded"]], "Ungrounded",
+       TrueQ[gc["Suspect"]], "Suspect", True, "Grounded"];
+    d["DerivedGroundingScore"] = Lookup[gc, "Score", Missing[]];
+    If[TrueQ[gc["Suspect"]], d["DerivedForeignAnchors"] = Lookup[gc, "ForeignAnchors", {}],
+      d = KeyDrop[d, "DerivedForeignAnchors"]];
+    d = KeyDrop[d, {"DerivedAttempts", "DerivedLastReason", "DerivedLastAttemptAt"}];
+    If[ListQ[Lookup[res, "Rejected", Missing[]]] && res["Rejected"] =!= {},
+      d["DerivedRejected"] = res["Rejected"]];
+    s2["Derived"] = d; s2];
 
 (* ---- \:65e2\:5b58 snapshot \:306e HTML \:672c\:6587\:3092\:8aad\:3081\:308b\:5e73\:6587\:3078 backfill ----
    ingest \:6642\:30c6\:30ad\:30b9\:30c8\:5316\:3092\:5c0e\:5165\:3059\:308b\:524d\:306b\:53d6\:308a\:8fbc\:3093\:3060\:30e1\:30fc\:30eb\:304c\:5bfe\:8c61\:3002\:672c\:6587\:3092\:5fa9\:53f7\:3057\:3001HTML \:306a\:3089
@@ -2051,7 +2678,8 @@ SourceVaultBackfillMailBodies[OptionsPattern[]] :=
    \:63d0\:6848\:304c `SourceVaultMailAddSummaries["univ","Latest"]` \:5358\:4f53\:3067\:3082\:5916\:90e8\:30d7\:30ed\:30bb\:30b9\:3067
    \:81ea\:5df1\:5b8c\:7d50\:3057\:3066\:30ed\:30fc\:30c9\[RightArrow]\:8981\:7d04\:307e\:3067\:8d70\:308b\:3002mbox \:7d5e\:308a\:306f\:6b63\:3057\:3044\:30d1\:30b9 #["MailSource"]["MBox"] \:3092\:4f7f\:3046\:3002 *)
 Options[SourceVaultMailAddSummaries] =
-  {"Limit" -> Infinity, "Persist" -> True, "CheckpointEvery" -> 3};
+  {"Limit" -> Infinity, "Persist" -> True, "CheckpointEvery" -> 3,
+   "Refresh" -> None, "DateFrom" -> Automatic, "DateTo" -> Automatic};
 SourceVaultMailAddSummaries[mbox_String, period_ : "Latest",
     OptionsPattern[]] :=
   Module[{ensured, result},
@@ -2062,6 +2690,11 @@ SourceVaultMailAddSummaries[mbox_String, period_ : "Latest",
       "MBox"    -> mbox,
       "Limit"   -> OptionValue["Limit"],
       "Persist" -> OptionValue["Persist"],
+      (* \:5206\:985e\:304c\:7a7a\:306e\:307e\:307e\:6b8b\:3063\:305f snapshot \:306f "Refresh" -> "MissingCategory" \:3067\:518d\:63a8\:8ad6\:3067\:304d\:308b\:3002
+         \:305d\:308c\:306f\:30ed\:30fc\:30c9\:6e08\:307f\:5168\:6708\:3092\:8d70\:67fb\:3059\:308b\:306e\:3067\:3001\:53e4\:3044\:6708\:307e\:3067\:5dfb\:304d\:8fbc\:307e\:306a\:3044\:3088\:3046 DateFrom/DateTo \:3067\:7d5e\:308c\:308b\:3002 *)
+      "Refresh"  -> OptionValue["Refresh"],
+      "DateFrom" -> OptionValue["DateFrom"],
+      "DateTo"   -> OptionValue["DateTo"],
       (* \:540c\:671f\:5b9f\:884c\:304c\:6253\:3061\:5207\:3089\:308c\:3066\:3082\:9032\:6357\:304c\:6b8b\:308b\:3088\:3046\:983b\:7e41\:306b\:4fdd\:5b58 (\:65e2\:5b9a 3 \:4ef6\:3054\:3068)\:3002 *)
       "CheckpointEvery" -> OptionValue["CheckpointEvery"]];
     <|"Status" -> "Ok", "MBox" -> mbox, "Period" -> period,

@@ -229,12 +229,13 @@ mailspec (date/subject/from/to/cc/body) からローカル LLM で派生を推�
 > **受信者ベースの決定的 privacy フロア (defense-in-depth)**: snapshot に派生を適用する際、LLM 推論 PrivacyLevel に **受信者(To/Cc)由来の下限**を `Max` で additive 適用する。**オーナーが直接の To/Cc 受信者・非 bulk・少数宛 (≤ 4 名)** のメール = 個人/小グループ通信とみなし `PrivacyLevel` を `$SourceVaultMailPersonalPrivacyFloor` (既定 0.6) 以上に保証する (LLM が個人メールの privacy を下げ過ぎて cloud gate を漏れるのを防ぐ)。ML/一斉配信はオーナーが To/Cc に入らず (position=Bulk)・bulk/多数宛は対象外 (floor 0.0)。フロアは privacy を**上げるだけ** (高い LLM 値は下げない)。`$SourceVaultMailPersonalPrivacyFloor = 0.0` で無効化。owner 未設定時は無効。
 
 ### SourceVaultInferMailDerivedBatch[opts]
-未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。CheckpointEvery 件ごとに dirty シャードを保存する (中断耐性: 強制終了しても "Processed" 済みは pending に戻らず再処理されない)。
+未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。CheckpointEvery 件ごとに dirty シャードを保存する (中断耐性: 強制終了しても "Processed" 済みは pending に戻らず再処理されない)。生成したサマリーは接地判定 (SourceVaultMailDerivedGroundingCheck: サマリーが元メール本文に基づいているか検証) を通過したものだけを保存する。
 **「<mbox> の (期間) メールにサマリーを追加」は SourceVaultMailAddSummaries[mbox, period] を使うこと** (EnsureLoaded を内包し外部ジョブでも自己完結)。本関数を直接呼ぶときは "MBox" で対象 mbox を必ず絞る — 無指定だとロード済み全 mbox を処理する。
-→ Association `<|Status, Processed, Skipped, ...|>`
-Options: "MBox" -> Automatic (文字列でその mbox に限定 / Automatic=ロード済み全 mbox), "Limit" -> 50 (フィルタ後の件数上限。範囲内全件なら Infinity), "DateFrom" -> Automatic, "DateTo" -> Automatic (DateObject/文字列/{y,m,d} で対象を日付範囲に限定、日単位包含), "Refresh" -> None (None=Pending のみ / "MissingCategory"=Category 未生成の処理済み旧 snapshot も再処理 / All=全件 / Function=述語一致を再処理), "Inferencer" -> (実LLM, 注入可), "CheckpointEvery" -> 20, "Persist" -> True
+→ Association `<|Status, Processed, Skipped, FailedGrounding, GroundingRejected, ...|>` (FailedGrounding=未接地で保存しなかった件数, GroundingRejected=接地判定リトライの試行上限で閉じた件数)
+Options: "MBox" -> Automatic (文字列でその mbox に限定 / Automatic=ロード済み全 mbox), "Limit" -> 50 (フィルタ後の件数上限。範囲内全件なら Infinity), "DateFrom" -> Automatic, "DateTo" -> Automatic (DateObject/文字列/{y,m,d} で対象を日付範囲に限定、日単位包含), "Refresh" -> None (None=Pending のみ / "MissingCategory"=Category 未生成の処理済み旧 snapshot も再処理 / "Ungrounded"=保存済みサマリーが接地判定に落ちる処理済みを再処理 (このモードでは MBox/DateFrom/DateTo を先に適用) / All=全件 / Function=述語一致を再処理), "Inferencer" -> (実LLM, 注入可), "CheckpointEvery" -> 20, "Persist" -> True
 例: `SourceVaultInferMailDerivedBatch["MBox"->"univ", "Limit"->Infinity, "DateFrom"->{2026,6,1}, "DateTo"->{2026,6,30}]`
 例: `SourceVaultInferMailDerivedBatch["Refresh"->Function[s, StringContainsQ[ToString@s["MailMetadataPublic"]["Subject"], "Cerezo"]]]`
+例: `SourceVaultInferMailDerivedBatch["Refresh"->"Ungrounded", "MBox"->"univ"]` (接地判定に落ちた既存サマリーだけ再処理)
 
 ### SourceVaultMailAddSummaries[mbox_String, period_:"Latest", opts]
 mbox の指定期間を SourceVaultMailEnsureLoaded でロードしてから SourceVaultInferMailDerivedBatch で一括生成・保存する。EnsureLoaded とバッチを内包する正準エントリポイント (外部 WolframScript ジョブへ退避してもロードから自己完結)。**「<mbox> の<期間>メールにサマリーを追加」はこの1関数で完結する** — 直接 EnsureLoaded+InferMailDerivedBatch を組まないこと。period は "Latest"/n日/{年,月}/{年,月,日}/"YYYYMM"/"YYYY" を受ける (「6月」= 当年なら "202606" または {2026,6})。
@@ -467,3 +468,7 @@ SourceVaultMailSend 送信本文の末尾に付加する署名文字列。空な
 ### $SourceVaultMailSendBccSelf
 型: True | False, 初期値: True
 True のとき SourceVaultMailSend は Bcc 省略時にオーナー主メールアドレスを Bcc に入れ、自分に控えを送る。
+
+---
+
+I found only one substantive drift in the visible source: `SourceVaultInferMailDerivedBatch` now has a `"Refresh"->"Ungrounded"` mode and returns `FailedGrounding`/`GroundingRejected` counts, reflecting a new summary-grounding safeguard (`SourceVaultMailDerivedGroundingCheck`). Everything else in the provided source chunks — options, defaults, section structure, and prose — matched the current document, so I left it untouched. Note the source was heavily truncated in several sections (`[7]` IMAP file and `[8]`/`[9]` mailui/reply files were mostly `以降省略`), and no local copy of the `.wl` files or a source-reading MCP tool was available in this environment to verify those hidden portions — if there are other unreleased changes deeper in those files, they weren't visible to me here.

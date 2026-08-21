@@ -14,8 +14,13 @@
      - Claude Code (review / codegen) role  -> ClaudeCode`$ClaudeModel
      - Codex (advisory / draft) role        -> ClaudeCode`$ClaudeAdvisaryModel
 
+   Both roles are just models: the drafter is whatever $ClaudeAdvisaryModel
+   resolves to (codex CLI by default, but {"claudecode", ...} works too) and
+   every recorded role tag (CreatedBy / OrchHandoff From-To / progress Role)
+   follows the ACTUAL provider -- see iProviderTag.
+
    The loop:
-     NeedDraft --Draft(codex)--> Drafted --Review(claude)--> Reviewed
+     NeedDraft --Draft(advisary)--> Drafted --Review(claude)--> Reviewed
        Reviewed --[verdict=Approved]--> Approved   (codegen)
        Reviewed --[NeedsRevision & round<max]--> NeedDraft (round+1)
        Reviewed --[NeedsRevision & round>=max]--> Failed
@@ -37,7 +42,17 @@ SourceVaultWorkflow`SpecReview`Private`$pkgRoot =
       Symbol["Global`$packageDirectory"],
     True, "F:/Dropbox/Mathematica-oneDrive/MyPackages"];
 
-(* base orchestrator (also pulls in ClaudeCode`) *)
+(* ClaudeCode: LLM 呼び出し (ClaudeQuerySync) の実体。
+   2026-08-20: 背景ドライバを init.m を読まない素のカーネルで起動するように
+   したため、ここで明示的にロードしないと ClaudeQuerySync が未定義のまま
+   「[claude produced no output ...]」になる (実測)。既ロードなら no-op。 *)
+If[Length[DownValues[ClaudeCode`ClaudeQuerySync]] === 0,
+  Block[{$CharacterEncoding = "UTF-8"},
+    Quiet @ Check[
+      Get[FileNameJoin[{SourceVaultWorkflow`SpecReview`Private`$pkgRoot, "claudecode.wl"}]],
+      Null]]];
+
+(* base orchestrator *)
 If[Length[DownValues[ClaudeOrchestrator`ClaudePlanTasks]] === 0,
   Block[{$CharacterEncoding = "UTF-8"},
     Get[FileNameJoin[{SourceVaultWorkflow`SpecReview`Private`$pkgRoot, "ClaudeOrchestrator.wl"}]]]];
@@ -79,8 +94,9 @@ WorkflowInfo[] := <|
   "Context" -> "SourceVaultWorkflow`SpecReview`",
   "Launch" -> "RunSpecReview",
   "Description" ->
-    "Codex drafts a spec, Claude reviews; revise/approve loop with SourceVault " <>
-    "snapshot+pointer versioning. An approved spec can be codegen'd to a .wl package.",
+    "The advisary model ($ClaudeAdvisaryModel; codex by default) drafts a spec, " <>
+    "$ClaudeModel reviews; revise/approve loop with SourceVault snapshot+pointer " <>
+    "versioning. An approved spec can be codegen'd to a .wl package.",
   "Routes" -> {}
 |>;
 
@@ -110,30 +126,35 @@ iMaxRounds[b_Association] := Lookup[iPayload[b], "MaxRounds", $DefaultMaxRounds]
 iDraftEmpty[b_Association] := TrueQ[Lookup[iPayload[b], "DraftEmpty", False]];
 
 (* ---- vault contract (mirror of orch_vault.wls) ----
-   作成者 LLM の記録: CreatedBy は role 名 (codex/claude)、GeneratedBy は
-   実モデルラベル (iModelLabel。メール/NB 要約 sidecar・llmlog・spec-impl と
-   同じ規約)。snapshot と OrchHandoff event の両方に載せる。 *)
-iSaveSpec[project_, round_, text_, parentRef_, genBy_:""] := Module[{snap, ref},
+   作成者 LLM の記録: CreatedBy は実際に走った provider のタグ (codex/claude/...)、
+   GeneratedBy は実モデルラベル (iModelLabel。メール/NB 要約 sidecar・llmlog・
+   spec-impl と同じ規約)。snapshot と OrchHandoff event の両方に載せる。
+   2026-08-20: CreatedBy/From/To と進捗の Role は "codex"/"claude" 固定だったため、
+   $ClaudeAdvisaryModel を claudecode にしても記録上は codex が起草したように
+   見えていた (役割は Role -> spec/review が保持するので provider タグを載せる)。 *)
+iSaveSpec[project_, round_, text_, parentRef_, genBy_:"",
+    createdBy_:"codex", peerTag_:"claude"] := Module[{snap, ref},
   snap = SourceVaultSaveImmutableSnapshot["OrchSpec", <|
     "Project" -> project, "Round" -> round, "Role" -> "spec",
     "Text" -> text, "ParentReviewRef" -> parentRef,
-    "CreatedBy" -> "codex", "GeneratedBy" -> genBy|>];
+    "CreatedBy" -> createdBy, "GeneratedBy" -> genBy|>];
   ref = Lookup[snap, "Ref"];
   SourceVaultAtomicUpdatePointer["orch/" <> project <> "/spec", ref];
   SourceVaultAppendEvent[<|"EventClass" -> "OrchHandoff", "Project" -> project,
-    "Round" -> round, "Role" -> "spec", "From" -> "codex", "To" -> "claude",
+    "Round" -> round, "Role" -> "spec", "From" -> createdBy, "To" -> peerTag,
     "GeneratedBy" -> genBy, "Value" -> ref, "ParentReviewRef" -> parentRef|>];
   ref];
 
-iSaveReview[project_, round_, verdict_, findings_, targetSpecRef_, text_, genBy_:""] := Module[{snap, ref},
+iSaveReview[project_, round_, verdict_, findings_, targetSpecRef_, text_, genBy_:"",
+    createdBy_:"claude", peerTag_:"codex"] := Module[{snap, ref},
   snap = SourceVaultSaveImmutableSnapshot["OrchReview", <|
     "Project" -> project, "Round" -> round, "Role" -> "review",
     "Verdict" -> verdict, "Findings" -> findings, "TargetSpecRef" -> targetSpecRef,
-    "Text" -> text, "CreatedBy" -> "claude", "GeneratedBy" -> genBy|>];
+    "Text" -> text, "CreatedBy" -> createdBy, "GeneratedBy" -> genBy|>];
   ref = Lookup[snap, "Ref"];
   SourceVaultAtomicUpdatePointer["orch/" <> project <> "/review", ref];
   SourceVaultAppendEvent[<|"EventClass" -> "OrchHandoff", "Project" -> project,
-    "Round" -> round, "Role" -> "review", "From" -> "claude", "To" -> "codex",
+    "Round" -> round, "Role" -> "review", "From" -> createdBy, "To" -> peerTag,
     "Verdict" -> verdict, "GeneratedBy" -> genBy, "Value" -> ref,
     "TargetSpecRef" -> targetSpecRef|>];
   ref];
@@ -154,6 +175,17 @@ iModelLabel[model_] := Which[
     model[[1]] <> If[Length[model] >= 2 && StringQ[model[[2]]] && model[[2]] =!= "" &&
       model[[2]] =!= "Automatic", ":" <> model[[2]], ""],
   True, "model"];
+(* 実際に走る provider のタグ。CreatedBy / OrchHandoff From-To / 進捗 Role に使う。
+   iModelTuple はこの下で定義されるが、参照は実行時なので順序は問わない。 *)
+iProviderTag[model_] := Module[{tup, prov},
+  tup = Quiet @ Check[iModelTuple[model], {"", ""}];
+  prov = If[ListQ[tup] && Length[tup] >= 1, ToLowerCase[ToString[tup[[1]]]], ""];
+  Which[
+    prov === "chatgptcodex", "codex",
+    prov === "claudecode", "claude",
+    prov === "", "llm",
+    True, prov]];
+
 iEmitProgress[None, _] := Null;
 iEmitProgress[file_String, assoc_Association] := Quiet @ Check[
   Module[{tmp = file <> ".tmp"},
@@ -469,10 +501,10 @@ iScanVerdict[_] := "NeedsRevision";
    Each returns <|"Payload" -> newState|> and is message-quiet.
    ============================================================ *)
 
-iDraftHandler[model_, draftFn_, progressFile_:None] := Function[binding,
-  Quiet @ Module[{pl, res, text, ref, emptyDraft},
+iDraftHandler[model_, draftFn_, progressFile_:None, peerTag_:"claude"] := Function[binding,
+  Quiet @ Module[{pl, res, text, ref, emptyDraft, tag = iProviderTag[model]},
     pl = iPayload[binding];
-    iProg[progressFile, pl, "Draft", "codex", model,
+    iProg[progressFile, pl, "Draft", tag, model,
       "drafting spec (round " <> ToString[Lookup[pl, "Round", 1]] <> ")"];
     res = draftFn[model, pl];
     text = Lookup[res, "SpecText", ""];
@@ -484,26 +516,26 @@ iDraftHandler[model_, draftFn_, progressFile_:None] := Function[binding,
       StringStartsQ[StringTrim[text], "[codex produced no output"] ||
       StringStartsQ[StringTrim[text], "[claude produced no output"];
     If[emptyDraft,
-      iProg[progressFile, pl, "Draft", "codex", model,
+      iProg[progressFile, pl, "Draft", tag, model,
         "EMPTY draft response (likely usage limit / overload) -- giving up"]];
     ref = iSaveSpec[Lookup[pl, "Project", "proj"], Lookup[pl, "Round", 1], text,
-      Lookup[pl, "LastReviewRef", "none"], iModelLabel[model]];
+      Lookup[pl, "LastReviewRef", "none"], iModelLabel[model], tag, peerTag];
     <|"Payload" -> Join[pl, <|"SpecRef" -> ref, "SpecURI" -> iRefToURI[ref],
         "SpecText" -> text, "DraftModel" -> model, "DraftEmpty" -> emptyDraft,
         "GiveUpReason" -> If[emptyDraft,
           "drafter returned an empty response (likely a usage/rate limit or HTTP 529 overload) -- re-run later", ""]|>]|>]];
 
-iReviewHandler[model_, reviewFn_, progressFile_:None] := Function[binding,
-  Quiet @ Module[{pl, res, verdict, findings, rtext, ref},
+iReviewHandler[model_, reviewFn_, progressFile_:None, peerTag_:"codex"] := Function[binding,
+  Quiet @ Module[{pl, res, verdict, findings, rtext, ref, tag = iProviderTag[model]},
     pl = iPayload[binding];
     If[iDraftEmpty[binding],
       (* G6: empty draft -> do not spend a review call; force NeedsRevision so the
          net's GiveUp guard (which includes DraftEmpty) fires. *)
-      iProg[progressFile, pl, "Review", "claude", model, "skipped (empty draft)"];
+      iProg[progressFile, pl, "Review", tag, model, "skipped (empty draft)"];
       verdict = "NeedsRevision"; findings = "[]";
       rtext = "skipped: empty draft (likely usage limit / overload)",
       (* normal review *)
-      iProg[progressFile, pl, "Review", "claude", model,
+      iProg[progressFile, pl, "Review", tag, model,
         "reviewing spec (round " <> ToString[Lookup[pl, "Round", 1]] <> ")"];
       res = reviewFn[model, pl, Lookup[pl, "SpecText", ""]];
       verdict = Lookup[res, "Verdict", "NeedsRevision"];
@@ -511,7 +543,7 @@ iReviewHandler[model_, reviewFn_, progressFile_:None] := Function[binding,
       rtext = Lookup[res, "ReviewText", ""]];
     ref = iSaveReview[Lookup[pl, "Project", "proj"], Lookup[pl, "Round", 1],
       verdict, findings, Lookup[pl, "SpecRef", "none"], rtext,
-      iModelLabel[model]];
+      iModelLabel[model], tag, peerTag];
     <|"Payload" -> Join[pl, <|"Verdict" -> verdict, "ReviewRef" -> ref,
         "ReviewURI" -> iRefToURI[ref], "LastReviewRef" -> ref,
         "LastReviewText" -> rtext, "ReviewModel" -> model|>]|>]];
@@ -519,14 +551,14 @@ iReviewHandler[model_, reviewFn_, progressFile_:None] := Function[binding,
 iApproveHandler[model_, codegenFn_, progressFile_:None] := Function[binding,
   Quiet @ Module[{pl, res},
     pl = iPayload[binding];
-    iProg[progressFile, pl, "Approved", "claude", model, "spec approved"];
+    iProg[progressFile, pl, "Approved", iProviderTag[model], model, "spec approved"];
     res = If[codegenFn === None, <|"Path" -> Missing["NoCodegen"]|>, codegenFn[model, pl]];
     <|"Payload" -> Join[pl, <|"Status" -> "Approved",
         "GeneratedPath" -> Lookup[res, "Path", Missing[]], "CodegenModel" -> model|>]|>]];
 
-iReviseHandler[progressFile_:None] := Function[binding,
+iReviseHandler[progressFile_:None, draftTag_:"codex"] := Function[binding,
   Module[{pl}, pl = iPayload[binding];
-    iProg[progressFile, pl, "Revise", "codex", "", "revising after review"];
+    iProg[progressFile, pl, "Revise", draftTag, "", "revising after review"];
     <|"Payload" -> Join[pl, <|"Round" -> Lookup[pl, "Round", 1] + 1, "Verdict" -> "Pending"|>]|>]];
 
 iGiveUpHandler[progressFile_:None] := Function[binding,
@@ -551,9 +583,13 @@ Options[BuildNet] = {
   "ProgressFile" -> None};
 
 BuildNet[project_String, opts:OptionsPattern[]] := Module[
-  {advisary, claude, draftFn, reviewFn, codegenFn, progressFile, spec, wid},
+  {advisary, claude, draftTag, reviewTag, draftFn, reviewFn, codegenFn,
+   progressFile, spec, wid},
   advisary = iResolveAdvisary[OptionValue["AdvisaryModel"]];
   claude   = iResolveClaude[OptionValue["ClaudeModel"]];
+  (* 記録・進捗に載る役者タグは解決済みモデルの provider から作る *)
+  draftTag  = iProviderTag[advisary];
+  reviewTag = iProviderTag[claude];
   draftFn  = OptionValue["DraftFunction"] /. Automatic -> iRealDraft;
   reviewFn = OptionValue["ReviewFunction"] /. Automatic -> iRealReview;
   codegenFn = OptionValue["CodegenFunction"] /. Automatic -> iRealCodegen;
@@ -562,7 +598,8 @@ BuildNet[project_String, opts:OptionsPattern[]] := Module[
   spec = <|
     "SourcePlace" -> "NeedDraft",
     "FinalPlaces" -> {"Approved", "Failed"},
-    "Description" -> "Codex<->Claude spec review loop for " <> project,
+    "Description" -> "Spec draft(" <> draftTag <> ")<->review(" <> reviewTag <>
+      ") loop for " <> project,
     "Places" -> <|
       "NeedDraft" -> WorkflowPlace["NeedDraft"],
       "Drafted"   -> WorkflowPlace["Drafted"],
@@ -574,12 +611,12 @@ BuildNet[project_String, opts:OptionsPattern[]] := Module[
         "InputArcs" -> {<|"Place" -> "NeedDraft"|>},
         "OutputArcs" -> {<|"Place" -> "Drafted", "TokenKind" -> "Artifact"|>},
         "Executor" -> "PureFunction",
-        "RuntimeSpec" -> <|"Handler" -> iDraftHandler[advisary, draftFn, progressFile]|>],
+        "RuntimeSpec" -> <|"Handler" -> iDraftHandler[advisary, draftFn, progressFile, reviewTag]|>],
       "Review" -> WorkflowTransition["Review",
         "InputArcs" -> {<|"Place" -> "Drafted"|>},
         "OutputArcs" -> {<|"Place" -> "Reviewed", "TokenKind" -> "Artifact"|>},
         "Executor" -> "PureFunction",
-        "RuntimeSpec" -> <|"Handler" -> iReviewHandler[claude, reviewFn, progressFile]|>],
+        "RuntimeSpec" -> <|"Handler" -> iReviewHandler[claude, reviewFn, progressFile, draftTag]|>],
       "Approve" -> WorkflowTransition["Approve",
         "InputArcs" -> {<|"Place" -> "Reviewed"|>},
         "OutputArcs" -> {<|"Place" -> "Approved", "TokenKind" -> "Artifact"|>},
@@ -593,7 +630,7 @@ BuildNet[project_String, opts:OptionsPattern[]] := Module[
         "Guard" -> Function[b, iVerdict[b] === "NeedsRevision" && iRound[b] < iMaxRounds[b] && ! iDraftEmpty[b]],
         "Priority" -> 5,
         "Executor" -> "PureFunction",
-        "RuntimeSpec" -> <|"Handler" -> iReviseHandler[progressFile]|>],
+        "RuntimeSpec" -> <|"Handler" -> iReviseHandler[progressFile, draftTag]|>],
       "GiveUp" -> WorkflowTransition["GiveUp",
         "InputArcs" -> {<|"Place" -> "Reviewed"|>},
         "OutputArcs" -> {<|"Place" -> "Failed", "TokenKind" -> "Artifact"|>},

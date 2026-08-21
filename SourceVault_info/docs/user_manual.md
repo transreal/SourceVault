@@ -84,6 +84,7 @@ SourceVault をロードすると、以下が自動的に有効になります�
 | 機能 | 内容 |
 |---|---|
 | コアサブファイルの自動ロード | `SourceVault_core.wl` / `SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_simrun.wl` / `SourceVault_searchindex.wl` / `SourceVault_searchview.wl` / `SourceVault_servicemanager.wl` / `SourceVault_webingest.wl` / `SourceVault_mcp.wl` / `SourceVault_llmlog.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / `SourceVault_workflowregistry.wl` / `SourceVault_knowledgehome.wl` / `SourceVault_cognition.wl` / `SourceVault_adjudication.wl` / `SourceVault_capbroker.wl` / `SourceVault_taint.wl` / `SourceVault_anomaly.wl` / `SourceVault_routine.wl` / `SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` を依存順に自動ロード |
+| ローカル資産解決層 / 発表登録簿 / KB 層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_oopsseed.wl` を自動ロード |
 | Cane 認知支援基盤 (既定 observe-only) | `SourceVault_knowledgehome.wl` (Knowledge Home 閲覧・非破壊追記・位置づけ/近傍提案) / `SourceVault_cognition.wl` (認知系イベントの暗号化保存・Guard shadow・owner 入力支援) / `SourceVault_adjudication.wl` (複数 LLM 裁定コア + runnable driver) / `SourceVault_capbroker.wl` (capability broker・LLM boundary shadow/gate・観測設定の永続化) / `SourceVault_taint.wl` (入力信頼度評価・taint 伝播) / `SourceVault_anomaly.wl` (統計的異常検知、既定オフ)。いずれも既定は「判定を記録するだけ」(shadow/observe-only) で、明示的な owner 操作なしに送信をブロックしたり通知したりしない (詳細は後述の「Boundary Observation」コールアウトを参照) |
 | シミュレーション実行基盤 | `SourceVault_simrun.wl` がマシンプロファイル共有・GPU/CUDA サポート・サブカーネル burst 管理・SimulationRun 記録 (実行フォルダ + immutable snapshot の 2 層設計) を提供 (詳細は「シミュレーション実行基盤」節を参照) |
 | Claude Code セッションログ ingest | `SourceVault_llmlog.wl` が Claude Code のセッションログ (実行ログ) をソースとして取り込む機能を提供。`GitHubCommitLog` (コミット履歴) とは別種別として扱われる |
@@ -584,6 +585,53 @@ SourceVaultIntegrationStatus[]
 
 ---
 
+## Claude モデルの intent 割り当て ($ClaudeModel / $ClaudeAdvisaryModel 等)
+
+SourceVault はロード時に `SourceVaultAssignClaudeModels[]` を自動実行し、ClaudeCode の実変数 (`$ClaudeModel` / `$ClaudeDocModel` / `$ClaudeAdvisaryModel` / `$ClaudePrivateModel` / `$ClaudeFallbackModels`) を、intent マッピング (SourceVault 側) と信頼ローカルサーバ (`NBAccess\`NBResolveLocalServer`) から設定します。ローカルサーバの IP/URL は NBAccess が安全に解決し (未知サブネットは localhost のみ)、モデル名は `ClaudeResolveModel` の intent 解決によって決まります。
+
+### SourceVaultSetModelIntent — intent の恒久設定
+
+```mathematica
+SourceVaultSetModelIntent[variable, spec, opts]
+```
+
+- `variable`: `"$ClaudeModel"` | `"$ClaudeDocModel"` | `"$ClaudeAdvisaryModel"` | `"$ClaudePrivateModel"` | `"$ClaudeFallbackModels"` のいずれか。
+- `spec`: `{provider, intent}` (例 `{"anthropic", "heavy"}`) の intent 指定、または具体モデル ID (例 `{"claudecode", "claude-opus-5"}`)、あるいは `"Automatic"`。`"$ClaudeFallbackModels"` には `{{provider,intent}, ...}` のリストを渡す。
+- 設定はディスクに永続化され (カーネル再起動後も保持)、直後に `SourceVaultAssignClaudeModels["Force" -> True]` が呼ばれて実変数へ即時反映されます。
+
+```mathematica
+(* 仕様レビューの advisory ロールを Anthropic の heavy intent に切り替える *)
+SourceVaultSetModelIntent["$ClaudeAdvisaryModel", {"anthropic", "heavy"}]
+
+(* 具体モデル ID を固定指定する (intent 解決を経ずそのまま採用) *)
+SourceVaultSetModelIntent["$ClaudeAdvisaryModel", {"claudecode", "claude-opus-5"}]
+```
+
+具体モデル ID または `"Automatic"` を `spec` の第 2 要素に渡すと、intent 解決を経ずそのまま採用されます (`SourceVaultListModels[provider]` の catalog に実在する ID かどうかで判定)。これにより、通常の `{provider, intent}` 形式と同じ API で固定モデル指定も永続化できます。
+
+### SourceVaultAssignClaudeModels — 実変数への反映
+
+```mathematica
+SourceVaultAssignClaudeModels[opts]
+```
+
+intent マッピング (SourceVault) と信頼ローカルサーバ (NBAccess) から `$ClaudeModel` / `$ClaudeDocModel` / `$ClaudeAdvisaryModel` / `$ClaudePrivateModel` / `$ClaudeFallbackModels` を設定します。SourceVault ロード時に自動実行されます。
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"Verbose"` | `False` | 割り当て内容を Print する |
+| `"Force"` | `False` | `True` で `$ClaudeAdvisaryModel` のセッション中の手動設定も上書きする |
+
+`$ClaudeAdvisaryModel` は他の変数と異なり、**セッション中に手動で設定した値を自動割り当てが上書きしません**。現在値がパッケージ既定 (`{"chatgptcodex", "Automatic"}`) または intent 解決結果そのもの、あるいは未設定のときだけ intent マップの値が代入されます (セッション中に手で入れた値を握り潰さないための保護)。明示的に intent 変更を反映したい場合は `"Force" -> True` を渡してください。`SourceVaultSetModelIntent` はこの保護を越えて反映できるよう、内部で `"Force" -> True` を渡します。
+
+### $ClaudeAdvisaryModel — advisory ロール (spec-review / spec-impl)
+
+`$ClaudeAdvisaryModel` は、spec-review の草稿役および spec-impl の検証役が使う advisory ロールのモデルです。既定値はパッケージ既定と同じ **codex CLI** (`{"chatgptcodex", "Automatic"}`)。詳細は次節「SourceVault ワークフロー」の `spec-review` を参照してください。
+
+> **注意 (2026-08-20 修正):** 以前は `$ClaudeAdvisaryModel` が intent マップに存在せず、カーネル起動のたびにパッケージ既定 `{"chatgptcodex", "Automatic"}` へ戻っていました。そのため `SourceVaultSetModelIntent` で手動設定しても、再起動後の仕様生成が黙って codex を呼び続ける問題がありました。現在は intent マップに既定エントリが追加され、設定値はセッションをまたいで維持されます。
+
+---
+
 ## SourceVault ワークフロー (コード化ワークフロー)
 
 SourceVault は、`ClaudeOrchestrator\`Workflow\``（multi-token Petri net エンジン）と SourceVault の snapshot/pointer 版管理の上に組まれた **コード化ワークフロー** を `SourceVault_workflows/` 配下に収納し、**オンデマンドでロード**する仕組みを備えます。ワークフローは普段はロードされず、PromptRouter のルートやパレットなどから必要時にだけ読み込まれます。
@@ -647,7 +695,7 @@ SourceVaultWorkflow`SpecReview`WorkflowInfo[]
 
 ### 同梱されるワークフロー: spec-review
 
-`spec-review` は **Codex↔Claude の仕様レビュー・改訂ループ**（旧 `OrchWorkflow`）です。context は `SourceVaultWorkflow\`SpecReview\``、起動関数は `RunSpecReview` / `BuildNet`。
+`spec-review` は **Codex↔Claude の仕様レビュー・改訂ループ**（旧 `OrchWorkflow`）です。context は `SourceVaultWorkflow\`SpecReview\``、起動関数は `RunSpecReview` / `BuildNet`。仕様生成 (spec-review の起草役) と仕様実装 (spec-impl の検証役) はいずれも advisory ロールとして `$ClaudeAdvisaryModel` を使います。既定はパッケージ既定と同じ codex CLI で、切り替え方は前節「Claude モデルの intent 割り当て」を参照してください。
 
 ```mathematica
 SourceVault`SourceVaultLoadWorkflow["spec-review"];
@@ -1076,10 +1124,15 @@ SourceVault の暗号・メール機能は、本体 `SourceVault.wl` のロー�
 $packageDirectory\
   SourceVault.wl                   ← 本体 (ローダがサブファイルを Get)
   SourceVault_core.wl              ← コア機能 (自動ロード)
+  SourceVault_voice.wl             ← ローカル資産の解決層 (音声。$packageDirectory / LOCALAPPDATA のみ参照、core の root 解決にも非依存、自動ロード)
+  SourceVault_vision.wl            ← ローカル資産の解決層 (視覚。同上、自動ロード)
+  SourceVault_slidedeck.wl         ← 発表 (スライド + 発表シナリオ) 登録簿 (core の root 解決だけに依存、自動ロード)
   SourceVault_contracts.wl         ← 契約・スキーマ定義 (自動ロード)
   SourceVault_wiring.wl            ← 依存ワイヤリング / 相互配線 (自動ロード)
   SourceVault_simrun.wl            ← シミュレーション実行基盤 (マシンプロファイル / GPU・CUDA / サブカーネル burst / SimulationRun 記録、自動ロード)
   SourceVault_searchindex.wl       ← 検索インデックス (自動ロード)
+  SourceVault_kb.wl                ← KB (Graph-RAG 低遅延応答層。lexical/searchindex に依存するためそれらの後にロード、自動ロード)
+  SourceVault_oopsseed.wl          ← (自動ロード)
   SourceVault_searchview.wl        ← 検索ビュー / 横断検索の表示層 (自動ロード)
   SourceVault_servicemanager.wl    ← サービスマネージャ (自動ロード)
   SourceVault_promptrouter.wl      ← PromptRouter 拡張 (自動ロード)

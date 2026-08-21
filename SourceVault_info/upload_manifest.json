@@ -44,11 +44,17 @@
 		"SourceVault_crosslink.wl",
 		"SourceVault_mailbrowse.wl",
 		"SourceVault_issues.wl",
-		"SourceVault_mailgraph.wl"
+		"SourceVault_mailgraph.wl",
+		"SourceVault_voice.wl",
+		"SourceVault_vision.wl",
+		"SourceVault_kb.wl",
+		"SourceVault_slidedeck.wl"
 	],
 	"directories":[
 		"SourceVault_info",
-		"SourceVault_workflows"
+		"SourceVault_workflows",
+		"SourceVault_voice",
+		"SourceVault_vision"
 	],
 	"excludePatterns":[
 		"SourceVault_info\/docs\/api_course_private.md",
@@ -60,6 +66,9 @@
 		"SourceVault_info\/secrets\/",
 		"SourceVault_workflows\/testing\/",
 		"SourceVault_workflows\/personal\/",
-		"SourceVault_workflows\/archive\/"
+		"SourceVault_workflows\/archive\/",
+		"SourceVault_voice\/tts\/runtime\/",
+		"SourceVault_voice\/tts\/models\/",
+		"SourceVault_voice\/asr\/models\/"
 	]
 }

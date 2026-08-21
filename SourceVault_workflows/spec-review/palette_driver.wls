@@ -26,7 +26,15 @@ Block[{$CharacterEncoding = "UTF-8"},
           mockDraft, mockReview, draftFn, reviewFn, specOut,
           pkgRoot, slug, loadRes, runFn, langInstr},
 
-    cfgFile = If[Length[$ScriptCommandLine] >= 2, $ScriptCommandLine[[2]], ""];
+    (* config の受け取り: 素のカーネル (wolfram.exe -noinit -script) は
+       $ScriptCommandLine に引数を入れないため、起動側が書く bootstrap が
+       Global`$ClaudeDriverConfigFile に入れてくる。wolframscript -file 経由の
+       従来呼び出しとの互換のため $ScriptCommandLine も見る。 *)
+    cfgFile = Which[
+      StringQ[Global`$ClaudeDriverConfigFile] && Global`$ClaudeDriverConfigFile =!= "",
+        Global`$ClaudeDriverConfigFile,
+      Length[$ScriptCommandLine] >= 2, $ScriptCommandLine[[2]],
+      True, ""];
     cfg = Quiet @ Check[Get[cfgFile], $Failed];
     If[! AssociationQ[cfg],
       Print["BAD CONFIG: ", cfgFile]; Exit[1]];

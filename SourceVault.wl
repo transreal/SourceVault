@@ -1096,8 +1096,9 @@ SourceVaultClearModelRegistry::usage =
 
 SourceVaultSetModelIntent::usage =
   "SourceVaultSetModelIntent[variable, spec] \:306f SourceVault \:304c\:9078\:629e\:3059\:308b\:30e2\:30c7\:30eb\:306e intent \:5272\:308a\:5f53\:3066\:3092\n" <>
-  "\:5909\:66f4\:3059\:308b\:3002variable: \"$ClaudeModel\" | \"$ClaudeDocModel\" | \"$ClaudePrivateModel\" |\n" <>
-  "\"$ClaudeFallbackModels\"\:3002spec: {provider, intent} (\:4f8b {\"anthropic\", \"heavy\"})\:3001\n" <>
+  "\:5909\:66f4\:3059\:308b\:3002variable: \"$ClaudeModel\" | \"$ClaudeDocModel\" | \"$ClaudeAdvisaryModel\" |\n" <>
+  "\"$ClaudePrivateModel\" | \"$ClaudeFallbackModels\"\:3002spec: {provider, intent} (\:4f8b {\"anthropic\", \"heavy\"})\:3001\n" <>
+  "\:307e\:305f\:306f\:5177\:4f53\:30e2\:30c7\:30eb ID (\:4f8b {\"claudecode\", \"claude-opus-5\"}) \:3084 \"Automatic\"\:3001\n" <>
   "FallbackModels \:306f {{provider,intent}, ...}\:3002\:8a2d\:5b9a\:5f8c SourceVaultAssignClaudeModels[] \:3092\:547c\:3093\:3067\n" <>
   "\:5b9f\:5909\:6570\:306b\:53cd\:6620\:3059\:308b\:3002\:3053\:306e\:95a2\:6570\:306f $NBApprovalHeads \:306b\:767b\:9332\:3055\:308c\:3001ClaudeEval \:7d4c\:7531\:3067\:306f\n" <>
   "Hold -> Approve \:304c\:5fc5\:8981 (\:30e2\:30c7\:30eb\:9078\:629e\:306e\:5909\:66f4\:306f\:691c\:8a3c\:5bfe\:8c61)\:3002\n" <>
@@ -1110,8 +1111,9 @@ SourceVaultModelIntentMap::usage =
 
 SourceVaultAssignClaudeModels::usage =
   "SourceVaultAssignClaudeModels[opts] \:306f intent \:30de\:30c3\:30d4\:30f3\:30b0 (SourceVault) \:3068\:4fe1\:983c\:30ed\:30fc\:30ab\:30eb\:30b5\:30fc\:30d0\n" <>
-  "(NBAccess`NBResolveLocalServer) \:304b\:3089 $ClaudeModel / $ClaudeDocModel / $ClaudePrivateModel /\n" <>
-  "$ClaudeFallbackModels \:3092\:8a2d\:5b9a\:3059\:308b\:3002SourceVault \:30ed\:30fc\:30c9\:6642\:306b\:81ea\:52d5\:5b9f\:884c\:3055\:308c\:308b\:3002\n" <>
+  "(NBAccess`NBResolveLocalServer) \:304b\:3089 $ClaudeModel / $ClaudeDocModel / $ClaudeAdvisaryModel /\n" <>
+  "$ClaudePrivateModel / $ClaudeFallbackModels \:3092\:8a2d\:5b9a\:3059\:308b\:3002SourceVault \:30ed\:30fc\:30c9\:6642\:306b\:81ea\:52d5\:5b9f\:884c\:3055\:308c\:308b\:3002\n" <>
+  "$ClaudeAdvisaryModel \:3060\:3051\:306f\:30bb\:30c3\:30b7\:30e7\:30f3\:4e2d\:306e\:624b\:52d5\:8a2d\:5b9a\:3092\:4e0a\:66f8\:304d\:3057\:306a\:3044 (\"Force\" -> True \:3067\:5f37\:5236)\:3002\n" <>
   "\:30ed\:30fc\:30ab\:30eb\:30b5\:30fc\:30d0\:306e IP/URL \:306f NBAccess \:304c\:5b89\:5168\:306b\:89e3\:6c7a (\:672a\:77e5\:30b5\:30d6\:30cd\:30c3\:30c8\:306f localhost \:306e\:307f)\:3001\n" <>
   "\:30e2\:30c7\:30eb\:540d\:306f ClaudeResolveModel \:306e intent \:89e3\:6c7a\:306b\:3088\:308b\:3002\:30aa\:30d7\:30b7\:30e7\:30f3: Verbose (\:65e2\:5b9a False)\:3002";
 
@@ -7103,6 +7105,12 @@ SourceVaultClearModelRegistry[___] :=
 $iSVModelIntentMap = <|
   "$ClaudeModel"        -> {"claudecode", "code-heavy"},
   "$ClaudeDocModel"     -> {"claudecode", "extraction"},
+  (* 仕様生成 (spec-review の起草役) / 仕様実装 (spec-impl の検証役) が使う
+     advisory ロール。既定はパッケージ既定と同じ codex CLI。2026-08-20 追加:
+     これが intent マップに無かったため、$ClaudeAdvisaryModel はカーネル起動の
+     たびにパッケージ既定 {"chatgptcodex","Automatic"} へ戻り、手で設定しても
+     再起動後の仕様生成が黙って codex を呼んでいた。 *)
+  "$ClaudeAdvisaryModel" -> {"chatgptcodex", "Automatic"},
   "$ClaudePrivateModel" -> {"lmstudio", "extraction"},
   "$ClaudeFallbackModels" -> {
     {"anthropic", "heavy"},
@@ -7140,7 +7148,7 @@ iSVLoadModelIntentMap[] :=
     If[!AssociationQ[loaded], Return[$iSVModelIntentMap, Module]];
     KeyValueMap[
       Function[{k, v},
-        If[MemberQ[{"$ClaudeModel", "$ClaudeDocModel",
+        If[MemberQ[{"$ClaudeModel", "$ClaudeDocModel", "$ClaudeAdvisaryModel",
                     "$ClaudePrivateModel", "$ClaudeFallbackModels"}, k] &&
            iSVValidIntentSpec[k, v],
           $iSVModelIntentMap[k] = v]],
@@ -7178,15 +7186,17 @@ Options[SourceVaultSetModelIntent] = {};
    \:8a2d\:5b9a\:5f8c\:306b SourceVaultAssignClaudeModels[] \:3092\:547c\:3093\:3067\:5b9f\:5909\:6570\:306b\:53cd\:6620\:3059\:308b\:3002 *)
 SourceVaultSetModelIntent[variable_String, spec_, opts:OptionsPattern[]] :=
   Module[{},
-    If[!MemberQ[{"$ClaudeModel", "$ClaudeDocModel",
+    If[!MemberQ[{"$ClaudeModel", "$ClaudeDocModel", "$ClaudeAdvisaryModel",
                  "$ClaudePrivateModel", "$ClaudeFallbackModels"}, variable],
       Return[<|"Status" -> "Failed", "Reason" -> "UnknownVariable",
         "Variable" -> variable|>]];
     $iSVModelIntentMap[variable] = spec;
     (* \:30c7\:30a3\:30b9\:30af\:306b\:6c38\:7d9a\:5316 (\:518d\:8d77\:52d5\:5f8c\:3082\:8a2d\:5b9a\:304c\:6b8b\:308b) *)
     iSVSaveModelIntentMap[];
-    (* \:5373\:5ea7\:306b\:5b9f\:5909\:6570\:3078\:53cd\:6620 (Private \:5185\:306a\:306e\:3067\:5b8c\:5168\:4fee\:98fe) *)
-    SourceVault`SourceVaultAssignClaudeModels[];
+    (* \:5373\:5ea7\:306b\:5b9f\:5909\:6570\:3078\:53cd\:6620 (Private \:5185\:306a\:306e\:3067\:5b8c\:5168\:4fee\:98fe)\:3002
+       "Force" -> True: \:660e\:793a\:7684\:306a intent \:5909\:66f4\:306a\:306e\:3067 $ClaudeAdvisaryModel \:306e
+       \:30bb\:30c3\:30b7\:30e7\:30f3\:4e0a\:66f8\:304d\:4fdd\:8b77 (\:4e0b\:8a18) \:3092\:8d8a\:3048\:3066\:53cd\:6620\:3055\:305b\:308b\:3002 *)
+    SourceVault`SourceVaultAssignClaudeModels["Force" -> True];
     <|"Status" -> "OK", "Variable" -> variable, "Spec" -> spec,
       "Note" -> "intent updated, persisted to disk, and applied to live variable"|>
   ];
@@ -7197,6 +7207,17 @@ SourceVaultSetModelIntent[___] :=
 (* spec {provider, intent} \:3092 SourceVaultResolve \:3067\:89e3\:6c7a\:3057
    {provider, modelId} \:3092\:8fd4\:3059\:3002\:89e3\:6c7a\:5931\:6557\:6642\:306f\:8a73\:7d30\:7406\:7531\:4ed8\:304d Missing\:3002
    \:5b9a\:7fa9\:76f4\:524d\:306b ClearAll \:3057\:3066\:53e4\:3044\:5b9a\:7fa9\:306e\:6b8b\:5b58\:3092\:9632\:3050 (\:30ab\:30fc\:30cd\:30eb\:518d\:30ed\:30fc\:30c9\:5bfe\:7b56)\:3002 *)
+(* spec の 2 要素目は intent が基本だが、catalog に実在する具体モデル ID と
+   "Automatic" (provider CLI 既定) はそのまま採用する。intent 名 (code-heavy 等)
+   は catalog のモデル ID ではないので衝突しない。
+   これにより {"claudecode", "claude-opus-5"} のような固定指定も
+   SourceVaultSetModelIntent 経由で永続化できる。 *)
+ClearAll[iSVLiteralModelIdQ];
+iSVLiteralModelIdQ[provider_String, id_String] :=
+  id === "Automatic" ||
+    MemberQ[Quiet @ Check[SourceVault`SourceVaultListModels[provider], {}], id];
+iSVLiteralModelIdQ[___] := False;
+
 ClearAll[iSVResolveIntentToTuple];
 iSVResolveIntentToTuple[spec_] :=
   Module[{provider, intent, resolved, mid},
@@ -7211,6 +7232,8 @@ iSVResolveIntentToTuple[spec_] :=
     If[!StringQ[intent], intent = ToString[intent]];
     If[provider === "" || intent === "",
       Return[Missing["EmptySpec", spec]]];
+    (* \:5177\:4f53\:30e2\:30c7\:30eb ID / "Automatic" \:306f intent \:89e3\:6c7a\:3092\:7d4c\:305a\:305d\:306e\:307e\:307e\:63a1\:7528 *)
+    If[iSVLiteralModelIdQ[provider, intent], Return[{provider, intent}]];
     (* Private \:5185\:304b\:3089\:306e\:547c\:3073\:51fa\:3057\:306a\:306e\:3067\:516c\:958b\:30b7\:30f3\:30dc\:30eb\:3092\:5b8c\:5168\:4fee\:98fe\:3059\:308b\:3002
        \:5b9f\:4f53\:306e SourceVaultResolve \:3092\:76f4\:63a5\:547c\:3076 (\:30e9\:30c3\:30d1\:30fc\:7d4c\:7531\:306e
        \:30b3\:30f3\:30c6\:30ad\:30b9\:30c8\:89e3\:6c7a\:554f\:984c\:3092\:56de\:907f)\:3002 *)
@@ -7226,13 +7249,25 @@ iSVResolveIntentToTuple[spec_] :=
 (* SourceVaultAssignClaudeModels[]:
    intent \:30de\:30c3\:30d4\:30f3\:30b0 (SourceVault) \:3068\:4fe1\:983c\:30ed\:30fc\:30ab\:30eb\:30b5\:30fc\:30d0 (NBAccess) \:304b\:3089
    ClaudeCode \:306e\:5b9f\:5909\:6570\:3092\:8a2d\:5b9a\:3059\:308b\:3002SourceVault \:30ed\:30fc\:30c9\:6642\:306b\:81ea\:52d5\:5b9f\:884c\:3002 *)
-Options[SourceVaultAssignClaudeModels] = {"Verbose" -> False};
+(* $ClaudeAdvisaryModel の「未設定」を表すパッケージ既定 (claudecode.wl と同値)。
+   現在値がこれ (または intent の解決結果そのもの、または未設定) のときだけ
+   intent マップの値を代入する = セッション中に手で入れた値を握り潰さない。
+   NBAccess`NBSyncClaudeModelVars 側にも同じ判定を置く (ミラー)。 *)
+$iSVAdvisaryPackageDefault = {"chatgptcodex", "Automatic"};
+
+iSVAdvisaryAssignableQ[resolved_] :=
+  ! ValueQ[ClaudeCode`$ClaudeAdvisaryModel] ||
+    ClaudeCode`$ClaudeAdvisaryModel === $iSVAdvisaryPackageDefault ||
+    ClaudeCode`$ClaudeAdvisaryModel === resolved;
+
+Options[SourceVaultAssignClaudeModels] = {"Verbose" -> False, "Force" -> False};
 
 SourceVaultAssignClaudeModels[opts:OptionsPattern[]] :=
-  Module[{verbose, report = <||>, mainSpec, docSpec, privSpec,
-          fbSpec, mainTuple, docTuple, localServer, privModel,
+  Module[{verbose, force, report = <||>, mainSpec, docSpec, privSpec, advSpec,
+          fbSpec, mainTuple, docTuple, advTuple, localServer, privModel,
           privTuple, fbResolved},
     verbose = TrueQ[OptionValue["Verbose"]];
+    force = TrueQ[OptionValue["Force"]];
 
     (* --- $ClaudeModel --- *)
     mainSpec = Lookup[$iSVModelIntentMap, "$ClaudeModel",
@@ -7253,6 +7288,22 @@ SourceVaultAssignClaudeModels[opts:OptionsPattern[]] :=
       report["$ClaudeDocModel"] = docTuple,
       report["$ClaudeDocModel_FAILED"] =
         <|"Spec" -> docSpec, "Result" -> docTuple|>];
+
+    (* --- $ClaudeAdvisaryModel (spec-review の起草役 / spec-impl の検証役) ---
+       他の変数と違い、セッション中の手動設定は上書きしない (iSVAdvisaryAssignableQ)。
+       SourceVaultSetModelIntent からは "Force" -> True で明示的に反映される。 *)
+    advSpec = Lookup[$iSVModelIntentMap, "$ClaudeAdvisaryModel",
+      $iSVAdvisaryPackageDefault];
+    advTuple = iSVResolveIntentToTuple[advSpec];
+    If[ListQ[advTuple],
+      If[force || iSVAdvisaryAssignableQ[advTuple],
+        ClaudeCode`$ClaudeAdvisaryModel = advTuple;
+        report["$ClaudeAdvisaryModel"] = advTuple,
+        report["$ClaudeAdvisaryModel_SKIPPED"] =
+          <|"Reason" -> "SessionOverride", "Spec" -> advSpec,
+            "Current" -> ClaudeCode`$ClaudeAdvisaryModel|>],
+      report["$ClaudeAdvisaryModel_FAILED"] =
+        <|"Spec" -> advSpec, "Result" -> advTuple|>];
 
     (* --- $ClaudePrivateModel ---
        provider/URL \:306f NBAccess \:306e\:4fe1\:983c\:30b5\:30fc\:30d0\:89e3\:6c7a (\:30bb\:30ad\:30e5\:30ea\:30c6\:30a3\:5883\:754c)\:3001
@@ -15581,9 +15632,18 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
       Function[f, Module[{p = FileNameJoin[{svDir, f}]},
         Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
       {"SourceVault_core.wl", "SourceVault_simrun.wl",
+       (* ローカル資産の解決層 (音声 / 視覚)。core の root 解決にすら依存せず
+          $packageDirectory と LOCALAPPDATA だけを見るので、どの位置でもよい。
+          利用側 (VRCRealtime の private TTS / 追尾) が起動時に問い合わせる。 *)
+       "SourceVault_voice.wl", "SourceVault_vision.wl",
+       (* 発表 (スライド + 発表シナリオ) 登録簿。core の root 解決だけに依存する
+          ので早い段階でよい。MCP tool / service command は呼び出し時解決。 *)
+       "SourceVault_slidedeck.wl",
        "SourceVault_contracts.wl", "SourceVault_wiring.wl",
        "SourceVault_packageapi.wl", "SourceVault_mining.wl",
-       "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_oopsseed.wl",
+       "SourceVault_lexical.wl", "SourceVault_searchindex.wl",
+       (* KB (Graph-RAG 低遅延応答層) は lexical/searchindex に依存するのでこの順 *)
+       "SourceVault_kb.wl", "SourceVault_oopsseed.wl",
        "SourceVault_mailstructure.wl", "SourceVault_mailbrowse.wl",
        "SourceVault_crosslink.wl", "SourceVault_mailsuggest.wl",
        (* Microsoft Graph 取得 provider: maildb の $SourceVaultMailSourceProviders

@@ -1,0 +1,62 @@
+{
+	"note": "ローカル音声資産の出所とライセンス。実体はリポジトリに同梱しない (upload_manifest.json の excludePatterns を参照)。",
+	"tts": {
+		"runtime": {
+			"name": "piper-plus",
+			"description": "rhasspy/piper の多言語 + OpenJTalk 対応フォーク。--json-input プロトコルで 1 行 1 要求。",
+			"install": "SourceVault_voice/tts/README.md",
+			"layout": [
+				"tts/runtime/piper/bin/piper.exe",
+				"tts/runtime/piper/lib/",
+				"tts/runtime/piper/share/open_jtalk/dic/",
+				"tts/runtime/piper/share/piper/dicts/"
+			],
+			"bundled": false,
+			"bundledReason": "第三者バイナリで、share/open_jtalk/dic/sys.dic が約 103 MB あり GitHub の 1 ファイル 100 MB 制限を超える。",
+			"components": {
+				"open_jtalk": {
+					"source": "https://github.com/r9y9/open_jtalk",
+					"license": "Modified BSD"
+				}
+			}
+		},
+		"voices": {
+			"bundled": false,
+			"bundledReason": "声モデルは配布元ごとに商用利用の可否・表記義務が異なり、一括での再配布ができない。",
+			"layout": [
+				"tts/models/<voice>/<model>.onnx + config.json",
+				"tts/models/<voice>.onnx + <voice>.onnx.json"
+			],
+			"parametersReadFromConfig": [
+				"language.code",
+				"espeak.voice",
+				"audio.sample_rate",
+				"num_speakers",
+				"inference.noise_scale",
+				"inference.length_scale",
+				"inference.noise_w",
+				"phoneme_type"
+			]
+		}
+	},
+	"asr": {
+		"engine": "Vosk",
+		"bundled": false,
+		"models": {
+			"ja": {
+				"name": "vosk-model-small-ja-0.22",
+				"url": "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip",
+				"approxMB": 48,
+				"license": "Apache-2.0"
+			},
+			"en": {
+				"name": "vosk-model-small-en-us-0.15",
+				"url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+				"approxMB": 40,
+				"license": "Apache-2.0"
+			}
+		},
+		"installPath": "SourceVault_voice/asr/models/<model>",
+		"legacyReadOnlyPath": "%LOCALAPPDATA%/VRCRealtime/models"
+	}
+}

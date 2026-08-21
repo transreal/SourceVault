@@ -40,10 +40,14 @@ GitHubInstallPackage["SourceVault",
 `SourceVault.wl` のロード時には、同じディレクトリにある以下の補助サブファイルが自動的に読み込まれます。これらも `$packageDirectory` 直下に配置してください。
 
 - `SourceVault_core.wl` — コア基盤（排他制御・不変 snapshot・event log・blob・pointer）
+- `SourceVault_voice.wl` — ローカル音声資産（音声合成・音声認識）の解決層。この機械の中だけで完結し、テキストも音声も外部へ出ない
+- `SourceVault_vision.wl` — ローカル視覚資産（人物検出・姿勢推定 ONNX モデル）の解決層
+- `SourceVault_slidedeck.wl` — 発表（スライド + 発表シナリオ）登録簿
 - `SourceVault_contracts.wl` — サブシステム間のコントラクト（型・不変条件）定義
 - `SourceVault_wiring.wl` — サブシステム間の配線・初期化
 - `SourceVault_simrun.wl` — シミュレーション実行との連携
 - `SourceVault_searchindex.wl` — 検索インデックス・公開ポリシー
+- `SourceVault_kb.wl` — KB（Graph-RAG 低遅延応答層）。lexical / searchindex サブシステムに依存するため、それらの後にロードされる
 - `SourceVault_searchview.wl` — 検索結果ビュー
 - `SourceVault_knowledgehome.wl` — ナレッジホーム（登録済み知識の集約・ホーム表示）
 - `SourceVault_cognition.wl` — 認知レイヤー（cognition）処理
@@ -106,10 +110,14 @@ $packageDirectory
 $packageDirectory\
   SourceVault.wl                 ← 本体
   SourceVault_core.wl            ← コア基盤（本体ロード時に自動ロード）
+  SourceVault_voice.wl           ← ローカル音声資産の解決層（本体ロード時に自動ロード）
+  SourceVault_vision.wl          ← ローカル視覚資産の解決層（本体ロード時に自動ロード）
+  SourceVault_slidedeck.wl       ← 発表（スライド）登録簿（本体ロード時に自動ロード）
   SourceVault_contracts.wl       ← コントラクト定義（本体ロード時に自動ロード）
   SourceVault_wiring.wl          ← 配線・初期化（本体ロード時に自動ロード）
   SourceVault_simrun.wl          ← シミュレーション実行連携（本体ロード時に自動ロード）
   SourceVault_searchindex.wl     ← 検索インデックス（本体ロード時に自動ロード）
+  SourceVault_kb.wl              ← KB（Graph-RAG 低遅延応答層。本体ロード時に自動ロード）
   SourceVault_searchview.wl      ← 検索結果ビュー（本体ロード時に自動ロード）
   SourceVault_knowledgehome.wl   ← ナレッジホーム（本体ロード時に自動ロード）
   SourceVault_cognition.wl       ← 認知レイヤー（本体ロード時に自動ロード）
@@ -290,6 +298,30 @@ ClaudeSetAPIKey["sk-ant-..."]
 $ClaudeModel = {"lmstudio", "qwen3-coder-30b-instruct"}
 ```
 
+### モデル intent の設定（SourceVaultSetModelIntent）
+
+SourceVault は SourceVault の (再)ロードのたびに `SourceVaultAssignClaudeModels[]` を自動実行し、intent マッピング（SourceVault が管理）と信頼ローカルサーバ解決（`NBAccess`NBResolveLocalServer`）から claudecode の実変数を設定します。ロード直後に上の `$ClaudeModel = {"lmstudio", ...}` のように直接代入しても構いませんが、再起動のたびに設定し直す代わりに、次の intent 変数を `SourceVaultSetModelIntent` で恒久化できます。
+
+| 変数 | 既定 intent | 用途 |
+|------|------------|------|
+| `$ClaudeModel` | `{"claudecode", "code-heavy"}` | 通常の ClaudeEval が使うメインモデル |
+| `$ClaudeDocModel` | `{"claudecode", "extraction"}` | ドキュメント更新・抽出用モデル |
+| `$ClaudeAdvisaryModel` | `{"chatgptcodex", "Automatic"}` | 仕様生成（spec-review の起草役）・仕様実装（spec-impl の検証役）が使う advisory ロール |
+| `$ClaudePrivateModel` | `{"lmstudio", "extraction"}` | 機密メール等、ローカル LLM に限定したい処理（provider=local・URL は NBAccess が解決） |
+| `$ClaudeFallbackModels` | `{{"anthropic","heavy"}, {"openai","heavy"}}` | メインモデル失敗時の fallback 列 |
+
+```mathematica
+(* メインモデルを anthropic の heavy intent に切り替える（再起動後も維持） *)
+SourceVault`SourceVaultSetModelIntent["$ClaudeModel", {"anthropic", "heavy"}]
+
+(* intent 名の代わりに固定モデル ID を直接指定することもできる *)
+SourceVault`SourceVaultSetModelIntent["$ClaudeModel", {"claudecode", "claude-opus-5"}]
+```
+
+設定は `PrivateVault/config/model-intent-map.json` に永続化され、`SourceVaultSetModelIntent` は即座に `SourceVaultAssignClaudeModels["Force" -> True]` を呼んで実変数へも反映します（$NBApprovalHeads に登録されているため、ClaudeEval 経由で呼ぶと Hold -> Approve の確認が入ります）。
+
+> `$ClaudeAdvisaryModel` だけは他の変数と挙動が異なります。`SourceVaultAssignClaudeModels[]` の通常呼び出し（起動時の自動同期など、`"Force" -> False` の既定呼び出し）では、現在値がパッケージ既定 `{"chatgptcodex", "Automatic"}` または intent 解決結果そのもの（つまり未変更）のときだけ intent マップの値を代入します。セッション中に手動で `ClaudeCode`$ClaudeAdvisaryModel` を設定した場合、それは自動同期で上書きされません。`SourceVaultSetModelIntent["$ClaudeAdvisaryModel", ...]` で明示的に変更した場合や、`SourceVaultAssignClaudeModels["Force" -> True]` を直接呼んだ場合は、この保護を越えて強制反映されます。
+
 ---
 
 ## ノートブック用スタイルシートとテンプレートの配置
@@ -414,6 +446,8 @@ NBAccess`NBRegisterTrustedLocalServer[<|
 ClaudeCode`$ClaudePrivateModel = {"lmstudio", "your-local-model", "http://127.0.0.1:1234"};
 ```
 
+> 恒久化したい場合は上の直接代入の代わりに `SourceVault`SourceVaultSetModelIntent["$ClaudePrivateModel", {"lmstudio", "extraction"}]` を使うと、再起動後も維持されます（「API キーの設定」の「モデル intent の設定」参照）。
+
 ### 5. IMAP アカウントの登録
 
 まず IMAP パスワードを **SystemCredential に手動で**設定し（`CredKey` がその名前）、次にアカウント設定を登録します。登録は `PrivateVault/config/mailaccounts.jsonl` に永続化され、パスワード本体は保存されません。
@@ -489,7 +523,7 @@ LM Studio などのローカル LLM の Web 検索を、外部 API (Exa 等) で
 
 実装は `SourceVault_webingest.wl`（SearXNG クライアント・本文取得・job・参照イベント・importance・要約）と `SourceVault_mcp.wl`（MCP tool schema / dispatch）に分かれ、`SourceVault.wl` ロード時に自動で読み込まれます。MCP の HTTP/JSON-RPC endpoint 自体は `SourceVault_servicemanager.wl` が起動する Python proxy 側にあります。
 
-### 構成（どこで何が動くか）
+### 構成(どこで何が動くか)
 
 このゲートウェイは **Mathematica 単体では完結せず**、複数のコンポーネントが連携します。下表の順に設定します。
 
@@ -735,6 +769,121 @@ SourceVault`SourceVaultWebSearchRunList[]            (* WebSearchRun の監査�
 
 ---
 
+## ローカル音声・視覚資産のセットアップ（任意）
+
+`SourceVault_voice.wl` と `SourceVault_vision.wl` は、**この機械の中だけで完結する
+推論資産**（音声合成 / 音声認識 / 人物検出 / 姿勢推定）の解決層です。テキストも音声も
+フレームも外部へ出ません。両ファイルとも `SourceVault_core.wl` に続いて `SourceVault.wl`
+のロード時に自動的に読み込まれます（core の root 解決にすら依存せず、`$packageDirectory`
+と LOCALAPPDATA だけを見るため、読み込み順は早くても問題ありません）。VRCRealtime の
+ローカル読み上げ（Privacy.Level >= 0.5 の資料を OpenAI へ渡さずに読む経路）はこの層の
+上に乗っています。
+
+どちらも**何も導入しなくてもロードは通り**、必要とする機能だけが静かに落ちます。
+状態は次で確認できます。
+
+```wolfram
+SourceVaultVoiceView[]     (* 合成ランタイム / 声モデル / 音声認識モデル *)
+SourceVaultVisionView[]    (* ONNX モデル *)
+```
+
+### 資産の置き場と配布方針
+
+| 資産 | 置き場 | リポジトリ同梱 |
+|------|--------|----------------|
+| 音声合成ランタイム（Piper） | `SourceVault_voice/tts/runtime/piper/` | **しない** |
+| 声モデル（.onnx + config） | `SourceVault_voice/tts/models/<声の名前>/` | **しない** |
+| 音声認識モデル（Vosk） | `SourceVault_voice/asr/models/<model>/` | **しない** |
+| 人物検出・姿勢推定（ONNX） | `SourceVault_vision/<model-dir>/` | する（Apache-2.0） |
+
+**同梱しない 3 つは `upload_manifest.json` の `excludePatterns` で恒久的に除外して
+います。**
+
+```
+SourceVault_voice/tts/runtime/
+SourceVault_voice/tts/models/
+SourceVault_voice/asr/models/
+```
+
+**この 3 行は消さないでください。** 理由は 2 つあります。
+
+1. 声モデルは配布元ごとに商用利用の可否や表記義務が異なり、勝手に再配布できません。
+   手元に入れた声が公開リポジトリへ流れるのを防ぐのがこの除外です。
+2. Piper のランタイムには 103 MB の OpenJTalk 辞書（`share/open_jtalk/dic/sys.dic`）が
+   含まれ、**GitHub の 1 ファイル 100 MB 制限を超えます**。技術的にも同梱できません。
+
+### 音声合成（TTS）の導入
+
+1. **ランタイム** — `piper-plus`（rhasspy/piper の多言語 + OpenJTalk 対応フォーク）の
+   Windows ビルドを `SourceVault_voice/tts/runtime/piper/` へ展開します。`bin/piper.exe`
+   が見つかればランタイムありと判定されます。`piper` を PATH に通してある場合はそちらも
+   自動で使われます。
+
+2. **声モデル** — **特定の声は前提にしていません。** 次のどちらかの形で置けば、その声が
+   使われます。
+
+   ```
+   SourceVault_voice/tts/models/<声の名前>/<なんでも>.onnx + config.json
+   SourceVault_voice/tts/models/<声の名前>.onnx + <声の名前>.onnx.json
+   ```
+
+   声の名前 = フォルダ名（またはファイル名）です。言語・サンプリング周波数・話者数・
+   推論の既定値は**すべて config から読みます**。コードにハードコードされた声名や
+   言語コードはありません。
+
+   ```wolfram
+   SourceVaultVoices[]   (* 導入済みの声の一覧 *)
+   SourceVaultVoice[]    (* 既定として選ばれる声 = 名前順の先頭 *)
+   ```
+
+   複数入れたときの既定を明示するなら:
+
+   ```wolfram
+   SourceVault`$SourceVaultVoiceDefault = "<声の名前>";
+   ```
+
+   指定した声が後で消えても停止はせず、警告を出して先頭の声に落ちます。
+
+3. **動作確認**
+
+   ```wolfram
+   SourceVaultVoiceSpeak["これはローカル音声合成の動作確認です。"]
+   ```
+
+   `Audio` が返れば成功です。音声もテキストも機械の外へ出ません。
+
+置き場所を変えたい場合は `SourceVault`$SourceVaultVoiceRoot` または環境変数
+`SOURCEVAULT_VOICE_ROOT` で上書きできます（Python 側も同じ変数を見ます）。
+
+### 音声認識（ASR）の導入
+
+```wolfram
+SourceVaultInstallSpeechModel[]        (* 日本語小モデル vosk-model-small-ja-0.22、約 50 MB *)
+SourceVaultInstallSpeechModel["en"]    (* 英語小モデル *)
+```
+
+冪等です。導入先は `SourceVaultSpeechModelDirectory[]`（既定 `SourceVault_voice/asr/models`）。
+旧 `%LOCALAPPDATA%\VRCRealtime\models` に既にあるモデルは**読み取り互換で
+そのまま使われる**ので、移行のために再ダウンロードする必要はありません。
+
+### 視覚モデル（ONNX）
+
+こちらは OpenCV Model Zoo の Apache-2.0 配布物なので**リポジトリに同梱**しています。
+欠けている場合は SHA256 検証つきで取得できます。
+
+```wolfram
+SourceVaultVisionModel["PersonDetector"]   (* 絶対パス、未導入なら Failure *)
+SourceVaultVisionModel["PoseEstimator"]
+SourceVaultInstallVisionModel[]            (* 欠けている物だけ配布元から取得 *)
+```
+
+置き場所の上書きは `SourceVault`$SourceVaultVisionRoot` / `SOURCEVAULT_VISION_ROOT`。
+
+詳細は `SourceVault_voice/README.md`、`SourceVault_voice/tts/README.md`、
+`SourceVault_voice/asr/README.md`、`SourceVault_vision/README.md` にあります。
+
+---
+
 ## 動作確認
 
 ### バージョン確認
@@ -967,6 +1116,11 @@ SourceVaultNotebookSummary[nbPath]
 | 自動トリガスケジューラが動かない／二重に動く | 自動起動は対話 FE カーネル（`$FrontEnd =!= Null`）に限定。`SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult` の `Status`/`Reason` を確認（`NotFrontEndKernel` = headless、`DisabledByUser` = `$iSVDisableAutoTriggerScheduler` が `True`、`AutoTriggerUnavailable` = claudecode 未ロード）。手動起動は `SourceVaultAutoTriggerStartScheduler[]`（冪等）。無効化は SourceVault ロード前に `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True` |
 | FE レス compute ノード（対話 FE なし）でジョブが自動的に拾われない | 対話 FE 限定の自動トリガスケジューラの対象外（`NotFrontEndKernel`）。そのマシン上だけでジョブ dispatch を拾わせたい場合は `SourceVaultEnableHeadlessDispatch[]` で headless dispatch を opt-in する。対話 FE のスケジューラと併用しても atomic dispatch claim により二重実行はされない |
 | 「Claude Code のログ」検索が GitHub コミット履歴やリポジトリ検索に誤ルートする | llmlog 専用キーワード（`"セッションログ"` / `"実行ログ"` / `"svcclog"` 等）を使う。取り込みは `SourceVaultIngestClaudeCodeLogs[]`、検索は `SourceVaultClaudeCode[...]`。`SourceVault_llmlog.wl` がロードされているか確認 |
+| `SourceVaultVoice[]` が `SourceVaultVoiceUnavailable` を返す / VRCRealtime が「ローカル音声合成の資産が無いため SourceVault 連携を切って起動します」と言う | 合成ランタイムか声モデルが未導入。`SourceVaultVoiceStatus[]` の `"Missing"` と `"Hint"` を見る。上の「ローカル音声・視覚資産のセットアップ」に従って `SourceVault_voice/tts/` へ導入する。資産が無いときに非公開資料を OpenAI へ 回すことはしない設計なので、連携が切れるのは安全側の挙動 |
+| `SourceVaultVoiceSpeak` が `SourceVaultVoiceSynthesisFailed` / `"Response" -> EndOfFile` を返す | piper が要求を読めずに即終了している。まず `"StandardError"` を見る。 2026-08-21 以前は要求を `WriteLine` で書いており、`$CharacterEncoding` が UTF-8 でないカーネル（日本語 Windows の FE メインカーネルは既定 ShiftJIS）で JSON 内の日本語が化けて必ずこうなった。現在は生の UTF-8 バイトで書き込む。 回帰テストは `test codes/sourcevault_voice_test.wls` |
+| 別の声に替えたら合成が失敗する・無音になる | 単言語の声に多言語用の `language` を送っている可能性。`SourceVaultVoices[]` の `"Multilingual"` を確認する（`False` の声には `language` を送らない）。声ごとの 言語・サンプリング周波数は config から読むので、config が欠けている声は `SourceVaultVoices[]` の `"Config"` が `None` になる |
+| 手元の声モデルが公開リポジトリに入りそうになる | `upload_manifest.json` の `excludePatterns` から `SourceVault_voice/tts/models/` 等の 行が消えていないか確認する。`GitHubValidateManifest["SourceVault"]` の `"ExcludePatterns"` で実効値を見られる |
+| `SourceVaultSetModelIntent["$ClaudeAdvisaryModel", ...]` を設定したのに再起動後に反映されていない・codex に戻ってしまう | 2026-08-20 以前は `$ClaudeAdvisaryModel` が `$iSVModelIntentMap` の既定キーに含まれておらず、カーネル起動のたびにパッケージ既定 `{"chatgptcodex", "Automatic"}` へ戻っていた（手で設定しても再起動後の仕様生成が黙って codex を呼ぶ不具合）。修正版では既定キーに追加済み。`SourceVaultModelIntentMap[]` で `"$ClaudeAdvisaryModel"` キーの値を確認し、期待と違う場合は `SourceVaultSetModelIntent["$ClaudeAdvisaryModel", {provider, intent}]` で設定し直す |
 
 ---
 
@@ -974,6 +1128,8 @@ SourceVaultNotebookSummary[nbPath]
 
 - [SourceVault リポジトリ](https://github.com/transreal/SourceVault)
 - [SearXNG](https://docs.searxng.org/) — ローカル Web 検索メタサーチ（MCP ゲートウェイのバックエンド）
+- [OpenCV Model Zoo](https://github.com/opencv/opencv_zoo) — `SourceVault_vision` の ONNX モデルの配布元（Apache-2.0）
+- [Vosk](https://alphacephei.com/vosk/models) — `SourceVault_voice/asr` のモデル配布元（Apache-2.0）
 - [NBAccess](https://github.com/transreal/NBAccess)
 - [claudecode](https://github.com/transreal/claudecode)
 - [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)

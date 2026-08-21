@@ -4,10 +4,11 @@
 - Exam composition (`SourceVaultExamCompose`) → question-paper PDF + answer-sheet PDF. Answer-sheet layout is stored as data on the exam record and shared with scanned-answer cropping (grading) — same geometry both places.
 - LLM-generated similar problems (Draft → owner approval via `SourceVaultExerciseApproveDraft`). Figure problems (automaton/binary-relation/set-algebra/stack-queue/binary-tree/expr-tree/float-format/graph-algo/sort-trace/venn-diagram/regex-automaton/predicate-logic recipes) generate structure only and are machine-verified; text problems are optionally re-verified for a unique correct answer.
 - Scanned-answer ingest / header verification / roster matching (owner visually verifies, or `SourceVaultExamProposeMatches` proposes from ID-crop recognition) / answer recognition / scoring / item analysis / re-weighting.
-- Per-lecture enrollment registry and gradebook (履修者 / 成績簿) — separate from the exercise store, keyed by lecture code; supports importing `SourceVaultExamScore` results, Cerezo quiz totals, and Web summary-assignment totals as weighted grading items.
+- Per-lecture enrollment registry and gradebook (履修者 / 成績簿) — separate from the exercise store, keyed by lecture code; supports importing `SourceVaultExamScore` results, Cerezo quiz totals, and Web summary-assignment totals as weighted grading items, each with a per-submission base score, a raw-to-100 conversion curve, and a per-Kind cap/weight.
 - Web レポート取込: collected report folders (manifest + PDFs) are joined with the enrollment roster into a Cerezo-schema-compatible snapshot; submitted-summary PDFs can then be vision-graded against an owner-authored policy plus a handout excerpt (`SourceVaultCourseSummaryGrade`), with late-submission scoring handled separately.
 - Privacy: exercise records carry no personal info → default PrivacyLevel 0.3 (cloud-eligible). Scans, matching, grading results, enrollment, and gradebook data are PL 1.0 (local only). Only answer-cell crops (and, if explicitly allowed, student-ID crops) go to cloud LLM; ID/name recognition and matching defaults to owner visual check unless a recognizer is explicitly enabled. Summary-grading vision calls go through Cerezo's anonymization seam (declared-region redaction + pseudonymization) before reaching the LLM.
 - Held-expression idiom: notebook cells are parsed via `ToExpression[..., Hold]` without evaluating, then decomposed with `Hold[{a,b,...}] -> {Hold[a], Hold[b], ...}` so images/graphics/math never get rasterized or evaluated during ingest.
+- Public-package defaults are environment-agnostic: `$SourceVaultExamInstructor` defaults to `""`, header/ID-crop rectangles use generic form coordinates, `SourceVaultCourseWebReportIngest`'s `"IgnoreIDs"` excludes nothing by default, and `$SourceVaultCourseSummaryLateFactor` defaults to 1.0 (no late penalty). A private extension, loaded automatically alongside this package if present, can supply real-world values for these.
 
 ## Config Variables
 
@@ -28,8 +29,8 @@ Default row cap for `*View` Dataset displays.
 Font for exam-paper rendering. Automatic picks by OS (Windows: "Yu Gothic").
 
 ### $SourceVaultExamInstructor
-型: String, 初期値: "今井 勝喜"
-Instructor name printed on exam papers.
+型: String, 初期値: ""
+Instructor name printed on exam papers. Public-package default is empty (environment-specific; set by the user or a private extension).
 
 ### $SourceVaultExamTemplatePDF
 型: Automatic | String | None, 初期値: Automatic
@@ -72,8 +73,8 @@ Web サマリー採点の匿名化ポリシー id (SourceVault_anonymize へ登�
 desc の章番号 -> 授業回/配布資料番号の補正 (既定 0 = chapter がそのまま回番号。実データ: 0801 = 第8回)。
 
 ### $SourceVaultCourseSummaryLateFactor
-型: Real, 初期値: 0.7
-遅延提出サマリーの既定減点率 (実効点 = 素点 × 減点率)。
+型: Real, 初期値: 1.0
+遅延提出サマリーの既定減点率 (実効点 = 素点 × 減点率)。公開版の既定は 1.0 (減点なし)。減点する場合は運用側 (私設拡張) で設定するか、`SourceVaultCourseSummarySetLateScores` の "Factor" で個別に指定する。
 
 ## Subject Management
 
@@ -215,6 +216,10 @@ Re-sets point weights. `weights` is `<|"g-n" -> points|>` or a flat list in ques
 ### SourceVaultExamAnswerKey[examId] → <|"問1-1"->"3",...|>
 Model-answer association (compatible with 模範解答.wl format).
 
+### SourceVaultExamAnswerKeyView[examId, opts]
+Dataset view of the answer key: question number / slot / correct answer / points / unit / whether original or generated / headline. No personal info.
+Options: "Export" -> path.xlsx
+
 ### SourceVaultExamRecordHistory[examId] → report
 Marks the exam as administered: stamps each problem's ExamHistory with year/exam name/question number/points.
 
@@ -309,7 +314,7 @@ Options: "Roster" -> Automatic, "ImageWidth" -> 2200, "Lecture" -> Automatic, "V
 
 ### SourceVaultExamSheetVerify[examId, pdfOrImages, opts] → {Association...}
 Checks whether collected answer sheets' headers (subject/duration/date-time-period print) match the sheet generated for this exam. Ranks against every candidate exam, so answer sheets belonging to a different exam trigger `Mismatch` (checked per page, so a stray sheet mixed into the bundle is still caught). Student-ID/name regions are excluded from the compared area (print-only).
-Options: "Pages" -> All | {n...}, "DiffX" -> 0, "DiffY" -> 0, "Candidates" -> Automatic, "MinScore" -> 0.25, "Tolerance" -> 0.02, "ImageWidth" -> 1200
+Options: "Pages" -> All | {n...}, "DiffX" -> 0, "DiffY" -> 0, "Candidates" -> Automatic, "MinScore" -> 0.4, "Tolerance" -> 0.02, "ImageWidth" -> 1200
 
 ### SourceVaultExamSheetVerifyView[examId, pdfOrImages, opts]
 Owner-verification display of `SourceVaultExamSheetVerify` (expected header / actual scanned header / candidate ranking, side-by-side).
@@ -382,6 +387,14 @@ Dataset view of `SourceVaultExamScore`.
 Score report (Dataset).
 Options: "Export" -> None (path.xlsx for local export)
 
+### SourceVaultExamAnswers[examId, opts] → {Association...}
+Core: per-scan read-out (PL 1.0). Each row: Scan, StudentID, Name, Answers (slot -> recognized value), Marks, Total, Unresolved.
+Options: "Scans" -> All | {i...}, "Assigned" -> False (True for matched sheets only)
+
+### SourceVaultExamAnswersView[examId, opts]
+Dataset view (rows=student, columns=question number, values=recognized answer).
+Options: "Marks" -> False (True to show ○/△/×/? grading marks instead), "Assigned" -> False, "Scans" -> All, "Export" -> path.xlsx
+
 ## Enrollment (履修者)
 
 Per-lecture enrollment registry, independent of the exercise store. All data here is PL 1.0 (personal info).
@@ -432,19 +445,19 @@ Dataset view of `SourceVaultCourseAssessments`.
 Deletes a grading item along with its entered scores.
 
 ### SourceVaultCourseSetScores[lecture, itemId, scores, opts] → report
-Enters raw scores. `scores`: `<|studentId->score|>` or `{{studentId,score}...}`. Students not in the roster are reported under "Unknown" and not entered unless "AllowUnknown" is set.
-Options: "Mode" -> "Merge" (default, overlays onto existing) | "Replace" (replaces the whole set), "AllowUnknown" -> False
+Enters raw scores. `scores`: `<|studentId->score|>` or `{{studentId,score}...}`. Students not in the roster are reported under "Unknown" and not entered.
+Options: "Mode" -> "Merge" (default, overlays onto existing) | "Replace" (replaces the whole set), "Counts" -> Automatic (`<|studentId->submission count|>`, entered under the same Mode; feeds Gradebook's per-submission "BaseScore")
 
 ### SourceVaultCourseImportExamScores[lecture, examId, opts] → report
-Imports `SourceVaultExamScore` results as a grading item (item id defaults to `examId`; MaxScore defaults to the exam's total points). Scans without a confirmed match are skipped and listed under "Unassigned".
+Imports `SourceVaultExamScore` results as a grading item (item id defaults to `examId`, Kind "Exam", MaxScore defaults to the exam's total points; each graded student's submission count is 1, used by Gradebook's per-Kind "BaseScore"). Scans without a confirmed match are skipped and listed under "Unassigned".
 Options: "ItemId" -> Automatic, "Title" -> Automatic, "Weight" -> Automatic, "MaxScore" -> Automatic, "Mode" -> "Replace"
 
 ### SourceVaultCourseImportCerezoQuizScores[lecture, opts] → report
-Imports CerezoExamIngest-processed quiz totals as a grading item (student total = sum of each quiz's Total across all rounds; unattempted rounds count as 0). MaxScore defaults to the sum of each quiz's max total. Cerezo.wl required (weak coupling).
+Imports CerezoExamIngest-processed quiz totals as a grading item (Kind "Quiz"; student total = sum of each quiz's Total across all rounds, unattempted rounds count as 0; also imports each student's submission count = number of rounds with a numeric score, used by Gradebook's "BaseScore"). MaxScore defaults to the sum of each quiz's max total. Cerezo.wl required (weak coupling).
 Options: "Selector" -> Automatic (default = the lecture name), "ItemId" -> "cerezoquiz", "Title" -> "小テスト", "Weight" -> Automatic, "MaxScore" -> Automatic, "Mode" -> "Replace"
 
 ### SourceVaultCourseImportSummaryScores[lecture, opts] → report
-Imports Web-summary assignment totals (from `SourceVaultCourseSummaryScores`, late-effective scores included) as a grading item. MaxScore defaults to `10 * (number of graded rounds)`.
+Imports Web-summary assignment totals (from `SourceVaultCourseSummaryScores`, late-effective scores included) and each student's submission count as a grading item (Kind "Report"). MaxScore defaults to `10 * (number of graded rounds)`. Combine with `SourceVaultCourseImportExamScores` via `SourceVaultCourseGradebookView` / `SourceVaultCourseSetWeights`.
 Options: "ItemId" -> "websummary", "Title" -> "サマリー課題", "Weight" -> Automatic, "MaxScore" -> Automatic, "Mode" -> "Replace", "Descs" -> Automatic
 
 ### SourceVaultCourseWeights[lecture] → Association
@@ -454,20 +467,27 @@ Overall-grade weight association `<|itemId->weight|>` (auto-generated from regis
 Updates overall-grade weights. `weights`: `<|itemId->weight|>` (a partial update is fine). An unknown itemId is rejected. Scores are untouched, so weights can be revised repeatedly once all grades are in.
 
 ### SourceVaultCourseGradebook[lecture, opts] → {Association...}
-Core: score table across all grading items plus the overall grade (PL 1.0). Overall = `Min[Cap, 100 * Scale * Sum[score/maxScore * weight] / Sum[weight]]` ("Scale"/"Cap" default to a no-op, so the formula reduces to the plain weighted-average percentage).
-Options: "Missing" -> "Zero" (default) | "Exclude" (drop that item's weight for the student instead of scoring 0), "Status" -> "Enrolled" (default) | All, "Round" -> 1, "Scale" -> 1 (bonus multiplier 1+α; lets each item's max score contribute up to (1+α)× its normalized weight), "Cap" -> None (numeric clips the overall grade via Min, e.g. 100)
+Core: score table across all grading items plus the overall grade (PL 1.0). List-valued options are given per Kind in order {Exam, Summary, Quiz} (a 4th entry covers Other; a single scalar applies to all Kinds).
+Formula: `Adjusted_i = Score_i + Counts_i * BaseScore_k` (Counts = the item's registered submission count; an Exam item counts 1 per graded student). `Converted_i = Clip[Curve_k[Adjusted_i], {0, 100*Cap_k}]`. `Contribution_i = Weight_i/ΣWeight * Converted_i`. Kind component (test/summary/quiz[/other]) = `TotalScale * (sum of that Kind's contributions)`. `Total = Min[TotalCap, TotalScale*ΣContribution_i + TotalBaseScore]`.
+"Curve" semantics: None = `100*Adjusted/MaxScore` (default); a number s = linear ×s; a list of `{score,converted}` points = least-squares fit (a line for 2 points, quadratic `NonlinearModelFit[pts, p x^2+q x+r, {p,q,r}, x]` for 3+); a FittedModel / pure function / InterpolatingFunction / single-variable expression (e.g. a `Fit[]` result) is applied directly as the 0-100 value (not divided by MaxScore).
+Rows: Scores (raw), Counts (submission counts), Adjusted (raw+base), Converted (0-100), Contributions, Components (`<|test,summary,quiz[,other]|>`), MissingItems, WeightUsed, Total.
+Options: "BaseScore" -> {0,0,0} (per-submission base points, per Kind), "Curve" -> None (per Kind, see above), "Cap" -> {1,1,1} (per-Kind Converted-score cap = 100×value; None = no cap; floor 0), "Weight" -> Automatic (per-Kind balance {wE,wS,wQ}, normalized to sum 1; Automatic = `SourceVaultCourseSetWeights` item weights, split by max-score ratio within a Kind), "TotalBaseScore" -> 0, "TotalScale" -> 1, "TotalCap" -> 100 (None = no cap), "Missing" -> "Zero" (default; ungraded item scores 0 and keeps its weight) | "Exclude" (drops that item's weight instead), "Status" -> "Enrolled" (default) | All, "Round" -> 1
 
 ### SourceVaultCourseGradebookView[lecture, opts]
-Dataset view of `SourceVaultCourseGradebook` (PL 1.0).
-Options: same as `SourceVaultCourseGradebook`.
+Dataset view of `SourceVaultCourseGradebook` (PL 1.0). Columns: StudentID, StudentName, Status, each item's raw score (pre-conversion), test/summary/quiz (Kind-level converted contribution × TotalScale; an "other" column is added if an Other-kind item exists), Total (= test+summary+quiz(+other) + TotalBaseScore, clipped by TotalCap). Rows whose rounded Total is below "FailBelow" get "FailBackground". Default `MaxItems`->{All,All} shows every row/column without scrolling. Excel export of the same table: `SourceVaultCourseGradebookExport`.
+Options: same as `SourceVaultCourseGradebook`, plus "TotalRound" -> 0 (round-half-up digit count for the Total column; None = unrounded core value), "FailBelow" -> None (no highlighting), "FailBackground" -> LightRed, "MaxItems" -> {All, All}
+
+### SourceVaultCourseGradebookExport[lecture, path, opts] → <|"Status","Exported","Rows","Columns","FailRows"|>
+Exports the same table/columns/rounding as `SourceVaultCourseGradebookView` to Excel (format inferred from the extension). Row 1 = column headers; cell background colors are not exported. PL 1.0.
+Options: same as `SourceVaultCourseGradebookView`
 
 ### SourceVaultCourseGradeReport[lecture, opts]
-Grade report (Dataset, Japanese headings). Options shared with `SourceVaultCourseGradebook`, plus:
-Options: "Export" -> None (path.xlsx for local export)
+Grade report (Dataset, Japanese headings): each item's raw score + test/summary/quiz post-conversion contributions + missing items + overall grade.
+Options: "Export" -> None (path.xlsx for local export), plus options shared with `SourceVaultCourseGradebook`
 
 ### SourceVaultCourseStudentScoreView[lecture, studentId, opts]
-Per-student report card: Web-summary rounds (with late effective scores), Cerezo quiz rounds (weak coupling), gradebook items (raw score / max / weight / weighted contribution), and the weighted overall grade. PL 1.0.
-Options: "Scale" -> 1 (bonus multiplier 1+α), "Cap" -> None, "Missing" -> "Zero", "Round" -> 1 (same semantics as `SourceVaultCourseGradebook`)
+Per-student report card: Web-summary rounds (with late effective scores), Cerezo quiz rounds (raw/max, weak coupling), gradebook items (raw score / submission count / adjusted / max / converted / weight / contribution — non-default BaseScore/Curve/Cap/Weight/Total settings are shown in the header), and the weighted overall grade. PL 1.0.
+Options: same as `SourceVaultCourseGradebook` ("BaseScore"/"Curve"/"Cap"/"Weight" as {Exam, Summary, Quiz} lists, "TotalBaseScore"/"TotalScale"/"TotalCap", "Missing", "Round")
 
 ## Web レポート取込
 
@@ -486,7 +506,7 @@ Options: "Scale" -> 1 (bonus multiplier 1+α), "Cap" -> None, "Missing" -> "Zero
 `<udb>/webreports` 配下の回収フォルダ (manifest.wxf) 一覧を返す。
 
 ### SourceVaultCourseWebReportIngest[lecture, opts] → report
-回収フォルダを名簿と結合して Cerezo と同一形式の SourceVault スナップショット (PL 1.0) へ取り込む。名簿結合は履修取消 (Withdrawn) も含む全登録履歴で行う (成績 View/成績簿は Enrolled のみ)。作業用アカウント (q*/b0000*/k.imai/imai/guest) は既定で除外し "Ignored" に報告。再実行は内容が変わった学生だけ新バージョンを作る。
+回収フォルダを名簿と結合して Cerezo と同一形式の SourceVault スナップショット (PL 1.0) へ取り込む。名簿結合は履修取消 (Withdrawn) も含む全登録履歴で行う (成績 View/成績簿は Enrolled のみ)。除外対象アカウントは "Ignored" に報告する。除外条件は "IgnoreIDs" で指定する (公開版の既定 Automatic は除外なし; 具体的な除外パターンは運用側または非公開拡張が設定する)。再実行は内容が変わった学生だけ新バージョンを作る。
 Options: "ReportDescs" -> All | {"0801"...}, "Chapters" -> All, "ReportOptions" -> All, "Roster" -> Automatic, "AssignmentName" -> Automatic, "AllowMissingNames" -> False (True で名簿外提出者を氏名なしで取込), "IgnoreIDs" -> Automatic | None | {id...} | predicate, "Folder" -> Automatic
 
 ### SourceVaultCourseWebReportRuns[] / SourceVaultCourseWebReportRuns[lecture] → {Association...}
@@ -533,13 +553,13 @@ Options: `SourceVaultCourseSummaryGrade` のオプション全部, "Regrade" -> 
 
 ### SourceVaultCourseSummarySetLateScores[lecture, studentId, scores, opts] → report
 遅延提出サマリーの点数を記録する (`scores` のキーは回番号 3 または desc "0301")。実効点 = 素点 × 減点率で View/合計/成績簿取込に反映され、通常採点より優先。値 `None` でその回の記録を削除。PL 1.0。
-Options: "Factor" -> Automatic (falls back to `$SourceVaultCourseSummaryLateFactor`, e.g. 0.7), "Note" -> ""
+Options: "Factor" -> Automatic (falls back to `$SourceVaultCourseSummaryLateFactor`, 既定は減点なしの 1.0), "Note" -> ""
 
 ### SourceVaultCourseSummaryLateScores[lecture] → Association
 遅延提出の記録 (`<|学籍番号キー-><|desc-><|Score,Factor,Effective,Note,RecordedAtUTC|>|>|>`) を返す。PL 1.0。
 
 ### SourceVaultCourseSummaryScores[lecture, opts] → {Association...}
-履修者×各回の点数表 (core, PL 1.0) を返す。未提出・未採点回は 0。遅延記録があればその実効点を優先。
+履修者×各回の点数表 (core, PL 1.0) を返す。未提出・未採点回は 0。遅延記録があればその実効点を優先。行に SubmittedDescs (提出のあった回 = 取込 run で Submitted / 採点行あり / 遅延記録あり) と Submitted (件数) を含む。
 Options: "Descs" -> Automatic (既定は採点済み+遅延記録済みの全回)
 
 ### SourceVaultCourseSummaryScoreView[lecture, reportDesc]

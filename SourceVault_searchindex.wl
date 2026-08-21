@@ -958,6 +958,8 @@ SourceVaultSearch[query_String, OptionsPattern[]] := Module[
       src = iLegacySourceFromRow[If[StringQ[profileName], profileName, "?"], row];
       gate = SourceVaultEvaluateReleasePolicy[src, ctxName];
       Join[KeyDrop[sr, "LegacyTags"], <|
+        (* downstream privacy router needs the assigned PL; raw source/path remains absent. *)
+        "PrivacyLevel" -> Lookup[src, "PrivacyLevel", 1.0],
         "ReleaseDecision" -> Lookup[gate, "Decision", "Deny"],
         "RequestTimeGateReevaluated" -> True,
         "PolicyDigestAtRequest" -> Lookup[gate, "PolicyDigest", Missing[]],
