@@ -5,7 +5,7 @@ Low-latency Graph-RAG knowledge base for VRCRealtime voice answers. Existing MCP
 Indexing unit: "slide" and "figure". Text cells are bundled per slide; figure cells get vision-read captions merged into the same slide as surrounding text.
 Not plain chunk RAG but Graph-RAG: builds a Deck -- Slide -- Chunk -- Topic graph, propagates 2 hops from BM25/topic seeds to pull in context (adjacent slides, other sessions on the same topic), then aggregates back to slide level.
 Reuses: BM25 (SourceVaultBuildLexicalStats / SourceVaultLexicalRank), EntityDictionary for term variation, SourceVaultEvaluateReleasePolicy for release gating, PDFIndex chunks (ingested once, not queried live), optional dense embeddings (SourceVaultEmbedTexts / RegisterHTTPEmbeddingProvider).
-Three idempotent, independently re-runnable stages: 1) ingest (notebook/PDF → source document, no LLM), 2) caption (figure → vision description, hash-cached, budgeted), 3) build (source + caption → chunk + graph + BM25 index).
+Three idempotent, independently re-runnable stages: 1) ingest (notebook/PDF/text → source document, no LLM), 2) caption (figure → vision description, hash-cached, budgeted), 3) build (source + caption → chunk + graph + BM25 index).
 Load order: [SourceVault](https://github.com/transreal/SourceVault) → [SourceVault_core](https://github.com/transreal/SourceVault_core) → [SourceVault_lexical](https://github.com/transreal/SourceVault_lexical) → [SourceVault_searchindex](https://github.com/transreal/SourceVault_searchindex) → SourceVault_kb. Optional deps: [SlideWorkflow](https://github.com/transreal/SlideWorkflow) (deck splitting), [PDFIndex](https://github.com/transreal/PDFIndex) (PDF chunk ingest), claudecode (vision captioning).
 
 ## Configuration / Globals
@@ -39,9 +39,9 @@ Whether the KB is currently loaded in memory.
 
 ## Ingest
 ### SourceVaultKBIngestSlideDeck[kbId, nbPath, opts]
-Parses one slide notebook and stores per-slide text plus figures (rendered PNG + hash) as a source document. No LLM call (figure captions are filled later by SourceVaultKBCaptionFigures). Skips re-parsing if file size/mtime digest is unchanged, unless "Force"->True.
+Parses one slide notebook and stores per-slide text plus figures (rendered PNG + hash) as a source document. No LLM call (figure captions are filled later by SourceVaultKBCaptionFigures). Skips re-parsing if file size/mtime/SlideNotes digest is unchanged, unless "Force"->True.
 → Association (<|"Status"->"OK"|"Unchanged", "KBId", "SourceId", "Slides", "ElapsedSeconds"|> or Failure)
-Options: "SourceId" -> Automatic (default: file base name), "Title" -> Automatic, "PrivacyLevel" -> 0.3, "Tags" -> {}, "RenderFigures" -> Automatic (True if front end available), "MaxFiguresPerSlide" -> 4, "FigureImageWidth" -> 1024, "IncludeCode" -> False, "Force" -> False, "MaxSlideCharacters" -> 1500, "Verbose" -> True
+Options: "SourceId" -> Automatic (default: file base name), "Title" -> Automatic, "PrivacyLevel" -> 0.3, "Tags" -> {}, "RenderFigures" -> Automatic (True if front end available), "MaxFiguresPerSlide" -> 4, "FigureImageWidth" -> 1024, "IncludeCode" -> False, "Force" -> False, "MaxSlideCharacters" -> 1500, "SlideNotes" -> <||> (Association slideIndex -> narration text; becomes the chunk body for image-only slides that have no extractable text), "Verbose" -> True
 ### SourceVaultKBIngestSlideDecks[kbId, dirOrFiles, opts]
 Batch-ingests multiple slide notebooks; a directory is searched recursively for .nb files.
 → Association (batch summary)
@@ -50,6 +50,10 @@ Options: all SourceVaultKBIngestSlideDeck options, plus "FileNamePattern" -> "*.
 Imports chunks from an existing PDFIndex collection into the KB (e.g. student handbook reuse). PDFIndex is read once at ingest time; search never touches it, keeping queries fast.
 → Association
 Options: "Group" -> None (registered search group name; inherits PrivacyLevel/ReleaseContext), "Docs" -> All (list of docId to include), "PrivacyLevel" -> Automatic (from group or 0.3), "Tags" -> {}, "MaxChunks" -> Automatic, "SourceId" -> Automatic (default "pdf-<collection>[-<group>]"), "Title" -> Automatic, "Verbose" -> True
+### SourceVaultKBIngestTexts[kbId, sourceId, items, opts]
+Ingests arbitrary text fragments as a source document (web-fetched content, hand-added notes). items is a list of strings, or a list of <|"Title","Text","URL","Locator"|>.
+→ Association (<|"Status"->"OK", "KBId", "SourceId", "Passages", "PrivacyLevel"|> or Failure: "NoTexts")
+Options: "Title" -> Automatic (default: sourceId), "PrivacyLevel" -> 0.0, "Tags" -> {}, "Kind" -> "Texts", "Replace" -> True (False appends after existing passages instead of overwriting), "Verbose" -> False
 
 ## Figure Captioning
 ### SourceVaultKBPendingFigures[kbId] → List of Association
@@ -78,6 +82,11 @@ Low-latency voice-answer builder. No LLM call; assembles a cited ContextText and
 → Association <|"Status","Route","ContextText","AnswerText","Citations","Results","Count","MaxPrivacyLevel","ElapsedMs","KBId"|>
 Options: all SourceVaultKBSearch options, plus "MaxContextCharacters" -> 1200, "MaxAnswerCharacters" -> 160, "TPO" -> None (registered TPOProfile name for optional topic gating)
 例: SourceVaultKBAnswer["cn", "第9回の計算と自然では何を扱った?"]
+### SourceVaultKBNeighbors[kbId, seed, opts]
+Graph-RAG seeded by a node instead of a query: propagates k hops from seed (e.g. "the page currently open") and returns nearby chunks aggregated to slide level. Use for context-aware follow-up ("what's near this") rather than keyword search.
+→ List of Association (slide-level results) or Failure ("SeedNotFound")
+seed: node id string (e.g. "s:<sourceId>:<slideIndex>"), or {sourceId, slideIndex}, or <|"SourceId","SlideIndex"|>
+Options: "Hops" -> 2, "Damping" -> 0.45, "Limit" -> 5, "ReleaseContext" -> Automatic, "IncludeSeed" -> False (exclude the seed slide itself from results), "MaxCharactersPerResult" -> 700, "FrontierCap" -> 240, "DeadlineMs" -> 400
 
 ## Graph / View
 ### SourceVaultKBGraph[kbId, opts]

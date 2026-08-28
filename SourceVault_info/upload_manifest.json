@@ -46,8 +46,10 @@
 		"SourceVault_issues.wl",
 		"SourceVault_mailgraph.wl",
 		"SourceVault_voice.wl",
+		"SourceVault_realtime.wl",
 		"SourceVault_vision.wl",
 		"SourceVault_kb.wl",
+		"SourceVault_talkqa.wl",
 		"SourceVault_slidedeck.wl"
 	],
 	"directories":[
@@ -58,6 +60,7 @@
 	],
 	"excludePatterns":[
 		"SourceVault_info\/docs\/api_course_private.md",
+		"SourceVault_info\/resources\/python\/__pycache__\/",
 		"SourceVault_info\/history\/",
 		"SourceVault_info\/references\/",
 		"SourceVault_info\/runtime\/",
@@ -69,6 +72,7 @@
 		"SourceVault_workflows\/archive\/",
 		"SourceVault_voice\/tts\/runtime\/",
 		"SourceVault_voice\/tts\/models\/",
-		"SourceVault_voice\/asr\/models\/"
+		"SourceVault_voice\/asr\/models\/",
+		"SourceVault_voice\/local\/"
 	]
 }

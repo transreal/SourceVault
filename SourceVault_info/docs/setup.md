@@ -1,13 +1,3 @@
-## 動作要件
-
-| 項目 | 要件 |
-|------|------|
-| Mathematica | 13.2 以降（14.x 推奨） |
-| OS | Windows 11（64-bit） |
-| Anthropic API キー | 任意（LLM 要約・claim 抽出機能を使う場合のみ） |
-
----
-
 ## 依存パッケージ
 
 SourceVault は以下のパッケージに依存しています。先にインストールしてください。
@@ -41,6 +31,7 @@ GitHubInstallPackage["SourceVault",
 
 - `SourceVault_core.wl` — コア基盤（排他制御・不変 snapshot・event log・blob・pointer）
 - `SourceVault_voice.wl` — ローカル音声資産（音声合成・音声認識）の解決層。この機械の中だけで完結し、テキストも音声も外部へ出ない
+- `SourceVault_realtime.wl` — クラウド経路の音声会話（OpenAI Realtime、既定のマイク/スピーカーを使用）の解決層。ローカル音声資産の解決層である voice と対になるが、依存関係は起動時にだけ効くため独立してロードされる
 - `SourceVault_vision.wl` — ローカル視覚資産（人物検出・姿勢推定 ONNX モデル）の解決層
 - `SourceVault_slidedeck.wl` — 発表（スライド + 発表シナリオ）登録簿
 - `SourceVault_contracts.wl` — サブシステム間のコントラクト（型・不変条件）定義
@@ -48,6 +39,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_simrun.wl` — シミュレーション実行との連携
 - `SourceVault_searchindex.wl` — 検索インデックス・公開ポリシー
 - `SourceVault_kb.wl` — KB（Graph-RAG 低遅延応答層）。lexical / searchindex サブシステムに依存するため、それらの後にロードされる
+- `SourceVault_talkqa.wl` — 音声対話 QA 層。KB（`SourceVault_kb.wl`）に依存するため、kb の直後にロードされる
 - `SourceVault_searchview.wl` — 検索結果ビュー
 - `SourceVault_knowledgehome.wl` — ナレッジホーム（登録済み知識の集約・ホーム表示）
 - `SourceVault_cognition.wl` — 認知レイヤー（cognition）処理
@@ -111,6 +103,7 @@ $packageDirectory\
   SourceVault.wl                 ← 本体
   SourceVault_core.wl            ← コア基盤（本体ロード時に自動ロード）
   SourceVault_voice.wl           ← ローカル音声資産の解決層（本体ロード時に自動ロード）
+  SourceVault_realtime.wl        ← クラウド音声会話 (OpenAI Realtime) の解決層（本体ロード時に自動ロード）
   SourceVault_vision.wl          ← ローカル視覚資産の解決層（本体ロード時に自動ロード）
   SourceVault_slidedeck.wl       ← 発表（スライド）登録簿（本体ロード時に自動ロード）
   SourceVault_contracts.wl       ← コントラクト定義（本体ロード時に自動ロード）
@@ -118,6 +111,7 @@ $packageDirectory\
   SourceVault_simrun.wl          ← シミュレーション実行連携（本体ロード時に自動ロード）
   SourceVault_searchindex.wl     ← 検索インデックス（本体ロード時に自動ロード）
   SourceVault_kb.wl              ← KB（Graph-RAG 低遅延応答層。本体ロード時に自動ロード）
+  SourceVault_talkqa.wl          ← 音声対話 QA 層（kb に依存。本体ロード時に自動ロード）
   SourceVault_searchview.wl      ← 検索結果ビュー（本体ロード時に自動ロード）
   SourceVault_knowledgehome.wl   ← ナレッジホーム（本体ロード時に自動ロード）
   SourceVault_cognition.wl       ← 認知レイヤー（本体ロード時に自動ロード）
@@ -778,6 +772,11 @@ SourceVault`SourceVaultWebSearchRunList[]            (* WebSearchRun の監査�
 と LOCALAPPDATA だけを見るため、読み込み順は早くても問題ありません）。VRCRealtime の
 ローカル読み上げ（Privacy.Level >= 0.5 の資料を OpenAI へ渡さずに読む経路）はこの層の
 上に乗っています。
+
+一方、`SourceVault_realtime.wl` は **クラウド経路の音声会話**（OpenAI Realtime、既定の
+マイク/スピーカーを使用）を提供する層です。`SourceVault_voice.wl`（ローカル完結）と
+対になる存在ですが、依存関係は起動時にだけ効くため、ロード順・可用性は独立に扱われます
+（ローカル資産が未導入でもクラウド音声会話は動作し得ます）。
 
 どちらも**何も導入しなくてもロードは通り**、必要とする機能だけが静かに落ちます。
 状態は次で確認できます。

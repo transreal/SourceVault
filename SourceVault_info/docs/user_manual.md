@@ -84,7 +84,7 @@ SourceVault をロードすると、以下が自動的に有効になります�
 | 機能 | 内容 |
 |---|---|
 | コアサブファイルの自動ロード | `SourceVault_core.wl` / `SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_simrun.wl` / `SourceVault_searchindex.wl` / `SourceVault_searchview.wl` / `SourceVault_servicemanager.wl` / `SourceVault_webingest.wl` / `SourceVault_mcp.wl` / `SourceVault_llmlog.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / `SourceVault_workflowregistry.wl` / `SourceVault_knowledgehome.wl` / `SourceVault_cognition.wl` / `SourceVault_adjudication.wl` / `SourceVault_capbroker.wl` / `SourceVault_taint.wl` / `SourceVault_anomaly.wl` / `SourceVault_routine.wl` / `SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` を依存順に自動ロード |
-| ローカル資産解決層 / 発表登録簿 / KB 層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_oopsseed.wl` を自動ロード |
+| ローカル資産解決層 / 発表登録簿 / KB 層・対話 QA・音声会話層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_talkqa.wl` (KB の上に載る対話型 QA 層) / `SourceVault_oopsseed.wl` / `SourceVault_realtime.wl` (クラウド経路の音声会話。OpenAI Realtime を既定のマイク/スピーカーで使う。`SourceVault_voice.wl` と対になる層だが、依存は呼び出し時にだけ効くため、この位置での自動ロードで問題ない) を自動ロード |
 | Cane 認知支援基盤 (既定 observe-only) | `SourceVault_knowledgehome.wl` (Knowledge Home 閲覧・非破壊追記・位置づけ/近傍提案) / `SourceVault_cognition.wl` (認知系イベントの暗号化保存・Guard shadow・owner 入力支援) / `SourceVault_adjudication.wl` (複数 LLM 裁定コア + runnable driver) / `SourceVault_capbroker.wl` (capability broker・LLM boundary shadow/gate・観測設定の永続化) / `SourceVault_taint.wl` (入力信頼度評価・taint 伝播) / `SourceVault_anomaly.wl` (統計的異常検知、既定オフ)。いずれも既定は「判定を記録するだけ」(shadow/observe-only) で、明示的な owner 操作なしに送信をブロックしたり通知したりしない (詳細は後述の「Boundary Observation」コールアウトを参照) |
 | シミュレーション実行基盤 | `SourceVault_simrun.wl` がマシンプロファイル共有・GPU/CUDA サポート・サブカーネル burst 管理・SimulationRun 記録 (実行フォルダ + immutable snapshot の 2 層設計) を提供 (詳細は「シミュレーション実行基盤」節を参照) |
 | Claude Code セッションログ ingest | `SourceVault_llmlog.wl` が Claude Code のセッションログ (実行ログ) をソースとして取り込む機能を提供。`GitHubCommitLog` (コミット履歴) とは別種別として扱われる |
@@ -96,6 +96,8 @@ SourceVault をロードすると、以下が自動的に有効になります�
 | `SourceVaultIndexNotebook` mtime cache | 透過的キャッシュ (`"Cached"` / `"SourceMTime"` 戻り値、`"ForceReindex" -> True` で無効化) |
 | Header parser MakeExpression 第一選択 | InitializationCell の副作用を回避 |
 | Header フィルタ | TodoItem cell の TaggingRules を Header と誤認しない |
+
+> **KB 層 / 対話 QA 層 / 音声会話層について:** `SourceVault_kb.wl` は Graph-RAG による低遅延応答層で、`SourceVault_lexical.wl` / `SourceVault_searchindex.wl` に依存するためそれらのロード後に読み込まれます。`SourceVault_talkqa.wl` はこの KB 層の上に構築された対話型 QA 層で、`SourceVault_kb.wl` の直後にロードされます。`SourceVault_realtime.wl` は OpenAI Realtime API を経由した**クラウド経路の音声会話**を提供し、既定ではこのマシンのマイク/スピーカーをそのまま使います。ローカル資産解決層の `SourceVault_voice.wl` と役割上は対になる層ですが、`SourceVault_realtime.wl` の依存は関数が実際に呼び出されたときにだけ効くため (ロード時点では重い初期化を行わない)、`SourceVault_voice.wl` の直後ではなく `SourceVault_oopsseed.wl` の後というこの位置での自動ロードでも問題ありません。
 
 > **自動トリガスケジューラの自動起動:** SourceVault をロードすると、実行環境が Front End のメインカーネル (`$FrontEnd =!= Null`) の場合に限り `SourceVaultAutoTriggerStartScheduler[]` が自動的に呼ばれます。これは「他 PC から『このマシンでこのワークフローを実行して』と依頼されたジョブを、このマシンが常に拾えるようにする」ためのものです。SourceVault.wl はサブカーネル・wolframscript の外部ジョブ・SourceVault サービスカーネル・MCP ゲートウェイカーネルなど、多くのプロセスからロードされますが、スケジューラは **1 マシンにつき 1 箇所 (対話的 FE) だけ**で起動するようガードされています。すべてのカーネルで無条件に起動すると、Wolfram ライセンスの同時カーネル席を浪費し、ジョブが多重ディスパッチされてしまいます。起動は冪等 (`StartScheduler` は同じ tick 登録を再登録するだけ) で、結果は `SourceVault\`Private\`$iSVAutoTriggerSchedulerAutoStartResult` に記録されます (同一カーネルセッション内では 1 回のみ実行)。FE-less の計算ノード (例: rapterlake4t) はこのガードの対象外で、代わりにサービス側の HEADLESS DISPATCH モード (`SourceVaultEnableHeadlessDispatch` によるマシン単位オプトイン) を使います。なお、スケジューラの起動箇所そのものを 1 台 1 箇所に絞るこのガードとは別に、ワークフローカタログの実際の起動 (dispatch) は複数プロセスから並行して呼ばれ得るため、内部の `SourceVaultAutoTriggerDispatchCatalogRuns` が per-slot の atomic dispatch claim によって同一ジョブの二重実行を防いでいます。
 >
@@ -1132,7 +1134,9 @@ $packageDirectory\
   SourceVault_simrun.wl            ← シミュレーション実行基盤 (マシンプロファイル / GPU・CUDA / サブカーネル burst / SimulationRun 記録、自動ロード)
   SourceVault_searchindex.wl       ← 検索インデックス (自動ロード)
   SourceVault_kb.wl                ← KB (Graph-RAG 低遅延応答層。lexical/searchindex に依存するためそれらの後にロード、自動ロード)
+  SourceVault_talkqa.wl            ← KB の上に載る対話型 QA 層 (自動ロード)
   SourceVault_oopsseed.wl          ← (自動ロード)
+  SourceVault_realtime.wl          ← クラウド経路の音声会話 (OpenAI Realtime、既定のマイク/スピーカー。SourceVault_voice.wl と対になる層だが依存は呼び出し時にだけ効くためこの位置で自動ロード)
   SourceVault_searchview.wl        ← 検索ビュー / 横断検索の表示層 (自動ロード)
   SourceVault_servicemanager.wl    ← サービスマネージャ (自動ロード)
   SourceVault_promptrouter.wl      ← PromptRouter 拡張 (自動ロード)

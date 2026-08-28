@@ -26,10 +26,10 @@ Returns <|Status, RecordId, Old, New, Scope, RuleId, Learned, Priority, PrivacyL
 例: SourceVaultMailCorrect["m123", <|"Category" -> "TaskRequest", "Priority" -> 0.8|>, "Scope" -> "Sender"]
 
 ### SourceVaultMailSetSenderWeight[recordIdOrEmail_String, weight_?NumericQ, opts]
-Sets the importance of a sender (0-1, base term of the structural priority). Writes PriorityWeight on the linked identity entity if known (shared across that entity's mail), otherwise falls back to an L1 rule on the address.
+Sets the importance of a sender (0-1, base term of the structural priority). Writes PriorityWeight on the linked identity entity if known (shared across that entity's mail), otherwise falls back to an L1 rule on the address. A new weight replaces any earlier sender-weight rule for the same address (they do not stack; stacking would sum their PriorityAdjust in the adjuster).
 → Association
 Options: "Reapply" -> True (re-scores already-stored mails of that sender), "Persist" -> True
-Returns <|Status, Email, Weight, Via ("Entity"|"Rule"), Reapplied?|>.
+Returns <|Status, Email, Weight, Via ("Entity"|"Rule"), RemovedRules, Reapplied?|>.
 
 ### SourceVaultMailCorrections[opts]
 Returns recorded correction events, newest first.
@@ -44,8 +44,8 @@ Options: same as SourceVaultMailCorrections ("RecordId" -> Automatic, "Field" ->
 ## Rules (L1)
 
 ### SourceVaultMailAddRule[spec_Association, opts]
-Registers an L1 rule. spec: <|"Match" -> <|"From", "Domain", "To", "Subject" -> {terms...}, "Category"|>, "Action" -> <|"SetCategory", "SetWorkRequest", "PriorityAdjust", "PriorityMin", "PrivacyAdjust", "PrivacyMin", "PriorityMax", "PrivacyMax"|>, "Note", "Enabled", "Source"|>. Every given Match key must hold (AND); "Subject" requires ALL listed terms. RuleId is a hash of Match+Action, so re-adding the same rule is idempotent.
-→ Association (the stored rule)
+Registers an L1 rule. spec: <|"Match" -> <|"From", "Domain", "To", "Subject" -> {terms...}, "Category"|>, "Action" -> <|"SetCategory", "SetWorkRequest", "PriorityAdjust", "PriorityMin", "PrivacyAdjust", "PrivacyMin", "PriorityMax", "PrivacyMax"|>, "Note", "Enabled", "Source"|>. Every given Match key must hold (AND); "Subject" requires ALL listed terms. RuleId is a hash of Match+Action, so re-adding the same rule is idempotent. A new enabled rule supersedes the same-name action fields of every earlier enabled rule with the same normalized Match: the old rule is trimmed to its remaining fields, or removed if none remain (rules on a different Match still combine, Min/Max-folded in the adjuster). Disabled rules are left untouched.
+→ Association (the stored rule, plus "ReplacedRules" -> {superseded rule ids})
 Options: "Persist" -> True
 
 ### SourceVaultMailRules[] → List of Association
@@ -79,7 +79,7 @@ Rebuilds the L2 model from the correction ledger (source of truth). Use after ed
 Returns <|Status, Events, Features|>.
 
 ### SourceVaultMailFeedbackFeatures[recordIdOrRowOrSnapshot] → Association
-Returns the feature list used by the learner: <|"From" -> {...}, "Dom" -> {...}, "To" -> {...}, "Subj" -> {...}|> (addresses lowercased; subject reduced to ASCII words, bracketed tags, and 2/3-grams of kanji/katakana runs, capped at $SourceVaultMailFeedbackMaxSubjectTerms).
+Returns the feature list used by the learner: <|"From" -> {...}, "Dom" -> {...}, "To" -> {...}, "Subj" -> {...}|> (addresses lowercased and capped at 2 senders / 8 To+Cc recipients; subject reduced to ASCII words, bracketed tags, and 2/3-grams of kanji/katakana runs, capped at $SourceVaultMailFeedbackMaxSubjectTerms).
 
 ### SourceVaultMailFeedbackAdjust[snapshot, derived_Association] → Association
 Applies the feedback layers (L1 then L2) to a derived association and returns the adjusted one, with the audit trail in "FeedbackAdjustment" (<|RuleIds, CategoryFrom, CategoryTo, CategoryMargin, PriorityAdjust, PrivacyAdjust, Explain, At|>). This is the function maildb calls through $SourceVaultMailDerivedAdjuster; it is pure (no store writes) and never touches a field pinned by Derived.UserOverride. Returns derived unchanged if $SourceVaultMailFeedbackEnabled is False.

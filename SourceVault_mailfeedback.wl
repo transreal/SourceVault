@@ -65,9 +65,10 @@ SourceVaultMailSetSenderWeight::usage =
 importance of a SENDER (0-1, the base term of the structural priority). When the \
 identity layer knows the sender it writes PriorityWeight on the entity (the \
 canonical place, shared by every mail of that entity); otherwise it falls back \
-to an L1 rule on the address so the effect is the same. \
+to an L1 rule on the address so the effect is the same. Setting a new weight \
+replaces any earlier sender-weight rule for the address (they do not stack). \
 Options: \"Reapply\" -> True re-scores the already stored mails of that sender, \
-\"Persist\" -> True. Returns <|Status, Email, Weight, Via, Reapplied|>.";
+\"Persist\" -> True. Returns <|Status, Email, Weight, Via, RemovedRules, Reapplied|>.";
 
 SourceVaultMailCorrections::usage =
   "SourceVaultMailCorrections[opts] returns the recorded correction events \
@@ -85,7 +86,11 @@ spec: <|\"Match\" -> <|\"From\", \"Domain\", \"To\", \"Subject\" -> {terms...}, 
 \"PriorityAdjust\", \"PriorityMin\", \"PrivacyAdjust\", \"PrivacyMin\"|>, \
 \"Note\", \"Enabled\", \"Source\"|>. Every Match key given must hold (AND); \
 \"Subject\" requires ALL listed terms. The RuleId is a hash of Match+Action, so \
-re-adding the same rule is idempotent. Returns the stored rule.";
+re-adding the same rule is idempotent. A new enabled rule SUPERSEDES the \
+same-name action fields of every earlier enabled rule with the same Match: the \
+old rule is trimmed to its other fields, or removed when none remain (rules on \
+different Matches still combine in the adjuster). Returns the stored rule plus \
+\"ReplacedRules\" -> {superseded rule ids}.";
 
 SourceVaultMailRules::usage =
   "SourceVaultMailRules[] returns the registered L1 rules (list of associations).";
@@ -541,23 +546,62 @@ iSVFBNormAction[a_Association] :=
     o];
 iSVFBNormAction[_] := <||>;
 
+(* supersession: a newly added enabled rule takes over the action fields it
+   sets from every earlier ENABLED rule with the SAME normalised Match. The
+   RuleId hashes Match+Action, so same-Match rules with different actions
+   coexist, and PriorityMin/PrivacyMin are Max-folded in the adjuster: without
+   this, correction-derived floors accumulate per Match and a stale HIGHER
+   floor defeats every later, lower correction forever. Same shape as the
+   sender-weight fix (cf. iSVFBSenderWeightRuleQ). Fields the new action does
+   not set survive: the old rule is trimmed, its RuleId re-derived from the
+   trimmed action. Rules on OTHER Matches are untouched -- their Max
+   combination is deliberate defence in depth. Disabled rules are historical
+   record and are left alone (the adjuster skips them anyway). *)
+iSVFBSupersedeSameMatch[match_Association, action_Association, id_String] :=
+  Module[{keep = {}, replaced = {}},
+    Scan[
+      Function[r,
+        If[! AssociationQ[r] || Lookup[r, "RuleId", ""] === id ||
+            Lookup[r, "Enabled", True] === False ||
+            With[{m = Lookup[r, "Match", <||>]},
+              ! AssociationQ[m] || KeySort[m] =!= KeySort[match]],
+          AppendTo[keep, r],
+          Module[{a, rest},
+            a = With[{x = Lookup[r, "Action", <||>]}, If[AssociationQ[x], x, <||>]];
+            rest = KeyDrop[a, Keys[action]];
+            Which[
+              Length[rest] === Length[a], AppendTo[keep, r],
+              rest === <||>, AppendTo[replaced, Lookup[r, "RuleId", ""]],
+              True,
+                AppendTo[replaced, Lookup[r, "RuleId", ""]];
+                AppendTo[keep,
+                  Join[r, <|"RuleId" -> iSVFBRuleId[Lookup[r, "Match", <||>], rest],
+                    "Action" -> rest|>]]]]]],
+      $iSVFBRules];
+    $iSVFBRules = keep;
+    replaced];
+
 Options[SourceVaultMailAddRule] = {"Persist" -> True};
 SourceVaultMailAddRule[spec_Association, OptionsPattern[]] :=
-  Module[{match, action, id, rule},
+  Module[{match, action, id, rule, enabled, replaced},
     iSVFBRulesEnsure[];
     match = iSVFBNormMatch[Lookup[spec, "Match", <||>]];
     action = iSVFBNormAction[Lookup[spec, "Action", <||>]];
     If[match === <||> || action === <||>,
       Return[<|"Status" -> "Error", "Reason" -> "EmptyMatchOrAction"|>]];
     id = iSVFBRuleId[match, action];
-    rule = <|"RuleId" -> id, "Enabled" -> (Lookup[spec, "Enabled", True] =!= False),
+    enabled = Lookup[spec, "Enabled", True] =!= False;
+    (* a rule added disabled must not strip fields from live rules *)
+    replaced = If[enabled, iSVFBSupersedeSameMatch[match, action, id], {}];
+    rule = <|"RuleId" -> id, "Enabled" -> enabled,
       "Match" -> match, "Action" -> action,
       "Note" -> ToString@Lookup[spec, "Note", ""],
       "Source" -> ToString@Lookup[spec, "Source", "User"],
       "CreatedAt" -> iSVFBNow[]|>;
     $iSVFBRules = Append[DeleteCases[$iSVFBRules, r_ /; Lookup[r, "RuleId", ""] === id], rule];
     If[TrueQ[OptionValue["Persist"]], iSVFBRulesSave[]];
-    rule];
+    (* ReplacedRules is return-value metadata, not part of the stored rule *)
+    Append[rule, "ReplacedRules" -> replaced]];
 
 SourceVaultMailRemoveRule[id_String] :=
   (iSVFBRulesEnsure[];
@@ -1056,13 +1100,34 @@ iSVFBResolveEntity[email_String] :=
         SourceVault`SourceVaultGetEntity[ent]]],
     Missing["NoIdentity"]];
 
+(* the L1 rules that encode a sender weight for one address: exactly a From
+   match and exactly a PriorityAdjust action. The only producer of that shape is
+   SourceVaultMailSetSenderWeight (corrections always carry PriorityMin /
+   SetCategory / ... actions), so matching on it cannot touch user-authored
+   rules. *)
+iSVFBSenderWeightRuleQ[r_Association, email_String] :=
+  Lookup[r, "Match", <||>] === <|"From" -> email|> &&
+    Keys[Lookup[r, "Action", <||>]] === {"PriorityAdjust"};
+iSVFBSenderWeightRuleQ[___] := False;
+
 Options[SourceVaultMailSetSenderWeight] = {"Reapply" -> True, "Persist" -> True};
 SourceVaultMailSetSenderWeight[target_String, weight_?NumericQ, OptionsPattern[]] :=
-  Module[{email, ent, w = N@Clip[weight, {0., 1.}], via = "Rule", ok, res},
+  Module[{email, ent, w = N@Clip[weight, {0., 1.}], via = "Rule", ok, res,
+      removed = 0, adj},
     email = If[StringContainsQ[target, "@"], ToLowerCase@StringTrim[target],
       First[Append[Lookup[iSVFBFeatureSets[iSVFBFacts[target]], "From", {}], ""]]];
     If[email === "",
       Return[<|"Status" -> "Error", "Reason" -> "NoSenderAddress", "Target" -> target|>]];
+    (* a new weight REPLACES any earlier sender-weight rules for this address.
+       Without this, successive settings coexist and their PriorityAdjusts SUM
+       in the adjuster (0.6 then 0.8 acted like 1.0); it also clears the rule
+       left behind when the sender later gains a linked entity, which would
+       otherwise double-count against the entity's PriorityWeight. *)
+    iSVFBRulesEnsure[];
+    removed = Count[$iSVFBRules, r_ /; iSVFBSenderWeightRuleQ[r, email]];
+    If[removed > 0,
+      $iSVFBRules = DeleteCases[$iSVFBRules, r_ /; iSVFBSenderWeightRuleQ[r, email]];
+      If[TrueQ[OptionValue["Persist"]], iSVFBRulesSave[]]];
     ent = iSVFBResolveEntity[email];
     If[AssociationQ[ent] && StringQ[Lookup[ent, "EntityId", Missing[]]] &&
         Length[DownValues[SourceVault`SourceVaultUpdateEntity]] > 0,
@@ -1072,12 +1137,17 @@ SourceVaultMailSetSenderWeight[target_String, weight_?NumericQ, OptionsPattern[]
       If[ok =!= $Failed, via = "Entity"]];
     If[via === "Rule",
       (* no linked entity: an L1 rule on the address reproduces the same shift
-         (relative to maildb's default sender weight 0.4) *)
-      SourceVaultMailAddRule[<|
-        "Match" -> <|"From" -> email|>,
-        "Action" -> <|"PriorityAdjust" -> N@Round[w - 0.4, 0.01]|>,
-        "Source" -> "User", "Note" -> "sender weight " <> ToString[w]|>]];
-    res = <|"Status" -> "Ok", "Email" -> email, "Weight" -> w, "Via" -> via|>;
+         (relative to maildb's default sender weight 0.4). w = 0.4 needs no
+         rule -- the default already is 0.4, so the removal above suffices. *)
+      adj = N@Round[w - 0.4, 0.01];
+      If[adj != 0.,
+        SourceVaultMailAddRule[<|
+            "Match" -> <|"From" -> email|>,
+            "Action" -> <|"PriorityAdjust" -> adj|>,
+            "Source" -> "User", "Note" -> "sender weight " <> ToString[w]|>,
+          "Persist" -> TrueQ[OptionValue["Persist"]]]]];
+    res = <|"Status" -> "Ok", "Email" -> email, "Weight" -> w, "Via" -> via,
+      "RemovedRules" -> removed|>;
     If[TrueQ[OptionValue["Reapply"]],
       res["Reapplied"] = SourceVaultMailFeedbackReapply["From" -> email,
          "Persist" -> TrueQ[OptionValue["Persist"]]]];
@@ -1318,13 +1388,36 @@ iSVFBCurrent[rid_String] :=
            If[StringQ[c], c, "Other"]]|>]];
     <|"Priority" -> 0., "PrivacyLevel" -> 0., "Category" -> "Other"|>];
 
+(* the sender weight the estimator will actually use for this mail's sender:
+   the entity PriorityWeight (canonical) or the entity group weight, PLUS any
+   sender-weight L1 rules -- the fallback route SourceVaultMailSetSenderWeight
+   takes for senders without a linked identity entity, which shift relative to
+   maildb's default 0.4. Reading only the entity here was the bug that made the
+   panel show "0.4 default" for a sender whose weight had in fact been set (and
+   was being applied) through a rule. Missing["NotSet"] only when nothing was
+   ever set. *)
 iSVFBSenderWeightNow[rid_String] :=
-  Module[{email, ent},
+  Module[{email, ent, base = Missing["NotSet"], grp, gw, adj},
     email = First[Append[Lookup[iSVFBFeatureSets[iSVFBFacts[rid]], "From", {}], ""]];
     If[email === "", Return[Missing["NoSender"]]];
     ent = iSVFBResolveEntity[email];
-    If[AssociationQ[ent] && NumericQ[Lookup[ent, "PriorityWeight", Missing[]]],
-      N@ent["PriorityWeight"], Missing["NotSet"]]];
+    If[AssociationQ[ent],
+      If[NumericQ[Lookup[ent, "PriorityWeight", Missing[]]],
+        base = N@Clip[ent["PriorityWeight"], {0., 1.}],
+        grp = Lookup[ent, "Group", Missing[]];
+        If[StringQ[grp] &&
+            Length[DownValues[SourceVault`SourceVaultGroupWeightFor]] > 0,
+          gw = Quiet@Check[SourceVault`SourceVaultGroupWeightFor[grp], Missing[]];
+          If[NumericQ[gw], base = N@Clip[gw, {0., 1.}]]]]];
+    iSVFBRulesEnsure[];
+    adj = Total[Cases[$iSVFBRules,
+       r_Association /; Lookup[r, "Enabled", True] =!= False &&
+           iSVFBSenderWeightRuleQ[r, email] :>
+         iSVFBNum[Lookup[Lookup[r, "Action", <||>], "PriorityAdjust", 0.], 0.]]];
+    Which[
+      NumericQ[base], N@Round[Clip[base + adj, {0., 1.}], 0.01],
+      adj != 0., N@Round[Clip[0.4 + adj, {0., 1.}], 0.01],
+      True, Missing["NotSet"]]];
 
 SourceVaultMailFeedbackPanel[rid_String] :=
   Module[{cur = iSVFBCurrent[rid], sw = iSVFBSenderWeightNow[rid], ff = iSVFBPanelFont[],

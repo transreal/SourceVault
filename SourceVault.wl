@@ -15636,6 +15636,9 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
           $packageDirectory と LOCALAPPDATA だけを見るので、どの位置でもよい。
           利用側 (VRCRealtime の private TTS / 追尾) が起動時に問い合わせる。 *)
        "SourceVault_voice.wl", "SourceVault_vision.wl",
+       (* クラウド経路の音声会話 (OpenAI Realtime, 既定のマイク/スピーカー)。
+          voice と対になる層で、依存は起動時にだけ効くのでここでよい。 *)
+       "SourceVault_realtime.wl",
        (* 発表 (スライド + 発表シナリオ) 登録簿。core の root 解決だけに依存する
           ので早い段階でよい。MCP tool / service command は呼び出し時解決。 *)
        "SourceVault_slidedeck.wl",
@@ -15643,7 +15646,7 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        "SourceVault_packageapi.wl", "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl",
        (* KB (Graph-RAG 低遅延応答層) は lexical/searchindex に依存するのでこの順 *)
-       "SourceVault_kb.wl", "SourceVault_oopsseed.wl",
+       "SourceVault_kb.wl", "SourceVault_talkqa.wl", "SourceVault_oopsseed.wl",
        "SourceVault_mailstructure.wl", "SourceVault_mailbrowse.wl",
        "SourceVault_crosslink.wl", "SourceVault_mailsuggest.wl",
        (* Microsoft Graph 取得 provider: maildb の $SourceVaultMailSourceProviders

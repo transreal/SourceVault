@@ -132,6 +132,19 @@ SourceVaultKBAnswer::usage =
   "opts: SourceVaultKBSearch のオプションに加えて \"MaxContextCharacters\" (既定 1200),\n" <>
   "\"MaxAnswerCharacters\" (既定 160), \"TPO\" -> 登録済み TPOProfile 名 (任意の話題ゲート)。";
 
+SourceVaultKBIngestTexts::usage =
+  "SourceVaultKBIngestTexts[kbId, sourceId, items, opts] は任意のテキスト片を source document として\n" <>
+  "取り込む (web 取得分・手で足した補足など)。items は文字列のリスト、または\n" <>
+  "<|\"Title\", \"Text\", \"URL\", \"Locator\"|> のリスト。\n" <>
+  "opts: \"Title\", \"PrivacyLevel\" (既定 0.0), \"Tags\", \"Kind\" (既定 \"Texts\"), \"Replace\" (既定 True)。";
+
+SourceVaultKBNeighbors::usage =
+  "SourceVaultKBNeighbors[kbId, seed, opts] は seed ノードから k ホップ伝播して近い chunk を\n" <>
+  "スライド単位で返す (質問語ではなく「いま開いているページ」を種にした Graph-RAG)。\n" <>
+  "seed: nodeId 文字列 / {sourceId, slideIndex} / <|\"SourceId\",\"SlideIndex\"|>。\n" <>
+  "opts: \"Hops\" (既定 2), \"Damping\" (既定 0.45), \"Limit\" (既定 5), \"ReleaseContext\",\n" <>
+  "\"IncludeSeed\" (既定 False), \"MaxCharactersPerResult\" (既定 700)。";
+
 SourceVaultKBGraph::usage =
   "SourceVaultKBGraph[kbId, opts] は KB のグラフを Graph オブジェクトで返す (View / 点検用)。\n" <>
   "opts: \"Center\" -> nodeId, \"Radius\" (既定 2), \"MaxVertices\" (既定 200), \"Kinds\"。";
@@ -180,7 +193,11 @@ iUTC[] := DateString[Now, "ISODateTime"];
      <root>/kb/<kbId>/index.wxf
    ============================================================ *)
 
-iKBBaseRoot[] := Module[{ls},
+iKBBaseRoot[] := Module[{v, ls},
+  (* 共有ボールトを優先する。LocalState 配下は環境によって
+     他のプロセスから見えないことがあった (実測 2026-08-23) *)
+  v = Quiet @ Check[SourceVault`$SourceVaultRoots["PrivateVault"], $Failed];
+  If[StringQ[v], Return[FileNameJoin[{v, "kb"}]]];
   ls = Quiet @ Check[SourceVault`SourceVaultRoot["LocalState"], $Failed];
   If[! StringQ[ls], ls = FileNameJoin[{$TemporaryDirectory, "SourceVault"}]];
   FileNameJoin[{ls, "kb"}]];
@@ -391,14 +408,14 @@ Options[SourceVaultKBIngestSlideDeck] = {
   "SourceId" -> Automatic, "Title" -> Automatic, "PrivacyLevel" -> 0.3,
   "Tags" -> {}, "RenderFigures" -> Automatic, "MaxFiguresPerSlide" -> 4,
   "FigureImageWidth" -> 1024, "IncludeCode" -> False, "Force" -> False,
-  "MaxSlideCharacters" -> 1500, "Verbose" -> True};
+  "MaxSlideCharacters" -> 1500, "SlideNotes" -> <||>, "Verbose" -> True};
 
 SourceVaultKBIngestSlideDeck[nbPath_String, opts : OptionsPattern[]] :=
   SourceVaultKBIngestSlideDeck[$SourceVaultKBDefaultId, nbPath, opts];
 
 SourceVaultKBIngestSlideDeck[kbId_String, nbPath_String, OptionsPattern[]] := Module[
   {path, sourceId, title, nb, split, slides, render, maxFigs, imgWidth, includeCode,
-   maxChars, verbose, mediaDir, digest, existing, doc, slideRecs, figureCount,
+   maxChars, verbose, mediaDir, digest, existing, doc, slideRecs, figureCount, notes,
    renderedCount, t0},
   t0 = AbsoluteTime[];
   path = ExpandFileName[nbPath];
@@ -418,11 +435,15 @@ SourceVaultKBIngestSlideDeck[kbId_String, nbPath_String, OptionsPattern[]] := Mo
   If[! IntegerQ[maxFigs] || maxFigs < 0, maxFigs = 4];
   If[! IntegerQ[imgWidth] || imgWidth < 128, imgWidth = 1024];
   If[! IntegerQ[maxChars] || maxChars < 200, maxChars = 1500];
+  (* 原稿 (スライド番号 -> 読み上げ文)。画像だけのスライドは本文が無いので、
+     ここで渡された原稿が chunk の中身になる *)
+  notes = OptionValue["SlideNotes"];
+  If[! AssociationQ[notes], notes = <||>];
 
-  (* 変更検知: サイズ + 更新時刻。未変更なら再解析しない *)
+  (* 変更検知: サイズ + 更新時刻 + 原稿。未変更なら再解析しない *)
   digest = Quiet @ Check[
-    Hash[{FileByteCount[path], DateString[FileDate[path], "ISODateTime"]},
-      "SHA256", "HexString"], ""];
+    Hash[{FileByteCount[path], DateString[FileDate[path], "ISODateTime"],
+      Sort[Normal[notes]]}, "SHA256", "HexString"], ""];
   existing = iKBLoadSource[kbId, sourceId];
   If[! TrueQ[OptionValue["Force"]] && AssociationQ[existing] &&
      Lookup[existing, "SourceDigest", ""] === digest && digest =!= "",
@@ -479,6 +500,7 @@ SourceVaultKBIngestSlideDeck[kbId_String, nbPath_String, OptionsPattern[]] := Mo
         <|"Index" -> n, "Title" -> slideTitle,
           "TextBlocks" -> textBlocks,
           "Text" -> StringTake[StringRiffle[textBlocks, " "], UpTo[maxChars]],
+          "Notes" -> iKBCleanText[iStr[Lookup[notes, n, ""]]],
           "Figures" -> figures|>]],
     slides];
 
@@ -824,10 +846,11 @@ iKBSlideChunks[kbId_String, doc_Association, caps_Association, maxChars_Integer,
   tags = Flatten[{Lookup[doc, "Tags", {}]}];
   state = Lookup[doc, "State", "Published"];
   Flatten @ Map[Function[s,
-    Module[{n, sTitle, body, figs, figTexts, slideText, slideNode, chunkId, out},
+    Module[{n, sTitle, body, notes, figs, figTexts, slideText, slideNode, chunkId, out},
       n = Lookup[s, "Index", 0];
       sTitle = Lookup[s, "Title", ""];
       body = Lookup[s, "Text", ""];
+      notes = Lookup[s, "Notes", ""];
       figs = Lookup[s, "Figures", {}];
       figTexts = Map[Function[f,
         Module[{c = Lookup[caps, Lookup[f, "Hash", ""], Missing[]]},
@@ -837,7 +860,7 @@ iKBSlideChunks[kbId_String, doc_Association, caps_Association, maxChars_Integer,
             <|"Fig" -> f, "Caption" -> Lookup[f, "AltText", ""],
               "Keywords" -> {}, "Pending" -> True|>]]], figs];
       slideText = StringRiffle[
-        Select[Join[{sTitle, body},
+        Select[Join[{sTitle, body, notes},
           Map[Function[ft, If[TrueQ[ft["Pending"]] && ! includePending, "",
             "図: " <> ft["Caption"] <>
               If[ft["Keywords"] === {}, "", " (" <> StringRiffle[ft["Keywords"], "、"] <> ")"]]],
@@ -1039,7 +1062,7 @@ SourceVaultKBBuild[kbId_String, OptionsPattern[]] := Module[
     Return[iFail["NoSources", "取り込み済みの source がありません。", <|"KBId" -> kbId|>]]];
   caps = iKBLoadCaptions[kbId];
   chunks = Flatten @ Map[Function[d,
-    If[Lookup[d, "Kind", ""] === "PDFCollection",
+    If[MemberQ[{"PDFCollection", "Texts", "Web"}, Lookup[d, "Kind", ""]],
       iKBPassageChunks[kbId, d, maxChars],
       iKBSlideChunks[kbId, d, caps, maxChars,
         TrueQ[OptionValue["IncludePendingFigures"]]]]], sources];
@@ -1490,6 +1513,135 @@ Options[SourceVaultKBGraph] = {"Center" -> None, "Radius" -> 2, "MaxVertices" ->
   "Kinds" -> All};
 SourceVaultKBGraph[opts : OptionsPattern[]] :=
   SourceVaultKBGraph[$SourceVaultKBDefaultId, opts];
+(* ============================================================
+   任意テキストの取り込み (web 取得分など)
+   ============================================================ *)
+
+Options[SourceVaultKBIngestTexts] = {"Title" -> Automatic, "PrivacyLevel" -> 0.0,
+  "Tags" -> {}, "Kind" -> "Texts", "Replace" -> True, "Verbose" -> False};
+
+SourceVaultKBIngestTexts[kbId_String, sourceId_String, itemsIn_List,
+    OptionsPattern[]] := Module[{items, passages, doc, prev, title},
+  items = Select[itemsIn, StringQ[#] || AssociationQ[#] &];
+  If[items === {},
+    Return[iFail["NoTexts", "取り込むテキストがありません。", <|"SourceId" -> sourceId|>]]];
+  title = Replace[OptionValue["Title"], Automatic :> sourceId];
+  passages = MapIndexed[Function[{it, pos},
+    Module[{txt, ttl, loc},
+      txt = If[StringQ[it], it, iStr[Lookup[it, "Text", ""]]];
+      ttl = If[StringQ[it], "", iStr[Lookup[it, "Title", ""]]];
+      loc = If[StringQ[it], "", iStr[Lookup[it, "URL", Lookup[it, "Locator", ""]]]];
+      <|"PassageId" -> sourceId <> ":p" <> ToString[First[pos]],
+        "DocId" -> sourceId, "DocTitle" -> iStr[title],
+        "Page" -> First[pos],
+        "Title" -> If[ttl === "", iStr[title], ttl],
+        "Locator" -> loc,
+        "Text" -> iKBCleanText[txt]|>]],
+    items];
+  passages = Select[passages, StringLength[StringTrim[Lookup[#, "Text", ""]]] > 0 &];
+  If[passages === {},
+    Return[iFail["NoTexts", "本文が空です。", <|"SourceId" -> sourceId|>]]];
+  (* 追記のときは既存 passage の後ろへ *)
+  prev = If[TrueQ[OptionValue["Replace"]], {},
+    With[{d = iKBLoadSource[kbId, sourceId]},
+      If[AssociationQ[d], Lookup[d, "Passages", {}], {}]]];
+  doc = <|"ObjectClass" -> "SourceVaultKBSourceDocument", "SchemaVersion" -> $kbSchemaVersion,
+    "SourceId" -> sourceId, "Kind" -> iStr[OptionValue["Kind"]], "Title" -> iStr[title],
+    "SourceDigest" -> Quiet @ Check[
+      Hash[Lookup[#, "Text", ""] & /@ passages, "SHA256", "HexString"], ""],
+    "PrivacyLevel" -> iNum[OptionValue["PrivacyLevel"], 0.0],
+    "Tags" -> Flatten[{OptionValue["Tags"]}],
+    "State" -> "Published",
+    "Slides" -> {}, "Passages" -> Join[prev, passages],
+    "PassageCount" -> Length[prev] + Length[passages],
+    "IngestedAtUTC" -> iUTC[]|>;
+  If[iKBSaveSource[kbId, doc] === $Failed,
+    Return[iFail["SourceSaveFailed", "source document の保存に失敗しました。",
+      <|"SourceId" -> sourceId|>]]];
+  If[TrueQ[OptionValue["Verbose"]],
+    Print["[KB ingest] " <> sourceId <> ": " <> ToString[Length[passages]] <> " 片"]];
+  <|"Status" -> "OK", "KBId" -> kbId, "SourceId" -> sourceId,
+    "Passages" -> doc["PassageCount"], "PrivacyLevel" -> doc["PrivacyLevel"]|>];
+
+(* ============================================================
+   ノードを種にした k-hop 近傍 (開いているページの周辺)
+   ============================================================ *)
+
+Options[SourceVaultKBNeighbors] = {"Hops" -> 2, "Damping" -> 0.45, "Limit" -> 5,
+  "ReleaseContext" -> Automatic, "IncludeSeed" -> False,
+  "MaxCharactersPerResult" -> 700, "FrontierCap" -> 240, "DeadlineMs" -> 400};
+
+iKBSeedNode[rec_Association, seed_] := Module[{nodes, sid, idx, cand},
+  nodes = Lookup[rec, "Nodes", <||>];
+  Which[
+    StringQ[seed] && KeyExistsQ[nodes, seed], seed,
+    StringQ[seed], With[{n = "s:" <> seed}, If[KeyExistsQ[nodes, n], n, $Failed]],
+    True,
+      {sid, idx} = Which[
+        MatchQ[seed, {_String, _Integer}], seed,
+        AssociationQ[seed], {iStr[Lookup[seed, "SourceId", ""]],
+          With[{v = Lookup[seed, "SlideIndex", 0]}, If[IntegerQ[v], v, 0]]},
+        True, {"", 0}];
+      cand = "s:" <> sid <> ":" <> ToString[idx];
+      If[KeyExistsQ[nodes, cand], cand, $Failed]]];
+
+SourceVaultKBNeighbors[seed_, opts : OptionsPattern[]] :=
+  SourceVaultKBNeighbors[$SourceVaultKBDefaultId, seed, opts];
+
+SourceVaultKBNeighbors[kbId_String, seed_, OptionsPattern[]] := Module[
+  {rec, node, scores, chunkIdx, chunkScores, bySlide, results, rc, lim, maxChars,
+   t0, deadline, seedSlide},
+  t0 = AbsoluteTime[];
+  rec = iKBEnsureLoaded[kbId];
+  If[! AssociationQ[rec], Return[rec]];
+  node = iKBSeedNode[rec, seed];
+  If[node === $Failed,
+    Return[iFail["SeedNotFound", "その種ノードは KB にありません。",
+      <|"Seed" -> seed, "KBId" -> kbId|>]]];
+  lim = OptionValue["Limit"]; If[! IntegerQ[lim] || lim < 1, lim = 5];
+  maxChars = OptionValue["MaxCharactersPerResult"];
+  If[! IntegerQ[maxChars] || maxChars < 100, maxChars = 700];
+  rc = Replace[OptionValue["ReleaseContext"], Automatic :>
+    Lookup[rec, "ReleaseContext", $SourceVaultKBReleaseContext]];
+  deadline = t0 + iNum[OptionValue["DeadlineMs"], 400]/1000.;
+  chunkIdx = Lookup[rec, "ChunkIndex", <||>];
+  scores = iKBPropagate[Lookup[rec, "Adjacency", <||>], <|node -> 1.|>,
+    If[IntegerQ[OptionValue["Hops"]], OptionValue["Hops"], 2],
+    iNum[OptionValue["Damping"], 0.45],
+    If[IntegerQ[OptionValue["FrontierCap"]], OptionValue["FrontierCap"], 240],
+    deadline];
+  chunkScores = KeyMap[StringDrop[#, 2] &, KeySelect[scores, StringStartsQ[#, "c:"] &]];
+  chunkScores = KeySelect[chunkScores, KeyExistsQ[chunkIdx, #] &];
+  seedSlide = node;
+  If[! TrueQ[OptionValue["IncludeSeed"]],
+    chunkScores = KeySelect[chunkScores,
+      Lookup[chunkIdx[#], "SlideNodeId", ""] =!= seedSlide &]];
+  If[Length[chunkScores] === 0, Return[{}]];
+  bySlide = GroupBy[
+    KeyValueMap[Function[{cid, sc}, <|"Chunk" -> chunkIdx[cid], "Score" -> sc|>], chunkScores],
+    #["Chunk"]["SlideNodeId"] &];
+  results = KeyValueMap[Function[{slideNode, items},
+    Module[{sorted, best, text},
+      sorted = ReverseSortBy[items, #["Score"] &];
+      best = First[sorted]["Chunk"];
+      text = iKBTrim[StringRiffle[DeleteDuplicates[
+        Lookup[#["Chunk"], "Text", ""] & /@ sorted], "\n"], maxChars];
+      <|"SlideNodeId" -> slideNode, "Score" -> First[sorted]["Score"],
+        "SourceId" -> Lookup[best, "SourceId", ""],
+        "SourceTitle" -> Lookup[best, "SourceTitle", ""],
+        "SlideIndex" -> Lookup[best, "SlideIndex", 0],
+        "Title" -> Lookup[best, "Title", ""],
+        "Text" -> text,
+        "PrivacyLevel" -> Max[Lookup[#["Chunk"], "PrivacyLevel", 0.] & /@ sorted],
+        "ObjectURI" -> Lookup[best, "ObjectURI", ""],
+        "Tags" -> Lookup[best, "Tags", {}],
+        "State" -> Lookup[best, "State", "Published"],
+        "SourceRef" -> Lookup[best, "SourceRef", <||>]|>]],
+    bySlide];
+  If[Length[DownValues[SourceVault`SourceVaultEvaluateReleasePolicy]] > 0,
+    results = Select[results, iKBPermitQ[#, rc] &]];
+  Take[ReverseSortBy[results, #["Score"] &], UpTo[lim]]];
+
 SourceVaultKBGraph[kbId_String, OptionsPattern[]] := Module[
   {rec, nodes, adj, center, radius, maxV, keep, edges, kinds},
   rec = iKBEnsureLoaded[kbId];

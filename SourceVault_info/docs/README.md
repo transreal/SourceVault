@@ -2,7 +2,7 @@
 
 Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter**、release context に基づく公開ポリシー基盤と Web 検索サービス管理 (**SourceVault_searchindex** / **SourceVault_servicemanager**)、[Eagle](https://eagle.cool) デジタルアセットライブラリ統合 (**SourceVault_eagle**)、排他制御・immutable snapshot・append-only event log を提供するコア基盤 (**SourceVault_core**) を備えます。加えて、関数契約と型付き配線による API コンパイラ層 (**SourceVault_contracts** / **SourceVault_wiring**)、シミュレーション実行基盤 (**SourceVault_simrun**)、検索結果を「たどれる作業面」として扱う検索ビュー層 (**SourceVault_searchview**)、一般メールの構造化・スレッド提案 (**SourceVault_mailstructure** / **SourceVault_mailsuggest**)、オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層 (**SourceVault_mailagenda**)、Claude Code セッションログ統合 (**SourceVault_llmlog**)、コード化ワークフローのレジストリ・カタログ管理 (**SourceVault_workflowregistry** / **SourceVault_workflowcatalog**)、自動トリガスケジューラ (**SourceVault_autotrigger**)、クロスパッケージ診断層 (**SourceVault_diagnostics**)、関数粒度のパッケージ API 索引 (**SourceVault_packageapi**)、[ComfyUI](https://github.com/comfyanonymous/ComfyUI) 画像・動画生成統合 (**SourceVault_comfyui**) も備えます。さらに、oops メーリングリストのアーカイブを「ベース基準座標」とする認知支援・安全基盤 (Cane: **SourceVault_knowledgehome** / **SourceVault_cognition** / **SourceVault_adjudication** / **SourceVault_capbroker** / **SourceVault_taint** / **SourceVault_anomaly** / **SourceVault_routine** / **SourceVault_routineplan**) も統合しており、いずれも既定では判定を記録するだけの observe-only / shadow モードで動作します。私的データを扱う全関数の出力が別名呼び出しや `Map`・`ClaudeEval` 越しでも確実に機密マークされるようにする、プライバシー伝達の正準層 (**SourceVault_privacy**) も統合されています。
 
-加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**) も統合されています。
+加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
 
 ## 設計思想と実装の概要
 
@@ -177,19 +177,23 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ W
 
 `SourceVault_simrun.wl` はシミュレーション実行 (ExecutionClass = `"simulation"`) の共通基盤です。各 PC のスペック（コア数・メモリ・GPU・nvcc）を `SourceVaultMachineProfile` で実測して Dropbox 共有ストアに記録し、仕様生成が「rapterlake4t で CUDA」のようなマシン指定つき仕様を書けるようにします。バルク出力は `<Dropbox>/udb/simruns/` の参照フォルダへ書き、SourceVault にはメタデータのみを immutable snapshot（class `"SimulationRun"`）として `SourceVaultSimRunFinalize` で保存する **二層出力**が原則です。`SourceVaultWithSubkernels` は「全サブカーネル起動 → 実行 → 停止」をライセンス席を汚さずに行い、`SourceVaultCUDARequire` / `SourceVaultCUDACompile` は Nvidia GPU 前提のシミュレーションに graceful なゲートと nvcc コンパイル・キャッシュを提供します。
 
-### 発表登録簿とローカル音声・視覚資産 (SourceVault_slidedeck / SourceVault_voice / SourceVault_vision)
+### 発表登録簿とローカル音声・視覚資産・リアルタイム音声対話 (SourceVault_slidedeck / SourceVault_voice / SourceVault_vision / SourceVault_realtime)
 
 `SourceVault_slidedeck.wl` は、発表タイトル（例:「計算と自然集会31の発表」）と、その Sliden mp4 の URL・コンパイル済み発表シナリオ（ナレーション原稿）を対応付ける登録簿です。スライド・原稿そのものの生成は [SlideWorkflow](https://github.com/transreal/SlideWorkflow) が担い、本モジュールは所在と公開ポリシーだけを保持します。PrivacyLevel が閾値 (`$SourceVaultSlideDeckReleaseCeiling`、既定 0.5) 以上の登録はナレーションが外部提供先（MCP・音声ブリッジ）へ渡されません。
 
-`SourceVault_voice.wl` / `SourceVault_vision.wl` は、外部認証情報を必要としないローカル完結の音声合成 (Piper Plus TTS)・音声認識 (Vosk ASR)・人物検出 / 姿勢推定 (MediaPipe ONNX モデル) の資産解決層です。PrivacyLevel が 0.5 以上のデータを外部サービスへ送らないという SourceVault の契約を音声・映像入出力の面で実装するもので、[VRCRealtime](https://github.com/transreal/VRCRealtime) のようなリアルタイム音声対話統合が起動時に問い合わせます。
+`SourceVault_voice.wl` / `SourceVault_vision.wl` は、外部認証情報を必要としないローカル完結の音声合成 (Piper Plus TTS、および VOICEVOX 互換のローカル HTTP TTS である AivisSpeech Engine の 2 エンジン)・音声認識 (Vosk ASR)・人物検出 / 姿勢推定 (MediaPipe ONNX モデル) の資産解決層です。PrivacyLevel が 0.5 以上のデータを外部サービスへ送らないという SourceVault の契約を音声・映像入出力の面で実装するもので、[VRCRealtime](https://github.com/transreal/VRCRealtime) のようなリアルタイム音声対話統合が起動時に問い合わせます。
+
+`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI の gpt-realtime モデルとライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。
 
 ### 検索ビューと行動ログ (SourceVault_searchview)
 
 `SourceVault_searchview.wl` は検索結果を、単なるランキング済みリストではなく **「たどれる作業面（live view）」**として返します。`SourceVaultBuildSearchView` が gate 済み検索から view object（RankedList / ContextSubgraphNotebook / GraphPlot / OrderedTree）を作り、`SourceVaultFollowSearchViewLink` でリンクをたどるたびに `SourceVaultRecordTopicItemInteraction` が閲覧・追記行為を interaction meta-layer として記録します。`SourceVaultAppendGraphAnnotation` は node への追記を非破壊に別 object 化し、調査ブランチを作ります。**meta-layer の boost は release gate を緩めません**。1 回の検索セッションを「どのクエリを組み立て、どの結果を見て、何を根拠にしたか」の探索グラフとして記録する Retrieval Episode（`SourceVaultStartRetrievalEpisode` 等）は、query 拡張や ranking prior の学習に使う高機密の行動ログ（PrivacyLevel 1.0、NoCloudLLM）として扱われます。
 
-### 低遅延 Graph-RAG ナレッジベース (SourceVault_kb)
+### 低遅延 Graph-RAG ナレッジベースと発表 Q&A (SourceVault_kb / SourceVault_talkqa)
 
 VRCRealtime のような音声対話では、既存の MCP 検索（Web / メール / Eagle / PDFIndex embedding）は数十秒かかることがあり realtime 応答には遅すぎます。`SourceVault_kb.wl` は、スライド・図版を「slide」「figure」単位で事前に索引化し、クエリ時は BM25 + インメモリの Deck–Slide–Chunk–Topic グラフ伝播のみ（数十 ms）で応答する低遅延レイヤです。ingest（notebook/PDF → source document、LLM 不要）・caption（figure → vision 読み取り、hash キャッシュ・予算制御）・build（source + caption → chunk + graph + BM25 索引）の 3 段階はそれぞれ冪等で独立に再実行できます。既存の BM25 (`SourceVaultBuildLexicalStats` / `SourceVaultLexicalRank`)・release gate (`SourceVaultEvaluateReleasePolicy`)・PDFIndex chunk 取り込みを再利用します。
+
+`SourceVault_talkqa.wl` は KB の上に載る、発表本番向けの **ライブ Q&A 層**です。`SourceVaultTalkQABuild` がスライドデッキと発表シナリオ (`<deck>_talk.md`) から「想定質問 → KB 由来の回答候補 → sv:// 引用」をビルド時に事前計算（LLM 呼び出しはビルド時のみ）し、本番中の `SourceVaultTalkQAAsk` は数十 ms でその QA パックを引き、無ければ KB へフォールバック、それも無ければ Web 検索を提案します。各回答候補には PrivacyLevel と公開経路（`Route`: Public = クラウド音声で読み上げ可、Local = ローカル音声のみ、Deny = 非公開のため回答拒否）がビルド時に焼き込まれるため、本番応答は監査可能かつ高速です。`$SourceVaultTalkQAMode`（既定 `"Presentation"`）が非公開情報への回答を拒否する境界を制御します。
 
 ### 一般メール構造化とスレッド提案 (SourceVault_mailstructure / SourceVault_mailsuggest)
 
@@ -264,12 +268,14 @@ SourceVault_core.wl                     コア基盤 (排他制御・event log�
 SourceVault_contracts.wl                関数契約 registry (aux、冪等初期化・呼び出し式検証)
 SourceVault_wiring.wl                   型付き配線・関数選定 (aux、contracts の後)
 SourceVault_voice.wl                    ローカル音声資産解決層 (aux、$packageDirectory/LOCALAPPDATA のみ参照)
+SourceVault_realtime.wl                 クラウド音声対話 (OpenAI Realtime、既定マイク/スピーカー使用。voice と対になるが依存は呼び出し時のみ)
 SourceVault_vision.wl                   ローカル視覚資産解決層 (aux、同上)
 SourceVault_slidedeck.wl                発表(スライド)登録簿 (aux、core の root 解決のみに依存)
 SourceVault_mining.wl                   マイニング (タグ/著者/実体リンク抽出・pre-scan・検索 boost・記憶代謝)
 SourceVault_lexical.wl                  日本語 lexical 層 (正規化・n-gram・BM25・entity OR-match)
 SourceVault_searchindex.wl              検索基盤 (release context・profiles・revocation・KeywordBM25V1)
 SourceVault_kb.wl                       Graph-RAG 低遅延ナレッジベース (lexical・searchindex の後)
+SourceVault_talkqa.wl                   発表ライブ Q&A 層 (kb の後、QA パック構築・低遅延応答)
 SourceVault_searchview.wl               検索ビュー (live hypertext view・interaction meta-layer・retrieval episode)
 SourceVault_knowledgehome.wl            Knowledge Home (oops 基準座標の読み取り専用ブラウザ・非破壊追記、既定 observe-only)
 SourceVault_cognition.wl                認知レイヤー (認知系イベントの暗号化保存・Guard shadow・owner 入力支援、既定 shadow)
@@ -324,7 +330,8 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 - `SourceVault_mailagenda` はメールアジェンダ経路で **索引のみ**を読み、LLM 再解析・IMAP 取得・シャード全体ロードを行いません。個人アドレス（オーナー/組織アドレス等）はコードに焼き込まず `PrivateVault/config/mailagenda.json` の環境設定で解決します。
 - `SourceVault_privacy` の **評価スコープ透かし**により、私的データを扱う関数の出力は別名呼び出し・`Map`・`ClaudeEval` 越しでも Max 伝搬・非降下で機密マークされ、テキストパターン照合には依存しません。宣言レジストリと呼び出しグラフ監査 (`SourceVaultPrivacyAudit`) が未宣言の漏洩を fail-closed で検出します。
 - `SourceVault_anonymize` の実行系 (`SourceVaultAnonymize`) は、owner が検証済みの `DeclassificationGrant` を持たない限り本文を一切読まず `NeedsOwnerApproval` で fail-closed します。未確定な入力は推測せず必ず `$Failed` / `Failure` を返します。
-- KB (`SourceVault_kb`) の低遅延検索も既存の release context gate を通過した chunk のみを返し、gate を迂回する経路はありません。
+- KB (`SourceVault_kb`) の低遅延検索も既存の release context gate を通過した chunk のみを返し、gate を迂回する経路はありません。`SourceVault_talkqa` の回答経路も同じ PrivacyLevel/`Route` 判定をビルド時に焼き込み、本番中に緩めることはありません。
+- `SourceVault_realtime` はマイク音声・会話テキストを OpenAI へ送るクラウド経路であり、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上を拒否) と Paid API 承認を通過しない限り起動しません。
 
 ### 永続化レイアウト
 
@@ -568,6 +575,7 @@ compiled wiki / projection が保持すべき情報を `SourceVaultMakeDiagnosti
 | Mathematica | 13.2 以降（14.x 推奨） |
 | OS | Windows 11（64-bit） |
 | Anthropic API キー | 任意（LLM 要約・claim 抽出機能を使う場合のみ） |
+| Python 3.10+ | 任意（`SourceVault_realtime` のクラウド音声会話ワーカーを使う場合のみ） |
 
 **依存パッケージ（先にインストールが必要）:**
 
@@ -599,11 +607,13 @@ $packageDirectory\
   SourceVault_contracts.wl       ← 関数契約 registry (本体ロード時に自動ロード)
   SourceVault_wiring.wl          ← 型付き配線・関数選定 (本体ロード時に自動ロード)
   SourceVault_voice.wl           ← ローカル音声資産解決層 (本体ロード時に自動ロード)
+  SourceVault_realtime.wl        ← クラウド音声対話 (OpenAI Realtime) の解決層 (本体ロード時に自動ロード)
   SourceVault_vision.wl          ← ローカル視覚資産解決層 (本体ロード時に自動ロード)
   SourceVault_slidedeck.wl       ← 発表(スライド)登録簿 (本体ロード時に自動ロード)
   SourceVault_simrun.wl          ← シミュレーション実行基盤 (本体ロード時に自動ロード)
   SourceVault_searchindex.wl     ← 検索基盤 (本体ロード時に自動ロード)
   SourceVault_kb.wl              ← Graph-RAG 低遅延ナレッジベース (本体ロード時に自動ロード)
+  SourceVault_talkqa.wl          ← 発表ライブ Q&A 層 (本体ロード時に自動ロード、kb 依存)
   SourceVault_searchview.wl      ← 検索ビュー (本体ロード時に自動ロード)
   SourceVault_knowledgehome.wl   ← Knowledge Home (本体ロード時に自動ロード)
   SourceVault_cognition.wl       ← 認知レイヤー (本体ロード時に自動ロード)
@@ -672,7 +682,7 @@ Block[{$CharacterEncoding = "UTF-8"},
 ]
 ```
 
-`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_contracts.wl`・`SourceVault_wiring.wl`・`SourceVault_voice.wl`・`SourceVault_vision.wl`・`SourceVault_slidedeck.wl`・`SourceVault_searchindex.wl`・`SourceVault_kb.wl`・`SourceVault_searchview.wl`・`SourceVault_knowledgehome.wl`・`SourceVault_cognition.wl`・`SourceVault_adjudication.wl`・`SourceVault_capbroker.wl`・`SourceVault_taint.wl`・`SourceVault_anomaly.wl`・`SourceVault_routine.wl`・`SourceVault_routineplan.wl`・`SourceVault_mailagenda.wl`・`SourceVault_mailbrowse.wl`・`SourceVault_crosslink.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl`・`SourceVault_mcp.wl`・`SourceVault_llmlog.wl`・`SourceVault_simrun.wl`・`SourceVault_packageapi.wl`・`SourceVault_workflowregistry.wl`・`SourceVault_autotrigger.wl`・`SourceVault_promptrouter.wl` などが順に自動的にロードされます。Cane 認知支援・安全基盤の各サブファイルは既定で observe-only / shadow のため、通常利用ではロードされていることを意識する必要はありません。
+`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_contracts.wl`・`SourceVault_wiring.wl`・`SourceVault_voice.wl`・`SourceVault_realtime.wl`・`SourceVault_vision.wl`・`SourceVault_slidedeck.wl`・`SourceVault_searchindex.wl`・`SourceVault_kb.wl`・`SourceVault_talkqa.wl`・`SourceVault_searchview.wl`・`SourceVault_knowledgehome.wl`・`SourceVault_cognition.wl`・`SourceVault_adjudication.wl`・`SourceVault_capbroker.wl`・`SourceVault_taint.wl`・`SourceVault_anomaly.wl`・`SourceVault_routine.wl`・`SourceVault_routineplan.wl`・`SourceVault_mailagenda.wl`・`SourceVault_mailbrowse.wl`・`SourceVault_crosslink.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl`・`SourceVault_mcp.wl`・`SourceVault_llmlog.wl`・`SourceVault_simrun.wl`・`SourceVault_packageapi.wl`・`SourceVault_workflowregistry.wl`・`SourceVault_autotrigger.wl`・`SourceVault_promptrouter.wl` などが順に自動的にロードされます。Cane 認知支援・安全基盤の各サブファイルは既定で observe-only / shadow のため、通常利用ではロードされていることを意識する必要はありません。
 
 LLM 要約・claim 抽出機能を使用する場合は、ClaudeRuntime もロードします。
 
@@ -865,10 +875,13 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultSaveSearchProfiles[]` / `SourceVaultLoadSearchProfiles[]` | DB プロファイル（ReleaseContext / PDFIndexProfile / SearchIndexProfile / SearchGroup / MigrationRule）を `PrivateVault/config` へ保存 / 復元。`$SourceVaultPersistSearchProfiles` で自動化を制御。 |
 | `SourceVaultSearch[query, opts]` | release context gate 付き検索。`"ReleaseContext"` / `"PDFIndexProfile"` / `"Limit"` / `"Index"`（native projection。`IndexKind` で KeywordBigram/KeywordBM25V1 を dispatch）対応。 |
 | `SourceVaultBuildProjectionIndex[ctx, opts]` | chunk を build-time gate して projection index 化。`"IndexKind"`（KeywordBigram/KeywordBM25V1）/ `"EntityDictionary"` 対応。 |
-| **低遅延 KB (SourceVault_kb)** | |
+| **低遅延 KB / 発表ライブ Q&A (SourceVault_kb / SourceVault_talkqa)** | |
 | `SourceVaultKBIngestSlideDeck[kbId, nbPath, opts]` | スライド notebook を「slide」「figure」単位で KB source として取り込む（LLM 不要）。 |
 | `SourceVaultKBCaptionFigures[kbId, opts]` | 未キャプション図版を vision で読み取り、hash キーでキャッシュしながら予算内で埋める。 |
 | `SourceVaultKBStatus[kbId]` | source/slide/figure/chunk/グラフ件数とロード状態を返す。 |
+| `SourceVaultTalkQABuild[deck, opts]` | スライドデッキ + 発表シナリオから想定質問・KB 由来回答・引用を持つ QA パックを事前構築する（ビルド時のみ LLM 使用）。 |
+| `SourceVaultTalkQAAsk[question, opts]` | ライブ質問に QA パック→KB→Web 検索提案の順で低遅延に回答する。PrivacyLevel/`Route` に応じて公開/拒否を判定。 |
+| `SourceVaultTalkQANeighbors[opts]` | 現在開いているスライドを起点に k-hop 近傍の関連トピックを返す。 |
 | **DB横断ハイパーリンク (SourceVault_crosslink)** | |
 | `SourceVaultCrossLinksView[anchor, opts]` | メール・OOPS・Eagle・ingest ソース横断の関連リンクを RRF ランキングで表示（クリックでネイティブビューへ遷移）。 |
 | `SourceVaultRegisterCrossLinkProvider[name, spec]` | 横断検索 provider（notebook DB 等）を追加登録。 |
@@ -885,10 +898,11 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultExamCompose[...]` | 試験構成から問題冊子 PDF と解答用紙 PDF を生成する。 |
 | `SourceVaultExerciseRegisterSubject[code, spec]` | 演習ストアに科目（シラバス・単元対応）を登録する。 |
 | `SourceVaultCourseSummaryGrade[...]` | Web レポートの要約 PDF を匿名化経由で vision 採点する。 |
-| **発表登録簿・ローカル音声/視覚資産 (SourceVault_slidedeck / _voice / _vision)** | |
+| **発表登録簿・ローカル音声/視覚資産・リアルタイム音声対話 (SourceVault_slidedeck / _voice / _vision / _realtime)** | |
 | `SourceVaultSlideDeckRegister[entry, talk]` | 発表タイトルと Sliden mp4 URL・発表シナリオを登録簿に upsert する。 |
-| `SourceVaultVoiceSpeak[text, opts]` | ローカル Piper Plus TTS でテキストを音声合成する。 |
+| `SourceVaultVoiceSpeak[text, opts]` | ローカル Piper Plus TTS / AivisSpeech Engine でテキストを音声合成する。 |
 | `SourceVaultVisionModel[name]` | 人物検出/姿勢推定 ONNX モデルの絶対パスを解決する。 |
+| `SourceVaultRealtimeStart[opts]` | 既定マイク/スピーカーで OpenAI Realtime とのクラウド音声会話セッションを開始する（Paid API 承認・provider access 判定必須）。 |
 | **サービス管理 (SourceVault_servicemanager)** | |
 | `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
 | `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |
@@ -919,7 +933,8 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultEagleRegisterLibrary[name, path]` | Eagle ライブラリを名前付きで登録（シンボリックパスで永続化、別 PC でも使用可）。 |
 | `SourceVaultEagleSetLibrary[nameOrPath]` | 現在の Eagle ライブラリを切り替える。 |
 | `SourceVaultEagleStatus[]` | 現在ライブラリ・item 数・API 状態・サマリー/ingest 件数の概要を返す。 |
-| `SourceVaultEagleSearch[query, opts]` | name / annotation / tags / url + サマリー本文の部分一致で item を検索。`"Folder"` / `"Tags"` / `"Ext"` / `"DateFrom"` 等のフィルタ対応。 || `SourceVaultEagleItems[]` | 全 item の metadata リストを返す（mtime.json による増分キャッシュ）。 |
+| `SourceVaultEagleSearch[query, opts]` | name / annotation / tags / url + サマリー本文の部分一致で item を検索。`"Folder"` / `"Tags"` / `"Ext"` / `"DateFrom"` 等のフィルタ対応。 |
+| `SourceVaultEagleItems[]` | 全 item の metadata リストを返す（mtime.json による増分キャッシュ）。 |
 | `SourceVaultEagleItemsInFolder[folder, opts]` | フォルダ（通常・スマートフォルダ）内 item を返す。 |
 | `SourceVaultEagleFolderList[]` | フォルダ一覧をノートブックリスト風の表で返す。フォルダ名クリックでビューを開く。 |
 | `SourceVaultEagleShowFolder[folder, opts]` | フォルダビューを新規ノートブックで開く。 |
@@ -1036,6 +1051,7 @@ SourceVaultNotebookSummary[nbPath]
 | `api_searchindex.md` | 検索基盤 API（release context・profiles・revocation・versioned snapshot） |
 | `api_searchview.md` | 検索ビュー API（live hypertext view・interaction meta-layer・retrieval episode） |
 | `api_kb.md` | Graph-RAG 低遅延ナレッジベース API（slide/figure 索引・caption・BM25+グラフ伝播検索） |
+| `api_talkqa.md` | 発表ライブ Q&A API（QA パック構築・ライブ質問応答・近傍探索） |
 | `api_servicemanager.md` | サービス管理 API（Web サービス・HTTP proxy・detached service・PDF グループ検索 profile） |
 | `api_webingest.md` | Web 検索 API（SearXNG・本文取得・importance・参照イベント rollup・要約） |
 | `api_mcp.md` | MCP tool schema / dispatch API（sv:// オブジェクト解決を含む） |
@@ -1047,8 +1063,9 @@ SourceVaultNotebookSummary[nbPath]
 | `api_course.md` | 授業支援 API（演習ストア・試験構成・答案採点・履修者名簿・成績簿・Web レポート採点） |
 | `api_course_private.md` | 授業支援 非公開拡張 API（配点シミュレーション、非公開・CodePrivacyLevel 0.1） |
 | `api_slidedeck.md` | 発表登録簿 API（発表タイトル→Sliden mp4 URL・発表シナリオ対応表） |
-| `api_voice.md` | ローカル音声資産 API（Piper Plus TTS・Vosk ASR の解決・合成） |
+| `api_voice.md` | ローカル音声資産 API（Piper Plus TTS・AivisSpeech Engine・Vosk ASR の解決・合成） |
 | `api_vision.md` | ローカル視覚資産 API（人物検出・姿勢推定 ONNX モデルの解決・導入） |
+| `api_realtime.md` | クラウド音声対話 API（OpenAI Realtime・Python worker 連携・スライド制御/QA ツール接続） |
 | `api_packageapi.md` | パッケージ API 索引 API（関数粒度 chunk 索引・決定的検索・契約 view・関連候補） |
 | `api_issues.md` | 汎用Issue管理 API（取り込み・分割・Risk/Importance 採点・解決ワークフロー） |
 | `api_diagnostics.md` | クロスパッケージ診断 API（ライセンス/トポロジプローブ・SystemDoctor・heartbeat・マルチ PC rollup） |
@@ -1365,6 +1382,7 @@ SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
 - [SourceVault_searchindex](https://github.com/transreal/SourceVault_searchindex)
 - [SourceVault_searchview](https://github.com/transreal/SourceVault_searchview)
 - [SourceVault_kb](https://github.com/transreal/SourceVault_kb)
+- [SourceVault_talkqa](https://github.com/transreal/SourceVault_talkqa)
 - [SourceVault_crosslink](https://github.com/transreal/SourceVault_crosslink)
 - [SourceVault_servicemanager](https://github.com/transreal/SourceVault_servicemanager)
 - [SourceVault_promptrouter](https://github.com/transreal/SourceVault_promptrouter)
@@ -1383,6 +1401,7 @@ SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
 - [SourceVault_slidedeck](https://github.com/transreal/SourceVault_slidedeck)
 - [SourceVault_voice](https://github.com/transreal/SourceVault_voice)
 - [SourceVault_vision](https://github.com/transreal/SourceVault_vision)
+- [SourceVault_realtime](https://github.com/transreal/SourceVault_realtime)
 - [SourceVault_issues](https://github.com/transreal/SourceVault_issues)
 - [SourceVault_knowledgehome](https://github.com/transreal/SourceVault_knowledgehome)
 - [SourceVault_cognition](https://github.com/transreal/SourceVault_cognition)

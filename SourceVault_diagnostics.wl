@@ -52,6 +52,10 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultDiagnosticsRegisterProbe",
   "SourceVault`SourceVaultDiagnosticsListProbes",
   "SourceVault`SourceVaultShadowedSystemSymbols",
+  "SourceVault`SourceVaultRepairShadowedSystemSymbols",
+  "SourceVault`SourceVaultShadowWatchStart",
+  "SourceVault`SourceVaultShadowWatchStop",
+  "SourceVault`SourceVaultShadowWatchLog",
   "SourceVault`SourceVaultDiagnosticsLightweightDoctor",
   "SourceVault`SourceVaultDiagnosticsTick",
   "SourceVault`SourceVaultDiagnosticsStartTick",
@@ -268,8 +272,45 @@ that symbol on parse (broke Dataset[..., MaxItems -> ...]). Returns a list of \
 False means an empty accidental symbol). Options: \"Contexts\" -> Automatic | {ctx..}; \
 \"IncludeInactive\" -> True also lists same-name symbols in contexts after System`. \
 Registered as diagnostics probe \"system-symbol-shadow\" (Degraded when non-empty). \
-Fix = remove the qualified reference in source and restart the kernel (or Remove[] \
-the accidental symbol and reload the package that defined its options).";
+Fix = remove the qualified reference in source, then either restart the kernel or \
+run SourceVaultRepairShadowedSystemSymbols[] (no restart needed).";
+
+SourceVaultRepairShadowedSystemSymbols::usage =
+  "SourceVaultRepairShadowedSystemSymbols[] removes (Remove[]) the accidental \
+EMPTY symbols currently shadowing System` built-ins (as listed by \
+SourceVaultShadowedSystemSymbols[]), so the built-ins work again WITHOUT a kernel \
+restart (e.g. Dataset[..., MaxItems -> ...] and the red Front End coloring recover \
+on the next evaluation). Symbols that carry definitions are kept and reported \
+under \"KeptDefined\" unless \"IncludeDefined\" -> True. Returns \
+<|\"Removed\", \"KeptDefined\", \"Failed\"|>. Repair alone does not fix the \
+ORIGIN: check SourceVaultShadowWatchLog[] for the creating file and remove the \
+qualified Ctx`Name reference there.";
+
+SourceVaultShadowWatchStart::usage =
+  "SourceVaultShadowWatchStart[] installs a $NewSymbol hook that catches the \
+CREATION of a symbol that IMMEDIATELY shadows a System` built-in: same short \
+name as a built-in, created in a context that precedes System` on the current \
+$ContextPath (the system-symbol-shadow accident, e.g. a qualified \
+GitHubREST`MaxItems reference in LLM-generated code evaluated at runtime). \
+Each hit is recorded in SourceVaultShadowWatchLog[] with the creating file \
+($InputFileName; empty = interactive/runtime evaluation) and raises the \
+SourceVaultShadowWatchStart::sysshadow warning immediately, so the origin is \
+attributed at the moment it happens instead of being discovered later by the \
+probe. Creations in Private` / Global` / off-path contexts stay silent (WL's \
+own paclets create System-named symbols in internal off-path contexts during \
+load; those never shadow). Auto-installed at load when $NewSymbol is free; \
+returns \"Installed\" | \"AlreadyInstalled\" | \"SkippedForeignNewSymbolHook\" \
+(an unrelated existing $NewSymbol hook is never clobbered).";
+
+SourceVaultShadowWatchStop::usage =
+  "SourceVaultShadowWatchStop[] disables the shadow watch and releases the \
+$NewSymbol hook (only when it is ours).";
+
+SourceVaultShadowWatchLog::usage =
+  "SourceVaultShadowWatchLog[] returns the shadow-watch hits recorded in this \
+kernel: a list of <|\"Symbol\", \"File\", \"Date\"|> (newest last, capped). \
+\"File\" -> \"\" means the symbol was created by interactive / runtime evaluation \
+(e.g. LLM-generated code), not by loading a package file.";
 
 SourceVaultDiagnosticsLightweightDoctor::usage =
   "SourceVaultDiagnosticsLightweightDoctor[] runs a cheap doctor: license probe + \
@@ -548,6 +589,119 @@ SourceVaultDiagnosticsRegisterProbe["system-symbol-shadow",
         <|"Health" -> "Degraded", "ReasonCode" -> "SystemSymbolShadowed",
           "Count" -> Length[sh],
           "Symbols" -> Map[#Context <> #Name &, sh]|>]]]];
+
+(* ------------------------------------------------------------
+   Shadow repair (2026-08-26): Remove[] the accidental empty
+   shadow symbols in-place so built-ins recover without a kernel
+   restart. Symbols with definitions are kept unless forced -- an
+   accidental symbol created by a mere qualified reference carries
+   no values at all, so removing only the empty ones is safe.
+   ------------------------------------------------------------ *)
+
+Options[SourceVaultRepairShadowedSystemSymbols] = {"IncludeDefined" -> False};
+
+SourceVaultRepairShadowedSystemSymbols[OptionsPattern[]] :=
+  Module[{sh, incl = TrueQ[OptionValue["IncludeDefined"]],
+      target, kept, removed = {}, failed = {}},
+    sh = SourceVaultShadowedSystemSymbols[];
+    If[!ListQ[sh], Return[$Failed]];
+    target = Select[sh, incl || !TrueQ[#Defined] &];
+    kept = Select[sh, !incl && TrueQ[#Defined] &];
+    Scan[
+      Function[rec, Module[{full = rec["Context"] <> rec["Name"]},
+        (* Remove / Unprotect are HoldAll: apply on the evaluated string
+           (Remove @@ {full}); Remove[full] would remove the Module
+           variable itself, not the named symbol *)
+        Quiet @ Check[
+          (Unprotect @@ {full}; Remove @@ {full}; AppendTo[removed, full]),
+          AppendTo[failed, full]]]],
+      target];
+    $iSVDiagShadowProbeCache = <||>;  (* force a fresh probe scan *)
+    <|"Removed" -> removed,
+      "KeptDefined" -> Map[#Context <> #Name &, kept],
+      "Failed" -> failed|>];
+
+(* ------------------------------------------------------------
+   Shadow watch (2026-08-26): $NewSymbol hook that attributes the
+   accident at CREATION time. The 60 s probe above detects a shadow
+   but cannot say where it came from; by then $InputFileName is
+   long gone. The hook records file + time the moment a System-named
+   symbol appears in a public non-System context -- including
+   runtime evaluation of LLM-generated code, which a static source
+   grep can never catch ($InputFileName == "" identifies that case).
+   Private` contexts are skipped: package option keys living in
+   Private` are harmless (never on $ContextPath) and number in the
+   dozens; Global` (path tail) never shadows either.
+   Cost: one hash lookup per new symbol; string tests only on hit.
+   ------------------------------------------------------------ *)
+
+SourceVaultShadowWatchStart::sysshadow =
+  "New symbol `1` shadows a System` built-in (created in: `2`). The built-in \
+(and its Front End coloring) is broken for this kernel until repaired. Run \
+SourceVaultRepairShadowedSystemSymbols[] to fix the session, and remove the \
+qualified reference at the recorded origin.";
+
+If[!ListQ[$iSVDiagShadowWatchLog], $iSVDiagShadowWatchLog = {}];
+$iSVDiagShadowWatchLimit = 200;
+
+(* fires only when the creation is an IMMEDIATE shadow: ctx precedes System`
+   on the current $ContextPath (probe semantics). WL's own paclet loads
+   routinely create System-named symbols in internal contexts that are never
+   on the path (System`Convert`HTMLDump`Monitor, FrontEnd`BoxFrame,
+   Image`InteractiveDump`Echo, ... -- 10 such during a full init load);
+   those never shadow anything and must stay silent. Load-time parse
+   accidents whose context reaches the path only later are still caught by
+   the 60 s probe above. *)
+iSVDiagShadowWatchHook[name_String, ctx_String] :=
+  If[TrueQ[$iSVDiagShadowWatchOn] &&
+       ctx =!= "System`" && ctx =!= "Global`" &&
+       AssociationQ[$iSVDiagShadowWatchSysNames] &&
+       KeyExistsQ[$iSVDiagShadowWatchSysNames, name] &&
+       StringFreeQ[ctx, "Private`"],
+    Module[{path = $ContextPath, cpos, spos},
+      cpos = FirstPosition[path, ctx, {Infinity}][[1]];
+      spos = FirstPosition[path, "System`", {Infinity}][[1]];
+      If[cpos < spos,
+        Block[{$iSVDiagShadowWatchOn = False},  (* reentrancy guard *)
+          If[!ListQ[$iSVDiagShadowWatchLog], $iSVDiagShadowWatchLog = {}];
+          AppendTo[$iSVDiagShadowWatchLog,
+            <|"Symbol" -> ctx <> name,
+              "File" -> If[StringQ[$InputFileName], $InputFileName, ""],
+              "Date" -> DateString[]|>];
+          If[Length[$iSVDiagShadowWatchLog] > $iSVDiagShadowWatchLimit,
+            $iSVDiagShadowWatchLog =
+              Take[$iSVDiagShadowWatchLog, -$iSVDiagShadowWatchLimit]];
+          $iSVDiagShadowProbeCache = <||>;
+          Message[SourceVaultShadowWatchStart::sysshadow, ctx <> name,
+            If[StringQ[$InputFileName] && $InputFileName =!= "",
+              $InputFileName, "interactive/runtime evaluation"]]]]]];
+
+SourceVaultShadowWatchStart[] := (
+  If[!AssociationQ[$iSVDiagShadowWatchSysNames],
+    $iSVDiagShadowWatchSysNames = AssociationMap[True &,
+      DeleteDuplicates[Last[StringSplit[#, "`"]] & /@ Names["System`*"]]]];
+  Which[
+    $NewSymbol === iSVDiagShadowWatchHook,
+      $iSVDiagShadowWatchOn = True; "AlreadyInstalled",
+    ValueQ[$NewSymbol],
+      "SkippedForeignNewSymbolHook",   (* never clobber an unrelated hook *)
+    True,
+      $iSVDiagShadowWatchOn = True;
+      $NewSymbol = iSVDiagShadowWatchHook;
+      "Installed"]);
+
+SourceVaultShadowWatchStop[] := (
+  $iSVDiagShadowWatchOn = False;
+  If[$NewSymbol === iSVDiagShadowWatchHook, Unset[$NewSymbol]];
+  "Stopped");
+
+SourceVaultShadowWatchLog[] :=
+  If[ListQ[$iSVDiagShadowWatchLog], $iSVDiagShadowWatchLog, {}];
+
+(* auto-install (weak): a free $NewSymbol is taken, a foreign hook is left
+   alone. Covers every kernel that loads the SourceVault chain, so the next
+   runtime-created shadow is attributed instead of rediscovered blind. *)
+Quiet @ SourceVaultShadowWatchStart[];
 
 (* ------------------------------------------------------------
    License capacity (measured).
