@@ -895,10 +895,45 @@ iSVPdfIndexRows[query_String, opts_Association : <||>] := Module[{rows, q, kws, 
 ];
 iSVPdfIndexRows[query_String] := iSVPdfIndexRows[query, <||>];
 
+(* ---- 横断検索 Grid の pdfindex 行アクション ----
+   行アクションを登録しないと既定 (SourceVaultShowSourceSummary /
+   SourceVaultOpenSourceFile) に落ち、src-* record が無い pdfindex 行では
+   クリックしても何も起きなかった。docId から doc メタを引いて原本 PDF を開く
+   (無ければ低漏洩の情報窓)。本文検索は SourceVaultSearch[query, "Group" -> name]。 *)
+iSVPdfIndexRowById[docId_String] :=
+  Module[{rows},
+    rows = Select[iSVPdfIndexDocRow @@@ Quiet @ Check[iSVPdfIndexDocFiles[], {}],
+      AssociationQ];
+    SelectFirst[rows, ToString @ Lookup[#, "Id", ""] === docId &, Missing["NotFound"]]];
+
+iSVPdfIndexOpenDoc[docId_String] :=
+  Module[{row = iSVPdfIndexRowById[docId], file},
+    If[! AssociationQ[row],
+      Return[<|"Status" -> "NotFound", "DocId" -> docId|>]];
+    file = ToString @ Lookup[row, "File", ""];
+    If[file =!= "" && TrueQ[Quiet @ Check[FileExistsQ[file], False]],
+      Quiet @ Check[SystemOpen[file], Null];
+      <|"Status" -> "Opened", "DocId" -> docId, "Path" -> file|>,
+      (* 原本が無い PC でも doc メタは見せる (パス以外は低漏洩) *)
+      Quiet @ Check[
+        CreateDocument[{
+          Cell[ToString @ Lookup[row, "Title", docId], "Subsection"],
+          Cell["Collection: " <> ToString @ Lookup[row, "Collection", ""], "Text"],
+          Cell[ToString @ Lookup[row, "Summary", ""], "Text"],
+          Cell["File: " <> file <> If[file === "", "(未記録)", " (この PC には無し)"],
+            "Text"],
+          Cell["本文検索: SourceVaultSearch[query, \"Group\" -> <group 名>]", "Text"]},
+          WindowTitle -> "PDF index: " <> docId], Null];
+      <|"Status" -> "OpenedInfo", "DocId" -> docId|>]];
+
 (* SourceVault.wl 本体 (SourceVaultSummaries) がロード済みなら provider 登録。
    standalone ロード時は登録関数が無いこともあるため guard する。 *)
 If[Quiet[Length[DownValues[SourceVault`SourceVaultRegisterSummaryProvider]] > 0],
   SourceVault`SourceVaultRegisterSummaryProvider["pdfindex", iSVPdfIndexRows]];
+If[AssociationQ[SourceVault`Private`$iSVRowTitleActions],
+  SourceVault`Private`$iSVRowTitleActions["pdfindex"] = iSVPdfIndexOpenDoc];
+If[AssociationQ[SourceVault`Private`$iSVRowOpenActions],
+  SourceVault`Private`$iSVRowOpenActions["pdfindex"] = iSVPdfIndexOpenDoc];
 
 (* rule を 1 行に適用し release 判定用 source 連想を作る。
    rule 未登録なら release context を与えず State も Draft = gate で Deny (fail-closed §7.4.1-4)。 *)

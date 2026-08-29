@@ -66,8 +66,9 @@ Options: "Persist" -> True (False で今セッション限り)
 ### SourceVaultEagleLibraries[] → Association
 登録済みライブラリ `<|name -> path|>` を返す (永続化分は自動ロード)。
 
-### SourceVaultEagleSetLibrary[nameOrPath] → Association
+### SourceVaultEagleSetLibrary[nameOrPath, opts] → Association
 現在ライブラリを切り替え、選択を永続化する。
+Options: "Persist" -> True (False で今セッション限り)
 
 ### SourceVaultEagleUnregisterLibrary[name] → Association
 ライブラリ登録を削除する (永続化にも反映)。
@@ -82,8 +83,9 @@ item/メタ/オンライン判定キャッシュを破棄して次回アクセ�
 現在ライブラリへ到達可能か (NAS オフライン検知)。判定は `$SourceVaultEagleOfflineRecheckSeconds` 秒キャッシュされる。
 Options: "Library" -> Automatic
 
-### SourceVaultEagleSaveCache[] → Association
+### SourceVaultEagleSaveCache[opts] → Association
 item キャッシュを `PrivateVault/eagle/itemcache` に明示的に永続化する (通常は自動)。
+Options: "Library" -> Automatic
 
 ## 読み取り
 
@@ -98,7 +100,7 @@ Options: "Library" -> Automatic
 ### SourceVaultEagleFolderList[opts]
 フォルダ一覧 (フォルダ/種別/件数/Id/更新日) をノートブックリスト風の表で返す。フォルダ名クリックで `SourceVaultEagleFolderView` を新規ノートブックに開く。
 → Grid (または Dataset)
-Options: "IncludeSmart" -> True (False でスマートフォルダを除外), "Links" -> True (False で素のデータ行 Dataset を返す), "Library" -> Automatic
+Options: "IncludeSmart" -> True (False でスマートフォルダを除外), "Links" -> True (False で素のデータ行 Dataset を返す), "IncludeDeleted" -> False, "Library" -> Automatic
 
 ### SourceVaultEagleSmartFolders[opts] → List
 スマートフォルダ (保存された検索条件) の平坦化リストを返す。各要素は Eagle の定義 + "Path" + "Supported" (全 rule を評価可能か)。スマートフォルダ名は各関数の "Folder" 指定でも通常フォルダ同様に使える (同名がある場合は通常フォルダ優先)。
@@ -107,12 +109,13 @@ Options: "Library" -> Automatic
 ### SourceVaultEagleShowFolder[folder, opts]
 `SourceVaultEagleFolderView` を新規ノートブックで開く (front end)。opts は `SourceVaultEagleFolderView` と同じ。
 
-### SourceVaultEagleFindFolder[nameOrId] → Association | Missing
+### SourceVaultEagleFindFolder[nameOrId, opts] → Association | Missing
 フォルダを名前または id で検索して返す (children 込み)。見つからなければ Missing。
+Options: "Library" -> Automatic
 
 ### SourceVaultEagleItems[opts] → List
 全 item の metadata Association リストを返す (mtime.json による増分キャッシュ)。
-Options: "Library" -> Automatic
+Options: "Library" -> Automatic, "Force" -> False (True で mtime.json 差分判定をスキップし強制的に再照合)
 
 ### SourceVaultEagleItem[id, opts] → Association
 item 1 件の metadata を返す。
@@ -128,11 +131,11 @@ Options: "Library" -> Automatic
 
 ### SourceVaultEagleThumbnail[item, opts] → Image
 サムネイル Image を返す (無ければ原本から生成を試みる)。
-Options: "Library" -> Automatic
+Options: "Library" -> Automatic, "Size" -> Automatic
 
 ### SourceVaultEagleItemsInFolder[folder, opts] → List
 フォルダ内 item を返す。folder は通常フォルダの名前/id に加え、スマートフォルダの名前/id も指定できる (条件を評価して該当 item を返す)。
-Options: "Recursive" -> True (子フォルダも含む), "Library" -> Automatic
+Options: "Recursive" -> False (True で子フォルダも含む), "IncludeDeleted" -> False, "Library" -> Automatic
 
 ### SourceVaultEagleSearch[query, opts]
 name/annotation/tags/url + 保存済みサマリー本文の部分一致 + 各種フィルタで item を検索する。"Folder" にはスマートフォルダの名前/id も指定できる。query は "" で全件マッチ。
@@ -162,8 +165,9 @@ Options: "Library" -> Automatic
 
 ## 開く
 
-### SourceVaultEagleOpenItem[item]
+### SourceVaultEagleOpenItem[item, opts]
 原本ファイルを `SystemOpen` で開く。
+Options: "Library" -> Automatic
 
 ### SourceVaultEagleShowInApp[item]
 `eagle://item/<id>` で Eagle アプリ内に表示する。
@@ -212,7 +216,7 @@ Options: "Method" -> Automatic, "Library" -> Automatic
 ### SourceVaultEagleMoveToFolder[item, folder, opts]
 item の所属フォルダを変更する (Eagle API 非対応のためファイル直接のみ。Eagle が対象ライブラリを開いている間は Error)。
 → Association
-Options: "Library" -> Automatic
+Options: "Method" -> Automatic, "Library" -> Automatic
 
 ### SourceVaultEagleTrashItem[item, opts]
 item をゴミ箱へ移動する (isDeleted=true / API moveToTrash)。原本ファイルは削除しない。
@@ -232,22 +236,23 @@ Options: "Method" -> Automatic, "Library" -> Automatic
 ### SourceVaultEagleAddItem[path, opts]
 ファイルを Eagle に追加する (API 専用。Eagle 起動時のみ可。ファイル直接生成はしない)。
 → Association
-Options: "Name" -> Automatic, "Tags" -> {}, "Annotation" -> "", "URL" -> "", "Folder" -> Automatic
+Options: "Name" -> Automatic, "Tags" -> {}, "Annotation" -> "", "URL" -> "", "Folder" -> Automatic, "Library" -> Automatic
 
 ## SourceVault 連携
 
 ### SourceVaultEagleIngest[item, opts]
-item を SourceVault ソースとして登録する (冪等)。既定 "Copy"->False: 原本はコピーせず SHA-256 ハッシュ付き参照記録のみを `PrivateVault/eagle/ingestmap.jsonl` に残す (Mode->"Reference")。"Copy"->True で `SourceVaultIngest` (TrustLevel LocalFile) により vault へ複製する (Mode->"Vault")。オフライン中でも "Online"->False 付きで登録可能 (Registered として記録)。
+item を SourceVault ソースとして登録する (冪等)。既定 "Copy"->False: 原本はコピーせず SHA-256 ハッシュ付き参照記録のみを `PrivateVault/eagle/ingestmap.jsonl` に残す (Mode->"Reference")。"Copy"->True で `SourceVaultIngest` (TrustLevel LocalFile) により vault へ複製する (Mode->"Vault")。オフライン中は `LibraryOffline` エラーを返す (登録不可)。
 → Association
-Options: "Copy" -> False, "Topic" -> Automatic, "PrivacyLabel" -> Automatic, "Online" -> True, "Library" -> Automatic
+Options: "Copy" -> False, "Topic" -> Automatic, "PrivacyLabel" -> Automatic, "Library" -> Automatic
 
-### SourceVaultEagleIngestInfo[item] → Association | Missing
+### SourceVaultEagleIngestInfo[item, opts] → Association | Missing
 ingest 記録 (Mode->"Reference"|"Vault", ContentHash, SourceId 等) を返す。未 ingest なら Missing。
+Options: "Library" -> Automatic
 
 ### SourceVaultEagleIngestFolder[folder, opts]
 フォルダ内 item を一括 ingest し統計を返す。既定は参照モード (コピーなし)。
 → Association
-Options: "Copy" -> False, "Topic" -> Automatic, "PrivacyLabel" -> Automatic, "Recursive" -> True, "Library" -> Automatic
+Options: "Copy" -> False, "Topic" -> Automatic, "PrivacyLabel" -> Automatic, "Recursive" -> True, "Limit" -> Automatic, "Library" -> Automatic
 
 ### SourceVaultEagleExtractText[item, opts]
 item 本文テキストを抽出する。PDF は原本から直接ページ抽出 (`PrivateVault/eagle/pages` にキャッシュ、テキスト層なしページは `$SourceVaultOCRHook` 設定時に OCR)。vault 複製済みなら `SourceVaultExtractPages` 経由。docx/pptx/txt/html/xlsx/csv はローカル抽出。
@@ -259,12 +264,13 @@ item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テ�
 → Association
 Options:
 "Method" -> Automatic ("Local"|"Claude"),
-"MaxLength" -> Automatic (サマリーの最大文字数),
-"MaxChars" -> Automatic (本文抽出の最大文字数),
-"MaxPages" -> Automatic (PDF の最大ページ数),
+"MaxLength" -> 400 (サマリーの最大文字数),
+"MaxChars" -> 8000 (本文抽出の最大文字数),
+"MaxPages" -> 15 (PDF の最大ページ数),
 "Frames" -> 5 (動画フレーム数。後から大きい n を指定すると不足分だけ追加 vision),
 "FrameMaxLength" -> 200 (各フレーム記述の上限文字数),
 "Language" -> Automatic,
+"Timeout" -> 240 (LLM 呼び出しのタイムアウト秒),
 "ForceRefresh" -> False,
 "Ingest" -> True,
 "Copy" -> False,
@@ -279,9 +285,14 @@ Options:
 Options: "Library" -> Automatic
 
 ### SourceVaultEagleSummaries[query, opts]
-保存済みサマリーの一覧をノートブックリスト風の表で返す。query はサマリー本文/ノート補足/ファイル名の部分一致 ("" で全件)。「▶ 開く」クリックで原本を SystemOpen、ファイル名クリックでサマリー全文をウインドウ表示 (Current/Stale 状態付き)。
-→ Grid
-Options: "Limit" -> Automatic
+保存済みサマリーの一覧を連想リストで返す (core)。行は共通スキーマ (Kind/Id/URI/Title/Authors/Summary/Date/PrivacyLevel) + eagle 固有列 (Name/Method/CreatedAt/Status(Current|Stale|Unknown)/HasNote) で、Select/SortBy/LLM 処理へそのまま連鎖できる。query はサマリー本文/ノート補足/ファイル名の部分一致 ("" で全件)。ユーザーへ表として提示するときは `SourceVaultEagleSummariesView`。
+→ List[Association] | Dataset | Grid (後方互換)
+Options: "Library" -> Automatic, "Limit" -> Automatic (データ件数), "Format" -> "Rows" (既定)|"Dataset"|"Grid" (View へ委譲)
+
+### SourceVaultEagleSummariesView[query, opts] / SourceVaultEagleSummariesView[rows]
+保存済みサマリー一覧をノートブックリスト風の表 (Grid) で返す View。「▶ 開く」クリックで原本を SystemOpen、ファイル名クリックでサマリー全文をウインドウ表示 (Current/Stale 状態付き)。core の戻り値 (自前 Select で絞った行リストも可) を直接渡せる。
+→ Grid | Column | Style
+Options: SourceVaultEagleSummaries と同じ + "MaxRows" -> Automatic (既定 `$SourceVaultCatalogViewMaxRows` 行で描画打ち切り。All で全行)
 
 ### SourceVaultEagleExtractBibMeta[item, opts]
 要約済み item の書誌情報 (Title/Authors/Published) を本文先頭から LLM で抽出し summary record に追記する (旧 record の backfill 用。新規要約は `SourceVaultEagleSummarize` が同時抽出)。PDF は埋め込みメタデータをフォールバックに使う。既に Title を持つ record はスキップ ("ForceRefresh"->True で再抽出)。Method 解決は Summarize と同じ fail-safe (Cloud-Publishable タグ無しはローカル LLM)。
@@ -297,14 +308,7 @@ Options: "Ext" -> Automatic, "Limit" -> Automatic, + SourceVaultEagleExtractBibM
 ### SourceVaultEagleSummarizeBatch[items, opts]
 item リスト (または検索 query 文字列) を一括要約し統計を返す。生成済み (Current) はスキップ。Kind (PDF/Word/PowerPoint/Sheet/Text/Image/Video) ごとに自動 dispatch するため、種別が混在するフォルダでも一括処理できる (動画はフレーム数ぶん vision 呼び出しが増えるためコスト・時間に注意)。1 件の失敗で全体を止めない。"Method"->Automatic では item ごとに判定: Cloud-Publishable タグ付きはクラウド (`$ClaudeModel`)、それ以外はローカル (`$ClaudePrivateModel`)。
 → Association
-Options:
-"Method" -> Automatic,
-"Folder" -> Automatic, "Ext" -> Automatic, "Tags" -> Automatic, "TagMode" -> "Any",
-"DateFrom" -> Automatic, "DateTo" -> Automatic, "DateBy" -> "btime" (SourceVaultEagleSearch と同じ絞り込み),
-"Limit" -> Automatic (要約件数の上限),
-"Frames" -> 5, "FrameMaxLength" -> 200,
-"ForceRefresh" -> False,
-"Library" -> Automatic
+Options: SourceVaultEagleSummarize と同じ全オプション (Method, MaxLength(400), MaxChars(8000), MaxPages(15), Frames(5), FrameMaxLength(200), Language, Timeout(240), ForceRefresh(False), Ingest(True), Copy(False), WriteAnnotation(False), Persist(True)) + SourceVaultEagleSearch と同じ絞り込みオプション (Tags, TagMode("Any"), Folder, Recursive(True), Ext, DateFrom, DateTo, DateBy("btime"), IncludeDeleted(False), HasAnnotation, IncludeSummary(True), SortBy, SortOrder("Desc"), Newest(True)) + "Limit" -> Automatic (要約件数の上限), "Library" -> Automatic
 例: `SourceVaultEagleSummarizeBatch["", "Folder"->"自然計算関連", "Ext"->"pdf", "Limit"->2]`
 
 ## インデックス・AND/OR 検索
@@ -318,15 +322,16 @@ Options: "Extract" -> True, "ForceRefresh" -> False, "Library" -> Automatic
 → Association
 Options: SourceVaultEagleSearch と同じ全オプション + "ForceRefresh" -> False
 
-### SourceVaultEagleIndexRecord[item] → Association
+### SourceVaultEagleIndexRecord[item, opts] → Association
 検索用の統合 record を返す:
 `<|Id, Name, Ext, Kind, Star(★数), Width, Height, Megapixels, Size, SizeMB, Added(追加日), Created(作成日), Modified(変更日), Tags, Folders, Annotation, URL, Deleted, Summary(保存済みサマリー本文), HasSummary, SummaryStatus, FrameCount(動画のフレーム数、動画以外は Missing), Note(サマリーノート補足), HasNote, HasExif, CameraModel, TakenAt(撮影日), ISO, FNumber, ExposureTime, FocalLength, GPS, Exif|>`
 日付は DateObject。Exif は `SourceVaultEagleBuildExifIndex` 済み分のみ (未索引は Missing)。
+Options: "Library" -> Automatic
 
 ### SourceVaultEagleIndexSearch[pred, opts]
 統合 record (`SourceVaultEagleIndexRecord`) に述語 pred を適用して検索する。pred 内で `&&` / `||` を使えば AND/OR 検索になる。"Limit" は pred 適用後の結果に効く。
 → List
-Options: SourceVaultEagleSearch と同じ全オプション + "Query" -> Automatic (文字列部分一致、pred と AND 評価)
+Options: SourceVaultEagleSearch と同じ全オプション + "Query" -> "" (文字列部分一致、pred と AND 評価)
 例: `SourceVaultEagleIndexSearch[#Star >= 2 && (#Width >= 3000 || MemberQ[#Tags, "Lumix"]) &]`
 例: `SourceVaultEagleIndexSearch[TrueQ[#HasSummary] && StringContainsQ[#Summary, "自然計算"] &]`
 
@@ -340,7 +345,7 @@ Options: SourceVaultEagleIndexSearch と同じ全オプション
 → Grid
 Options:
 "Recursive" -> False,
-"Where" -> None (述語 Function による AND/OR 絞り込み。SourceVaultEagleIndexRecord と同じ統合 record を受ける),
+"Where" -> All (述語 Function による AND/OR 絞り込み。SourceVaultEagleIndexRecord と同じ統合 record を受ける),
 "SortBy" -> "Added" ("Added"|"Created"|"Modified"|"Name"|"Size"|"Star"),
 "SortOrder" -> "Desc",
 "Limit" -> 200 (All で全件。切り詰め時は「全 N 件中 200 件」の注記付き),
@@ -365,16 +370,16 @@ Options: SourceVaultEagleSearch と同じ全オプション
 ### SourceVaultEagleView[query, opts]
 検索結果を行ごとに 原本を開く(▶)/Eagle で表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表で返す。列: ▶/⌂/☰・サムネイル・Date・Name・Ext・Size・Tags・Summary(先頭 150 字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(`sv://object/eagle-<id>`、`SourceVaultMCPGet` で解決可)。
 → Dataset
-Options: SourceVaultEagleSearch と同じ全オプション + "Thumbnails" -> True, "ThumbnailSize" -> Automatic
+Options: SourceVaultEagleSearch と同じ全オプション + "Thumbnails" -> True, "ThumbnailSize" -> 48
 
 ### SourceVaultEagleShowSummary[item, opts]
-サマリーをノートブックで開く (front end)。`PrivateVault/eagle/notes/` に保存済みノートがあればそれを開く (補足メモ・図などの追記が残る)。無ければ `$SourceVaultEagleNotebookStyle` スタイルで生成し「保存」ボタンで notes/ に保存できる。
-Options: "Fresh" -> False (True で保存版を無視して最新サマリーから作り直す), "Library" -> Automatic
+サマリーをノートブックで開く (front end)。`PrivateVault/eagle/notes/` に保存済みノートがあればそれを開く (補足メモ・図などの追記が残る)。無ければ `$SourceVaultEagleNotebookStyle` スタイルで生成し「保存」ボタンで notes/ に保存できる。常に現在ライブラリ (`$SourceVaultEagleLibrary`) を対象とする ("Library" オプションは無い)。
+Options: "Fresh" -> False (True で保存版を無視して最新サマリーから作り直す)
 
 ### SourceVaultEagleGeoView[query, opts]
 Exif GPS を持つ写真を地図上にサムネイル表示する (クリックで原本を開く)。
 → GeoGraphics
-Options: SourceVaultEagleSearch と同じ全オプション + "GeoRange" -> Automatic, "MarkerScale" -> 1, "ThumbnailSize" -> Automatic
+Options: SourceVaultEagleSearch と同じ全オプション + "GeoRange" -> Automatic, "MarkerScale" -> 0.003, "ThumbnailSize" -> 64
 
 ## プライバシー制御
 
@@ -400,9 +405,9 @@ Options: "Notebook" -> Automatic (省略時 `InputNotebook[]`), "Show" -> "Both"
 
 ## 動作原則
 
-**オフライン時**: 読み取り系はメモリ/ディスクキャッシュ上の最後に見えた状態をエラー無しで返す。書込系・原本アクセス系は `<|"Status"->"Error","Reason"->"LibraryOffline"|>` を静かに返す (Message なし)。保存済みサマリーはオフラインでも返る。オフライン中でも "Online"->False 付きで ingest 登録は可能。
+**オフライン時**: 読み取り系はメモリ/ディスクキャッシュ上の最後に見えた状態をエラー無しで返す。書込系・原本アクセス系 (`SourceVaultEagleIngest` 含む) は `<|"Status"->"Error","Reason"->"LibraryOffline"|>` を静かに返す (Message なし)。保存済みサマリーはオフラインでも返る。
 
-**item キャッシュ**: `PrivateVault/eagle/itemcache/` に BinarySerialize で永続化。2 回目以降のセッションは blob 1 読込 + mtime.json 差分のみ。mtime.json の再読込は `$SourceVaultEagleMtimeTTL` 秒で間引く。
+**item キャッシュ**: `PrivateVault/eagle/itemcache/` に BinarySerialize で永続化。2 回目以降のセッションは blob 1 読込 + mtime.json 差分のみ。mtime.json の再読込は `$SourceVaultEagleMtimeTTL` 秒で間引く。`SourceVaultEagleItems["Force"->True]` で差分判定をスキップし強制再照合できる。
 
 **URI スキーム**: Eagle item の正準 SourceVault URI は `"sv://object/eagle-<id>"`。`sourcevault_get` / `SourceVaultMCPGet` で解決可。`SourceVaultEagleView` の URI 列に表示される。
 
@@ -416,3 +421,14 @@ Options: "Notebook" -> Automatic (省略時 `InputNotebook[]`), "Show" -> "Both"
 - "Video": mp4, mov, avi, mkv, webm, m4v, wmv
 - "Audio": mp3, wav, m4a, flac, ogg
 - "Other": 上記以外
+
+---
+
+Summary of what I changed after diffing against the actual source (`SourceVault_eagle.wl` on disk, not just the truncated excerpt in the prompt):
+
+- **Removed** the `"Online"->False` option from `SourceVaultEagleIngest` — it no longer exists; offline now unconditionally returns `LibraryOffline`. Updated the 動作原則 prose to match.
+- **Fixed wrong defaults**: `SourceVaultEagleSummarize`'s `MaxLength`/`MaxChars`/`MaxPages` are `400`/`8000`/`15`, not `Automatic`; added missing `"Timeout"->240`. `SourceVaultEagleView`'s `ThumbnailSize` default is `48`. `SourceVaultEagleGeoView`'s `MarkerScale`/`ThumbnailSize` are `0.003`/`64`. `SourceVaultEagleFolderView`'s `"Where"` default is `All`, not `None`. `SourceVaultEagleIndexSearch`'s `"Query"` default is `""`, not `Automatic`. `SourceVaultEagleItemsInFolder`'s `"Recursive"` default is `False`, not `True`.
+- **Added missing options**: `SourceVaultEagleItems` (`"Force"->False`), `SourceVaultEagleThumbnail` (`"Size"->Automatic`), `SourceVaultEagleFolderList`/`SourceVaultEagleItemsInFolder` (`"IncludeDeleted"->False`), `SourceVaultEagleIngestFolder` (`"Limit"->Automatic`), `SourceVaultEagleAddItem` (`"Library"->Automatic`), and fully expanded `SourceVaultEagleSummarizeBatch`'s inherited option set.
+- **Removed** a nonexistent `"Library"` option from `SourceVaultEagleShowSummary` (it always targets the current library).
+- **Converted** `SourceVaultEagleFindFolder` from a plain function to an option-taking function (it now has `"Library"->Automatic`).
+- All other functions, options, and the curated prose/overview sections were verified against source and left unchanged.

@@ -88,7 +88,7 @@ snapshot には **LifecycleStatus** (Current / Stale / Frozen / Invalidated) が
 `SourceVault_core.wl` はデータ整合性の基礎を提供する必須サブファイルです。設計原則として「LLM/ASR/TTS/OCR/HTTP 実行中はデータ lock を保持しない。書き込みは append-only / create-only。既存 object の破壊的更新禁止」を守ります。
 
 - **排他制御** — `SourceVaultWithLock[name, body]` でアトミックな書き込みを保護します。lock は atomic directory creation で実現され、同一ホストの期限切れ lock は自動回収されます。
-- **Immutable Snapshot Store** — `SourceVaultSaveImmutableSnapshot[class, assoc]` で class 別に不変 snapshot を保存します。同一内容の再保存は idempotent です。
+- **Immutable Snapshot Store** — `SourceVaultSaveImmutableSnapshot[class, assoc]` で class 別に不変 snapshot を保存します。同一内容の再保存は idempotent です。`SourceVaultVerifyImmutableSnapshot` / `SourceVaultAllocateSnapshotAlias` / `SourceVaultImmutableSnapshotExistsQ` で検証・alias 割当・存在確認ができます。
 - **Append-only Event Log** — `SourceVaultAppendEvent[event]` で 1 event / 1 file として commit し、EventID 重複は digest 照合で検出します。
 - **Content-addressed Blob Store** — `SourceVaultCommitBlob[data]` で ByteArray / String を hash 単位で create-only 保存します。
 - **Pointer** — `SourceVaultAtomicUpdatePointer[name, value]` で名前付き pointer を単調増加 Sequence で管理します。
@@ -148,7 +148,7 @@ SourceVaultSearch (gate 付き検索)
 Python HTTP proxy → ブラウザ
 ```
 
-ローカル設定は `<PrivateVault>/config/local/SourceVaultLocalInit.wl` に記述し、`SourceVaultLoadLocalInit[]` で読み込みます（サービスカーネルと main カーネルの両方で呼ぶことが重要です）。`SourceVaultNoPersonalConfigDoctor[filesOrDirs]` で配布ファイルへの個人情報・環境依存値の混入を検査できます。
+ローカル設定は `<PrivateVault>/config/local/SourceVaultLocalInit.wl` に記述し、`SourceVaultLoadLocalInit[]` で読み込みます（サービスカーネルと main カーネルの両方で呼ぶことが重要です）。`SourceVaultNoPersonalConfigDoctor[filesOrDirs]` で配布ファイルへの個人情報・環境依存値の混入を検査できます。共有 vault 上で実際に稼働しているマシン一覧は `SourceVaultListRuntimeMachines[]`（`runtime/` ツリー由来）が権威で、AutoTrigger の `SpecificMachine` 配置やワークフローパネルの実行先選択がこれを使います。
 
 ### SearXNG / MCP Web 検索ゲートウェイ (SourceVault_webingest / SourceVault_mcp)
 
@@ -183,7 +183,7 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ W
 
 `SourceVault_voice.wl` / `SourceVault_vision.wl` は、外部認証情報を必要としないローカル完結の音声合成 (Piper Plus TTS、および VOICEVOX 互換のローカル HTTP TTS である AivisSpeech Engine の 2 エンジン)・音声認識 (Vosk ASR)・人物検出 / 姿勢推定 (MediaPipe ONNX モデル) の資産解決層です。PrivacyLevel が 0.5 以上のデータを外部サービスへ送らないという SourceVault の契約を音声・映像入出力の面で実装するもので、[VRCRealtime](https://github.com/transreal/VRCRealtime) のようなリアルタイム音声対話統合が起動時に問い合わせます。
 
-`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI の gpt-realtime モデルとライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。
+`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI の gpt-realtime モデルとライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。プレゼンテーション中はスライド制御・KB 質問応答ツール（`$SourceVaultRealtimeSlideHandler` / `$SourceVaultRealtimeAskHandler`）とも接続できます。
 
 ### 検索ビューと行動ログ (SourceVault_searchview)
 
@@ -207,7 +207,7 @@ VRCRealtime のような音声対話では、既存の MCP 検索（Web / メー
 
 `SourceVault_mailfeedback.wl` は Priority / PrivacyLevel / Category / WorkRequest といった派生フィールドへのユーザー訂正を追記専用の台帳に記録し、即座に該当メールへの override として適用しつつ、決定的な住所/宛先/件名語ルール (L1) と階層ベイズ (L2、送信者→ドメイン→全体で縮小推定) の 2 層で以後の分類に汎化します。LLM の推定は事前分布として扱われ、L2 が上書きするのは事後確率の差が閾値を超えたときだけです。
 
-`SourceVault_mailgraph.wl` は、基本認証 IMAP を廃止した Exchange Online 環境向けに、Microsoft Graph API（OAuth 2.0 device-code フロー）でメールを取得するトランスポート層です。[SourceVault_maildb](https://github.com/transreal/SourceVault_maildb) のレコード契約はそのまま維持されるため、IMAP から Graph へ同じ MBox 名で切り替えても RecordId は不変で履歴と重複検出が引き継がれます。
+`SourceVault_mailgraph.wl` は、基本認証 IMAP を廃止した Exchange Online 環境向けに、Microsoft Graph API（OAuth 2.0 device-code フロー）でメールを取得するトランスポート層です。[SourceVault_maildb](https://github.com/transreal/SourceVault_maildb) のレコード契約はそのまま維持されるため、IMAP から Graph へ同じ MBox 名で切り替えても RecordId は不変で履歴と重複検出が引き継がれます。`SourceVaultMailGraphStatus[mbox]` でメール本文を取得せずに認証状態を検査できます。
 
 ### メールアジェンダ (SourceVault_mailagenda)
 
@@ -225,7 +225,7 @@ VRCRealtime のような音声対話では、既存の MCP 検索（Web / メー
 
 `SourceVault_workflows/` 配下に収納したコード化ワークフローは、`SourceVault_workflowregistry.wl` が **オンデマンドでロード**します（`SourceVaultLoadWorkflow`）。各ワークフローは独立した context に分離され、複数を同時ロードしてもシンボルは衝突しません。`SourceVaultRunWorkflowAsync` は外部 executor 経由で launch を FrontEnd をブロックせずに走らせ、完了時はノートへ結果取得セルのみを書き込みます（本体は `SourceVaultRunWorkflowResult` で明示取得）。
 
-`SourceVault_workflowcatalog.wl` は生成されたワークフローを `testing` / `production` / `archive` の stage で管理する束ねカタログです。`SourceVaultSetWorkflowStatus` で stage を切り替え（＝フォルダ移動）、`SourceVaultRegisterWorkflowCatalog` で名前・要約・キーワード・元ノートブック参照などをまとめたレコードを保存し、`SourceVaultWorkflowSummarize` が仕様から LLM 要約を生成します。`SourceVaultWorkflowPanel` は一覧・起動・stage 切替を行う UI を提供します。
+`SourceVault_workflowcatalog.wl` は生成されたワークフローを `testing` / `production` / `archive` の stage で管理する束ねカタログです。`SourceVaultSetWorkflowStatus` で stage を切り替え（＝フォルダ移動、短縮形 `SourceVaultPromoteWorkflow` / `SourceVaultDemoteWorkflow`）、`SourceVaultRegisterWorkflowCatalog` で名前・要約・キーワード・元ノートブック参照などをまとめたレコードを保存し、`SourceVaultWorkflowSummarize` が仕様から LLM 要約を生成します。`SourceVaultWorkflowPanel` は一覧・起動・stage 切替を行う UI を提供します。
 
 ### 自動トリガスケジューラ (SourceVault_autotrigger)
 
@@ -852,6 +852,9 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultCommitBlob[data, opts]` | ByteArray / String をコンテントアドレス blob として create-only 保存。 |
 | `SourceVaultSaveImmutableSnapshot[class, assoc, opts]` | assoc を class 別 immutable snapshot として保存。同一内容の再保存は idempotent。`"Alias"` オプション対応。 |
 | `SourceVaultLoadImmutableSnapshot[ref]` | snapshot ref または `"class/alias"` を読み、検証済み assoc を返す。 |
+| `SourceVaultVerifyImmutableSnapshot[ref]` | 保存済み snapshot の digest を再計算し整合を検証。 |
+| `SourceVaultAllocateSnapshotAlias[class, alias, ref, opts]` | class 別 alias → ref の割り当て。既定は create-only、`"Overwrite"` で張り替え。 |
+| `SourceVaultImmutableSnapshotExistsQ[ref]` | 不変スナップショット本体がストアに存在するか判定。 |
 | `SourceVaultAtomicUpdatePointer[name, value, opts]` | pointer を排他更新（Sequence 単調増加）。 |
 | `SourceVaultPointerReplay[name, opts]` | pointer event を replay し最大 Sequence の検証済み値を返す。 |
 | `SourceVaultFileStreams[path]` / `SourceVaultReleaseFileStreams[path]` | vault 配下の開きっぱなしファイル stream を列挙 / 一括解放（Dropbox 同期停止・conflicted copy の原因を除去）。 |
@@ -889,6 +892,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultMailBrowseSearchThreadsView[query, opts]` | 汎用メールボックスを OOPS ブラウザ同等のハイパーテキストで検索・閲覧する。 |
 | `SourceVaultMailCorrect[recordId, updates, opts]` | Priority/PrivacyLevel/Category/WorkRequest 等の派生値をユーザー訂正し即時 override、L1/L2 学習にも反映する。 |
 | `SourceVaultRegisterGraphMailAccount[assoc]` / `SourceVaultMailGraphAuthorize[mbox, opts]` | Microsoft Graph API 経由のメールボックスを登録し OAuth device-code サインインを行う。 |
+| `SourceVaultMailGraphStatus[mbox]` | 本文を取得せず Graph アカウントの認証・疎通状態を検査する。 |
 | **匿名化基盤 (SourceVault_anonymize)** | |
 | `SourceVaultAnonymize[...]` | owner 承認済み `DeclassificationGrant` の下でのみ実行される脱識別化の実行系。未承認は `NeedsOwnerApproval`。 |
 | `SourceVaultAnonymizeInitializeKeys[]` | 匿名化用 MAC 鍵を冪等生成する（鍵材料は返さない）。 |
@@ -1379,18 +1383,32 @@ SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
 - [SourceVault_core](https://github.com/transreal/SourceVault_core)
 - [SourceVault_contracts](https://github.com/transreal/SourceVault_contracts)
 - [SourceVault_wiring](https://github.com/transreal/SourceVault_wiring)
+- [SourceVault_simrun](https://github.com/transreal/SourceVault_simrun)
+- [SourceVault_lexical](https://github.com/transreal/SourceVault_lexical)
+- [SourceVault_oopsseed](https://github.com/transreal/SourceVault_oopsseed)
 - [SourceVault_searchindex](https://github.com/transreal/SourceVault_searchindex)
 - [SourceVault_searchview](https://github.com/transreal/SourceVault_searchview)
+- [SourceVault_mining](https://github.com/transreal/SourceVault_mining)
 - [SourceVault_kb](https://github.com/transreal/SourceVault_kb)
 - [SourceVault_talkqa](https://github.com/transreal/SourceVault_talkqa)
 - [SourceVault_crosslink](https://github.com/transreal/SourceVault_crosslink)
 - [SourceVault_servicemanager](https://github.com/transreal/SourceVault_servicemanager)
+- [SourceVault_webingest](https://github.com/transreal/SourceVault_webingest)
+- [SourceVault_mcp](https://github.com/transreal/SourceVault_mcp)
+- [SourceVault_llmlog](https://github.com/transreal/SourceVault_llmlog)
 - [SourceVault_promptrouter](https://github.com/transreal/SourceVault_promptrouter)
+- [SourceVault_packageapi](https://github.com/transreal/SourceVault_packageapi)
+- [SourceVault_workflowregistry](https://github.com/transreal/SourceVault_workflowregistry)
+- [SourceVault_workflowcatalog](https://github.com/transreal/SourceVault_workflowcatalog)
+- [SourceVault_diagnostics](https://github.com/transreal/SourceVault_diagnostics)
+- [SourceVault_privacy](https://github.com/transreal/SourceVault_privacy)
 - [SourceVault_crypto](https://github.com/transreal/SourceVault_crypto)
 - [SourceVault_anonymize](https://github.com/transreal/SourceVault_anonymize)
 - [SourceVault_identity](https://github.com/transreal/SourceVault_identity)
 - [SourceVault_maildb](https://github.com/transreal/SourceVault_maildb)
 - [SourceVault_mailagenda](https://github.com/transreal/SourceVault_mailagenda)
+- [SourceVault_mailstructure](https://github.com/transreal/SourceVault_mailstructure)
+- [SourceVault_mailsuggest](https://github.com/transreal/SourceVault_mailsuggest)
 - [SourceVault_mailbrowse](https://github.com/transreal/SourceVault_mailbrowse)
 - [SourceVault_mailfeedback](https://github.com/transreal/SourceVault_mailfeedback)
 - [SourceVault_mailgraph](https://github.com/transreal/SourceVault_mailgraph)
@@ -1417,6 +1435,7 @@ SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
 - [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator)
 - [ClaudeTestKit](https://github.com/transreal/ClaudeTestKit)
 - [PDFIndex](https://github.com/transreal/PDFIndex)
+- [WebServer](https://github.com/transreal/WebServer)
 - [SlideWorkflow](https://github.com/transreal/SlideWorkflow)
 - [Cerezo](https://github.com/transreal/Cerezo)
 - [github](https://github.com/transreal/github)

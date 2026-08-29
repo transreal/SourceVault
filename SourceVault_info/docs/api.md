@@ -44,26 +44,52 @@ vault 内の全 source ID リスト。
 
 ## ソース一覧 / 横断検索
 
+**core / View 分離**: 一覧・検索の関数は「連想リストを返す core」と「表を返す View」の対で用意してある。core (`SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries`) は `List[Association]` を返すので Select/SortBy/JoinAcross や LLM の後段処理へそのまま連鎖でき、ユーザーへ提示する表は View (`…View`) が作る。表示行数の上限も View 層のみで掛ける (`$SourceVaultCatalogViewMaxRows`)。素の Dataset/Grid を手組みしないこと (行アクション ▶開く / 種別ごとのクリック動作が失われる)。
+
 ### SourceVaultSources[query, opts]
-ingest 済み全ソースをメタデータ付き表で表示する。arXiv は論文タイトル・著者・出版日を arXiv API から自動取得して meta にキャッシュ。Web ページは HTML `<title>`、ローカルファイルはファイル名を Title に出す。各行に URL リンク (▶ URL) と ingest 済みファイルを開くリンク (▶ 開く) が付く。query は Title/Authors/Summary/URL/Id 等の部分一致 (`""` または省略で全件)。
-→ Grid | Dataset | List
-Options: `"Limit"` -> Automatic|n, `"Kind"` -> All|`"arxiv"`|`"web"`|`"local"`, `"FetchMetadata"` -> Automatic (未取得のみ取得)|False (network なし)|True (再取得), `"Since"`/`"Until"`/`"On"` -> ingest 日での絞り込み (日付文字列 `"yyyy-mm-dd"` / Today / DateObject。`"On"` は単日、`"Since"`/`"Until"` は範囲、両端含む), `"Author"` -> 著者名の部分一致, `"Format"` -> `"Grid"` (既定)|`"Dataset"`|`"Rows"`
+ingest 済み全ソースの共通スキーマ行を `List[Association]` で返す (core)。arXiv は論文タイトル・著者・出版日を arXiv API から自動取得して meta にキャッシュ。Web ページは HTML `<title>`、ローカルファイルはファイル名を Title に出す。query は Title/Authors/Summary/URL/Id 等の部分一致 (`""` または省略で全件)。
+→ List[Association] | Dataset | Grid (後方互換)
+Options: `"Limit"` -> Automatic|n (データ件数の上限。表示件数は View 側), `"Kind"` -> All|`"arxiv"`|`"web"`|`"local"`, `"FetchMetadata"` -> Automatic (未取得のみ取得)|False (network なし)|True (再取得), `"Since"`/`"Until"`/`"On"` -> ingest 日での絞り込み (日付文字列 `"yyyy-mm-dd"` / Today / DateObject。`"On"` は単日、`"Since"`/`"Until"` は範囲、両端含む), `"Author"` -> 著者名の部分一致, `"Format"` -> `"Rows"` (既定)|`"Dataset"`|`"Grid"` (View へ委譲)
 例: `SourceVaultSources["", "Kind" -> "arxiv", "On" -> Today]` (今日 ingest した arXiv)
 注意: 対象は SourceVault ingest 済みソース (src-* record) のみ。PDF 検索索引 (PDFIndex collection。学生便覧等) は含まれない — それらの横断は SourceVaultSummaries (pdfindex provider)、本文検索は SourceVaultSearch[query, "Group" -> name] を使うこと。
 
+### SourceVaultSourcesView[query, opts] / SourceVaultSourcesView[rows]
+ingest 済みソース一覧をユーザー提示用の表 (notebook list 風 Grid) で返す View。各行に URL リンク (▶ URL)、ファイルを開くリンク (▶ 開く)、タイトル/サマリークリックで種別ごとの表示アクション (arxiv/web/local はサマリーノート) が付く。core の戻り値 (自前 Select で絞った行リストも可) を `SourceVaultSourcesView[rows]` で直接表示できる。
+→ Grid | Column | Style
+Options: SourceVaultSources と同じ + `"MaxRows"` -> Automatic (既定 `$SourceVaultCatalogViewMaxRows` 行で描画打ち切り。All で全行)
+
+### $SourceVaultCatalogViewMaxRows
+型: Integer, 初期値: 200
+catalog 系 View (`SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView` / `SourceVaultEagleSummariesView`) が一度に描画する最大行数。表示制限は View 層のみで、core のデータ件数は縮めない。
+
 ### SourceVaultArXiv[query, opts]
-arXiv ソースだけを共通スキーマ表で表示する (`SourceVaultSources[query, "Kind" -> "arxiv", ...]` の薄ラッパ)。Eagle の SourceVaultEagleSummaries / mail の SourceVaultMailSearchSummary と同じ種別専用ビューで、リンク開き・絞り込み検索を持ち、横断検索 SourceVaultSummaries にも相乗りする。
-→ Grid | Dataset | List
+arXiv ソースだけの共通スキーマ行を返す (`SourceVaultSources[query, "Kind" -> "arxiv", ...]` の薄ラッパ。core)。Eagle の SourceVaultEagleSummaries / mail の SourceVaultMailSearchIndex と同じ種別専用の口で、横断検索 SourceVaultSummaries にも相乗りする。
+→ List[Association] | Dataset | Grid (後方互換)
 Options: `"On"`/`"Since"`/`"Until"`/`"Author"`/`"Limit"`/`"Format"` 等 (SourceVaultSources と同じ)
 例: `SourceVaultArXiv["", "On" -> Today]`、`SourceVaultArXiv["reversible", "Author" -> "Bennett"]`
+
+### SourceVaultArXivView[query, opts] / SourceVaultArXivView[rows]
+arXiv ソース一覧の表 (SourceVaultSourcesView の `"Kind" -> "arxiv"` 版)。
+→ Grid | Column | Style
+Options: SourceVaultSourcesView と同じ
 
 ### SourceVaultBackfillArXivSummaries[opts]
 既存の arXiv ソースのうち Summary が未設定 (または過去の LLM エラー本文) のものに arXiv アブストラクトを取得し `$Language` へ翻訳して付与する。cloud LLM 使用 (arXiv は公開データなので PrivacyLevel 0.0)。`$Language` が Japanese のセッションで実行すること (headless では英語原文のまま格納)。
 → `<|"Candidates", "Updated", "AlreadyPresent", "NoAbstract", "Failed", "Results"|>`
 Options: `"Force"` -> False (True で既存 Summary も再生成), `"Model"` -> Automatic, `"Limit"` -> Automatic|n
 
+### SourceVaultBackfillSourceSummaries[opts]
+web / local ソースのうち Summary が未設定 (または過去の LLM エラー本文) のものに、ingest 済み snapshot の本文 (plaintext) を LLM で要約して付与する (arXiv は SourceVaultBackfillArXivSummaries が担当)。モデルは行の PrivacyLevel で決まる: PL > 0.5 は `$ClaudePrivateModel` (ローカル LLM)、以下はクラウド CLI。PL 不明は fail-safe で 1.0 = ローカル扱い。本文は UNTRUSTED データ境界で包んでから渡し (prompt injection 対策)、prescan が quarantined と判定した本文は LLM へ渡さない。LLM エラー本文は保存されない (`iSVLooksLikeLLMError` ゲート)。`$Language` が Japanese のセッションで実行すること。
+→ `<|"Candidates", "Updated", "AlreadyPresent", "NoText", "Quarantined", "Failed", "Remaining", "Language", "Results"|>`
+Options: `"Kind"` -> `{"web", "local"}` (既定。`All` で arxiv も含む), `"Sources"` -> All|`{sourceId...}` (対象を明示指定), `"Force"` -> False (True で既存 Summary も再生成), `"Limit"` -> 10 (Infinity で全件), `"Model"` -> Automatic (明示指定で PL 分岐を上書き), `"MaxChars"` -> Automatic (`$SourceVaultSourceSummaryMaxChars`), `"TimeoutSeconds"` -> 120 (本文抽出 1 件あたり)
+例: `SourceVaultBackfillSourceSummaries["Limit" -> 5]` (新しい順に 5 件だけ試す)
+
+### $SourceVaultSourceSummaryMaxChars
+型: Integer, 初期値: 12000
+`SourceVaultBackfillSourceSummaries` が LLM へ渡す本文の最大文字数 (超過分は切り詰め)。
+
 ### SourceVaultShowSourceSummary[sourceId, opts]
-ingest 済みソース (arXiv / web / local) のサマリーを編集可能なノートブックで開く。Eagle の SourceVaultEagleShowSummary と同じ枠組み。保存済みのユーザー追記版があればそれを開き (正本)、無ければ Title/著者/出版/URL/要約からノートを生成する。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が開く。SourceVaultSources / SourceVaultArXiv / SourceVaultSummaries の表でタイトルまたはサマリーをクリックすると呼ばれる (arxiv/web/local の既定アクション)。
+ingest 済みソース (arXiv / web / local) のサマリーを編集可能なノートブックで開く。Eagle の SourceVaultEagleShowSummary と同じ枠組み。保存済みのユーザー追記版があればそれを開き (正本)、無ければ Title/著者/出版/URL/要約からノートを生成する。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が開く。SourceVaultSourcesView / SourceVaultArXivView / SourceVaultSummariesView の表でタイトルまたはサマリーをクリックすると呼ばれる (arxiv/web/local の既定アクション)。
 → なし (NotebookOpen 副作用)
 Options: `"Fresh"` -> False (True で保存版を無視し record から新規生成)
 
@@ -72,7 +98,7 @@ Options: `"Fresh"` -> False (True で保存版を無視し record から新規�
 `SourceVaultShowSourceSummary` が開くノートの StyleDefinitions (Eagle サマリーノートと同じスタイル)。
 
 ### SourceVaultOpenSourceFile[sourceId]
-ingest 済みソースの raw ファイルを ContentHash から現 PC の vault パスを live 再算出して SystemOpen で開く。別 PC (Dropbox 同期) でも開ける。SourceVaultSources / SourceVaultArXiv の「▶ 開く」ボタンの実体。
+ingest 済みソースの raw ファイルを ContentHash から現 PC の vault パスを live 再算出して SystemOpen で開く。別 PC (Dropbox 同期) でも開ける。SourceVaultSourcesView / SourceVaultArXivView の「▶ 開く」ボタンの実体。
 → なし (SystemOpen 副作用)
 
 ### SourceVaultSourceRow[sourceId] → Association
@@ -80,11 +106,16 @@ ingest 済みソースの raw ファイルを ContentHash から現 PC の vault
 Options: `"FetchMetadata"` -> Automatic
 
 ### SourceVaultSummaries[query, opts]
-SourceVault が抱えるデータ全体 (ingest 済みソース + Eagle 保存済みサマリー + PDF 検索索引ドキュメント (pdfindex provider。学生便覧等) 等、登録 provider 横断) を検索し統合表で表示する。
-→ Grid | Dataset | List
-Options: `"Providers"` -> All|`{"sources", "eagle", "pdfindex", ...}`, `"Limit"`, `"Kind"`, `"Since"`/`"Until"`/`"On"` -> 登録/生成日での絞り込み, `"Author"` -> 著者部分一致, `"FetchMetadata"`, `"Format"` -> `"Grid"` (既定)|`"Dataset"`|`"Rows"`
-例: `SourceVaultSummaries["可逆計算"]`、`SourceVaultSummaries["便覧", "Providers" -> {"pdfindex"}]`
+SourceVault が抱えるデータ全体 (ingest 済みソース + Eagle 保存済みサマリー + メール + PDF 検索索引ドキュメント (pdfindex provider。学生便覧等) 等、登録 provider 横断) を検索し、共通スキーマ行を `List[Association]` で返す (core)。
+→ List[Association] | Dataset | Grid (後方互換)
+Options: `"Providers"` -> All|`{"sources", "eagle", "mail", "pdfindex", "workflow", ...}`, `"Kind"` -> All|`{"web", "arxiv", "local", "mail", "eagle", ...}` (行の種別。**provider 非依存に効く** — `"Kind"` を無視する provider の行も落とす。`"Providers"` に provider 名でない語 (`"web"` 等) を書いた場合も種別指定として解釈する。どちらでもない語は `SourceVaultSummaries::unkfilter` で知らせる), `"Limit"`, `"Since"`/`"Until"`/`"On"` -> 登録/生成日での絞り込み, `"Author"` -> 著者部分一致, `"FetchMetadata"`, `"Format"` -> `"Rows"` (既定)|`"Dataset"`|`"Grid"` (View へ委譲)
+例: `SourceVaultSummaries["可逆計算"]`、`SourceVaultSummariesView["便覧", "Providers" -> {"pdfindex"}]`
 pdfindex 行の本文検索 (チャンク単位・gate 付き) は SourceVaultSearch[query, "Group" -> name] を使うこと。
+
+### SourceVaultSummariesView[query, opts] / SourceVaultSummariesView[rows]
+横断検索の結果をユーザー提示用の表 (Grid) で返す View。タイトル/サマリークリックは種別ごとの表示アクションを呼ぶ: arxiv/web/local → サマリーノート、eagle → Eagle サマリー、**mail → メール本文ウインドウ (`SourceVaultMailShowBody`。返信/全員に返信/翻訳して返信/翻訳表示 + アジェンダ操作つき。索引行の ShardKey から必要シャードだけ遅延ロード)**、「▶ 開く」は mail ならスレッド窓 (`SourceVaultMailThreadNotebook`)。自前 Select で絞った行リストも `SourceVaultSummariesView[rows]` で表示する。
+→ Grid | Column | Style
+Options: SourceVaultSummaries と同じ + `"MaxRows"` -> Automatic
 
 ### SourceVaultRegisterSummaryProvider[name, fn]
 `SourceVaultSummaries` の横断検索 provider を登録する。fn のシグネチャ: `fn[query_String, opts_Association]` → 共通スキーマ行 (SourceVaultSourceRow 参照) のリスト。
@@ -127,7 +158,8 @@ index 時に `.nb` をそもそも読み込む (Import する) かどうかの�
 → Association (`"Status"`, `"SourceId"`, `"SnapshotId"`, `"URI"`, ...)
 Options:
 - `Topic` -> Automatic | String
-- `TrustLevel` -> Automatic | `"OfficialAPI"` | `"OfficialDocs"` | `"PublicWeb"` | `"LocalFile"`
+- `TrustLevel` -> Automatic | `"OfficialAPI"` | `"OfficialDocs"` | `"PublicWeb"` | `"PrivateHost"` | `"LocalFile"`
+  自動 PrivacyLevel: OfficialAPI / OfficialDocs / PublicWeb = **0.0** (SourceVaultIngest が取得できるのは認証不要の公開ページだけなので、内容は公開データ)、PrivateHost (localhost / プライベート IP / `*.local` 等 LAN 内ホスト) = 0.85、LocalFile = 0.8。`PrivacyLabel` で明示上書き可。
 - `PrivacyLabel` -> Automatic | Real
 - `PinVersion` -> Automatic | True | False
 - `"Asynchronous"` -> False (True 時は LLMGraphDAGCreate 経由でジョブキューに投入し JobId を即時 return。LLMGraphDAGCreate (claudecode.wl) が必要)
@@ -141,9 +173,10 @@ ingest 済みソースを参照文字列から解決する。ref は正準 snaps
 非同期 ingest の完了を待つ。ingestResult が sync 完了済み (Status: Ingested/AlreadyCurrent/RebuiltMetadata) なら即座に return。Status: Queued の場合は SourceId の snapshot 増加を polling して新規 snapshot 出現で完了。第一引数は SourceVaultIngest の結果 Association または SourceId String。timeoutSec 既定 60 秒、超過で Status: Timeout。
 → Association
 
-### SourceVaultReclassifyPublicPrivacy[]
-ingest 済みの公開 origin ソース (arXiv / 公開 URL) で PrivacyLevel が機密閾値 0.5 以上に誤設定されているものを本来の公開既定値 (OfficialDocs/OfficialAPI=0.0, PublicWeb=0.4) に是正する保守関数。source/snapshot 両メタを書き換える。旧版が arXiv 等の OfficialDocs を 0.6 とタグした件の一度きりの修復用 (冪等)。
-→ `<|"Status", "Count", "Changed" -> {<|SourceId, From, To|>...}|>`
+### SourceVaultReclassifyPublicPrivacy[opts]
+ingest 済みの公開 origin ソース (arXiv / 公開 URL) の PrivacyLevel を現行の自動既定値 (OfficialDocs/OfficialAPI/PublicWeb = 0.0, PrivateHost = 0.85) に是正する保守関数。source/snapshot 両メタを書き換える。冪等。対象は (a) PrivacyLevel が機密閾値 0.5 以上に誤設定されているもの (旧版が arXiv 等の OfficialDocs を 0.6 とタグした件)、(b) 旧既定 `PublicWeb = 0.4` が自動で付いたまま残っているもの (2026-08-29 に公開 web の既定を 0.0 へ変更)。ユーザーが意図的に付けた 0.4 以外の低 PL には触れない。
+→ `<|"Status", "Count", "Changed" -> {<|SourceId, From, To, Trust, TrustChanged, Reason|>...}|>`
+Options: `"LegacyPublicWeb"` -> True ((b) を対象にするか), `"RecheckTrust"` -> True (保存済み URL から TrustLevel を再判定し、LAN 内ページを PrivateHost へ引き上げる), `"DryRun"` -> False (True で書き換えず対象だけ返す)
 
 ### Ingest オプションシンボル
 `Topic` / `PinVersion` / `TrustLevel` / `PrivacyLabel` は `SourceVaultIngest` のオプションシンボル。`MaxCharacters` は `SourceVaultContext` / `SourceVaultContextAssemble` のオプションシンボル。

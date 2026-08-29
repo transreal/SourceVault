@@ -1385,23 +1385,56 @@ iSVMDCommonRows[query_String, opts_Association] :=
       Select[rows, AssociationQ]]];
 iSVMDCommonRows[query_String] := iSVMDCommonRows[query, <||>];
 
-(* \:6a2a\:65ad\:691c\:7d22 Grid \:306e mail \:884c\:30bf\:30a4\:30c8\:30eb\:30af\:30ea\:30c3\:30af: \:4f4e\:6f0f\:6d29\:30d8\:30c3\:30c0 + URI \:3092\:30a6\:30a4\:30f3\:30c9\:30a6\:8868\:793a
-   (\:672c\:6587\:30fb\:6697\:53f7\:6587\:306f\:8aad\:307e\:306a\:3044)\:3002\:5168\:6587/\:30b5\:30de\:30ea\:30fc\:306f mail \:5c02\:7528 API (\:6a5f\:5bc6\:30e9\:30c3\:30d7\:4ed8\:304d) \:3092\:4f7f\:3046\:3002 *)
+(* \:6a2a\:65ad\:691c\:7d22 Grid \:306e mail \:884c\:30af\:30ea\:30c3\:30af\:52d5\:4f5c\:3002
+   \:65b9\:91dd (2026-08-29): \:6a2a\:65ad\:691c\:7d22\:304b\:3089\:958b\:3044\:3066\:3082 **\:30e1\:30fc\:30eb\:5c02\:7528\:306e\:8868\:793a\:95a2\:6570\:3092\:4f7f\:3046**\:3002
+   \:65e7\:5b9f\:88c5\:306f\:4ef6\:540d/From/Date/URI \:3060\:3051\:306e\:30b9\:30bf\:30d6\:7a93\:3092\:4f5c\:3063\:3066\:304a\:308a\:3001\:672c\:6587\:3082\:8fd4\:4fe1\:30fb\:7ffb\:8a33\:30fb
+   \:30a2\:30b8\:30a7\:30f3\:30c0\:64cd\:4f5c\:3082\:7121\:3044\:5225\:7269\:3060\:3063\:305f (rule 106 \:306e core/View \:5206\:96e2\:539f\:5247\:3068\:540c\:3058\:8da3\:65e8\:3067\:3001
+   \:4e00\:89a7\:304b\:3089\:306e\:30c9\:30ea\:30eb\:30c0\:30a6\:30f3\:5148\:306f\:5e38\:306b\:6b63\:6e96\:306e\:30e1\:30fc\:30eb UI \:306b\:63c3\:3048\:308b)\:3002
+   - \:30bf\:30a4\:30c8\:30eb/\:30b5\:30de\:30ea\:30fc\:30af\:30ea\:30c3\:30af -> SourceVaultMailShowBody (\:2709 \:3068\:540c\:3058\:672c\:6587\:7a93\:3002
+     \:8fd4\:4fe1/\:5168\:54e1\:306b\:8fd4\:4fe1/\:7ffb\:8a33\:3057\:3066\:8fd4\:4fe1/\:7ffb\:8a33\:8868\:793a + \:30a2\:30b8\:30a7\:30f3\:30c0\:64cd\:4f5c\:4ed8\:304d)\:3002
+   - \:300c\:25b6 \:958b\:304f\:300d -> SourceVaultMailThreadNotebook (\:2630 \:3068\:540c\:3058\:30b9\:30ec\:30c3\:30c9\:7a93)\:3002
+   \:3069\:3061\:3089\:3082\:7d22\:5f15\:884c\:306e ShardKey \:304b\:3089**\:5fc5\:8981\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:9045\:5ef6\:30ed\:30fc\:30c9**\:3059\:308b (index-first)\:3002
+   \:7d22\:5f15\:306b\:7121\:3044/\:5fa9\:53f7\:3067\:304d\:306a\:3044\:5834\:5408\:306f\:4f4e\:6f0f\:6d29\:30d8\:30c3\:30c0\:3060\:3051\:306e\:7a93\:306b\:30d5\:30a9\:30fc\:30eb\:30d0\:30c3\:30af\:3059\:308b\:3002 *)
+iSVMDMailInfoWindow[recordId_String, r_Association] :=
+  (Quiet @ Check[
+     CreateDocument[{
+       Cell[ToString @ Lookup[r, "Subject", "(\:4ef6\:540d\:7121\:3057)"], "Subsection"],
+       Cell["From: " <> ToString @ Lookup[r, "From", ""], "Text"],
+       Cell["Date: " <> ToString @ Lookup[r, "Date", ""] <>
+         "    PL: " <> ToString @ Lookup[r, "PrivacyLevel", ""], "Text"],
+       Cell["URI: " <> iSVMDMailURI[recordId], "Text"],
+       Cell["\:672c\:6587\:3092\:5fa9\:53f7\:3067\:304d\:306a\:304b\:3063\:305f (\:30b7\:30e3\:30fc\:30c9\:672a\:30ed\:30fc\:30c9\:307e\:305f\:306f\:9375\:7121\:3057)\:3002" <>
+         "\:5168\:6587\:30fb\:30b5\:30de\:30ea\:30fc\:306f mail \:5c02\:7528 API (SourceVaultMailShowBody / " <>
+         "SourceVaultMailSearchSummary \:7b49\:3001\:6a5f\:5bc6\:30e9\:30c3\:30d7\:4ed8) \:3092\:4f7f\:3046\:3002", "Text"]},
+       WindowTitle -> "Mail: " <> recordId],
+     Null];
+   <|"Status" -> "OpenedHeaderOnly", "RecordId" -> recordId|>);
+
 iSVMDShowMailInfo[recordId_String] :=
-  Module[{r = SourceVaultMailIndexGet[recordId]},
+  Module[{r = SourceVaultMailIndexGet[recordId], sk, snap, res},
     If[! AssociationQ[r],
       Return[<|"Status" -> "NotFound", "RecordId" -> recordId|>]];
-    Quiet @ Check[
-      CreateDocument[{
-        Cell[ToString @ Lookup[r, "Subject", "(\:4ef6\:540d\:7121\:3057)"], "Subsection"],
-        Cell["From: " <> ToString @ Lookup[r, "From", ""], "Text"],
-        Cell["Date: " <> ToString @ Lookup[r, "Date", ""] <>
-          "    PL: " <> ToString @ Lookup[r, "PrivacyLevel", ""], "Text"],
-        Cell["URI: " <> iSVMDMailURI[recordId], "Text"],
-        Cell["\:5168\:6587\:30fb\:30b5\:30de\:30ea\:30fc\:306f mail \:5c02\:7528 API (SourceVaultMailSearchSummary \:7b49\:3001\:6a5f\:5bc6\:30e9\:30c3\:30d7\:4ed8) \:3092\:4f7f\:3046\:3002", "Text"]},
-        WindowTitle -> "Mail: " <> recordId],
-      Null];
-    <|"Status" -> "Opened", "RecordId" -> recordId|>];
+    sk = Lookup[r, "ShardKey", Missing[]];
+    (* \:5fc5\:8981\:30b7\:30e3\:30fc\:30c9\:3060\:3051\:9045\:5ef6\:30ed\:30fc\:30c9\:3002iSVMDIxEnsureLoaded \:306f\:672c\:30d5\:30a1\:30a4\:30eb\:5f8c\:534a
+       (\:540c\:3058 SourceVault`Private` \:6587\:8108) \:3067\:5b9a\:7fa9\:3055\:308c\:308b\:3002
+       SourceVaultMailShowBody / SourceVaultMailThreadNotebook \:306f\:5f8c\:7d9a\:306e BeginPackage
+       \:30bb\:30af\:30b7\:30e7\:30f3\:3067 ::usage \:5ba3\:8a00\:3055\:308c\:308b\:306e\:3067\:3001**\:3053\:3053\:3067\:306f\:307e\:3060 SourceVault` \:306b\:7121\:3044**\:3002
+       \:7121\:4fee\:98fe\:3067\:66f8\:304f\:3068 SourceVault`Private` \:5074\:306e\:5225\:30b7\:30f3\:30dc\:30eb\:304c\:4f5c\:3089\:308c\:3001
+       \:30af\:30ea\:30c3\:30af\:3057\:3066\:3082\:4f55\:3082\:8d77\:304d\:306a\:3044 (\:672a\:8a55\:4fa1\:306e\:307e\:307e\:8fd4\:308b) \:306e\:3067\:5fc5\:305a\:6587\:8108\:4fee\:98fe\:3059\:308b\:3002 *)
+    snap = Quiet @ Check[iSVMDIxEnsureLoaded[recordId, sk], Missing["LoadFailed"]];
+    If[MissingQ[snap], Return[iSVMDMailInfoWindow[recordId, r]]];
+    res = Quiet @ Check[SourceVault`SourceVaultMailShowBody[recordId], $Failed];
+    If[res === $Failed || res === Null,
+      iSVMDMailInfoWindow[recordId, r],
+      <|"Status" -> "Opened", "RecordId" -> recordId|>]];
+
+(* \:300c\:25b6 \:958b\:304f\:300d = \:30b9\:30ec\:30c3\:30c9\:5168\:4f53\:306e\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:7a93 (\:2630 \:3068\:540c\:7b49) *)
+iSVMDShowMailThread[recordId_String] :=
+  Module[{r = SourceVaultMailIndexGet[recordId], res},
+    If[! AssociationQ[r],
+      Return[<|"Status" -> "NotFound", "RecordId" -> recordId|>]];
+    res = Quiet @ Check[SourceVault`SourceVaultMailThreadNotebook[r], $Failed];
+    If[res === $Failed, iSVMDMailInfoWindow[recordId, r], res]];
 
 (* provider / \:884c\:30a2\:30af\:30b7\:30e7\:30f3\:767b\:9332 (eagle \:3068\:540c\:3058\:67a0\:7d44\:307f\:30fbAssociation \:30ac\:30fc\:30c9\:4ed8\:304d\:3002
    SourceVault.wl \:672a\:30ed\:30fc\:30c9\:306e maildb \:5358\:4f53\:30ed\:30fc\:30c9\:3067\:3082\:843d\:3061\:306a\:3044)\:3002 *)
@@ -1409,6 +1442,8 @@ If[! AssociationQ[$SourceVaultSummaryProviders], $SourceVaultSummaryProviders = 
 $SourceVaultSummaryProviders["mail"] = iSVMDCommonRows;
 If[! AssociationQ[$iSVRowTitleActions], $iSVRowTitleActions = <||>];
 $iSVRowTitleActions["mail"] = iSVMDShowMailInfo;
+If[! AssociationQ[$iSVRowOpenActions], $iSVRowOpenActions = <||>];
+$iSVRowOpenActions["mail"] = iSVMDShowMailThread;
 
 End[];
 EndPackage[];

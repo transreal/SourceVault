@@ -130,7 +130,9 @@ SourceVaultEagleIngestFolder::usage = "SourceVaultEagleIngestFolder[folder, opts
 SourceVaultEagleExtractText::usage = "SourceVaultEagleExtractText[item, opts] は item 本文テキストを抽出する。PDF は原本から直接ページ抽出 (コピーなし、PrivateVault/eagle/pages にキャッシュ、テキスト層が無いページは $SourceVaultOCRHook 設定時に OCR)。vault 複製済み (\"Copy\"->True で ingest 済み) なら SourceVaultExtractPages 経由。docx/pptx/txt/html/xlsx はローカル抽出。opts: \"MaxPages\" (整数 | All | Infinity。既定 15), \"MaxChars\" (既定 8000。全文が要るときは明示的に大きく)。";
 SourceVaultEagleSummarize::usage = "SourceVaultEagleSummarize[item, opts] は item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約、画像はサムネイル優先 (原本フォールバック) で vision 要約する。動画は 2 段 pipeline: Stage 1 で n 枚 (既定 5、\"Frames\"->n) のフレームを nested dyadic 位置で抽出し各フレームを個別に vision 記述 (各 \"FrameMaxLength\"->200 文字)、Stage 2 でフレーム説明を時刻順に統合して最終 summary を作る。各フレーム記述は record の \"Frames\"[*].\"Text\" に保存され、シーン遷移として ShowSummary 表示・検索に使われる。後から \"Frames\"->より大きい n を指定すると粒度を上げられ、既存フレーム記述を再利用して不足分だけ追加 vision する (\"ForceRefresh\"->True で全再生成)。PDF・画像・動画が混在するフォルダでも batch / summaries / search が一貫動作する (動画は vision 呼び出しが n 回になるためコスト増)。既定はローカル LLM ($ClaudePrivateModel 経由。\"Method\"->\"Claude\" でクラウド)、原本コピーなし (\"Copy\"->True で vault 複製)。$SourceVaultEagleCloudPublishableTag (既定 \"Cloud-Publishable\") のタグが付いた item は Automatic でもクラウドへ切り替わり、summary record に PrivacyLevel 0.0 を記録する。クラウド経路は $ClaudeModel の provider に従う: claudecode/未設定→Claude Code CLI、chatgptcodex/codex→Codex CLI (テキスト。画像/動画は Codex 未対応のため Claude Code CLI で実行)。課金 API は {\"anthropic\"|\"openai\", ...} 明示時のみ。文書系 (PDF/Word/PowerPoint/テキスト) は同じ LLM 呼び出しで書誌情報 (Title/Authors/Published) も抽出して record に保存する (PDF は埋め込みメタデータをフォールバック。旧 record の backfill は SourceVaultEagleExtractBibMeta)。opts: \"Method\"(Automatic|\"Local\"|\"Claude\"), \"MaxLength\", \"MaxChars\", \"MaxPages\", \"Frames\"(動画フレーム数、既定 5), \"FrameMaxLength\"(各フレーム記述の上限、既定 200), \"Language\", \"ForceRefresh\", \"Ingest\", \"Copy\", \"WriteAnnotation\", \"Persist\"。";
 SourceVaultEagleSummary::usage = "SourceVaultEagleSummary[item] は保存済みサマリー record を返す (\"SummaryStatus\"->\"Current\"|\"Stale\" 付き)。無ければ Missing。一覧は SourceVaultEagleSummaries[]、全文表示は SourceVaultEagleShowSummary[item]、表中では View の Summary 列にも出る。";
-SourceVaultEagleSummaries::usage = "SourceVaultEagleSummaries[query, opts] は保存済みサマリーの一覧をノートブックリスト風の表で返す。「▶ 開く」クリックで原本ファイルを SystemOpen、ファイル名クリックでサマリー全文をウインドウ表示 (Current/Stale 状態付き)。query はサマリー本文/ノート補足/ファイル名の部分一致。opts: \"Limit\"。";
+SourceVaultEagleSummaries::usage = "SourceVaultEagleSummaries[query, opts] は保存済みサマリーの一覧を連想リストで返す (core)。行は共通スキーマ (Kind/Id/URI/Title/Authors/Summary/Date/PrivacyLevel) + eagle 固有列 (Name/Method/CreatedAt/Status(Current|Stale|Unknown)/HasNote) で、後段の Select/SortBy/LLM 処理へそのまま連鎖できる。ユーザーへ表として提示するときは SourceVaultEagleSummariesView[query]。query はサマリー本文/ノート補足/ファイル名の部分一致。opts: \"Library\", \"Limit\"(データ件数), \"Format\" -> \"Rows\"(既定)|\"Dataset\"|\"Grid\"(後方互換: View へ委譲)。";
+
+SourceVaultEagleSummariesView::usage = "SourceVaultEagleSummariesView[query, opts] は保存済みサマリー一覧をノートブックリスト風の表 (Grid) で返す View 関数。「▶ 開く」クリックで原本ファイルを SystemOpen、ファイル名クリックでサマリー全文をウインドウ表示 (Current/Stale 状態付き)。SourceVaultEagleSummariesView[rows] で core の戻り値 (自前 Select で絞った行リストも可) をそのまま表示できる (素の Dataset/Grid を手組みしない)。opts: SourceVaultEagleSummaries と同じ + \"MaxRows\" -> Automatic ($SourceVaultCatalogViewMaxRows 行で描画を打ち切る。All で全行)。";
 SourceVaultEagleExtractBibMeta::usage = "SourceVaultEagleExtractBibMeta[item, opts] は要約済み item の書誌情報 (Title/Authors/Published) を本文先頭から LLM で抽出し summary record に追記する (旧 record の backfill 用。新規要約は SourceVaultEagleSummarize が同時抽出)。PDF は埋め込みメタデータをフォールバックに使う。既に Title を持つ record はスキップ (\"ForceRefresh\"->True で再抽出)。Method 解決は Summarize と同じ fail-safe (Cloud-Publishable タグ無しはローカル LLM)。opts: \"Method\", \"MaxChars\"(2500), \"MaxPages\"(2), \"Timeout\", \"ForceRefresh\"。";
 SourceVaultEagleExtractBibMetaBatch::usage = "SourceVaultEagleExtractBibMetaBatch[query, opts] は保存済みサマリー record のうち書誌情報が無いものへ一括で SourceVaultEagleExtractBibMeta を適用し統計を返す。query は SourceVaultEagleSummaries と同じ部分一致 (\"\" で全件)。opts: \"Ext\"->\"pdf\" 等の絞り込み, \"Limit\", ほか SourceVaultEagleExtractBibMeta と同じ。例: SourceVaultEagleExtractBibMetaBatch[\"\", \"Ext\"->\"pdf\", \"Limit\"->20]。";
 SourceVaultEagleSummarizeBatch::usage = "SourceVaultEagleSummarizeBatch[items, opts] は item リスト (または検索 query 文字列) を一括要約し統計を返す。生成済み (Current) はスキップ。検索オプション (\"Folder\", \"Ext\", \"Tags\", \"DateFrom\" 等 SourceVaultEagleSearch と同じ) を併用でき、\"Limit\" は要約件数の上限。PDF・画像・動画が混在するフォルダでも Kind ごとに dispatch して全件処理する (1 件の失敗で全体を止めない)。\"Frames\" / \"FrameMaxLength\" など SourceVaultEagleSummarize の option も継承する (動画はフレーム数ぶん vision 呼び出しが増えるためコスト・時間に注意)。例: SourceVaultEagleSummarizeBatch[\"\", \"Folder\"->\"自然計算関連\", \"Ext\"->\"pdf\", \"Limit\"->2]。\"Method\"->Automatic では item ごとに判定: Cloud-Publishable タグ付きはクラウド ($ClaudeModel)、それ以外はローカル ($ClaudePrivateModel)。";
@@ -3137,9 +3139,6 @@ SourceVaultEagleDataset[query_String : "", opts : OptionsPattern[]] :=
     Dataset[(SourceVaultEagleSummaryRow[#, "Library" -> lib] &) /@
       SourceVaultEagleSearch[query, opts]]];
 
-(* 保存済みサマリーの一覧 (notebook list 風 Grid)。
-   「▶ 開く」= 原本を SystemOpen、ファイル名 = サマリー全文をウインドウ表示。
-   (Dataset はセル内の式に含まれる文字列をクォート付きで表示するため Grid を使う) *)
 (* 保存済みサマリー一覧の内部行 (新しい順):
    {<|"Id", "NameDisp", "Rec", "Status"|>..}
    query はサマリー本文/ノート補足/ファイル名の部分一致。
@@ -3175,38 +3174,118 @@ iSVEGSummaryListRows[query_String, lib_] :=
     ReverseSortBy[Select[rows, AssociationQ],
       ToString@Lookup[Lookup[#, "Rec", <||>], "CreatedAt", ""] &]];
 
-Options[SourceVaultEagleSummaries] = {"Library" -> Automatic, "Limit" -> Automatic};
-SourceVaultEagleSummaries[query_String : "", OptionsPattern[]] :=
-  Module[{lib = iSVEGLib[OptionValue["Library"]], libSpec, rows, lim,
-      total, header, body, grid, ff = iSVEGFont[]},
-    (* 原本を開くボタンには絶対パスでなく可搬な登録名を焼く (別 PC でも解決) *)
-    libSpec = If[StringQ[lib], iSVEGLibPortableSpec[lib], Automatic];
-    rows = iSVEGSummaryListRows[query, lib];
-    total = Length[rows];
+(* ---- core / View 分離 (SourceVault 共通の設計原則) ----
+   SourceVaultEagleSummaries (core) = 保存済みサマリーの連想リスト。後段の
+   Select/SortBy/LLM 処理へそのまま連鎖できる。
+   SourceVaultEagleSummariesView (View) = ユーザーへ提示する Grid (原本を開く /
+   サマリー全文ウインドウのボタン付き)。描画行数の上限も View 層で掛ける。 *)
+
+(* 内部行 (Id/NameDisp/Rec/Status) -> 公開行 (共通スキーマ + eagle 固有列)。
+   共通キー (Kind/Id/URI/Title/Authors/Summary/Date/PrivacyLevel) は
+   SourceVaultSourceRow / SourceVaultSummaries の行と混在利用できる。 *)
+iSVEGSummaryPublicRows[query_String, lib_] :=
+  Module[{listRows, libPL, notesDir, noteIds},
+    listRows = iSVEGSummaryListRows[query, lib];
+    If[! ListQ[listRows], Return[{}]];
+    libPL = If[StringQ[lib], iSVEGLibraryPL[lib], 1.0];
+    (* ノート有無は notes/ を 1 回だけ列挙して id 集合で判定 (行ごとの
+       FileNames グロブは全件走査で高くつくため) *)
+    notesDir = iSVEGNotesDir[];
+    noteIds = If[TrueQ[Quiet@Check[DirectoryQ[notesDir], False]],
+      Association[(# -> True &) /@ (iSVEGNoteIdOf /@ FileNames["*.nb", notesDir])],
+      <||>];
+    Map[Function[row,
+      Module[{id = ToString@Lookup[row, "Id", ""],
+          r = Lookup[row, "Rec", <||>], name, created, pl},
+        name = ToString@Lookup[row, "NameDisp", id];
+        created = ToString@Lookup[r, "CreatedAt", ""];
+        pl = With[{p = Lookup[r, "PrivacyLevel", Missing[]]},
+          If[NumericQ[p], N[p], libPL]];
+        <|"Kind" -> "eagle",
+          "Id" -> id,
+          "URI" -> iSVEGObjectURI[id],
+          "Title" -> With[{bt = ToString@Lookup[r, "Title", ""]},
+            If[StringTrim[bt] =!= "", bt, name]],
+          "Name" -> name,
+          "Authors" -> ToString@Lookup[r, "Authors", ""],
+          "Published" -> ToString@Lookup[r, "Published", ""],
+          "Summary" -> ToString@Lookup[r, "Summary", ""],
+          "Method" -> ToString@Lookup[r, "Method", ""],
+          "Date" -> created,
+          "CreatedAt" -> created,
+          "Status" -> ToString@Lookup[row, "Status", ""],
+          "HasNote" -> TrueQ[Lookup[noteIds, id, False]],
+          "PrivacyLevel" -> pl|>]],
+      Select[listRows, AssociationQ]]];
+
+Options[SourceVaultEagleSummaries] = {
+  "Library" -> Automatic, "Limit" -> Automatic, "Format" -> "Rows"};
+SourceVaultEagleSummaries[query_String : "", opts : OptionsPattern[]] :=
+  Module[{lib = iSVEGLib[OptionValue["Library"]], rows, lim},
+    rows = iSVEGSummaryPublicRows[query, lib];
     lim = OptionValue["Limit"];
     If[IntegerQ[lim] && lim >= 0, rows = Take[rows, UpTo[lim]]];
-    If[rows === {},
+    Switch[OptionValue["Format"],
+      "Dataset", Dataset[rows],
+      (* 後方互換: 明示 "Grid" のときだけ View へ委譲 *)
+      "Grid", iSVEGSummariesRowsView[rows, lib, Automatic],
+      _, rows]];
+
+(* View 層の描画行数上限 (SourceVault.wl の catalog View と共有。未ロードでも動く) *)
+iSVEGViewMaxRows[] := With[{n = SourceVault`$SourceVaultCatalogViewMaxRows},
+  If[IntegerQ[n] && n >= 1, n, 200]];
+
+Options[SourceVaultEagleSummariesView] =
+  Join[Options[SourceVaultEagleSummaries], {"MaxRows" -> Automatic}];
+SourceVaultEagleSummariesView[rows : {__Association}, opts : OptionsPattern[]] :=
+  iSVEGSummariesRowsView[rows, iSVEGLib[OptionValue["Library"]],
+    OptionValue["MaxRows"]];
+SourceVaultEagleSummariesView[{}, OptionsPattern[]] :=
+  Style["保存済みサマリーはありません。", "Text"];
+SourceVaultEagleSummariesView[query_String : "", opts : OptionsPattern[]] :=
+  Module[{lib = iSVEGLib[OptionValue["Library"]]},
+    iSVEGSummariesRowsView[
+      SourceVaultEagleSummaries[query, "Format" -> "Rows",
+        FilterRules[{opts}, Options[SourceVaultEagleSummaries]]],
+      lib, OptionValue["MaxRows"]]];
+
+(* 公開行リスト -> notebook list 風 Grid。
+   「▶ 開く」= 原本を SystemOpen、ファイル名 = サマリー全文をウインドウ表示。
+   (Dataset はセル内の式に含まれる文字列をクォート付きで表示するため Grid を使う) *)
+iSVEGSummariesRowsView[rowsIn_, lib_, maxRows_] :=
+  Module[{rows = rowsIn, libSpec, total, cap, header, body, grid,
+      ff = iSVEGFont[]},
+    If[! ListQ[rows] || rows === {},
       Return[Style["保存済みサマリーはありません。", "Text"]]];
+    (* 原本を開くボタンには絶対パスでなく可搬な登録名を焼く (別 PC でも解決) *)
+    libSpec = If[StringQ[lib], iSVEGLibPortableSpec[lib], Automatic];
+    total = Length[rows];
+    cap = Which[
+      IntegerQ[maxRows] && maxRows >= 0, maxRows,
+      maxRows === All || maxRows === Infinity, total,
+      True, iSVEGViewMaxRows[]];
+    rows = Take[rows, UpTo[cap]];
     header = (Style[#, Bold, FontFamily -> ff] &) /@
       {"原本", "ファイル", "サマリー", "Method", "PL", "生成日時", "状態", "ノート"};
     body = Function[row,
-      With[{id = row["Id"], r = row["Rec"], lsp = libSpec},
+      With[{id = ToString@Lookup[row, "Id", ""], lsp = libSpec},
         {Button[Style[Row[{"▶ 開く"}], "Hyperlink", FontFamily -> ff],
            SourceVaultEagleOpenItem[id, "Library" -> lsp],
            Appearance -> "Frameless", Method -> "Queued",
            BaseStyle -> "Hyperlink"],
-         Button[Style[Row[{row["NameDisp"]}], "Hyperlink", FontFamily -> ff],
+         Button[Style[Row[{ToString@Lookup[row, "Name",
+              Lookup[row, "Title", id]]}], "Hyperlink", FontFamily -> ff],
            SourceVaultEagleShowSummary[id],
            Appearance -> "Frameless", Method -> "Queued",
            BaseStyle -> "Hyperlink"],
-         iSVEGTruncate[ToString@Lookup[r, "Summary", ""], 120],
-         ToString@Lookup[r, "Method", ""],
-         With[{pl = Lookup[r, "PrivacyLevel", Missing[]]},
+         iSVEGTruncate[ToString@Lookup[row, "Summary", ""], 120],
+         ToString@Lookup[row, "Method", ""],
+         With[{pl = Lookup[row, "PrivacyLevel", Missing[]]},
            If[NumericQ[pl], ToString[N[pl]], ""]],
-         ToString@Lookup[r, "CreatedAt", ""],
-         row["Status"],
+         ToString@Lookup[row, "CreatedAt", Lookup[row, "Date", ""]],
+         ToString@Lookup[row, "Status", ""],
          (* 保存済みノート (追記つき) があるか *)
-         If[StringQ[iSVEGSummaryNoteFile[id]], "あり", ""]}]] /@ rows;
+         If[TrueQ[Lookup[row, "HasNote", False]], "あり", ""]}]] /@ rows;
     grid = Grid[Prepend[body, header],
       Frame -> All, FrameStyle -> Directive[GrayLevel[0.85]],
       Background -> {None, {GrayLevel[0.92], {White}}},
@@ -3215,7 +3294,7 @@ SourceVaultEagleSummaries[query_String : "", OptionsPattern[]] :=
     If[Length[rows] < total,
       Column[{
         Style["全 " <> ToString[total] <> " 件中 " <> ToString[Length[rows]] <>
-          " 件を表示。全件は \"Limit\" -> All。", FontFamily -> ff,
+          " 件を表示。全件は \"MaxRows\" -> All。", FontFamily -> ff,
           GrayLevel[0.45]], grid}],
       grid]];
 

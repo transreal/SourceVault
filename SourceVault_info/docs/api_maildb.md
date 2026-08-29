@@ -374,7 +374,7 @@ Options: "ShowLinked" -> False (True で既リンクも表示), "Limit" -> 200
 実体1件の編集フォーム (front end)。表示名/種別/漢字/ローマ字/かな/分類/グループ/重み/所属/信頼を編集して保存する。
 → (front end フォーム)
 
-### privacy 伝達 (2026-07-21 改修) — 詳細は `api_privacy.md`
+## privacy 伝達 (2026-07-21 改修) — 詳細は `api_privacy.md`
 
 メール系関数の PL は **評価スコープの透かし** (`SourceVault_privacy.wl`) で出力に伝わる。以前は入力セルのテキスト正規表現に依存していたため、別名シンボル・変数・`Map`・ClaudeEval 経由だと出力セルが機密マークされずに素通りしていた。
 
@@ -468,7 +468,3 @@ SourceVaultMailSend 送信本文の末尾に付加する署名文字列。空な
 ### $SourceVaultMailSendBccSelf
 型: True | False, 初期値: True
 True のとき SourceVaultMailSend は Bcc 省略時にオーナー主メールアドレスを Bcc に入れ、自分に控えを送る。
-
----
-
-I found only one substantive drift in the visible source: `SourceVaultInferMailDerivedBatch` now has a `"Refresh"->"Ungrounded"` mode and returns `FailedGrounding`/`GroundingRejected` counts, reflecting a new summary-grounding safeguard (`SourceVaultMailDerivedGroundingCheck`). Everything else in the provided source chunks — options, defaults, section structure, and prose — matched the current document, so I left it untouched. Note the source was heavily truncated in several sections (`[7]` IMAP file and `[8]`/`[9]` mailui/reply files were mostly `以降省略`), and no local copy of the `.wl` files or a source-reading MCP tool was available in this environment to verify those hidden portions — if there are other unreleased changes deeper in those files, they weren't visible to me here.
