@@ -184,7 +184,7 @@ request key: Provider / ModelId / ModelIntent / TrustDomain
 ## Prompt delivery profile (spec §2.5a)
 
 ### SourceVaultResolvePromptDeliveryProfile[request, opts]
-model/実行環境/MCP 可否から PromptDeliveryProfile (spec §2.5a) を返す。TrustDomain/TrustCeiling は opts "Trusted" と provider 級 cap (NBGetProviderMaxAccessLevel, guarded) から server 側で決め、自己申告では緩めない。
+model/実行環境/MCP 可否から PromptDeliveryProfile (spec §2.5a) を返す。TrustDomain/TrustCeiling は opts "Trusted" と provider 級 cap (NBGetProviderMaxAccessLevel, guarded) から server 側で決め、自己申告では緩めない。provider の trust domain 分類は既知クラウド provider (anthropic/openai/gemini/azure/bedrock/cohere/mistral/zai/glm/kimi/moonshot/deepseek/groq/together/fireworks/openrouter/perplexity/xai 等) と既知ローカル推論 (lmstudio/ollama/llamacpp/vllm/koboldcpp/localai/freetoken 等) を判別し、どちらにも合致しなければ "Unknown" (Cloud と同じ安全側上限 0.49 を適用)。
 → Association
 Options: "Trusted" -> <||>, "ResolveAccessProfile" -> True
 request key (すべて advisory): provider / modelId / clientKind / mcpToolsVisible / sourcevaultMcpEnabled / canCallMcpDuringInference / localFolderReadableByTool / localPackageDirectoryReadable

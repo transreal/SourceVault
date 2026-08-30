@@ -663,10 +663,16 @@ SourceVaultMCPCatalog[OptionsPattern[]] := Module[{rows},
    cloud model (anthropic/openai/claude-code/codex 等) は Cloud、ローカル推論は Local、不明は Unknown。 *)
 iSVClassifyTrustDomain[provider_String] := Module[{p = ToLowerCase[provider]},
   Which[
+    (* 2026-08-30: zai (z.ai/GLM) と kimi (Moonshot) が漏れていて "Unknown" に
+       落ちていた。Unknown も cloudish 扱いなので実効上限 (0.25) は正しかったが、
+       既知のクラウド provider に「未知の信頼ドメイン」警告が毎回出ていた。
+       freetoken はローカル推論サーバなので Local 側へ。 *)
     StringContainsQ[p, "anthropic" | "claude" | "openai" | "gpt" | "codex" | "chatgpt" |
-      "gemini" | "google" | "azure" | "bedrock" | "cohere" | "mistral"], "Cloud",
+      "gemini" | "google" | "azure" | "bedrock" | "cohere" | "mistral" |
+      "zai" | "z.ai" | "glm" | "kimi" | "moonshot" | "deepseek" | "groq" |
+      "together" | "fireworks" | "openrouter" | "perplexity" | "xai" | "grok"], "Cloud",
     StringContainsQ[p, "lmstudio" | "ollama" | "llamacpp" | "llama.cpp" | "vllm" |
-      "koboldcpp" | "localai" | "local"], "Local",
+      "koboldcpp" | "localai" | "freetoken" | "textgenwebui" | "local"], "Local",
     True, "Unknown"]];
 iSVClassifyTrustDomain[_] := "Unknown";
 
