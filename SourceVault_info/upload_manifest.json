@@ -50,7 +50,8 @@
 		"SourceVault_vision.wl",
 		"SourceVault_kb.wl",
 		"SourceVault_talkqa.wl",
-		"SourceVault_slidedeck.wl"
+		"SourceVault_slidedeck.wl",
+		"SourceVault_todo.wl"
 	],
 	"directories":[
 		"SourceVault_info",

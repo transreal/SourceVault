@@ -3835,6 +3835,7 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
           "mail", "(クリックで本文ウインドウを開く)",
           "pdfindex", "(クリックで原本 PDF を開く)",
           "workflow", "(クリックでワークフロー情報を表示)",
+          "todo", "(クリックで todo ノートを開く)",
           _, "(クリックで要約ノートを開く)"];
         {kind,
          With[{a = act, theId = id},
@@ -4079,8 +4080,9 @@ SourceVaultBackfillArXivSummaries[OptionsPattern[]] :=
    arXiv は API のアブストラクトが正なので SourceVaultBackfillArXivSummaries が担当する。
    こちらは ingest 済み snapshot の本文 (plaintext) を LLM で要約して meta["Summary"] に
    付与する (SourceVaultSourcesView の Summary 列・横断検索の Summary 列に出る)。
-   ・モデルは行の PrivacyLevel で決まる (iCallSummaryLLM: PL > 0.5 なら
-     $ClaudePrivateModel = ローカル LLM、以下ならクラウド CLI)。PL 不明は 1.0 = ローカル。
+   ・モデルは行の PrivacyLevel で決まる (iCallSummaryLLM: PL >= 0.5 なら
+     $ClaudePrivateModel = ローカル LLM (不在時は fail-closed で Failed)、
+     未満ならクラウド CLI)。PL 不明は 1.0 = ローカル。
    ・本文は外部由来なので UNTRUSTED データ境界で包んでから渡す
      (SourceVaultWrapUntrustedText。webingest 未ロード時は同等の内蔵 preamble)。
      prescan が quarantined と判定した本文は LLM へ渡さない (webingest の既定 Block と同方針)。
@@ -8896,7 +8898,15 @@ iExtractTodoCellsFromExpr[nbExpr_HoldComplete] :=
                     "Text" -> txt,
                     "Status" -> status["Status"],
                     "StatusSource" -> status["StatusSource"],
-                    "StrikeThrough" -> iStrikeThroughQ[opts]
+                    "StrikeThrough" -> iStrikeThroughQ[opts],
+                    (* \:6700\:7d42\:30bb\:30eb\:5909\:66f4\:6642\:523b (CellChangeTimes \:306e\:6700\:5927\:5024 = AbsoluteTime)\:3002
+                       Done \:8a2d\:5b9a\:304c\:6700\:5f8c\:306e\:5909\:66f4\:3067\:3042\:308b\:3053\:3068\:304c\:591a\:304f\:3001todo \:5c64\:306e
+                       DoneAt \:63a8\:5b9a\:3068\:30ea\:30de\:30a4\:30f3\:30c9\:306e anchor \:306b\:4f7f\:3046\:3002\:65e7 snapshot \:306b\:306f
+                       \:7121\:3044\:30ad\:30fc\:306a\:306e\:3067\:8aad\:307f\:5074\:306f Missing \:8a31\:5bb9 (additive)\:3002 *)
+                    "LastChanged" -> With[{cc = Lookup[opts, CellChangeTimes,
+                        Missing["None"]]},
+                      With[{vals = Cases[Flatten[{cc}], _?NumericQ]},
+                        If[vals === {}, Missing["None"], N[Max[vals]]]]]
                   |>]]]]],
           cells]],
       styles];
@@ -9808,6 +9818,7 @@ SourceVaultIndexNotebook[path_String, opts:OptionsPattern[]] :=
         "StatusSource" -> Lookup[t, "StatusSource", "Default"],
         "StrikeThrough" -> Lookup[t, "StrikeThrough", False],
         "CellStyle" -> Lookup[t, "CellStyle", ""],
+        "LastChanged" -> Lookup[t, "LastChanged", Missing["None"]],
         "ExtractedAt" -> ts|>], todos];
     byNotebookPath = iNotebookTodosByNotebookPath[nbRef];
     todoLines = Map[Function[r,
@@ -10831,17 +10842,25 @@ iCallSummaryLLM[prompt_String, model_, privacyLevel_] :=
       True, Null
     ];
 
-    (* \:30e2\:30c7\:30eb\:6c7a\:5b9a\:30ed\:30b8\:30c3\:30af:
-       (1) \:30e6\:30fc\:30b6\:304c\:660e\:793a\:6307\:5b9a \[Rule] \:305d\:308c\:3092\:4f7f\:3046
-       (2) PrivacyLevel > 0.5 (default 1.0) \:304b\:3064 $ClaudePrivateModel \:6709\:52b9 \[Rule] \:305d\:306e\:30e2\:30c7\:30eb
-       (3) \:305d\:308c\:4ee5\:5916 \[Rule] Automatic (ClaudeQuerySync \:5185\:90e8\:306e\:81ea\:52d5\:5224\:5b9a\:3001\:901a\:5e38 CLI) *)
+    (* モデル決定ロジック (2026-09-01 機密規約に統一: PL 0.5 以上 = クラウド送信不可。
+       旧実装は厳密不等号 pl > 0.5 で、未宣言ローカル .nb 継承のちょうど 0.5 が
+       クラウド CLI へ流れていた):
+       (1) ユーザが明示指定 -> それを使う (オーナー上書き。PL より優先)
+       (2) PrivacyLevel >= 0.5 または非数値 (PL 不明は 1.0 = 機密扱い) ->
+           $ClaudePrivateModel 有効ならそのモデル。不在なら fail-closed で
+           Failed["PrivateModelUnavailable"] を返し、Automatic (クラウド CLI) へ
+           黙って落とさない
+       (3) PrivacyLevel < 0.5 -> Automatic (ClaudeQuerySync 内部の自動判定、通常 CLI) *)
     effectiveModel = Which[
       ListQ[model] && Length[model] >= 2, model,
-      NumericQ[privacyLevel] && privacyLevel > 0.5 &&
-        ListQ[privModel] && Length[privModel] >= 2,
-        privModel,
+      !NumericQ[privacyLevel] || privacyLevel >= 0.5,
+        If[ListQ[privModel] && Length[privModel] >= 2, privModel, $Failed],
       True, Automatic
     ];
+    If[effectiveModel === $Failed,
+      Return[<|"Status" -> "Failed",
+        "Reason" -> "PrivateModelUnavailable",
+        "PrivacyLevel" -> If[NumericQ[privacyLevel], N[privacyLevel], 1.0]|>]];
 
     (* 1H-S boundary gate: ClaudeQuerySync 委譲の最終境界 (maildb/llmlog 共有ハブ。
        capbroker 不在は fail-open) *)
@@ -11243,7 +11262,7 @@ iSVAskCloudFallback[path_String, localErr_] :=
 
 (* iCallSummaryLLM \:306e fallback \:5bfe\:5fdc\:7248\:3002
    - PrivacyLevel \:304c\:30af\:30e9\:30a6\:30c9\:7981\:6b62 (1.0) \:306a\:3089\:30ed\:30fc\:30ab\:30eb\:306e\:307f\:3067\:8a66\:884c
-   - PrivacyLevel \:30af\:30e9\:30a6\:30c9\:53ef (0.5 \:307e\:305f\:306f\:6df7\:5728) \:306a\:3089\:3001
+   - PrivacyLevel がクラウド可 (< 0.5 を含む、または混在) なら、
        (a) \:307e\:305a\:30ed\:30fc\:30ab\:30eb\:3067\:8a66\:3057\:3001
        (b) \:5931\:6557\:6642\:306f fallback \:30e2\:30fc\:30c9\:306b\:5f93\:3063\:3066\:30af\:30e9\:30a6\:30c9\:3092\:8a66\:884c\:3002
    Inconsistent \:30b9\:30c6\:30fc\:30bf\:30b9 (\:30ed\:30fc\:30ab\:30eb\:5931\:6557\:30fb\:30af\:30e9\:30a6\:30c9\:62d2\:5426) \:3082\:8fd4\:308a\:5024\:3068\:3059\:308b\:3002 *)
@@ -11280,8 +11299,9 @@ iCallSummaryLLMWithFallback[prompt_String, model_, privacyLevel_,
         "LocalResult" -> localResult,
         "Path" -> path|>]];
 
-    (* \:30af\:30e9\:30a6\:30c9\:3067\:8a66\:884c (privacyLevel \:3092 0.5 \:306b\:3057\:3066 $ClaudePrivateModel \:3092\:30b9\:30ad\:30c3\:30d7) *)
-    cloudResult = iCallSummaryLLM[prompt, model, 0.5];
+    (* クラウドで試行 (privacyLevel 0.0 = クラウド可を明示して $ClaudePrivateModel を
+       スキップ。旧センチネル 0.5 はハブ閾値の >= 0.5 化でローカル側になったため不可) *)
+    cloudResult = iCallSummaryLLM[prompt, model, 0.0];
     If[Lookup[cloudResult, "Status", ""] === "OK",
       Return[cloudResult]];
 
@@ -16118,7 +16138,10 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
           へ "Graph" を登録するので maildb より後 (maildb は promptrouter 段で
           ロード済み)。 *)
        "SourceVault_mailgraph.wl",
-       "SourceVault_searchview.wl", "SourceVault_knowledgehome.wl", "SourceVault_cognition.wl", "SourceVault_adjudication.wl", "SourceVault_capbroker.wl", "SourceVault_taint.wl", "SourceVault_anomaly.wl", "SourceVault_routine.wl", "SourceVault_routineplan.wl", "SourceVault_mailagenda.wl", "SourceVault_anonymize.wl",
+       "SourceVault_searchview.wl", "SourceVault_knowledgehome.wl", "SourceVault_cognition.wl", "SourceVault_adjudication.wl", "SourceVault_capbroker.wl", "SourceVault_taint.wl", "SourceVault_anomaly.wl", "SourceVault_routine.wl", "SourceVault_routineplan.wl", "SourceVault_mailagenda.wl",
+       (* todo \:30ad\:30e3\:30c3\:30b7\:30e5 DB\:3002routineplan/mailagenda \:304b\:3089\:306f\:5f31\:7d50\:5408
+          (\:5b9f\:884c\:6642 Symbol \:89e3\:6c7a) \:3067\:53c2\:7167\:3055\:308c\:308b\:306e\:3067\:3053\:306e\:9806\:3067\:3088\:3044\:3002 *)
+       "SourceVault_todo.wl", "SourceVault_anonymize.wl",
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
        "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",
        "SourceVault_workflowcatalog.wl", "SourceVault_course.wl",

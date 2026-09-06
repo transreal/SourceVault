@@ -122,7 +122,7 @@ SourceVaultSearch["履修登録の手順",
 
 **entity OR-match** により、seed entity dictionary を `"EntityDictionary"` に渡すと、query「Bruce Sterling」と doc「ブルース・スターリング」が双方の entity term で一致します（表記非一致 / OOV 回復）。catch-all な退化トピック（記号のみのラベル・surface form 過多）は auto-tag / BM25 双方から除外されます。MCP からは `sourcevault_search` の `methods` に `"bm25"` を含めると BM25 index 経路に入ります。
 
-`SourceVault_oopsseed.wl` は 1992–2005 の個人メーリングリスト（OOPS、約 6500 通・約 4100 topic item）の **seed オントロジ取り込み**（Common Lisp S式 reader・ShiftJIS/UTF-8 decode・owner-scoped namespace・別名/日英併記の surface form）と、一般メールの段落への **topic 自動付与**（`SourceVaultParseMailParagraphs` → `SourceVaultAssignParagraphTopics`）を提供します。「seed を取り込み、一般メールを同形式に変換して検索精度を上げる」方針の基盤です。詳細は [`api_lexical.md`](api_lexical.md) / [`api_oopsseed.md`](api_oopsseed.md)。
+`SourceVault_oopsseed.wl` は 1992–2005 の個人メーリングリスト（OOPS、約 6500 通・約 4100 topic item）の **seed オントロジ取り込み**（Common Lisp S式 reader・ShiftJIS/UTF-8 decode・owner-scoped namespace・別名/日英併記の surface form）と、一般メールの段落への **topic 自動付与**（`SourceVaultParseMailParagraphs` → `SourceVaultAssignParagraphTopics`）を提供します。「seed を取り込み、一般メールを同形式に変換して検索精度を上げる」方針の基盤です。詳細は [`api_lexical.md`](SourceVault_info/docs/api_lexical.md) / [`api_oopsseed.md`](SourceVault_info/docs/api_oopsseed.md)。
 
 ```mathematica
 (* seed 辞書を entity dictionary として BM25 index に載せる *)
@@ -403,7 +403,7 @@ SourceVault には、source 管理に加えて、**at-rest 暗号化基盤・可
 
 ### 初回セットアップ（オーナー登録・メールアカウント・鍵バックアップ）
 
-暗号化・メール・アドレス帳を使う前に、個人ごとの初期設定を**一度だけ**行います（鍵 backend を `SystemCredential` に → 暗号化初期化 → **オーナー（自分）を identity 層に登録** → オーナーの LLMProfile/プライマリメール設定 → IMAP アカウント登録 → 鍵バンドルのバックアップ → グループ重み設定）。これらは私的設定（ログイン名・氏名・所属など）を含むため**ソースや公開リポジトリには置かず**、各自のローカル起動ファイル（`init.m` 等、GitHub に上げない）にまとめます。手順とコード例（すべてプレースホルダ）は **[setup.md の「初回セットアップ（暗号化・メール・アドレス帳）」](setup.md)** を参照してください。
+暗号化・メール・アドレス帳を使う前に、個人ごとの初期設定を**一度だけ**行います（鍵 backend を `SystemCredential` に → 暗号化初期化 → **オーナー（自分）を identity 層に登録** → オーナーの LLMProfile/プライマリメール設定 → IMAP アカウント登録 → 鍵バンドルのバックアップ → グループ重み設定）。これらは私的設定（ログイン名・氏名・所属など）を含むため**ソースや公開リポジトリには置かず**、各自のローカル起動ファイル（`init.m` 等、GitHub に上げない）にまとめます。手順とコード例（すべてプレースホルダ）は **[setup.md の「初回セットアップ（暗号化・メール・アドレス帳）」](SourceVault_info/docs/setup.md)** を参照してください。
 
 ```mathematica
 NBAccess`$NBCredentialBackend = "SystemCredential";   (* 永続鍵。Memory だと復号不可=データ消失 *)
@@ -526,7 +526,7 @@ SourceVaultComfyUIGenerateToNotebook["sdxl_simple_example2",
 
 ## マイニング（記憶の代謝・検証・自己修復）
 
-`SourceVault_mining.wl` は、Eagle・メール・notebook などの object から **タグ・著者・実体リンク** を由来つきで抽出し、append-only event の replay で projection を再構成し、検索 ranking に bounded boost を与え、診断 probe・ErrorBook・PinnedFact による記憶代謝で精度を保つレイヤです（`SourceVault.wl` ロード時に自動ロード）。設計の不変条件・全 API は [`api_mining.md`](api_mining.md)、基本〜応用の実行例は [`examples/mining_example.md`](examples/mining_example.md) を参照してください。
+`SourceVault_mining.wl` は、Eagle・メール・notebook などの object から **タグ・著者・実体リンク** を由来つきで抽出し、append-only event の replay で projection を再構成し、検索 ranking に bounded boost を与え、診断 probe・ErrorBook・PinnedFact による記憶代謝で精度を保つレイヤです（`SourceVault.wl` ロード時に自動ロード）。設計の不変条件・全 API は [`api_mining.md`](SourceVault_info/docs/api_mining.md)、基本〜応用の実行例は [`examples/mining_example.md`](SourceVault_info/docs/examples/mining_example.md) を参照してください。
 
 ### 由来つきタグ・著者・実体同定
 

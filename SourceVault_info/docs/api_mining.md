@@ -235,7 +235,7 @@ EventClass="PinnedFactAdded" の event を作る。
 ### SourceVaultMakeObjectInteraction[targetURI, actorKind, interactionKind, opts]
 owner/LLM/workflow の操作観測 (§8.8.4) を作る。actorKind=Owner/LLM/Workflow/System。interactionKind=Open/Read/MarkRead/SearchClick/ContextInclude/Cite/Edit/Annotate/Tag/Pin/Dismiss 等。Weight は InteractionKind 別の既定値を持ち opts で上書き可。
 → Association
-既定 Weight: ContextInclude/Cite/Edit/Pin=1.0, Annotate/Tag/Star=0.8, Accept=0.7, SearchClick=0.4, Open/Read=0.3, Reject/Dismiss=0.2..0.3
+既定 Weight: ContextInclude/Cite/Edit/Pin=1.0, Annotate/Tag/Star=0.8, Accept=0.7, SearchClick=0.4, Open/Read=0.3, Reject=0.3, Dismiss=0.2, Retrieve=0.2, MarkRead/MarkUnread=0.1, その他既定=0.5
 Options: "Weight" -> Automatic, "ObjectClass" -> Missing["NoClass"], "ActorID" -> Missing["NoActor"], "QueryRef" -> Missing["NoQuery"], "RunID" -> Missing["NoRun"], "ContextRef" -> Missing["NoContext"], "AccessLevel" -> 0.85, "InteractionID" -> Automatic, "CreatedAtUTC" -> Automatic
 
 ### SourceVaultObjectInteractionRecordedEvent[interaction]

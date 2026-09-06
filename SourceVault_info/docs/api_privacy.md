@@ -27,25 +27,29 @@ privacy 伝達の正準層。「入力変数や内部でインポートしたデ
 
 ## 1. 評価スコープ透かし (runtime)
 
-### SourceVaultNotePrivacy[pl]
-現在の評価に PrivacyLevel を記録する (Max 伝搬)。FE があり `pl >= $SourceVaultPrivacyMarkThreshold` なら評価セルを同期で機密マークし、出力セルを **CellObject 同一性ベース**の遅延マーカーへ登録する (index 依存なし)。
+### SourceVaultNotePrivacy[pl] → Real
+現在の評価に PrivacyLevel を記録する (Max 伝搬)。FE があり `pl >= $SourceVaultPrivacyMarkThreshold` なら評価セルを同期で機密マークし、出力セルを **CellObject 同一性ベース**の遅延マーカーへ登録する (index 依存なし)。非数値/引数なしは fail-closed で `$SourceVaultPrivacyDefaultLevel` 扱い。
 → clip 後の pl
 
-### SourceVaultNotePrivacyOf[data]
+### SourceVaultNotePrivacyOf[data] → Real
 data (Association / 行リスト / snapshot 群) から PrivacyLevel を収集して最大値を記録する。`"PrivacyLevel"` キー → `"Derived"` → `"PrivacyLevel"` の順に見る。数値が取れない要素は fail-closed で 0.85 扱い。空リストは 0.0。
 → 記録した最大 PL
 
-### SourceVaultEvaluationPrivacy[] / SourceVaultResetEvaluationPrivacy[]
-現在の透かしの読み出し / リセット (テスト用)。
+### SourceVaultEvaluationPrivacy[] → Real
+現在の評価スコープの透かしを読み出す。
 
-### SourceVaultWithPrivacyScope[expr]  (HoldFirst)
+### SourceVaultResetEvaluationPrivacy[] → 0.
+透かしを 0.0 にリセットする (テスト用)。
+
+### SourceVaultWithPrivacyScope[expr]  (HoldFirst) → Association
 透かしを Block して expr を評価する。
 → `<|"Value" -> 結果, "Privacy" -> スコープ内の最大 PL|>` 。外側の透かしは Max で更新される。適合テストの計測はこれで行う。
 
-### SourceVaultMarkEvaluationPrivacyCells[nb]
-透かし由来の未処理マークを流し込む backstop。入力セルのテキストは一切見ない。`SourceVaultMarkConfidentialViewCells` の先頭と `NBMakeContextPacket` フックから呼ばれる。
+### SourceVaultMarkEvaluationPrivacyCells[nb] / SourceVaultMarkEvaluationPrivacyCells[] → List
+透かし由来の未処理マークを流し込む backstop。入力セルのテキストは一切見ない。引数なし形は現在の pending 全体を対象にする。`SourceVaultMarkConfidentialViewCells` の先頭と `NBMakeContextPacket` フックから呼ばれる。
+→ マークしたセルの記述リスト
 
-### SourceVaultPendingPrivacyMarks[]
+### SourceVaultPendingPrivacyMarks[] → List
 未処理の出力セルマーク要求一覧 (診断用)。0 なら遅延マーカーは全部処理済み。
 
 ### 遅延マーカーの挙動
@@ -55,6 +59,7 @@ data (Association / 行リスト / snapshot 群) から PrivacyLevel を収集�
 - 評価セルの直後から `Output`/`Print`/`Message` を連続でマークし、**それ以外のスタイルが現れたら打ち切る** (無関係なセルを巻き込まない)。
 - PL は**上げるだけ**。既存 PL 以上なら何もしない (旧 `ClaudeCode`Confidential` の遅延マークが先に勝った場合も二重マークしない)。
 - 出力セルが現れないまま `$svPPendingTTL` (20 秒) 経過した要求は破棄する (末尾 `;` の抑制評価で無限ポーリングしないため)。
+- パレット型ノートブック (`WindowFrame -> "Palette"`) はマーク対象から除外する。パレットのボタン経由で機密 View を開くと `EvaluationNotebook[]` がパレット自身に解決され、パレット全体が赤背景になる不具合 (2026-09-01 実機報告) の回避。機密表示自体は `SourceVaultPrivate` の赤枠バッジが必ず伴うので、セルマークだけ抑止しても機密性は失われない。
 
 ### 変数
 - `$SourceVaultPrivacyMarkThreshold` = 0.5 (これ以上でセルマーク)
@@ -63,67 +68,95 @@ data (Association / 行リスト / snapshot 群) から PrivacyLevel を収集�
 
 ## 2. 正準 exit
 
-### SourceVaultPrivateResult[expr, pl]
-**Core 系** (生データを返す関数) の正準 exit。pl を記録しセルをマークして expr をそのまま返す。値の形は変えない。
+### SourceVaultPrivateResult[expr, pl] / SourceVaultPrivateResult[expr] → 任意
+**Core 系** (生データを返す関数) の正準 exit。pl を記録しセルをマークして expr をそのまま返す。値の形は変えない。pl 省略時は `$SourceVaultPrivacyDefaultLevel`。
 
-### SourceVaultPrivateView[expr, pl]
-**View 系** (UI オブジェクトを返す関数) の正準 exit。pl >= 閾値なら `SourceVaultPrivate[expr, pl]` で包む (冪等)。
+### SourceVaultPrivateView[expr, pl] / SourceVaultPrivateView[expr] → 任意 | SourceVaultPrivate[...]
+**View 系** (UI オブジェクトを返す関数) の正準 exit。pl >= 閾値なら `SourceVaultPrivate[expr, pl]` で包む (冪等。既に `SourceVaultPrivate` でラップ済みならそのまま)。pl 省略時は `$SourceVaultPrivacyDefaultLevel`。`$SourceVaultPrivacyViewBadge -> False` ならバッジなしで expr をそのまま返す (透かしは記録される)。
 ⚠️ **Core 系に使わないこと。** `Dataset[SourceVaultMailSearchSummary[...]]` のような下流が壊れる (実際に一度壊した)。
 
 ### SourceVaultPrivate[expr, pl]
 privacy ラベル付き表示ラッパ。`Format` 定義で赤枠 + 「機密 / Confidential PrivacyLevel x.xx」バッジとして表示されるが、**値の構造は `SourceVaultPrivate[payload, pl]` のまま残る**ので決定的に剥がせる。セルマークが race で落ちても機密であることが必ず視認できる二重防御。
 
-### SourceVaultPrivacyUnwrap[x] / SourceVaultPrivacyLevelOf[x]
-ラッパを剥がして中身を返す (ラッパでなければそのまま) / ラッパの PL を返す。View の構造を検査するテスト・下流コードは必ず Unwrap を通すこと。
+### SourceVaultPrivacyUnwrap[x] → 任意
+ラッパを剥がして中身を返す (ラッパでなければそのまま)。View の構造を検査するテスト・下流コードは必ずこれを通すこと。
+
+### SourceVaultPrivacyLevelOf[x] → Real | Missing
+ラッパの PL を返す (無ければ `Missing["NoPrivacyLabel"]`)。
 
 ## 3. 宣言レジストリ
 
-### SourceVaultDeclarePrivacySource[name, spec]
+### SourceVaultDeclarePrivacySource[name, spec] → Association
 私的データの**一次ストア (読み出し口)** を宣言する。
 spec: `<|"Level" -> 0.85, "Readers" -> {"シンボル名"...}, "Description" -> _|>`
 既定で `mail` / `notebook` / `eagle` / `oops` / `llmlog` の 5 つを宣言済み。派生関数は呼び出しグラフで自動的に到達判定されるので、増えても書き足す必要はない。
 
-### SourceVaultRegisterPrivacyContract[symbolName, spec]
-関数の privacy 契約を登録する。
+### SourceVaultRegisterPrivacyContract[symbolName, spec] / SourceVaultRegisterPrivacyContract[symbolName, class] → Association | Failure
+関数の privacy 契約を登録する。第 2 引数を文字列 (Class 名) で渡す簡易形は `<|"Class" -> class|>` と同義。
 spec: `<|"Class" -> "Private"|"Public"|"Internal", "Exit" -> "View"|"Result"|"Head"|"None", "Level" -> Automatic|数値, "Sources" -> {...}, "NoDataFlow" -> 理由, "Module" -> _, "Note" -> _|>`
+Class が不正 (Private/Public/Internal 以外) なら `Failure["InvalidPrivacyClass", ...]` を返す。Exit 省略時は Class Private なら "Result"、それ以外は "None"。
 
 - `"Private"` … 私的データが出力に載る。正準 exit を通す義務がある。
 - `"Public"` / `"Internal"` … 載らない。私的ストアへ到達する場合は **`"NoDataFlow"` に理由が必須** (理由なしは監査 FAIL = fail-closed)。
 
 登録は自モジュール内で行うこと。手本: `SourceVault_maildb.wl` の `iSVMDRegisterPrivacyContracts`。まだ自前登録を持たないモジュール分は `SourceVault_privacy.wl` §7b の横断表にある。
 
-### SourceVaultPrivacyContract[sym] / SourceVaultPrivacyContracts[] / SourceVaultPrivacySources[]
-登録内容の参照。
+### SourceVaultPrivacyContract[sym] → Association | Missing
+登録済み privacy 契約を返す。無ければ `Missing["NoPrivacyContract", sym]`。
 
-### SourceVaultDeclareModulePrivacy[file, spec] / SourceVaultModulePrivacyDeclarations[]
-モジュール単位の既定 (`"DefaultClass"` / `"Sources"`)。
+### SourceVaultPrivacyContracts[] → Association
+登録済み privacy 契約表 (symbolName -> 契約) 全体。
+
+### SourceVaultPrivacySources[] → Association
+宣言済みの私的ストア表全体。
+
+### SourceVaultDeclareModulePrivacy[file, spec] → Association
+モジュール単位の既定を宣言する。spec: `<|"DefaultClass" -> "Internal", "Sources" -> {...}, "Note" -> _|>`。個別契約が無い symbol はこの既定が適用される。
+
+### SourceVaultModulePrivacyDeclarations[] → Association
+モジュール宣言表全体。
 
 ## 4. 監査
 
 ### SourceVaultPrivacyAudit[opts]
-`"Mode" -> "Runtime"` (既定): ロード済み SourceVault シンボルの呼び出しグラフを `DownValues/SubValues/OwnValues` から作り、私的ストアに到達する public 関数が `Class -> "Private"` を宣言しているかを検査する。未宣言は `"UndeclaredLeak"`。
-`"Mode" -> "Source"`: .wl の `::usage` を数え、レビュー済み一覧に無い public シンボルを `"Unreviewed"` として報告する (headless / コミットゲート用)。
-その他: `"Files"`, `"Directory"`, `"MaxDepth"` (既定 8)。
+privacy 形式の遵守を検査する。
 → `<|"Status" -> "OK"|"Failed", "Mode", "UndeclaredLeak", "Unreviewed", "MissingExit", "Counts"|>`
+Options: "Mode" -> "Runtime" (ロード済み SourceVault シンボルの呼び出しグラフを `DownValues/SubValues/OwnValues` から作り、私的ストアに到達する public 関数が `Class -> "Private"` を宣言しているかを検査する。未宣言は `"UndeclaredLeak"` reason `"Undeclared"`。Public/Internal 宣言済みで `"NoDataFlow"` 理由が無い場合は reason `"DeclaredAs<Class>WithoutNoDataFlowReason"`), "Mode" -> "Source" (.wl の `::usage` を数え、レビュー済み一覧に無い public シンボルを `"Unreviewed"` として報告する。headless / コミットゲート用), "Files" -> Automatic (Source モードのみ使用、パス明示リストも可), "Directory" -> Automatic, "MaxDepth" -> 8 (Runtime モードの BFS 深さ上限)
 
-### SourceVaultPrivacyCallGraph[] / SourceVaultPrivacyReachesSource[sym]
-参照グラフ / 1 関数がどの私的ストアに到達するか。
+### SourceVaultPrivacyCallGraph[] → Association
+SourceVault` 系シンボルの参照グラフ (完全名 -> 参照シンボル完全名リスト) を作る。
 ⚠️ 罠: `SourceVault`` が `$ContextPath` に載っていると `Names["SourceVault`*"]` は**短縮名**を返す。グラフの節点は必ず完全名へ正規化すること (しないと BFS が 1 歩も進まず監査が常に OK になる)。
 
-### SourceVaultPrivacyReviewedSymbols[] / SourceVaultPrivacyWriteReview[opts]
-レビュー済み public シンボル一覧 (`SourceVault_info/privacy/privacy_reviewed.m`, `<|file -> {name..}|>`) の読み出し / 書き出し。**新規シンボルを privacy 宣言したうえで** 書き出すこと。
+### SourceVaultPrivacyReachesSource[symbolName] → Association
+1 関数がどの私的ストアに到達するかを返す。
+→ `<|"Symbol" -> symbolName, "Sources" -> {到達したストア名...}|>`
+
+### SourceVaultPrivacyReviewedSymbols[] → Association
+レビュー済み public シンボル一覧 (`SourceVault_info/privacy/privacy_reviewed.m`, `<|file -> {name..}|>`) の読み出し。ファイル未存在時は `<||>`。
+
+### SourceVaultPrivacyWriteReview[opts]
+現在のソースの public シンボル一覧をレビュー済みファイルへ書き出す。**新規シンボルを privacy 宣言したうえで**実行すること。
+→ `<|"Status" -> "Written", "Path", "Files", "Symbols"|>` (書き込み失敗時は `Failure["PrivacyReviewWriteFailed", ...]`)
+Options: "Directory" -> Automatic (ソースディレクトリ自動検出), "Path" -> Automatic (既定 `SourceVault_info/privacy/privacy_reviewed.m`)
 
 ## 5. 動的適合テスト
 
-### SourceVaultRegisterPrivacyProbe[symbolName, probe]
+### SourceVaultRegisterPrivacyProbe[symbolName, probe] → Association
 probe: `<|"Setup" -> Function[level, _], "Call" -> Function[setupResult, _], "Teardown" -> _ (省略可), "Levels" -> {0.0, 1.0} (省略可)|>`
 Setup は「PL = level の合成データを見えるようにする」責務、Call は対象関数を呼ぶ責務。probe はパッケージではなく `test codes/SourceVault_privacy_conformance_test.wls` に置く。
 
-### SourceVaultPrivacyConformanceTest[symbolName] / [All]
-登録 probe を使って PL 伝達を実測する。FE 不要 (透かしを観測する)。
+### SourceVaultPrivacyProbes[] → Association
+登録済み probe 表全体 (symbolName -> probe)。
+
+### SourceVaultPrivacyConformanceTest[symbolName] → Association
+登録 probe を使って PL 伝達を実測する。FE 不要 (透かしを観測する)。probe 未登録なら `"Status" -> "Skipped"`。
 - 高 PL 入力 (>= 閾値) → 観測 PL >= 入力 PL であること (**伝達**)
 - 低 PL 入力 (< 閾値) → 観測 PL < 閾値であること (**過剰マーク防止**)
 → `<|"Status" -> "Pass"|"Fail"|"Skipped", "Symbol", "Cases"|>`
+
+### SourceVaultPrivacyConformanceTest[All] → Association
+登録済み全 probe を実行する。
+→ `<|"Status" -> "Pass"|"Fail", "Results" -> {各 symbol の結果...}, "Counts" -> <|"Total", "Pass", "Fail", "Skipped"|>|>`
 
 ## 6. コミットゲート (新関数の必須手順)
 
@@ -151,3 +184,7 @@ wolframscript -file "test codes/SourceVault_privacy_conformance_test.wls"
 - **Internal + NoDataFlow** (19): 取込み/派生生成パイプライン (件数と状態だけ返す)、機密マーク機構自身、ルーティング提案層
 
 同時に、索引 sidecar 経路 (`SourceVaultMailSearchIndex` / `SourceVaultMailSearchIndexView` / `MailIndexGet` / `MailThreadNotebook` / `MailShowBody`) が機密ヘッド表から丸ごと抜けていたのを追加した。
+
+## 2026-09-01 の追補監査
+
+Source モード監査で `mailbrowse` / `crosslink` / `oopsseed` の public 関数群 (§7b) が、それぞれ mail/oops ストアおよび provider 経由のサマリーに到達するのに契約未登録だったため追加。同時に `eagle`/`llmlog` ストアの `Readers` に実在しないシンボル名 (幽霊名) が登録されており、runtime 監査がこれら 2 ストアへの到達を検出できていなかったのを実名へ修正した結果、新たに 69 件 + `SourceVaultEagleIngestInfo` の到達が判明し分類・登録した (§7b 末尾)。自前登録へ移行した関数は §7b から削除してよい。

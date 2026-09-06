@@ -80,6 +80,15 @@ SourceVaultTalkQABuild::usage =
   "\"Cloud\" | \"Local\" | \"None\" | 自前の関数 fn[slideText, talkText, k]),\n" <>
   "\"Slides\" -> All | {n...}, \"Verbose\" (既定 True)。";
 
+SourceVaultTalkQAImport::usage =
+  "SourceVaultTalkQAImport[deck, slides] は「人が書いた」想定質問と回答をそのまま QA パックへ焼き込む。\n" <>
+  "SlideWorkflow の質疑応答セル (SlideQA) が正で、LLM も KB も推測で上書きしない。\n" <>
+  "slides: {<|\"Slide\"->n, \"Title\"->.., \"Text\"->スライド本文, \"Talk\"->原稿,\n" <>
+  "  \"Entries\"->{<|\"Question\"->q, \"Answer\"->a, \"Citations\"->{..}, \"PrivacyLevel\"->pl|>..}|>..}。\n" <>
+  "opts: \"PackId\", \"KBId\", \"SourceId\", \"PrivacyLevel\" (デッキ既定 PL, 既定 0.3),\n" <>
+  "\"Ingest\" (既定 True = KB へ取り込んで取りこぼしの受け皿を作る), \"Rebuild\" (既定 Automatic),\n" <>
+  "\"Enrich\" (既定 True = 回答が空の想定質問だけ KB から補う), \"Verbose\" (既定 False)。";
+
 SourceVaultTalkQAPacks::usage = "SourceVaultTalkQAPacks[] は作成済み QA パック id の一覧。";
 SourceVaultTalkQALoad::usage = "SourceVaultTalkQALoad[packId] は QA パックをメモリに読み込む。";
 SourceVaultTalkQAWhere::usage =
@@ -128,6 +137,13 @@ SourceVaultTalkQASlideInfo::usage =
 
 SourceVaultTalkQALinks::usage =
   "SourceVaultTalkQALinks[slide] はそのスライドに結び付いた sv:// URI の一覧を返す。";
+
+SourceVaultTalkQAExport::usage =
+  "SourceVaultTalkQAExport[packId] は パックの中身を SourceVaultTalkQAImport と同じ形
+" <>
+  "({<|\"Slide\", \"Question\", \"Answer\", \"Citations\", \"PrivacyLevel\"|>..}) で返す。
+" <>
+  "LLM で作った既存パックをスライドの質疑応答セルへ書き戻す (人が直せる形にする) のに使う。";
 
 SourceVaultTalkQAView::usage =
   "SourceVaultTalkQAView[] は QA パックの中身を Dataset で表示する (View 関数)。";
@@ -270,16 +286,37 @@ iTQSameFileQ[a_, b_] := StringQ[a] && StringQ[b] &&
         fb = Quiet @ Check[AbsoluteFileName[b], $Failed]},
     StringQ[fa] && fa === fb];
 
-SourceVaultTalkQASelectForDeck[deck_String] := Module[{base, hit},
+iTQDeckMatchQ[p_, base_String, deck_String] := Module[{dp},
+  If[! AssociationQ[p], Return[False]];
+  dp = iStr[Lookup[p, "DeckPath", ""]];
+  iTQNameKey[Lookup[p, "SourceId", ""]] === base ||
+    iTQNameKey[FileBaseName[dp]] === base ||
+    iTQSameFileQ[dp, deck]];
+
+(* 同じデッキに複数のパックが残ることがある (パック id を変えて作り直したとき)。
+   新しいほうを使う。古い発表の作り置きで答えるのが一番わかりにくい事故なので、
+   一覧の先頭 (アルファベット順) に任せない。
+   BuiltAtUTC は秒単位で、同じ秒に 2 つ書くと並びが決まらない。書き込み時刻を
+   主鍵にする (どちらが後に書かれたかが、まさに知りたいこと) *)
+iTQPackWrittenAt[packId_String] := Module[{p, path},
+  p = iTQPeek[packId];
+  If[AssociationQ[p] && NumericQ[Lookup[p, "SavedAt", None]],
+    Return[N[Lookup[p, "SavedAt"]]]];
+  (* SavedAt を持たない古いパック。ファイルの日付で近似する (秒単位) *)
+  path = iTQFind[packId];
+  If[path === "", Return[0.]];
+  With[{d = Quiet @ Check[AbsoluteTime[FileDate[path]], 0.]},
+    If[NumericQ[d], N[d], 0.]]];
+
+iTQPacksForDeck[deck_String] := Module[{base, hits},
   base = iTQNameKey[FileBaseName[deck]];
-  hit = SelectFirst[SourceVaultTalkQAPacks[],
-    Module[{p = iTQPeek[#], dp},
-      dp = If[AssociationQ[p], iStr[Lookup[p, "DeckPath", ""]], ""];
-      AssociationQ[p] && (
-        iTQNameKey[Lookup[p, "SourceId", ""]] === base ||
-        iTQNameKey[FileBaseName[dp]] === base ||
-        iTQSameFileQ[dp, deck])] &,
-    None];
+  hits = Select[SourceVaultTalkQAPacks[], iTQDeckMatchQ[iTQPeek[#], base, deck] &];
+  Reverse[SortBy[hits,
+    {iTQPackWrittenAt[#], iStr[Lookup[iTQPeek[#], "BuiltAtUTC", ""]]} &]]];
+
+SourceVaultTalkQASelectForDeck[deck_String] := Module[{hits, hit},
+  hits = iTQPacksForDeck[deck];
+  hit = If[hits === {}, None, First[hits]];
   If[hit === None,
     Return[iFail["NoPackForDeck", "このデッキの QA パックはまだありません。",
       <|"Deck" -> deck, "Packs" -> SourceVaultTalkQAPacks[],
@@ -300,7 +337,8 @@ iTQPeek[packId_String] := Module[{path},
   path = iTQFind[packId];
   If[path === "", Return[Missing["NoPack"]]];
   $tqPeeked[packId] = Quiet @ Check[
-    KeyTake[Import[path, "WXF"], {"PackId", "SourceId", "DeckPath", "BuiltAtUTC"}],
+    KeyTake[Import[path, "WXF"],
+      {"PackId", "SourceId", "DeckPath", "BuiltAtUTC", "KBId", "Origin", "SavedAt"}],
     Missing["Unreadable"]]];
 
 SourceVaultTalkQAUnload[packId_String] := ($tqLoaded = KeyDrop[$tqLoaded, packId];
@@ -322,8 +360,13 @@ iTQEnsure[packIdIn_] := Module[{packId = iTQPackId[packIdIn], r},
 
 (* ---- 正規化と鍵 ---- *)
 
-iTQNorm[s_String] := Quiet @ Check[
-  SourceVault`SourceVaultNormalizeSearchText[s], ToLowerCase[StringTrim[s]]];
+(* SourceVault の中核が読まれていないカーネルだと、この関数は未定義のまま
+   返る (メッセージが出ないので Check も拾わない)。そのまま進むと
+   鍵 (Keys/QNorm) に式が焼き込まれ、パックは作れるのに一問も当たらない。
+   文字列が戻らなければ落とす *)
+iTQNorm[s_String] := With[{r = Quiet @ Check[
+    SourceVault`SourceVaultNormalizeSearchText[s], $Failed]},
+  If[StringQ[r], r, ToLowerCase[StringTrim[s]]]];
 iTQNorm[x_] := iTQNorm[iStr[x]];
 
 (* 質問の当たり判定に使う鍵。日本語は空白で切れないので 2-gram も使うが、
@@ -553,7 +596,7 @@ SourceVaultTalkQABuild[deck_String, OptionsPattern[]] := Module[
 
   pack = <|"ObjectClass" -> "SourceVaultTalkQAPack", "SchemaVersion" -> 1,
     "PackId" -> packId, "KBId" -> kbId, "DeckPath" -> deck, "SourceId" -> sourceId,
-    "BuiltAtUTC" -> iUTC[], "Version" -> $tqVersion,
+    "BuiltAtUTC" -> iUTC[], "SavedAt" -> AbsoluteTime[], "Version" -> $tqVersion,
     "Slides" -> slideRecs, "Entries" -> entries,
     "Index" -> iTQBuildIndex[entries],
     "PublicMax" -> iTQPublicMax[],
@@ -620,6 +663,176 @@ iTQSlideChunks[kbId_String, sourceId_String] := Module[{res},
       "ReleaseContext" -> $tqReleaseContext], {}];
   If[! ListQ[res] || res === {}, Return[{}]];
   SortBy[Select[res, IntegerQ[Lookup[#, "SlideIndex", 0]] &], Lookup[#, "SlideIndex", 0] &]];
+
+(* ============================================================
+   セル由来の作り置き (SourceVaultTalkQAImport)
+
+   SourceVaultTalkQABuild は「LLM に想定質問を作らせ、KB に答えを引かせる」。
+   こちらは逆で、発表者がスライドに書いた質疑応答セルをそのまま焼き込む。
+   人が書いた答えを LLM の言い換えで上書きしない (本番で読み上げるので、
+   言い回しまで発表者のものであるべき)。
+
+   KB への取り込みは残す。作り置きに無い質問が来たときの受け皿 (Ask の 2 段目)
+   と、近傍表示 (Neighbors) が、デッキを KB が知らないと動かないため。
+   ============================================================ *)
+
+iTQImportCite[c_] := Which[
+  AssociationQ[c], c,
+  StringQ[c] && StringStartsQ[StringTrim[c], "sv://"],
+    <|"Label" -> StringTrim[c], "SourceId" -> "", "SlideIndex" -> 0,
+      "ObjectURI" -> StringTrim[c]|>,
+  StringQ[c] && StringTrim[c] =!= "",
+    <|"Label" -> StringTrim[c], "SourceId" -> "", "SlideIndex" -> 0,
+      "ObjectURI" -> ""|>,
+  True, Nothing];
+
+(* 1 問を焼く。答えが空のものは焼かない = Ask が KB へ落ちる。
+   空のまま入れると iTQLookup が当たってしまい、「資料に見当たりません」で
+   打ち切られる (KB に答えがあっても届かない) *)
+iTQImportEntry[kbId_String, sourceId_String, n_Integer, e_Association,
+    slidePL_, enrich_] := Module[{q, a, pl, cites, uris, pub, ans},
+  q = StringTrim[iStr[Lookup[e, "Question", ""]]];
+  If[q === "", Return[Missing["NoQuestion"]]];
+  a = StringTrim[iStr[Lookup[e, "Answer", ""]]];
+  pl = iNum[Lookup[e, "PrivacyLevel", slidePL], iNum[slidePL, 0.3]];
+  cites = DeleteCases[iTQImportCite /@ Flatten[{Lookup[e, "Citations", {}]}], Nothing];
+  If[a === "" && TrueQ[enrich],
+    ans = iTQAnswerFor[kbId, q, 3, sourceId];
+    If[AssociationQ[ans],
+      a = StringTrim[iStr[Lookup[ans, "FullAnswer", Lookup[ans, "AnswerText", ""]]]];
+      If[cites === {}, cites = Select[Lookup[ans, "FullCitations", {}], AssociationQ]];
+      pl = Max[pl, iNum[Lookup[ans, "PrivacyLevel", 0.], 0.]]]];
+  If[a === "", Return[Missing["NoAnswer"]]];
+  pub = pl <= iTQPublicMax[];
+  uris = Select[iStr[Lookup[#, "ObjectURI", ""]] & /@ cites,
+    StringQ[#] && StringStartsQ[#, "sv://"] &];
+  <|"Slide" -> n, "Question" -> q, "Keys" -> iTQKeys[q], "QNorm" -> iTQNorm[q],
+    "AnswerText" -> a,
+    "PublicAnswer" -> If[pub, a, ""],
+    "PublicCitations" -> If[pub, cites, {}],
+    "PublicPrivacyLevel" -> If[pub, pl, 0.],
+    "FullAnswer" -> a, "FullCitations" -> cites,
+    "ContextText" -> "",
+    "PrivacyLevel" -> pl,
+    "Route" -> If[pub, "Public", "Deny"],
+    "RoutePrivate" -> iTQRoute[pl, "Private"],
+    "Citations" -> cites, "CitationURIs" -> uris,
+    "Count" -> 1, "Origin" -> "Cells"|>];
+
+Options[SourceVaultTalkQAImport] = {"PackId" -> Automatic, "KBId" -> Automatic,
+  "SourceId" -> Automatic, "PrivacyLevel" -> 0.3, "Ingest" -> True,
+  "Rebuild" -> Automatic, "Enrich" -> True, "Verbose" -> False};
+
+SourceVaultTalkQAImport[deck_String, slidesIn_List, OptionsPattern[]] := Module[
+  {kbId, packId, sourceId, deckPL, verbose, enrich, talkTexts, ing, chunks,
+   chunkOf = <||>, entries = {}, slideRecs = <||>, pack, t0, dropped = 0,
+   kbStatus = <||>, slides, prior},
+  t0 = AbsoluteTime[];
+  verbose = TrueQ[OptionValue["Verbose"]];
+  enrich = TrueQ[OptionValue["Enrich"]];
+  slides = Select[slidesIn, AssociationQ];
+  If[slides === {},
+    Return[iFail["NoSlides", "質疑応答セルがありません。", <|"Deck" -> deck|>]]];
+  (* すでにこのデッキのパックがあるなら、その id と KB を引き継ぐ。
+     別 id で作ると同じデッキに 2 つ残り、SelectForDeck が古いほうを掴む。
+     KB も変わると、作り置きに無い質問の受け皿が別の索引を見にいく *)
+  prior = If[StringQ[deck] && deck =!= "",
+    With[{h = iTQPacksForDeck[deck]},
+      If[h === {}, <||>, With[{p = iTQPeek[First[h]]}, If[AssociationQ[p], p, <||>]]]],
+    <||>];
+  sourceId = Replace[OptionValue["SourceId"], Automatic :>
+    With[{sid = iStr[Lookup[prior, "SourceId", ""]]},
+      If[sid =!= "", sid, FileBaseName[deck]]]];
+  packId = Replace[OptionValue["PackId"], Automatic :>
+    With[{pid = iStr[Lookup[prior, "PackId", ""]]},
+      If[pid =!= "", pid, sourceId]]];
+  kbId = Replace[OptionValue["KBId"], Automatic :>
+    With[{k = iStr[Lookup[prior, "KBId", ""]]},
+      If[k =!= "", k, SourceVault`$SourceVaultKBDefaultId]]];
+  If[! StringQ[kbId] || kbId === "", kbId = "cn"];
+  deckPL = iNum[OptionValue["PrivacyLevel"], 0.3];
+
+  talkTexts = Select[Association[Table[
+    Lookup[s, "Slide", 0] -> iStr[Lookup[s, "Talk", ""]], {s, slides}]],
+    StringQ[#] && StringTrim[#] =!= "" &];
+
+  (* KB へ取り込む。失敗しても作り置きは作る (発表本番で「パックが無い」より、
+     取りこぼしの受け皿が弱いほうが軽い) *)
+  If[TrueQ[OptionValue["Ingest"]] && FileExistsQ[deck],
+    If[verbose, Print["[talkqa] KB へ取り込み: " <> sourceId]];
+    ing = Quiet @ Check[SourceVault`SourceVaultKBIngestSlideDeck[kbId, deck,
+      "SourceId" -> sourceId, "PrivacyLevel" -> deckPL,
+      "SlideNotes" -> talkTexts, "MaxSlideCharacters" -> 2500], $Failed];
+    If[AssociationQ[ing] && OptionValue["Rebuild"] =!= False &&
+        (OptionValue["Rebuild"] === True || Lookup[ing, "Status", ""] =!= "Unchanged"),
+      If[verbose, Print["[talkqa] KB を再構築 (" <> $tqReleaseContext <> ")"]];
+      Quiet @ Check[SourceVault`SourceVaultKBBuild[kbId,
+        "ReleaseContext" -> $tqReleaseContext], $Failed]];
+    kbStatus = Quiet @ Check[SourceVault`SourceVaultKBStatus[kbId], <||>]];
+
+  chunks = Quiet @ Check[iTQSlideChunks[kbId, sourceId], {}];
+  If[ListQ[chunks],
+    chunkOf = Association[Table[Lookup[c, "SlideIndex", 0] -> c, {c, chunks}]]];
+
+  Do[
+    Module[{n, ch, title, body, talk, slPL, recs, links},
+      n = Lookup[s, "Slide", 0];
+      If[IntegerQ[n] && n >= 1,
+        ch = Lookup[chunkOf, n, <||>];
+        If[! AssociationQ[ch], ch = <||>];
+        title = iStr[Lookup[s, "Title", ""]];
+        If[title === "", title = iStr[Lookup[ch, "Title", ""]]];
+        body = iStr[Lookup[s, "Text", ""]];
+        If[body === "", body = iStr[Lookup[ch, "Text", ""]]];
+        talk = iStr[Lookup[s, "Talk", ""]];
+        slPL = iNum[Lookup[s, "PrivacyLevel",
+          iNum[Lookup[ch, "PrivacyLevel", deckPL], deckPL]], deckPL];
+        recs = Table[iTQImportEntry[kbId, sourceId, n, e, slPL, enrich],
+          {e, Select[Lookup[s, "Entries", {}], AssociationQ]}];
+        dropped += Count[recs, _Missing];
+        recs = Select[recs, AssociationQ];
+        links = DeleteDuplicates[Select[Join[
+          {iStr[Lookup[ch, "ObjectURI", ""]]},
+          Flatten[Lookup[#, "CitationURIs", {}] & /@ recs]],
+          StringQ[#] && StringStartsQ[#, "sv://"] &]];
+        slideRecs[n] = <|"Slide" -> n, "Title" -> title,
+          "Terms" -> iTQProperTerms[title <> " " <> body <> " " <> talk, 4],
+          "SlideNodeId" -> iStr[Lookup[ch, "SlideNodeId", ""]],
+          "ObjectURI" -> iStr[Lookup[ch, "ObjectURI", ""]],
+          "PrivacyLevel" -> slPL,
+          "Links" -> links, "QuestionCount" -> Length[recs]|>;
+        entries = Join[entries, recs]]],
+    {s, slides}];
+
+  If[entries === {},
+    Return[iFail["NoAnswers",
+      "回答の書かれた想定質問がありません (Q: に対する A: を書いてください)。",
+      <|"Deck" -> deck, "Dropped" -> dropped|>]]];
+
+  pack = <|"ObjectClass" -> "SourceVaultTalkQAPack", "SchemaVersion" -> 1,
+    "PackId" -> packId, "KBId" -> kbId, "DeckPath" -> deck, "SourceId" -> sourceId,
+    "BuiltAtUTC" -> iUTC[], "SavedAt" -> AbsoluteTime[],
+    "Version" -> $tqVersion, "Origin" -> "Cells",
+    "Slides" -> slideRecs, "Entries" -> entries,
+    "Index" -> iTQBuildIndex[entries],
+    "PublicMax" -> iTQPublicMax[],
+    "KBStatus" -> If[AssociationQ[kbStatus], KeyTake[kbStatus,
+      {"Chunks", "Nodes", "Edges", "Sources", "BuiltAtUTC"}], <||>]|>;
+  If[iTQSave[pack] === $Failed,
+    Return[iFail["PackSaveFailed", "QA パックを保存できませんでした。",
+      <|"PackId" -> packId|>]]];
+  $tqLoaded[packId] = pack;
+  $tqPeeked = KeyDrop[$tqPeeked, packId];
+  SourceVault`$SourceVaultTalkQADefaultPack = packId;
+  If[verbose,
+    Print["[talkqa] セルから作成: " <> ToString[Length[slideRecs]] <> " 枚 / " <>
+      ToString[Length[entries]] <> " 問"]];
+  <|"Status" -> "OK", "PackId" -> packId, "KBId" -> kbId, "Origin" -> "Cells",
+    "Slides" -> Length[slideRecs], "Questions" -> Length[entries],
+    "Dropped" -> dropped,
+    "Public" -> Count[entries, e_ /; Lookup[e, "Route", ""] === "Public"],
+    "NonPublic" -> Count[entries, e_ /; Lookup[e, "Route", ""] =!= "Public"],
+    "ElapsedSeconds" -> Round[AbsoluteTime[] - t0, 0.1]|>];
 
 iTQCiteOf[results_List] := Map[Function[r,
   <|"Label" -> iStr[Lookup[r, "SourceTitle", ""]] <> " / スライド " <>
@@ -1242,6 +1455,23 @@ SourceVaultTalkQAView[packIdIn_ : Automatic] := Module[{pack, entries},
       "PL" -> Round[iNum[Lookup[e, "PrivacyLevel", 0.], 0.], 0.01],
       "Route" -> Lookup[e, "Route", ""],
       "Cites" -> Length[Lookup[e, "Citations", {}]]|>], entries]]];
+
+(* パック -> 人が直せる形。Import の逆で、往復できることが大事 (LLM で作った
+   作り置きをスライドのセルへ戻し、そこで直してから焼き直す) *)
+SourceVaultTalkQAExport[packIdIn_ : Automatic] := Module[{pack},
+  pack = iTQEnsure[packIdIn];
+  If[! AssociationQ[pack], Return[pack]];
+  Map[Function[e,
+    <|"Slide" -> Lookup[e, "Slide", 0],
+      "Question" -> iStr[Lookup[e, "Question", ""]],
+      "Answer" -> iStr[Lookup[e, "FullAnswer", Lookup[e, "AnswerText", ""]]],
+      "Citations" -> Select[
+        Map[Function[c, With[{u = iStr[Lookup[c, "ObjectURI", ""]]},
+            If[u =!= "", u, iStr[Lookup[c, "Label", ""]]]]],
+          Select[Lookup[e, "FullCitations", Lookup[e, "Citations", {}]], AssociationQ]],
+        StringQ[#] && StringTrim[#] =!= "" &],
+      "PrivacyLevel" -> iNum[Lookup[e, "PrivacyLevel", 0.], 0.]|>],
+    Select[Lookup[pack, "Entries", {}], AssociationQ]]];
 
 SourceVaultTalkQASetSlide[n_Integer] := (SourceVault`$SourceVaultTalkQASlide = n);
 SourceVaultTalkQASetSlide[_] := SourceVault`$SourceVaultTalkQASlide;

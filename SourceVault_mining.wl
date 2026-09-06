@@ -1557,8 +1557,12 @@ SourceVaultQueryLocalLLM[prompt_String, timeout_, temp_ : 0, sys_ : Automatic] :
       "temperature" -> temp, "stream" -> False,
       (* JSON 抽出タスクに推論(thinking)は不要。Qwen3 系 reasoning モデルは思考を
          reasoning_content に延々と出力し content が空/JSON 不遵守になる(1F 実機で
-         proposer 2/3 落ちの主因)。maildb/eagle と同じく抑止(非対応モデルは無害に無視) *)
-      "chat_template_kwargs" -> <|"enable_thinking" -> False|>|>,
+         proposer 2/3 落ちの主因)。maildb/eagle と同じく抑止(非対応モデルは無害に無視)。
+         2026-09-02 実測 (LM Studio + qwen3.8-27b): enable_thinking=false は無視され
+         reasoning 1130 字/57s、"/no_think" は 599 字/28s、reasoning_effort="none" だけが
+         思考 0 字/14s で JSON を返した (low や reasoning->{effort} は無効)。両方送る。 *)
+      "chat_template_kwargs" -> <|"enable_thinking" -> False|>,
+      "reasoning_effort" -> "none"|>,
       If[llm["Model"] =!= "", <|"model" -> llm["Model"]|>, <||>]];
     body = Quiet@Check[StringToByteArray[Developer`WriteRawJSONString[req], "UTF-8"], $Failed];
     If[body === $Failed, Return[Missing["EncodeFailed"]]];

@@ -3492,6 +3492,7 @@ iSVUIAgendaStateLabel[r_String] :=
     Switch[Lookup[Lookup[res, r, <||>], "State", Missing[]],
       "Dismissed", "\:5bfe\:5fdc\:6e08\:307f",
       "NotebookCreated", "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:4f5c\:6210\:6e08\:307f",
+      "TodoCreated", "Todo\:4f5c\:6210\:6e08\:307f",
       _, ""]];
 
 (* st の初期値は With で先に算出してリテラルとして焼き込む: DynamicModule の
@@ -3499,7 +3500,9 @@ iSVUIAgendaStateLabel[r_String] :=
 iSVUIAgendaActions[r_String] :=
   If[StringTrim[r] === "", Nothing,
    With[{st0 = iSVUIAgendaStateLabel[r], avail = iSVUIAgendaAvailableQ[],
-     reopenQ = Length[DownValues[SourceVault`SourceVaultMailAgendaReopen]] > 0},
+     reopenQ = Length[DownValues[SourceVault`SourceVaultMailAgendaReopen]] > 0,
+     todoQ = Length[DownValues[
+       SourceVault`SourceVaultMailAgendaInheritTodo]] > 0},
     DynamicModule[{st = st0},
       Column[{
         Row[Join[
@@ -3511,8 +3514,21 @@ iSVUIAgendaActions[r_String] :=
                  st = If[Lookup[res, "Status", ""] === "OK",
                    "\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:4f5c\:6210\:6e08\:307f",
                    "\:4f5c\:6210\:5931\:6557: " <> ToString@Lookup[res, "Reason", ""]]],
-               Method -> "Queued"],
-             Button["\:2713 \:78ba\:8a8d\:306e\:307f\:30fb\:5bfe\:5fdc\:6e08\:307f",
+               Method -> "Queued"]},
+            {}],
+          (* lightweight sibling: inherit as a standalone TODO (no project
+             notebook). Weak: the button appears only when SourceVault_todo
+             wired SourceVaultMailAgendaInheritTodo. *)
+          If[avail && todoQ,
+            {Button["\:2611 Todo\:3092\:4f5c\:6210\:3057\:3066\:7d99\:627f",
+               With[{res = SourceVault`SourceVaultMailAgendaInheritTodo[r]},
+                 st = If[Lookup[res, "Status", ""] === "OK",
+                   "Todo\:4f5c\:6210\:6e08\:307f",
+                   "\:4f5c\:6210\:5931\:6557: " <> ToString@Lookup[res, "Reason", ""]]],
+               Method -> "Queued"]},
+            {}],
+          If[avail,
+            {Button["\:2713 \:78ba\:8a8d\:306e\:307f\:30fb\:5bfe\:5fdc\:6e08\:307f",
                (SourceVault`SourceVaultMailAgendaResolve[r, "Dismissed"];
                 st = "\:5bfe\:5fdc\:6e08\:307f"), Method -> "Queued"]},
             {}]],
@@ -4612,6 +4628,8 @@ iSVMDRegisterPrivacyContracts[] :=
          {"SourceVaultMailSearchSummary", "Result"},
          {"SourceVaultMailDataset", "Result"},
          {"SourceVaultMailDerivedPending", "Result"},
+         {"SourceVaultMailUngroundedDerived", "Result"},
+         {"SourceVaultMailDerivedGroundingCheck", "Result"},
          {"SourceVaultMailAttachments", "Result"},
          {"SourceVaultMailView", "View"},
          {"SourceVaultMailSearchIndexView", "View"},

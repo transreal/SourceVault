@@ -1,10 +1,3 @@
-## 依存パッケージ
-
-SourceVault は以下のパッケージに依存しています。先にインストールしてください。
-
-- **[NBAccess](https://github.com/transreal/NBAccess)** — ノートブックアクセス制御・semantic API。Notebook ヘッダ / Todo の読み書きはすべて NBAccess を経由します。`NBReadHeader` / `NBReadTodos` / `NBWriteTodoStatus` などの高レベル semantic API が必須です。
-- **[claudecode](https://github.com/transreal/claudecode)** — LLMGraph DAG スケジューラ・`$Path` 自動設定・LLM プロバイダーへの問い合わせ経路。
-
 ### オプションパッケージ
 
 - **[ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)** — `SourceVaultNotebookSummary` などの LLM 要約機能を `ClaudeEval` 経由で実行する場合に必要です。SourceVault 単体では index・extract・lint・FindNotebooks クエリなど deterministic な機能のみ動作します。
@@ -50,6 +43,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_routine.wl` — ルーティン管理
 - `SourceVault_routineplan.wl` — ルーティン計画（routine plan）
 - `SourceVault_mailagenda.wl` — メールアジェンダ（オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層。maildb の既存派生 (Summary/Category/Priority/Deadline) を索引だけで読み、LLM/IMAP/シャード本体はロードしない。routineplan の日別カレンダー・「✉ 要対応メール」バンドに統合される）
+- `SourceVault_todo.wl` — Todo キャッシュ DB。notebook 内 TodoItem の状態と最終セル変更時刻（LastChanged）を蓄積するストア。routineplan / mailagenda からは弱結合（索引参照のみ）で使われる
 - `SourceVault_servicemanager.wl` — サービス管理・Python proxy・headless dispatch
 - `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得
 - `SourceVault_mcp.wl` — MCP tool schema / dispatch ＋ sv:// オブジェクト解決
@@ -122,6 +116,7 @@ $packageDirectory\
   SourceVault_routine.wl         ← ルーティン管理（本体ロード時に自動ロード）
   SourceVault_routineplan.wl     ← ルーティン計画（本体ロード時に自動ロード）
   SourceVault_mailagenda.wl      ← メールアジェンダ（本体ロード時に自動ロード）
+  SourceVault_todo.wl            ← Todo キャッシュ DB（本体ロード時に自動ロード）
   SourceVault_servicemanager.wl  ← サービス管理・headless dispatch（本体ロード時に自動ロード）
   SourceVault_webingest.wl       ← SearXNG/Web 検索（本体ロード時に自動ロード）
   SourceVault_mcp.wl             ← MCP + sv:// オブジェクト解決（本体ロード時に自動ロード）
@@ -316,6 +311,8 @@ SourceVault`SourceVaultSetModelIntent["$ClaudeModel", {"claudecode", "claude-opu
 
 > `$ClaudeAdvisaryModel` だけは他の変数と挙動が異なります。`SourceVaultAssignClaudeModels[]` の通常呼び出し（起動時の自動同期など、`"Force" -> False` の既定呼び出し）では、現在値がパッケージ既定 `{"chatgptcodex", "Automatic"}` または intent 解決結果そのもの（つまり未変更）のときだけ intent マップの値を代入します。セッション中に手動で `ClaudeCode`$ClaudeAdvisaryModel` を設定した場合、それは自動同期で上書きされません。`SourceVaultSetModelIntent["$ClaudeAdvisaryModel", ...]` で明示的に変更した場合や、`SourceVaultAssignClaudeModels["Force" -> True]` を直接呼んだ場合は、この保護を越えて強制反映されます。
 
+> **PrivacyLevel によるモデル自動選択の統一規約（2026-09-01）**: `iCallSummaryLLM` 等の内部ルーティングは「PrivacyLevel >= 0.5 ならローカル LLM (`$ClaudePrivateModel`)、PrivacyLevel < 0.5 ならクラウド CLI」に統一されました（旧実装は厳密不等号 `> 0.5` を使っており、未宣言ノートブックが継承するちょうど 0.5 の値がクラウド CLI 側へ誤って流れる不具合があったため修正）。PrivacyLevel が非数値の行は不明として 1.0（機密扱い＝ローカル）にフォールバックします。さらに、`$ClaudePrivateModel` が未設定または解決できない場合はローカル処理が **fail-closed**（`Failed["PrivateModelUnavailable"]`）で失敗するようになり、クラウドへの自動フォールバックは行われません。機密データを扱う前に、下の「初回セットアップ」手順 4 で必ず `$ClaudePrivateModel` を設定してください。
+
 ---
 
 ## ノートブック用スタイルシートとテンプレートの配置
@@ -430,7 +427,7 @@ SourceVault`SourceVaultEntityEditUI[1]
 
 ### 4. ローカル LLM（LM Studio）の登録
 
-機密メール（PrivacyLevel > 0.5）はローカル LLM で処理します。LM Studio のサーバを登録し、`$ClaudePrivateModel` を設定します。
+機密メール（PrivacyLevel >= 0.5）はローカル LLM で処理します（2026-09-01 に、クラウド送信不可の機密規約が閾値 0.5 以上に統一されました。旧実装の厳密不等号 `> 0.5` では、未宣言ノートブックが継承するちょうど 0.5 の値がクラウド CLI へ誤って流れる不具合があり、修正済みです）。LM Studio のサーバを登録し、`$ClaudePrivateModel` を設定します。
 
 ```mathematica
 NBAccess`NBRegisterTrustedLocalServer[<|
@@ -441,6 +438,8 @@ ClaudeCode`$ClaudePrivateModel = {"lmstudio", "your-local-model", "http://127.0.
 ```
 
 > 恒久化したい場合は上の直接代入の代わりに `SourceVault`SourceVaultSetModelIntent["$ClaudePrivateModel", {"lmstudio", "extraction"}]` を使うと、再起動後も維持されます（「API キーの設定」の「モデル intent の設定」参照）。
+>
+> **重要**: `$ClaudePrivateModel` が未設定・解決不能な状態で機密（PrivacyLevel >= 0.5）データの処理を行おうとすると、意図しないクラウド送信を防ぐため **fail-closed** で処理が失敗します（`Failed["PrivateModelUnavailable"]`。クラウド CLI への自動フォールバックはしません）。機密メール・機密ソースを扱う前に、必ず本手順でローカルサーバを登録してください。
 
 ### 5. IMAP アカウントの登録
 
@@ -932,6 +931,8 @@ NBReadTodos[nbPath]
 
 > 巨大なファイル（`$SourceVaultMaxFileSizeMB` 超）は index 時に `"SkipReason" -> "FileTooLarge"` の skip 済み (`snap-toolarge-*`) snapshot として扱われ、Header/Todos は保持されません（サイズ判定のための軽量な `SourceSize` フィールドを持つ最新形式の snapshot に自動アップグレードされます）。
 
+> Todo 項目の状態・最終セル変更時刻（`LastChanged`。CellChangeTimes の最大値から推定され、無い場合は `Missing["None"]`）は `SourceVault_todo.wl` が提供する Todo キャッシュ DB に蓄積されます。routineplan / mailagenda はこのキャッシュを弱結合（索引参照のみ）で利用します。
+
 ### ソース一覧・横断検索の動作確認（SourceVaultSources / SourceVaultArXiv / SourceVaultSummaries）
 
 登録済みのすべてのソースを一覧表示する `SourceVaultSources`、arXiv ソースだけを表示する `SourceVaultArXiv`、Eagle 保存済みサマリー・PDF 検索索引ドキュメント（pdfindex provider。学生便覧等）等の登録プロバイダ横断で検索・統合表示する `SourceVaultSummaries` が利用できます。これら 3 つはいずれも **core / View に分離**されています。`SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries` 本体（core）は共通スキーマ行を `List[Association]`（既定 `"Format" -> "Rows"`）で返し、後段の `Select`/`SortBy`/LLM 処理へそのまま連鎖できます。ノートブックへ表として提示するときは、対応する View 関数 `SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView` を使ってください（`"Format" -> "Grid"` を指定すると後方互換で内部的に View へ委譲されます）。arXiv 論文ソースについては、タイトル・著者・出版日が arXiv API（export.arxiv.org）から自動取得され、メタデータとしてキャッシュされます。ingest 時には arXiv アブストラクトを取得して `$Language` へ翻訳したものが Summary として自動付与されます。View が描画する各行には URL リンク（▶ URL）と、ingest 済みファイルを現在の PC で開くリンク（▶ 開く）が付きます。
@@ -1031,7 +1032,7 @@ SourceVault`SourceVaultBackfillSourceSummaries[]
        "Failed", "Remaining", "Language", "Results"|> *)
 ```
 
-> 使用するモデルは行の `PrivacyLevel` で自動選択されます: `PL > 0.5` はローカル LLM（`$ClaudePrivateModel`）、それ以外はクラウド CLI（`$ClaudeModel`）。PL が不明な行は fail-safe でローカル扱い（1.0）になります。本文は UNTRUSTED データ境界で包んでから LLM へ渡され（プロンプトインジェクション対策）、事前スキャンで危険と判定された本文は要約せず `"Quarantined"` として除外されます。`"Kind" -> {"web", "local"}` が既定（`All` で arXiv も含みますが、arXiv は通常 `SourceVaultBackfillArXivSummaries` を使ってください）。`"Sources" -> {sourceId, ...}` で対象を明示指定、`"Force" -> True` で既存 Summary も再生成、`"Limit" -> n`（既定 10。`Infinity`/`Automatic` で全件）で処理件数を制限、`"MaxChars" -> Automatic`（既定 `$SourceVaultSourceSummaryMaxChars`、12000 文字。超過分は切り詰め）で LLM へ渡す本文長を調整できます。`$Language` が `"Japanese"` のセッションで実行してください（headless では英語要約のまま格納されます）。
+> 使用するモデルは行の `PrivacyLevel` で自動選択されます: `PL >= 0.5` はローカル LLM（`$ClaudePrivateModel`）、`PL < 0.5` はクラウド CLI（2026-09-01 に統一された規約。旧実装の厳密不等号 `> 0.5` は修正済み）。PL が不明な行は fail-safe でローカル扱い（1.0）になります。`$ClaudePrivateModel` が未設定・解決不能な場合はローカル処理が fail-closed で失敗し（`Failed["PrivateModelUnavailable"]`）、クラウドへは回りません。本文は UNTRUSTED データ境界で包んでから LLM へ渡され（プロンプトインジェクション対策）、事前スキャンで危険と判定された本文は要約せず `"Quarantined"` として除外されます。`"Kind" -> {"web", "local"}` が既定（`All` で arXiv も含みますが、arXiv は通常 `SourceVaultBackfillArXivSummaries` を使ってください）。`"Sources" -> {sourceId, ...}` で対象を明示指定、`"Force" -> True` で既存 Summary も再生成、`"Limit" -> n`（既定 10。`Infinity`/`Automatic` で全件）で処理件数を制限、`"MaxChars" -> Automatic`（既定 `$SourceVaultSourceSummaryMaxChars`、12000 文字。超過分は切り詰め）で LLM へ渡す本文長を調整できます。`$Language` が `"Japanese"` のセッションで実行してください（headless では英語要約のまま格納されます）。
 
 #### 公開ソースの PrivacyLevel 是正
 
@@ -1096,7 +1097,7 @@ SourceVault`SourceVaultMailAgendaOpen[recordId]
 SourceVault`SourceVaultMailAgendaInherit[recordId]
 ```
 
-> 同一スレッド（Re/Fwd を剥いだ正規化件名 + MBox）は 1 項目に集約され、代表はオーナー宛て条件を満たす最新メールです。解決状態は `Pending → Done`（返信 / ノートブック作成 / 明示的な Dismissed）の一方向遷移で、返信は既存 maildb の返信送信時に自動記録されます。`SourceVaultRoutineAgendaData` に `"IncludeMail"` / `"MailItems"` / `"MailMaxPrivacyLevel"` オプションが追加され、`SourceVaultRoutineAgendaView` の表示に日別カレンダーの `"MailDeadline"` 種別および「✉ 要対応メール」バンドとして統合されます。PrivacyLevel ≥ 0.5 のメールを含む View 出力は既存 maildb と同じ機密規約（`ClaudeCode`Confidential`）でラップされます。個人アドレス（オーナー/組織アドレス・宛名パターン）はコードに焼き込まず `PrivateVault/config/mailagenda.json` で設定します。
+> 同一スレッド（Re/Fwd を剥いだ正規化件名 + MBox）は 1 項目に集約され、代表はオーナー宛て条件を満たす最新メールです。解決状態は `Pending → Done`（返信 / ノートブック作成 / 明示的な Dismissed）の一方向遷移で、返信は既存 maildb の返信送信時に自動記録されます。`SourceVaultRoutineAgendaData` に `"IncludeMail"` / `"MailItems"` / `"MailMaxPrivacyLevel"` オプションが追加され、`SourceVaultRoutineAgendaView` の表示に日別カレンダーの `"MailDeadline"` 種別および「✉ 要対応メール」バンドとして統合されます。PrivacyLevel >= 0.5 のメールを含む View 出力は既存 maildb と同じ機密規約（`ClaudeCode`Confidential`）でラップされます。個人アドレス（オーナー/組織アドレス・宛名パターン）はコードに焼き込まず `PrivateVault/config/mailagenda.json` で設定します。
 
 ### LLM 要約の動作確認（ClaudeRuntime 必須）
 
@@ -1119,6 +1120,7 @@ SourceVaultNotebookSummary[nbPath]
 | `iLoadJSONFromFile` が `Null` を返す | 罠 #28 (`ImportString[..., "RawJSON"]` が Windows path のバックスラッシュで失敗)。3 段階 fallback を使う実装か確認 |
 | `SourceVaultNotebookSummary` が失敗する | ClaudeRuntime がロードされているか、API キーまたはローカル LLM が利用可能か確認 |
 | `SourceVaultNotebookSummary` 等の LLM 呼び出しが `LLMBoundaryRefused` で失敗する | 境界観測 (Boundary Observation) の self-gate により、その呼び出し元（例: `sourcevault:iCallSummaryLLM`）が拒否されています。`SourceVault`Private`$iSVBoundaryObsApplyResult` と `SourceVaultSetBoundaryObservation` の設定を確認してください |
+| LLM 呼び出しが `Failed["PrivateModelUnavailable"]` を返す | 対象データが機密扱い（PrivacyLevel >= 0.5、または PL 不明で 1.0 にフォールバック）なのに `$ClaudePrivateModel` が未設定・解決不能です（2026-09-01 以降、fail-closed でクラウドへは自動フォールバックしません）。「初回セットアップ」手順 4 に従って `$ClaudePrivateModel` / `NBRegisterTrustedLocalServer` を設定してください |
 | 大きい notebook（`SkipReason` -> `"FileTooLarge"`）の Header/Todo が再 index しても復元されない | skip 済み (too-large) snapshot は Header/Todos を保持しない仕様（再生成不可）。旧形式 (`SourceSize` フィールド無しの `snap-toolarge-*`) は最新形式へ自動アップグレードされ、以後は毎回ではなく 1 度だけ ForceReindex すれば済みます |
 | `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |
 | `SourceVaultMailAgendaItems[]` が要対応メールを返さない・見逃す | Category/Priority/Deadline は `SourceVaultInferMailDerivedBatch[]` の事前計算に依存（未計算メールは除外せず `PendingCount` に計上されるだけ）。まず `SourceVaultMailAddSummaries[mbox]` で派生を計算する。オーナー宛て判定は `$SourceVaultMailAgendaDirectionThreshold`（既定 0.7）未満だと候補から外れるため、`PrivateVault/config/mailagenda.json` の OwnerAddresses/OrgAddresses/AddresseePatterns を確認 |
@@ -1130,7 +1132,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultSources` / `SourceVaultArXiv` に PDF 検索索引（学生便覧等）が出てこない | 仕様どおりです。`SourceVaultSources`/`SourceVaultArXiv` は ingest 済みソース (`src-*`) のみが対象で、PDFIndex は含まれません。`SourceVaultSummaries["...", "Providers" -> {"pdfindex"}]`（表示は `SourceVaultSummariesView`）を使ってください |
 | `SourceVaultSources["query"]` を評価しても表 (Grid) が出ずデータの連想リストが返るだけ | 仕様変更（core / View 分離）です。`SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries` は既定で `"Format" -> "Rows"`（`List[Association]`）を返す core になりました。表として提示したい場合は `SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView` を使うか、`"Format" -> "Grid"` を指定してください（後方互換で内部的に View へ委譲されます） |
 | arXiv ソースの Summary が空・英語のまま | `SourceVaultBackfillArXivSummaries[]` を `$Language = "Japanese"` のセッションで実行。LLM エラー本文が残っている場合は `"Force" -> True` で再生成 |
-| web / local ソースの Summary が空・英語のまま | `SourceVaultBackfillSourceSummaries[]` を `$Language = "Japanese"` のセッションで実行。機密ソース（PrivacyLevel > 0.5）はローカル LLM (`$ClaudePrivateModel`) が必要。本文が prescan で危険と判定されると `"Quarantined"` として要約されない（意図した挙動） |
+| web / local ソースの Summary が空・英語のまま | `SourceVaultBackfillSourceSummaries[]` を `$Language = "Japanese"` のセッションで実行。機密ソース（PrivacyLevel >= 0.5）はローカル LLM (`$ClaudePrivateModel`) が必要（未設定なら fail-closed で失敗）。本文が prescan で危険と判定されると `"Quarantined"` として要約されない（意図した挙動） |
 | 公開 arXiv / Web ソースが機密扱い（PrivacyLevel 0.5 以上）になっている、または旧既定 `PublicWeb = 0.4` のまま残っている | `SourceVaultReclassifyPublicPrivacy[]` で公開既定値（すべて 0.0）に一括是正（冪等）。旧既定 0.4 の移行だけを対象から外したい場合は `"LegacyPublicWeb" -> False` |
 | モデルのバージョン比較が誤る（新メジャー版に旧マイナー付き版が負ける） | `iSVParseModelVersion` の数値キーを固定幅パディング方式（base-100000・width 6）に修正済み。旧実装は指数に桁数 `Length` を使っていたため、桁数の異なるバージョン間（例: `claude-sonnet-4-6` の `{4,6}` と `claude-sonnet-5` の `{5}`）で、桁数の多い `{4,6}`（`4*1000+6=4006`）が桁数の少ない `{5}`（`5`）を誤って上回っていました。SourceVault を最新版に更新すれば、固定幅パディングにより `{5}`（新メジャー版）が `{4,6}` を正しく上回ります。日付らしき数値は `iSVParseModelVersion` で事前に除外されるため（10000 未満のみ通す）、固定幅パディング（base-100000・width 6）と衝突して桁上がりすることはありません。2026-07-06 に、この不具合で LM Studio モデルが誤ルートした実例が確認され対処済みです。 |
 | `SourceVaultShowSourceSummary` がいつも自動生成版を開く（追記が反映されない） | ノート内の「このノートを保存する」ボタンを押して `<PrivateVault>/sources/summary-notes/` に保存したか確認。保存版が正本として優先されます。逆に保存版を無視して record から作り直したい場合は `"Fresh" -> True` |

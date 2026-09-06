@@ -4426,7 +4426,7 @@ SourceVaultBackfillSourceSummaries["Force" -> True, "Limit" -> 3]     (* 既存�
 
 設計上のポイント:
 
-- **モデルは行の PrivacyLevel で決まる**。`PL > 0.5` は `$ClaudePrivateModel` (ローカル LLM)、`PL <= 0.5` はクラウド CLI。PL が読めない行は fail-safe で 1.0 (ローカル) 扱い。`"Model"` を明示すると分岐を上書きできます。
+- **モデルは行の PrivacyLevel で決まる**。`PL >= 0.5` は `$ClaudePrivateModel` (ローカル LLM。不在時は fail-closed で `Failed["PrivateModelUnavailable"]`)、`PL < 0.5` はクラウド CLI。PL が読めない行は fail-safe で 1.0 (ローカル) 扱い。`"Model"` を明示すると分岐を上書きできます。
 - **本文は UNTRUSTED データ境界で包んでから渡す** (`SourceVaultWrapUntrustedText`)。Web 本文の「以降の指示に従え」型 prompt injection が要約を汚染するのを防ぎます。prescan が quarantined と判定した本文は **LLM に渡さず** `Status -> "Quarantined"` で返します (webingest の既定 `QuarantinePolicy -> "Block"` と同方針)。
 - **LLM エラー本文は保存しない**。`iSVLooksLikeLLMError` ゲート (例 `"API Error: 529 ..."`) に掛かると `Failed` になり meta は書き換えません。逆に、過去にエラー文が入ってしまった行は「未設定」とみなして再生成の候補になります。
 - 本文抽出は pdf / html / txt / md 対応 (`iExtractTextPages`)。`"TimeoutSeconds"` (既定 120) を超えたら `NoText` として飛ばすので、巨大 PDF で止まりません。LLM へ渡すのは先頭 `$SourceVaultSourceSummaryMaxChars` (既定 12000) 字。

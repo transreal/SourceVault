@@ -70,6 +70,14 @@ emits an inheritance event to $SourceVaultMailAgendaEventSink (mining layer seam
 Options: \"Directory\" (Automatic -> Global`$onWork), \"Open\" (True -> SystemOpen), \
 \"Deadline\", \"Title\". Returns <|Status, NotebookPath, RecordId|>.";
 
+SourceVaultMailAgendaInheritTodo::usage =
+  "SourceVaultMailAgendaInheritTodo[recordId, opts] creates a STANDALONE TODO \
+(SourceVault_todo layer) inheriting the mail's subject and inferred deadline -- for \
+tasks too small to deserve a whole project notebook. The todo carries Source \
+\"mail\" + MailRecordId (back-navigation) and the mail's derived PrivacyLevel. \
+Records TodoCreated in agenda.json (item leaves the agenda) and emits an event. \
+Options: \"Deadline\", \"Title\". Returns <|Status, TodoId, RecordId|>.";
+
 SourceVaultMailForNotebook::usage =
   "SourceVaultMailForNotebook[nbPathOrNotebookObject] reads the MailRecordId metadata \
 of an inheriting notebook (non-evaluating parse) and opens the mail thread \
@@ -249,7 +257,8 @@ SourceVault`SourceVaultMailAgendaResolutions[] := (iSVMALoad[]; $iSVMAStore);
 
 Options[SourceVault`SourceVaultMailAgendaResolve] = {"NotebookPath" -> None};
 SourceVault`SourceVaultMailAgendaResolve[rid_String,
-    kind : ("Dismissed" | "NotebookCreated"), OptionsPattern[]] := Module[{entry},
+    kind : ("Dismissed" | "NotebookCreated" | "TodoCreated"),
+    OptionsPattern[]] := Module[{entry},
   iSVMALoad[];
   entry = <|"State" -> kind, "At" -> DateString["ISODateTime"]|>;
   If[StringQ[OptionValue["NotebookPath"]],
@@ -259,7 +268,8 @@ SourceVault`SourceVaultMailAgendaResolve[rid_String,
   <|"Status" -> "OK", "RecordId" -> rid, "State" -> kind|>];
 SourceVault`SourceVaultMailAgendaResolve[___] :=
   <|"Status" -> "Failed",
-    "Reason" -> "expects [recordId_String, \"Dismissed\"|\"NotebookCreated\"]"|>;
+    "Reason" ->
+      "expects [recordId_String, \"Dismissed\"|\"NotebookCreated\"|\"TodoCreated\"]"|>;
 
 SourceVault`SourceVaultMailAgendaReopen[rid_String] := (
   iSVMALoad[]; KeyDropFrom[$iSVMAStore, rid]; iSVMASave[False];
@@ -369,7 +379,7 @@ iSVMAResolvedAbs[rids_List, interactions_, resolutions_] := Module[{ts = {}},
     If[StringQ[rep],
       With[{a = iSVMAAbs[rep]}, AppendTo[ts, If[NumberQ[a], a, Infinity]]]];
     res = Lookup[resolutions, rid, <||>];
-    If[MemberQ[{"Dismissed", "NotebookCreated"},
+    If[MemberQ[{"Dismissed", "NotebookCreated", "TodoCreated"},
         Lookup[res, "State", Missing[]]],
       With[{a = iSVMAAbs[Lookup[res, "At", Missing[]]]},
         AppendTo[ts, If[NumberQ[a], a, Infinity]]]]],
@@ -587,6 +597,62 @@ SourceVault`SourceVaultMailAgendaInherit[rid_String, OptionsPattern[]] := Module
   If[TrueQ[OptionValue["Open"]], Quiet[SystemOpen[nbPath]]];
   <|"Status" -> "OK", "NotebookPath" -> nbPath, "RecordId" -> rid|>];
 SourceVault`SourceVaultMailAgendaInherit[___] :=
+  <|"Status" -> "Failed", "Reason" -> "expects [recordId_String, opts]"|>;
+
+(* ---------------- inheritance TODO (lightweight sibling of Inherit) ----
+   For mails whose task does not deserve a whole project notebook: create a
+   standalone todo in the SourceVault_todo layer instead. Weak binding via
+   runtime Symbol[] resolution -- SourceVault_todo loads AFTER mailagenda, so
+   a bare reference here would mint an orphan symbol (known trap). *)
+
+iSVMATodoLayerReady[] :=
+  Names["SourceVault`SourceVaultNewTodo"] =!= {} &&
+  With[{sym = Symbol["SourceVault`SourceVaultNewTodo"]},
+    Length[DownValues[sym]] > 0];
+
+Options[SourceVault`SourceVaultMailAgendaInheritTodo] = {
+  "Deadline" -> Automatic, "Title" -> Automatic};
+
+SourceVault`SourceVaultMailAgendaInheritTodo[rid_String, OptionsPattern[]] :=
+  Module[{row, subject, deadline, dl = None, pl, res},
+    If[! iSVMATodoLayerReady[],
+      Return[<|"Status" -> "Failed", "Reason" -> "TodoLayerUnavailable",
+        "Hint" -> "SourceVault_todo.wl is not loaded."|>]];
+    row = If[Length[DownValues[SourceVault`SourceVaultMailIndexGet]] > 0,
+      Quiet@Check[SourceVault`SourceVaultMailIndexGet[rid], <||>], <||>];
+    If[! AssociationQ[row], row = <||>];
+    subject = With[{t = OptionValue["Title"]},
+      If[StringQ[t], t, Lookup[row, "Subject", "mail task"]]];
+    If[! StringQ[subject], subject = "mail task"];
+    deadline = With[{d = OptionValue["Deadline"]},
+      If[d === Automatic, Lookup[row, "Deadline", Missing[]], d]];
+    Which[
+      DateObjectQ[deadline], dl = deadline,
+      StringQ[deadline],
+        With[{d0 = Quiet@Check[
+            DateObject[StringTake[deadline, UpTo[10]], "Day"], $Failed]},
+          If[DateObjectQ[d0], dl = d0]]];
+    (* privacy inheritance: the todo title embeds the subject, so it carries
+       the mail's derived PL (missing = 1.0 fail-safe) *)
+    pl = With[{p = Lookup[row, "PrivacyLevel", Missing[]]},
+      If[NumberQ[p], N[p], 1.0]];
+    res = Quiet@Check[
+      Symbol["SourceVault`SourceVaultNewTodo"][<|
+        "Title" -> subject,
+        "Deadline" -> dl,
+        "PrivacyLevel" -> pl,
+        "Source" -> "mail",
+        "MailRecordId" -> rid|>], $Failed];
+    If[! (AssociationQ[res] && Lookup[res, "Status", ""] === "OK"),
+      Return[<|"Status" -> "Failed", "Reason" -> "NewTodoFailed",
+        "Result" -> res|>]];
+    SourceVault`SourceVaultMailAgendaResolve[rid, "TodoCreated"];
+    iSVMAEmitEvent[<|"Type" -> "MailInheritedByTodo", "RecordId" -> rid,
+      "TodoId" -> Lookup[res, "TodoId", Missing[]],
+      "At" -> DateString["ISODateTime"]|>];
+    <|"Status" -> "OK", "TodoId" -> Lookup[res, "TodoId", Missing[]],
+      "RecordId" -> rid|>];
+SourceVault`SourceVaultMailAgendaInheritTodo[___] :=
   <|"Status" -> "Failed", "Reason" -> "expects [recordId_String, opts]"|>;
 
 (* ---------------- notebook -> mail back-navigation ---------------- *)

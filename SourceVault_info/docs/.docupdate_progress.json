@@ -1,8 +1,17 @@
 {
-	"Cycle":"4vioo5rc4v73",
+	"Cycle":"on7o4cwjppq",
 	"Done":[
+		"api_mailagenda.md",
+		"api_mining.md",
+		"api_privacy.md",
+		"api_maildb.md",
 		"api.md",
+		"api_routineplan.md",
+		"api_slidedeck.md",
+		"api_talkqa.md",
+		"api_servicemanager.md",
 		"api_webingest.md",
+		"api_todo.md",
 		"setup.md",
 		"user_manual.md"
 	]

@@ -664,16 +664,30 @@ iWebFetchUrl[url_String, timeout_] := Module[{resp},
 iWebQuality[text_String] := Which[
   StringLength[text] < 200, "Poor", StringLength[text] < 1500, "Fair", True, "Good"];
 
-iWebExtractClean[bytes_ByteArray, contentType_, url_String] := Module[{ct, text, title},
+(* HTML 本文抽出に渡すバイト数上限 (2026-09-02)。ImportByteArray の HTML->Plaintext は
+   割り込み不能区間が長く、巨大ページでは TimeConstrained の期限を過ぎても止まらず、
+   保留された Abort が後で呼び出し元 (ツールループの URLSubmit ハンドラ等) を壊す。
+   先頭 2 MB で本文は十分に取れる。超過時は Reason に HTMLTruncatedTo:N を残す。 *)
+If[! IntegerQ[$iWebMaxHTMLExtractBytes], $iWebMaxHTMLExtractBytes = 2097152];
+iWebCapBytes[bytes_ByteArray] :=
+  If[IntegerQ[$iWebMaxHTMLExtractBytes] && $iWebMaxHTMLExtractBytes > 0 &&
+     Length[bytes] > $iWebMaxHTMLExtractBytes,
+    bytes[[;; $iWebMaxHTMLExtractBytes]], bytes];
+iWebCapBytes[b_] := b;
+
+iWebExtractClean[bytes_ByteArray, contentType_, url_String] := Module[{ct, text, title, hb},
   ct = ToLowerCase[ToString[contentType]];
   Which[
     StringContainsQ[ct, "html"] || ct === "" || ct === "automatic",
-      text  = TimeConstrained[Quiet @ Check[ImportByteArray[bytes, {"HTML", "Plaintext"}], $Failed], 20, $Failed];
-      title = TimeConstrained[Quiet @ Check[ImportByteArray[bytes, {"HTML", "Title"}], $Failed], 10, $Failed];
+      hb    = iWebCapBytes[bytes];
+      text  = TimeConstrained[Quiet @ Check[ImportByteArray[hb, {"HTML", "Plaintext"}], $Failed], 20, $Failed];
+      title = TimeConstrained[Quiet @ Check[ImportByteArray[hb, {"HTML", "Title"}], $Failed], 10, $Failed];
       If[! StringQ[text],
         <|"ExtractionStatus" -> "Failed", "Reason" -> "HTMLPlaintextFailed"|>,
-        <|"Title" -> If[StringQ[title], title, ""], "CleanText" -> text,
-          "ExtractionStatus" -> "Succeeded", "ExtractionQuality" -> iWebQuality[text]|>],
+        Join[<|"Title" -> If[StringQ[title], title, ""], "CleanText" -> text,
+          "ExtractionStatus" -> "Succeeded", "ExtractionQuality" -> iWebQuality[text]|>,
+          If[Length[hb] < Length[bytes],
+            <|"Reason" -> "HTMLTruncatedTo:" <> ToString[Length[hb]] <> "bytes"|>, <||>]]],
     StringContainsQ[ct, "text/"] || StringContainsQ[ct, "json"] || StringContainsQ[ct, "xml"],
       text = Quiet @ Check[ByteArrayToString[bytes, "UTF-8"], $Failed];
       If[StringQ[text],

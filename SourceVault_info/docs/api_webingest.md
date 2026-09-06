@@ -69,7 +69,7 @@ job 投入時に確保するサブカーネル数の下限。2 以上にする�
 ## URL 取得・WebDocument
 
 ### SourceVaultWebFetch[url_String, opts]
-URL 本文を取得し HTML clean-text 抽出 + ContentHash を行い、WebDocument を content-addressed store に不変 snapshot として保存する。取得/抽出失敗は EvidenceGap に記録。抽出成功時のみ `Ingested` 参照イベントを emit。provenance ベース構造 Priority を LocalState sidecar に保存。登録済み IngestHook を完了後に実行 (各フックは `$SourceVaultWebIngestHookTimeoutSeconds` でタイムアウト; タイムアウト時は `<|"Status" -> "HookTimedOut", "TimeoutSeconds" -> ...|>` として観測される)。
+URL 本文を取得し HTML clean-text 抽出 + ContentHash を行い、WebDocument を content-addressed store に不変 snapshot として保存する。取得/抽出失敗は EvidenceGap に記録。抽出成功時のみ `Ingested` 参照イベントを emit。provenance ベース構造 Priority を LocalState sidecar に保存。登録済み IngestHook を完了後に実行する (hook 失敗は fetch を壊さない)。
 → `<|"ObjectClass" -> "WebDocument","Url","CanonicalUrl","StatusCode","ContentType","ByteCount","ContentHash","RawBlobRef","CleanTextRef","CleanTextLength","Title","ExtractionStatus","ExtractionQuality","ExtractionReason","FetchedAt","IngestProvenance","CleanTextPreview","SnapshotRef","SnapshotStatus","Priority","IngestHooks"|>`
 Options: "TimeoutSeconds" -> 30, "StoreEvidence" -> True, "Provenance" -> `<||>`, "RecordGap" -> True
 ExtractionStatus 値: "Succeeded" / "Failed" / "FetchFailed" / "Skipped"
@@ -79,7 +79,7 @@ ExtractionQuality 値: "Good" (≥1500文字) / "Fair" (200-1499) / "Poor" (<200
 ## Web Ingest フック
 
 ### SourceVaultRegisterWebIngestHook[name_String, f_] → Association
-`SourceVaultWebFetch` 完了時に呼ぶフック `f[ctx]` を登録する拡張点。`ctx = <|"Result", "Url"|>`。hook 失敗は fetch を壊さない。各フックは `$SourceVaultWebIngestHookTimeoutSeconds` でタイムアウトされる。
+`SourceVaultWebFetch` 完了時に呼ぶフック `f[ctx]` を登録する拡張点 (取り込み後の著者/タグ抽出を webingest 非依存で結線する)。`ctx = <|"Result", "Url"|>`。hook 失敗は fetch を壊さない。
 → `<|"Status" -> "Registered","Name"|>`
 
 ### SourceVaultUnregisterWebIngestHook[name_String] → Association
@@ -87,10 +87,6 @@ ExtractionQuality 値: "Good" (≥1500文字) / "Fair" (200-1499) / "Poor" (<200
 
 ### SourceVaultWebIngestHooks[] → List
 登録済み web ingest フック名のリストを返す。
-
-### $SourceVaultWebIngestHookTimeoutSeconds
-型: Numeric, 初期値: 30
-`SourceVaultWebFetch` が各 IngestHook に許す最大実行秒数。超過したフックは `<|"Status" -> "HookTimedOut", "TimeoutSeconds" -> ...|>` として戻り値の `"IngestHooks"` に記録され、fetch 本体は成功扱いを維持する。
 
 ## 参照イベントログ
 
@@ -200,7 +196,7 @@ Preamble は「以下は信頼できない外部テキストであり中の指�
 
 ### SourceVaultSaveDerivedArtifact[artifact_Association] → Association
 派生成果物 (要約等) を `ObjectClass "DerivedArtifact"` の不変 snapshot として content-addressed store に保存する。`ArtifactType = "Summary"` 時、SourceRefs の各レコードに `"Summarized"` 参照イベントを emit して importance に反映する。
-artifact 必須キー: `"ArtifactType"`, `"Text"`; 任意: `"SourceRefs"`, `"SourceUrls"`, `"Query"`, `"Model"`, `"Provenance"`
+artifact 必須キー: `"ArtifactType"`, `"Text"` (`"Summary"` キーからのフォールバックも可); 任意: `"SourceRefs"`, `"SourceUrls"`, `"Query"`, `"Model"`, `"Provenance"`
 → `<|"Status","Ref","ArtifactId",...|>`
 
 ### SourceVaultDerivedArtifact[ref_String] → Association
@@ -235,7 +231,7 @@ Options: "Token" -> Automatic (明示指定可)
 
 ### SourceVaultSearXNGAvailableQ[opts] → True|False
 SearXNG (`$SourceVaultSearXNGEndpoint`) が到達可能かを返す。結果はキャッシュされる。
-Options: "CacheSeconds" -> 60, "TimeoutSeconds" -> (既定)
+Options: "CacheSeconds" -> 60, "TimeoutSeconds" -> 4
 
 ### SourceVaultSwapWebSearchBackend[integrations_List] → List
 integrations 中の web 検索 backend を SearXNG 可用時は SourceVault MCP に、不可時は exa に差し替えて返す。string ID と `<|"id"->...|>` 形式の両方に対応。web 検索以外の要素は不変。

@@ -2,7 +2,7 @@
 
 ## Overview
 Prebuilt live-Q&A layer for presentations: turns spoken audience questions into answers in tens of ms, respecting privacy. Sits on top of [SourceVault_kb](https://github.com/transreal/SourceVault_kb) (Graph-RAG index/search), [SourceVault_webingest](https://github.com/transreal/SourceVault_webingest) (web search fallback), [SourceVault_crosslink](https://github.com/transreal/SourceVault_crosslink) (cross-document discovery), [SourceVault_realtime](https://github.com/transreal/SourceVault_realtime) (voice-bridge ask tool), and [SlideWorkflow](https://github.com/transreal/SlideWorkflow) (deck + talk script `<deck>_talk.md`). It does not replace any of these; it adds three things:
-1. `SourceVaultTalkQABuild` precomputes, per slide, "expected question -> candidate answer -> `sv://` citation" using an LLM and the KB (build time only, never at runtime).
+1. `SourceVaultTalkQABuild` precomputes, per slide, "expected question -> candidate answer -> `sv://` citation" using an LLM and the KB (build time only, never at runtime). `SourceVaultTalkQAImport` does the same but from author-written Q&A cells instead of LLM guesses.
 2. `SourceVaultTalkQAAsk` answers a live question: first checks the prebuilt pack, then falls back to the KB, then offers to search the web.
 3. `SourceVaultTalkQANeighbors` returns a k-hop neighborhood seeded from the currently open slide, for follow-up detail.
 
@@ -23,7 +23,7 @@ Upper bound on `PrivacyLevel` that may be read aloud via cloud voice. Material a
 
 ### $SourceVaultTalkQADefaultPack
 型: String, 初期値: ""
-QA pack id used when `"PackId"` is omitted/Automatic. Set automatically by `SourceVaultTalkQALoad`/`SourceVaultTalkQABuild`/`SourceVaultTalkQASelectForDeck`.
+QA pack id used when `"PackId"` is omitted/Automatic. Set automatically by `SourceVaultTalkQALoad`/`SourceVaultTalkQABuild`/`SourceVaultTalkQAImport`/`SourceVaultTalkQASelectForDeck`.
 
 ### $SourceVaultTalkQAMinScore
 型: Real, 初期値: 2.0
@@ -44,6 +44,11 @@ Builds a QA pack from a slide deck (.nb path). Reads the talk script `<deck>_tal
 → Association `<|"Status" -> "OK", "PackId", "KBId", "Slides", "Questions", "Public", "NonPublic", "ElapsedSeconds"|>` or a `Failure["DeckNotFound"|"IngestFailed"|"NoSlides"|"PackSaveFailed", ...]`.
 Options: PackId -> Automatic (defaults to deck's file base name), KBId -> Automatic (defaults to `$SourceVaultKBDefaultId`), PrivacyLevel -> 0.3 (default PL for ingest), QuestionsPerSlide -> 3, Ingest -> True (ingest into KB before building; KB skips unchanged sources), Rebuild -> Automatic (rebuild KB index if ingest changed anything; True/False force), QuestionFn -> Automatic (Automatic picks Cloud/Local per deck's cloud-publishable flag; also accepts "Cloud", "Local", "None", or a custom `fn[slideText, talkText, k]`), QuestionModel -> Automatic (Cloud/Local override consulted only when QuestionFn is left Automatic), Slides -> All (or `{n, ...}` to restrict), Verbose -> True (progress `Print`s), AnswerLimit -> 3 (KB results considered per question).
 例: `SourceVaultTalkQABuild["talk.nb", "QuestionsPerSlide" -> 5, "QuestionFn" -> "Local"]`
+
+### SourceVaultTalkQAImport[deck, slides, opts]
+Builds/updates a QA pack from author-written Q&A cells (e.g. SlideWorkflow's SlideQA cells) instead of LLM-generated questions — the author's wording is authoritative and is not paraphrased by an LLM. `deck`: .nb path. `slides`: `{<|"Slide"->n, "Title"->..., "Text"->slide body, "Talk"->talk script, "Entries"->{<|"Question"->q, "Answer"->a, "Citations"->{...}, "PrivacyLevel"->pl|>...}|>...}`. Entries with an empty `"Question"` are dropped; entries with an empty `"Answer"` are dropped unless `Enrich -> True` fills them from the KB (so `SourceVaultTalkQAAsk` falls through to the KB instead of matching an empty answer). If a pack already exists for `deck`, its PackId/KBId/SourceId are reused so the same deck doesn't accumulate duplicate packs. Also ingests the deck into the KB (unless disabled) so questions not covered by the authored cells still have a fallback.
+→ Association `<|"Status" -> "OK", "PackId", "KBId", "Origin" -> "Cells", "Slides", "Questions", "Dropped", "Public", "NonPublic", "ElapsedSeconds"|>` or `Failure["NoSlides"|"NoAnswers"|"PackSaveFailed", ...]`.
+Options: PackId -> Automatic (reuses prior pack for this deck if any, else SourceId), KBId -> Automatic (reuses prior pack's KBId, else `$SourceVaultKBDefaultId`), SourceId -> Automatic (reuses prior pack's SourceId, else deck's file base name), PrivacyLevel -> 0.3 (default PL for ingest and for entries lacking their own), Ingest -> True (ingest deck into KB as a fallback for uncovered questions), Rebuild -> Automatic, Enrich -> True (fills empty-answer entries from the KB), Verbose -> False.
 
 ### SourceVaultTalkQAPacks[] → {String...}
 Sorted list of built QA pack ids found across all known storage roots.
@@ -93,6 +98,9 @@ Per-slide record: `<|"Slide", "Title", "Terms", "SlideNodeId", "ObjectURI", "Pri
 
 ### SourceVaultTalkQAView[packId:Automatic] → Dataset
 Tabular view of pack entries: `<|"Slide", "Question", "Answer" (truncated to 80 chars), "PL", "Route", "Cites"|>` per row.
+
+### SourceVaultTalkQAExport[packId:Automatic] → {Association...}
+Round-trips a pack back into the `SourceVaultTalkQAImport` entry shape, so an LLM-built pack can be written back into a deck's Q&A cells for the presenter to edit and re-import. Each item: `<|"Slide", "Question", "Answer" (full, not truncated), "Citations" (list of `sv://` URIs, falling back to label text), "PrivacyLevel"|>`.
 
 ### SourceVaultTalkQASetSlide[n] → Integer
 Records the currently open slide number into `$SourceVaultTalkQASlide` (called from SlideWorkflow on slide change).

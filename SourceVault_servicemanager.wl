@@ -158,6 +158,19 @@ SourceVaultServiceMain::usage =
 SourceVaultServiceRuntimeDir::usage =
   "SourceVaultServiceRuntimeDir[serviceId] は service の runtime directory を返す。";
 
+SourceVaultServiceInteractiveLease::usage =
+  "SourceVaultServiceInteractiveLease[opts] は「いま低遅延の応答が要る対話クライアントが居る」ことを\n" <>
+  "service へ知らせる lease (runtime dir の interactive.lease.json) を張り直す。lease が生きている間、\n" <>
+  "service loop は長時間の保守フック (llmlog ingest / Cane anomaly / TurnWiki 維持 / capbroker prune /\n" <>
+  "reference rollup) を見送り、commands/ の処理だけを回す。VRCRealtime の音声ブリッジのように\n" <>
+  "60 秒で諦めるクライアントが、300 秒走る保守 tick に轢かれないようにするためのもの。\n" <>
+  "オプション \"ServiceId\" (既定 $SourceVaultMCPServiceId)・\"Seconds\" (TTL 既定 120、10-600 に clip)・\n" <>
+  "\"Holder\" (名乗り)・\"Release\" -> True (即時解放 = ファイル削除)。\n" <>
+  "TTL は短く、保持者が張り直し続ける前提。保持者が落ちれば TTL 経過で自動的に切れる。";
+SourceVaultServiceInteractiveLeaseActiveQ::usage =
+  "SourceVaultServiceInteractiveLeaseActiveQ[opts] は対話 lease が生きているかを True/False で返す。\n" <>
+  "オプション \"ServiceId\"。";
+
 (* ---- Python HTTP リバースプロキシ (SocketListen が headless で不可なための edge)。
    proxy code は SourceVault data として保存し、起動時に working へ materialize + digest 検証して実行する ---- *)
 $SourceVaultPython::usage =
@@ -649,6 +662,67 @@ iRuntimeMachineRoot[root_String] := FileNameJoin[{root, "runtime", iRuntimeMachi
 iServiceRuntimeDir[serviceId_String] := Module[{root = SourceVault`SourceVaultCoreRoot[]},
   If[FailureQ[root], root, FileNameJoin[{iRuntimeMachineRoot[root], "services", serviceId}]]];
 SourceVaultServiceRuntimeDir[serviceId_String] := iServiceRuntimeDir[serviceId];
+
+(* ---- 対話 lease (2026-09-04) --------------------------------------------
+   service loop は単一スレッドで、保守フックは TimeConstrained で「暴走は止める」
+   が「待たせない」わけではない。実測: Cane anomaly tick が上限 300s を焼いている
+   間、commands/ は一切読まれず、VRCRealtime の SlideDeckLookup が 60s の
+   タイムアウトに落ちて発表が始まらなかった (登録簿には在るのに)。
+   保守 tick は冪等で間隔駆動なので「後回し」にできる。対話クライアントは
+   できない。lease はその優先順位をファイル一枚で表現する。
+   鮮度判定は lease ファイルの更新時刻で行う (プロセス跨ぎの ISO 文字列比較や
+   時計ずれを持ち込まない)。TTL はファイル自身が申告し、10-600s に clip する。 *)
+iSMInteractiveLeasePath[dir_String] := FileNameJoin[{dir, "interactive.lease.json"}];
+
+iSMInteractiveLeaseInfo[dir_String] := Module[{path, lease, ttl, age},
+  path = iSMInteractiveLeasePath[dir];
+  If[! FileExistsQ[path], Return[<|"Active" -> False, "Reason" -> "NoLease"|>]];
+  lease = Quiet @ Check[iSMReadJSON[path], Missing["Unreadable"]];
+  ttl = If[AssociationQ[lease], Lookup[lease, "TTLSeconds", 120], 120];
+  If[! NumericQ[ttl], ttl = 120];
+  ttl = Clip[N[ttl], {10., 600.}];
+  age = Quiet @ Check[
+    AbsoluteTime[] - AbsoluteTime[FileDate[path, "Modification"]], $Failed];
+  If[! NumericQ[age], Return[<|"Active" -> False, "Reason" -> "NoFileDate"|>]];
+  <|"Active" -> (age <= ttl), "Reason" -> If[age <= ttl, "Held", "Expired"],
+    "AgeSeconds" -> Round[age, 0.1], "TTLSeconds" -> ttl,
+    "Holder" -> If[AssociationQ[lease], Lookup[lease, "Holder", Null], Null]|>];
+
+iSMInteractiveLeaseQ[dir_String] :=
+  TrueQ[Lookup[iSMInteractiveLeaseInfo[dir], "Active", False]];
+
+Options[SourceVaultServiceInteractiveLease] = {
+  "ServiceId" -> Automatic, "Seconds" -> 120, "Holder" -> "Interactive",
+  "Release" -> False};
+SourceVaultServiceInteractiveLease[OptionsPattern[]] := Module[
+  {sid, dir, path, ttl},
+  sid = OptionValue["ServiceId"];
+  If[sid === Automatic, sid = SourceVault`$SourceVaultMCPServiceId];
+  If[! StringQ[sid], sid = "sourcevault"];
+  dir = iServiceRuntimeDir[sid];
+  If[FailureQ[dir], Return[dir]];
+  path = iSMInteractiveLeasePath[dir];
+  If[TrueQ[OptionValue["Release"]],
+    Quiet @ DeleteFile[path];
+    Return[<|"Status" -> "Released", "ServiceId" -> sid, "Path" -> path|>]];
+  iSMEnsureDir[dir];
+  ttl = OptionValue["Seconds"];
+  If[! NumericQ[ttl], ttl = 120];
+  ttl = Clip[N[ttl], {10., 600.}];
+  iSMWriteJSON[path, <|
+    "Holder" -> ToString[OptionValue["Holder"]],
+    "PID" -> $ProcessID,
+    "TTLSeconds" -> ttl,
+    "RenewedAtUTC" -> iSMUTCNow[]|>];
+  <|"Status" -> "Held", "ServiceId" -> sid, "Path" -> path, "TTLSeconds" -> ttl|>];
+
+Options[SourceVaultServiceInteractiveLeaseActiveQ] = {"ServiceId" -> Automatic};
+SourceVaultServiceInteractiveLeaseActiveQ[OptionsPattern[]] := Module[{sid, dir},
+  sid = OptionValue["ServiceId"];
+  If[sid === Automatic, sid = SourceVault`$SourceVaultMCPServiceId];
+  If[! StringQ[sid], sid = "sourcevault"];
+  dir = iServiceRuntimeDir[sid];
+  If[FailureQ[dir], False, iSMInteractiveLeaseQ[dir]]];
 
 iServiceLog[dir_String, eventClass_String, data_Association: <||>] :=
   iSMAppendJSONL[FileNameJoin[{dir, "service.log.jsonl"}],
@@ -1889,9 +1963,11 @@ iProcessServiceCommands[dir_String] := Module[{cmdDir, doneDir, files, stop = Fa
 Options[SourceVaultServiceMain] = {"HeartbeatIntervalSeconds" -> 1, "MaxSeconds" -> Automatic};
 SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Module[
   {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath,
+   leased = False, leaseHeld = False,
    lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs,
    lastDispatchAbs = 0, dispatchCounter = 0, dispatchState = None,
-   lastCaneAnomalyAbs = 0, lastCapPruneAbs = 0, lastStreamSweepAbs = 0},
+   lastCaneAnomalyAbs = 0, lastCapPruneAbs = 0, lastStreamSweepAbs = 0,
+   lastTurnWikiAbs = 0, turnWikiState = None},
   dir = iServiceRuntimeDir[serviceId];
   If[FailureQ[dir], Return[dir]];
   iSMEnsureDir[dir];
@@ -1934,6 +2010,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
   lastCaneAnomalyAbs = AbsoluteTime[];
   lastCapPruneAbs = AbsoluteTime[];
   lastStreamSweepAbs = AbsoluteTime[];
+  (* TurnWiki 維持 tick は LLM を叩くので、同じ理由で初回発火を 1 周期遅らせる。 *)
+  lastTurnWikiAbs = AbsoluteTime[];
   interval = OptionValue["HeartbeatIntervalSeconds"];
   maxSec = OptionValue["MaxSeconds"];  (* 安全弁: Automatic なら無制限 *)
   statusPath = FileNameJoin[{dir, "status.json"}];
@@ -1957,9 +2035,19 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
          鮮度を SourceVaultServiceStatus が判定する。 *)
       iSMWriteJSON[hbPath, Join[
         <|"Counter" -> counter, "UpdatedAtUTC" -> iSMUTCNow[], "PID" -> $ProcessID|>,
-        If[AssociationQ[dispatchState], <|"Dispatch" -> dispatchState|>, <||>]]];
+        If[AssociationQ[dispatchState], <|"Dispatch" -> dispatchState|>, <||>],
+        If[AssociationQ[turnWikiState], <|"TurnWiki" -> turnWikiState|>, <||>]]];
       stop = iProcessServiceCommands[dir];
       If[stop, Break[]];
+      (* 対話 lease (2026-09-04): 音声ブリッジのような「60 秒で諦める」クライアントが
+         居る間は、下の保守フック群 (最大 300s / 720s) を見送る。last*Abs は進めない
+         ので、lease が切れた次の tick で即座に発火する = 保守は遅れるだけで飛ばない。
+         lease は TTL 付きで保持者が張り直す前提なので、保持者が落ちれば自然に切れる。 *)
+      leased = iSMInteractiveLeaseQ[dir];
+      If[leased =!= leaseHeld,
+        leaseHeld = leased;
+        iServiceLog[dir, If[leased, "InteractiveLeaseHeld", "InteractiveLeaseReleased"],
+          <|"Holder" -> Lookup[iSMInteractiveLeaseInfo[dir], "Holder", Null]|>]];
       (* WLMCP: サブカーネルの完了結果を回収して done を書く。pending がある間は
          0.8s まで短周期で追いポーリング (速い評価を同一 tick で返す)。 *)
       Quiet @ Check[iSMWLMCPPoll[dir, 0.8], Null];
@@ -1972,7 +2060,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
         iSMSafeHook[SourceVault`SourceVaultWebJobPump[], 20, Null]];
       (* #2: 低頻度で参照イベントを CoreRoot に rollup (per-event 同期を避ける; バッテリーノート配慮)。
          反映には service 再起動が必要 (rule105 §8)。 *)
-      If[Length[DownValues[SourceVault`SourceVaultRollupReferenceEvents]] > 0 &&
+      If[! leased &&
+         Length[DownValues[SourceVault`SourceVaultRollupReferenceEvents]] > 0 &&
          NumericQ[SourceVault`$SourceVaultRollupIntervalSeconds] &&
          (AbsoluteTime[] - lastRollupAbs) > SourceVault`$SourceVaultRollupIntervalSeconds,
         (* #3: rollup をループ内で無制限ブロックさせない。Dropbox I/O ハング等は
@@ -1981,7 +2070,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
         lastRollupAbs = AbsoluteTime[]];
       (* llmlog: 低頻度で Claude Code セッションログを増分 ingest (watermark 冪等・
          変更セッションのみ digest)。rollup と同じく TimeConstrained で打ち切る。 *)
-      If[Length[DownValues[SourceVault`SourceVaultIngestClaudeCodeLogs]] > 0 &&
+      If[! leased &&
+         Length[DownValues[SourceVault`SourceVaultIngestClaudeCodeLogs]] > 0 &&
          NumericQ[SourceVault`$SourceVaultClaudeCodeIngestIntervalSeconds] &&
          (AbsoluteTime[] - lastCCIngestAbs) > SourceVault`$SourceVaultClaudeCodeIngestIntervalSeconds,
         iSMSafeHook[
@@ -1990,7 +2080,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
       (* hardening 05 Inc2: producer per-process spool の診断イベントを
          正準 diagnostics-log へ ingest (単一書き手=この service kernel。
          EventId dedup で冪等)。rollup と同じく TimeConstrained で打ち切る。 *)
-      If[Length[DownValues[SourceVault`SourceVaultDiagnosticsIngestSpool]] > 0 &&
+      If[! leased &&
+         Length[DownValues[SourceVault`SourceVaultDiagnosticsIngestSpool]] > 0 &&
          (AbsoluteTime[] - lastDiagIngestAbs) >
            If[NumericQ[SourceVault`$SourceVaultDiagIngestIntervalSeconds],
              SourceVault`$SourceVaultDiagIngestIntervalSeconds, 60],
@@ -1999,7 +2090,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
       (* Cane 1H-A: anomaly ワークフローの schedule tick (owner 登録の ScheduleSpec が
          Enabled のときだけ実行。observe-only・冪等・enforcement なし=I-16。
          due 判定は tick 内 (profile の IntervalSeconds)。ここの間隔は判定周期のみ。 *)
-      If[Length[DownValues[SourceVault`SourceVaultCaneAnomalyScheduleTick]] > 0 &&
+      If[! leased &&
+         Length[DownValues[SourceVault`SourceVaultCaneAnomalyScheduleTick]] > 0 &&
          (AbsoluteTime[] - lastCaneAnomalyAbs) >
            If[NumericQ[SourceVault`$SourceVaultCaneAnomalyTickIntervalSeconds],
              SourceVault`$SourceVaultCaneAnomalyTickIntervalSeconds, 600],
@@ -2016,7 +2108,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
       (* capbroker GC: 観測常時化で溜まる prepared/lease の用済みレコードを低頻度で掃除。
          安全範囲(prepared=consumed/期限切れ、lease=consumed|revoked かつ期限切れ。issued 未期限は残す)
          なので service では DryRun->False で自動実行。GraceSeconds で余裕を持たせる。 *)
-      If[Length[DownValues[SourceVault`SourceVaultPruneCapBroker]] > 0 &&
+      If[! leased &&
+         Length[DownValues[SourceVault`SourceVaultPruneCapBroker]] > 0 &&
          (AbsoluteTime[] - lastCapPruneAbs) >
            If[NumericQ[SourceVault`$SourceVaultCapBrokerPruneIntervalSeconds],
              SourceVault`$SourceVaultCapBrokerPruneIntervalSeconds, 3600],
@@ -2029,6 +2122,37 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
             iServiceLog[dir, "CapBrokerPruned",
               <|"Prepared" -> Lookup[pruneR, "PreparedPruned", 0],
                 "Leases" -> Lookup[pruneR, "LeasesPruned", 0]|>]]]];
+      (* TurnWiki 定期維持 (2026-09-02): ClaudeOrchestrator_turnwiki.wl の
+         ClaudeTurnWikiMaintainTick[] (Collect+Maintain のみ。手順書 (skill) の
+         提案/昇格は行わない = パターン集を育てるだけ) を判定周期ごとに呼ぶ。
+         実際の発火可否 (Claude TurnWiki/settings.json の AutoMaintain と
+         MaintainIntervalSeconds=既定 6h、排他ロック、LLM 可用性) は tick 内部が
+         毎回判定するので、パレットの「Wiki: 自動維持」トグルは service 再起動
+         なしで効く (Cane anomaly と同じ二段構え。ここの間隔は判定周期のみ)。
+         Disabled/IntervalNotElapsed/NoNewTraces はログしない (量の配慮)。
+         Maintainer は local LLM 1 呼び出し (LLM timeout 480s: 27B の JSON 生成は
+         ~12 tok/s で 180s では切れた 2026-09-02 実測) なので、走る間は heartbeat が
+         最大 8 分止まる。負荷を抑えるため sample は fail3+pass2。 *)
+      If[! leased &&
+         Length[DownValues[ClaudeOrchestrator`TurnWiki`ClaudeTurnWikiMaintainTick]] > 0 &&
+         (AbsoluteTime[] - lastTurnWikiAbs) >
+           If[NumericQ[SourceVault`$SourceVaultTurnWikiTickIntervalSeconds],
+             SourceVault`$SourceVaultTurnWikiTickIntervalSeconds, 600],
+        Module[{twR},
+          twR = iSMSafeHook[
+            ClaudeOrchestrator`TurnWiki`ClaudeTurnWikiMaintainTick[
+              "MaxFail" -> 3, "MaxPass" -> 2],
+            720, <|"Status" -> "TimedOut"|>, <|"Status" -> "Error"|>];
+          lastTurnWikiAbs = AbsoluteTime[];
+          turnWikiState = <|"LastTickAtUTC" -> iSMUTCNow[],
+            "LastStatus" -> If[AssociationQ[twR], Lookup[twR, "Status", "?"], ToString[twR]]|>;
+          If[AssociationQ[twR] &&
+             !MemberQ[{"Disabled", "IntervalNotElapsed", "NoNewTraces"},
+               Lookup[twR, "Status", ""]],
+            iServiceLog[dir, "TurnWikiMaintainTick",
+              <|"Result" -> Lookup[twR, "Status", "?"],
+                "Traces" -> Lookup[twR, "Traces", 0],
+                "Consumed" -> Lookup[twR, "Consumed", 0]|>]]]];
       (* headless dispatch (配車専用): opt-in マシンでのみ、enqueue された
          CatalogWorkflow ジョブを拾い SourceVaultRunWorkflowAsync (外部プロセス)
          へ委譲する。サブカーネルプールなし・トリガー評価なし。opt-in 判定は
@@ -2127,7 +2251,8 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
           "SourceVault_slidedeck.wl",
           "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
           "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl",
-          "SourceVault_llmlog.wl", "SourceVault_autotrigger.wl"},
+          "SourceVault_llmlog.wl", "SourceVault_autotrigger.wl",
+          "SourceVault_mining.wl", "ClaudeOrchestrator_turnwiki.wl"},
         "InjectedRootHash" -> rootHash,
         "HasPrelude" -> (StringLength[prelude] > 0), "CreatedAtUTC" -> iSMUTCNow[]|>];
     Module[{strm = OpenWrite[path, BinaryFormat -> True], text},
@@ -2170,6 +2295,15 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
            の FE ガード側にあり service kernel では走らない)。存在ガードで fail-soft。
            実行 stack (workflowregistry/engine) は opt-in マシンでのみ遅延ロードされる。 *)
         "  With[{tpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_autotrigger.wl\"}]}, If[FileExistsQ[tpath], Get[tpath]]];\n",
+        (* mining: TurnWiki 維持 tick の既定 LLM (SourceVaultQueryLocalLLM, local LM Studio)
+           と安価な可用性プローブ (iSVMResolveLocalLLM) の所有パッケージ。core のみ依存。
+           存在ガードで fail-soft。 *)
+        "  With[{npath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_mining.wl\"}]}, If[FileExistsQ[npath], Get[npath]]];\n",
+        (* ClaudeOrchestrator_turnwiki (2026-09-02): WikiSkill 型 turn 改善ループの
+           維持 tick (ClaudeTurnWikiMaintainTick) を service heartbeat で回すため単体 load。
+           ClaudeOrchestrator 本体には依存しない (弱結合)。ロード時の注入復元は
+           ClaudeDirectives 不在の service では no-op。存在ガードで fail-soft。 *)
+        "  With[{ypath = FileNameJoin[{", q[pkgRoot], ", \"ClaudeOrchestrator_turnwiki.wl\"}]}, If[FileExistsQ[ypath], Get[ypath]]];\n",
         "];\n",
         "SourceVault`$SourceVaultCoreRoot = ", q[root], ";\n",
         (* root snapshot 注入 (spec v6 §3.7): service kernel は注入値を最優先する。
@@ -2218,12 +2352,56 @@ iSafeName[s_String] := StringReplace[s,
 (* service 用 scheduled task 名 (serviceId を file/task 安全名に) *)
 iServiceTaskName[serviceId_String] := "SourceVaultSvc_" <> iSafeName[serviceId];
 
+(* ---- boot 前の self-report 退避 (2026-09-02) ----
+   旧 instance の pid.json が残っていると、起動後の「pid.json 出現待ち」が即座に抜け、
+   Started + 死んだ旧 PID を返す (strixhalo128 で観測: StartMCP が旧 28952 を返し、
+   新 kernel 60328 は ~35s 後に boot。直後の ServiceStatus は Starting/PidAlive False/
+   旧 heartbeat)。runner は pid.json / heartbeat.json を temp-rename で書き直すので、
+   起動前に両者を *.prev.json へ回し、待ち合わせが新 kernel の self-report だけを
+   見るようにする。rename 失敗 (共有違反等) は iSMWriteJSON と同様 1 回 retry →
+   削除に fallback。 *)
+iSMRotateStateFile[path_String] := Module[{prev, ok},
+  If[! FileExistsQ[path], Return[Missing["NoFile"]]];
+  prev = FileNameJoin[{DirectoryName[path], FileBaseName[path] <> ".prev.json"}];
+  ok = Quiet @ Check[RenameFile[path, prev, OverwriteTarget -> True]; True, False];
+  If[! TrueQ[ok],
+    Pause[0.05];
+    ok = Quiet @ Check[RenameFile[path, prev, OverwriteTarget -> True]; True, False]];
+  If[! TrueQ[ok], Quiet @ DeleteFile[path]];
+  Which[FileExistsQ[path], $Failed, TrueQ[ok], prev, True, "Deleted"]];
+
+iSMRotateBootFiles[dir_String] := Module[{pidRec, oldPid},
+  pidRec = iSMReadJSON[FileNameJoin[{dir, "pid.json"}]];
+  oldPid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing[]];
+  <|"PreviousPID" -> oldPid,
+    "PidRotated" -> iSMRotateStateFile[FileNameJoin[{dir, "pid.json"}]],
+    "HeartbeatRotated" -> iSMRotateStateFile[FileNameJoin[{dir, "heartbeat.json"}]]|>];
+
+(* 新 runner の self-report (整数 PID を持つ pid.json) を待つ。temp-rename 書きなら
+   FileExistsQ 成立時点で完全だが、fallback 直接書きの途中を読む可能性もあるため
+   parse 済み PID を条件にする。timeout なら Missing["Pending"]。 *)
+iSMAwaitPidSelfReport[dir_String, timeoutSec_?NumericQ] := Module[
+  {pidPath = FileNameJoin[{dir, "pid.json"}], deadline = AbsoluteTime[] + timeoutSec, rec},
+  rec = iSMReadJSON[pidPath];
+  While[! (AssociationQ[rec] && IntegerQ[Lookup[rec, "PID"]]) && AbsoluteTime[] < deadline,
+    Pause[0.5]; rec = iSMReadJSON[pidPath]];
+  If[AssociationQ[rec] && IntegerQ[Lookup[rec, "PID"]], rec, Missing["Pending"]]];
+
+(* 新 PID の heartbeat.json が書かれ始めるまで短く待つ (best-effort)。Start 直後の
+   ServiceStatus が旧/欠損 heartbeat でなく新 kernel の鼓動を映すため。 *)
+iSMAwaitHeartbeatOf[dir_String, pid_Integer, timeoutSec_?NumericQ] := Module[
+  {hbPath = FileNameJoin[{dir, "heartbeat.json"}], deadline = AbsoluteTime[] + timeoutSec, hb},
+  hb = iSMReadJSON[hbPath];
+  While[! (AssociationQ[hb] && Lookup[hb, "PID"] === pid) && AbsoluteTime[] < deadline,
+    Pause[0.25]; hb = iSMReadJSON[hbPath]];
+  AssociationQ[hb] && Lookup[hb, "PID"] === pid];
+
 Options[SourceVaultStartService] = {
   "Kind" -> "heartbeat", "HeartbeatIntervalSeconds" -> 1, "PackageRoot" -> Automatic,
   "PreludeCode" -> ""};
 SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
   {dir, root, pkgRoot, kind, interval, runWls, exe, batPath, task, runRes, pid,
-   existing, pidPath, deadline, pidRec, prelude, seat, seatTok},
+   existing, rotated, pidRec, hbFresh, prelude, seat, seatTok},
   root = SourceVault`SourceVaultCoreRoot[];
   If[FailureQ[root], Return[root]];
   kind = OptionValue["Kind"];
@@ -2248,6 +2426,9 @@ SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
   (* 起動前に未処理コマンドを掃除する。特に前回 StopService が残した stale "Stop" を
      新 service が起動直後に拾って即停止する事故を防ぐ (heartbeat 1 で Stopped になる)。 *)
   Quiet[DeleteFile /@ FileNames["*.json", FileNameJoin[{dir, "commands"}]]];
+  (* 旧 instance の pid.json / heartbeat.json を *.prev.json へ退避。これを怠ると
+     下の boot 待ちが stale pid.json で即抜けし、死んだ旧 PID を Started として返す。 *)
+  rotated = iSMRotateBootFiles[dir];
   runWls = iGenRunWls[dir, kind, serviceId, root, pkgRoot, interval, prelude];
   exe = iResolveWolframScript[];
   batPath = iGenLaunchBat[dir, exe, runWls];
@@ -2284,16 +2465,18 @@ SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
       <|"State" -> "Crashed", "Reason" -> "ScheduledTaskRunFailed"|>];
     Return[Failure["ScheduledTaskRunFailed", <|"ServiceId" -> serviceId, "Task" -> task,
       "Detail" -> If[AssociationQ[runRes], Lookup[runRes, "StandardError"], runRes]|>]]];
-  (* runner が pid.json を書くのを待つ。scheduler 下の kernel boot は遅い (~10-20s)。 *)
-  pidPath = FileNameJoin[{dir, "pid.json"}];
-  deadline = AbsoluteTime[] + 60;
-  While[AbsoluteTime[] < deadline && ! FileExistsQ[pidPath], Pause[0.5]];
-  pidRec = iSMReadJSON[pidPath];
+  (* runner が pid.json を書くのを待つ。scheduler 下の kernel boot は遅い (~10-20s)。
+     pid.json は上で退避済みなので、ここで現れるのは新 kernel の self-report だけ。 *)
+  pidRec = iSMAwaitPidSelfReport[dir, 60];
   pid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing["Pending"]];
+  (* 新 PID の初回 heartbeat まで短く待つ (直後の ServiceStatus が新 kernel を映すため) *)
+  hbFresh = If[IntegerQ[pid], iSMAwaitHeartbeatOf[dir, pid, 5], False];
   (* boot 窓終了 → 席返却 (成否問わず。以後は実測が本体を数える) *)
   If[StringQ[seatTok], Quiet @ ClaudeRuntime`ClaudeSeatRelease[seatTok]];
-  iServiceLog[dir, "ServiceLaunched", <|"PID" -> pid, "Kind" -> kind, "Task" -> task|>];
+  iServiceLog[dir, "ServiceLaunched", <|"PID" -> pid, "Kind" -> kind, "Task" -> task,
+    "PreviousPID" -> Lookup[rotated, "PreviousPID"], "HeartbeatFresh" -> hbFresh|>];
   <|"Status" -> "Started", "ServiceId" -> serviceId, "PID" -> pid,
+    "PreviousPID" -> Lookup[rotated, "PreviousPID"], "HeartbeatFresh" -> hbFresh,
     "RuntimeDir" -> dir, "Task" -> task|>];
 
 iHeartbeatAgeSeconds[dir_String] := Module[{hb = iSMReadJSON[FileNameJoin[{dir, "heartbeat.json"}]], t},

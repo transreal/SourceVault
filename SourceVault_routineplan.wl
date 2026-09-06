@@ -710,7 +710,8 @@ iSVRPTaskName[t_] := Module[
     True, "(untitled)"]];
 
 iSVRPAllDayRank[item_] := Switch[Lookup[item, "Kind", ""],
-  "Deadline", 1, "MailDeadline", 2, "Review", 3, "AllDayEvent", 4, _, 5];
+  "Deadline", 1, "MailDeadline", 2, "Todo", 2, "Review", 3,
+  "AllDayEvent", 4, _, 5];
 
 (* --- open-todo disclosure for OVERDUE notebook rows (2026-07-28) ---
    An overdue item gains "OpenTodos" -> its todo items whose Status is not
@@ -745,7 +746,8 @@ Options[SourceVaultRoutineAgendaData] = {
   PrivacySpec -> <|"AccessLevel" -> 1.0|>, "CalendarEvents" -> Automatic,
   "OnWorkTasks" -> Automatic, "ModifiedWithinDays" -> 120, "IncludeOverdue" -> True,
   "TimeZone" -> Automatic, "IncludeMail" -> Automatic, "MailItems" -> Automatic,
-  "MailMaxPrivacyLevel" -> 1.0};
+  "MailMaxPrivacyLevel" -> 1.0,
+  "IncludeTodos" -> Automatic, "TodoItems" -> Automatic};
 
 SourceVaultRoutineAgendaData[dur_Quantity, opts : OptionsPattern[]] :=
   SourceVaultRoutineAgendaData[N[AbsoluteTime[]],
@@ -754,11 +756,11 @@ SourceVaultRoutineAgendaData[dur_Quantity, opts : OptionsPattern[]] :=
 SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
   {tz = OptionValue["TimeZone"], ps = OptionValue[PrivacySpec],
    fromAbs = iSVRPAbs[from], toAbs = iSVRPAbs[to], cal, ow, items = {}, overdue = {},
-   fromDay, toDayEnd, byDay, dayKeys, days},
+   todosNoDue = {}, fromDay, toDayEnd, byDay, dayKeys, days},
   If[tz === Automatic, tz = $TimeZone];
   If[!NumberQ[fromAbs] || !NumberQ[toAbs],
     Return[<|"From" -> from, "To" -> to, "TimeZone" -> tz, "Overdue" -> {},
-      "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {},
+      "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}, "Todos" -> {},
       "MaxPrivacyLevel" -> 0.|>]];
   fromDay = iSVRPDayStart[fromAbs, tz];
   toDayEnd = iSVRPDayStart[toAbs, tz] + $svRPDay;
@@ -838,6 +840,41 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
         {o, occ}]]],
     {t, ow}];
 
+  (* --- standalone todos (weak binding to SourceVault_todo, 2026-09-01) ---
+     Open todos that belong to NO notebook: deadline-carrying ones join the
+     day list / overdue band as Kind "Todo"; the rest surface in a dedicated
+     band (result key "Todos"). Runtime Symbol[] resolution, NOT a bare
+     reference (orphan-symbol trap: SourceVault_todo loads AFTER routineplan). *)
+  Module[{incTd = OptionValue["IncludeTodos"], tds},
+    If[incTd === Automatic, incTd = True];
+    tds = If[TrueQ[incTd],
+      With[{o = OptionValue["TodoItems"]},
+        If[o === Automatic,
+          If[Names["SourceVault`SourceVaultTodoAgendaItems"] =!= {} &&
+              With[{sym = Symbol["SourceVault`SourceVaultTodoAgendaItems"]},
+                Length[DownValues[sym]] > 0],
+            Quiet@Check[
+              Symbol["SourceVault`SourceVaultTodoAgendaItems"][
+                PrivacySpec -> ps], {}], {}],
+          o]], {}];
+    If[!ListQ[tds], tds = {}];
+    Do[Module[{due = Lookup[td, "DueT", Missing[]], item, d},
+      item = <|"Kind" -> "Todo",
+        "DueT" -> If[NumberQ[due], due, Missing["None"]],
+        "Label" -> Lookup[td, "Label", "(todo)"],
+        "TodoId" -> Lookup[td, "TodoId", Missing[]],
+        "State" -> Lookup[td, "State", "Open"],
+        "PrivacyLevel" -> iSVRPItemPL[td]|>;
+      If[NumberQ[due],
+        d = iSVRPDayStart[due, tz];
+        item["DayAbs"] = d;
+        Which[
+          d < fromDay, If[TrueQ[OptionValue["IncludeOverdue"]],
+            AppendTo[overdue, item]],
+          d < toDayEnd, AppendTo[items, item]],
+        AppendTo[todosNoDue, item]]],
+      {td, Select[tds, AssociationQ]}]];
+
   overdue = SortBy[overdue, #["DueT"] &];
   (* overdue notebooks additionally disclose their OPEN (not Done/Pass) todo
      items -- the view lists them indented under the row. Day-list items are
@@ -895,7 +932,8 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
       <|"DayAbs" -> N[dk], "DayKey" -> iSVRPDayKey[dk, tz],
         "Weekday" -> iSVRPWeekdayJP[dk],
         "AllDay" -> SortBy[Select[grp, MemberQ[
-            {"Deadline", "MailDeadline", "Review", "AllDayEvent"}, #["Kind"]] &],
+            {"Deadline", "MailDeadline", "Todo", "Review", "AllDayEvent"},
+            #["Kind"]] &],
           {iSVRPAllDayRank[#], Lookup[#, "Label", ""]} &],
         "Timed" -> SortBy[Select[grp, #["Kind"] === "Event" &],
           #["StartT"] &]|>]], dayKeys];
@@ -904,25 +942,29 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
        failure in any part degrades to 1.0, never to an unlabelled output *)
     <|"From" -> fromAbs, "To" -> toAbs, "TimeZone" -> tz, "Overdue" -> overdue,
       "Mail" -> mailItems, "MailPendingCount" -> mailPending, "Days" -> days,
+      "Todos" -> todosNoDue,
       "MaxPrivacyLevel" -> Quiet@Check[
-        Max[0., iSVRPMaxPL[items], iSVRPMaxPL[overdue], iSVRPMaxPL[mailItems]],
+        Max[0., iSVRPMaxPL[items], iSVRPMaxPL[overdue], iSVRPMaxPL[mailItems],
+          iSVRPMaxPL[todosNoDue]],
         1.0]|>]];
 SourceVaultRoutineAgendaData[] :=
   SourceVaultRoutineAgendaData[Quantity[7, "Days"]];
 SourceVaultRoutineAgendaData[___] :=
   <|"From" -> Missing[], "To" -> Missing[], "TimeZone" -> 0, "Overdue" -> {},
-    "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {},
+    "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}, "Todos" -> {},
     "MaxPrivacyLevel" -> 0.|>;
 
 (* ---- view ---- *)
 iSVRPAgendaColor["Deadline"] = RGBColor[0.85, 0.2, 0.2];
 iSVRPAgendaColor["MailDeadline"] = RGBColor[0.8, 0.3, 0.15];
+iSVRPAgendaColor["Todo"] = RGBColor[0.55, 0.3, 0.7];
 iSVRPAgendaColor["Review"] = RGBColor[0.2, 0.45, 0.8];
 iSVRPAgendaColor["AllDayEvent"] = RGBColor[0.2, 0.6, 0.3];
 iSVRPAgendaColor["Event"] = RGBColor[0.2, 0.55, 0.35];
 iSVRPAgendaColor[_] = GrayLevel[0.3];
 iSVRPAgendaKindTag["MailDeadline"] = "\:2709\:3006\:5207";
 iSVRPAgendaKindTag["Deadline"] = "\:3006\:5207";
+iSVRPAgendaKindTag["Todo"] = "Todo";
 iSVRPAgendaKindTag["Review"] = "\:30ec\:30d3\:30e5\:30fc";
 iSVRPAgendaKindTag[_] = "";
 
@@ -970,6 +1012,18 @@ iSVRPAgendaItemRow[item_, tz_, showDue_] := Module[
         Button[Mouseover[Style[lbl, c, 12], Style[lbl, c, 12, Underlined]],
           SourceVaultMailAgendaOpen[r], Appearance -> None, Method -> "Queued"],
         "\:958b\:304f: \:30e1\:30fc\:30eb\:672c\:6587 (\:8fd4\:4fe1/\:30b9\:30ec\:30c3\:30c9/\:7d99\:627f/\:5bfe\:5fdc\:6e08\:307f)"]],
+    (* standalone todo: click -> the todo summary/note window (weak binding;
+       Symbol[] resolved at CLICK time so load order never matters) *)
+    StringQ[Lookup[item, "TodoId", Missing[]]] &&
+      Names["SourceVault`SourceVaultTodoShowSummary"] =!= {} &&
+      With[{sym = Symbol["SourceVault`SourceVaultTodoShowSummary"]},
+        Length[DownValues[sym]] > 0],
+    With[{t = item["TodoId"], lbl = label, c = col},
+      Tooltip[
+        Button[Mouseover[Style[lbl, c, 12], Style[lbl, c, 12, Underlined]],
+          Symbol["SourceVault`SourceVaultTodoShowSummary"][t],
+          Appearance -> None, Method -> "Queued"],
+        "\:958b\:304f: todo \:30ce\:30fc\:30c8 (\:30b5\:30de\:30ea\:30fc/\:4fdd\:5b58\:7248)"]],
     True, Style[label, col, 12]];
   (* folder link: SystemOpen the CONTAINING DIRECTORY (goes through the OS,
      so Dropbox online-only placeholders hydrate, same as the file link) *)
@@ -1208,6 +1262,26 @@ iSVRPMailBandRows[mail_List, nowAbs_, tz_] := Module[
     out = Join[out, Map[iSVRPMailRow[#, nowAbs, tz] &, none]]];
   out];
 
+(* one row of the standalone-todo band; click -> the todo note window *)
+iSVRPTodoRow[item_Association] := Module[
+  {label = Lookup[item, "Label", "?"],
+   tid = Lookup[item, "TodoId", Missing[]], openable},
+  openable = StringQ[tid] &&
+    Names["SourceVault`SourceVaultTodoShowSummary"] =!= {} &&
+    With[{sym = Symbol["SourceVault`SourceVaultTodoShowSummary"]},
+      Length[DownValues[sym]] > 0];
+  Row[{Style["\:2611 ", RGBColor[0.55, 0.3, 0.7], 11],
+    If[openable,
+      With[{t = tid, lbl = label},
+        Tooltip[
+          Button[Mouseover[Style[lbl, GrayLevel[0.15], 12],
+              Style[lbl, GrayLevel[0.15], 12, Underlined]],
+            Symbol["SourceVault`SourceVaultTodoShowSummary"][t],
+            Appearance -> None, Method -> "Queued"],
+          "\:958b\:304f: todo \:30ce\:30fc\:30c8"]],
+      Style[label, GrayLevel[0.15], 12]]}]];
+iSVRPTodoRow[x_] := Style[ToString[x], 11];
+
 Options[SourceVaultRoutineAgendaView] = Options[SourceVaultRoutineAgendaData];
 SourceVaultRoutineAgendaView[dur_Quantity, opts : OptionsPattern[]] :=
   SourceVaultRoutineAgendaView[N[AbsoluteTime[]],
@@ -1215,13 +1289,14 @@ SourceVaultRoutineAgendaView[dur_Quantity, opts : OptionsPattern[]] :=
 SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
   {data = SourceVaultRoutineAgendaData[from, to,
      Sequence @@ FilterRules[{opts}, Options[SourceVaultRoutineAgendaData]]],
-   tz, overdue, days, mail, mailPending, sections = {}},
+   tz, overdue, days, mail, mailPending, todos, sections = {}},
   tz = Lookup[data, "TimeZone", 0];
   overdue = Lookup[data, "Overdue", {}];
   days = Lookup[data, "Days", {}];
   mail = Lookup[data, "Mail", {}];
   mailPending = Lookup[data, "MailPendingCount", 0];
-  If[overdue === {} && days === {} && mail === {},
+  todos = With[{t = Lookup[data, "Todos", {}]}, If[ListQ[t], t, {}]];
+  If[overdue === {} && days === {} && mail === {} && todos === {},
     Return[Style["\:4e88\:5b9a\:30fb\:3006\:5207\:30fb\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
       Italic, Gray]]];
   (* order: day-by-day calendar FIRST, then overdue, then actionable mails *)
@@ -1259,6 +1334,17 @@ SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
           Alignment -> Left, Spacings -> 0.4],
         Background -> RGBColor[0.95, 0.97, 1], FrameStyle -> RGBColor[0.55, 0.65, 0.85],
         RoundingRadius -> 5, FrameMargins -> 8]]]];
+  (* standalone todos WITHOUT a deadline (dated ones are already in the day
+     list / overdue band as Kind "Todo") *)
+  If[todos =!= {},
+    AppendTo[sections, Framed[Column[Prepend[
+        Map[iSVRPTodoRow, todos],
+        Style["\:2611 \:672a\:51e6\:7406 Todo (" <> ToString[Length[todos]] <> ")",
+          RGBColor[0.55, 0.3, 0.7], Bold, 12]],
+        Alignment -> Left, Spacings -> 0.35],
+      Background -> RGBColor[0.97, 0.95, 1],
+      FrameStyle -> RGBColor[0.7, 0.6, 0.85],
+      RoundingRadius -> 5, FrameMargins -> 8]]];
   (* the wrap decision uses the aggregate MaxPrivacyLevel over EVERY
      component (notebook titles, calendar summaries, mails) -- missing
      aggregate is fail-safe 1.0 *)

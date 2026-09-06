@@ -218,6 +218,17 @@ iPEvalNotebook[] :=
 iPEvalCell[] :=
   If[iPFrontEndQ[], Quiet @ Check[EvaluationCell[], $Failed], $Failed];
 
+(* パレット型ノートブックはコントロール置き場でありコンテンツを持たないので、
+   セル機密マークの対象にしない。パレットのボタンから機密 View を開くと
+   EvaluationNotebook[]/EvaluationCell[] がパレット自身に解決され、パレット全体が
+   赤背景に塗られていた (2026-09-01 実機報告)。機密コンテンツ自体は表示先で
+   L1 バッジ (SourceVaultPrivate 赤枠) を必ず伴うので、ここで抑止しても
+   機密表示が消えることはない (セルマークという副作用だけを止める)。
+   CurrentValue 失敗時はマーク可扱い (マークする側へ倒す fail-safe)。 *)
+iPMarkableNotebookQ[nb_NotebookObject] :=
+  Quiet @ Check[CurrentValue[nb, WindowFrame] =!= "Palette", True];
+iPMarkableNotebookQ[___] := False;
+
 (* ============================================================
    1. 評価スコープ透かし
    ------------------------------------------------------------
@@ -261,7 +272,8 @@ SourceVault`SourceVaultNotePrivacy[pl_] :=
     $svPMax = Max[N[$svPMax], lv];
     If[lv >= iPThreshold[],
       cell = iPEvalCell[]; nb = iPEvalNotebook[];
-      If[MatchQ[cell, _CellObject] && MatchQ[nb, _NotebookObject],
+      If[MatchQ[cell, _CellObject] && MatchQ[nb, _NotebookObject] &&
+          iPMarkableNotebookQ[nb],
         (* 入力セルは同期でマーク (確実に効く) *)
         Quiet @ Check[iPMarkCellObject[nb, cell, lv], Null];
         (* 出力セルは CellObject 同一性ベースの遅延マーカーへ登録 *)
@@ -842,17 +854,43 @@ SourceVault`SourceVaultDeclarePrivacySource["notebook", <|
 SourceVault`SourceVaultDeclarePrivacySource["eagle", <|
   "Level" -> 0.85,
   "Description" -> "Eagle \:30e9\:30a4\:30d6\:30e9\:30ea\:306e item \:30e1\:30bf/\:6ce8\:91c8",
-  "Readers" -> {"SourceVaultEagleSearchItems", "SourceVaultEagleItemGet"}|>];
+  (* 2026-09-01: 実在しない "SourceVaultEagleSearchItems"/"SourceVaultEagleItemGet" を
+     実 reader に修正 (旧名では runtime 監査がこのソースに対して盲目だった)。
+     一次読み出し口 = 各サブストアを直接読む public 関数:
+     Items/Item (item メタキャッシュ + metadata.json), LibraryInfo (ライブラリ
+     metadata.json = フォルダ木), Tags (tags.json), Summary (summary sidecar),
+     Exif (exifindex), ExtractText (原本本文), Thumbnail (サムネイル/原本画像),
+     APICall (Eagle アプリ API 直読), IngestInfo (ingest 対応表 = Name/Path 入り)。
+     Search/IndexSearch/View 系は Items 経由の派生なので列挙不要
+     (呼び出しグラフで自動到達判定)。 *)
+  "Readers" -> {
+    "SourceVaultEagleItems", "SourceVaultEagleItem",
+    "SourceVaultEagleLibraryInfo", "SourceVaultEagleTags",
+    "SourceVaultEagleSummary", "SourceVaultEagleExif",
+    "SourceVaultEagleExtractText", "SourceVaultEagleThumbnail",
+    "SourceVaultEagleAPICall", "SourceVaultEagleIngestInfo"}|>];
 
 SourceVault`SourceVaultDeclarePrivacySource["oops", <|
   "Level" -> 0.85,
   "Description" -> "OOPS \:30b9\:30ec\:30c3\:30c9 (\:500b\:4eba\:30e1\:30e2/\:5b66\:5185\:60c5\:5831)",
-  "Readers" -> {"SourceVaultOopsSearchThreads", "SourceVaultOopsThread"}|>];
+  (* 2026-09-01: 実在しない "SourceVaultOops*" を実名 (OOPS 大文字) に修正。
+     旧名では runtime 監査がこのソースに対して盲目だった。 *)
+  "Readers" -> {"SourceVaultOOPSSearchThreads", "SourceVaultOOPSThread"}|>];
 
 SourceVault`SourceVaultDeclarePrivacySource["llmlog", <|
   "Level" -> 0.85,
   "Description" -> "LLM \:5b9f\:884c\:30ed\:30b0 digest (\:30d7\:30ed\:30f3\:30d7\:30c8\:672c\:6587\:3092\:542b\:307f\:3046\:308b)",
-  "Readers" -> {"SourceVaultLLMLogSearch", "SourceVaultLLMLogGet"}|>];
+  (* 2026-09-01: 実在しない "SourceVaultLLMLogSearch"/"SourceVaultLLMLogGet" を
+     実 reader に修正 (旧名では runtime 監査がこのソースに対して盲目だった)。
+     llmlog の内部文脈 SourceVault`PrivateLLMLog` は監査グラフ ($svPContexts) の
+     外なので、内部ヘルパー経由でストアを直接読む public 関数を漏れなく列挙する:
+     Sessions/SessionGet (rollup digest + summary sidecar),
+     SessionTranscript (生 transcript local/mirror), SessionDigest (生 JSONL -> digest)。
+     SessionSearch/View/Summary 系は上記 public 経由の派生。LogStatus/Mirror は
+     ストアを読むが返すのは件数のみ (データ非搬送) なので reader 扱いしない。 *)
+  "Readers" -> {
+    "SourceVaultClaudeCodeSessions", "SourceVaultClaudeCodeSessionGet",
+    "SourceVaultClaudeCodeSessionTranscript", "SourceVaultClaudeCodeSessionDigest"}|>];
 
 (* ============================================================
    7b. 既定の関数宣言 (横断表)
@@ -944,6 +982,165 @@ iPDeclareMany["Internal",
   {"SourceVaultPromptReprocessPlan", "SourceVault_promptrouter.wl"},
   {"SourceVaultCallableAllowlistRegistry", "SourceVault_promptrouter.wl"},
   {"SourceVaultCallableAllowlistView", "SourceVault_promptrouter.wl"}}];
+
+(* ---- 2026-09-01 Source 監査レビューで追加: mailbrowse / crosslink / oopsseed ----
+   mailbrowse は SourceVaultMailRecordsForStructuring 経由で mail ストアに、
+   crosslink は provider (mail/oops/eagle サマリー) 経由で、oopsseed は oops
+   ストアに到達するのに契約が無かった。自前登録へ移したらここから削除してよい。 *)
+
+iPDeclareMany["Private", "Result", {
+  {"SourceVaultMailBrowseMail", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseSearchThreads", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseSessions", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseThread", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseTopicMails", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseTopicRelated", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseTopicSessions", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseTopicStep", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseSetState", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseStatus", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultCrossLinks", "SourceVault_crosslink.wl"},
+  {"SourceVaultCrossLinkAnchor", "SourceVault_crosslink.wl"},
+  {"SourceVaultCrossLinkAssertTopics", "SourceVault_crosslink.wl"},
+  {"SourceVaultOOPSSearchThreads", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSThread", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSSessions", "SourceVault_oopsseed.wl"}}];
+
+iPDeclareMany["Private", "View", {
+  {"SourceVaultMailBrowseMailView", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseSearchThreadsView", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseThreadView", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseThreadList", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultMailBrowseTopicThreadList", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultCrossLinksView", "SourceVault_crosslink.wl"},
+  {"SourceVaultOOPSThreadView", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSThreadList", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSMailView", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSSearchThreadsView", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSTopicThreadList", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSThreadGraph", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSTopicGraphPlot", "SourceVault_oopsseed.wl"}}];
+
+(* ---- 2026-09-01 eagle/llmlog Reader 幽霊名修正に伴う追加 ----
+   §7 の eagle/llmlog Readers を実在シンボルへ差し替えた結果、runtime 監査
+   (SourceVaultPrivacyAudit["Mode"->"Runtime"]) が初めてこの 2 ソースへの到達を
+   検出した 69 件 + IngestInfo を分類する。自前登録へ移したらここから削除してよい。 *)
+
+(* eagle: 生データ/連想を返す core (item メタ・サマリー・Exif・原本内容) *)
+iPDeclareMany["Private", "Result", {
+  {"SourceVaultEagleItems", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleItem", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleItemPath", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleThumbnailPath", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleThumbnail", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleItemsInFolder", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSearch", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleIndexSearch", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleIndexRecord", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleLibraryInfo", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleFolders", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSmartFolders", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleFindFolder", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleTags", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSummary", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSummaries", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSummaryRow", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSummarize", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleExtractText", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleExtractBibMeta", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleExif", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleAPICall", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleIngest", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleIngestInfo", "SourceVault_eagle.wl"}}];
+
+(* eagle: 表示オブジェクト (View/Dataset)。ObjectToCell は confidential マーク付き
+   セル出力 (正準 exit 内蔵) *)
+iPDeclareMany["Private", "View", {
+  {"SourceVaultEagleFolderList", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleFolderView", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleGeoView", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSummariesView", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleView", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleDataset", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleIndexDataset", "SourceVault_eagle.wl"},
+  {"SourceVaultObjectToCell", "SourceVault_eagle.wl"}}];
+
+(* eagle: ノートブック/外部アプリを開く (egress は開いた先) *)
+iPDeclareMany["Private", "Head", {
+  {"SourceVaultEagleOpenItem", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleShowFolder", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleShowSummary", "SourceVault_eagle.wl"}}];
+
+(* eagle: 変更系 (タグ/注釈/フォルダ/ゴミ箱/追加) *)
+iPDeclareMany["Internal",
+  "\:5909\:66f4\:7cfb\:3002item/\:30d5\:30a9\:30eb\:30c0\:3092\:89e3\:6c7a\:3059\:308b\:305f\:3081\:30b9\:30c8\:30a2\:3078\:5230\:9054\:3059\:308b\:304c\:3001\:8fd4\:308a\:5024\:306f Status/Method/Id \:7b49\:306e\:72b6\:614b\:306e\:307f\:3002", {
+  {"SourceVaultEagleSetTags", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleAddTags", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleRemoveTags", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSetAnnotation", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSetURL", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleMoveToFolder", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleTrashItem", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleCreateFolder", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleRenameFolder", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleAddItem", "SourceVault_eagle.wl"}}];
+
+(* eagle: バッチ/状態/マーク機構系 *)
+iPDeclareMany["Internal",
+  "\:30d0\:30c3\:30c1/\:72b6\:614b/\:30de\:30fc\:30af\:6a5f\:69cb\:7cfb\:3002\:8fd4\:308a\:5024\:306f\:4ef6\:6570\:30fb\:72b6\:614b\:30fb\:30bb\:30eb\:756a\:53f7\:30fbPL \:7b49\:306e\:96c6\:8a08\:306e\:307f\:3002", {
+  {"SourceVaultEagleSaveCache", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleStatus", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleAPIAvailable", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleIngestFolder", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleSummarizeBatch", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleExtractBibMetaBatch", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleBuildExifIndex", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleMarkViewCells", "SourceVault_eagle.wl"},
+  {"SourceVaultEagleEnableAutoConfidential", "SourceVault_eagle.wl"}}];
+
+(* llmlog: digest/生 transcript を返す core。SummarizeSessions/Ingest も
+   PerSession に Title (digest 内容) が載るので Result 扱い *)
+iPDeclareMany["Private", "Result", {
+  {"SourceVaultClaudeCodeSessions", "SourceVault_llmlog.wl"},
+  {"SourceVaultClaudeCodeSessionGet", "SourceVault_llmlog.wl"},
+  {"SourceVaultClaudeCodeSessionSearch", "SourceVault_llmlog.wl"},
+  {"SourceVaultClaudeCodeSessionTranscript", "SourceVault_llmlog.wl"},
+  {"SourceVaultClaudeCodeSessionDigest", "SourceVault_llmlog.wl"},
+  {"SourceVaultClaudeCodeSessionSummary", "SourceVault_llmlog.wl"},
+  {"SourceVaultClaudeCodeSummarizeSessions", "SourceVault_llmlog.wl"},
+  {"SourceVaultIngestClaudeCodeLogs", "SourceVault_llmlog.wl"}}];
+
+iPDeclareMany["Private", "View", {
+  {"SourceVaultClaudeCodeSessionView", "SourceVault_llmlog.wl"},
+  {"SourceVaultClaudeCodeSessionSearchView", "SourceVault_llmlog.wl"},
+  {"SourceVaultKnowledgeHomeView", "SourceVault_knowledgehome.wl"}}];
+
+(* 横断: sv:// URI オブジェクト解決層 (eagle item/画像へ到達) *)
+iPDeclareMany["Private", "Result", {
+  {"SourceVaultObjectData", "SourceVault_mcp.wl"},
+  {"SourceVaultObjectProperties", "SourceVault_mcp.wl"}}];
+
+iPDeclareMany["Internal",
+  "PL \:89e3\:6c7a\:306e\:307f\:3002item \:3092\:8aad\:3080\:304c\:8fd4\:3059\:306e\:306f privacy level \:6570\:5024\:306e\:307f\:3002", {
+  {"SourceVaultObjectPrivacyLevel", "SourceVault_mcp.wl"}}];
+
+iPDeclareMany["Internal",
+  "digest \:3092\:8aad\:3080\:304c\:8fd4\:3059\:306e\:306f\:5b9f\:884c\:72b6\:614b/\:65e5\:6b21\:96c6\:8a08\:7279\:5fb4 (\:4ef6\:6570\:30fb\:7387) \:306e\:307f\:3067\:672c\:6587\:306f\:975e\:642c\:9001\:3002", {
+  {"SourceVaultServiceMain", "SourceVault_servicemanager.wl"},
+  {"SourceVaultOperationalSignalEstimate", "SourceVault_cognition.wl"}}];
+
+iPDeclareMany["Private", "Head", {
+  {"SourceVaultMailBrowseOpenMail", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultCrossLinkOpen", "SourceVault_crosslink.wl"}}];
+
+iPDeclareMany["Internal",
+  "\:72b6\:614b\:69cb\:7bc9\:30fb\:767b\:9332\:30fb\:30a4\:30d9\:30f3\:30c8\:8a18\:9332\:306e\:307f\:3002\:8fd4\:308a\:5024\:306f\:4ef6\:6570/\:72b6\:614b/PL \:6570\:5024\:3067\:672c\:6587\:306f\:8f09\:3089\:306a\:3044\:3002", {
+  {"SourceVaultMailBrowseEnsureLoaded", "SourceVault_mailbrowse.wl"},
+  {"SourceVaultOOPSEnsureLoaded", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSStatus", "SourceVault_oopsseed.wl"},
+  {"SourceVaultOOPSMailPrivacyLevel", "SourceVault_oopsseed.wl"},
+  {"SourceVaultCrossLinkRecordInteraction", "SourceVault_crosslink.wl"},
+  {"SourceVaultRegisterCrossLinkProvider", "SourceVault_crosslink.wl"}}];
 
 (* ============================================================
    8. ロード時: 自己参照パス記憶

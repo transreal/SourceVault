@@ -169,7 +169,7 @@ agenda.json の Dismissed/NotebookCreated、または返信送信済み (`Source
 例: `SourceVaultMailSearchIndex[{"科研","KAKENHI","学振"}, "MBox"->"univ"]` (OR 検索)
 
 ### SourceVaultMailSearchIndexView[query:""|{kw1,kw2,...}, opts]
-`SourceVaultMailSearchIndex` の **View 版**。索引 sidecar だけで検索し（**SourceVaultMailEnsureLoaded 不要・シャード非ロード＝速い/省メモリ**）、結果を UI つき Dataset で表示する。行ごとに **✉**（本文表示: その行の shard だけを遅延ロードして復号・別窓表示）と **☰**（スレッド窓: `SourceVaultMailThreadNotebook`）。表示件数は `$SourceVaultMailViewMaxRows` で制限。PL≥0.5 を含む結果は機密ラップ。索引 sidecar 必須 (無ければ `SourceVaultMailRebuildMetadataIndex[]` で構築)。**メール検索のノートブック表示はまずこれを使う**（全シャードロードが不要）。opts は SourceVaultMailSearchIndex と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。query は文字列リストも可 (OR 検索、SourceVaultMailSearchIndex と同じ)。
+`SourceVaultMailSearchIndex` の **View 版**。索引 sidecar だけで検索し（**SourceVaultMailEnsureLoaded 不要・シャード非ロード＝速い/省メモリ**）、結果を UI つき Dataset で表示する。行ごとに **✉**（本文表示: その行の shard だけを遅延ロードして復号・別窓表示）と **☰**（スレッド窓: `SourceVaultMailThreadNotebook`）。表示件数は `$SourceVaultMailViewMaxRows` で制限。PL≥0.5 を含む結果は機密ラップ。索引 sidecar 必須 (無ければ `SourceVaultMailRebuildMetadataIndex[]` で構築)。**メール検索のノートブック表示はまずこれを使う**（全シャードロードが不要）。opts は SourceVaultMailSearchIndex と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。query は文字列リストも可 (OR 検索、SourceVaultMailSearchIndex と同じ)。`SourceVaultMailSearchIndexView[rows]` の行リスト直渡し形もあり、`SourceVaultMailSearchIndex` の戻り値 (自前 Select で絞った部分集合でも可) を同じ UI で表示できる。
 → Pane[Dataset] (UI)
 例: `SourceVaultMailSearchIndexView["Zoom", "MBox"->"univ", "SortBy"->"Date", "SortOrder"->"Desc"]`
 
@@ -196,9 +196,9 @@ agenda.json の Dismissed/NotebookCreated、または返信送信済み (`Source
 ## IMAP 取得
 
 ### SourceVaultMailFetchNew[mbox_String, opts]
-IMAP から新着のみ取得し snapshot 化して store に保存する。RecordId で既存と重複排除する。既定は LLM 処理なし。
-→ Association `<|Status, MBox, ...|>`
-Options: "Period" -> Automatic ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> (実IMAP=Python imaplib, 注入可), "Inferencer" -> (実LLM=LM Studio, 注入可), "Persist" -> True, "MaxEmails" -> Automatic
+IMAP から新着のみ取得し snapshot 化して store に保存する。RecordId で既存と重複排除する (Overwrite->True なら同一 RecordId も再取得・上書き)。既定は LLM 処理なし。取込完了後 PostFetchHooks を実行し各フックの戻り値を結果に載せる (フック失敗は fetch を壊さない)。
+→ Association `<|Status, MBox, Fetched, New, Stored, Overwritten, Duplicates, Processed, ProcessMode, PostFetchHooks|>`
+Options: "Period" -> "Latest" ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> Automatic (Automatic はアカウントの "AuthMethod" を $SourceVaultMailSourceProviders で解決して使う。未登録/該当プロバイダ無しなら実IMAP=Python imaplib。関数を直接渡せば注入・headless テスト可), "Inferencer" -> Automatic (実LLM=LM Studio, 注入可), "Persist" -> True, "MaxEmails" -> Automatic, "Overwrite" -> False (True で同一 RecordId の既存メールも再取得し上書き)
 
 ### SourceVaultRegisterPostFetchHook[name_String, f]
 SourceVaultMailFetchNew の取り込み完了時に呼ぶフック `f[mbox, fetchResult]` を登録する。フック失敗は fetch を壊さない。
@@ -223,7 +223,7 @@ Options: "MBox" -> Automatic (文字列でその mbox に限定), "DateFrom" -> 
 例: `Length[SourceVaultMailDerivedPending["MBox"->"univ", "DateFrom"->{2026,6,1}, "DateTo"->{2026,6,30}]]`
 
 ### SourceVaultMailInferDerived[mailspec_Association]
-mailspec (date/subject/from/to/cc/body) からローカル LLM で派生を推論する (優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン。Deadline は ISO 文字列または Missing["None"]。
+mailspec (date/subject/from/to/cc/body) からローカル LLM で派生を推論する (優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン。Deadline は ISO 文字列または Missing["None"]。$SourceVaultMailGroundingGate が True (既定) なら出力を SourceVaultMailDerivedGroundingCheck にかけ、未接地は1回再試行のうえなお未接地なら `<|Status->"Error", Reason->"UngroundedOutput"|>` を返す (保存しない)。
 → Association `<|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|>`
 
 > **受信者ベースの決定的 privacy フロア (defense-in-depth)**: snapshot に派生を適用する際、LLM 推論 PrivacyLevel に **受信者(To/Cc)由来の下限**を `Max` で additive 適用する。**オーナーが直接の To/Cc 受信者・非 bulk・少数宛 (≤ 4 名)** のメール = 個人/小グループ通信とみなし `PrivacyLevel` を `$SourceVaultMailPersonalPrivacyFloor` (既定 0.6) 以上に保証する (LLM が個人メールの privacy を下げ過ぎて cloud gate を漏れるのを防ぐ)。ML/一斉配信はオーナーが To/Cc に入らず (position=Bulk)・bulk/多数宛は対象外 (floor 0.0)。フロアは privacy を**上げるだけ** (高い LLM 値は下げない)。`$SourceVaultMailPersonalPrivacyFloor = 0.0` で無効化。owner 未設定時は無効。
@@ -240,11 +240,11 @@ Options: "MBox" -> Automatic (文字列でその mbox に限定 / Automatic=ロ�
 ### SourceVaultMailAddSummaries[mbox_String, period_:"Latest", opts]
 mbox の指定期間を SourceVaultMailEnsureLoaded でロードしてから SourceVaultInferMailDerivedBatch で一括生成・保存する。EnsureLoaded とバッチを内包する正準エントリポイント (外部 WolframScript ジョブへ退避してもロードから自己完結)。**「<mbox> の<期間>メールにサマリーを追加」はこの1関数で完結する** — 直接 EnsureLoaded+InferMailDerivedBatch を組まないこと。period は "Latest"/n日/{年,月}/{年,月,日}/"YYYYMM"/"YYYY" を受ける (「6月」= 当年なら "202606" または {2026,6})。
 → Association `<|Status, MBox, Period, Loaded, Batch|>`
-Options: "Limit" -> Infinity, "Persist" -> True
+Options: "Limit" -> Infinity, "Persist" -> True, "Refresh" -> None (None=未処理のみ / "MissingCategory"=分類未生成の処理済みも再推論 / "Ungrounded"=保存済みサマリーがそのメールに接地していない処理済みを再推論 / All=全件), "DateFrom" -> Automatic, "DateTo" -> Automatic (既定 Automatic=期間で絞らない)
 例: `SourceVaultMailAddSummaries["univ", "202606"]`  (univ の 2026 年 6 月メールに一括サマリー)
 
 ### SourceVaultRegisterMailspecEnricher[name_String, f]
-LLM へ渡す mailspec を拡張する enricher を登録する。`f[mailspec, snapshot]` が変更後の mailspec を返す。非該当/失敗時は mailspec をそのまま返す。Derived.DerivedEnrichment に名前が記録される。
+LLM へ渡す mailspec を拡張する enricher を登録する (Cerezo.wl 等の拡張用)。`f[mailspec, snapshot]` が変更後の mailspec を返す。非該当/失敗時は mailspec をそのまま返す。Derived.DerivedEnrichment に名前が記録される。取り込み・保存レコード形式には影響せず、未登録なら完全素通し。
 → (副作用)
 
 ### SourceVaultUnregisterMailspecEnricher[name_String]
@@ -253,6 +253,15 @@ mailspec enricher の登録を解除する。
 
 ### SourceVaultMailspecEnrichers[]
 → List[String] 登録済み mailspec enricher 名のリスト。
+
+### SourceVaultMailDerivedGroundingCheck[snapshot_Association] / [mailspec_Association, summary_String]
+生成サマリーがそのメール自身 (subject/from/to/cc/body) の実文に接地しているかを、アンカー語 (5文字以上の英字固有名詞等) の出現率から決定論的に判定する。2026-08-19 に発生した LM Studio KV/prompt cache 混入 (Coursera 宛メールのサマリーが別件 SIG26 メールの内容になった事故) を検出するための書き込み関所。
+→ Association `<|Grounded, Score(アンカー語の実文中出現率), Found, Total, HeaderHit, LatinHits, ForeignAnchors(本文に無い6文字以上の英字固有名詞=部分混入の兆候), Suspect, Reason|>`
+
+### SourceVaultMailUngroundedDerived[opts]
+処理済み snapshot のうち保存済みサマリーが接地判定に落ちるもの (空サマリー / Rejected / 他メールの内容 / Suspect=本文に無い固有名詞を含む) を返す。再推論は `SourceVaultMailAddSummaries[mbox, period, "Refresh"->"Ungrounded"]` を使う。
+→ List[Association]
+Options: "MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic
 
 ## 優先度計算
 
@@ -287,7 +296,7 @@ Options: "Persist" -> True
 
 ### SourceVaultRegisterMailAccount[assoc_Association, opts]
 IMAP アカウント設定を登録し vault config に保存する。パスワードは保存せず CredKey (SystemCredential 名) のみ記録する。同一 MBox は上書き。
-必須キー: "MBox", "CredKey", "Server"。任意: "User", "Email", "Port" (既定 993)。
+必須キー: "MBox", "CredKey", "Server"。任意: "User", "Email", "Port" (既定 993)。さらに provider 拡張キー "AuthMethod", "TenantId", "ClientId" (任意、文字列として保存。指定しない従来の IMAP アカウントは今までどおり)。"AuthMethod" を指定すると SourceVaultMailFetchNew は $SourceVaultMailSourceProviders 経由でそのプロバイダを既定 MessageSource に使う (例: SourceVault_mailgraph.wl の "Graph" = Microsoft 365/Exchange Online)。
 → Association `<|Status, MBox|>`
 Options: "Persist" -> True
 例: `SourceVaultRegisterMailAccount[<|"MBox"->"imai", "User"->"k.imai@...", "Email"->"k.imai@...", "CredKey"->"sv-imap-imai", "Server"->"imap.example.com"|>]`
@@ -343,7 +352,7 @@ Options: "ReplyAll" -> False (True で Cc 含む), "Body" -> "" (本文初期値
 Options: "ReplyAll" -> False (True で全員に返信), "Translate" -> False (True で日本語で書いて元メールの言語に翻訳して送る。元メールの言語とフォーマル度を LLM で判定し、返信文の敬体/常体も加味する。旧 maildb replyMailTr 踏襲)
 
 ### SourceVaultMailSend[spec_Association]
-メールを送信する。spec=`<|"To","Cc","Bcc","Subject","Body","Attachments"->{パス...}|>`。Bcc 省略時、$SourceVaultMailSendBccSelf が True ならオーナー主アドレス宛に控えを送る。$SourceVaultMailSignature が非空なら本文末尾に署名付加。存在しない添付は送信前に弾く。Mathematica の SendMail 設定が必要。
+メールを送信する。spec=`<|"To","Cc","Bcc","Subject","Body","Attachments"->{パス...}|>`。Bcc 省略時、$SourceVaultMailSendBccSelf が True ならオーナー主アドレス宛に控えを送る。$SourceVaultMailSignature が非空なら本文末尾に署名付加。存在しない添付は送信前に弾く。Mathematica の SendMail 設定 (Preferences > Internet Connectivity > Mail Settings) が必要。
 → Association `<|Status->"Sent", To, Cc, Bcc, Subject, Attachments|>` または `<|Status->"Error", Reason, ...|>`
 
 ### SourceVaultMailView[query_String:"", opts]
@@ -385,7 +394,7 @@ Options: "ShowLinked" -> False (True で既リンクも表示), "Limit" -> 200
 - **privacy 契約** を `iSVMDRegisterPrivacyContracts` でロード時登録 (mail 系 18 関数)。新しい関数を足すときはここに追加し、`test codes/SourceVault_privacy_gate.wls` を通すこと。
 
 ### SourceVaultMarkConfidentialViewCells[nb_:EvaluationNotebook[]]
-まず privacy 層の未処理マーク (透かし由来・テキスト非依存) を流し込み、続いて notebook 内の生データ出力セル (SourceVaultMailView / MailDataset / MailSearchSummary / MailSearchIndex(View) / SourceVaultFindTodos 等) を含まれる最大 PL で機密マークする。メールは Derived.PrivacyLevel、Todo はソースノートブックの Publishable による。クラウド LLM (閾値0.5) へはスキーマのみ、ローカル LLM (閾値1.0) へは全文。検出対象は共有レジストリで拡張される (Eagle View 等)。後半のテキスト走査は補助層 (privacy 層が無い環境と取りこぼしの掃除用)。
+まず privacy 層の未処理マーク (透かし由来・テキスト非依存) を流し込み、続いて notebook 内の生データ出力セル (SourceVaultMailView / MailDataset / MailSearchSummary / MailSearchIndex(View) / SourceVaultFindTodos 等) を含まれる最大 PL で機密マークする。メールは Derived.PrivacyLevel、Todo はソースノートブックの Publishable による (全 Public なら 0.0=マークせず、1つでも非 Public なら 1.0)。クラウド LLM (閾値0.5) へはスキーマのみ、ローカル LLM (閾値1.0) へは全文。サマリー/予定表 (SourceVaultUpcomingSchedule 等) はクラウド安全なので対象外。検出対象は共有レジストリで拡張される (SourceVault_eagle.wl ロード時は Eagle View/Dataset/Search/GeoView も対象)。nb 省略時は EvaluationNotebook[]。
 → List[Association] `{<|"Cell"->idx, "PrivacyLevel"->pl|>, ...}`
 
 ### SourceVaultMailMarkViewCells[nb_:EvaluationNotebook[]]
@@ -422,6 +431,62 @@ import 時のメール本文 PL 既定 (fail-safe)。maildb の privacy フィ�
 型: Real, 初期値: 0.6
 個人宛メール (オーナーが直接の To/Cc・非 bulk・少数宛 ≤4 名) の派生 PrivacyLevel 下限。LLM 推論が個人メールの PL を下げ過ぎて cloud gate を漏れるのを防ぐ決定的フロア。0.0 で無効化。owner 未設定時は無効。
 
+### $SourceVaultMailSourceProviders
+型: Association (AuthMethod文字列 -> Function[{mbox, srcOpts}, records]), 初期値: `<||>`
+fetch-source provider レジストリ。登録アカウントの "AuthMethod" に一致する provider があれば SourceVaultMailFetchNew はそれを既定 MessageSource として使う (無ければ実IMAP=Python imaplib)。SourceVault_mailgraph.wl が "Graph" (Microsoft 365/Exchange Online, Microsoft Graph API) を登録する。
+
+### $SourceVaultMailDerivedAdjuster
+型: None | Function[{snapshot, derived}, derived2], 初期値: None
+分類フィードバックの弱結合フック (rule 11)。推論直後・優先度再計算直後、Derived.UserOverride 適用前に derived association へ適用される。SourceVault_mailfeedback.wl がここに自身を登録し、ユーザー修正 (ルール+学習済み事後確率) を将来の分類へ反映する。未登録時は maildb の動作に一切影響しない。
+
+### $SourceVaultMailGroundingGate
+型: True | False, 初期値: True
+True で SourceVaultMailInferDerived の出力を SourceVaultMailDerivedGroundingCheck にかけ、未接地なら1回再試行、なお未接地なら `<|Status->"Error", Reason->"UngroundedOutput"|>` を返し保存しない。
+
+### $SourceVaultMailGroundingMinRatio
+型: Real, 初期値: 0.15
+接地判定のアンカー語出現率の下限。件名/差出人に5文字以上の英字アンカーが無ければ比率に関係なく接地とみなす。
+
+### $SourceVaultMailInferMaxAttempts
+型: Integer, 初期値: 3
+SourceVaultMailInferDerived が未接地な答えに対し同一呼び出し内で試す LLM 呼び出し回数の上限 (LM Studio 側の混入は確率的なので再試行が効く)。
+
+### $SourceVaultMailDerivedMaxAttempts
+型: Integer, 初期値: 6
+未接地で失敗した snapshot をバッチ間で再試行する回数の上限。到達すると Summary 空・DerivedGrounding "Rejected" で Processed に閉じ、却下文面は Derived.DerivedRejected に残る。
+
+### $SourceVaultMailLLMFreshContext
+型: True | False, 初期値: True
+True でメール派生の LM Studio 要求の先頭に毎回異なる request-id 行を置き cache_prompt:false を付け、サーバ側 prompt cache (LCP 類似度による slot 再利用) を回避する。False で従来動作。
+
+### $SourceVaultMailLLMNoThinkPrefill
+型: Automatic | True | False, 初期値: Automatic
+メール派生の LM Studio 要求を /v1/completions + ChatML 非思考 prefill (`<think>\n\n</think>`) で送るか。Automatic はモデル名に qwen を含むか不明なら使う / True=常に / False=従来の chat 経路。推論1000-5000 tokenを省いて1通数十秒にする。completions が失敗/書式外なら chat へ自動フォールバック。
+
+### $SourceVaultMailLLMMaxTokens
+型: Integer, 初期値: 512
+prefill 経路 (/v1/completions) の max_tokens。
+
+### $SourceVaultMailLLMPromptTokenBudget
+型: Integer, 初期値: 4000
+メール派生 LLM プロンプト全体 (指示+ヘッダ+本文) の推定トークン上限。超過分は本文末尾を切る。LM Studio (llama.cpp) の評価バッチサイズ (n_batch=2048) を超えるプロンプトは qwen35系ハイブリッドモデルで前の要求の内容を答える (2026-08-19実測: 2118まで正常/2197以上混入)。サーバ側で n_batch を上げたら合わせて上げる。
+
+### $SourceVaultMailLLMPromptTokenHardMax
+型: Integer, 初期値: 4500
+サーバが報告した prompt_tokens の上限。超えた要求の答えは捨て、本文を比例縮小して1回だけ送り直す (推定器の誤差対策)。
+
+### $SourceVaultMailLLMReanchor
+型: True | False, 初期値: False
+True でメール派生プロンプト末尾に「このメールの件名・差出人を再確認し、他のメールを混ぜるな」行を付け、LM Studio (qwen35 ハイブリッド) が前要求の状態で答える混入を recency で抑える (2026-08-19実測 24/24正答; 無しだと長文で混入)。
+
+### $SourceVaultMailLLMBodyMaxChars
+型: Integer, 初期値: 12000
+メール派生 LLM プロンプトに入れる本文の上限文字数 (超過分は省略マーカー)。不可視文字 (\p{Cf}/U+034F 等) 除去・空白圧縮後に適用。保存 body は不変。
+
+### $SourceVaultMailLLMURLTailChars
+型: Integer, 初期値: 32
+LLM プロンプト内の URL を (scheme を除き) 先頭何文字残して残り (24文字以上のトラッキング尾部) を … に置換するか。0 で無効。
+
 ### $SourceVaultMailConfigRoot
 型: String, 初期値: PrivateVault/config
 IMAP アカウント設定の保存ルート。テストで上書き可能。
@@ -436,11 +501,11 @@ IMAP アカウント設定の保存ルート。テストで上書き可能。
 
 ### $SourceVaultMailViewMaxRows
 型: Integer | All, 初期値: 25
-SourceVaultMailView 等が一度に描画する最大行数。Windows 版 FrontEnd の描画負荷対策。All で無制限。
+SourceVaultMailView 等が一度に描画する最大行数。Windows 版 FrontEnd の描画負荷対策 (Pane スクロール + Dataset ページング前提)。All で無制限。
 
 ### $SourceVaultMailViewColumnWidths
 型: Association (列 ID -> 幅), 初期値:
-`<|"Act"->8, "Opens"->3, "Replied"->3, "Date"->13, "Pri"->4, "Sec"->4, "Cat"->5, "Deadline"->12, "Subject"->26, "From"->14, "Summary"->40|>`
+`<|"Act"->10, "Opens"->3, "Replied"->3, "Resolved"->3, "Date"->13, "Pri"->4, "Sec"->4, "Cat"->5, "Deadline"->12, "Subject"->26, "From"->14, "Summary"->40|>`
 
 **行アクションは 1 列目 ("Act") にまとめる**（MailView = ✉ 本文 / 📎 添付 / ↩ 返信、
 SearchIndexView = ✉ 本文 / スレ スレッド窓）。Dataset に `ItemSize` を渡すと

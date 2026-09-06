@@ -46,7 +46,11 @@ SourceVaultSlideDeckRegister::usage =
   "Id・DeckFile・SecondsPerSlide・StartSlide・EndSlide・NarrationInstructions・\n" <>
   "Event・Author・Date・PrivacyLevel (既定 0.0)・TalkMarkdown を持つ Association。\n" <>
   "talk はコンパイル済みシナリオ (<|Opening, Closing, Slides|>) で、与えると\n" <>
-  "talks/<id>.json へ、TalkMarkdown があれば talks/<id>.md へ保存する。";
+  "talks/<id>.json へ、TalkMarkdown があれば talks/<id>.md へ保存する。\n" <>
+  "再登録 (同じデッキで押し直し) は前回のエントリを土台にし、今回与えた\n" <>
+  "(空でない) 値だけを上書きする。前回エントリの特定は Id > DeckFile > SlideURL なので\n" <>
+  "タイトルを直しても別エントリにならない。\"Merge\" -> False で完全差し替え。\n" <>
+  "戻り値には RegistryStatus (Created|Updated) と ChangedKeys が付く。";
 
 SourceVaultSlideDeckUnregister::usage =
   "SourceVaultSlideDeckUnregister[idOrTitle] は登録を削除する。";
@@ -247,12 +251,71 @@ iSDNormalizeEntry[entryIn_Association] := Module[{e = entryIn, id},
   e["UpdatedAtUTC"] = iSDUTCNow[];
   KeyDrop[e, {"TalkMarkdown"}]];
 
+(* ---------------- 再登録 (同じデッキで「登録」を押し直したとき) ----------------
+   前回のエントリを土台にし、今回実際に与えられた値だけを上書きする
+   (直したところだけが直る)。未記入の項目や、登録簿側でただ一度
+   設定した項目 (StartSlide / EndSlide など) を再登録で落とさないため。
+
+   前回エントリの特定は Id > DeckFile > SlideURL。タイトルを直しただけで
+   別エントリが増えないよう、Id (タイトル由来) が外れてもデッキファイルと
+   配信 URL でも引く。Id を明示したときだけはそれが唯一の鍵。 *)
+
+iSDPathKey[p_] := If[StringQ[p] && StringTrim[p] =!= "",
+  ToLowerCase[StringReplace[StringTrim[p], "\\" -> "/"]], ""];
+
+iSDExplicitId[entry_Association] := With[{v = Lookup[entry, "Id", ""]},
+  If[StringQ[v] && StringTrim[v] =!= "", StringTrim[v], None]];
+
+iSDFindPrior[entries_List, incoming_Association, id_String] := Module[{f, deck, url},
+  f = SelectFirst[entries, ToString[Lookup[#, "Id", ""]] === id &, None];
+  If[AssociationQ[f], Return[f]];
+  If[iSDExplicitId[incoming] =!= None, Return[None]];
+  deck = iSDPathKey[Lookup[incoming, "DeckFile", ""]];
+  If[deck =!= "",
+    f = SelectFirst[entries, iSDPathKey[Lookup[#, "DeckFile", ""]] === deck &, None];
+    If[AssociationQ[f], Return[f]]];
+  url = StringTrim[ToString[Lookup[incoming, "SlideURL", ""]]];
+  If[url =!= "",
+    f = SelectFirst[entries,
+      StringTrim[ToString[Lookup[#, "SlideURL", ""]]] === url &, None];
+    If[AssociationQ[f], Return[f]]];
+  None];
+
+(* 空文字列・空リスト・ Null は「今回は指定していない」= 前回の値を残す *)
+iSDSuppliedQ[v_] := Which[
+  v === Null || v === None || v === Automatic || MissingQ[v], False,
+  StringQ[v], StringTrim[v] =!= "",
+  ListQ[v], v =!= {},
+  True, True];
+
+iSDChangedKeys[entry_Association, prior_] := If[! AssociationQ[prior], {},
+  DeleteCases[
+    Select[Union[Keys[entry], Keys[prior]],
+      Lookup[entry, #, Null] =!= Lookup[prior, #, Null] &],
+    "UpdatedAtUTC"]];
+
+Options[SourceVaultSlideDeckRegister] = {"Merge" -> True};
+
 SourceVaultSlideDeckRegister[entry_Association] :=
   SourceVaultSlideDeckRegister[entry, None];
 
-SourceVaultSlideDeckRegister[entryIn_Association, talk_] := Module[
-  {entry, entries, id, talkFile, talkJSON, markdown},
-  entry = iSDNormalizeEntry[entryIn];
+SourceVaultSlideDeckRegister[entry_Association, opts__Rule] :=
+  SourceVaultSlideDeckRegister[entry, None, opts];
+
+SourceVaultSlideDeckRegister[entryIn_Association,
+    talk : Except[_Rule | _RuleDelayed], OptionsPattern[]] := Module[
+  {entry, entries, prior, baseId, changed, id, talkFile, talkJSON, markdown,
+   talkChanged = False},
+  entries = iSDReadRegistry[];
+  baseId = iSDNormalizeEntry[entryIn]["Id"];
+  prior = If[TrueQ[OptionValue["Merge"]],
+    iSDFindPrior[entries, entryIn, baseId], None];
+  entry = iSDNormalizeEntry[
+    If[AssociationQ[prior],
+      Join[KeyDrop[prior, {"UpdatedAtUTC"}],
+        Select[KeyDrop[entryIn, {"Id"}], iSDSuppliedQ],
+        <|"Id" -> ToString[Lookup[prior, "Id", baseId]]|>],
+      entryIn]];
   If[entry["Title"] === "",
     Return[Failure["SlideDeckTitleRequired",
       <|"MessageTemplate" -> "発表タイトル (Title) は必須です。"|>]]];
@@ -265,6 +328,14 @@ SourceVaultSlideDeckRegister[entryIn_Association, talk_] := Module[
   markdown = Lookup[entryIn, "TalkMarkdown", None];
   If[StringQ[markdown] && StringTrim[markdown] =!= "",
     talkFile = FileNameJoin[{iSDTalkDirectory[], id <> ".md"}];
+    (* 原稿はエントリの外 (talks/<id>.md) なので、変わったかをここで見る *)
+    talkChanged = ! FileExistsQ[talkFile] ||
+      With[{old = Quiet[Check[
+          Import[talkFile, "Text", CharacterEncoding -> "UTF-8"], None]]},
+        (* Import["Text"] は末尾改行を落とすので、改行だけの差で変更扱いにしない *)
+        ! StringQ[old] ||
+          StringTrim[StringReplace[old, "\r\n" -> "\n"]] =!=
+            StringTrim[StringReplace[markdown, "\r\n" -> "\n"]]];
     Quiet @ Check[
       Export[talkFile, markdown, "Text", CharacterEncoding -> "UTF-8"], Null];
     entry["TalkFile"] = FileNameJoin[{"talks", id <> ".md"}]];
@@ -276,12 +347,17 @@ SourceVaultSlideDeckRegister[entryIn_Association, talk_] := Module[
     If[entry["SlideCount"] === Null,
       With[{n = Length @ Lookup[talk, "Slides", {}]},
         If[n > 0, entry["SlideCount"] = n]]]];
-  entries = iSDReadRegistry[];
-  entries = Append[Select[entries, Lookup[#, "Id", ""] =!= id &], entry];
+  changed = iSDChangedKeys[entry, prior];
+  If[AssociationQ[prior] && TrueQ[talkChanged], AppendTo[changed, "Talk"]];
+  (* 並びを崩さずに差し替える (新規は末尾へ) *)
+  entries = If[AnyTrue[entries, ToString[Lookup[#, "Id", ""]] === id &],
+    Replace[entries, e_Association /; ToString[Lookup[e, "Id", ""]] === id :> entry, {1}],
+    Append[entries, entry]];
   If[iSDWriteRegistry[entries] === $Failed,
     Failure["SlideDeckRegistryWriteFailed",
       <|"MessageTemplate" -> "登録簿を書き込めませんでした。", "Path" -> iSDRegistryFile[]|>],
-    entry]];
+    Join[entry, <|"RegistryStatus" -> If[AssociationQ[prior], "Updated", "Created"],
+      "ChangedKeys" -> changed|>]]];
 
 SourceVaultSlideDeckUnregister[query_String] := Module[{entry, entries},
   entry = SourceVaultSlideDeckLookup[query];

@@ -14,7 +14,7 @@ SourceVaultInferMailDerivedBatch が事前計算)を**索引だけ**で読む(�
 を除外)→ ③プライバシーゲート(派生 PrivacyLevel > "MaxPrivacyLevel" を除外、PL 欠落は 1.0
 扱い= fail-safe)→ ④スレッド集約+解決済み除外(スレッド最新メールより後の解決があれば
 そのスレッド全体をスキップ; interaction.json の RepliedAt / agenda.json の Dismissed・
-NotebookCreated)→ ⑤**オーナー宛て判定**(未解決スレッド内を新しい順に走査し、最初に閾値
+NotebookCreated・TodoCreated)→ ⑤**オーナー宛て判定**(未解決スレッド内を新しい順に走査し、最初に閾値
 $SourceVaultMailAgendaDirectionThreshold=0.7 以上になったメールをスレッド代表として採用。
 To ∋ owner address → 1.0、To ∋ org address → 0.6、不足時のみ遅延 snapshot probe:
 Cc ∋ owner → 0.7 に引き上げ、OrgTo → 0.6 に引き上げ、本文冒頭に宛名パターン(既定「今井」)が
@@ -38,10 +38,10 @@ Options: "Mails"/"Interactions"/"Resolutions"/"SnapshotProbe"(すべて Automati
 
 ## 解決状態機械 (R9-5)
 
-Pending → Done(Replied | NotebookCreated | Dismissed)。返信は既存 maildb の返信ノートブック
+Pending → Done(Replied | NotebookCreated | TodoCreated | Dismissed)。返信は既存 maildb の返信ノートブック
 送信で interaction.json に RepliedAt が自動記録され、次回から消える。何もしなければ残る。
 
-### SourceVaultMailAgendaResolve[recordId, "Dismissed"|"NotebookCreated", opts] → <|Status, RecordId, State|>
+### SourceVaultMailAgendaResolve[recordId, "Dismissed"|"NotebookCreated"|"TodoCreated", opts] → <|Status, RecordId, State|>
 解決を `<mailStoreRoot>/agenda.json`(Dropbox 共有・内容最小化=RecordId のみ、件名/本文なし、
 UTF-8 単一エンコード+アトミック rename で保存)へ記録。
 Options: "NotebookPath" -> None。
@@ -83,6 +83,17 @@ TaggingRules→{"SourceVault"→{"CloudPublishable"→False}} を明示宣言し
 PL 1.0 fail-safe だが原則を明示)。スタイルシートは "SourceVault default.nb"。
 Options: "Directory"(Automatic→Global`$onWork), "Open"(True→SystemOpen),
 "Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject)。
+
+### SourceVaultMailAgendaInheritTodo[recordId, opts] → <|Status, TodoId, RecordId|>
+本文/プロジェクトノートを作るほどではない小タスク用に、SourceVault_todo 層へ**スタンドアロン
+TODO**を作成してメールを継承する(Inherit の軽量版)。件名+推定 Deadline を引き継ぎ、
+Source->"mail" + MailRecordId(逆参照)+メールの派生 PrivacyLevel を TODO に持たせる。
+SourceVault_todo が未ロード(SourceVaultNewTodo 未定義)なら Status->"Failed",
+Reason->"TodoLayerUnavailable" を返す(弱結合、mailagenda は SourceVault_todo より先にロード
+されるため Symbol[] 経由の実行時解決で orphan symbol を避ける)。成功時は agenda.json に
+TodoCreated を記録(アジェンダから消える)し、$SourceVaultMailAgendaEventSink へ
+<|Type→"MailInheritedByTodo",RecordId,TodoId,At|> を emit。
+Options: "Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject)。
 
 ### SourceVaultMailForNotebook[nbPath | NotebookObject] → recordId | Missing[...]
 継承ノートのメタデータ MailRecordId を**非評価**で読み(NotebookStatus セル優先、なければ

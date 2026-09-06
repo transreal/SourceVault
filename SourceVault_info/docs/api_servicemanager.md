@@ -97,6 +97,7 @@ Options: "MailAllowlist" -> {} (許可するメールアドレスリスト), "Ex
 detached WolframScript service を起動する。メイン Mathematica 終了後も service process は heartbeat を更新し続ける。
 → `<|"Status", "ServiceId", "PID", "RuntimeDir"|>`
 Options: "Kind" -> "heartbeat" (サービス種別), "HeartbeatIntervalSeconds" -> 1, "PackageRoot" -> Automatic
+生成される `run.wls` は起動時に以下を順にロードする: SourceVault_core, _crypto, _lexical, _searchindex, _kb, _diagnostics, _issues, _slidedeck, _servicemanager, _webingest, _contracts, _packageapi, _mcp, _llmlog, _autotrigger, _mining, ClaudeOrchestrator_turnwiki(欠落時 fail-soft)。よって service kernel 内では WLMCP・autotrigger・mining 等の機能も利用可能。main kernel の current roots は snapshot として run.wls に注入される(`InjectedRootHash` で検証可能)。
 
 ### SourceVaultStopService[serviceId, opts]
 Stop command を queue に入れ、必要なら pid 検証後に kill する。scheduled task も削除する。
@@ -176,6 +177,27 @@ detached service process 側の runner entrypoint。生成された `run.wls` �
 ### SourceVaultServiceRuntimeDir[serviceId] → String | Failure
 service の runtime directory を返す。パス構成: `<CoreRoot>/runtime/<MachineTag>/services/<serviceId>`。machine tag は `$MachineName` を英数・`-`・`_` 以外を `-` に置換したもの。マシン固有状態を machine 層で namespacing し Dropbox 共有 vault でも別マシンと衝突しない。`runtime/locks` はクロスマシン排他のため共有のまま。
 
+### SourceVaultServiceInteractiveLease[opts] → Association | Failure
+「いま低遅延の応答が要る対話クライアントが居る」ことを service へ知らせる lease
+(runtime dir の `interactive.lease.json`)を張り直す。lease が生きている間、service loop は
+長時間の保守フック(llmlog ingest / diagnostics ingest / Cane anomaly / capbroker prune /
+TurnWiki 維持 / reference rollup)を見送り、`commands/` の処理だけを回す。
+service loop は単一スレッドなので、保守フックが走っている間 `commands/` は一切読まれない。
+実測(2026-09-04): Cane anomaly tick が上限 300s を焼いている間に VRCRealtime の
+`SlideDeckLookup` が 60s のタイムアウトに落ち、登録済みの発表が始まらなかった。保守 tick は
+冪等・間隔駆動なので後回しにできるが、対話クライアントはできない — その優先順位を表す。
+見送られたフックは `last*Abs` を進めないので、lease が切れた次の tick で即座に発火する
+(保守は遅れるだけで飛ばない)。
+Options: "ServiceId" -> Automatic(`$SourceVaultMCPServiceId`)、"Seconds" -> 120(TTL。10-600 に clip)、
+"Holder" -> "Interactive"(名乗り)、"Release" -> True(即時解放 = ファイル削除)。
+TTL は短く、保持者が張り直し続ける前提(VRCRealtime の broker は 30 秒ごと)。保持者が落ちれば
+TTL 経過で自動的に切れるので、stale な lease が保守を永久に止めることはない。
+鮮度判定は lease ファイルの更新時刻で行う(プロセス跨ぎの時刻文字列比較を持ち込まない)。
+→ `<|"Status" -> "Held" | "Released", "ServiceId", "Path", "TTLSeconds"|>`
+
+### SourceVaultServiceInteractiveLeaseActiveQ[opts] → True | False
+対話 lease が生きているかを返す。Options: "ServiceId"。
+
 ### $SourceVaultStreamSweepIntervalSeconds
 型: Number, 初期値: 300
 service loop が `SourceVaultReleaseFileStreams[]` を呼び vault 配下の開きっぱなし stream (Abort/TimeConstrained 打ち切りによるリーク) を強制 Close する間隔秒。開いたハンドルは Dropbox 同期を止め conflicted copy の原因になる。
@@ -253,6 +275,9 @@ Options: "ServiceId" -> $SourceVaultMCPServiceId
 ### SourceVaultMCPStatus[opts] → Association
 MCP の状態と公開 URL を返す。`"Running"` は実到達性(/health 接続成功)。`"ProxyState"` / `"ProxyPidAlive"` は pid ベース。両者が食い違う場合(PidAlive だが Running 偽)は stale/再利用 pid を示す。
 Options: "ServiceId" -> $SourceVaultMCPServiceId
+
+### claudecode CLI MCP 自己登録(内部動作, 2026-07-04)
+パッケージロード時、SourceVault MCP は claudecode の package-neutral CLI MCP レジストリ(`ClaudeRegisterCLIMCPServer`)へ自己登録される(claudecode は SourceVault に依存しない弱参照)。`SourceVaultMCPRunningQ` が真の間だけ `/sv/mcp` の URL(+トークンがあれば `X-SourceVault-Token` ヘッダ)を返し、停止中は None(CLI は MCP なし)。headless `claude --print` は対話承認できないため、pre-allow される read-only tool のみが有効: `sourcevault_catalog/search/get/commit_log/directives/fs_list/fs_read/web_search/request_access/access_status/oops_status/oops_search_threads/oops_thread/mail_status/mail_search_threads/mail_thread`。deposit/workflow_write 等の書き込み系ツールは含まれない。
 
 ## Wolfram AgentTools MCP 集約(WLMCP、プロセス席 3→2 統合)
 

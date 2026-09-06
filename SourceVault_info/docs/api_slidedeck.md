@@ -4,6 +4,7 @@ Service-loadable constraint: no FrontEnd/Notebook/NBAccess/UI dependency, no dep
 Privacy: every entry declares `PrivacyLevel` at registration (default 0.0 = public). Readers treat a missing/non-numeric level as 1.0 (fail-closed). Entries with `PrivacyLevel >= $SourceVaultSlideDeckReleaseCeiling` (default 0.5) have their narration withheld (`talkWithheld -> True`, `talk -> Null`, URL omitted) from `SourceVaultSlideDeckPresentationSpec`. `DeckFile` is a local absolute path and is never included in payloads.
 Storage layout: root/`registry.json` (all entries) + root/`talks/<id>.json` (compiled scenario) + root/`talks/<id>.md` (optional raw narration markdown, if `TalkMarkdown` was given at registration). JSON is written/read via `ExportByteArray`/`ReadByteArray` with `"RawJSON"` (never `ExportString`, which mangles UTF-8 on Japanese Windows) and short retries (5x, 0.05s pause) to tolerate transient Dropbox-sync lock failures.
 Title matching: normalized (NFKC, lowercased, letters/digits only) bigram-Jaccard/substring scoring via `SourceVaultSlideDeckMatchScore`, with a hard rule that trailing-digit mismatches (e.g. "31" vs "30") never match. Lookup threshold is 0.34.
+Re-registration: pushing "register" again for the same talk merges onto the prior entry instead of forking a new one — see `SourceVaultSlideDeckRegister`'s `"Merge"` option.
 
 ### $SourceVaultSlideDeckRoot
 型: String | Automatic, 初期値: Automatic
@@ -16,12 +17,14 @@ Upper bound (exclusive) on `PrivacyLevel` for narration to be released to extern
 ### SourceVaultSlideDeckRoot[] → String
 Returns the absolute registry directory path, creating it if missing.
 
-### SourceVaultSlideDeckRegister[entry] → Association | Failure
-### SourceVaultSlideDeckRegister[entry, talk] → Association | Failure
-Upserts a talk entry into the registry (matched/replaced by `Id`). `entry` is an `Association` with keys:
+### SourceVaultSlideDeckRegister[entry, opts]
+### SourceVaultSlideDeckRegister[entry, talk, opts]
+Upserts a talk entry into the registry. `entry` is an `Association` with keys:
 Title (String, required), SlideURL (String, required, must start with "http://" or "https://"), Aliases (list of String, default {}), Id (String, default: derived from normalized Title, or an 8-char hash if Title is empty), DeckFile (local path, not exposed in payloads), SecondsPerSlide (Real, default 25.), StartSlide (Integer >= 1, default 1), EndSlide (Integer >= 1 or Null, default Null), SlideCount (Integer >= 0 or Null; auto-filled from `talk`'s Slides count if Null and `talk` given), NarrationInstructions (String, default ""), Event, Author, Date (String, freeform), PrivacyLevel (Real, default 0.0), TalkMarkdown (String; if non-empty, saved verbatim to talks/<id>.md and referenced as entry["TalkFile"]).
-`talk` (optional, 2nd arg) is a compiled scenario `<|"Opening"->String, "Closing"->String, "Slides"->{<|"Slide"->Integer,"Title"->String,"Seconds"->Real|Null,"Text"->String|>...}|>` (lowercase key aliases "opening"/"closing"/"slides"/"slide"/"title"/"seconds"/"text" also accepted); saved to talks/<id>.json, and entry gets `TalkURI -> "sv://slidetalk/<id>"`.
-Returns the normalized stored entry Association, or `Failure["SlideDeckTitleRequired",...]` / `Failure["SlideDeckURLRequired",...]` / `Failure["SlideDeckRegistryWriteFailed",...]`.
+`talk` (optional, 2nd arg) is a compiled scenario `<|"Opening"->String, "Closing"->String, "Slides"->{<|"Slide"->Integer,"Title"->String,"Seconds"->Real|Null,"Text"->String|>...}|>` (lowercase key aliases "opening"/"closing"/"slides"/"slide"/"title"/"seconds"/"text" also accepted); saved to talks/<id>.json, entry gets `TalkJSON -> "talks/<id>.json"` and `TalkURI -> "sv://slidetalk/<id>"`.
+→ Association | Failure
+Options: "Merge" -> True (re-registration finds the prior entry — matched by Id if an explicit Id was given, else by DeckFile path, else by SlideURL — and merges: fields kept from the prior entry are overwritten only by keys actually supplied this call with a non-empty value (`iSDSuppliedQ`: non-empty String, non-empty List, or any non-Null/None/Automatic/Missing value), so retitling alone does not fork a new entry. "Merge" -> False replaces the matched-by-Id entry wholly, or creates a fresh one)
+Returns the normalized stored entry Association joined with `RegistryStatus -> "Created"|"Updated"` and `ChangedKeys -> {key...}` (keys whose value differs from the prior entry; includes "Talk" if TalkMarkdown text differs from the file on disk), or `Failure["SlideDeckTitleRequired",...]` / `Failure["SlideDeckURLRequired",...]` / `Failure["SlideDeckRegistryWriteFailed",...]`.
 例: SourceVaultSlideDeckRegister[<|"Title"->"計算と自然集会31","SlideURL"->"https://example.com/talk31.mp4","PrivacyLevel"->0.|>, <|"Opening"->"...","Closing"->"...","Slides"->{<|"Slide"->1,"Text"->"..."|>}|>]
 
 ### SourceVaultSlideDeckUnregister[idOrTitle_String] → Association | Missing
