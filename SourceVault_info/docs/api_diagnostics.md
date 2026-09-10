@@ -147,22 +147,38 @@ workflow / saved-prompt リスト先頭用のコンパクトな framed status ba
 本 kernel 内で System` シンボルを shadow しているシンボルを列挙する。すなわち、built-in と同じ短名を持つ Ctx`Name（Ctx != System`）で、$ContextPath 上で Ctx が System` より前にあるもの（$ContextPath は順に検索される。$Context / Global`（最後）は built-in を shadow しない）。この状態ではノートブック中の `Name` が Ctx`Name に解決され（Front End では赤表示）、built-in のオプション / 関数が黙って効かなくなる。典型的原因は他パッケージ内に書かれた `GitHubREST`MaxItems` のような修飾参照で、parse 時にそのシンボルが生成される（`Dataset[..., MaxItems -> ...]` を壊した実例）。
 → `<|"Name", "Context", "Active", "Defined"|>` のリスト（健全なら空。"Defined" が False なら偶発生成された空シンボル）
 Options: "Contexts" -> Automatic | {ctx..} (検査対象コンテキスト), "IncludeInactive" -> False (System` より後ろのコンテキストにある同名シンボルも列挙)
-診断プローブ "system-symbol-shadow" として登録済み（非空なら Degraded, 直近スキャン結果を $ContextPath キーで 600 秒キャッシュ）。修正はソースの修飾参照を削除して kernel 再起動するか、SourceVaultRepairShadowedSystemSymbols[] を実行（再起動不要）。
+診断プローブ "system-symbol-shadow" として登録済み（非空なら Degraded, 直近スキャン結果を $ContextPath キーで 600 秒キャッシュ）。修正はソースの修飾参照を削除して kernel 再起動するか、SourceVaultRepairShadowedSystemSymbols[] を実行（再起動不要）。永続化されたファイル/キャッシュ内のトークンは SourceVaultShadowScanFiles[] で検出し SourceVaultShadowSanitizeFile[] / SourceVaultShadowSanitizeNotebook[] で書き換える。
 
 ### SourceVaultRepairShadowedSystemSymbols[opts] → Association
 SourceVaultShadowedSystemSymbols[] が列挙する、System` built-in を shadow している「定義を持たない偶発シンボル」を Remove[] し、kernel 再起動なしで built-in を復旧する（例: `Dataset[..., MaxItems -> ...]` や Front End の赤色表示が次の評価で回復）。定義を持つシンボルは既定では削除せず "KeptDefined" として報告する。
 → `<|"Removed", "KeptDefined", "Failed"|>`
-Options: "IncludeDefined" -> False (True で定義済みシンボルも削除対象に含める)
-Repair だけでは根本原因（ソース中の修飾参照）は直らない。SourceVaultShadowWatchLog[] で生成元ファイルを確認し、そこの修飾参照を削除すること。
+Options: "IncludeDefined" -> False (True で定義済みシンボルも削除対象に含める), "IncludeInactive" -> False (True で System` より後ろのコンテキストにある同名の空シンボルも削除対象。built-in には無害だが Front End は赤表示のまま)
+Repair はセッション内の症状のみを直す。根本原因は SourceVaultShadowWatchLog[] の "File" / "Stack" で特定する（"Stack" はヒット時点の評価スタック: Import/BinaryDeserialize/Get なら永続化された WXF/Put キャッシュが shadow を再生成している可能性がある）。ソース中の修飾参照を削除するか、永続キャッシュそのものを SourceVaultShadowSanitizeFile / SourceVaultShadowSanitizeNotebook で書き換えること。
+
+### SourceVaultShadowScanFiles[path | {paths..}, opts] → List
+notebook / パッケージファイル / Put・WXF キャッシュ（ディレクトリを渡すと *.nb, *.m, *.wl, *.wls, *.wxf, *.mx を再帰探索）を、永続化された shadow シンボル（built-in と同名の完全修飾トークン Ctx`Name, 例: 評価済み Dataset 出力セル内の `GitHubREST`MaxItems`）についてバイトレベルのトークン検索でスキャンする。評価は一切行わずシンボルも生成しない。
+→ `<|"File", "Symbol", "Context", "Name", "Count", "Active"|>` のリスト。"Active" -> True は当該 context が現在の $ContextPath 上で System` より前にあること（= そのファイルをロード/表示すると shadow が再生成される）を意味する。"Active" -> False（OutputSizeLimit`Skeleton 等）は WL 内部由来で無害。
+Options: "Names" -> Automatic (走査対象を特定の short name に限定)
+
+### SourceVaultShadowSanitizeFile[file_String, opts] → Association | Failure
+SourceVaultShadowScanFiles が検出した永続 shadow トークンを file 内で書き換える（Ctx`Name -> Name）。テキストファイル（.nb/.m/.wl/.wls）はトークン部分以外バイト完全一致で書き換え、.wxf は長さを考慮したバイト列書き換え（再 Import で検証、非圧縮 WXF のみ対応）。既定で書き換え前に `<file>.shadowbak-<timestamp>` バックアップを作成。既定では Active なトークンのみ書き換える。Front End で開いているノートブックは Failure["NotebookOpen"]（代わりに SourceVaultShadowSanitizeNotebook を使う）。.mx（DumpSave）は Failure["Unsupported"]。
+→ `<|"File", "Replaced" -> <|token -> count|>, "Backup"|>`
+Options: "Contexts" -> Automatic (Active なトークンのみ; {ctx..} で明示指定または All), "Backup" -> True (False でバックアップをスキップ), "Names" -> Automatic (対象 short name を限定)
+
+### SourceVaultShadowSanitizeNotebook[nbObject, opts] → Association
+### SourceVaultShadowSanitizeNotebook[opts] → Association
+Front End 上で開いている（省略時は EvaluationNotebook[] の）ノートブックを in-place で消毒する: 永続 shadow シンボルを含むセル（典型例: `"Meta" -> <|GitHubREST`MaxItems -> ...|>` を保持する Dataset 出力セル）を NotebookRead/NotebookWrite で System` シンボルへ書き換え、続けて kernel を SourceVaultRepairShadowedSystemSymbols で修復する。スキャンはメモリ上のノートブックに対して行うため未保存の汚染出力にも対応。書き換え後はノートブックを保存すること。
+→ `<|"Notebook", "Cells" -> 書き換えセル数, "Symbols"|>`
+Options: "Contexts" -> Automatic, "Names" -> Automatic (意味は SourceVaultShadowSanitizeFile と同じ)
 
 ### SourceVaultShadowWatchStart[] → "Installed" | "AlreadyInstalled" | "SkippedForeignNewSymbolHook"
-$NewSymbol フックをインストールし、System` built-in を即座に shadow するシンボル生成（生成先 ctx が現在の $ContextPath 上で System` より前）をリアルタイム検知する。検知時は SourceVaultShadowWatchLog[] に生成元ファイル（$InputFileName; 空文字なら対話/実行時評価、例えば LLM 生成コード）付きで記録し、shadow probe のキャッシュを無効化して SourceVaultShadowWatchStart::sysshadow warning を即時発行する。Private` / Global` / off-path context での生成は silent（WL 自身の paclet ロードが off-path context に作る同名シンボルを誤検知しないため）。$NewSymbol が空なら Get[] 時に自動インストール済み。既存の無関係な $NewSymbol フックは絶対に上書きしない。
+$NewSymbol フックをインストールし、System` built-in を即座に shadow するシンボル生成（生成先 ctx が現在の $ContextPath 上で System` より前）をリアルタイム検知する。検知時は SourceVaultShadowWatchLog[] に生成元ファイル（$InputFileName; 空文字なら対話/実行時評価、例えば LLM 生成コード）と、そのヒット時点の評価スタック見出し（"Stack"; Import/BinaryDeserialize/Get なら永続化された WXF/Put キャッシュが原因、ToExpression なら生成コード評価が原因、等の特定に使う）付きで記録し、shadow probe のキャッシュを無効化して SourceVaultShadowWatchStart::sysshadow warning を即時発行する。Private` / Global` / off-path context での生成は silent（WL 自身の paclet ロードが off-path context に作る同名シンボルを誤検知しないため）。$NewSymbol が空なら Get[] 時に自動インストール済み。既存の無関係な $NewSymbol フックは絶対に上書きしない。
 
 ### SourceVaultShadowWatchStop[] → "Stopped"
 shadow watch を無効化し、（自分がインストールしたものであれば）$NewSymbol フックを解除する。
 
 ### SourceVaultShadowWatchLog[] → List
-本 kernel で記録された shadow-watch ヒットを返す: `<|"Symbol", "File", "Date"|>` のリスト（新しい順は末尾, 上限 200 件）。"File" -> "" は対話/実行時評価（例: LLM 生成コード）による生成を意味し、パッケージファイルのロードではない。
+本 kernel で記録された shadow-watch ヒットを返す: `<|"Symbol", "File", "Stack", "Date"|>` のリスト（新しい順は末尾, 上限 200 件）。"File" -> "" は対話/実行時評価（例: LLM 生成コード）による生成を意味し、パッケージファイルのロードではない。"Stack" はヒット時点の評価スタック見出し（構造的ヘッドは除去、連続重複は畳み込み、直近フレームを最大30件保持）で、原因特定に使う（Import/BinaryDeserialize/Get なら永続キャッシュが原因の可能性）。
 
 ## Polling Tick
 

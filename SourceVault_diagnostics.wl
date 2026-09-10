@@ -56,6 +56,9 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultShadowWatchStart",
   "SourceVault`SourceVaultShadowWatchStop",
   "SourceVault`SourceVaultShadowWatchLog",
+  "SourceVault`SourceVaultShadowScanFiles",
+  "SourceVault`SourceVaultShadowSanitizeFile",
+  "SourceVault`SourceVaultShadowSanitizeNotebook",
   "SourceVault`SourceVaultDiagnosticsLightweightDoctor",
   "SourceVault`SourceVaultDiagnosticsTick",
   "SourceVault`SourceVaultDiagnosticsStartTick",
@@ -281,10 +284,14 @@ EMPTY symbols currently shadowing System` built-ins (as listed by \
 SourceVaultShadowedSystemSymbols[]), so the built-ins work again WITHOUT a kernel \
 restart (e.g. Dataset[..., MaxItems -> ...] and the red Front End coloring recover \
 on the next evaluation). Symbols that carry definitions are kept and reported \
-under \"KeptDefined\" unless \"IncludeDefined\" -> True. Returns \
-<|\"Removed\", \"KeptDefined\", \"Failed\"|>. Repair alone does not fix the \
-ORIGIN: check SourceVaultShadowWatchLog[] for the creating file and remove the \
-qualified Ctx`Name reference there.";
+under \"KeptDefined\" unless \"IncludeDefined\" -> True. \"IncludeInactive\" -> True \
+also removes the EMPTY same-name symbols in contexts after System` on the path \
+(Global` etc.: harmless for the built-in, but still colored red by the Front End). \
+Returns <|\"Removed\", \"KeptDefined\", \"Failed\"|>. Repair alone does not fix the \
+ORIGIN: check SourceVaultShadowWatchLog[] (\"File\" / \"Stack\") for the creating \
+file or code path and remove the qualified Ctx`Name reference there -- or \
+rewrite the persisted cache (WXF / Put file) that carries the symbol: a cache \
+written while a shadow was active re-creates it on every load.";
 
 SourceVaultShadowWatchStart::usage =
   "SourceVaultShadowWatchStart[] installs a $NewSymbol hook that catches the \
@@ -293,7 +300,9 @@ name as a built-in, created in a context that precedes System` on the current \
 $ContextPath (the system-symbol-shadow accident, e.g. a qualified \
 GitHubREST`MaxItems reference in LLM-generated code evaluated at runtime). \
 Each hit is recorded in SourceVaultShadowWatchLog[] with the creating file \
-($InputFileName; empty = interactive/runtime evaluation) and raises the \
+($InputFileName; empty = interactive/runtime evaluation) plus the evaluation-stack \
+heads at that moment (\"Stack\": Import/BinaryDeserialize/Get of a persisted cache, \
+ToExpression of generated code, the package function that ran it) and raises the \
 SourceVaultShadowWatchStart::sysshadow warning immediately, so the origin is \
 attributed at the moment it happens instead of being discovered later by the \
 probe. Creations in Private` / Global` / off-path contexts stay silent (WL's \
@@ -301,6 +310,44 @@ own paclets create System-named symbols in internal off-path contexts during \
 load; those never shadow). Auto-installed at load when $NewSymbol is free; \
 returns \"Installed\" | \"AlreadyInstalled\" | \"SkippedForeignNewSymbolHook\" \
 (an unrelated existing $NewSymbol hook is never clobbered).";
+
+SourceVaultShadowScanFiles::usage =
+  "SourceVaultShadowScanFiles[path | {paths..}] scans notebooks / package files / \
+Put and WXF caches (directories recurse over *.nb, *.m, *.wl, *.wls, *.wxf, *.mx) \
+for PERSISTED shadow symbols: fully qualified tokens Ctx`Name whose short name is a \
+System` built-in (e.g. 'GitHubREST`MaxItems' inside a Dataset output cell that was \
+evaluated while that shadow was active). Byte-level token search: nothing is evaluated \
+and no symbol is created. Returns a list of <|\"File\", \"Symbol\", \"Context\", \"Name\", \
+\"Count\", \"Active\"|>; \"Active\" -> True means the context precedes System` on the \
+CURRENT $ContextPath, i.e. loading / rendering that file re-creates a live shadow \
+(the root cause of the recurring MaxItems shadow, 2026-09-09: the Front End sends the \
+embedded expression to the kernel each time it renders the stored output). Inactive hits \
+(OutputSizeLimit`Skeleton, ...) are WL internals and harmless. Option \"Names\" -> \
+{short names} restricts the search.";
+
+SourceVaultShadowSanitizeFile::usage =
+  "SourceVaultShadowSanitizeFile[file] rewrites the persisted shadow tokens found by \
+SourceVaultShadowScanFiles in file: Ctx`Name -> Name in text files (.nb / .m / .wl / \
+.wls, byte-exact except for the tokens), or a length-aware token rewrite of the WXF \
+byte stream for a .wxf cache (verified by re-import; compressed WXF is not supported). A backup <file>.shadowbak-<timestamp> is \
+written first (\"Backup\" -> False to skip). Only ACTIVE tokens are rewritten by \
+default (\"Contexts\" -> Automatic); pass \"Contexts\" -> {ctx..} to name the \
+contexts explicitly (e.g. in a headless kernel where github.wl is not loaded) or All. \
+A notebook that is open in the Front End is refused (Failure \"NotebookOpen\"): the \
+Front End would overwrite the file on save -- use SourceVaultShadowSanitizeNotebook for \
+those. .mx (DumpSave) files cannot be rewritten (Failure \"Unsupported\"). Returns \
+<|\"File\", \"Replaced\" -> <|token -> count|>, \"Backup\"|>.";
+
+SourceVaultShadowSanitizeNotebook::usage =
+  "SourceVaultShadowSanitizeNotebook[nbObject] (or [] for EvaluationNotebook[]) \
+sanitizes an OPEN notebook in place through the Front End: every cell whose stored \
+expression contains an active persisted shadow symbol (typically a Dataset output \
+cell holding \"Meta\" -> <|GitHubREST`MaxItems -> ...|>) is rewritten with the \
+System` symbol (NotebookRead / NotebookWrite), then the kernel is repaired \
+(SourceVaultRepairShadowedSystemSymbols). Save the notebook afterwards. The scan works \
+on the in-memory notebook, so unsaved poisoned outputs are covered too. Returns \
+<|\"Notebook\", \"Cells\" -> rewritten count, \"Symbols\"|>. Options: \"Contexts\", \"Names\" \
+as in SourceVaultShadowSanitizeFile.";
 
 SourceVaultShadowWatchStop::usage =
   "SourceVaultShadowWatchStop[] disables the shadow watch and releases the \
@@ -598,12 +645,17 @@ SourceVaultDiagnosticsRegisterProbe["system-symbol-shadow",
    no values at all, so removing only the empty ones is safe.
    ------------------------------------------------------------ *)
 
-Options[SourceVaultRepairShadowedSystemSymbols] = {"IncludeDefined" -> False};
+Options[SourceVaultRepairShadowedSystemSymbols] =
+  {"IncludeDefined" -> False, "IncludeInactive" -> False};
 
 SourceVaultRepairShadowedSystemSymbols[OptionsPattern[]] :=
   Module[{sh, incl = TrueQ[OptionValue["IncludeDefined"]],
       target, kept, removed = {}, failed = {}},
-    sh = SourceVaultShadowedSystemSymbols[];
+    (* "IncludeInactive": also the empty same-name symbols in contexts AFTER
+       System` on the path (Global` etc.). Those never break the built-in but
+       the Front End still colors the name red (duplicate on the path). *)
+    sh = SourceVaultShadowedSystemSymbols[
+      "IncludeInactive" -> TrueQ[OptionValue["IncludeInactive"]]];
     If[!ListQ[sh], Return[$Failed]];
     target = Select[sh, incl || !TrueQ[#Defined] &];
     kept = Select[sh, !incl && TrueQ[#Defined] &];
@@ -652,6 +704,32 @@ $iSVDiagShadowWatchLimit = 200;
    those never shadow anything and must stay silent. Load-time parse
    accidents whose context reaches the path only later are still caught by
    the 60 s probe above. *)
+(* evaluation-stack heads at the moment of a hit (computed only on a hit):
+   attributes runtime creations that carry no $InputFileName -- a WXF / Put
+   cache written while a shadow was active re-creates the shadow symbol on
+   every Import / BinaryDeserialize / Get (verified 2026-09-09: both
+   serializers persist the full context, both fire $NewSymbol), ToExpression
+   of LLM-generated code, Dynamic callbacks, ... Structural heads are
+   dropped, consecutive duplicates collapsed, innermost frames kept. *)
+$iSVDiagShadowStackNoise = {"System`CompoundExpression", "System`Module",
+  "System`Block", "System`With", "System`If", "System`Which", "System`Set",
+  "System`SetDelayed", "System`Function", "System`Map", "System`Scan",
+  "System`Do", "System`Table", "System`List", "System`Rule", "System`AppendTo",
+  "System`Quiet", "System`Check", "System`Association", "System`Part",
+  "System`Catch", "System`Throw", "System`Apply", "System`Composition",
+  "System`RuleDelayed", "System`Hold", "System`HoldComplete", "System`Sequence"};
+$iSVDiagShadowStackLimit = 30;
+
+iSVDiagShadowStackHeads[] :=
+  Quiet @ Check[
+    Module[{heads = Stack[], names},
+      names = Map[If[Head[#] === Symbol, Context[#] <> SymbolName[#], ToString[#]] &,
+        heads];
+      names = DeleteCases[names, Alternatives @@ $iSVDiagShadowStackNoise];
+      names = names //. {a___, x_, x_, b___} :> {a, x, b};
+      Take[names, -Min[Length[names], $iSVDiagShadowStackLimit]]],
+    {}];
+
 iSVDiagShadowWatchHook[name_String, ctx_String] :=
   If[TrueQ[$iSVDiagShadowWatchOn] &&
        ctx =!= "System`" && ctx =!= "Global`" &&
@@ -667,6 +745,7 @@ iSVDiagShadowWatchHook[name_String, ctx_String] :=
           AppendTo[$iSVDiagShadowWatchLog,
             <|"Symbol" -> ctx <> name,
               "File" -> If[StringQ[$InputFileName], $InputFileName, ""],
+              "Stack" -> iSVDiagShadowStackHeads[],
               "Date" -> DateString[]|>];
           If[Length[$iSVDiagShadowWatchLog] > $iSVDiagShadowWatchLimit,
             $iSVDiagShadowWatchLog =
@@ -702,6 +781,221 @@ SourceVaultShadowWatchLog[] :=
    alone. Covers every kernel that loads the SourceVault chain, so the next
    runtime-created shadow is attributed instead of rediscovered blind. *)
 Quiet @ SourceVaultShadowWatchStart[];
+
+(* ------------------------------------------------------------
+   Persisted-shadow scan / sanitize (2026-09-09).
+   ROOT CAUSE of the recurring MaxItems shadow (8/18, 8/26, 9/9): a
+   Dataset output cell evaluated while GitHubREST`MaxItems was active
+   (2026-08-18) stores its display metadata with the FULLY QUALIFIED
+   option symbol -- "Meta" -> <|GitHubREST`MaxItems -> {All, All}|> --
+   inside the notebook file. Every time the Front End renders that
+   output (opening the notebook, paging the table) the embedded
+   expression is sent to the kernel, the symbol is re-created, and,
+   github.wl being on $ContextPath, System`MaxItems is shadowed again.
+   $InputFileName is empty on that path, so the source grep and the
+   headless load-chain replay never see it. Put / WXF caches persist
+   symbols the same way (verified: both keep the full context, both
+   fire $NewSymbol on load).
+   Scan = byte-level token search (nothing evaluated, no symbol created);
+   sanitize = rewrite Ctx`Name -> Name in text files (closed notebooks,
+   packages) or re-serialize WXF, always leaving a backup. Open
+   notebooks go through the Front End (NotebookRead / NotebookWrite).
+   Only ACTIVE tokens (context before System` on the current path) are
+   rewritten by default: OutputSizeLimit`Skeleton and similar WL
+   internals are legitimate and must stay.
+   ------------------------------------------------------------ *)
+
+$iSVDiagShadowTokenRegex = "(?<![A-Za-z0-9$`])(?:[A-Za-z0-9$]+`)+[A-Za-z0-9$]+";
+$iSVDiagShadowScanPatterns = {"*.nb", "*.m", "*.wl", "*.wls", "*.wxf", "*.mx"};
+
+(* System short-name table shared with the watch hook *)
+iSVDiagShadowSysNameSet[] := (
+  If[!AssociationQ[$iSVDiagShadowWatchSysNames],
+    $iSVDiagShadowWatchSysNames = AssociationMap[True &,
+      DeleteDuplicates[Last[StringSplit[#, "`"]] & /@ Names["System`*"]]]];
+  $iSVDiagShadowWatchSysNames);
+
+iSVDiagShadowNameSet[Automatic] := iSVDiagShadowSysNameSet[];
+iSVDiagShadowNameSet[names_List] := AssociationMap[True &, Select[names, StringQ]];
+iSVDiagShadowNameSet[_] := iSVDiagShadowSysNameSet[];
+
+(* bytes <-> string by a Latin-1 round trip: every byte maps to exactly one
+   character and back, so binary (WXF) and any text encoding scan alike and
+   a text rewrite is written back byte-exact outside the replaced tokens. *)
+iSVDiagShadowReadText[file_String] :=
+  Quiet @ Check[ByteArrayToString[ReadByteArray[file], "ISO8859-1"], $Failed];
+
+iSVDiagShadowWriteText[file_String, text_String] :=
+  Module[{str = OpenWrite[file, BinaryFormat -> True]},
+    BinaryWrite[str, StringToByteArray[text, "ISO8859-1"]];
+    Close[str]];
+
+iSVDiagShadowExpandPaths[paths_List] :=
+  DeleteDuplicates @ Flatten @ Map[
+    Function[p, Which[
+      !StringQ[p], {},
+      DirectoryQ[p], FileNames[$iSVDiagShadowScanPatterns, p, Infinity],
+      FileExistsQ[p], {p},
+      True, {}]],
+    paths];
+
+(* qualified-symbol tokens of one text. Text (.nb / .m / .wl): tokens are
+   delimited by non-identifier characters. WXF ("8:" header): a symbol is
+   "s" + length byte + name and the NEXT token's type byte (a letter) follows
+   without any delimiter, so the text regex would read "MaxItemsf"; cut at
+   the stored length instead. Compressed WXF ("8C:") is not scanned. *)
+iSVDiagShadowTokens[text_String] :=
+  If[StringStartsQ[text, "8:"],
+    Select[
+      Cases[StringCases[text,
+          RegularExpression["s([\\x01-\\x7f])([A-Za-z0-9$`]+)"] :> {"$1", "$2"}],
+        ({l_, sym_} /; StringLength[sym] >= First[ToCharacterCode[l]]) :>
+          StringTake[sym, First[ToCharacterCode[l]]]],
+      StringMatchQ[#, RegularExpression["(?:[A-Za-z0-9$]+`)+[A-Za-z0-9$]+"]] &],
+    StringCases[text, RegularExpression[$iSVDiagShadowTokenRegex]]];
+
+(* token scan of one text; label = file name (or "<notebook>") *)
+iSVDiagShadowScanText[text_String, label_String, names_] :=
+  Module[{sysNames = iSVDiagShadowNameSet[names], path = $ContextPath, sysPos, toks},
+    sysPos = FirstPosition[path, "System`", {Infinity}][[1]];
+    toks = iSVDiagShadowTokens[text];
+    toks = Select[toks, Function[t, With[{parts = StringSplit[t, "`"]},
+      KeyExistsQ[sysNames, Last[parts]] && First[parts] =!= "System"]]];
+    Map[Function[pair, With[{tok = pair[[1]], name = Last[StringSplit[pair[[1]], "`"]]},
+      With[{ctx = StringDrop[tok, -StringLength[name]]},
+        <|"File" -> label, "Symbol" -> tok, "Context" -> ctx, "Name" -> name,
+          "Count" -> pair[[2]],
+          "Active" -> TrueQ[FirstPosition[path, ctx, {Infinity}][[1]] < sysPos]|>]]],
+      Tally[toks]]];
+
+Options[SourceVaultShadowScanFiles] = {"Names" -> Automatic};
+
+SourceVaultShadowScanFiles[paths : (_String | {___String}), OptionsPattern[]] :=
+  Module[{files = iSVDiagShadowExpandPaths[Flatten[{paths}]], names = OptionValue["Names"]},
+    Flatten @ Map[
+      Function[f, Module[{text = iSVDiagShadowReadText[f]},
+        If[StringQ[text], iSVDiagShadowScanText[text, f, names], {}]]],
+      files]];
+
+iSVDiagShadowSelectTargets[hits_List, ctxs_] := Switch[ctxs,
+  Automatic, Select[hits, TrueQ[#Active] &],
+  All, hits,
+  _, Select[hits, MemberQ[Flatten[{ctxs}], #Context] &]];
+
+(* is the file open in the Front End? (its save would overwrite our rewrite) *)
+iSVDiagShadowNotebookOpenQ[file_String] :=
+  $FrontEnd =!= Null && TrueQ @ Quiet @ Check[
+    AnyTrue[Notebooks[], Quiet @ Check[
+      ExpandFileName[NotebookFileName[#]] === ExpandFileName[file], False] &], False];
+
+iSVDiagShadowBackup[file_String] :=
+  Module[{bak = file <> ".shadowbak-" <>
+      DateString[{"Year", "Month", "Day", "Hour", "Minute", "Second"}]},
+    CopyFile[file, bak, OverwriteTarget -> True]; bak];
+
+(* whole-token replacement: never inside a longer identifier *)
+iSVDiagShadowTokenRule[tok_String, name_String] :=
+  RegularExpression["(?<![A-Za-z0-9$`])" <> StringReplace[tok, "$" -> "\\$"] <>
+    "(?![A-Za-z0-9$`])"] -> name;
+
+(* WXF: a symbol token is "s" + length byte + name, so rewrite the byte
+   stream with the corrected length. This is done on the bytes, not via
+   Import / ReplaceAll / Export: ReplaceAll never reaches Association KEYS
+   (exactly where the poisoned option symbol lives) and Import would
+   evaluate held code inside the cache. Names >= 128 bytes (2-byte varint)
+   are not handled (never a System name). *)
+iSVDiagShadowWXFTokenRules[targets_List] :=
+  Map[Function[t,
+      "s" <> FromCharacterCode[StringLength[t["Symbol"]]] <> t["Symbol"] ->
+      "s" <> FromCharacterCode[StringLength[t["Name"]]] <> t["Name"]],
+    Select[targets, StringLength[#Symbol] < 128 &]];
+
+iSVDiagShadowRewriteWXFText[text_String, targets_List] :=
+  StringReplace[text, iSVDiagShadowWXFTokenRules[targets]];
+
+(* in-kernel expression rewrite through the same byte path: handles keys and
+   held parts alike, evaluates nothing (BinarySerialize / BinaryDeserialize) *)
+iSVDiagShadowReplaceSymbols[expr_, targets_List] :=
+  Block[{$iSVDiagShadowWatchOn = False},
+    BinaryDeserialize[StringToByteArray[
+      iSVDiagShadowRewriteWXFText[
+        ByteArrayToString[BinarySerialize[expr], "ISO8859-1"], targets],
+      "ISO8859-1"]]];
+
+iSVDiagShadowSanitizeWXF[file_String, targets_List] :=
+  Module[{text = iSVDiagShadowReadText[file], check},
+    If[!StringQ[text] || !StringStartsQ[text, "8:"], Return[$Failed]];
+    iSVDiagShadowWriteText[file, iSVDiagShadowRewriteWXFText[text, targets]];
+    (* verify: the rewritten cache must still deserialize. Not Check[]: a
+       leftover shadow would fire ::sysshadow / ::shdw and Check would
+       misread those as failure *)
+    check = Block[{$iSVDiagShadowWatchOn = False}, Quiet @ Import[file, "WXF"]];
+    If[check === $Failed, Return[$Failed]];
+    SourceVaultRepairShadowedSystemSymbols[];
+    True];
+
+Options[SourceVaultShadowSanitizeFile] =
+  {"Contexts" -> Automatic, "Backup" -> True, "Names" -> Automatic};
+
+SourceVaultShadowSanitizeFile[file_String, OptionsPattern[]] :=
+  Module[{hits, targets, ext, text, new, bak = None, counts, r},
+    If[!FileExistsQ[file], Return[Failure["NotFound", <|"File" -> file|>]]];
+    If[iSVDiagShadowNotebookOpenQ[file],
+      Return[Failure["NotebookOpen", <|"MessageTemplate" ->
+        "`1` is open in the Front End; use SourceVaultShadowSanitizeNotebook[nbObject] or close it first.",
+        "MessageParameters" -> {file}, "File" -> file|>]]];
+    hits = SourceVaultShadowScanFiles[file, "Names" -> OptionValue["Names"]];
+    targets = iSVDiagShadowSelectTargets[hits, OptionValue["Contexts"]];
+    If[targets === {},
+      Return[<|"File" -> file, "Replaced" -> <||>, "Backup" -> None|>]];
+    ext = ToLowerCase[FileExtension[file]];
+    If[ext === "mx",
+      Return[Failure["Unsupported", <|"MessageTemplate" ->
+        "`1` is a DumpSave (.mx) file; regenerate it after repairing the kernel.",
+        "MessageParameters" -> {file}, "File" -> file,
+        "Symbols" -> targets[[All, "Symbol"]]|>]]];
+    If[TrueQ[OptionValue["Backup"]], bak = iSVDiagShadowBackup[file]];
+    counts = Association[(#Symbol -> #Count) & /@ targets];
+    If[ext === "wxf",
+      r = iSVDiagShadowSanitizeWXF[file, targets];
+      If[r === $Failed,
+        If[StringQ[bak], Quiet @ CopyFile[bak, file, OverwriteTarget -> True]];
+        Return[Failure["WXFRewriteFailed", <|"File" -> file, "Backup" -> bak,
+          "MessageTemplate" -> "`1`: rewritten WXF did not verify (compressed WXF is not supported); original restored from the backup.",
+          "MessageParameters" -> {file}|>]]],
+      text = iSVDiagShadowReadText[file];
+      If[!StringQ[text],
+        Return[Failure["ReadFailed", <|"File" -> file, "Backup" -> bak|>]]];
+      new = StringReplace[text, iSVDiagShadowTokenRule[#Symbol, #Name] & /@ targets];
+      iSVDiagShadowWriteText[file, new]];
+    <|"File" -> file, "Replaced" -> counts, "Backup" -> bak|>];
+
+Options[SourceVaultShadowSanitizeNotebook] = {"Contexts" -> Automatic, "Names" -> Automatic};
+
+SourceVaultShadowSanitizeNotebook[opts : OptionsPattern[]] :=
+  SourceVaultShadowSanitizeNotebook[EvaluationNotebook[], opts];
+
+iSVDiagShadowWXFText[expr_] := ByteArrayToString[BinarySerialize[expr], "ISO8859-1"];
+
+SourceVaultShadowSanitizeNotebook[nb_NotebookObject, OptionsPattern[]] :=
+  Module[{hits, targets, needles, done = 0},
+    Block[{$iSVDiagShadowWatchOn = False},   (* reading the cells re-creates the symbols; repaired below *)
+      (* in-memory scan (covers outputs produced since the last save) through
+         the WXF byte form: every non-System symbol is fully qualified there,
+         so the same token scan applies and nothing is evaluated *)
+      hits = iSVDiagShadowScanText[iSVDiagShadowWXFText[NotebookGet[nb]], "<notebook>",
+        OptionValue["Names"]];
+      targets = iSVDiagShadowSelectTargets[hits, OptionValue["Contexts"]];
+      If[targets === {},
+        Return[<|"Notebook" -> nb, "Cells" -> 0, "Symbols" -> {}|>]];
+      needles = iSVDiagShadowWXFTokenRules[targets][[All, 1]];
+      Scan[Function[c, Module[{expr = Quiet @ NotebookRead[c], text},
+          text = Quiet @ Check[iSVDiagShadowWXFText[expr], $Failed];
+          If[StringQ[text] && StringContainsQ[text, Alternatives @@ needles],
+            NotebookWrite[c, iSVDiagShadowReplaceSymbols[expr, targets]]; done++]]],
+        Cells[nb]]];
+    SourceVaultRepairShadowedSystemSymbols[];
+    <|"Notebook" -> nb, "Cells" -> done, "Symbols" -> targets[[All, "Symbol"]]|>];
 
 (* ------------------------------------------------------------
    License capacity (measured).

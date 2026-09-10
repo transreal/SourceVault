@@ -3174,26 +3174,88 @@ iSVFSWriteFile[pathIn_String, contentIn_] := Module[
 iSVFSWriteFile[_, ___] := <|"Status" -> "Denied", "Reason" -> "BadPath"|>;
 
 (* ---- Claude Directives listing (rules / skills / CLAUDE.md), read live ---- *)
-iSVFSDirectivesRoot[] := Module[{base},
+(* 2026-09-08: share the canonical root resolution with ClaudeDirectives when it
+   is loaded (weak coupling), so the MCP tool and the prompt builder can never
+   disagree about which "Claude Directives" is authoritative. *)
+iSVFSDirectivesRoot[] := Module[{base, r},
+  If[Length[Names["ClaudeDirectives`ClaudeResolveDirectiveRoot"]] > 0,
+    r = Quiet @ Check[ToExpression["ClaudeDirectives`ClaudeResolveDirectiveRoot"][Automatic], $Failed];
+    If[StringQ[r] && DirectoryQ[r], Return[r]]];
   base = If[ValueQ[Global`$packageDirectory] && StringQ[Global`$packageDirectory],
     Global`$packageDirectory, Directory[]];
   SelectFirst[{FileNameJoin[{base, "Claude Directives"}], FileNameJoin[{base, ".claude"}]},
     DirectoryQ, Missing["NoDirectivesRoot"]]];
 
-iSVFSFrontmatter[text_String] := Module[{m},
-  m = StringCases[text, StartOfString ~~ "---\n" ~~ Shortest[b__] ~~ "\n---" :> b, 1];
+(* Frontmatter: delegate to the canonical parser when ClaudeDirectives is
+   loaded; otherwise a local YAML subset that understands CRLF, block scalars
+   (`description: |` / `>`), and `- item` lists. The old one-line splitter
+   returned the literal "|" as the description for 11 skills. *)
+iSVFSFrontmatter[text_String] := Module[{t, m, lines, kvs = <||>, curKey = None,
+    curList = {}, blockKey = None, blockLines = {}, i, n, line, trimmed, kv, k, v},
+  If[Length[Names["ClaudeDirectives`ClaudeDirectivesParseFrontmatter"]] > 0,
+    m = Quiet @ Check[
+      ToExpression["ClaudeDirectives`ClaudeDirectivesParseFrontmatter"][text], $Failed];
+    If[AssociationQ[m] && AssociationQ[Lookup[m, "Frontmatter", None]],
+      Return[m["Frontmatter"]]]];
+  t = StringReplace[text, "\r\n" -> "\n"];
+  m = StringCases[t, StartOfString ~~ "---\n" ~~ Shortest[b___] ~~ "\n---" :> b, 1];
   If[m === {}, Return[<||>]];
-  Association @ Cases[StringSplit[First[m], "\n"],
-    l_ /; StringContainsQ[l, ":"] :> With[{kv = StringSplit[l, ":"]},
-      StringTrim[First[kv]] -> StringTrim[StringRiffle[Rest[kv], ":"]]]]];
+  lines = StringSplit[First[m], "\n", All];
+  n = Length[lines];
+  Do[
+    line = lines[[i]];
+    trimmed = StringTrim[line];
+    Which[
+      (* inside a block scalar: indented (or blank) lines belong to it *)
+      StringQ[blockKey] && (trimmed === "" || StringStartsQ[line, " " | "\t"]),
+        AppendTo[blockLines, trimmed],
+      (* list item under the current key *)
+      StringQ[curKey] && StringStartsQ[trimmed, "- "],
+        AppendTo[curList, StringTrim[StringDrop[trimmed, 2], "\"" | "'" | " "]],
+      trimmed === "", Null,
+      True,
+        If[StringQ[blockKey], kvs[blockKey] = StringRiffle[blockLines, "\n"];
+          blockKey = None; blockLines = {}];
+        If[StringQ[curKey] && curList =!= {}, kvs[curKey] = curList];
+        curKey = None; curList = {};
+        kv = StringSplit[line, ":", 2];
+        If[Length[kv] === 2,
+          k = StringTrim[kv[[1]]]; v = StringTrim[kv[[2]]];
+          Which[
+            StringMatchQ[v, RegularExpression["^[|>][+-]?\\d*$"]],
+              blockKey = k; blockLines = {},
+            v === "", curKey = k; curList = {},
+            True, kvs[k] = StringTrim[v, "\"" | "'"]]]],
+    {i, n}];
+  If[StringQ[blockKey], kvs[blockKey] = StringRiffle[blockLines, "\n"]];
+  If[StringQ[curKey] && curList =!= {}, kvs[curKey] = curList];
+  kvs];
 
-iSVFSDirectiveEntry[file_String, role_String] := Module[{text, fm, title},
+iSVFSDirectiveTier[fm_Association, name_String] := Module[{t},
+  t = Lookup[fm, "tier", Lookup[fm, "Tier", None]];
+  Which[
+    StringQ[t] && t =!= "", ToLowerCase[StringTrim[t]],
+    StringStartsQ[name, "evolved-turn-"], "evolved",
+    True, "guardrail"]];
+
+iSVFSDirectiveEntry[file_String, role_String] := Module[{text, fm, title, name, desc, models},
   text = Quiet @ Check[ByteArrayToString[ReadByteArray[file], "UTF-8"], ""];
   If[! StringQ[text], text = ""];
   fm = iSVFSFrontmatter[text];
-  title = First[StringCases[text, StartOfLine ~~ "# " ~~ t : Except["\n"] .. :> t, 1], Missing[]];
-  <|"role" -> role, "name" -> Lookup[fm, "name", FileBaseName[file]],
-    "description" -> Lookup[fm, "description", title],
+  title = First[StringCases[text, StartOfLine ~~ "# " ~~ t : Except["\n" | "\r"] .. :> t, 1], Missing[]];
+  (* CRLF rule files leave "\r" on every frontmatter value; strip it everywhere *)
+  fm = Map[If[StringQ[#], StringTrim[StringReplace[#, "\r" -> ""]], #] &, fm];
+  name = StringTrim[StringReplace[ToString @ Lookup[fm, "name", FileBaseName[file]], "\r" -> ""]];
+  desc = Lookup[fm, "description", title];
+  desc = If[StringQ[desc], StringTrim[StringReplace[desc, "\r" -> ""]], desc];
+  (* long block-scalar descriptions: first paragraph only for the listing *)
+  If[StringQ[desc] && StringLength[desc] > 600,
+    desc = StringTake[First[StringSplit[desc, "\n\n"], desc], UpTo[600]]];
+  models = Lookup[fm, "models", Missing[]];
+  <|"role" -> role, "name" -> name,
+    "description" -> desc,
+    "tier" -> If[role === "rule", iSVFSDirectiveTier[fm, name], Missing[]],
+    "models" -> If[ListQ[models] || StringQ[models], models, Missing[]],
     "uri" -> ("sv://file/" <> iSVURIEnc[iSVFSCanon[file]]),
     "path" -> file, "bytes" -> Quiet @ Check[FileByteCount[file], Missing[]]|>];
 
@@ -3212,6 +3274,54 @@ iSVFSDirectivesList[kindIn_:"all"] := Module[{root, kind, items, claudemd},
     If[FileExistsQ[claudemd], items["Root"] = {iSVFSDirectiveEntry[claudemd, "root"]}]];
   Join[<|"Status" -> "OK", "Root" -> root, "PrivacyLevel" -> 0.0,
     "Count" -> Total[Length /@ Values[items]]|>, items]];
+
+(* ---- one directive body by name (2026-09-08) ----
+   The on-demand half of the directive tool pair. Scoped to the canonical
+   directives root (never an arbitrary path), PL 0.0, so it is safe to expose
+   to cloud API models through the client-side tool loop where
+   sourcevault_fs_read (any allowed root) is not. *)
+If[! IntegerQ[$iSVFSDirectiveBodyMaxChars], $iSVFSDirectiveBodyMaxChars = 40000];
+
+iSVFSDirectiveBody[nameIn_, kindIn_:"any", maxCharsIn_:Automatic] := Module[
+  {root, name, kind, cands, file, text, maxc, fm, body, truncated = False},
+  root = iSVFSDirectivesRoot[];
+  If[! StringQ[root], Return[<|"Status" -> "NoDirectivesRoot"|>]];
+  name = StringTrim[ToString[nameIn]];
+  name = StringReplace[name, {".md" ~~ EndOfString -> "", "/SKILL" ~~ EndOfString -> ""}];
+  If[name === "" || StringContainsQ[name, ".." | "\\" | "/" | ":"],
+    Return[<|"Status" -> "Denied", "Reason" -> "BadName"|>]];
+  kind = ToLowerCase[ToString[kindIn]];
+  cands = Flatten[{
+    If[MemberQ[{"any", "rule", "rules"}, kind],
+      FileNameJoin[{root, "rules", name <> ".md"}], {}],
+    If[MemberQ[{"any", "skill", "skills"}, kind],
+      FileNameJoin[{root, "skills", name, "SKILL.md"}], {}],
+    If[MemberQ[{"any", "root"}, kind] && MemberQ[{"claude", "claude.md"}, ToLowerCase[name]],
+      FileNameJoin[{root, "CLAUDE.md"}], {}]}];
+  file = SelectFirst[cands, FileExistsQ, Missing[]];
+  (* rules are numbered: allow "80-package-operations" or just "package-operations" *)
+  If[MissingQ[file] && MemberQ[{"any", "rule", "rules"}, kind],
+    file = SelectFirst[
+      Quiet @ Check[FileNames["*-" <> name <> ".md", FileNameJoin[{root, "rules"}]], {}],
+      FileExistsQ, Missing[]]];
+  If[MissingQ[file], Return[<|"Status" -> "NotFound", "Name" -> name, "Kind" -> kind|>]];
+  text = Quiet @ Check[ByteArrayToString[ReadByteArray[file], "UTF-8"], $Failed];
+  If[! StringQ[text], Return[<|"Status" -> "ReadFailed", "Name" -> name|>]];
+  fm = iSVFSFrontmatter[text];
+  maxc = If[IntegerQ[maxCharsIn] && maxCharsIn > 0, Min[maxCharsIn, $iSVFSDirectiveBodyMaxChars],
+    $iSVFSDirectiveBodyMaxChars];
+  body = text;
+  If[StringLength[body] > maxc, body = StringTake[body, maxc]; truncated = True];
+  <|"Status" -> "OK", "Name" -> name,
+    "Kind" -> Which[StringContainsQ[file, FileNameJoin[{root, "rules"}]], "rule",
+      StringContainsQ[file, FileNameJoin[{root, "skills"}]], "skill", True, "root"],
+    "Tier" -> If[StringContainsQ[file, FileNameJoin[{root, "rules"}]],
+      iSVFSDirectiveTier[fm, FileBaseName[file]], Missing[]],
+    "Description" -> Lookup[fm, "description", Missing[]],
+    "Models" -> Lookup[fm, "models", Missing[]],
+    "Uri" -> ("sv://file/" <> iSVURIEnc[iSVFSCanon[file]]),
+    "Chars" -> StringLength[text], "Truncated" -> truncated,
+    "PrivacyLevel" -> 0.0, "Text" -> body|>];
 
 (* ---- sv://file/<abs-path> adapter (read-only; content in summary at PL 0.0) ---- *)
 iSVFileOwnsURIQ[parsed_Association] := Lookup[parsed, "Namespace", ""] === "file";
@@ -3743,11 +3853,19 @@ SourceVaultMCPTools[] := {
         "maxBytes" -> <|"type" -> "integer", "description" -> "Optional read cap in bytes; clamped to the server max."|>|>,
       "required" -> {"path"}|>|>,
   <|"name" -> "sourcevault_directives",
-    "description" -> "List Claude Directives (rules/, skills/, CLAUDE.md) with name, description and an sv://file URI for each, so CLI and API agents share the same directive set. Read live from the canonical Claude Directives directory. Use sourcevault_fs_read (or sourcevault_get on the sv://file URI) to fetch a directive's full text.",
+    "description" -> "List Claude Directives (rules/, skills/, CLAUDE.md) with name, description, tier (rules: safety | guardrail | procedure | style | evolved), model scope and an sv://file URI for each, so CLI and API agents share the same directive set. Read live from the canonical Claude Directives directory. Use sourcevault_directive_body (name) to fetch a directive's full text.",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
         "kind" -> <|"type" -> "string", "description" -> "rules | skills | root | all (default all)."|>|>,
       "required" -> {}|>|>,
+  <|"name" -> "sourcevault_directive_body",
+    "description" -> "Return the full text of ONE Claude Directive by name: a rule (e.g. '80-package-operations' or 'package-operations'), a skill (e.g. 'wolfram-general') or 'CLAUDE' (CLAUDE.md). Scoped to the canonical directives root only; cloud-safe (privacyLevel 0.0). Use after sourcevault_directives to read a directive that the system prompt listed by name only, before doing work it governs.",
+    "inputSchema" -> <|"type" -> "object",
+      "properties" -> <|
+        "name" -> <|"type" -> "string", "description" -> "Directive name (rule file stem, skill folder name, or CLAUDE)."|>,
+        "kind" -> <|"type" -> "string", "description" -> "rule | skill | root | any (default any)."|>,
+        "maxChars" -> <|"type" -> "integer", "description" -> "Optional cap on returned text (server max applies)."|>|>,
+      "required" -> {"name"}|>|>,
   <|"name" -> "sourcevault_commit_log",
     "description" -> "Get the commit history of one of THIS SYSTEM's packages (e.g. SourceVault, claudecode, github, NBAccess) as compact metadata: {sha, date, author, message} per commit. Answer 'what changed / what was added since <date>?', 'update history', 'changelog' questions with THIS -- do NOT try to run git yourself (the mirror folder has no .git; history lives in the GitHub API). Commit metadata only (no code bodies), cloud-safe (privacyLevel 0.0). Use since/until to bound the range.",
     "inputSchema" -> <|"type" -> "object",
@@ -4174,6 +4292,10 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
     "sourcevault_directives",
       Module[{o = iSVFSDirectivesList[Lookup[args, "kind", "all"]]},
         iSVRecordToolCall["sourcevault_directives", args, o]; iMCPJSONText[o]],
+    "sourcevault_directive_body",
+      Module[{o = iSVFSDirectiveBody[Lookup[args, "name", ""], Lookup[args, "kind", "any"],
+          Lookup[args, "maxChars", Automatic]]},
+        iSVRecordToolCall["sourcevault_directive_body", args, o]; iMCPJSONText[o]],
     "sourcevault_commit_log",
       Module[{o = SourceVaultPackageCommitLog[
           ToString @ Lookup[args, "package", ""],

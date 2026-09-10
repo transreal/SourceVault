@@ -83,12 +83,14 @@ SourceVault をロードすると、以下が自動的に有効になります�
 
 | 機能 | 内容 |
 |---|---|
-| コアサブファイルの自動ロード | `SourceVault_core.wl` / `SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_simrun.wl` / `SourceVault_searchindex.wl` / `SourceVault_searchview.wl` / `SourceVault_servicemanager.wl` / `SourceVault_webingest.wl` / `SourceVault_mcp.wl` / `SourceVault_llmlog.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / `SourceVault_workflowregistry.wl` / `SourceVault_knowledgehome.wl` / `SourceVault_cognition.wl` / `SourceVault_adjudication.wl` / `SourceVault_capbroker.wl` / `SourceVault_taint.wl` / `SourceVault_anomaly.wl` / `SourceVault_routine.wl` / `SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` / `SourceVault_todo.wl` を依存順に自動ロード |
-| Todo キャッシュ DB | `SourceVault_todo.wl` が todo 項目の正準キャッシュを提供 (`SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` からは弱結合)。各 todo record は `LastChanged` (最終セル変更時刻。対象セルの `CellChangeTimes` の最大値から算出した AbsoluteTime) を持ち、Done 化タイミングの推定やリマインドの起点 (anchor) として使われる。`LastChanged` を持たない旧 snapshot は `Missing["None"]` として読み取れる (additive フィールドのため再 index は不要) |
+| コアサブファイルの自動ロード | `SourceVault_core.wl` / `SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_simrun.wl` / `SourceVault_searchindex.wl` / `SourceVault_searchview.wl` / `SourceVault_servicemanager.wl` / `SourceVault_webingest.wl` / `SourceVault_mcp.wl` / `SourceVault_llmlog.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / `SourceVault_workflowregistry.wl` / `SourceVault_knowledgehome.wl` / `SourceVault_cognition.wl` / `SourceVault_adjudication.wl` / `SourceVault_capbroker.wl` / `SourceVault_taint.wl` / `SourceVault_anomaly.wl` / `SourceVault_routine.wl` / `SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` / `SourceVault_todo.wl` / `SourceVault_anonymize.wl` / `SourceVault_diagnostics.wl` を依存順に自動ロード |
+| Todo キャッシュ DB | `SourceVault_todo.wl` が todo 項目の正準キャッシュを提供 (`SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` からは弱結合)。各 todo record は `LastChanged` (最終セル変更時刻。対象セルの `CellChangeTimes` の最大値から算出した AbsoluteTime) を持ち、Done 化タイミングの推定やリマインドの起点 (anchor) として使われる。`LastChanged` を持たない旧 snapshot は `Missing["None"]` として読み取れる (additive フィールドのため再 index は不要)。標準ワークフロー (`SourceVaultTodos` / `SourceVaultNewTodo` / `SourceVaultTodoDone` 等) の詳細は後述の「Todo 管理 (SourceVault_todo)」節を参照 |
+| 匿名化 (declassification) 拡張 | `SourceVault_anonymize.wl` が canonicalization / KeyRing (NBAccess MAC KeyRef 上) / 衝突耐性 ID 式 (EntityID / SourceObjectID / SourceUnitID / DerivedUnitID) / 役割別 token (Subject / Item / Job / ResultSlot) + ReleaseHandle (CSPRNG) を提供。現時点では本文を読まない schema-only の `SourceVaultAnonymizationPlan` までが実装されており、高 PrivacyLevel の本文を実際に読んで匿名化する Execute 相当の関数は未実装 (grant gate の実装後に追加予定) |
+| SIEM / システム診断層 | `SourceVault_diagnostics.wl` が NBAccess / claudecode / ClaudeOrchestrator / サービスマネージャ横断の診断情報を集約する collector / store / doctor 層を提供 (Phase 0 最小コア)。詳細は「システム診断 / SIEM 基盤 (SourceVault_diagnostics)」節を参照 |
 | ローカル資産解決層 / 発表登録簿 / KB 層・対話 QA・音声会話層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_talkqa.wl` (KB の上に載る対話型 QA 層) / `SourceVault_oopsseed.wl` / `SourceVault_realtime.wl` (クラウド経路の音声会話。OpenAI Realtime を既定のマイク/スピーカーで使う。`SourceVault_voice.wl` と対になる層だが、依存は呼び出し時にだけ効くため、この位置での自動ロードで問題ない) を自動ロード |
 | Cane 認知支援基盤 (既定 observe-only) | `SourceVault_knowledgehome.wl` (Knowledge Home 閲覧・非破壊追記・位置づけ/近傍提案) / `SourceVault_cognition.wl` (認知系イベントの暗号化保存・Guard shadow・owner 入力支援) / `SourceVault_adjudication.wl` (複数 LLM 裁定コア + runnable driver) / `SourceVault_capbroker.wl` (capability broker・LLM boundary shadow/gate・観測設定の永続化) / `SourceVault_taint.wl` (入力信頼度評価・taint 伝播) / `SourceVault_anomaly.wl` (統計的異常検知、既定オフ)。いずれも既定は「判定を記録するだけ」(shadow/observe-only) で、明示的な owner 操作なしに送信をブロックしたり通知したりしない (詳細は後述の「Boundary Observation」コールアウトを参照) |
 | シミュレーション実行基盤 | `SourceVault_simrun.wl` がマシンプロファイル共有・GPU/CUDA サポート・サブカーネル burst 管理・SimulationRun 記録 (実行フォルダ + immutable snapshot の 2 層設計) を提供 (詳細は「シミュレーション実行基盤」節を参照) |
-| Claude Code セッションログ ingest | `SourceVault_llmlog.wl` が Claude Code のセッションログ (実行ログ) をソースとして取り込む機能を提供。`GitHubCommitLog` (コミット履歴) とは別種別として扱われる |
+| Claude Code セッションログ ingest | `SourceVault_llmlog.wl` が Claude Code のセッションログ (実行ログ) をソースとして取り込む機能を提供。`GitHubCommitLog` (コミット履歴) とは別種別として扱われる (詳細は「Claude Code セッションログの ingest」節を参照) |
 | 自動トリガスケジューラの自動起動 | Front End のメインカーネルでロードされたときに限り、`SourceVault_autotrigger.wl` のスケジューラを冪等に自動起動する (詳細は後述) |
 | PromptRouter 拡張の自動ロード | 同ディレクトリの `SourceVault_promptrouter.wl`（暗号・身元・メール群を含む）を自動ロード |
 | ワークフローレジストリの自動ロード | `SourceVault_workflowregistry.wl` を自動ロード（コード化ワークフローのオンデマンドローダ。`SourceVault_workflows/` 配下を解決） |
@@ -436,11 +438,85 @@ SourceVaultIngestWait[r, 90]   (* 最大 90 秒待つ *)
 
 ### Claude Code セッションログの ingest
 
-Claude Code の実行ログ (セッションログ) を `SourceVault_llmlog.wl` 経由でソースとして取り込むことができます。取り込まれたログは provider `"claudecode_sessions"` として扱われ、`SourceVaultSummaries` の横断検索に相乗りします。`GitHubCommitLog` (コミット履歴) や GitHub リポジトリ検索とは明確に区別される別種別のソースです。
+Claude Code の実行ログ（セッションログ）を `SourceVault_llmlog.wl` 経由でソースとして取り込むことができます。各 PC ローカルの transcript（JSONL、生ログは数百 MB に及ぶこともある）は machine-local で他 PC からは見えないため、本モジュールはセッションごとの**ダイジェスト**（メタデータ + bounded preview + ツール統計）を抽出し、`<CoreRoot>/rollup/claudecode_sessions/<MachineTag>/YYYY-MM.jsonl` へ append-only で集約します。取り込まれたログは provider `"claudecode_sessions"` として扱われ、`SourceVaultSummaries` の横断検索に相乗りします。`GitHubCommitLog`（コミット履歴）や GitHub リポジトリ検索とは明確に区別される別種別のソースです。
+
+#### セッションログの取り込み (ingest)
 
 ```mathematica
 SourceVaultIngestClaudeCodeLogs[]
+SourceVaultIngestClaudeCodeLogs["MaxAgeDays" -> 30, "Limit" -> 50]
 ```
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"DryRun"` | `False` | 実際には書き込まず対象だけ確認 |
+| `"MaxSessionsPerRun"` | `Automatic` | 無制限。1 回の実行で処理するセッション数の上限 |
+| `"MaxAgeDays"` | `180` | 何日前までのセッションを対象にするか（`All` で全期間） |
+| `"MaxFileMB"` | `200` | この容量を超える transcript はスキップ |
+
+戻り値: `<|"Status", "MachineTag", "Scanned", "Changed", "Ingested", "Skipped", "RollupDir", "PerSession"|>`。ingest は watermark で冪等かつ非破壊です。
+
+`SourceVaultIngestClaudeCodeLogs` はローカルの生ログ一式も増分でミラーします（内部で `SourceVaultMirrorClaudeCodeLogs[]` を呼ぶ。SourceVault store の外、`$SourceVaultClaudeCodeRawMirrorRoot`（既定 `Automatic` = `<CoreRoot の親>/claudecodelogs`。例: Dropbox の `udb/claudecodelogs`）に平のフォルダとして置かれるため、肥大化してもフォルダごとオフライン化するだけで SourceVault 側は破綻しません）。
+
+```mathematica
+SourceVaultMirrorClaudeCodeLogs[]
+SourceVaultMirrorClaudeCodeLogs["DryRun" -> True, "MaxFilesPerRun" -> 200]
+```
+
+`SourceVaultMirrorClaudeCodeLogs[]` はローカル `~/.claude/projects` の生ログ一式を `<mirror>/<MachineTag>/` へ増分コピーします（サイズ差分のみ・tmp+rename・非破壊）。オプション: `"DryRun"`（既定 `False`）/ `"MaxFilesPerRun"`（既定 `Automatic` = 無制限）。戻り値: `<|"Status", "MachineTag", "Scanned", "Copied", "CopiedBytes", "Skipped", "Deferred", "MirrorDir"|>`。
+
+`SourceVaultClaudeCodeLogStatus[]` はローカル走査対象と rollup 集約状況（`<|"LocalSessions", "UningestedSessions", "RollupByMachine", "RollupTotal", ...|>`）を返します。
+
+#### セッションの検索と取得
+
+```mathematica
+(* 全マシンの rollup から SessionId 毎に最新 1 件へ dedup したリスト (core、新しい順) *)
+SourceVaultClaudeCodeSessions["MachineTag" -> All, "Project" -> All, "Limit" -> 50]
+
+(* トークン単位 OR スコアリング (決定論 tie-break) で検索 (core / view) *)
+SourceVaultClaudeCodeSessionSearch["MCP proxy", "Limit" -> 20]
+SourceVaultClaudeCodeSessionSearchView["MCP proxy"]
+
+(* 1 件のダイジェストを取得 (見つからなければ Missing["NotFound"]) *)
+SourceVaultClaudeCodeSessionGet[sessionId]
+```
+
+`SourceVaultClaudeCodeSessionSearch` の `"Limit"` 既定は 20、`"MachineTag"` / `"Project"` はいずれも `All` が既定です。`SourceVaultClaudeCodeSessionSearchView` はこの結果の Dataset 表示版 (表示件数制限付き) です。
+
+#### 全文の表示 (transcript)
+
+digest は preview 止まりですが、生 transcript が現在の PC（ローカル）または他マシンの Dropbox ミラーに存在すれば、対話 turn の形に整形して読めます。
+
+```mathematica
+SourceVaultClaudeCodeSessionTranscript[sessionId]
+SourceVaultClaudeCodeSessionTranscript[sessionId, "IncludeMeta" -> True]
+
+SourceVaultClaudeCodeSessionView[sessionId, "MaxTurns" -> 80, "MaxCharsPerTurn" -> 2000]
+```
+
+`SourceVaultClaudeCodeSessionTranscript` はローカル → ミラー（他マシン分）の順で生ログを探し、見つからなければ digest の preview にフォールバックします。戻り値は `<|"SessionId", "Source" -> "local"|"mirror"|"digest", "Path", "Turns" -> {<|"Role","At","Text","Tools"|>..}|>`。`"IncludeMeta"`（既定 `False`）で system-reminder 等のメタ turn を残すかどうかを指定できます。`SourceVaultClaudeCodeSessionView` はヘッダ（Title/マシン/期間/要約）に続けて対話を整形表示するビュー版で、`"MaxTurns"`（既定 80）・`"MaxCharsPerTurn"`（既定 2000）を受け付けます。
+
+#### LLM 要約
+
+```mathematica
+SourceVaultClaudeCodeSessionSummary[sessionId]
+SourceVaultClaudeCodeSessionSummary[sessionId, "ForceRefresh" -> True, "MaxLength" -> 200]
+
+SourceVaultClaudeCodeSummarizeSessions[]
+```
+
+`SourceVaultClaudeCodeSessionSummary[sessionId]` はセッションダイジェストを LLM で 2〜3 文に要約し、共有 sidecar（`<CoreRoot>/rollup/claudecode_sessions/_summaries/`）にキャッシュします。キャッシュが Current（digest の LineCount 一致）なら再生成しません。ルーティングは、digest の privacy が 0.49 以下（通常のコード作業ログ）なら `$ClaudeDocModel` を主経路として直接呼び、失敗時のみ local ladder へフォールバックします。privacy が 0.49 を超える場合は local-first のままです。
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"ForceRefresh"` | `False` | キャッシュを無視して再生成 |
+| `"MaxLength"` | `300` | 要約の目標文字数 |
+| `"Model"` | `Automatic` | 明示指定で主経路を上書き |
+| `"FallbackToCloud"` | `"Deny"` | local ladder 内での cloud fallback 可否 |
+
+戻り値: `<|"Status" -> "OK"|"Failed"|.., "Summary", "Cached", "GeneratedBy", "SessionId", ...|>`。
+
+`SourceVaultClaudeCodeSummarizeSessions[]` は要約が未生成、または digest 更新により陳腐化したセッションをまとめて処理するバッチ版です。
 
 > 補助 API ドキュメント (`api_llmlog.md`) は、タスクに「Claude Code」「実行ログ」「セッションログ」「作業ログ」等のキーワードが含まれるときのみ注入されます。単独の「ログ」だけではトリガーにならないよう意図的に外されています (over-match 防止)。詳細は「補助 API の条件付き注入」節を参照してください。
 
@@ -461,7 +537,7 @@ Mathematica notebook (`.nb`) を first-class source として扱う機能群で�
 
 NBAccess には高レベル semantic API 7 個があり、`.nb` ファイルを **FrontEnd 不要** で直接編集できます。`SourceVaultMarkTodo` はこれの薄いラッパーです。
 
-Todo 項目の正準キャッシュは `SourceVault_todo.wl` に集約されています（前節「ロード時に有効になる機能」を参照）。各 todo record は `LastChanged` (対象セルの `CellChangeTimes` の最大値、AbsoluteTime) を持ち、Done への切り替えが最後のセル変更であることが多いという経験則から、Done 化タイミングの推定値やリマインドの起点として利用されます。`LastChanged` を持たない旧 snapshot は `Missing["None"]` として扱われ、これだけを理由に再 index が走ることはありません (additive フィールド)。
+Todo 項目の正準キャッシュは `SourceVault_todo.wl` に集約されています（前節「ロード時に有効になる機能」を参照。実際の検索・作成・状態変更 API の詳細は後述の「Todo 管理 (SourceVault_todo)」節を参照）。各 todo record は `LastChanged` (対象セルの `CellChangeTimes` の最大値、AbsoluteTime) を持ち、Done への切り替えが最後のセル変更であることが多いという経験則から、Done 化タイミングの推定値やリマインドの起点として利用されます。`LastChanged` を持たない旧 snapshot は `Missing["None"]` として扱われ、これだけを理由に再 index が走ることはありません (additive フィールド)。
 
 ### SourceVault で使うノートブックの書式
 
@@ -629,6 +705,108 @@ CopyFile[
 > `Templates` フォルダが存在しない場合は、あらかじめ `CreateDirectory[FileNameJoin[{$packageDirectory, "Templates"}]]` で作成してください。
 >
 > コピー後、テンプレートの `NotebookStatus` セルが既定の書式（`<|"Keywords" -> {"template"}, "Deadline" -> DateObject[...], "NextReview" -> Quantity[1, "Weeks"], "Status" -> "Todo"|>`）になっていることを確認してください。`SourceVaultNewNotebook` は、この `Deadline` / `NextReview` を生成日に置換した新規ノートブックを開きます。
+
+---
+
+## Todo 管理 (SourceVault_todo)
+
+`SourceVault_todo.wl` は、notebook 由来の Todo（`TodoItem_x` セル）と standalone の Todo（notebook に属さない単発の todo）を統合した正準キャッシュ DB です。前節までで触れた `LastChanged` フィールドもこのモジュールが提供します。
+
+### 2 つの Todo の出自
+
+- **notebook 由来**: 既存の `notebooks/sources/*.json` + snapshot（`TodosCompressed`）から index-first で読み取られます（`.nb` を再 import しません）。Status が Done/Keep のノートブックでも、開いている（Open の）Todo 項目は表示され続けます（このレイヤーの本来の存在意義です）。
+- **standalone**: どの notebook にも属さない単発の todo。`SourceVaultNewTodo`、パレットのテンプレート、メールアジェンダの「todo へ継承」ボタン、Wolfram Cloud の `RegisterTodoForm` 受信箱、または `SourceVaultTodoForSummary`（既存の eagle/source/mail サマリーに付けるリマインダー）から作られます。
+
+**Overlay**（`<PrivateVault>/todo/overlays/<id>.json`）は、notebook Todo に対するユーザー側の状態を **`.nb` に書き込まずに** 保持します: Done マーキング・締切修正・LLM 要約・RECURRENCE マーカー（「今年やったので来年また出す」）。standalone Todo でも同じ overlay 機構が使われます。
+
+Eagle サマリーノートと同様、`SourceVaultTodoShowSummary` は保存ボタン付きのサマリーノートブックを開きます。保存されたノート（`todo/notes/*.nb`）が正本のユーザー注釈版となり、その本文は検索索引にも合流します。
+
+### 検索・一覧 (core / View)
+
+```mathematica
+(* core: List[Association] *)
+rows = SourceVaultTodos[]
+SourceVaultTodos["Status" -> "All"]
+SourceVaultTodos["DueWithinDays" -> 7]   (* 期限超過も含め7日以内 *)
+
+(* View: 行アクション (完了マーク・再発マーカー・ノート/notebook を開く) 付き Grid *)
+SourceVaultTodosView[]
+```
+
+`SourceVaultTodos` のオプション:
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"Status"` | `"Open"` | `"Open"` \| `"All"` \| ステータスのリスト/文字列 |
+| `"Origin"` | `All` | `All` \| `"notebook"` \| `"standalone"` |
+| `"Source"` | `All` | `All` \| `"manual"` \| `"cloud"` \| `"mail"` \| `"summary"` |
+| `"HasDeadline"` | `All` | `All` \| `True` \| `False` |
+| `"DueWithinDays"` | `None` | n 日以内に締切がある項目のみ (期限超過も含む) |
+| `"Limit"` | — | 件数制限 |
+
+各行のキー: `TodoId` / `Text` / `Title` / `Status` / `Deadline` / `DeadlineSource` / `Recur` / `Summary` / `HasNote` / `NotebookPath` / `NotebookTitle` / `NotebookStatus` / `PrivacyLevel` / `AddedAt` / `URI`。「実効 Status」は per-todo overlay（Done マーク・再発浮上）を notebook セル状態の上に適用したものです。
+
+`SourceVaultTodosView` は `$SourceVaultTodoViewMaxRows` 行で表示を打ち切ります (`"MaxRows"` オプション)。core / View のオプションはすべて共通です。
+
+個別の todo は `SourceVaultTodoGet[todoId]` で取得できます (notebook / standalone どちらでも、実効状態にマージ済みのレコードを返す。見つからなければ `Missing["NotFound"]`)。
+
+### standalone todo の作成
+
+```mathematica
+(* 簡単な作成 (shorthand) *)
+SourceVaultNewTodo["卒論の参考文献リストを整理する"]
+
+(* 詳細指定 *)
+SourceVaultNewTodo[<|
+  "Title" -> "科研費申請書を提出する",
+  "Deadline" -> DateObject[{2026, 10, 1}],
+  "PrivacyLevel" -> 0.9,
+  "Recur" -> "Yearly"|>]
+```
+
+`SourceVaultNewTodo[spec]` の spec キー: `"Title"` (必須) / `"Description"` / `"Deadline"` (`DateObject` \| `"yyyy-mm-dd"` \| `None`) / `"PrivacyLevel"` (既定 1.0、fail-safe) / `"Source"` (既定 `"manual"`) / `"MailRecordId"` / `"LinkKind"` ・ `"LinkId"` (既存サマリーへの添付) / `"Recur"`。戻り値 `<|"Status", "TodoId", ...|>`。
+
+`SourceVaultNewTodoTemplate[]` は、現在のノートブックへ編集可能な `SourceVaultNewTodo[<|...|>]` の入力式テンプレートセルを挿入します（claudecode パレットの新規 todo ボタンが使う、式中心の入力 UI）。
+
+### 状態変更
+
+```mathematica
+(* 汎用: Open|Done|Pass|Keep、または Automatic でオーバーライド解除 *)
+SourceVaultTodoSetStatus[todoId, "Done"]
+SourceVaultTodoSetStatus[todoId, Automatic]
+
+(* ショートカット *)
+SourceVaultTodoDone[todoId]     (* DoneAt を記録。再発マーカーは維持される *)
+SourceVaultTodoPass[todoId]     (* 「今回は見送り」。PassAt を記録 *)
+```
+
+notebook 由来の todo に対する `SourceVaultTodoSetStatus` は **overlay のみ** を書き換え、`.nb` セル自体には触れません (セルそのものを編集するには `SourceVaultMarkTodo` を使う)。`SourceVaultTodoDone` は `DoneAt` を、`SourceVaultTodoPass` は `PassAt` を記録します。どちらも再発の anchor になり得ます（review cycle が設定された Passed 項目も、Done 項目と同じく次サイクルで浮上します）。
+
+### 再発 (recurrence) マーカー
+
+```mathematica
+SourceVaultTodoDone[todoId];
+SourceVaultTodoRemindNext[todoId, "Yearly"]
+
+(* リード日数を明示指定 *)
+SourceVaultTodoRemindNext[todoId, "Yearly", 14]
+```
+
+`SourceVaultTodoRemindNext[todoId, cycle]` は「Done 後、次のサイクルが来たら再び Open として浮上する」マーカーを付けます。典型例は、毎年の持ち越し項目を Done にしてから `RemindNext "Yearly"` を付けること。`cycle`: `"Yearly"` \| `"HalfYearly"` \| `"Quarterly"` \| `"Monthly"` \| `"Weekly"` \| `None` (解除)。浮上のリード期間は `$SourceVaultTodoRecurLeadDays` 日 (サイクルに応じてスケールする既定値) ですが、`SourceVaultTodoRemindNext[todoId, cycle, leadDays]` で明示指定もできます。
+
+### 複数設定の一括適用
+
+```mathematica
+SourceVaultTodoUpdate[todoId, <|
+  "Status" -> "Open",
+  "Deadline" -> "2026-12-01",
+  "Priority" -> 0.8,
+  "Recur" -> "Quarterly"|>]
+```
+
+`SourceVaultTodoUpdate[todoId, spec]` は設定パネルの「適用」ボタンが呼ぶ、複数設定を 1 回の書き込みでまとめて適用する関数です。spec キー: `"Status"` (`"Open"`\|`"Done"`\|`"Pass"`\|`"Keep"`\|`Automatic`)、`"Deadline"` (`DateObject`\|`"yyyy-mm-dd"`\|`"yyyy/mm/dd"`\|`None` で消去。消去は文字列から推定された締切の再表示も抑制する)、`"Priority"` (0..1)、`"PrivacyLevel"` (0..1\|`Automatic` でオーバーライド解除)、`"Recur"` (サイクル文字列\|`None`)、`"RecurLeadDays"`。notebook todo は overlay に、standalone todo は直接更新されます。戻り値 `<|"Status", "TodoId", "Applied"|>`。
+
+> Todo は `SourceVaultSummaries` の `"todo"` provider としても横断検索に相乗りします (前述「ソース一覧・横断検索」節を参照)。行をクリックすると対象の todo ノートが開きます。
 
 ---
 
@@ -969,7 +1147,7 @@ SourceVault と ClaudeOrchestrator が両方ロードされていると、パレ
 
 ---
 
-## 暗号化基盤 (at-rest 暗号化)
+## 暗号化基盤 (at-rest暗号化)
 
 SourceVault は、機密の本文・プロンプト・メール本文を **encrypt-then-MAC** で at-rest 暗号化して保存します。鍵は NBAccess 層 (KeyRef 間接参照) の中に閉じ込められ、**戻り値・ログ・record のいずれにも鍵材料は現れません**。プロンプト保存 (`SaveLastPrompt[..., "Encrypt" -> True]`) やメール本文の暗号化保存は、すべてこの基盤の上に乗っています。
 
@@ -1330,7 +1508,7 @@ SourceVaultEntityEditUI[1]        (* 実体1件の編集フォーム (オーナ�
 
 ## ファイル構成 (暗号/メール機能)
 
-SourceVault の暗号・メール機能は、本体 `SourceVault.wl` のローダが依存順に Get する **5 つのサブファイル**に集約されています。また、`Get["SourceVault.wl"]` 単体でのロード時には、コア機能 (`SourceVault_core.wl`)・契約定義 (`SourceVault_contracts.wl`)・ワイヤリング (`SourceVault_wiring.wl`)・検索インデックス (`SourceVault_searchindex.wl`)・検索ビュー (`SourceVault_searchview.wl`)・サービスマネージャ (`SourceVault_servicemanager.wl`) に加え、シミュレーション実行基盤・PromptRouter 拡張・Web ingest・MCP・Claude Code セッションログ・メール構造/提案・Todo キャッシュ DB のサブファイルが依存順に自動でロードされます。
+SourceVault の暗号・メール機能は、本体 `SourceVault.wl` のローダが依存順に Get する **5 つのサブファイル**に集約されています。また、`Get["SourceVault.wl"]` 単体でのロード時には、コア機能 (`SourceVault_core.wl`)・契約定義 (`SourceVault_contracts.wl`)・ワイヤリング (`SourceVault_wiring.wl`)・検索インデックス (`SourceVault_searchindex.wl`)・検索ビュー (`SourceVault_searchview.wl`)・サービスマネージャ (`SourceVault_servicemanager.wl`) に加え、シミュレーション実行基盤・PromptRouter 拡張・Web ingest・MCP・Claude Code セッションログ・メール構造/提案・Todo キャッシュ DB・匿名化拡張・SIEM 診断層のサブファイルが依存順に自動でロードされます。
 
 | ファイル | 文脈 | 内容 |
 |---|---|---|
@@ -1361,8 +1539,8 @@ $packageDirectory\
   SourceVault_servicemanager.wl    ← サービスマネージャ (自動ロード)
   SourceVault_promptrouter.wl      ← PromptRouter 拡張 (自動ロード)
   SourceVault_webingest.wl         ← Web 検索 / SearXNG / job 二層 / 参照イベント (自動ロード)
-  SourceVault_mcp.wl               ← MCP tool schema・dispatch / sv:// オブジェクト解決 (自動ロード)
-  SourceVault_llmlog.wl            ← Claude Code セッションログ ingest (自動ロード)
+  SourceVault_mcp.wl               ← MCP tool schema・dispatch / sv:// オブジェクト解決 / Universal MCP Access URI 層・アダプタ登録 (自動ロード)
+  SourceVault_llmlog.wl            ← Claude Code セッションログ ingest / 検索 / 要約 / transcript 表示 (自動ロード)
   SourceVault_mailstructure.wl     ← メール構造の正規化・解析 (自動ロード)
   SourceVault_mailsuggest.wl       ← メール返信文面などの提案機能 (自動ロード)
   SourceVault_workflowregistry.wl  ← コード化ワークフローのオンデマンドローダ (自動ロード)
@@ -1376,6 +1554,8 @@ $packageDirectory\
   SourceVault_routineplan.wl       ← Routine/attention の計画層 (自動ロード)
   SourceVault_mailagenda.wl        ← メール由来のアジェンダ/議題項目管理 (自動ロード)
   SourceVault_todo.wl              ← Todo キャッシュ DB (routineplan/mailagenda から弱結合。各 record は LastChanged を保持、自動ロード)
+  SourceVault_anonymize.wl         ← 匿名化 (declassification) 拡張。Canonicalization / KeyRing / 衝突耐性 ID・役割別 token (schema-only の Plan まで実装、自動ロード)
+  SourceVault_diagnostics.wl       ← cross-package 診断 / SIEM collector・store・doctor 層 (Phase 0 最小コア、自動ロード)
   SourceVault_eagle.wl             ← Eagle 連携 + privacy 継承付きセル出力 (旧 objectview を統合)
   NBAccess_crypto.wl               ← 鍵隔離 (NBAccess` 文脈)
   SourceVault_crypto.wl            ← 暗号 + 鍵 + 鍵バンドル + 暗号 record + release
@@ -1385,7 +1565,7 @@ $packageDirectory\
   NBAccess.wl / claudecode.wl / ...
 ```
 
-> 旧来の細分化ファイル (`SourceVault_keys.wl` / `_encryptedstore.wl` / `_addressbook.wl` / `_imap.wl` / `_mailui.wl` など) は上記 5 ファイルに統合済みです。`sv://` の実データ/プロパティ取得は `SourceVault_mcp.wl`、privacy 継承付きのセル出力は `SourceVault_eagle.wl` に統合され、旧 `SourceVault_objectview.wl` は廃止されました。詳細な関数シグネチャは API リファレンス (`api_crypto.md` / `api_identity.md` / `api_privacy.md` / `api_maildb.md` / `api_llmlog.md` / `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md`) を参照してください。
+> 旧来の細分化ファイル (`SourceVault_keys.wl` / `_encryptedstore.wl` / `_addressbook.wl` / `_imap.wl` / `_mailui.wl` など) は上記 5 ファイルに統合済みです。`sv://` の実データ/プロパティ取得は `SourceVault_mcp.wl`、privacy 継承付きのセル出力は `SourceVault_eagle.wl` に統合され、旧 `SourceVault_objectview.wl` は廃止されました。詳細な関数シグネチャは API リファレンス (`api_crypto.md` / `api_identity.md` / `api_privacy.md` / `api_maildb.md` / `api_llmlog.md` / `api_mcp.md` / `api_todo.md` / `api_anonymize.md` / `api_diagnostics.md` / `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md`) を参照してください。
 
 ---
 
@@ -1407,7 +1587,7 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy
 ```
 
 - `SourceVault_webingest.wl` — SearXNG クライアント / Web 検索 / 本文取得 / clean-text / job 二層 / 参照イベント / importance / 要約。
-- `SourceVault_mcp.wl` — MCP tool schema・dispatch（protocol endpoint は Python proxy 側）。`sv://` オブジェクトの実データ/プロパティ解決もここに統合。
+- `SourceVault_mcp.wl` — MCP tool schema・dispatch（protocol endpoint は Python proxy 側）。`sv://` オブジェクトの実データ/プロパティ解決、および Universal MCP Access の URI 正準化・データアダプタ登録もここに統合。
 - `SourceVault_eagle.wl` — privacy 継承付きセル出力（WebDocument 等のオブジェクトビューを提供。旧 `SourceVault_objectview.wl` を統合）。
 - いずれも **service-loadable**（FrontEnd / NBAccess 非依存）で、`SourceVault.wl` ロード時に自動読み込み。
 
@@ -1488,9 +1668,70 @@ SourceVaultStopMCP[]
 
 `ShowClaudePalette[]`（claudecode）のプライバシー直下に **MCP 起動/停止トグル**が出ます（実状態に追従）。これは claudecode の package-neutral レジストリ `$ClaudePalet`$ClaudePaletteServiceControls`（`ClaudeRegisterPaletteServiceControl`）に SourceVault が登録する形で、claudecode は SourceVault に依存しません。
 
-MCP が公開するツール：`sourcevault_web_search`（同期）/ `sourcevault_submit_web_search`（非同期・本文取得可）/ `sourcevault_job_status` / `sourcevault_job_result` / `sourcevault_get_document`。いずれの検索も `RequestChannel="MCP"`・`Actor=MCPClient` として監査記録されます。
+MCP が公開するツール：`sourcevault_web_search`（同期）/ `sourcevault_submit_web_search`（非同期・本文取得可）/ `sourcevault_job_status` / `sourcevault_job_result` / `sourcevault_get_document` / `sourcevault_commit_log`（後述の `SourceVaultPackageCommitLog` の実体）。いずれの検索も `RequestChannel="MCP"`・`Actor=MCPClient` として監査記録されます。
 
-> 詳細な関数シグネチャ・オプションは API リファレンス（`api_servicemanager.md`）を、規約は Claude Directives の `rules/105-sourcevault-web-mcp.md` を参照してください。**`.wl` を更新したら稼働中サービスは `SourceVaultRestartService` で再起動**しないと反映されません。
+### Universal MCP Access — URI 層とデータアダプタ (Phase A)
+
+`SourceVault_mcp.wl` は MCP tool schema / dispatch に加えて、`sv://` URI の正準化とデータアダプタ登録の基盤 (universal spec Phase A skeleton) を提供します。
+
+#### sv:// URI の構文層
+
+```mathematica
+SourceVaultParseURI["sv://snapshot/sha256/abcd..."]
+(* → <|Valid -> True, Form -> ..., Scheme -> "sv", Namespace -> "snapshot",
+       Segments -> {...}, Id -> ..., CanonicalURI -> ...|> *)
+
+SourceVaultBuildURI["record", "svcclog-abc123"]
+SourceVaultValidURIQ["sv://object/..."]
+SourceVaultResolveURI[uri, "Return" -> "CanonicalURI"]
+SourceVaultCanonicalURI[uri]
+SourceVaultURIForObject[refOrAssoc]
+```
+
+`$SourceVaultURINamespaces` は予約済み identity namespace のリストです（`object` / `chunk` / `artifact` / `hash` / `group` / `relation` / `snapshot` / `record` / `citation`。`mail` / `web` / `pdf` などのデータ種別は URI namespace ではなく `Class` / `MediaType` / `Kind` の sidecar に持たせます）。
+
+- `SourceVaultParseURI[uri]` は `sv://` URI または legacy ref（`blob:sha256:..` / `snapshot:class:hex`）を解析し、未知 namespace や arity 不一致は `Valid -> False` で fail-closed になります（純関数、NBAccess 非依存）。
+- `SourceVaultBuildURI[namespace, id]` / `[namespace, {seg..}]` は namespace と arity を検証し、各 segment を percent-encoding した正準 URI 文字列を返します（不正指定は `Failure`）。
+- `SourceVaultResolveURI[uri, opts]` は URI を正規化し `<|CanonicalURI, AlternateURIs, Namespace, Class, Kind, Adapter, InternalStableId, ObjectSnapshotRef, ContentHash, ResolutionConfidence|>` を返します。`ResolutionConfidence` は `Exact`（正準）/ `Alias`（legacy ref）/ `Ambiguous` / `NotFound` のいずれかです。Phase A skeleton では構文正規化のみを行い、adapter による実オブジェクト解決やアクセスゲートは後続 increment に持ち越されています。
+- `SourceVaultCanonicalURI[uri, accessRequest]` は `SourceVaultResolveURI[..., "Return" -> "CanonicalURI"]` の薄いラッパーです。URI を key / edge / group member / SourceRef として保存する前には必ずこれで正規化してください。
+- `SourceVaultURIForObject[objectOrRef, opts]` は object や内部 ref から正準 `sv://` URI を返す adapter hook です。Phase A skeleton では legacy ref 文字列や `CanonicalURI`/`Ref`/`BlobRef` を持つ Association を正規化します。
+
+#### データアダプタの登録
+
+```mathematica
+SourceVaultRegisterMCPDataAdapter["myadapter", <|
+  "Kinds" -> {"mykind"},
+  "Capabilities" -> <|"Search" -> True, "ReadMetadata" -> True|>,
+  "Search" -> searchFn, "Resolve" -> resolveFn|>]
+
+SourceVaultListMCPDataAdapters[]
+SourceVaultResolveMCPDataAdapter["myadapter"]
+```
+
+`SourceVaultRegisterMCPDataAdapter[name, spec]` は data adapter を登録します。`spec` の必須キーは `"Kinds"` (`{_String..}`)。任意キー: `"Capabilities"`（`Search`/`ReadMetadata`/`ReadSummary`/`ReadContext`/`ReadBody`/`DepositArtifact`/`ResolveObjectURI`/`SemanticSearch`/`MetadataFilter` の可否。未指定 key は `False` で補完）、`"Search"`/`"Resolve"`/`"Read"`/`"SummaryRow"`/`"Metadata"`/`"Authorize"`/`"URIForObject"` の各関数。`SourceVaultListMCPDataAdapters[]` は登録済み adapter 名のリスト、`SourceVaultResolveMCPDataAdapter[name]` は登録済み spec（未登録は `Missing["AdapterNotRegistered"]`）を返します。
+
+#### Principal / AccessRequest の正規化
+
+```mathematica
+SourceVaultNormalizePrincipal[input, "Trusted" -> <|"ProviderClass" -> "..."|>]
+SourceVaultNormalizeAccessRequest[spec, opts]
+SourceVaultEffectiveAccessLevel[{ceiling1, ceiling2, ...}]
+```
+
+`SourceVaultNormalizePrincipal[input, opts]` は MCP request の主体を Principal 連想に正規化します。tool 引数由来の `ClientName` / `ProviderClass` は自己申告 (provenance) 扱いとなり、authoritative な `ProviderClass` は `opts` の `"Trusted"`（transport/grant/main-kernel で確立された値）からのみ採用されます。指定がなければ `"Unknown"` になります。
+
+`SourceVaultNormalizeAccessRequest[spec, opts]` は MCP tool call を AccessRequest 連想（spec §2.2）に正規化します。`"AccessLevel"` が正準キーで、`"MaxPrivacyLevel"` は入力互換の alias です。`ScopePolicy` は既定（`RequireAccessTags {}`, `AllowAccessTags All`, `DenyAccessTags {}`, `Untagged "MetadataOnly"`）で補完されます。
+
+`SourceVaultEffectiveAccessLevel[{ceiling..}]` は指定された access ceiling 群のうち最も厳しいものを返します。
+
+#### コミット履歴の取得 (SourceVaultPackageCommitLog)
+
+```mathematica
+SourceVaultPackageCommitLog["SourceVault", "Since" -> "2026-06-20"]
+(* → <|"Status", "Package", "Count", "Commits" -> {<|sha,date,author,message|>..}, "PrivacyLevel"|> *)
+```
+
+`SourceVaultPackageCommitLog[packageName]` は本システムのパッケージのコミット履歴を `GitHubREST\`GitHubCommitLog` 経由で取得し、JSON-safe なコンパクト形式で返す MCP tool `sourcevault_commit_log` の実体です。コミットメタデータのみ（コード本文は含まない）なので cloud-safe (PrivacyLevel 0.0) です。`GithubRepositories/` は `.git` を持たないミラーのため、履歴の正本は GitHub API 側にあります。オプション: `"Since"`（既定 `None`）/ `"Until"`（既定 `None`）/ `"MaxItems"`（既定 50）。
 
 #### 運用上の注意（2026-06 追記）
 
@@ -1500,6 +1741,59 @@ MCP が公開するツール：`sourcevault_web_search`（同期）/ `sourcevaul
 - **同じ理由で、SourceVault_autotrigger のスケジューラも FE メインカーネル 1 箇所でしか起動しません。** 前述（「ロード時に有効になる機能」節）のとおり、SourceVault.wl はサブカーネル・wolframscript ジョブ・サービスカーネル・MCP ゲートウェイカーネルなど多数のプロセスからロードされるため、どのカーネルでもスケジューラを起動すると同じ理由でライセンス席とジョブディスパッチが多重化します。`$FrontEnd =!= Null` のカーネルだけが起動するようガードされています。FE-less の計算ノードはこのガードで除外され、代わりにサービス側の HEADLESS DISPATCH モードを使います。
 - **再起動後に自動で MCP を上げたい場合**は、proxy / service の `launch_hidden.vbs` を Windows の Startup フォルダから起動するショートカットを置きます（手順は `setup.md` の「ログオン時の自動起動」）。`SourceVaultStartMCP[]` をパレットから押す手間が不要になります。
 - **当座の復旧**（proxy は生きているがサービスカーネルが死んでいる時）は `SourceVaultStartMCP["RestartService" -> True]`、または service の `launch_hidden.vbs` を `wscript //B //Nologo` で直接起動します。
+
+---
+
+## システム診断 / SIEM 基盤 (SourceVault_diagnostics)
+
+`SourceVault_diagnostics.wl` は、NBAccess / claudecode / ClaudeOrchestrator / サービスマネージャ / auto-trigger など複数パッケージを横断する診断情報を集約する SIEM 的な **collector / store / doctor** 層です（現状は Phase 0 の最小コア）。このモジュール自身はドメイン固有の診断ロジックを持たず、各 producer パッケージが自分のプローブを実装し、本層が存在するときだけ弱結合で emit します（producer 側に hard dependency を作らない設計）。
+
+### 可用性の検知と構造化ログ
+
+```mathematica
+SourceVaultDiagnosticsSinkAvailableQ[]   (* True ならこの層がロード済み。producer はこれで弱く確認する *)
+SourceVaultDiagnosticsLog[event]         (* 構造化 append-only 診断ログへの追記 *)
+SourceVaultDiagnosticsPublish[event]     (* 診断 event の bus 入口。canonical log 記録 + issue DB への弱結合 fan-out *)
+```
+
+`SourceVaultDiagnosticsPublish[event]` は診断イベントの正準入口です。canonical diagnostics-log へ記録すると同時に、issue DB へは machine-local outbox への enqueue のみで弱結合に fan-out します（登録・分析は writer 側の reconciler が行う）。
+
+### ライセンス容量 / カーネルトポロジのプローブ
+
+```mathematica
+SourceVaultDiagnosticsLicenseProbe[]              (* $LicenseProcesses / $MaxLicenseProcesses / $MaxLicenseSubprocesses の実測 *)
+SourceVaultDiagnosticsKernelProcessTopology[]     (* Windows CIM ベースのカーネルプロセス分類 (best-effort) *)
+SourceVaultDiagnosticsReclaimableCapacity[]       (* 重複 MCP-server カーネル等の回収可能容量を検出 *)
+```
+
+### システムドクター / ハートビート
+
+```mathematica
+SourceVaultSystemDoctor[]
+(* → ライセンス + reclaimable + 既存サービスマネージャの健全性を集約した OK / Degraded / Failing 判定 *)
+
+SourceVaultDiagnosticsMachineHeartbeat[]   (* マシン単位のハートビートを atomic write (per-machine path) *)
+SourceVaultDiagnosticsStatus[]             (* 現在の診断ステータス *)
+SourceVaultDiagnosticsPanel[]              (* 最小の状態パネル *)
+```
+
+### マシン横断の集約 (Phase 0 以降の拡張)
+
+登録済みマシンの一覧・ハートビート読み取り・アグリゲータのロールアップ・クラウド経由の心拍/通信チャネルなど、複数マシンにまたがる診断集約 API も同モジュールに用意されています: `SourceVaultDiagnosticsRegisterMachine` / `SourceVaultDiagnosticsMachineRegistry` / `SourceVaultDiagnosticsReadHeartbeats` / `SourceVaultDiagnosticsActiveAggregator` / `SourceVaultDiagnosticsAggregatorRollup` / `SourceVaultDiagnosticsCloudHeartbeat` / `SourceVaultDiagnosticsCloudChannel` / `SourceVaultDiagnosticsCloudSend` / `SourceVaultDiagnosticsCloudListen` / `SourceVaultDiagnosticsCloudStopListen` / `SourceVaultDiagnosticsCloudInbox` / `SourceVaultDiagnosticsCloudCommsStatus` / `SourceVaultDiagnosticsCloudPeerLiveness` / `SourceVaultDiagnosticsCloudConsume`。
+
+### producer spool の取り込み
+
+```mathematica
+SourceVaultDiagnosticsIngestSpool[]
+```
+
+`SourceVaultDiagnosticsIngestSpool[]` は producer が per-process で書き出す spool（`$UserBaseDirectory/ApplicationData/ClaudeRuntime/diag-spool/*.jsonl`）の DiagnosticsEvent を正準 diagnostics-log へ転記します。呼び出しはサービスカーネルの低頻度 hook からのみ行われる想定です（単一書き手原則）。offset sidecar（`<file>.ingest.json`）で差分読み・EventId dedup により冪等に動作し、消化済みの過去日 shard は削除されます。`$SourceVaultDiagIngestIntervalSeconds`（既定 60 秒）が service ループでの ingest 周期を制御し、`$SourceVaultDiagSpoolRoot`（既定 `Automatic`）で spool directory をテスト用に上書きできます。
+
+### Shadow 監視 / Guard 系ユーティリティ
+
+同モジュールには、システムシンボルの shadow 検出・修復・監視（`SourceVaultShadowedSystemSymbols` / `SourceVaultRepairShadowedSystemSymbols` / `SourceVaultShadowWatchStart` / `SourceVaultShadowWatchStop` / `SourceVaultShadowWatchLog` / `SourceVaultShadowScanFiles` / `SourceVaultShadowSanitizeFile` / `SourceVaultShadowSanitizeNotebook`）や、軽量ドクター・低頻度 tick スケジューラ（`SourceVaultDiagnosticsLightweightDoctor` / `SourceVaultDiagnosticsTick` / `SourceVaultDiagnosticsStartTick` / `SourceVaultDiagnosticsStopTick`）、エスカレーション/メール通知の設定（`SourceVaultDiagnosticsEscalate` / `SourceVaultDiagnosticsConfigureMail` / `SourceVaultDiagnosticsMailConfig`）も含まれます。
+
+> **設計メモ:** このモジュールは独立パッケージではなく `SourceVault\`` 文脈の拡張で、Get[] だけで単体ロードできます（producer / vault root が無くてもロードは成功します）。冪等 (`Get[]` の再実行で安全に再定義) であり、producer への Needs 依存 (`ClaudeRuntime\`` / `ClaudeOrchestrator\`` 等) は一切持たず、公開シンボル名のみで弱く到達します。エスカレーション/メール通知チャネル・アグリゲータのフェイルオーバー・Wolfram Cloud 経由通信・comprehensive-doctor の auto-trigger 連携は、現時点では後続 increment に持ち越されています。
 
 ---
 
@@ -1622,4 +1916,7 @@ SourceVaultSimRuns["ising-sweep"]
 | 関数 | 役割 |
 |---|---|
 | `SourceVaultSimRunCreate[slug, params]` | 実行フォルダを作成し run メタ (`RunId` / `Folder` / `Slug` / `Machine` / `Params` / `StartedAtUTC`) を返す |
-| `SourceVaultSimRunFinalize[run, extra]` | ファイル一覧を採取して immutable sn
+| `SourceVaultSimRunFinalize[run, extra]` | ファイル一覧を採取して immutable snapshot として保存し、`URI` を返す |
+| `SourceVaultSimRunRecord[uri]` | 記録済み SimulationRun のメタを読む |
+| `SourceVaultSimRunFolder[uri]` | 実行フォルダを現在のマシンの絶対パスへ解決 (未同期なら `Missing["NotSynced", path]`) |
+| `SourceVaultSimRuns[slug]` | slug の実行履歴 (新しい順の URI リスト) |

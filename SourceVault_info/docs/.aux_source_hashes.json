@@ -4,13 +4,13 @@
 	"contracts":"1jhmdce3hq07y",
 	"core":"1rhvbib8b6gz5",
 	"crypto":"16wu8twr4d15",
-	"diagnostics":"3c6y4ur7i2wp",
+	"diagnostics":"vmlkokoctmgy",
 	"eagle":"t4aqfs1w13bz",
 	"identity":"1cijrn8i8pab0",
 	"lexical":"mq70qg0gjjzo",
 	"mailstructure":"gnrurz8xsdp6",
 	"mailsuggest":"1thjihtbyzwvj",
-	"mcp":"k8bqullbr3bj",
+	"mcp":"1hthzjx3npc60",
 	"mining":"10x8drz7q3xpr",
 	"oopsseed":"3culdxmyjd6i",
 	"packageapi":"vf6hcc3zjhd",
@@ -24,7 +24,7 @@
 	"workflowregistry":"105flndza6qbz",
 	"maildb":"1xbpizn4ufxg4",
 	"simrun":"19rfzbb4u4vb4",
-	"llmlog":"18icztqzc55er",
+	"llmlog":"1v6nkhrb245v7",
 	"@main":"1vnfyhrr4xesj",
 	"knowledgehome":"pxgjwgip4yc1",
 	"cognition":"wopb9w6eo5fd",
@@ -50,5 +50,5 @@
 	"voice":"edf31j21h9x6",
 	"realtime":"6i8ii0tc5lic",
 	"talkqa":"qz0wdm23f442",
-	"todo":"1mhncgpb4ox4r"
+	"todo":"1bwllecl9qvv9"
 }

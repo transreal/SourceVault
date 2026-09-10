@@ -72,7 +72,9 @@ SourceVaultTodoSetStatus::usage =
 (\"Open\"|\"Done\"|\"Pass\"|\"Keep\"). For notebook todos this writes the \
 OVERLAY only (the .nb cell is untouched; use SourceVaultMarkTodo to edit the \
 cell itself). SourceVaultTodoSetStatus[todoId, Automatic] clears the overlay \
-override. Done marks record DoneAt (recurrence anchor).";
+override. Done marks record DoneAt, Pass marks record PassAt; both are \
+recurrence anchors (a Passed item with a review cycle resurfaces at the \
+next cycle just like a Done one).";
 
 SourceVaultTodoDone::usage =
   "SourceVaultTodoDone[todoId] marks a todo Done (records DoneAt; keeps any \
@@ -83,7 +85,53 @@ SourceVaultTodoRemindNext::usage =
 the todo is Done, it resurfaces as Open when the next cycle comes due \
 (lead window $SourceVaultTodoRecurLeadDays days before). cycle: \"Yearly\" | \
 \"HalfYearly\" | \"Quarterly\" | \"Monthly\" | \"Weekly\" | None (remove). \
-Typical use: mark an annual carry-over item Done, then RemindNext \"Yearly\".";
+Typical use: mark an annual carry-over item Done, then RemindNext \
+\"Yearly\". SourceVaultTodoRemindNext[todoId, cycle, leadDays] also \
+sets the lead window explicitly (Automatic = the cycle-scaled default).";
+
+SourceVaultTodoPass::usage =
+  "SourceVaultTodoPass[todoId] marks a todo Pass (\"skipped this time\"; \
+records PassAt). With a review cycle set, the item resurfaces at the next \
+cycle exactly as a Done one does.";
+
+SourceVaultTodoUpdate::usage =
+  "SourceVaultTodoUpdate[todoId, spec] applies several settings in one \
+write (what the settings panel apply button calls). spec keys: \
+\"Status\" (\"Open\"|\"Done\"|\"Pass\"|\"Keep\"|Automatic), \
+\"Deadline\" (DateObject | \"yyyy-mm-dd\" | \"yyyy/mm/dd\" | None to \
+clear, which also suppresses the text-parsed deadline), \"Priority\" \
+(0..1), \"PrivacyLevel\" (0..1 | Automatic to drop an override), \
+\"Recur\" (cycle string | None) and \"RecurLeadDays\". Notebook todos \
+get an overlay, standalone todos are updated in place. Returns \
+<|\"Status\", \"TodoId\", \"Applied\"|>.";
+
+SourceVaultTodoSetDeadline::usage =
+  "SourceVaultTodoSetDeadline[todoId, date] sets the deadline (DateObject or \
+\"yyyy-mm-dd\"/\"yyyy/mm/dd\"). SourceVaultTodoSetDeadline[todoId, None] \
+clears it AND suppresses the deadline the text parser would otherwise infer \
+from the todo text, so a cleared deadline stays cleared.";
+
+SourceVaultTodoSetPriority::usage =
+  "SourceVaultTodoSetPriority[todoId, p] sets the importance 0..1 (0.5 is \
+the neutral value used when nothing was set). Sort and filter with the \
+\"SortBy\"->\"Priority\" and \"MinPriority\" options of SourceVaultTodos.";
+
+SourceVaultTodoSetPrivacyLevel::usage =
+  "SourceVaultTodoSetPrivacyLevel[todoId, pl] sets the privacy level of one \
+todo, 0..1. For a notebook todo this OVERRIDES, for that item only, the \
+level inherited from its notebook (an owner decision: it can raise or lower \
+it); for a standalone todo it replaces the stored level. Automatic drops the \
+override and returns to the inherited value.";
+
+SourceVaultTodoEditPanel::usage =
+  "SourceVaultTodoEditPanel[todoId] is the todo settings control (deadline, \
+review cycle, importance, privacy level, Open/Done/Pass/Keep). It is shown \
+inside the todo note window and from the list view settings button. Edits \
+are collected in the panel and written by one SourceVaultTodoUpdate call.";
+
+SourceVaultTodoEditWindow::usage =
+  "SourceVaultTodoEditWindow[todoId] opens SourceVaultTodoEditPanel in its \
+own window.";
 
 SourceVaultTodoShowSummary::usage =
   "SourceVaultTodoShowSummary[todoId] opens the todo summary notebook \
@@ -264,6 +312,30 @@ iSVTDPLOf[a_Association] :=
     If[NumericQ[p], N[p], 1.0]];
 iSVTDPLOf[___] := 1.0;
 
+(* an explicitly stored per-todo privacy level overrides the one inherited
+   from the notebook; anything else keeps the inherited value *)
+iSVTDPLPick[ov_Association, base_] :=
+  With[{p = Lookup[ov, "PrivacyLevel", Missing[]]},
+    If[NumericQ[p], N[Clip[p, {0., 1.}]], base]];
+iSVTDPLPick[_, base_] := base;
+
+(* importance 0..1; nothing stored means the neutral middle *)
+$iSVTDDefaultPriority = 0.5;
+iSVTDPriorityPick[a_Association] :=
+  With[{p = Lookup[a, "Priority", Missing[]]},
+    If[NumericQ[p], {N[Clip[p, {0., 1.}]], "Explicit"},
+      {$iSVTDDefaultPriority, "Default"}]];
+iSVTDPriorityPick[___] := {$iSVTDDefaultPriority, "Default"};
+
+iSVTDPriorityOf[rec_] :=
+  With[{p = Lookup[If[AssociationQ[rec], rec, <||>], "Priority", Missing[]]},
+    If[NumericQ[p], N[p], $iSVTDDefaultPriority]];
+
+(* Round[x, 0.01] leaves 0.7000000000000001 behind; go through hundredths as
+   an integer so the stored JSON keeps clean two-decimal values *)
+iSVTDClip01[x_] :=
+  If[NumericQ[x], N[Round[100 N[Clip[x, {0., 1.}]]]/100], $Failed];
+
 (* Deadline value -> DateObject (day) | Missing *)
 iSVTDToDate[d_] := Which[
   DateObjectQ[d], DateObject[d, "Day"],
@@ -377,20 +449,31 @@ iSVTDNextRecurDue[anchor_?DateObjectQ, cycle_String, afterAbs_?NumberQ] :=
     If[k >= 200, Missing["RecurFailed"], d]];
 iSVTDNextRecurDue[___] := Missing["RecurFailed"];
 
-(* apply recurrence to an effective record: Done + Recur -> resurface as Open
-   with the advanced deadline once inside the lead window *)
+(* apply recurrence to an effective record: a CLOSED item (Done, or Pass =
+   skipped this time) with a review cycle resurfaces as Open with the advanced
+   deadline once inside the lead window. Pass is what makes the cycle a review
+   cycle rather than a done-only one: "not this round, ask me again next time". *)
+iSVTDClosedStamp[rec_Association] :=
+  With[{st = Lookup[rec, "Status", ""]},
+    Which[
+      st === "Done", Lookup[rec, "DoneAt", Missing["None"]],
+      st === "Pass", With[{p = Lookup[rec, "PassAt", Missing[]]},
+        If[StringQ[p], p, Lookup[rec, "DoneAt", Missing["None"]]]],
+      True, Missing["None"]]];
+
 iSVTDApplyRecur[rec_Association, nowAbs_?NumberQ] :=
   Module[{recur = Lookup[rec, "Recur", Missing[]], cycle, anchor, doneAbs,
-      next, lead, nextAbs},
-    If[Lookup[rec, "Status", ""] =!= "Done" || ! AssociationQ[recur],
+      next, lead, nextAbs, stamp},
+    If[! MemberQ[{"Done", "Pass"}, Lookup[rec, "Status", ""]] ||
+        ! AssociationQ[recur],
       Return[rec]];
     cycle = Lookup[recur, "Cycle", Missing[]];
     If[! StringQ[cycle], Return[rec]];
-    doneAbs = With[{d = Lookup[rec, "DoneAt", Missing[]]},
-      With[{a = iSVTDDateAbs[d]}, If[NumberQ[a], a, nowAbs]]];
+    stamp = iSVTDClosedStamp[rec];
+    doneAbs = With[{a = iSVTDDateAbs[stamp]}, If[NumberQ[a], a, nowAbs]];
     anchor = With[{d = Lookup[rec, "Deadline", Missing[]]},
       If[DateObjectQ[d], d,
-        With[{dd = iSVTDToDate[Lookup[rec, "DoneAt", Missing[]]]},
+        With[{dd = iSVTDToDate[stamp]},
           If[DateObjectQ[dd], dd,
             iSVTDToDate[Lookup[rec, "AddedAt", Missing[]]]]]]];
     If[! DateObjectQ[anchor], Return[rec]];
@@ -705,7 +788,7 @@ SourceVaultTodoRebuildIndex[OptionsPattern[]] :=
 (* base notebook row + overlay -> effective record *)
 iSVTDEffectiveNb[row_Association, nowAbs_] :=
   Module[{id = Lookup[row, "TodoId", ""], ov, status, statusSrc, deadline,
-      dlSrc, rec, parsed, doneAt},
+      dlSrc, rec, parsed, doneAt, passAt, noDl, prio},
     ov = With[{o = iSVTDOverlayOf[id]}, If[AssociationQ[o], o, <||>]];
     status = With[{s = Lookup[ov, "Status", Missing[]]},
       If[StringQ[s], s,
@@ -721,13 +804,23 @@ iSVTDEffectiveNb[row_Association, nowAbs_] :=
             DateString[FromAbsoluteTime[row["LastChanged"]], "ISODate"],
             Missing["None"]],
         True, Missing["None"]]];
-    deadline = iSVTDToDate[Lookup[ov, "Deadline", Missing[]]];
-    dlSrc = If[DateObjectQ[deadline], ToString@Lookup[ov, "DeadlineSource",
-      "Overlay"], ""];
-    If[! DateObjectQ[deadline],
+    passAt = With[{d = Lookup[ov, "PassAt", Missing[]]},
+      If[StringQ[d], d, Missing["None"]]];
+    (* an explicitly CLEARED deadline must stay cleared: without this marker
+       the text parser would hand the same date straight back *)
+    noDl = TrueQ[Lookup[ov, "NoDeadline", False]];
+    deadline = If[noDl, Missing["None"],
+      iSVTDToDate[Lookup[ov, "Deadline", Missing[]]]];
+    dlSrc = Which[
+      noDl, "Cleared",
+      DateObjectQ[deadline],
+        ToString@Lookup[ov, "DeadlineSource", "Overlay"],
+      True, ""];
+    If[! noDl && ! DateObjectQ[deadline],
       parsed = iSVTDDeadlineFromText[Lookup[row, "Text", ""], nowAbs];
       If[AssociationQ[parsed] && parsed["Confidence"] >= 0.6,
         deadline = parsed["Date"]; dlSrc = "TextParse"]];
+    prio = iSVTDPriorityPick[ov];
     rec = <|
       "TodoId" -> id, "Origin" -> "notebook", "Source" -> "notebook",
       "Text" -> Lookup[row, "Text", ""],
@@ -739,6 +832,8 @@ iSVTDEffectiveNb[row_Association, nowAbs_] :=
       "Recur" -> With[{r = Lookup[ov, "Recur", Missing[]]},
         If[AssociationQ[r], r, Missing["None"]]],
       "DoneAt" -> doneAt,
+      "PassAt" -> passAt,
+      "Priority" -> prio[[1]], "PrioritySource" -> prio[[2]],
       "Summary" -> ToString@Lookup[ov, "Summary", ""],
       "SummaryAt" -> ToString@Lookup[ov, "SummaryAt", ""],
       "NotebookPath" -> Lookup[row, "NotebookPath", Missing[]],
@@ -747,7 +842,10 @@ iSVTDEffectiveNb[row_Association, nowAbs_] :=
       "NotebookStatus" -> Lookup[row, "NotebookStatus", ""],
       "CellStatus" -> Lookup[row, "CellStatus", "Open"],
       "LastChanged" -> Lookup[row, "LastChanged", Missing["None"]],
-      "PrivacyLevel" -> iSVTDPLOf[row],
+      "PrivacyLevel" -> iSVTDPLPick[ov, iSVTDPLOf[row]],
+      "PrivacyLevelSource" ->
+        If[NumericQ[Lookup[ov, "PrivacyLevel", Missing[]]], "Overlay",
+          "Notebook"],
       "AddedAt" -> Lookup[row, "AddedAt", ""],
       "URI" -> "sv://record/" <> id|>;
     iSVTDApplyRecur[rec, nowAbs]];
@@ -755,15 +853,21 @@ iSVTDEffectiveNb[row_Association, nowAbs_] :=
 (* standalone item -> effective record *)
 iSVTDEffectiveItem[item_Association, nowAbs_] :=
   Module[{id = Lookup[item, "TodoId", ""], deadline, dlSrc, rec, parsed,
-      title = ToString@Lookup[item, "Title", ""]},
-    deadline = iSVTDToDate[Lookup[item, "Deadline", Missing[]]];
-    dlSrc = If[DateObjectQ[deadline],
-      ToString@Lookup[item, "DeadlineSource", "Explicit"], ""];
-    If[! DateObjectQ[deadline],
+      noDl, prio, title = ToString@Lookup[item, "Title", ""]},
+    noDl = TrueQ[Lookup[item, "NoDeadline", False]];
+    deadline = If[noDl, Missing["None"],
+      iSVTDToDate[Lookup[item, "Deadline", Missing[]]]];
+    dlSrc = Which[
+      noDl, "Cleared",
+      DateObjectQ[deadline],
+        ToString@Lookup[item, "DeadlineSource", "Explicit"],
+      True, ""];
+    If[! noDl && ! DateObjectQ[deadline],
       parsed = iSVTDDeadlineFromText[
         title <> " " <> ToString@Lookup[item, "Description", ""], nowAbs];
       If[AssociationQ[parsed] && parsed["Confidence"] >= 0.6,
         deadline = parsed["Date"]; dlSrc = "TextParse"]];
+    prio = iSVTDPriorityPick[item];
     rec = <|
       "TodoId" -> id, "Origin" -> "standalone",
       "Source" -> ToString@Lookup[item, "Source", "manual"],
@@ -777,6 +881,8 @@ iSVTDEffectiveItem[item_Association, nowAbs_] :=
       "Recur" -> With[{r = Lookup[item, "Recur", Missing[]]},
         If[AssociationQ[r], r, Missing["None"]]],
       "DoneAt" -> Lookup[item, "DoneAt", Missing["None"]],
+      "PassAt" -> Lookup[item, "PassAt", Missing["None"]],
+      "Priority" -> prio[[1]], "PrioritySource" -> prio[[2]],
       "Summary" -> ToString@Lookup[item, "Summary", ""],
       "SummaryAt" -> ToString@Lookup[item, "SummaryAt", ""],
       "NotebookPath" -> Missing["None"],
@@ -785,6 +891,7 @@ iSVTDEffectiveItem[item_Association, nowAbs_] :=
       "LinkKind" -> Lookup[item, "LinkKind", Missing["None"]],
       "LinkId" -> Lookup[item, "LinkId", Missing["None"]],
       "PrivacyLevel" -> iSVTDPLOf[item],
+      "PrivacyLevelSource" -> "Item",
       "AddedAt" -> ToString@Lookup[item, "AddedAt", ""],
       "URI" -> "sv://record/" <> id|>;
     iSVTDApplyRecur[rec, nowAbs]];
@@ -821,7 +928,8 @@ iSVTDQueryMatch[rec_Association, q_String] :=
 
 Options[SourceVaultTodos] = {
   "Status" -> "Open", "Origin" -> All, "Source" -> All,
-  "HasDeadline" -> All, "DueWithinDays" -> None, "Limit" -> Automatic};
+  "HasDeadline" -> All, "DueWithinDays" -> None, "MinPriority" -> None,
+  "SortBy" -> "Deadline", "Limit" -> Automatic};
 
 SourceVaultTodos[opts : OptionsPattern[]] := SourceVaultTodos["", opts];
 SourceVaultTodos[query_String, OptionsPattern[]] :=
@@ -846,14 +954,22 @@ SourceVaultTodos[query_String, OptionsPattern[]] :=
       rows = Select[rows,
         With[{a = iSVTDDateAbs[Lookup[#, "Deadline", Missing[]]]},
           NumberQ[a] && a <= nowAbs + dwd*86400.] &]];
+    With[{mp = OptionValue["MinPriority"]},
+      If[NumberQ[mp],
+        rows = Select[rows, iSVTDPriorityOf[#] >= mp - 0.0001 &]]];
     rows = Select[rows, iSVTDQueryMatch[#, query] &];
-    (* order: dated items by deadline ascending first, then undated newest *)
-    rows = Join[
-      SortBy[Select[rows, DateObjectQ[Lookup[#, "Deadline", Missing[]]] &],
-        iSVTDDateAbs[Lookup[#, "Deadline", Missing[]]] &],
-      Reverse@SortBy[
-        Select[rows, ! DateObjectQ[Lookup[#, "Deadline", Missing[]]] &],
-        ToString@Lookup[#, "AddedAt", ""] &]];
+    If[OptionValue["SortBy"] === "Priority",
+      (* importance first, deadline as the tie-break (undated last) *)
+      rows = SortBy[rows, {-iSVTDPriorityOf[#] &,
+        With[{a = iSVTDDateAbs[Lookup[#, "Deadline", Missing[]]]},
+          If[NumberQ[a], a, 1.*^13]] &}],
+      (* order: dated items by deadline ascending first, then undated newest *)
+      rows = Join[
+        SortBy[Select[rows, DateObjectQ[Lookup[#, "Deadline", Missing[]]] &],
+          iSVTDDateAbs[Lookup[#, "Deadline", Missing[]]] &],
+        Reverse@SortBy[
+          Select[rows, ! DateObjectQ[Lookup[#, "Deadline", Missing[]]] &],
+          ToString@Lookup[#, "AddedAt", ""] &]]];
     If[IntegerQ[lim] && lim >= 0, rows = Take[rows, UpTo[lim]]];
     iSVTDPrivateResult[rows]];
 SourceVaultTodos[___] := {};
@@ -901,6 +1017,8 @@ SourceVaultNewTodo[spec_Association] :=
         If[StringQ[a] && a =!= "", a, iSVTDIsoNow[]]]|>;
     If[StringQ[dl], rec["Deadline"] = dl;
       rec["DeadlineSource"] = "Explicit"];
+    With[{pv = Lookup[spec, "Priority", Missing[]]},
+      If[NumericQ[pv], rec["Priority"] = iSVTDClip01[pv]]];
     passKeys = {"MailRecordId", "LinkKind", "LinkId", "Recur"};
     Scan[
       Function[k, With[{v = Lookup[spec, k, Missing[]]},
@@ -914,11 +1032,12 @@ SourceVaultNewTodo[___] :=
     "Reason" -> "expects [title_String] or [spec_Association]"|>;
 
 SourceVaultTodoSetStatus[id_String, Automatic] :=
-  iSVTDMutate[id, <|"Status" -> None, "DoneAt" -> None|>];
+  iSVTDMutate[id, <|"Status" -> None, "DoneAt" -> None, "PassAt" -> None|>];
 SourceVaultTodoSetStatus[id_String,
     status : ("Open" | "Done" | "Pass" | "Keep")] :=
   iSVTDMutate[id, <|"Status" -> status,
-    "DoneAt" -> If[status === "Done", iSVTDIsoNow[], None]|>];
+    "DoneAt" -> If[status === "Done", iSVTDIsoNow[], None],
+    "PassAt" -> If[status === "Pass", iSVTDIsoNow[], None]|>];
 SourceVaultTodoSetStatus[___] :=
   <|"Status" -> "Failed",
     "Reason" -> "expects [todoId, \"Open\"|\"Done\"|\"Pass\"|\"Keep\"|Automatic]"|>;
@@ -926,18 +1045,159 @@ SourceVaultTodoSetStatus[___] :=
 SourceVaultTodoDone[id_String] := SourceVaultTodoSetStatus[id, "Done"];
 SourceVaultTodoDone[___] := <|"Status" -> "Failed", "Reason" -> "BadArgs"|>;
 
+SourceVaultTodoPass[id_String] := SourceVaultTodoSetStatus[id, "Pass"];
+SourceVaultTodoPass[___] := <|"Status" -> "Failed", "Reason" -> "BadArgs"|>;
+
 SourceVaultTodoRemindNext[id_String, None] :=
   iSVTDMutate[id, <|"Recur" -> None|>];
 SourceVaultTodoRemindNext[id_String, cycle_String] :=
+  SourceVaultTodoRemindNext[id, cycle, Automatic];
+SourceVaultTodoRemindNext[id_String, None, _] :=
+  iSVTDMutate[id, <|"Recur" -> None|>];
+SourceVaultTodoRemindNext[id_String, cycle_String, lead_] :=
   If[MemberQ[$iSVTDRecurCycles, cycle],
-    (* LeadDays is left to the cycle-scaled default at read time; an explicit
-       <|"Cycle"->..,"LeadDays"->..|> can still be set via the NewTodo spec *)
-    iSVTDMutate[id, <|"Recur" -> <|"Cycle" -> cycle|>|>],
+    (* lead Automatic -> the cycle-scaled default is applied at read time *)
+    iSVTDMutate[id, <|"Recur" -> If[NumberQ[lead] && lead >= 0,
+      <|"Cycle" -> cycle, "LeadDays" -> N[lead]|>,
+      <|"Cycle" -> cycle|>]|>],
     <|"Status" -> "Failed", "Reason" -> "UnknownCycle",
       "Allowed" -> $iSVTDRecurCycles|>];
 SourceVaultTodoRemindNext[___] :=
   <|"Status" -> "Failed",
-    "Reason" -> "expects [todoId, \"Yearly\"|\"HalfYearly\"|\"Quarterly\"|\"Monthly\"|\"Weekly\"|None]"|>;
+    "Reason" -> "expects [todoId, \"Yearly\"|\"HalfYearly\"|\"Quarterly\"|\"Monthly\"|\"Weekly\"|None, leadDays]"|>;
+
+(* ---- individual settings (deadline / importance / privacy level) ----
+   Every one of these goes through iSVTDMutate, so a notebook todo gets an
+   OVERLAY and its .nb cell is never touched. A None value in the delta means
+   "drop the key", which is how a setting returns to its inherited default. *)
+
+SourceVaultTodoSetDeadline[id_String, None] :=
+  iSVTDMutate[id, <|"Deadline" -> None, "DeadlineSource" -> None,
+    "NoDeadline" -> True|>];
+SourceVaultTodoSetDeadline[id_String, Automatic] :=
+  iSVTDMutate[id, <|"Deadline" -> None, "DeadlineSource" -> None,
+    "NoDeadline" -> None|>];
+SourceVaultTodoSetDeadline[id_String, d_] :=
+  With[{iso = iSVTDIso[d]},
+    If[StringQ[iso],
+      iSVTDMutate[id, <|"Deadline" -> iso, "DeadlineSource" -> "Explicit",
+        "NoDeadline" -> None|>],
+      <|"Status" -> "Failed", "Reason" -> "BadDate", "TodoId" -> id|>]];
+SourceVaultTodoSetDeadline[___] :=
+  <|"Status" -> "Failed",
+    "Reason" -> "expects [todoId, date | None (clear) | Automatic (re-parse)]"|>;
+
+SourceVaultTodoSetPriority[id_String, Automatic] :=
+  iSVTDMutate[id, <|"Priority" -> None|>];
+SourceVaultTodoSetPriority[id_String, p_?NumericQ] :=
+  iSVTDMutate[id, <|"Priority" -> iSVTDClip01[p]|>];
+SourceVaultTodoSetPriority[___] :=
+  <|"Status" -> "Failed", "Reason" -> "expects [todoId, 0..1 | Automatic]"|>;
+
+SourceVaultTodoSetPrivacyLevel[id_String, Automatic] :=
+  iSVTDMutate[id, <|"PrivacyLevel" -> None|>];
+SourceVaultTodoSetPrivacyLevel[id_String, p_?NumericQ] :=
+  iSVTDMutate[id, <|"PrivacyLevel" -> iSVTDClip01[p]|>];
+SourceVaultTodoSetPrivacyLevel[___] :=
+  <|"Status" -> "Failed", "Reason" -> "expects [todoId, 0..1 | Automatic]"|>;
+
+(* ---- one-write batch update (what the settings panel calls) ----
+   Catch/Throw rather than Return: Return inside the nested With/Which of a
+   Module is the trap this codebase has been bitten by before. *)
+SourceVaultTodoUpdate[id_String, spec_Association] :=
+  Catch[
+    Module[{delta = <||>, applied = {}, base, cyc, lead, curRecur, curCyc,
+        curLead, res},
+      base = With[{b = SourceVaultTodoGet[id]}, If[AssociationQ[b], b, <||>]];
+      If[base === <||>,
+        Throw[<|"Status" -> "Failed", "Reason" -> "NotFound",
+          "TodoId" -> id|>, "iSVTDUpd"]];
+      (* status *)
+      If[KeyExistsQ[spec, "Status"],
+        With[{st = spec["Status"], cur = ToString@Lookup[base, "Status", "Open"]},
+          Which[
+            st === Automatic,
+              delta["Status"] = None; delta["DoneAt"] = None;
+              delta["PassAt"] = None; AppendTo[applied, "Status"],
+            MemberQ[{"Open", "Done", "Pass", "Keep"}, st],
+              delta["Status"] = st;
+              (* re-applying the same status must not move the recurrence
+                 anchor, so only a real transition stamps the time *)
+              If[st =!= cur,
+                delta["DoneAt"] = If[st === "Done", iSVTDIsoNow[], None];
+                delta["PassAt"] = If[st === "Pass", iSVTDIsoNow[], None]];
+              AppendTo[applied, "Status"],
+            True,
+              Throw[<|"Status" -> "Failed", "Reason" -> "BadStatus",
+                "TodoId" -> id|>, "iSVTDUpd"]]]];
+      (* deadline *)
+      If[KeyExistsQ[spec, "Deadline"],
+        With[{d = spec["Deadline"]},
+          Which[
+            d === None,
+              delta["Deadline"] = None; delta["DeadlineSource"] = None;
+              delta["NoDeadline"] = True; AppendTo[applied, "Deadline"],
+            d === Automatic,
+              delta["Deadline"] = None; delta["DeadlineSource"] = None;
+              delta["NoDeadline"] = None; AppendTo[applied, "Deadline"],
+            True,
+              With[{iso = iSVTDIso[d]},
+                If[StringQ[iso],
+                  delta["Deadline"] = iso;
+                  delta["DeadlineSource"] = "Explicit";
+                  delta["NoDeadline"] = None; AppendTo[applied, "Deadline"],
+                  Throw[<|"Status" -> "Failed", "Reason" -> "BadDate",
+                    "TodoId" -> id|>, "iSVTDUpd"]]]]]];
+      (* review cycle (+ lead window) *)
+      curRecur = With[{r = Lookup[base, "Recur", Missing[]]},
+        If[AssociationQ[r], r, <||>]];
+      curCyc = With[{c = Lookup[curRecur, "Cycle", Missing[]]},
+        If[StringQ[c], c, "None"]];
+      curLead = Lookup[curRecur, "LeadDays", Missing[]];
+      If[KeyExistsQ[spec, "Recur"] || KeyExistsQ[spec, "RecurLeadDays"],
+        cyc = Lookup[spec, "Recur", curCyc];
+        lead = Lookup[spec, "RecurLeadDays",
+          If[NumberQ[curLead], curLead, Automatic]];
+        Which[
+          cyc === None || cyc === Automatic || cyc === "None",
+            delta["Recur"] = None; AppendTo[applied, "Recur"],
+          StringQ[cyc] && MemberQ[$iSVTDRecurCycles, cyc],
+            delta["Recur"] = If[NumberQ[lead] && lead >= 0,
+              <|"Cycle" -> cyc, "LeadDays" -> N[lead]|>,
+              <|"Cycle" -> cyc|>];
+            AppendTo[applied, "Recur"],
+          True,
+            Throw[<|"Status" -> "Failed", "Reason" -> "UnknownCycle",
+              "Allowed" -> $iSVTDRecurCycles, "TodoId" -> id|>, "iSVTDUpd"]]];
+      (* importance *)
+      If[KeyExistsQ[spec, "Priority"],
+        With[{p = spec["Priority"]},
+          Which[
+            p === Automatic, delta["Priority"] = None;
+              AppendTo[applied, "Priority"],
+            NumericQ[p], delta["Priority"] = iSVTDClip01[p];
+              AppendTo[applied, "Priority"],
+            True, Throw[<|"Status" -> "Failed", "Reason" -> "BadPriority",
+              "TodoId" -> id|>, "iSVTDUpd"]]]];
+      (* privacy level *)
+      If[KeyExistsQ[spec, "PrivacyLevel"],
+        With[{p = spec["PrivacyLevel"]},
+          Which[
+            p === Automatic, delta["PrivacyLevel"] = None;
+              AppendTo[applied, "PrivacyLevel"],
+            NumericQ[p], delta["PrivacyLevel"] = iSVTDClip01[p];
+              AppendTo[applied, "PrivacyLevel"],
+            True, Throw[<|"Status" -> "Failed", "Reason" -> "BadPrivacyLevel",
+              "TodoId" -> id|>, "iSVTDUpd"]]]];
+      If[delta === <||>,
+        <|"Status" -> "NoChange", "TodoId" -> id, "Applied" -> {}|>,
+        res = iSVTDMutate[id, delta];
+        If[AssociationQ[res] && Lookup[res, "Status", ""] === "OK",
+          Append[res, "Applied" -> applied], res]]],
+    "iSVTDUpd"];
+SourceVaultTodoUpdate[___] :=
+  <|"Status" -> "Failed",
+    "Reason" -> "expects [todoId_String, spec_Association]"|>;
 
 SourceVaultTodoForSummary[kind_String, linkId_String,
     spec_Association : <||>] :=
@@ -961,7 +1221,8 @@ SourceVaultNewTodoTemplate[] :=
     If[Head[nb] =!= NotebookObject,
       Return[<|"Status" -> "Failed", "Reason" -> "NoInputNotebook"|>]];
     tmpl = "SourceVaultNewTodo[<|\"Title\" -> \"\", \"Deadline\" -> None, " <>
-      "\"Description\" -> \"\", \"PrivacyLevel\" -> 1.0|>]";
+      "\"Description\" -> \"\", \"Priority\" -> 0.5, " <>
+      "\"PrivacyLevel\" -> 1.0, \"Recur\" -> None|>]";
     If[Length[DownValues[NBAccess`NBInsertInputTemplate]] > 0,
       NBAccess`NBInsertInputTemplate[nb, tmpl],
       NotebookWrite[nb, Cell[BoxData[tmpl], "Input"], All]];
@@ -991,15 +1252,32 @@ SourceVaultTodoShowSummary[id_String, OptionsPattern[]] :=
         If[d =!= "", "\:3006\:5207: " <> d, Nothing]],
       With[{r = Lookup[rec, "Recur", Missing[]]},
         If[AssociationQ[r],
-          "\:30ea\:30de\:30a4\:30f3\:30c9: " <> ToString@Lookup[r, "Cycle", ""],
+          "\:6b21\:56de\:30ec\:30d3\:30e5\:30fc: " <>
+            iSVTDCycleLabel[ToString@Lookup[r, "Cycle", ""]],
           Nothing]],
+      "\:91cd\:8981\:5ea6: " <> iSVTDFmt01[iSVTDPriorityOf[rec]],
+      "\:79d8\:533f: " <> iSVTDFmt01[iSVTDPLOf[rec]],
       "Source: " <> ToString@Lookup[rec, "Source", ""],
       With[{a = ToString@Lookup[rec, "AddedAt", ""]},
         If[a =!= "", "\:767b\:9332: " <> StringTake[a, UpTo[10]], Nothing]]},
       Nothing], " / "];
     cells = Join[
       {Cell[title, "Subtitle"],
-       Cell[metaLine, "Text"]},
+       Cell[metaLine, "Text"],
+       (* live settings control. Held inside Dynamic so the SAVED note never
+          carries a stale snapshot of the panel: it is rebuilt from the store
+          every time the note is opened. The guard uses System` symbols only,
+          so reopening the note without SourceVault loaded degrades to a note
+          instead of an error (same rule as the save button below). *)
+       With[{theId = id},
+         ExpressionCell[
+           Dynamic[
+             If[Length[DownValues[SourceVault`SourceVaultTodoEditPanel]] > 0,
+               SourceVault`SourceVaultTodoEditPanel[theId,
+                 "ShowNoteButton" -> False],
+               Style["\:8a2d\:5b9a UI \:306f SourceVault \:30ed\:30fc\:30c9\:5f8c\:306b\:6709\:52b9\:306b\:306a\:308a\:307e\:3059",
+                 GrayLevel[0.5]]]],
+           "Output", CellMargins -> {{20, 20}, {6, 10}}]]},
       With[{p = Lookup[rec, "NotebookPath", Missing[]]},
         If[StringQ[p],
           {Cell["\:30ce\:30fc\:30c8\:30d6\:30c3\:30af: " <> p <>
@@ -1222,9 +1500,289 @@ SourceVaultTodoAgendaItems[OptionsPattern[]] :=
           "State" -> "Open",
           "Summary" -> Lookup[r, "Summary", ""],
           "Recurred" -> TrueQ[Lookup[r, "Recurred", False]],
+          "Priority" -> iSVTDPriorityOf[r],
           "PrivacyLevel" -> iSVTDPLOf[r]|>],
       rows]];
 SourceVaultTodoAgendaItems[___] := {};
+
+(* ============================================================
+   Settings panel: deadline / review cycle / importance / privacy level /
+   Open-Done-Pass-Keep, in the shape of the mail classification panel --
+   edits are collected in the panel and written by ONE apply button
+   (SourceVaultTodoUpdate), so a half-finished edit never reaches the store.
+   For a notebook todo everything lands in the overlay; the .nb is untouched.
+   ============================================================ *)
+
+iSVTDPanelFont[] :=
+  If[Length[DownValues[iSVUIFont]] > 0,
+    Quiet@Check[iSVUIFont[], "Yu Gothic UI"], "Yu Gothic UI"];
+
+iSVTDFmt01[x_] := If[NumericQ[x], ToString[NumberForm[N[x], {3, 2}]], "-"];
+
+iSVTDStep01[v_, dv_] :=
+  iSVTDClip01[If[NumericQ[v], N[v], 0.5] + dv];
+
+iSVTDPriorityColor[p_] := Which[
+  ! NumericQ[p], GrayLevel[0.5],
+  p >= 0.8, RGBColor[0.8, 0.2, 0.2],
+  p >= 0.6, RGBColor[0.85, 0.5, 0.1],
+  p <= 0.3, GrayLevel[0.55],
+  True, GrayLevel[0.25]];
+
+iSVTDPriorityWord[p_] := Which[
+  ! NumericQ[p], "",
+  p >= 0.8, "\:9ad8",
+  p >= 0.6, "\:3084\:3084\:9ad8",
+  p <= 0.3, "\:4f4e",
+  True, "\:4e2d"];
+
+iSVTDCycleLabel[c_] := Switch[c,
+  "Yearly", "\:5e74\:6b21", "HalfYearly", "\:534a\:5e74", "Quarterly", "\:56db\:534a\:671f",
+  "Monthly", "\:6708\:6b21", "Weekly", "\:9031\:6b21", _, "\:306a\:3057"];
+
+$iSVTDCycleMenu = {"None" -> "\:306a\:3057", "Weekly" -> "\:9031\:6b21",
+  "Monthly" -> "\:6708\:6b21", "Quarterly" -> "\:56db\:534a\:671f",
+  "HalfYearly" -> "\:534a\:5e74", "Yearly" -> "\:5e74\:6b21"};
+
+iSVTDDayStr[d_] :=
+  If[DateObjectQ[d], DateString[d, {"Year", "/", "Month", "/", "Day"}], ""];
+
+(* "yyyy/mm/dd" typed in the field -> DateObject (Missing when blank/bad) *)
+iSVTDFieldToDate[s_] :=
+  If[StringQ[s] && StringTrim[s] =!= "", iSVTDToDate[StringTrim[s]],
+    Missing["None"]];
+
+iSVTDShiftField[s_, step_, nowAbs_] :=
+  Module[{base, d2},
+    base = With[{d = iSVTDFieldToDate[s]},
+      If[DateObjectQ[d], d,
+        DateObject[FromAbsoluteTime[nowAbs], "Day"]]];
+    d2 = Quiet@Check[DatePlus[base, step], $Failed];
+    If[DateObjectQ[d2], iSVTDDayStr[d2], If[StringQ[s], s, ""]]];
+
+(* what the item will resurface on, computed from the values currently in the
+   panel (no store read, so it is cheap enough to sit inside a Dynamic) *)
+iSVTDPreviewNext[dlField_, cyc_, closedAbs_, nowAbs_] :=
+  Module[{anchor, next, ref},
+    If[! StringQ[cyc] || ! MemberQ[$iSVTDRecurCycles, cyc], Return[""]];
+    ref = If[NumberQ[closedAbs], closedAbs, nowAbs];
+    anchor = With[{d = iSVTDFieldToDate[dlField]},
+      If[DateObjectQ[d], d, DateObject[FromAbsoluteTime[ref], "Day"]]];
+    next = iSVTDNextRecurDue[anchor, cyc, ref];
+    If[DateObjectQ[next], iSVTDDayStr[next], ""]];
+
+iSVTDPanelMsg[r_] :=
+  If[AssociationQ[r] && MemberQ[{"OK", "NoChange"}, Lookup[r, "Status", ""]],
+    Style["\[Checkmark] " <>
+      If[Lookup[r, "Status", ""] === "NoChange",
+        "\:5909\:66f4\:304c\:3042\:308a\:307e\:305b\:3093", "\:53cd\:6620\:3057\:307e\:3057\:305f"],
+      Darker@Green],
+    Style["\[Times] " <>
+      ToString@Lookup[If[AssociationQ[r], r, <||>], "Reason", "Error"], Red]];
+
+Options[SourceVaultTodoEditPanel] = {"ShowNoteButton" -> True};
+SourceVaultTodoEditPanel[id_String, OptionsPattern[]] :=
+  Module[{rec, ff = iSVTDPanelFont[], st0, dl0, cyc0, lead0, prio0, pl0,
+      leadOpts, nbQ, closedAbs, nowAbs = iSVTDNow[]},
+    rec = SourceVaultTodoGet[id];
+    If[! AssociationQ[rec],
+      Return[Style["todo \:304c\:898b\:3064\:304b\:308a\:307e\:305b\:3093: " <> id, Red,
+        FontFamily -> ff]]];
+    nbQ = StringStartsQ[id, "svtodo-nb-"];
+    st0 = ToString@Lookup[rec, "Status", "Open"];
+    dl0 = iSVTDShortDate[Lookup[rec, "Deadline", Missing[]]];
+    cyc0 = With[{r = Lookup[rec, "Recur", Missing[]]},
+      If[AssociationQ[r] && StringQ[Lookup[r, "Cycle", Missing[]]],
+        r["Cycle"], "None"]];
+    lead0 = With[{r = Lookup[rec, "Recur", Missing[]]},
+      If[AssociationQ[r] && NumberQ[Lookup[r, "LeadDays", Missing[]]],
+        Round[N[r["LeadDays"]]], Automatic]];
+    leadOpts = Join[{Automatic -> "\:65e2\:5b9a"},
+      (# -> ToString[#] <> "\:65e5" &) /@
+        Union[{2, 7, 14, 30, 60, 90}, If[IntegerQ[lead0], {lead0}, {}]]];
+    prio0 = iSVTDPriorityOf[rec];
+    pl0 = iSVTDPLOf[rec];
+    closedAbs = With[{a = iSVTDDateAbs[iSVTDClosedStamp[rec]]},
+      If[NumberQ[a], a, nowAbs]];
+    With[{theId = id, ff2 = ff, now2 = nowAbs, closed2 = closedAbs,
+        nb2 = nbQ, lopts = leadOpts,
+        note2 = TrueQ[OptionValue["ShowNoteButton"]],
+        dlSrc2 = ToString@Lookup[rec, "DeadlineSource", ""],
+        plSrc2 = ToString@Lookup[rec, "PrivacyLevelSource", ""],
+        st1 = st0, dl1 = dl0, cyc1 = cyc0, lead1 = lead0,
+        prio1 = prio0, pl1 = pl0},
+      DynamicModule[{st = st1, dl = dl1, cyc = cyc1, lead = lead1,
+          prio = prio1, pl = pl1, busy = False, msg = ""},
+        Panel[
+          Column[{
+            (* ---- status: Open / Done / Pass / Keep ---- *)
+            Row[{
+              Style["\:72b6\:614b ", "Text", FontFamily -> ff2],
+              SetterBar[Dynamic[st],
+                {"Open" -> "Open", "Done" -> "Done", "Pass" -> "Pass",
+                 "Keep" -> "Keep"}, BaseStyle -> {FontFamily -> ff2}],
+              Spacer[10],
+              If[nb2,
+                Button[Style["\:81ea\:52d5 (\:30bb\:30eb\:6e96\:62e0\:306b\:623b\:3059)", FontFamily -> ff2],
+                  (busy = True;
+                   msg = iSVTDPanelMsg[
+                     SourceVaultTodoSetStatus[theId, Automatic]];
+                   With[{rr = SourceVaultTodoGet[theId]},
+                     If[AssociationQ[rr],
+                       st = ToString@Lookup[rr, "Status", "Open"]]];
+                   busy = False), Method -> "Queued"],
+                ""],
+              Spacer[10],
+              Style["Pass = \:4eca\:56de\:306f\:898b\:9001\:308a (\:5468\:671f\:304c\:3042\:308c\:3070\:6b21\:56de\:518d\:6d6e\:4e0a)",
+                GrayLevel[0.45], 10, FontFamily -> ff2]},
+              BaselinePosition -> Center],
+            (* ---- deadline ---- *)
+            Row[{
+              Style["\:3006\:5207 ", "Text", FontFamily -> ff2],
+              InputField[Dynamic[dl], String, FieldSize -> {9, 1},
+                BaseStyle -> {FontFamily -> ff2}],
+              Spacer[4],
+              Button[Style["\:4eca\:65e5", FontFamily -> ff2],
+                dl = iSVTDDayStr[DateObject[FromAbsoluteTime[now2], "Day"]],
+                Appearance -> "Palette", ImageSize -> {46, 20}],
+              Button[Style["+1\:9031", FontFamily -> ff2],
+                dl = iSVTDShiftField[dl, {7, "Day"}, now2],
+                Appearance -> "Palette", ImageSize -> {46, 20}],
+              Button[Style["+1\:30f6\:6708", FontFamily -> ff2],
+                dl = iSVTDShiftField[dl, {1, "Month"}, now2],
+                Appearance -> "Palette", ImageSize -> {56, 20}],
+              Button[Style["\:306a\:3057", FontFamily -> ff2], dl = "",
+                Appearance -> "Palette", ImageSize -> {46, 20}],
+              Spacer[10],
+              Style["yyyy/mm/dd", GrayLevel[0.5], 10],
+              If[MemberQ[{"TextParse", "Recurrence", "Cleared"}, dlSrc2],
+                Style["  (\:7531\:6765: " <> dlSrc2 <> ")", GrayLevel[0.5], 10,
+                  FontFamily -> ff2], ""]},
+              BaselinePosition -> Center],
+            (* ---- review cycle ---- *)
+            Row[{
+              Style["\:6b21\:56de\:30ec\:30d3\:30e5\:30fc ", "Text", FontFamily -> ff2],
+              PopupMenu[Dynamic[cyc], $iSVTDCycleMenu,
+                MenuStyle -> {FontFamily -> ff2}],
+              Spacer[8],
+              Style["\:30ea\:30fc\:30c9 ", "Text", FontFamily -> ff2],
+              PopupMenu[Dynamic[lead], lopts,
+                MenuStyle -> {FontFamily -> ff2}],
+              Spacer[10],
+              Dynamic[
+                With[{n = iSVTDPreviewNext[dl, cyc, closed2, now2]},
+                  If[n === "", Style["", 10],
+                    Style["\:6b21\:56de: " <> n, RGBColor[0.35, 0.3, 0.7], 10,
+                      FontFamily -> ff2]]]]},
+              BaselinePosition -> Center],
+            (* ---- importance / privacy level ---- *)
+            Row[{
+              Style["\:91cd\:8981\:5ea6 ", "Text", FontFamily -> ff2],
+              Button["\[EmptyDownTriangle]", prio = iSVTDStep01[prio, -0.1],
+                Appearance -> "Palette", ImageSize -> {24, 20}],
+              Pane[Dynamic@Style[iSVTDFmt01[prio], "Text", Bold,
+                  iSVTDPriorityColor[prio], FontFamily -> ff2],
+                {42, Automatic}, Alignment -> Center],
+              Button["\[EmptyUpTriangle]", prio = iSVTDStep01[prio, +0.1],
+                Appearance -> "Palette", ImageSize -> {24, 20}],
+              Spacer[4],
+              Dynamic@Style[iSVTDPriorityWord[prio],
+                iSVTDPriorityColor[prio], 10, FontFamily -> ff2],
+              Spacer[16],
+              Style["\:79d8\:533f ", "Text", FontFamily -> ff2],
+              Button["\[EmptyDownTriangle]", pl = iSVTDStep01[pl, -0.1],
+                Appearance -> "Palette", ImageSize -> {24, 20}],
+              Pane[Dynamic@Style[iSVTDFmt01[pl], "Text", Bold,
+                  FontFamily -> ff2], {42, Automatic}, Alignment -> Center],
+              Button["\[EmptyUpTriangle]", pl = iSVTDStep01[pl, +0.1],
+                Appearance -> "Palette", ImageSize -> {24, 20}],
+              Spacer[6],
+              Dynamic[If[NumericQ[pl] && pl >= 0.5,
+                Style["\:6a5f\:5bc6 (\:8981\:7d04\:306f\:30ed\:30fc\:30ab\:30ebLLM\:306e\:307f)",
+                  RGBColor[0.75, 0.2, 0.2], 10, FontFamily -> ff2],
+                Style["", 10]]],
+              If[plSrc2 === "Overlay",
+                Style["  (\:30ce\:30fc\:30c8\:65e2\:5b9a\:3092\:4e0a\:66f8\:304d)", GrayLevel[0.5], 10,
+                  FontFamily -> ff2], ""]},
+              BaselinePosition -> Center],
+            (* ---- apply ---- *)
+            Row[{
+              Button[Style["\:53cd\:6620", Bold, FontFamily -> ff2],
+                (busy = True;
+                 Module[{spec = <||>, base, curDl, curCyc, curLead, r},
+                   base = With[{b = SourceVaultTodoGet[theId]},
+                     If[AssociationQ[b], b, <||>]];
+                   If[st =!= ToString@Lookup[base, "Status", "Open"],
+                     spec["Status"] = st];
+                   curDl = iSVTDShortDate[Lookup[base, "Deadline", Missing[]]];
+                   With[{v = StringTrim[If[StringQ[dl], dl, ""]]},
+                     Which[
+                       v === "" && curDl =!= "", spec["Deadline"] = None,
+                       v =!= "" && v =!= curDl,
+                         spec["Deadline"] =
+                           If[DateObjectQ[iSVTDFieldToDate[v]], v, $Failed]]];
+                   curCyc = With[{rr = Lookup[base, "Recur", Missing[]]},
+                     If[AssociationQ[rr] &&
+                         StringQ[Lookup[rr, "Cycle", Missing[]]],
+                       rr["Cycle"], "None"]];
+                   curLead = With[{rr = Lookup[base, "Recur", Missing[]]},
+                     If[AssociationQ[rr] &&
+                         NumberQ[Lookup[rr, "LeadDays", Missing[]]],
+                       Round[N[rr["LeadDays"]]], Automatic]];
+                   If[cyc =!= curCyc,
+                     spec["Recur"] = If[cyc === "None", None, cyc]];
+                   If[lead =!= curLead && cyc =!= "None",
+                     spec["RecurLeadDays"] =
+                       If[NumberQ[lead], N[lead], Automatic]];
+                   If[Abs[prio - iSVTDPriorityOf[base]] > 0.004,
+                     spec["Priority"] = prio];
+                   If[Abs[pl - iSVTDPLOf[base]] > 0.004,
+                     spec["PrivacyLevel"] = pl];
+                   Which[
+                     Lookup[spec, "Deadline", Missing[]] === $Failed,
+                       msg = Style[
+                         "\[Times] \:65e5\:4ed8\:306f yyyy/mm/dd \:3067\:5165\:529b\:3057\:3066\:304f\:3060\:3055\:3044", Red],
+                     spec === <||>,
+                       msg = Style["\:5909\:66f4\:304c\:3042\:308a\:307e\:305b\:3093", Gray],
+                     True,
+                       r = SourceVaultTodoUpdate[theId, spec];
+                       msg = iSVTDPanelMsg[r];
+                       With[{rr = SourceVaultTodoGet[theId]},
+                         If[AssociationQ[rr],
+                           st = ToString@Lookup[rr, "Status", "Open"];
+                           dl = iSVTDShortDate[
+                             Lookup[rr, "Deadline", Missing[]]];
+                           prio = iSVTDPriorityOf[rr];
+                           pl = iSVTDPLOf[rr]]]]];
+                 busy = False), Method -> "Queued"],
+              Spacer[6],
+              If[note2,
+                Button[Style["\:30ce\:30fc\:30c8\:3092\:958b\:304f", FontFamily -> ff2],
+                  SourceVaultTodoShowSummary[theId], Method -> "Queued"], ""],
+              Spacer[8],
+              Dynamic[If[busy, ProgressIndicator[Appearance -> "Necklace"],
+                ""]],
+              Spacer[6], Dynamic[msg],
+              Spacer[10],
+              Style["\:4e00\:89a7\:306f\:518d\:8a55\:4fa1\:3067\:66f4\:65b0\:3055\:308c\:307e\:3059", GrayLevel[0.5], 10,
+                FontFamily -> ff2]},
+              BaselinePosition -> Center]},
+            Spacings -> 0.6],
+          Style["\:3053\:306etodo \:306e\:8a2d\:5b9a", "Text", FontFamily -> ff2]]]]];
+SourceVaultTodoEditPanel[rec_Association, opts : OptionsPattern[]] :=
+  SourceVaultTodoEditPanel[ToString@Lookup[rec, "TodoId", ""], opts];
+SourceVaultTodoEditPanel[___] := "";
+
+SourceVaultTodoEditWindow[id_String] :=
+  Quiet@Check[
+    CreateDocument[
+      ExpressionCell[SourceVaultTodoEditPanel[id], "Output",
+        CellMargins -> {{15, 15}, {12, 12}}],
+      WindowTitle -> "Todo \:8a2d\:5b9a: " <> StringTake[id, UpTo[28]],
+      WindowSize -> {920, 260}], $Failed];
+SourceVaultTodoEditWindow[rec_Association] :=
+  SourceVaultTodoEditWindow[ToString@Lookup[rec, "TodoId", ""]];
+SourceVaultTodoEditWindow[___] := $Failed;
 
 (* ============================================================
    View
@@ -1243,6 +1801,7 @@ iSVTDStatusLabel[rec_Association] :=
     Row[{Style[st, Switch[st,
         "Open", RGBColor[0.75, 0.35, 0.1],
         "Done", RGBColor[0.2, 0.55, 0.35],
+        "Pass", RGBColor[0.45, 0.45, 0.65],
         _, GrayLevel[0.4]], Bold, 10],
       If[hasRecur,
         Style[" \:21bb" <> If[rc, "!", ""], RGBColor[0.35, 0.3, 0.7], 10],
@@ -1267,7 +1826,8 @@ SourceVaultTodosView[query_String, opts : OptionsPattern[]] :=
       Quiet@Check[iSVUIFont[], "Yu Gothic UI"], "Yu Gothic UI"];
     header = (Style[#, Bold, FontFamily -> ff] &) /@
       {"Act", "\:72b6\:614b", "\:3006\:5207", "\:5185\:5bb9",
-       "\:30b5\:30de\:30ea\:30fc", "\:30ce\:30fc\:30c8", "PL", "\:767b\:9332"};
+       "\:30b5\:30de\:30ea\:30fc", "\:30ce\:30fc\:30c8", "\:91cd\:8981", "PL",
+       "\:767b\:9332"};
     body = Function[rec,
       Module[{id = ToString@Lookup[rec, "TodoId", ""],
           text = ToString@Lookup[rec, "Title", ""],
@@ -1290,11 +1850,26 @@ SourceVaultTodosView[query_String, opts : OptionsPattern[]] :=
               "Done \:306b\:3059\:308b (\:518d\:8a55\:4fa1\:3067\:53cd\:6620)"]],
           "  ",
           With[{theId = id},
+            Tooltip[Button["\:00bb",
+              (SourceVaultTodoPass[theId];
+               Quiet@Check[iSVTDRefreshNote[], Null]),
+              Appearance -> "Frameless", Method -> "Queued",
+              BaseStyle -> {RGBColor[0.45, 0.45, 0.65], Bold}],
+              "Pass \:306b\:3059\:308b (\:4eca\:56de\:306f\:898b\:9001\:308a\:3002\:5468\:671f\:304c\:3042\:308c\:3070\:6b21\:56de\:518d\:6d6e\:4e0a)"]],
+          "  ",
+          With[{theId = id},
             Tooltip[Button["\:21bb",
               iSVTDRecurDialog[theId],
               Appearance -> "Frameless", Method -> "Queued",
               BaseStyle -> {RGBColor[0.35, 0.3, 0.7], Bold}],
-              "\:30ea\:30de\:30a4\:30f3\:30c9 (\:5e74\:6b21/\:6708\:6b21...) \:3092\:8a2d\:5b9a"]]}];
+              "\:30ea\:30de\:30a4\:30f3\:30c9 (\:5e74\:6b21/\:6708\:6b21...) \:3092\:8a2d\:5b9a"]],
+          "  ",
+          With[{theId = id},
+            Tooltip[Button[Style["\:8a2d\:5b9a", 10],
+              SourceVaultTodoEditWindow[theId],
+              Appearance -> "Frameless", Method -> "Queued",
+              BaseStyle -> {RGBColor[0.25, 0.4, 0.7], Bold}],
+              "\:8a2d\:5b9a\:3092\:7de8\:96c6 (\:3006\:5207/\:30ec\:30d3\:30e5\:30fc\:5468\:671f/\:91cd\:8981\:5ea6/\:79d8\:533f)"]]}];
         nbCell = Which[
           StringQ[nbPath],
             With[{p = nbPath, t = nbTitle},
@@ -1325,6 +1900,12 @@ SourceVaultTodosView[query_String, opts : OptionsPattern[]] :=
          If[sum === "", "",
            Tooltip[Style[iSVTDTrunc[sum, 40], FontFamily -> ff], sum]],
          nbCell,
+         With[{p = iSVTDPriorityOf[rec]},
+           Tooltip[
+             Style[iSVTDFmt01[p], iSVTDPriorityColor[p], Bold, 10,
+               FontFamily -> ff],
+             "\:91cd\:8981\:5ea6 " <> iSVTDFmt01[p] <> " " <>
+               iSVTDPriorityWord[p]]],
          With[{p = iSVTDPLOf[rec]}, ToString[p]],
          With[{a = ToString@Lookup[rec, "AddedAt", ""]},
            If[a === "", "", StringTake[a, UpTo[10]]]]}]] /@ shown;
@@ -1640,6 +2221,7 @@ Quiet@Check[
           "Module" -> "SourceVault_todo.wl"|>] &,
       {{"SourceVaultTodos", "Result"},
        {"SourceVaultTodosView", "View"},
+       {"SourceVaultTodoUpdate", "Result"},
        {"SourceVaultTodoGet", "Result"},
        {"SourceVaultTodoShowSummary", "View"},
        {"SourceVaultTodoAgendaItems", "Result"},
@@ -1652,7 +2234,13 @@ Quiet@Check[
             "Deploys an EMPTY entry form / registers scheduling state only; no stored todo content flows out."|>] &,
       {"SourceVaultTodoDeployCloudForm", "SourceVaultTodoCloudSyncStart",
        "SourceVaultTodoCloudSyncStop", "SourceVaultTodoCloudSyncStatus",
-       "SourceVaultTodoRebuildIndex", "SourceVaultNewTodoTemplate"}]],
+       "SourceVaultTodoRebuildIndex", "SourceVaultNewTodoTemplate",
+       (* settings controls: they render only a todo own SETTINGS (status,
+          deadline, cycle, importance, privacy level) and no stored todo text,
+          summary or notebook content, so nothing classified flows through *)
+       "SourceVaultTodoEditPanel", "SourceVaultTodoEditWindow",
+       "SourceVaultTodoPass", "SourceVaultTodoSetDeadline",
+       "SourceVaultTodoSetPriority", "SourceVaultTodoSetPrivacyLevel"}]],
   Null];
 
 End[];

@@ -2,7 +2,7 @@
 
 Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter**、release context に基づく公開ポリシー基盤と Web 検索サービス管理 (**SourceVault_searchindex** / **SourceVault_servicemanager**)、[Eagle](https://eagle.cool) デジタルアセットライブラリ統合 (**SourceVault_eagle**)、排他制御・immutable snapshot・append-only event log を提供するコア基盤 (**SourceVault_core**) を備えます。加えて、関数契約と型付き配線による API コンパイラ層 (**SourceVault_contracts** / **SourceVault_wiring**)、シミュレーション実行基盤 (**SourceVault_simrun**)、検索結果を「たどれる作業面」として扱う検索ビュー層 (**SourceVault_searchview**)、一般メールの構造化・スレッド提案 (**SourceVault_mailstructure** / **SourceVault_mailsuggest**)、オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層 (**SourceVault_mailagenda**)、Claude Code セッションログ統合 (**SourceVault_llmlog**)、コード化ワークフローのレジストリ・カタログ管理 (**SourceVault_workflowregistry** / **SourceVault_workflowcatalog**)、自動トリガスケジューラ (**SourceVault_autotrigger**)、クロスパッケージ診断層 (**SourceVault_diagnostics**)、関数粒度のパッケージ API 索引 (**SourceVault_packageapi**)、[ComfyUI](https://github.com/comfyanonymous/ComfyUI) 画像・動画生成統合 (**SourceVault_comfyui**) も備えます。さらに、oops メーリングリストのアーカイブを「ベース基準座標」とする認知支援・安全基盤 (Cane: **SourceVault_knowledgehome** / **SourceVault_cognition** / **SourceVault_adjudication** / **SourceVault_capbroker** / **SourceVault_taint** / **SourceVault_anomaly** / **SourceVault_routine** / **SourceVault_routineplan**) も統合しており、いずれも既定では判定を記録するだけの observe-only / shadow モードで動作します。私的データを扱う全関数の出力が別名呼び出しや `Map`・`ClaudeEval` 越しでも確実に機密マークされるようにする、プライバシー伝達の正準層 (**SourceVault_privacy**) も統合されています。
 
-加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
+加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、notebook 由来 Todo とスタンドアロン Todo を横断的に統合管理する Todo キャッシュ DB (**SourceVault_todo**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
 
 ## 設計思想と実装の概要
 
@@ -28,7 +28,7 @@ SourceVault の中核は **Source-First ingest パイプライン**です。各 
 
 Mathematica notebook (`.nb`) も first-class source として扱えます。`SourceVaultIndexNotebook[path]` で先頭 Input セルの Header Association を **safe parse** (whitelist 経由) し、TodoItem cell の状態 (`Open` / `Done` / `Pass`) を TaggingRules > StrikeThrough > Default の優先順位で判定し、Deadline / NextReview の lint を生成します。
 
-NBAccess には高レベル semantic API 7 個 (`NBReadHeader` / `NBReadTodos` / `NBFindCellByPredicate` + 書き込み系 4 個) があり、FrontEnd を起動せずに `.nb` ファイルを直接編集できる atomic-write パイプラインが整っています。SourceVault からは `SourceVaultMarkTodo` でこれを呼び出します。
+NBAccess には高レベル semantic API 7 個 (`NBReadHeader` / `NBReadTodos` / `NBFindCellByPredicate` + 書き込み系 4 個) があり、FrontEnd を起動せずに `.nb` ファイルを直接編集できる atomic-write パイプラインが整っています。SourceVault からは `SourceVaultMarkTodo` でこれを呼び出します。notebook 由来の Todo とスタンドアロン Todo を横断的に検索・管理する統合キャッシュ層 (**SourceVault_todo**) については後述の「Todo 管理」節を参照してください。
 
 ```
 .nb ファイル
@@ -193,7 +193,7 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ W
 
 VRCRealtime のような音声対話では、既存の MCP 検索（Web / メール / Eagle / PDFIndex embedding）は数十秒かかることがあり realtime 応答には遅すぎます。`SourceVault_kb.wl` は、スライド・図版を「slide」「figure」単位で事前に索引化し、クエリ時は BM25 + インメモリの Deck–Slide–Chunk–Topic グラフ伝播のみ（数十 ms）で応答する低遅延レイヤです。ingest（notebook/PDF → source document、LLM 不要）・caption（figure → vision 読み取り、hash キャッシュ・予算制御）・build（source + caption → chunk + graph + BM25 索引）の 3 段階はそれぞれ冪等で独立に再実行できます。既存の BM25 (`SourceVaultBuildLexicalStats` / `SourceVaultLexicalRank`)・release gate (`SourceVaultEvaluateReleasePolicy`)・PDFIndex chunk 取り込みを再利用します。
 
-`SourceVault_talkqa.wl` は KB の上に載る、発表本番向けの **ライブ Q&A 層**です。`SourceVaultTalkQABuild` がスライドデッキと発表シナリオ (`<deck>_talk.md`) から「想定質問 → KB 由来の回答候補 → sv:// 引用」をビルド時に事前計算（LLM 呼び出しはビルド時のみ）し、本番中の `SourceVaultTalkQAAsk` は数十 ms でその QA パックを引き、無ければ KB へフォールバック、それも無ければ Web 検索を提案します。各回答候補には PrivacyLevel と公開経路（`Route`: Public = クラウド音声で読み上げ可、Local = ローカル音声のみ、Deny = 非公開のため回答拒否）がビルド時に焼き込まれるため、本番応答は監査可能かつ高速です。`$SourceVaultTalkQAMode`（既定 `"Presentation"`）が非公開情報への回答を拒否する境界を制御します。
+`SourceVault_talkqa.wl` は KB の上に載る、発表本番向けの **ライブ Q&A 層**です。`SourceVaultTalkQABuild` がスライドデッキと発表シナリオ (`<deck>_talk.md`) から「想定質問 → KB 由来の回答候補 → sv:// 引用」をビルド時に事前計算（LLM 呼び出しはビルド時のみ）し、本番中の `SourceVaultTalkQAAsk` は数十 ms でその QA パックを引き、無ければ KB へフォールバック、それも無ければ Web 検索を提案します。`SourceVaultTalkQAImport` は著者が書いた Q&A セル（LLM 推測ではなく著者の言い回しをそのまま採用）からも同じ QA パックを構築・更新できます。各回答候補には PrivacyLevel と公開経路（`Route`: Public = クラウド音声で読み上げ可、Local = ローカル音声のみ、Deny = 非公開のため回答拒否）がビルド時に焼き込まれるため、本番応答は監査可能かつ高速です。`$SourceVaultTalkQAMode`（既定 `"Presentation"`）が非公開情報への回答を拒否する境界を制御します。
 
 ### 一般メール構造化とスレッド提案 (SourceVault_mailstructure / SourceVault_mailsuggest)
 
@@ -211,7 +211,11 @@ VRCRealtime のような音声対話では、既存の MCP 検索（Web / メー
 
 ### メールアジェンダ (SourceVault_mailagenda)
 
-`SourceVault_mailagenda.wl` は routine attention の一部 (R9) として、**オーナー宛ての要対応メール**（返信/出席/確認・作業依頼など）を routine アジェンダへ供給する薄い層です。`SourceVault_maildb` が事前計算済みの派生（Summary / Category / Priority / Deadline）を **索引だけで読み**、アジェンダ経路で LLM 呼び出し・IMAP 取得・シャード本体のロードを行いません。`SourceVaultMailAgendaItems` がカテゴリゲート → SPAM/無関係ゲート → オーナー宛て判定（To/Cc・宛名パターン）→ 解決済み除外の順に候補を絞り、同一スレッドは 1 項目に集約されます。解決は Pending → Done（Replied / NotebookCreated / Dismissed）の状態機械で管理され、`SourceVaultMailAgendaResolve` / `SourceVaultMailAgendaReopen` で記録・取り消しができます。`SourceVaultMailAgendaOpen` が返信・ノートブック継承・確認済みマークの対応 UI を開き、`SourceVaultMailAgendaInherit` はメールを継承した作業ノートブックを作成します（`SourceVaultMailForNotebook` で逆参照可能、`SourceVaultRoutinePlacePlan` の日別カレンダーの「✉ 要対応メール」バンドに統合）。個人アドレス（オーナー/組織アドレス等）はコードに焼き込まず `PrivateVault/config/mailagenda.json` で環境設定します。
+`SourceVault_mailagenda.wl` は routine attention の一部 (R9) として、**オーナー宛ての要対応メール**（返信/出席/確認・作業依頼など）を routine アジェンダへ供給する薄い層です。`SourceVault_maildb` が事前計算済みの派生（Summary / Category / Priority / Deadline）を **索引だけで読み**、アジェンダ経路で LLM 呼び出し・IMAP 取得・シャード本体のロードを行いません。`SourceVaultMailAgendaItems` がカテゴリゲート → SPAM/無関係ゲート → オーナー宛て判定（To/Cc・宛名パターン）→ 解決済み除外の順に候補を絞り、同一スレッドは 1 項目に集約されます。解決は Pending → Done（Replied / NotebookCreated / TodoCreated / Dismissed）の状態機械で管理され、`SourceVaultMailAgendaResolve` / `SourceVaultMailAgendaReopen` で記録・取り消しができます。`SourceVaultMailAgendaOpen` が返信・ノートブック継承・確認済みマークの対応 UI を開き、`SourceVaultMailAgendaInherit` はメールを継承した作業ノートブックを作成します（`SourceVaultMailForNotebook` で逆参照可能、`SourceVaultRoutinePlacePlan` の日別カレンダーの「✉ 要対応メール」バンドに統合）。ノートブックを作るほどではない小タスクには `SourceVaultMailAgendaInheritTodo` があり、`SourceVault_todo` 層へスタンドアロン TODO としてメールを継承します（`SourceVault_todo` 未ロード時は弱結合で失敗を返します）。個人アドレス（オーナー/組織アドレス等）はコードに焼き込まず `PrivateVault/config/mailagenda.json` で環境設定します。
+
+### Todo 管理 (SourceVault_todo)
+
+`SourceVault_todo.wl` は notebook 内 TodoItem と、notebook に属さない **スタンドアロン Todo** を 1 つの検索・管理面に統合するキャッシュ DB です。notebook 由来の Todo は `notebooks/sources/*.json` + snapshot（`TodosCompressed`）を index-first に読み、クエリ経路で `.nb` を再取込みしません。ユーザー側の状態（Done/Pass マーク・締切修正・LLM 要約・再来サイクル）は notebook 本体を書き換えずオーバレイ (`todo/overlays/<id>.json`) に持たせます。スタンドアロン項目 (`todo/items/<id>.json`) は `SourceVaultNewTodo`・パレットテンプレート・メールアジェンダの継承ボタン (`SourceVaultMailAgendaInheritTodo`)・Wolfram Cloud のフォーム受信箱 (`RegisterTodoForm`) などから作成されます。`SourceVaultTodos[query, opts]` が両ソースを統合した `List[Association]` を返す core 関数、`SourceVaultTodosView` が行アクション（完了マーク・再来サイクル設定・ノート/ノートブックを開く）付きの表示 View です。`SourceVault_routineplan` / `SourceVault_mailagenda` からは索引参照のみの弱結合で使われ、検索横断層 (`SourceVaultSummaries` / `SourceVaultCrossLinksView`) には `"todo"` provider として相乗りします。
 
 ### DB 横断ハイパーリンク (SourceVault_crosslink)
 
@@ -254,7 +258,7 @@ oops メーリングリストのアーカイブを「ベース基準座標」と
 - **SourceVault_taint** — 入力の信頼度評価 (`SourceVaultAssessInputTrust`) と、派生物への SafetyState の非降下伝播 (`SourceVaultPropagateTaint`)。LLM を使わない決定的処理です。
 - **SourceVault_anomaly** — レート系ストリームの統計的な逸脱検知 (`SourceVaultDetectStreamAnomalies` 等)。**明示的に実行する observe-only ワークフロー**で、通知・isolation 変更・policy freeze などの enforcement は一切行いません。既存 event store から決定的にレートストリームを構築する `SourceVaultCollectCaneAnomalyStreams` と、service の低頻度 hook から呼ばれる `SourceVaultCaneAnomalyScheduleTick` により定期分析を owner 登録できます。
 - **SourceVault_routine** / **SourceVault_routineplan** — 予定・ルーチン・約束事の充足判定を担う obligation コア層（3値 Kleene 証拠論理・Resolution 状態機械）と、その拡張である準備タスク見積・容量ベースの日次配置・リスケジューリング。判定・提案のみを行い、実行権限は持ちません。
-- **SourceVault_mailagenda** — maildb の既存派生（Summary/Category/Priority/Deadline）を索引だけで読み、オーナー宛ての要対応メール（返信/出席/確認依頼など）を routine アジェンダへ供給する薄い層。スレッド集約・解決状態機械（Pending→Done: Replied/NotebookCreated/Dismissed）・メール継承による作業ノートブック作成 (`SourceVaultMailAgendaInherit`) を提供し、メール本文の LLM 再解析やシャード全体ロードは行いません。
+- **SourceVault_mailagenda** — maildb の既存派生（Summary/Category/Priority/Deadline）を索引だけで読み、オーナー宛ての要対応メール（返信/出席/確認依頼など）を routine アジェンダへ供給する薄い層。スレッド集約・解決状態機械（Pending→Done: Replied/NotebookCreated/TodoCreated/Dismissed）・メール継承による作業ノートブック作成 (`SourceVaultMailAgendaInherit`) / スタンドアロン TODO 化 (`SourceVaultMailAgendaInheritTodo`) を提供し、メール本文の LLM 再解析やシャード全体ロードは行いません。
 
 詳細な設計・不変条件は `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md` / `api_routine.md` / `api_routineplan.md` / `api_mailagenda.md`、および user_manual.md の該当節を参照してください。
 
@@ -286,6 +290,7 @@ SourceVault_anomaly.wl                  異常検知 (observe-only ワークフ�
 SourceVault_routine.wl                  ルーチン/義務(obligation) コア層 (3値証拠論理・Resolution 状態機械、実行権限なし)
 SourceVault_routineplan.wl              ルーチン計画拡張 (準備見積・容量配置・リスケジューリング)
 SourceVault_mailagenda.wl               ルーチン系メールアジェンダ (maildb 派生の索引だけを読み、要対応メールを routine アジェンダへ供給)
+SourceVault_todo.wl                     Todo キャッシュ DB (notebook Todo + standalone Todo の統合索引、mailagenda/routineplan から弱結合)
 SourceVault_oopsseed.wl                 OOPS seed オントロジ取り込み・一般メール topic auto-tag
 SourceVault_mailstructure.wl            一般メール構造化 (TopicVocabulary・mail relation graph mining)
 SourceVault_mailsuggest.wl              メールスレッド提案 (状況テキスト→session 候補・スレッド閲覧)
@@ -365,6 +370,9 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
   notebooks/todos/by-notebook/nb-src-<...>.jsonl
   notebooks/review/overdue.jsonl
   notebooks/lint/notebook-lint.jsonl
+  todo/items/<id>.json                 (スタンドアロン Todo レコード)
+  todo/overlays/<id>.json              (notebook Todo へのオーバレイ状態)
+  todo/notes/<id>.nb                   (Todo 要約ノートの canonical 保存先)
   promptrouter/runs/prompt-runs.jsonl  (PromptRun ストア、append-only)
   promptrouter/artifacts/wf-code/      (WorkflowRoute コード artifact)
   promptrouter/routes/                 (コンパイル済み PromptRoute レジストリ)
@@ -624,6 +632,7 @@ $packageDirectory\
   SourceVault_routine.wl         ← ルーチン/義務コア層 (本体ロード時に自動ロード)
   SourceVault_routineplan.wl     ← ルーチン計画拡張 (本体ロード時に自動ロード)
   SourceVault_mailagenda.wl      ← メールアジェンダ (本体ロード時に自動ロード)
+  SourceVault_todo.wl            ← Todo キャッシュ DB (本体ロード時に自動ロード)
   SourceVault_mailbrowse.wl      ← 一般メールブラウザ (本体ロード時に自動ロード、mailstructure 依存)
   SourceVault_crosslink.wl       ← DB 横断ハイパーリンク層 (本体ロード時に自動ロード)
   SourceVault_servicemanager.wl  ← サービス管理 (本体ロード時に自動ロード)
@@ -682,7 +691,7 @@ Block[{$CharacterEncoding = "UTF-8"},
 ]
 ```
 
-`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_contracts.wl`・`SourceVault_wiring.wl`・`SourceVault_voice.wl`・`SourceVault_realtime.wl`・`SourceVault_vision.wl`・`SourceVault_slidedeck.wl`・`SourceVault_searchindex.wl`・`SourceVault_kb.wl`・`SourceVault_talkqa.wl`・`SourceVault_searchview.wl`・`SourceVault_knowledgehome.wl`・`SourceVault_cognition.wl`・`SourceVault_adjudication.wl`・`SourceVault_capbroker.wl`・`SourceVault_taint.wl`・`SourceVault_anomaly.wl`・`SourceVault_routine.wl`・`SourceVault_routineplan.wl`・`SourceVault_mailagenda.wl`・`SourceVault_mailbrowse.wl`・`SourceVault_crosslink.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl`・`SourceVault_mcp.wl`・`SourceVault_llmlog.wl`・`SourceVault_simrun.wl`・`SourceVault_packageapi.wl`・`SourceVault_workflowregistry.wl`・`SourceVault_autotrigger.wl`・`SourceVault_promptrouter.wl` などが順に自動的にロードされます。Cane 認知支援・安全基盤の各サブファイルは既定で observe-only / shadow のため、通常利用ではロードされていることを意識する必要はありません。
+`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_contracts.wl`・`SourceVault_wiring.wl`・`SourceVault_voice.wl`・`SourceVault_realtime.wl`・`SourceVault_vision.wl`・`SourceVault_slidedeck.wl`・`SourceVault_searchindex.wl`・`SourceVault_kb.wl`・`SourceVault_talkqa.wl`・`SourceVault_searchview.wl`・`SourceVault_knowledgehome.wl`・`SourceVault_cognition.wl`・`SourceVault_adjudication.wl`・`SourceVault_capbroker.wl`・`SourceVault_taint.wl`・`SourceVault_anomaly.wl`・`SourceVault_routine.wl`・`SourceVault_routineplan.wl`・`SourceVault_mailagenda.wl`・`SourceVault_todo.wl`・`SourceVault_mailbrowse.wl`・`SourceVault_crosslink.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl`・`SourceVault_mcp.wl`・`SourceVault_llmlog.wl`・`SourceVault_simrun.wl`・`SourceVault_packageapi.wl`・`SourceVault_workflowregistry.wl`・`SourceVault_autotrigger.wl`・`SourceVault_promptrouter.wl` などが順に自動的にロードされます。Cane 認知支援・安全基盤の各サブファイルは既定で observe-only / shadow のため、通常利用ではロードされていることを意識する必要はありません。
 
 LLM 要約・claim 抽出機能を使用する場合は、ClaudeRuntime もロードします。
 
@@ -883,6 +892,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultKBCaptionFigures[kbId, opts]` | 未キャプション図版を vision で読み取り、hash キーでキャッシュしながら予算内で埋める。 |
 | `SourceVaultKBStatus[kbId]` | source/slide/figure/chunk/グラフ件数とロード状態を返す。 |
 | `SourceVaultTalkQABuild[deck, opts]` | スライドデッキ + 発表シナリオから想定質問・KB 由来回答・引用を持つ QA パックを事前構築する（ビルド時のみ LLM 使用）。 |
+| `SourceVaultTalkQAImport[deck, slides, opts]` | 著者が書いた Q&A セルから（LLM 生成でなく）QA パックを構築・更新する。 |
 | `SourceVaultTalkQAAsk[question, opts]` | ライブ質問に QA パック→KB→Web 検索提案の順で低遅延に回答する。PrivacyLevel/`Route` に応じて公開/拒否を判定。 |
 | `SourceVaultTalkQANeighbors[opts]` | 現在開いているスライドを起点に k-hop 近傍の関連トピックを返す。 |
 | **DB横断ハイパーリンク (SourceVault_crosslink)** | |
@@ -907,6 +917,11 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultVoiceSpeak[text, opts]` | ローカル Piper Plus TTS / AivisSpeech Engine でテキストを音声合成する。 |
 | `SourceVaultVisionModel[name]` | 人物検出/姿勢推定 ONNX モデルの絶対パスを解決する。 |
 | `SourceVaultRealtimeStart[opts]` | 既定マイク/スピーカーで OpenAI Realtime とのクラウド音声会話セッションを開始する（Paid API 承認・provider access 判定必須）。 |
+| **Todo 管理 (SourceVault_todo)** | |
+| `SourceVaultTodos[query, opts]` | notebook 由来 + standalone の Todo を統合した `List[Association]` を返す。`"Status"` / `"HasDeadline"` / `"DueWithinDays"` / `"MinPriority"` / `"SortBy"` 等対応。 |
+| `SourceVaultTodosView[query, opts]` | `SourceVaultTodos` の Grid 表示版（完了マーク・再来サイクル・ノート/ノートブックを開くボタン付き）。 |
+| `SourceVaultNewTodo[spec]` | notebook に属さないスタンドアロン Todo を新規作成する。 |
+| `SourceVaultTodoSetStatus[todoId, status]` / `SourceVaultTodoDone[todoId]` / `SourceVaultTodoPass[todoId]` | Todo の有効ステータスを変更（notebook Todo はオーバレイのみ、`.nb` 本体は不変）。 |
 | **サービス管理 (SourceVault_servicemanager)** | |
 | `SourceVaultLoadLocalInit[opts]` | `<PrivateVault>/config/local/SourceVaultLocalInit.wl` を読み込む（未存在は fail-closed せず NotFound を返す）。 |
 | `SourceVaultLocalConfigDoctor[opts]` | 必須 registry（ReleaseContext / SearchBackend / WebServiceEndpoint）の登録状況を点検。 |
@@ -984,10 +999,11 @@ SourceVaultNotebookSummary[nbPath]
 | `$SourceVaultDefaultImportedMailPL` | import 時のメール本文 PL 既定（`0.85`、fail-safe）。 |
 | **メールアジェンダ (SourceVault_mailagenda)** | |
 | `SourceVaultMailAgendaItems[opts]` | maildb の既存派生（Summary/Category/Priority/Deadline）を索引だけで読み、オーナー宛ての要対応メール候補を返す（スレッド集約・解決済み除外・`"MaxPrivacyLevel"` フィルタ付き）。 |
-| `SourceVaultMailAgendaResolve[recordId, status, opts]` | 要対応メールの解決状態（`"Dismissed"` / `"NotebookCreated"`）を記録する。 |
+| `SourceVaultMailAgendaResolve[recordId, status, opts]` | 要対応メールの解決状態（`"Dismissed"` / `"NotebookCreated"` / `"TodoCreated"`）を記録する。 |
 | `SourceVaultMailAgendaReopen[recordId]` / `…Resolutions[]` | 解決の取り消し、および解決一覧の取得。 |
 | `SourceVaultMailAgendaOpen[recordId \| item]` | 返信・ノートブック継承・確認済みマークの対応ウィンドウを開く。 |
 | `SourceVaultMailAgendaInherit[recordId, opts]` | メールを継承した作業ノートブックを `$onWork` に作成し、routine アジェンダから除外する。 |
+| `SourceVaultMailAgendaInheritTodo[recordId, opts]` | メールを継承したスタンドアロン TODO を `SourceVault_todo` 層に作成し、routine アジェンダから除外する（軽量版）。 |
 | `SourceVaultMailForNotebook[nbPath]` | 継承ノートブックのメタデータから元メールの RecordId を非評価で読む（逆参照）。 |
 | **マイニング (SourceVault_mining)** | |
 | `SourceVaultMakeTagAssertion[targetURI, tag, opts]` | 由来つき TagAssertion を作る（`SourceKind` / `TagClass` / `Confidence` / `AccessImpact`）。 |
@@ -1046,7 +1062,8 @@ SourceVaultNotebookSummary[nbPath]
 | `api_mailbrowse.md` | 一般メールブラウザ API（引用・topic・DB 横断リンク付きハイパーテキスト閲覧） |
 | `api_mailstructure.md` | 一般メール構造化 API（TopicVocabulary・mail relation graph mining） |
 | `api_mailsuggest.md` | メールスレッド提案 API（状況テキスト→session 候補・スレッド閲覧） |
-| `api_mailagenda.md` | メールアジェンダ API（routine attention R9・maildb 派生の索引読み・解決状態機械・継承ノートブック） |
+| `api_mailagenda.md` | メールアジェンダ API（routine attention R9・maildb 派生の索引読み・解決状態機械・継承ノートブック/継承 Todo） |
+| `api_todo.md` | Todo キャッシュ DB API（notebook Todo + standalone Todo の統合クエリ・overlay・mutation） |
 | `api_crosslink.md` | DB 横断ハイパーリンク API（mail/OOPS/Eagle/ingest ソース横断の RRF 融合検索） |
 | `api_mining.md` | マイニング API（タグ/著者/実体リンクの由来つき抽出・security pre-scan・検索 boost・記憶代謝・ObjectSignals） |
 | `api_lexical.md` | 日本語 lexical 検索 API（正規化・n-gram・BM25・entity OR-match） |
@@ -1187,7 +1204,7 @@ SourceVaultMarkTodo[nbPath, 1, "Done"]
 
 (* 実行 *)
 SourceVaultMarkTodo[nbPath, 1, "Done", "DryRun" -> False]
-(* → atomic write 発生、AutoReindex で SourceVaultIndexNotebook が自動呼び出し *)
+(* → atomic write 発生、AutoReindex で SourceVaultIndexNotebook が自動的に呼び出される) *)
 ```
 
 target は Integer (Index) / String (TodoId) / Association を受け付けます。
@@ -1305,6 +1322,27 @@ SourceVaultMailAgendaOpen[agenda["Items"][[1]]]
 
 (* メールを継承した作業ノートブックを作成し、アジェンダから除外 *)
 SourceVaultMailAgendaInherit[agenda["Items"][[1]]["RecordId"]]
+
+(* ノートブックを作るほどではない小タスクは standalone TODO で継承 *)
+SourceVaultMailAgendaInheritTodo[agenda["Items"][[1]]["RecordId"]]
+```
+
+### Todo の統合管理
+
+notebook 由来 Todo とスタンドアロン Todo を横断して確認・操作します。
+
+```mathematica
+(* 未完了 Todo を締切昇順で一覧 *)
+SourceVaultTodos["", "Status" -> "Open"]
+
+(* 7 日以内が締切の Todo だけ表示（Grid） *)
+SourceVaultTodosView["", "Status" -> "Open", "DueWithinDays" -> 7]
+
+(* notebook に属さないスタンドアロン Todo を新規作成 *)
+SourceVaultNewTodo[<|"Title" -> "学生便覧の改訂箇所を確認", "Deadline" -> "2026-09-20"|>]
+
+(* 完了マーク（notebook Todo はオーバレイのみに記録、.nb 本体は不変） *)
+SourceVaultTodoDone[todoId]
 ```
 
 ### Eagle ライブラリの検索と表示
@@ -1407,6 +1445,7 @@ SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
 - [SourceVault_identity](https://github.com/transreal/SourceVault_identity)
 - [SourceVault_maildb](https://github.com/transreal/SourceVault_maildb)
 - [SourceVault_mailagenda](https://github.com/transreal/SourceVault_mailagenda)
+- [SourceVault_todo](https://github.com/transreal/SourceVault_todo)
 - [SourceVault_mailstructure](https://github.com/transreal/SourceVault_mailstructure)
 - [SourceVault_mailsuggest](https://github.com/transreal/SourceVault_mailsuggest)
 - [SourceVault_mailbrowse](https://github.com/transreal/SourceVault_mailbrowse)

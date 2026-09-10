@@ -12,14 +12,14 @@
 ### SourceVaultIngestClaudeCodeLogs[opts]
 ローカルセッションログを走査し、新規/更新セッション (watermark の Bytes と現サイズの差分で検出) だけダイジェスト化して自マシンの rollup shard へ追記する。append-only・冪等・非破壊。既定で生 transcript の Dropbox ミラー (`SourceVaultMirrorClaudeCodeLogs`) も相乗り実行する。service heartbeat が起動時 + `$SourceVaultClaudeCodeIngestIntervalSeconds` 間隔で自動実行する。
 → `<|"Status"->"OK"|"DryRun"|"Error", "MachineTag", "Scanned", "Changed", "Ingested", "Skipped", "Deferred", "RollupDir", "PerSession", "Mirror"(SourceVaultMirrorClaudeCodeLogs の結果; MirrorRaw->False なら Missing["Disabled"])|>`
-Options: `"DryRun"` -> False, `"MaxSessionsPerRun"` -> Automatic (整数で 1 回の処理数を制限; 残りは Deferred で次回へ), `"MaxAgeDays"` -> 180 (All で全期間), `"MaxFileMB"` -> 200 (超過 transcript は skip), `"ForceRefresh"` -> False (True で watermark を無視し全再 digest — digest スキーマ更新後に各マシンで 1 回実行する), `"MirrorRaw"` -> True (生ログの Dropbox ミラーを同時実行するか)
+Options: `"DryRun"` -> False, `"MaxSessionsPerRun"` -> Automatic (整数で 1 回の処理数を制限; 残りは Deferred で次回へ; 古い順に処理), `"MaxAgeDays"` -> 180 (All で全期間), `"MaxFileMB"` -> 200 (超過 transcript は skip), `"ForceRefresh"` -> False (True で watermark を無視し全再 digest — digest スキーマ更新後に各マシンで 1 回実行する), `"MirrorRaw"` -> True (生ログの Dropbox ミラーを同時実行するか)
 
 ### SourceVaultClaudeCodeLogStatus[]
 ローカル走査対象と rollup 集約状況・生ログミラー状況。
 → `<|"MachineTag", "LocalSessions", "UningestedSessions", "WatermarkedSessions", "RollupByMachine", "RollupTotal", "LogRoots", "RollupDir", "WatermarkPath", "MirrorRoot", "MirrorByMachine"|>`
 
 ### SourceVaultClaudeCodeSessionDigest[jsonlPath, opts]
-1 セッション transcript からダイジェストを作る (純関数寄り; 保存しない)。ユーザー発話 preview は 400 字 x 最大 12 件 (先頭 8 + 末尾 4)、秘密らしき token (sk-/bearer 等) はマスク、system-reminder は除去。harness (ClaudeEval 等のワンショット呼び出し) の boilerplate プロンプトはタスク本文抽出に置換される。privacy は cwd が MyPackages 下なら 0.4、それ以外は fail-closed 0.75。
+1 セッション transcript からダイジェストを作る (純関数寄り; 保存しない)。ユーザー発話 preview は 400 字 x 最大 12 件 (先頭 8 + 末尾 4)、秘密らしき token (sk-/bearer 等) はマスク、system-reminder / command-message は除去。harness (ClaudeEval 等のワンショット呼び出し) の boilerplate プロンプトはタスク本文抽出に置換される。privacy は cwd が MyPackages 下なら 0.4、それ以外は fail-closed 0.75。
 → `<|"ObjectClass"->"ClaudeCodeSessionDigest", "SchemaVersion"->2, "SessionId", "MachineTag", "Project", "SessionKind"->"interactive"|"harness", "Cwd", "GitBranch", "ClientVersion", "StartedAtUTC", "LastAtUTC", "Models", "LineCount", "SkippedLines", "UserMessageCount", "AssistantMessageCount", "ToolCounts", "FilesTouched", "Title", "Summaries", "UserPreviews", "AssistantTail", "EffectivePrivacyLevel", "DigestAtUTC"|>`
 Options: `"MachineTag"` -> Automatic (省略時 `SourceVaultMachineTag[]`)
 
@@ -38,19 +38,19 @@ rollup namespace 用の正準 machine tag (`$MachineName` を path-safe 化)。
 読み手は全マシンの rollup shard を読み、SessionId 毎に最新 digest へ dedup する (rollup の signature キャッシュ付き)。
 
 ### SourceVaultClaudeCodeSessions[opts]
-dedup 済みダイジェストのリスト (LastAtUTC 新しい順)。
+dedup 済みダイジェストのリスト (LastAtUTC 新しい順)。共有 sidecar の LLM 要約を自動 join し、あれば `"SummaryLLM"` / `"SummaryStale"` を付す。
 → List of Association
 Options: `"MachineTag"` -> All | _String, `"Project"` -> All | _String (部分一致), `"Limit"` -> All, `"Kind"` -> All | "interactive" | "harness"
 
-**SessionKind**: `"harness"` = Claude Working の一時 project で走るワンショット自動呼び出し (ClaudeEval コード生成・doc 更新等。実測で全体の 9 割超)、`"interactive"` = 対話セッション。harness のプロンプト boilerplate ("You are an expert ..." / "## Project guidelines ...") は digest 時にタスク本文 (`=== TASK OVERVIEW ===` ブロック / 末尾 `Task:`) へ置換され、Title/preview/検索を汚さない。
+**SessionKind**: `"harness"` = Claude Working の一時 project (project 名に "claude-project-" を含む、または cwd に "Claude Working" を含む) で走るワンショット自動呼び出し (ClaudeEval コード生成・doc 更新等。実測で全体の 9 割超)、`"interactive"` = 対話セッション。harness のプロンプト boilerplate ("You are an expert ..." / "## Project guidelines ...") は digest 時にタスク本文 (`=== TASK OVERVIEW ===` ブロック / 末尾 `Task:`) へ置換され、Title/preview/検索を汚さない。
 
 ### SourceVaultClaudeCodeSessionSearch[query, opts]
-トークン単位 OR スコアリング (Title 3 / Summaries・SummaryLLM 2.5 / UserPreviews・FilesTouched 2 / ...) + 決定論 tie-break (Score 降順 → LastAtUTC 降順 → SessionId)。score 0 は返さない。core 版 (Association リスト)。
+トークン単位 (2 文字以上) OR スコアリング (Title 3 / SummaryLLM・Summaries 2.5 / UserPreviews・FilesTouched 2 / AssistantTail・Project+Cwd・MachineTag+Models 1 / ToolCounts keys 0.5; SessionId 完全一致 +10) + 決定論 tie-break (Score 降順 → LastAtUTC 降順 → SessionId)。score 0 は返さない。core 版 (Association リスト)。
 → List of Association (各 "Score" 付き)
 Options: `"Limit"` -> 20, `"MachineTag"` -> All, `"Project"` -> All, `"Kind"` -> All | "interactive" | "harness"
 
 ### SourceVaultClaudeCodeSessionSearchView[query, opts]
-上記の Dataset 表示版。列 = Score / Machine / Last / **Kind / Title / 概要** / SessionId。概要は LLM 要約 (キャッシュ) があればそれ、無ければ先頭発話 + "…(要約未生成)"。digest が要約後に伸びていれば "(追記あり・要約は旧版)" を付す。
+上記の Dataset 表示版。列 = Score / Machine / Last / **Kind / Title / 概要** / SessionId。概要は LLM 要約 (キャッシュ) があればそれ、無ければ先頭発話 (最大2件) + "…(要約未生成)"。digest が要約後に伸びていれば "(追記あり・要約は旧版)" を付す。
 Options: 検索と同じ (Limit/MachineTag/Project/Kind) + `"Summarize"` -> False (True で表示行の未生成分をその場で LLM 生成; 1 件数秒〜数十秒の同期実行), `"MaxRows"` -> 25
 
 ## 生 transcript の Dropbox ミラー + 全文閲覧
@@ -66,19 +66,19 @@ Options: `"DryRun"` -> False, `"MaxFilesPerRun"` -> Automatic
 既定 Automatic = `<CoreRoot の親>/claudecodelogs`。文字列で上書き可。
 
 ### SourceVaultClaudeCodeSessionTranscript[sessionId, opts]
-全文 transcript (core 版)。生ログを **local → mirror (他マシン分) → digest** の順で解決。
-→ `<|"SessionId", "Source"->"local"|"mirror"|"digest", "Path", "Turns"->{<|"Role","At","Text","Tools"|>..}|>`
+全文 transcript (core 版)。生ログを **local → mirror (他マシン分) → digest** の順で解決 (`.claude/projects` 配下で `<sessionId>.jsonl` を depth 2 まで探索)。assistant turn には元 `message.model` を `"Model"` として保持。
+→ `<|"SessionId", "Source"->"local"|"mirror"|"digest", "Path", "Turns"->{<|"Role","At","Text","Tools",("Model")|>..}|>`
 Options: `"IncludeMeta"` -> False (True で system-reminder 等も残す)
 
 ### SourceVaultClaudeCodeSessionView[sessionId, opts]
-全文の表示版。ヘッダ (Title/マシン/期間/LLM 要約) + user/assistant 対話を Panel 列で整形。
+全文の表示版。ヘッダ (Title/マシン/SessionKind/期間/source/turn数/LLM 要約) + user/assistant 対話を Panel 列で整形。
 Options: `"MaxTurns"` -> 80, `"MaxCharsPerTurn"` -> 2000
 
 ## LLM 要約 (notebook summary と同型)
 
-要約は共有 sidecar `<CoreRoot>/rollup/claudecode_sessions/_summaries/<sessionId>.json` に保存され全マシンで共有。生成は main kernel のみ (service kernel では LLMRouteUnavailable)。
+要約は共有 sidecar `<CoreRoot>/rollup/claudecode_sessions/_summaries/<sessionId>.json` に保存され全マシンで共有 (atomic write・last-writer-wins)。生成は main kernel のみ (service kernel では LLMRouteUnavailable)。
 
-**モデルルーティング**: digest の privacy <= 0.49 (通常のコード作業 = 0.4) は **`$ClaudeDocModel`** (doc 生成用・安価高品質、例 Sonnet) を主経路で直接呼ぶ。失敗時 (オフライン/API 不通) のみ notebook summary と同じ local-first ladder (`iCallSummaryLLMWithFallback`) へフォールバック。privacy > 0.49 のセッションは従来どおり local-first のみ (既定 cloud Deny)。
+**モデルルーティング**: digest の privacy <= 0.49 (`$iSVLLCloudMaxPrivacy`; 通常のコード作業 = 0.4) は **`ClaudeCode`$ClaudeDocModel`** (doc 生成用・安価高品質) を主経路で `ClaudeCode`ClaudeQuerySync` 経由で直接呼ぶ (paid-API guard・LLM boundary self-gate を通過する必要あり)。失敗時 (オフライン/API 不通/guard 拒否) のみ notebook summary と同じ local-first ladder (`iCallSummaryLLMWithFallback`) へフォールバック。privacy > 0.49 のセッションは従来どおり local-first のみ (既定 cloud Deny)。
 
 ### SourceVaultClaudeCodeSessionSummary[sessionId, opts]
 1 セッションを 2〜3 文に LLM 要約しキャッシュする。Current (保存時 SourceLineCount = 現 LineCount) なら再生成しない。
@@ -88,21 +88,21 @@ Options: `"ForceRefresh"` -> False, `"MaxLength"` -> 300, `"Model"` -> Automatic
 ### SourceVaultClaudeCodeSummarizeSessions[opts]
 未生成/stale のセッションを新しい順にまとめて要約 (同期)。発話ゼロのセッションは対象外。失敗は PerSession の `Reason` で診断できる。
 → `<|"Requested", "Generated", "Cached", "Failed", "PerSession" (各 <|Status, Reason, Cached, Title|>)|>`
-Options: `"Limit"` -> 10, `"Query"` -> None (文字列なら検索ヒットのみ), `"MachineTag"` -> All, `"Kind"` -> "interactive" (既定; harness ワンショットは大量なので除外。含めるなら All) + 上記オプション
+Options: `"Limit"` -> 10, `"Query"` -> None (文字列なら検索ヒットのみ), `"MachineTag"` -> All, `"Kind"` -> "interactive" (既定; harness ワンショットは大量なので除外。含めるなら All) + `SourceVaultClaudeCodeSessionSummary` の各オプション
 
 読み API (`SourceVaultClaudeCodeSessions` / `SessionSearch` / `SessionGet`) は要約を自動 join し、`"SummaryLLM"` / `"SummaryStale"` を付す。MCP 行の Summary/body にも先頭に載る。
 
 ### SourceVaultClaudeCodeSessionGet[sessionId]
-sessionId のダイジェスト全体。
+sessionId のダイジェスト全体 (要約 join 済み)。
 → Association | Missing["NotFound"]
 
 ## MCP 露出
 
 ### SourceVaultRegisterLLMLogMCPAdapter[]
 data adapter "llmlog" を登録 (冪等; 本ファイルロード時に自動試行)。kinds: `llmlog` / `claudecode`。URI は record namespace を間借り: `sv://record/svcclog-<sessionId>` (mail の svmail- と同型; URI namespace table 変更不要)。
-- search 行: URI / Title / Summary (LLM 要約があれば先頭 + machine|project|期間|件数) / Snippet (先頭 preview 500 字) / PrivacyLevel / PrivacyClass ("CodeWork" if privacy<=0.4, else "Unclassified") / Metadata (SessionId, SessionKind, MachineTag, Project, GitBranch, StartedAtUTC, LastAtUTC, Models, UserMessageCount, AssistantMessageCount, TopTools, FilesTouched)
+- search 行: URI / Title / Summary (LLM 要約があれば先頭 + machine|project|期間|件数) / Snippet (先頭 preview 最大3件・500 字) / Score / PrivacyLevel (既定 0.75) / PrivacyClass ("CodeWork" if privacy<=0.4, else "Unclassified") / Metadata (SessionId, SessionKind, MachineTag, Project, GitBranch, StartedAtUTC, LastAtUTC, Models, UserMessageCount, AssistantMessageCount, TopTools (上位5), FilesTouched (最大8))
 - filters: `machineTag`, `project`, `kind` ("interactive" で harness 除外)
-- body (digest 全文の整形テキスト) は grant 必須 (`RequireGrantFor` body/raw)。生 transcript は MCP に出さない。
+- body (digest 全文の整形テキスト: summary/summaries/user previews/last assistant text/files touched/tool counts) は grant 必須 (`RequireGrantFor` body/raw)。生 transcript は MCP に出さない。
 
 ## 運用ノート
 

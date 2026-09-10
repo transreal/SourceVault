@@ -81,7 +81,7 @@ Options: `"Force"` -> False (True で既存 Summary も再生成), `"Model"` -> 
 ### SourceVaultBackfillSourceSummaries[opts]
 web / local ソースのうち Summary が未設定 (または過去の LLM エラー本文) のものに、ingest 済み snapshot の本文 (plaintext) を LLM で要約して付与する (arXiv は SourceVaultBackfillArXivSummaries が担当)。モデルは行の PrivacyLevel で決まる: PL > 0.5 は `$ClaudePrivateModel` (ローカル LLM)、以下はクラウド CLI。PL 不明は fail-safe で 1.0 = ローカル扱い。本文は UNTRUSTED データ境界で包んでから渡し (prompt injection 対策)、prescan が quarantined と判定した本文は LLM へ渡さない。LLM エラー本文は保存されない (`iSVLooksLikeLLMError` ゲート)。`$Language` が Japanese のセッションで実行すること。
 → `<|"Candidates", "Updated", "AlreadyPresent", "NoText", "Quarantined", "Failed", "Remaining", "Language", "Results"|>`
-Options: `"Kind"` -> `{"web", "local"}` (既定。`All` で arxiv も含む), `"Sources"` -> All|`{sourceId...}` (対象を明示指定), `"Force"` -> False (True で既存 Summary も再生成), `"Limit"` -> 10 (Infinity で全件), `"Model"` -> Automatic (明示指定で PL 分岐を上書き), `"MaxChars"` -> Automatic (`$SourceVaultSourceSummaryMaxChars`), `"TimeoutSeconds"` -> 120 (本文抽出 1 件あたり)
+Options: `"Kind"` -> `{"web", "local"}` (既定。`All` で arxiv も含む), `"Sources"` -> All|`{sourceId...}` (対象を明示指定), `"Force"` -> False (True で既存 Summary も再生成), `"Limit"` -> 10 (Infinity/Automatic で全件), `"Model"` -> Automatic (明示指定で PL 分岐を上書き), `"MaxChars"` -> Automatic (`$SourceVaultSourceSummaryMaxChars`), `"TimeoutSeconds"` -> 120 (本文抽出 1 件あたり)
 例: `SourceVaultBackfillSourceSummaries["Limit" -> 5]` (新しい順に 5 件だけ試す)
 
 ### $SourceVaultSourceSummaryMaxChars
@@ -433,18 +433,18 @@ compiled model registry を削除し、次回アクセス時に seed (コード�
 Options: `"Channel"` -> `"public"` (既定)
 
 ### SourceVaultSetModelIntent[variable, spec]
-SourceVault が選択するモデルの intent 割り当てを変更する。variable: `"$ClaudeModel"` | `"$ClaudeDocModel"` | `"$ClaudePrivateModel"` | `"$ClaudeFallbackModels"`。spec: `{provider, intent}` (例 `{"anthropic", "heavy"}`)、FallbackModels は `{{provider,intent}, ...}`。設定後 `SourceVaultAssignClaudeModels[]` を呼んで実変数に反映する。$NBApprovalHeads に登録され ClaudeEval 経由では Hold -> Approve が必要。
+SourceVault が選択するモデルの intent 割り当てを変更する。variable: `"$ClaudeModel"` | `"$ClaudeDocModel"` | `"$ClaudeAdvisaryModel"` | `"$ClaudePrivateModel"` | `"$ClaudeFallbackModels"`。spec: `{provider, intent}` (例 `{"anthropic", "heavy"}`)、FallbackModels は `{{provider,intent}, ...}`。設定後 `SourceVaultAssignClaudeModels[]` を呼んで実変数に反映する。$NBApprovalHeads に登録され ClaudeEval 経由では Hold -> Approve が必要。
 → Association
 例: `SourceVaultSetModelIntent["$ClaudeModel", {"anthropic", "heavy"}]`
 
 ### SourceVaultModelIntentMap[] → Association
 変数名 -> intent spec のマッピングを返す読み取り公開関数。`NBAccess`NBSyncClaudeModelVars` がこれを読んでモデル変数を解決・代入する。
-例: `<|"$ClaudeModel" -> {"claudecode","code-heavy"}, ...|>`
+例: `<|"$ClaudeModel" -> {"claudecode","code-heavy"}, "$ClaudeAdvisaryModel" -> {"chatgptcodex","Automatic"}, ...|>`
 
 ### SourceVaultAssignClaudeModels[opts]
-intent マッピング (SourceVault) と信頼ローカルサーバ (`NBAccess`NBResolveLocalServer`) から $ClaudeModel / $ClaudeDocModel / $ClaudePrivateModel / $ClaudeFallbackModels を設定する。SourceVault ロード時に自動実行される。
+intent マッピング (SourceVault) と信頼ローカルサーバ (`NBAccess`NBResolveLocalServer`) から $ClaudeModel / $ClaudeDocModel / $ClaudeAdvisaryModel / $ClaudePrivateModel / $ClaudeFallbackModels を設定する。SourceVault ロード時に自動実行される。$ClaudeAdvisaryModel (仕様生成/検証の advisory ロール、既定 codex CLI) だけは他と異なり、現在値がパッケージ既定 (`{"chatgptcodex","Automatic"}`) またはこの intent の解決結果と一致するときだけ代入する — セッション中に手動設定した値を黙って上書きしない。
 → Association
-Options: `Verbose` -> False (既定)
+Options: `"Verbose"` -> False (既定), `"Force"` -> False (既定。True で $ClaudeAdvisaryModel のセッション上書き保護を無視して強制反映。SourceVaultSetModelIntent が内部でこれを使う)
 
 ### SourceVaultRefreshModelRegistry[opts]
 クラウド (anthropic/openai) とローカル (LM Studio) のエンドポイントからモデル一覧を取得し compiled model registry を更新する。クラウド API キーは `NBAccess`NBGetAPIKey` 経由で取得し、キーが無い provider はスキップ。取得エントリは Source -> "auto-fetch" でマークし、既存の seed/manual エントリは温存してマージする。
@@ -597,9 +597,9 @@ notebook の意味的内容のみを対象としたハッシュを計算する�
 ## Stage 9 P1 Step 4: Summary artifact stale 判定
 
 ### SourceVaultRegisterNotebookSummary[path, summary, opts]
-notebook の summary artifact を登録する。現在の snapshot (SnapshotId + SemanticHash) に紐づけて保存されるため、後日 stale 判定が可能。summary 文字列を外部から受け取って保存する形式。
+notebook の summary artifact を登録する。現在の snapshot (SnapshotId + SemanticHash) に紐づけて保存されるため、後日 stale 判定が可能。summary 文字列を外部から受け取って保存する形式。SourceVaultNotebookSummary (Step 5) が内部でこれを呼び、PrivacyLevel 以下の追加フィールドを自動計算して渡す。
 → `<|"Status" -> "OK"|"Failed", "SummaryId" -> _String, "NotebookRef" -> _String, ...|>`
-Options: `"SummaryFormat"` -> `"text"` (既定) | `"markdown"`, `"GeneratedBy"` -> `"manual"` (既定)
+Options: `"SummaryFormat"` -> `"text"` (既定) | `"markdown"`, `"GeneratedBy"` -> `"manual"` (既定), `"PrivacyLevel"` -> 0.0 (既定。要約本文自体の PrivacyLevel。confidential セルを材料に生成した要約は 1.0 を渡してクラウド転送を防ぐ), `"PromptCellMaxPrivacyLevel"` -> 0.0 (既定。実際にプロンプトへ投入したセルの PrivacyLevel 最大値。旧名 InputPrivacyLevel), `"NotebookDeclaration"` -> Automatic (既定。Automatic は `NBAccess`NBGetCloudPublishable` から判定、明示指定は `"Public"` | `"Private"` | `"Unspecified"`), `"PromptVersion"` -> 0 (既定。Integer 以外は 0 に丸められる), `"CellsUsed"` -> 0 (既定。プロンプトに使った先頭セル数)
 
 ### SourceVaultGetNotebookSummary[path]
 notebook に紐づく summary record を取得する。Summary が未登録の場合は `"Status" -> "Missing"` を返す。

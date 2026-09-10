@@ -705,9 +705,14 @@ SourceVault`SourceVaultClaudeCodeSessionTranscript[sessionId_String, OptionsPatt
                     b_Association /; Lookup[b, "type", ""] === "tool_use" :>
                       ToString @ Lookup[b, "name", "?"]];
                   If[StringTrim[txt] =!= "" || tools =!= {},
+                    (* 2026-09-08: keep the per-turn model id (message.model)
+                       so consumers (TurnWiki model profiles) can attribute the
+                       turn; the digest only had the per-session union *)
                     AppendTo[turns, <|"Role" -> "assistant",
                       "At" -> Lookup[r, "timestamp", Missing[]],
-                      "Text" -> txt, "Tools" -> tools|>]]]],
+                      "Text" -> txt, "Tools" -> tools,
+                      "Model" -> With[{m = Lookup[msg, "model", Missing[]]},
+                        If[StringQ[m], m, Missing[]]]|>]]]],
             _, Null]]]]],
     lines];
   <|"SessionId" -> sessionId, "Source" -> raw["Source"], "Path" -> raw["Path"],
