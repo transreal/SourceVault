@@ -617,9 +617,10 @@
    "SourceVaultPrivate", "SourceVaultPrivateResult", 
    "SourceVaultPrivateView", "SourceVaultRegisterPrivacyContract", 
    "SourceVaultRegisterPrivacyProbe", "SourceVaultResetEvaluationPrivacy", 
-   "SourceVaultWithPrivacyScope", "Sym", "Symbol", 
-   "$SourceVaultPrivacyDefaultLevel", "$SourceVaultPrivacyMarkThreshold", 
-   "$SourceVaultPrivacyViewBadge"}, "SourceVault_promptrouter.wl" -> 
+   "SourceVaultWithPrivacyScope", "Sym", "Symbol",
+   "$SourceVaultPrivacyCellEpilog",
+   "$SourceVaultPrivacyDefaultLevel", "$SourceVaultPrivacyMarkThreshold",
+   "$SourceVaultPrivacyViewBadge"}, "SourceVault_promptrouter.wl" ->
   {"AddPromptMemo", "SaveLastPrompt", "SourceVaultAddSavedPrompt", 
    "SourceVaultAutoSaveLastPrompt", "SourceVaultCallableAllowlistRegistry", 
    "SourceVaultCallableAllowlistView", "SourceVaultCaptureLastPromptRun", 

@@ -27,6 +27,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_realtime.wl` — クラウド経路の音声会話（OpenAI Realtime、既定のマイク/スピーカーを使用）の解決層。ローカル音声資産の解決層である voice と対になるが、依存関係は起動時にだけ効くため独立してロードされる
 - `SourceVault_vision.wl` — ローカル視覚資産（人物検出・姿勢推定 ONNX モデル）の解決層
 - `SourceVault_slidedeck.wl` — 発表（スライド + 発表シナリオ）登録簿
+- `SourceVault_knowledgegraph.wl` — 発表用知識グラフ（KG）層。論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手（理解度）と時間（枚数・分）を与えて最小全域順序木・階層概要・詰め込み（packing）・言語別アウトラインを決定的に計算する（LLM は呼ばない）。kb（過去デッキ検索）・oopsseed（グラフ描画）に弱結合
 - `SourceVault_contracts.wl` — サブシステム間のコントラクト（型・不変条件）定義
 - `SourceVault_wiring.wl` — サブシステム間の配線・初期化
 - `SourceVault_simrun.wl` — シミュレーション実行との連携
@@ -53,7 +54,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_autotrigger.wl` — 自動トリガスケジューラ（対話 FE カーネルで自動起動）
 - `SourceVault_promptrouter.wl` — PromptRouter 拡張
 
-リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。暗号化・メールを使う場合は `SourceVault_crypto.wl` / `SourceVault_identity.wl` / `SourceVault_privacy.wl` / `SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` も、Eagle 統合を使う場合は `SourceVault_eagle.wl`(手動ロード)も同様に配置します(メール系サブファイルは各 Mail 関数の初回呼び出し時にオンデマンドで読み込まれます。`SourceVault_privacy.wl` は View/Core の正準プライバシー判定 exit(`SourceVaultPrivateView` / `SourceVaultNotePrivacyOf`)を提供し maildb より先にロードされます。弱結合のため未ロードでも maildb 自体は動作しますが、その場合は旧来のテキスト走査によるプライバシー判定にフォールバックします)。
+リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。暗号化・メールを使う場合は `SourceVault_crypto.wl` / `SourceVault_identity.wl` / `SourceVault_privacy.wl` / `SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` も、Eagle 統合を使う場合は `SourceVault_eagle.wl`(手動ロード)も同様に配置します(メール系サブファイルは各 Mail 関数の初回呼び出し時にオンデマンドで読み込まれます。`SourceVault_privacy.wl` は View/Core の正準プライバシー判定 exit(`SourceVaultPrivateView` / `SourceVaultNotePrivacyOf`)を提供し maildb より先にロードされます。弱結合のため未ロードでも maildb 自体は動作しますが、その場合は旧来のテキスト走査によるプライバシー判定にフォールバックします)。Eagle 保存論文の和訳ノートブックを生成・登録する機能(Eagle View の「訳」ボタン)を使う場合は `SourceVault_papernb.wl`(初回呼び出し時にオンデマンドロード)も同様に配置してください。
 
 依存パッケージも同様にインストールできます。
 
@@ -101,6 +102,7 @@ $packageDirectory\
   SourceVault_realtime.wl        ← クラウド音声会話 (OpenAI Realtime) の解決層(本体ロード時に自動ロード)
   SourceVault_vision.wl          ← ローカル視覚資産の解決層(本体ロード時に自動ロード)
   SourceVault_slidedeck.wl       ← 発表(スライド)登録簿(本体ロード時に自動ロード)
+  SourceVault_knowledgegraph.wl  ← 発表用知識グラフ(KG)層(本体ロード時に自動ロード)
   SourceVault_contracts.wl       ← コントラクト定義(本体ロード時に自動ロード)
   SourceVault_wiring.wl          ← 配線・初期化(本体ロード時に自動ロード)
   SourceVault_simrun.wl          ← シミュレーション実行連携(本体ロード時に自動ロード)
@@ -1139,6 +1141,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultNotebookSummary` が失敗する | ClaudeRuntime がロードされているか、API キーまたはローカル LLM が利用可能か確認 |
 | `SourceVaultNotebookSummary` 等の LLM 呼び出しが `LLMBoundaryRefused` で失敗する | 境界観測 (Boundary Observation) の self-gate により、その呼び出し元(例: `sourcevault:iCallSummaryLLM`)が拒否されています。`SourceVault`Private`$iSVBoundaryObsApplyResult` と `SourceVaultSetBoundaryObservation` の設定を確認してください |
 | LLM 呼び出しが `Failed["PrivateModelUnavailable"]` を返す | 対象データが機密扱い(PrivacyLevel >= 0.5、または PL 不明で 1.0 にフォールバック)なのに `$ClaudePrivateModel` が未設定・解決不能です(2026-09-01 以降、fail-closed でクラウドへは自動フォールバックしません)。「初回セットアップ」手順 4 に従って `$ClaudePrivateModel` / `NBRegisterTrustedLocalServer` を設定してください |
+| `SourceVaultNotePrivacy` でマークした入力セルが赤くならない(出力セルは正しく機密表示される) | 2026-09-11 実機で判明した、環境によっては出力セル確定前に評価完了扱いとなり ScheduledTask 経由の遅延 flush が走らないケースがあった問題。`$SourceVaultPrivacyCellEpilog`(既定 True)により、評価完了後(出力セルが存在する時点)の CellEpilog で確実に flush するよう修正済み。SourceVault を最新版に更新すれば自動的に有効になります |
 | 大きい notebook(`SkipReason` -> `"FileTooLarge"`)の Header/Todo が再 index しても復元されない | skip 済み (too-large) snapshot は Header/Todos を保持しない仕様(再生成不可)。旧形式 (`SourceSize` フィールド無しの `snap-toolarge-*`) は最新形式へ自動アップグレードされ、以後は毎回ではなく 1 度だけ ForceReindex すれば済みます |
 | `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |
 | `SourceVaultMailAgendaItems[]` が要対応メールを返さない・見逃す | Category/Priority/Deadline は `SourceVaultInferMailDerivedBatch[]` の事前計算に依存(未計算メールは除外せず `PendingCount` に計上されるだけ)。まず `SourceVaultMailAddSummaries[mbox]` で派生を計算する。オーナー宛て判定は `$SourceVaultMailAgendaDirectionThreshold`(既定 0.7)未満だと候補から外れるため、`PrivateVault/config/mailagenda.json` の OwnerAddresses/OrgAddresses/AddresseePatterns を確認 |

@@ -83,10 +83,12 @@ SourceVault をロードすると、以下が自動的に有効になります�
 
 | 機能 | 内容 |
 |---|---|
-| コアサブファイルの自動ロード | `SourceVault_core.wl` / `SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_simrun.wl` / `SourceVault_searchindex.wl` / `SourceVault_searchview.wl` / `SourceVault_servicemanager.wl` / `SourceVault_webingest.wl` / `SourceVault_mcp.wl` / `SourceVault_llmlog.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / `SourceVault_workflowregistry.wl` / `SourceVault_knowledgehome.wl` / `SourceVault_cognition.wl` / `SourceVault_adjudication.wl` / `SourceVault_capbroker.wl` / `SourceVault_taint.wl` / `SourceVault_anomaly.wl` / `SourceVault_routine.wl` / `SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` / `SourceVault_todo.wl` / `SourceVault_anonymize.wl` / `SourceVault_diagnostics.wl` を依存順に自動ロード |
+| コアサブファイルの自動ロード | `SourceVault_core.wl` / `SourceVault_contracts.wl` / `SourceVault_wiring.wl` / `SourceVault_simrun.wl` / `SourceVault_searchindex.wl` / `SourceVault_searchview.wl` / `SourceVault_servicemanager.wl` / `SourceVault_webingest.wl` / `SourceVault_mcp.wl` / `SourceVault_llmlog.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` / `SourceVault_papernb.wl` / `SourceVault_knowledgegraph.wl` / `SourceVault_workflowregistry.wl` / `SourceVault_knowledgehome.wl` / `SourceVault_cognition.wl` / `SourceVault_adjudication.wl` / `SourceVault_capbroker.wl` / `SourceVault_taint.wl` / `SourceVault_anomaly.wl` / `SourceVault_routine.wl` / `SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` / `SourceVault_todo.wl` / `SourceVault_anonymize.wl` / `SourceVault_diagnostics.wl` を依存順に自動ロード |
 | Todo キャッシュ DB | `SourceVault_todo.wl` が todo 項目の正準キャッシュを提供 (`SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` からは弱結合)。各 todo record は `LastChanged` (最終セル変更時刻。対象セルの `CellChangeTimes` の最大値から算出した AbsoluteTime) を持ち、Done 化タイミングの推定やリマインドの起点 (anchor) として使われる。`LastChanged` を持たない旧 snapshot は `Missing["None"]` として読み取れる (additive フィールドのため再 index は不要)。標準ワークフロー (`SourceVaultTodos` / `SourceVaultNewTodo` / `SourceVaultTodoDone` 等) の詳細は後述の「Todo 管理 (SourceVault_todo)」節を参照 |
 | 匿名化 (declassification) 拡張 | `SourceVault_anonymize.wl` が canonicalization / KeyRing (NBAccess MAC KeyRef 上) / 衝突耐性 ID 式 (EntityID / SourceObjectID / SourceUnitID / DerivedUnitID) / 役割別 token (Subject / Item / Job / ResultSlot) + ReleaseHandle (CSPRNG) を提供。現時点では本文を読まない schema-only の `SourceVaultAnonymizationPlan` までが実装されており、高 PrivacyLevel の本文を実際に読んで匿名化する Execute 相当の関数は未実装 (grant gate の実装後に追加予定) |
 | SIEM / システム診断層 | `SourceVault_diagnostics.wl` が NBAccess / claudecode / ClaudeOrchestrator / サービスマネージャ横断の診断情報を集約する collector / store / doctor 層を提供 (Phase 0 最小コア)。詳細は「システム診断 / SIEM 基盤 (SourceVault_diagnostics)」節を参照 |
+| 論文の和訳ノートブック登録簿 | `SourceVault_papernb.wl` が、取り込み済み論文 (arXiv/web/local ソースおよび Eagle の PDF 項目) に対する和訳ノートブックの生成・登録簿を提供する (PL 継承)。core の root 解決だけに依存するため早い段階でロードされる。詳細は後述の「論文の和訳ノートブック (SourceVault_papernb)」節を参照 |
+| 発表用知識グラフ層 (KG) | `SourceVault_knowledgegraph.wl` が、論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手 (理解度・前提知識) と時間 (枚数・分) から階層構成・アウトラインを決定的に計算する機能を提供する (LLM 非依存、FrontEnd/Notebook 非依存)。詳細は後述の「発表用知識グラフ (SourceVault_knowledgegraph)」節を参照 |
 | ローカル資産解決層 / 発表登録簿 / KB 層・対話 QA・音声会話層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_talkqa.wl` (KB の上に載る対話型 QA 層) / `SourceVault_oopsseed.wl` / `SourceVault_realtime.wl` (クラウド経路の音声会話。OpenAI Realtime を既定のマイク/スピーカーで使う。`SourceVault_voice.wl` と対になる層だが、依存は呼び出し時にだけ効くため、この位置での自動ロードで問題ない) を自動ロード |
 | Cane 認知支援基盤 (既定 observe-only) | `SourceVault_knowledgehome.wl` (Knowledge Home 閲覧・非破壊追記・位置づけ/近傍提案) / `SourceVault_cognition.wl` (認知系イベントの暗号化保存・Guard shadow・owner 入力支援) / `SourceVault_adjudication.wl` (複数 LLM 裁定コア + runnable driver) / `SourceVault_capbroker.wl` (capability broker・LLM boundary shadow/gate・観測設定の永続化) / `SourceVault_taint.wl` (入力信頼度評価・taint 伝播) / `SourceVault_anomaly.wl` (統計的異常検知、既定オフ)。いずれも既定は「判定を記録するだけ」(shadow/observe-only) で、明示的な owner 操作なしに送信をブロックしたり通知したりしない (詳細は後述の「Boundary Observation」コールアウトを参照) |
 | シミュレーション実行基盤 | `SourceVault_simrun.wl` がマシンプロファイル共有・GPU/CUDA サポート・サブカーネル burst 管理・SimulationRun 記録 (実行フォルダ + immutable snapshot の 2 層設計) を提供 (詳細は「シミュレーション実行基盤」節を参照) |
@@ -256,7 +258,7 @@ SourceVaultListSnapshotsForSource[sourceId]
 `SourceVaultListSources[]` / `SourceVaultListSnapshots[]` よりも高機能な一覧・検索 API として、`SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries` があります。いずれも **core (連想リストを返す) / View (装飾付き表を返す)** の 2 系統に分かれた設計になっています。
 
 - **core** (`SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries`) は `List[Association]` を返し、`Select` / `SortBy` / LLM 処理など後段の処理へそのまま連鎖できます。
-- **View** (`SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView`) はノートブックへの提示用に、各行にクリック可能なアクション (▶ URL、▶ 開く、タイトル/サマリークリックでのサマリーノート表示等) を備えた表 (Grid) を返します。
+- **View** (`SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView`) はノートブックへの提示用に、各行にクリック可能なアクション (▶ URL、▶ 開く、タイトル/サマリークリックでのサマリーノート表示等) を備えた表 (Grid) を返します。`SourceVault_papernb.wl` がロードされている環境では、arXiv/web/local の各行に**和訳ノートブック** (原文を日本語訳したノートブック) の生成/表示ボタンも付きます (詳細は後述の「論文の和訳ノートブック (SourceVault_papernb)」節を参照)。
 
 > 素の `Dataset` / 手組みの `Grid` を自前で組み立てないでください。行アクションが失われます。core の戻り値を `Select` 等で絞り込んだ後は、それをそのまま `SourceVaultSourcesView[rows]` のように行リスト直渡しで View 関数へ渡せます。
 
@@ -324,7 +326,7 @@ SourceVaultSummariesView["便覧", "Providers" -> {"pdfindex"}]
 
 `SourceVaultSummariesView` のクリックアクションは行の種別によって異なります。
 
-- `arxiv` / `web` / `local` → サマリーノート (`SourceVaultShowSourceSummary`、後述)
+- `arxiv` / `web` / `local` → サマリーノート (`SourceVaultShowSourceSummary`、後述)。`SourceVault_papernb.wl` がロードされていれば、同じ行に和訳ノートブックの生成/表示ボタンも付く (後述)
 - `eagle` → Eagle サマリー
 - `mail` → メール本文ウインドウ (`SourceVaultMailShowBody`。返信/全員に返信/翻訳して返信/アジェンダ操作つき。必要シャードのみ遅延ロード)。「▶ 開く」はメールならスレッド窓を開く
 - `todo` → todo ノート (クリックで対象の todo ノートを開く。`SourceVault_todo.wl` が保持する `LastChanged` により、直近に更新された todo が判別できる)
@@ -373,6 +375,27 @@ SourceVaultOpenSourceFile[sourceId]
 `SourceVaultShowSourceSummary` は Eagle の `SourceVaultEagleShowSummary` と同じ枠組みです。保存済みのユーザー追記版があればそれ (正本) を開き、無ければ Title / 著者 / 出版 / URL / 要約からノートを生成します。ノート内の「このノートを保存する」ボタンを押すと `<PrivateVault>/sources/summary-notes/` に保存され、以後はその保存版が開きます。これは `SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView` の表でタイトルまたはサマリーをクリックしたときの既定アクション (arxiv/web/local) でもあります。スタイルは `$SourceVaultSummaryNotebookStyle` (既定 `"SourceVault default.nb"`。Eagle サマリーノートと同じスタイル) で決まります。
 
 `SourceVaultOpenSourceFile` は、保存時の絶対パスではなく `ContentHash` から現在の PC の vault パスを都度再算出してから `SystemOpen` で開くため、別 PC (Dropbox 同期先) でも機能します。`SourceVaultSourcesView` / `SourceVaultArXivView` の「▶ 開く」ボタンの実体です。
+
+### 論文の和訳ノートブック (SourceVault_papernb)
+
+補助モジュール `SourceVault_papernb.wl` は、取り込み済み論文 (arXiv / web / local ソース) および Eagle の PDF 項目に対して、**和訳ノートブック**（原文を日本語へ訳したノートブック）を生成・登録・閲覧する登録簿機能を提供します。
+
+`SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView` の表には「和訳NB」列が追加され、Eagle の `SourceVaultEagleView` には（原本を開く▶・Eagle で表示⌂・サマリー表示☰に続く）4 つ目のボタン「訳」が追加されます。いずれも未登録なら生成ボタン (「＋ 和訳NB」/ 「▶ 和訳NB」は登録済みを開くボタン) として表示されます。対象になるのは種別が `arxiv` / `web` / `local` のいずれかで、`Id` が空でない行だけです。
+
+```mathematica
+(* 登録済みかどうかを確認する (未登録なら Missing["NotRegistered"]) *)
+SourceVault`SourceVaultPaperNotebook[sourceId]
+
+(* 和訳ノートブックを DocImportPaper 経由で生成して登録する *)
+SourceVault`SourceVaultMakePaperNotebook[sourceId, "Interactive" -> True]
+
+(* 登録済みの和訳ノートブックを開く *)
+SourceVault`SourceVaultOpenPaperNotebook[sourceId]
+```
+
+生成される和訳ノートブックの `PrivacyLevel` は、元ソースの実効 PrivacyLevel をそのまま継承します。取り込み済み論文 → 和訳ノートブックの登録簿は core の root 解決だけに依存するため早い段階でロードされます。
+
+> `SourceVault_papernb.wl` が未ロードの環境では、これらのボタン・列は表示されません。ボタン描画は `DownValues[SourceVault\`SourceVaultPaperNotebook]` の有無で弱結合的に判定されるため、モジュール不在時でも `SourceVaultSourcesView` / `SourceVaultSummariesView` / Eagle View 本体の動作には影響しません。
 
 ### ソースへのサマリー自動付与 (Backfill)
 
@@ -1218,7 +1241,7 @@ d = SourceVaultDecryptRecord[rec];
 | `"PrivacyLevel"` | `0.75` (`$SourceVaultPrivateThreshold`) | これ以上で平文 digest/index を抑制 |
 | `"ContentType"` | `"Generic"` | record 種別ラベル |
 | `"AccessTags"` | `{}` | アクセス制御タグ (AAD として認証) |
-| `"CloudSendAllowed"` | `False` | cloud materialization の前提条件 |
+| `"CloudSendAllowed"` | `False` | cloud materialization の前提条件 | `"CloudSendAllowed"` | `False` | cloud materialization の前提条件 |
 | `"Persist"` | `True` | `False` で in-kernel store に保存せず record のみ返す |
 | `"SensitiveFields"` | `{"Prompt","Memo","TargetExprString","ResolvedMaterial"}` | 漏洩検査の対象フィールド |
 
@@ -1508,7 +1531,7 @@ SourceVaultEntityEditUI[1]        (* 実体1件の編集フォーム (オーナ�
 
 ## ファイル構成 (暗号/メール機能)
 
-SourceVault の暗号・メール機能は、本体 `SourceVault.wl` のローダが依存順に Get する **5 つのサブファイル**に集約されています。また、`Get["SourceVault.wl"]` 単体でのロード時には、コア機能 (`SourceVault_core.wl`)・契約定義 (`SourceVault_contracts.wl`)・ワイヤリング (`SourceVault_wiring.wl`)・検索インデックス (`SourceVault_searchindex.wl`)・検索ビュー (`SourceVault_searchview.wl`)・サービスマネージャ (`SourceVault_servicemanager.wl`) に加え、シミュレーション実行基盤・PromptRouter 拡張・Web ingest・MCP・Claude Code セッションログ・メール構造/提案・Todo キャッシュ DB・匿名化拡張・SIEM 診断層のサブファイルが依存順に自動でロードされます。
+SourceVault の暗号・メール機能は、本体 `SourceVault.wl` のローダが依存順に Get する **5 つのサブファイル**に集約されています。また、`Get["SourceVault.wl"]` 単体でのロード時には、コア機能 (`SourceVault_core.wl`)・契約定義 (`SourceVault_contracts.wl`)・ワイヤリング (`SourceVault_wiring.wl`)・検索インデックス (`SourceVault_searchindex.wl`)・検索ビュー (`SourceVault_searchview.wl`)・サービスマネージャ (`SourceVault_servicemanager.wl`) に加え、シミュレーション実行基盤・PromptRouter 拡張・Web ingest・MCP・Claude Code セッションログ・メール構造/提案・論文の和訳ノートブック登録簿・発表用知識グラフ層・Todo キャッシュ DB・匿名化拡張・SIEM 診断層のサブファイルが依存順に自動でロードされます。
 
 | ファイル | 文脈 | 内容 |
 |---|---|---|
@@ -1518,7 +1541,7 @@ SourceVault の暗号・メール機能は、本体 `SourceVault.wl` のロー�
 | `SourceVault_privacy.wl` | `SourceVault\`` | privacy 判定の正準 exit (View/Core)。`SourceVault_maildb.wl` はこれに弱結合 |
 | `SourceVault_maildb.wl` | `SourceVault\`` | maildb + imap + mailui |
 
-> **SourceVault_privacy.wl (新規サブファイル):** メール本文や各種ノートの秘匿度 (PrivacyLevel) 判定を、View/Core 層に対する **正準な exit point** として切り出したモジュールです。公開関数は主に `SourceVaultPrivateView`（指定 record / note のプライバシー状態のビュー取得）と `SourceVaultNotePrivacyOf`（個別ノート・レコード単位の秘匿度判定コア）です。ロード順は `SourceVault_identity.wl` の後・`SourceVault_maildb.wl` の前で、`SourceVault_maildb.wl` はこれに **弱結合** しています — `SourceVault_privacy.wl` が (旧バージョンとの混在などで) 未ロードでも maildb 自体は動作を継続しますが、その場合の秘匿度判定は旧来のテキスト走査 (キーワードパターンによる簡易判定) にフォールバックし、`SourceVaultPrivateView` 経由の正準判定は使われません。
+> **SourceVault_privacy.wl (新規サブファイル):** メール本文や各種ノートの秘匿度 (PrivacyLevel) 判定を、View/Core 層に対する **正準な exit point** として切り出したモジュールです。公開関数は主に `SourceVaultPrivateView`（指定 record / note のプライバシー状態のビュー取得）と `SourceVaultNotePrivacyOf`（個別ノート・レコード単位の秘匿度判定コア）です。ロード順は `SourceVault_identity.wl` の後・`SourceVault_maildb.wl` の前で、`SourceVault_maildb.wl` はこれに **弱結合** しています — `SourceVault_privacy.wl` が (旧バージョンとの混在などで) 未ロードでも maildb 自体は動作を継続しますが、その場合の秘匿度判定は旧来のテキスト走査 (キーワードパターンによる簡易判定) にフォールバックし、`SourceVaultPrivateView` 経由の正準判定は使われません。評価セルの privacy マークは `$SourceVaultPrivacyCellEpilog` (既定 `True`) が制御します。有効なときは `SourceVaultNotePrivacy` が評価中の入力セルに `CellEpilog :> SourceVaultMarkEvaluationPrivacyCells[]` を付与し、評価完了後 (出力セルが実際に挿入された時点) にマークを確実に flush します。これは、環境によっては従来の `ScheduledTask` ベースの遅延 flush だけでは走らず「入力セルだけ赤くなり出力セルが決してマークされない」ケースへの保険で、同一セルへの `SetOptions` は 1 回だけに抑えられます。
 
 ```
 $packageDirectory\
@@ -1534,6 +1557,7 @@ $packageDirectory\
   SourceVault_kb.wl                ← KB (Graph-RAG 低遅延応答層。lexical/searchindex に依存するためそれらの後にロード、自動ロード)
   SourceVault_talkqa.wl            ← KB の上に載る対話型 QA 層 (自動ロード)
   SourceVault_oopsseed.wl          ← (自動ロード)
+  SourceVault_knowledgegraph.wl    ← 発表用知識グラフ層 (論文内容 + 周辺知識の順序・難易度つき KG、聴き手/時間からの階層構成計算。LLM 非依存・FrontEnd 非依存、自動ロード)
   SourceVault_realtime.wl          ← クラウド経路の音声会話 (OpenAI Realtime、既定のマイク/スピーカー。SourceVault_voice.wl と対になる層だが依存は呼び出し時にだけ効くためこの位置で自動ロード)
   SourceVault_searchview.wl        ← 検索ビュー / 横断検索の表示層 (自動ロード)
   SourceVault_servicemanager.wl    ← サービスマネージャ (自動ロード)
@@ -1543,6 +1567,7 @@ $packageDirectory\
   SourceVault_llmlog.wl            ← Claude Code セッションログ ingest / 検索 / 要約 / transcript 表示 (自動ロード)
   SourceVault_mailstructure.wl     ← メール構造の正規化・解析 (自動ロード)
   SourceVault_mailsuggest.wl       ← メール返信文面などの提案機能 (自動ロード)
+  SourceVault_papernb.wl           ← 取り込み済み論文 → 和訳ノートブックの登録簿 (PL 継承。core の root 解決だけに依存、自動ロード)
   SourceVault_workflowregistry.wl  ← コード化ワークフローのオンデマンドローダ (自動ロード)
   SourceVault_knowledgehome.wl     ← Cane Knowledge Home 閲覧・非破壊追記・位置づけ (自動ロード)
   SourceVault_cognition.wl         ← Cane 認知系イベントの暗号化保存・Guard shadow・owner 入力支援 (自動ロード)
@@ -1556,7 +1581,7 @@ $packageDirectory\
   SourceVault_todo.wl              ← Todo キャッシュ DB (routineplan/mailagenda から弱結合。各 record は LastChanged を保持、自動ロード)
   SourceVault_anonymize.wl         ← 匿名化 (declassification) 拡張。Canonicalization / KeyRing / 衝突耐性 ID・役割別 token (schema-only の Plan まで実装、自動ロード)
   SourceVault_diagnostics.wl       ← cross-package 診断 / SIEM collector・store・doctor 層 (Phase 0 最小コア、自動ロード)
-  SourceVault_eagle.wl             ← Eagle 連携 + privacy 継承付きセル出力 (旧 objectview を統合)
+  SourceVault_eagle.wl             ← Eagle 連携 + privacy 継承付きセル出力 (旧 objectview を統合。PDF 項目には和訳ノートブックボタンも追加)
   NBAccess_crypto.wl               ← 鍵隔離 (NBAccess` 文脈)
   SourceVault_crypto.wl            ← 暗号 + 鍵 + 鍵バンドル + 暗号 record + release
   SourceVault_identity.wl          ← アドレス帳 + 送信者認証 + identity + release plan
@@ -1565,7 +1590,7 @@ $packageDirectory\
   NBAccess.wl / claudecode.wl / ...
 ```
 
-> 旧来の細分化ファイル (`SourceVault_keys.wl` / `_encryptedstore.wl` / `_addressbook.wl` / `_imap.wl` / `_mailui.wl` など) は上記 5 ファイルに統合済みです。`sv://` の実データ/プロパティ取得は `SourceVault_mcp.wl`、privacy 継承付きのセル出力は `SourceVault_eagle.wl` に統合され、旧 `SourceVault_objectview.wl` は廃止されました。詳細な関数シグネチャは API リファレンス (`api_crypto.md` / `api_identity.md` / `api_privacy.md` / `api_maildb.md` / `api_llmlog.md` / `api_mcp.md` / `api_todo.md` / `api_anonymize.md` / `api_diagnostics.md` / `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md`) を参照してください。
+> 旧来の細分化ファイル (`SourceVault_keys.wl` / `_encryptedstore.wl` / `_addressbook.wl` / `_imap.wl` / `_mailui.wl` など) は上記 5 ファイルに統合済みです。`sv://` の実データ/プロパティ取得は `SourceVault_mcp.wl`、privacy 継承付きのセル出力は `SourceVault_eagle.wl` に統合され、旧 `SourceVault_objectview.wl` は廃止されました。詳細な関数シグネチャは API リファレンス (`api_crypto.md` / `api_identity.md` / `api_privacy.md` / `api_maildb.md` / `api_llmlog.md` / `api_mcp.md` / `api_todo.md` / `api_anonymize.md` / `api_diagnostics.md` / `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md` / `api_papernb.md` / `api_knowledgegraph.md`) を参照してください。
 
 ---
 
@@ -1920,3 +1945,113 @@ SourceVaultSimRuns["ising-sweep"]
 | `SourceVaultSimRunRecord[uri]` | 記録済み SimulationRun のメタを読む |
 | `SourceVaultSimRunFolder[uri]` | 実行フォルダを現在のマシンの絶対パスへ解決 (未同期なら `Missing["NotSynced", path]`) |
 | `SourceVaultSimRuns[slug]` | slug の実行履歴 (新しい順の URI リスト) |
+
+---
+
+## 発表用知識グラフ (SourceVault_knowledgegraph)
+
+`SourceVault_knowledgegraph.wl` は、論文 1 本 (または複数) の内容と周辺知識を「順序・難易度つきの知識グラフ (KG)」として保持し、聴き手 (理解度・前提知識) と時間 (枚数・分) を与えると、発表用の階層構成・アウトラインを **決定的に** 計算する層です。生成物はスライドそのものではなく KG であり、スライドは KG の投影という位置づけです。想定する処理段階は次の 6 つです。
+
+1. 知識グラフの構築 (Nodes / Edges: 関連度 + 因果/年代/導出/難易度の順序辺)
+2. 周辺知識ノードの追加と共有 background 層への連結
+3. 最小全域順序木の算出 (複数候補: 右背骨貪欲 = 線形拡張の階層分割)
+4. 階層ごとの概要生成 + 破綻検証 (順序違反 / 前提欠落 / 循環)
+5. 枚数・時間による詰め込み (packing) と枝刈り (pruning)
+6. トポロジカル順のシリアライズ → 言語別アウトライン → シナリオ md への変換
+
+### 設計原則
+
+- **service-loadable**: FrontEnd / Notebook / NBAccess / UI に依存しません。他 SourceVault モジュール (core の root 解決 / `SourceVault_kb.wl` の過去デッキ検索 / `SourceVault_oopsseed.wl` の描画) へは `DownValues` ガード付きの弱結合のみで参照するため、単体 `Get` でも `$SourceVaultKGRoot` を明示すればテストできます。
+- **LLM を内部で呼びません**: プロンプトは純関数として組み立て、LLM の応答 JSON は `SourceVaultKGFromJSON` / `SourceVaultKGMerge` で検証して取り込みます (LLM の実行自体はエージェント側の責務)。
+- **oops-ml のグラフ枠組みを再利用**: 辺レコードは `SourceVault_oopsseed.wl` の TopicItemGraph と同形 (`{From, To, EdgeKind, Weight, EvidenceRefs}` + `Order` / `OrderKind` / `Confidence`) で、`SourceVaultKGToTopicItemGraph` により `SourceVaultOOPSTopicGraphPlot` へそのまま渡せます。
+- **周辺知識ノードの共有**: background ノードは `bg:<slug>` の共有 ID を持ち、複数論文の KG から参照されます (Knowledge Home の `svtopic:kh:*` と同じ「追記して共有する」思想)。過去デッキの再利用は `SourceVault_kb.wl` (Graph-RAG) の検索で提案されます。
+- **privacy**: KG / ノードは `PrivacyLevel` (0.0-1.0、大きいほど厳格) を持ち、既定は 0.0 (公開論文)。アウトライン化の際は `"ReleaseCeiling"` (既定 0.5) を超えるノードを fail-closed で落とします。
+
+### 主な定数
+
+| 変数 | 既定 | 説明 |
+|---|---|---|
+| `$SourceVaultKGRoot` | `Automatic` | 保存先ディレクトリ (`SourceVaultCoreRoot[]/knowledgegraph`、無ければ `LOCALAPPDATA/SourceVault/knowledgegraph`)。テストでは明示的に別ディレクトリを与えて隔離する |
+| `$SourceVaultKGEdgeKinds` | — | 辺種別の表 (`kind -> <|"Order", "OrderKind" (Difficulty\|Temporal\|Derivation\|Narrative\|Causal\|Hierarchy\|None), "Parent" (From\|To\|Either\|None), "Affinity"|>`) |
+| `$SourceVaultKGNodeKinds` | — | ノード種別 (Claim / Concept / Definition / Method / Experiment / Result / Equation / Figure / Question / Conclusion / Background / Section / Survey) |
+| `$SourceVaultKGAudiencePresets` | — | 聴き手プリセット (「高校生」「大学理系学部卒」「ITエンジニア」「高校数学III」等) -> `<|"Level", "Knowledge" -> <|領域 -> 理解度|>|>` |
+| `$SourceVaultKGDomainAliases` | — | 領域名の別名表 (英語名 -> 正準日本語名)。ノードの Domains と聴き手の Knowledge の照合に使う |
+| `$SourceVaultKGViewMaxRows` | `200` | View 関数が Dataset に出す最大行数 |
+| `$SourceVaultKGTooHard` | `0.6` | 「聴き手にとって難しすぎる」と判定する need (難易度 − 既知度) の閾値。超えたノードは score が半減し TooHard フラグが付く |
+
+### KG の作成・保存・読み込み
+
+```mathematica
+(* 空の KG を作る *)
+kg = SourceVaultKGNew["kg-my-paper", "Title" -> "My Paper", "Kind" -> "Paper"];
+
+(* LLM 応答 (```json フェンス付き可) や JSON 文字列/連想を KG に変換して検証する *)
+kg = SourceVaultKGFromJSON[llmResponseText];
+
+(* KG を保存 / 読み込み (前版は graphs/history/ に退避) *)
+SourceVaultKGSave[kg]
+SourceVaultKGLoad["kg-my-paper"]
+
+(* 保存済み KG の一覧 *)
+SourceVaultKGList[]
+(* → {<|"GraphId", "Title", "Kind", "NodeCount", "EdgeCount", "UpdatedAtUTC"|>..} *)
+
+SourceVaultKGDelete["kg-my-paper"]   (* history は残る *)
+```
+
+- `SourceVaultKGNew[graphId, opts]` の opts: `"Title"` / `"Language"` (既定 `"ja"`) / `"Sources"` (`{<|"Key","Locator","Kind","Note"|>..}`) / `"Kind"` (Paper\|Survey\|Background) / `"PrivacyLevel"`。
+- `SourceVaultKGValidate[kg]` はすべての取り込み口が通る正規化ステップで、ノード・辺の既定値補完、未知の辺種別の `RelatedTo` への丸め込み、端点の無い辺や自己ループの除去、Root の決定を行い、`"Warnings"` を付けた KG を返します。
+- `SourceVaultKGMerge[kg, delta, opts]` は差分 KG を取り込みます。同じ `Id` のノードは delta のキーだけ上書きし、辺は `(From, To, EdgeKind)` で重複排除されます。`"Language" -> "en"` を渡すと、delta の文字列テキスト (Label/Summary/Points/Talk) はその言語の訳として既存テキストに併記されます。
+- `SourceVaultKGToJSON[kg]` は KG を JSON 文字列に戻します。
+
+### ノードの参照とテキスト取得
+
+```mathematica
+SourceVaultKGNode[kg, id]                 (* ノード連想。無ければ Missing *)
+SourceVaultKGText[node, "Summary", "ja"]  (* 言語別テキスト。Label/Summary/Talk/Cite は String、Points は List *)
+```
+
+`SourceVaultKGText[node, key, lang]` は指定言語のテキストが無ければ主言語 → 任意の言語の順で自動的にフォールバックします。
+
+### 聴き手 (audience) と重要度
+
+```mathematica
+(* 聴き手指定を正規化する *)
+audience = SourceVaultKGAudience["大学理系学部卒"];
+audience2 = SourceVaultKGAudience["高校生, 電気化学=0.3, 高校数学III"];
+
+(* 各ノードの need = 難易度 - 聴き手の既知度 *)
+SourceVaultKGNeed[kg, audience]
+(* → <|id -> Real...|>。0 以下なら「既知」として扱える *)
+
+(* 重要度 x 聴き手にとっての必要度、および TooHard/Assumed フラグ *)
+SourceVaultKGScores[kg, audience]
+(* → <|id -> <|"Need", "Known", "Score", "Flags"|>...|> *)
+```
+
+`SourceVaultKGAudience[spec]` は次のいずれの形式も受け付けます: プリセット名 (`"大学理系学部卒"`)、カンマ区切りの複合指定 (`"高校生, 電気化学=0.3, 高校数学III"`)、リスト、または `<|"Level", "Knowledge", "Presets", "Language", "Description"|>` の明示指定。戻り値は `<|"Level"` (主題の理解度 0-1)`, "Knowledge" -> <|領域 -> 理解度|>, "Presets", "Language", "Description", "Unknown"` (解釈できなかった語) `|>` です。
+
+### 順序制約・線形拡張・階層木
+
+```mathematica
+(* 順序制約辺 (Order->True の種別 + Contains) だけの有向グラフ *)
+SourceVaultKGOrderGraph[kg]
+(* → <|"Graph", "Dropped"|> ("Dropped" は循環を切るために落とした辺) *)
+
+(* 順序制約を満たす線形拡張 (トポロジカル順) *)
+SourceVaultKGLinearOrder[kg, "Source"]        (* 論文の出現順優先 *)
+SourceVaultKGLinearOrder[kg, "Importance"]
+SourceVaultKGLinearOrder[kg, "Difficulty"]    (* 易 → 難 *)
+SourceVaultKGLinearOrder[kg, "Coherent"]      (* 直前ノードとの関連度優先 *)
+
+(* 最小全域順序木 (線形拡張の階層分割) *)
+tree = SourceVaultKGOrderedTree[kg, "Strategy" -> "Source", "MaxDepth" -> 3];
+tree["Order"]     (* 前順走査 = 線形拡張 *)
+tree["Parent"]
+tree["Children"]
+tree["Depth"]
+```
+
+`SourceVaultKGOrderedTree[kg, opts]` の戻り値は `<|"Root", "Order", "Parent", "Children", "Depth", "Score", "Strategy", "Diagnostics"|>`。opts: `"Strategy"` (既定 `"Source"`) / `"MaxDepth"` (既定 3) / `"DepthPenalty"` (既定 0.02)。
+
+> 詰め込み (packing) / 枝刈り (pruning) や、トポロジカル順から言語別アウトライン・シナリオ md へのシリアライズ (処理段階 5〜6) は設計仕様 `SlideWorkflow_info/design/slide_knowledge_graph_spec_v0_1.md` に定義されていますが、詳細な API は `api_knowledgegraph.md` を参照してください。

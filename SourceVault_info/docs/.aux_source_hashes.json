@@ -5,7 +5,7 @@
 	"core":"1rhvbib8b6gz5",
 	"crypto":"16wu8twr4d15",
 	"diagnostics":"vmlkokoctmgy",
-	"eagle":"t4aqfs1w13bz",
+	"eagle":"ixhp2a50imxb",
 	"identity":"1cijrn8i8pab0",
 	"lexical":"mq70qg0gjjzo",
 	"mailstructure":"gnrurz8xsdp6",
@@ -25,7 +25,7 @@
 	"maildb":"1xbpizn4ufxg4",
 	"simrun":"19rfzbb4u4vb4",
 	"llmlog":"1v6nkhrb245v7",
-	"@main":"1vnfyhrr4xesj",
+	"@main":"x9wtzym50mji",
 	"knowledgehome":"pxgjwgip4yc1",
 	"cognition":"wopb9w6eo5fd",
 	"adjudication":"2pnc7a77ze2q",
@@ -35,7 +35,7 @@
 	"routine":"ohb6y10fu2mi",
 	"routineplan":"lap8j658kna",
 	"mailagenda":"208mfiuu1e02",
-	"privacy":"44ydqfelp6n2",
+	"privacy":"98gd0z4az6j7",
 	"anonymize":"gajol753165b",
 	"course":"i2wstkmcnckg",
 	"mailbrowse":"c2usg28uj4dh",
@@ -50,5 +50,7 @@
 	"voice":"edf31j21h9x6",
 	"realtime":"6i8ii0tc5lic",
 	"talkqa":"qz0wdm23f442",
-	"todo":"1bwllecl9qvv9"
+	"todo":"1bwllecl9qvv9",
+	"papernb":"qen9u19ie0s5",
+	"knowledgegraph":"19nj6f09ynpln"
 }

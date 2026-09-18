@@ -22,8 +22,10 @@
       未知フィールドは Import("RawJSON") -> 変更 -> Export("RawJSON") で完全保存する。
    3. item metadata 変更時は modificationTime / lastModified (epoch ms) を更新し、
       mtime.json の該当エントリを同期する。"all" は「ライブラリの総 item 数」なので
-      書き換えない (mtime.json は最近変更された item の部分インデックスであり、
-      全 item は載らない。実ライブラリで実測: エントリ 1k 件 / all 56k)。
+      書き換えない (mtime.json に載る item の集合は Eagle の版・運用で変わる。
+      実測: 2026-06 はエントリ 1k / all 56k の部分インデックス、2026-09 は
+      58,750 / 58,793 のほぼ全件。mtime.json[id] === item["lastModified"] は
+      どちらでも成立し、キャッシュ照合はこの不変条件に依る)。
    4. ライブラリ metadata.json 変更時は事前に backup/backup-<Eagle命名>.json を作る。
    5. Eagle アプリが対象ライブラリを開いている間のファイル直接書込は禁止
       (アプリ内メモリ状態と衝突する)。その場合は Eagle ローカル HTTP API
@@ -149,7 +151,8 @@ SourceVaultEagleFolderView::usage = "SourceVaultEagleFolderView[folder, opts] �
 (* ---- 表示 ---- *)
 SourceVaultEagleSummaryRow::usage = "SourceVaultEagleSummaryRow[item] は一覧用の低漏洩行を SourceVault 共通スキーマで返す: <|Kind(\"eagle\"),Id,URI(sv://object/eagle-<id>),Title,Authors,Published,Summary,URL,File,Date,PrivacyLevel|> + eagle 固有の <|Ext,Size,Tags,Folders,Annotation|>。SourceVaultSourceRow (SourceVault.wl) と同じ共通キーを共有し、SourceVaultSummaries の横断検索行と互換。混在データセットの汎用 join/参照キーは \"URI\"。(旧キー \"Name\" は \"Title\" に改名)";
 SourceVaultEagleDataset::usage = "SourceVaultEagleDataset[query, opts] は検索結果を素の Dataset で返す (ボタン無し)。";
-SourceVaultEagleView::usage = "SourceVaultEagleView[query, opts] は検索結果を、行ごとに 原本を開く(▶)/Eagleで表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表 (Dataset) で返す。列は ▶/⌂/☰・(サムネイル)・Date・Name・Ext・Size・Tags・Summary(サマリー先頭150字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(正準 SourceVault URI sv://object/eagle-<id>、sourcevault_get / SourceVaultMCPGet で解決可)。opts は SourceVaultEagleSearch + \"Thumbnails\", \"ThumbnailSize\"。";
+SourceVaultEagleObjectInfo::usage = "SourceVaultEagleObjectInfo[ref, \"Library\" -> lib] は Eagle item の参照 (sv://object/eagle-<id> / eagle:<id> / id) を SourceVault 共通スキーマ <|\"Status\" (OK|NotFound), \"SourceId\" (\"\"), \"URI\", \"File\", \"Title\", \"PrivacyLevel\" (実効 PL), \"Kind\" -> \"eagle\", \"Ext\"|> に解決する。和訳ノートブック登録簿 (SourceVault_papernb.wl) が Eagle の PDF を元ソースとして扱うための読み口。";
+SourceVaultEagleView::usage = "SourceVaultEagleView[query, opts] は検索結果を、行ごとに 原本を開く(▶)/Eagleで表示(⌂)/サマリー表示(☰)、PDF なら 和訳ノートブック (訳: 登録済みなら開く、無ければ DocImportPaper で生成して登録。PL は item の実効 PrivacyLevel を継承。SourceVault_papernb.wl) のボタンとサムネイル付きの表 (Dataset) で返す。ボタンは 1 列目にまとめる (Dataset では 2 列目以降の埋め込みボタンが押せなくなるため)。列は ▶⌂☰・(サムネイル)・Date・Name・Ext・Size・Tags・Summary(サマリー先頭150字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(正準 SourceVault URI sv://object/eagle-<id>、sourcevault_get / SourceVaultMCPGet で解決可)。opts は SourceVaultEagleSearch + \"Thumbnails\", \"ThumbnailSize\"。";
 SourceVaultEagleShowSummary::usage = "SourceVaultEagleShowSummary[item, opts] はサマリーをノートブックで開く (front end)。PrivateVault/eagle/notes/ に保存済みノートがあればそれを開く (補足メモ・図などの追記が残る)。無ければ $SourceVaultEagleNotebookStyle のスタイルで生成し、ノート内の「保存」ボタンで notes/ に保存できる (以後 Ctrl+S で上書き、次回からは保存版が開く)。\"Fresh\"->True で保存版を無視して最新サマリーから作り直す (保存ボタンで上書き)。";
 $SourceVaultEagleNotebookStyle::usage = "$SourceVaultEagleNotebookStyle はサマリー/フォルダ表示ノートブックの StyleDefinitions。既定 \"SourceVault default.nb\"。";
 SourceVaultEagleGeoView::usage = "SourceVaultEagleGeoView[query, opts] は Exif GPS を持つ写真を地図上にサムネイル表示する (クリックで原本を開く)。opts は SourceVaultEagleSearch + \"GeoRange\", \"MarkerScale\", \"ThumbnailSize\"。";
@@ -396,6 +399,8 @@ If[! ValueQ[$SourceVaultEagleOfflineRecheckSeconds],
   $SourceVaultEagleOfflineRecheckSeconds = 60];
 If[! ValueQ[$SourceVaultEagleMtimeTTL], $SourceVaultEagleMtimeTTL = 5];
 If[! ValueQ[$SourceVaultEagleCacheSaveEvery], $SourceVaultEagleCacheSaveEvery = 50];
+(* 長時間スキャン中に途中経過をディスクへ書き出す間隔 (秒) *)
+If[! ValueQ[$SourceVaultEagleScanFlushSeconds], $SourceVaultEagleScanFlushSeconds = 30];
 
 iSVEGOnlineProbe[lib_String] :=
   TrueQ[Quiet@Check[FileExistsQ[FileNameJoin[{lib, "metadata.json"}]], False]];
@@ -515,6 +520,15 @@ iSVEGLoadItemMeta[lib_String, id_String] :=
   With[{m = iSVEGImportJSON[FileNameJoin[{iSVEGInfoDir[lib, id], "metadata.json"}]]},
     If[AssociationQ[m], m, $Failed]];
 
+(* mtime.json の値は item metadata の "lastModified" と同一 (実ライブラリ 2000 件で
+   全一致を確認)。キャッシュ済み record 自身がこの値を持つので、mtime.json との
+   照合だけで「読み直し不要」を証明できる。判定できない場合は Missing を返し、
+   呼び出し側はファイルを読み直す (fail-safe)。 *)
+iSVEGItemStamp[item_Association] :=
+  With[{v = Lookup[item, "lastModified", Missing[]]},
+    If[IntegerQ[v], v, Missing["NoStamp"]]];
+iSVEGItemStamp[_] := Missing["NoStamp"];
+
 (* mtime.json が無い/壊れている場合の全走査フォールバック *)
 iSVEGScanIds[lib_String] :=
   (FileBaseName /@ Select[FileNames["*.info", FileNameJoin[{lib, "images"}]], DirectoryQ]);
@@ -575,7 +589,8 @@ SourceVaultEagleSaveCache[OptionsPattern[]] :=
 Options[SourceVaultEagleItems] = {"Library" -> Automatic, "Force" -> False};
 SourceVaultEagleItems[OptionsPattern[]] :=
   Module[{lib = iSVEGLib[OptionValue["Library"]], force, now, ttl, st, mt, ids,
-      seen, cache, changed, nChanged = 0, dropped},
+      seen, cache, suspect, reconciled, changed, nChanged = 0, dropped,
+      commit, flush, lastFlush, flushTTL},
     If[! StringQ[lib], Return[{}]];
     iSVEGDiskCacheLoad[lib];
     cache = Lookup[$iSVEGItemCache, lib, <||>];
@@ -593,9 +608,11 @@ SourceVaultEagleItems[OptionsPattern[]] :=
       AssociateTo[$iSVEGMtimeCache, lib -> {now, st}];
       Return[Values[cache]]];
     (* 照合: id の真実源は images/ ディレクトリ走査。
-       mtime.json は「最近変更された item」の部分インデックスで全 item は載らないため
-       (実ライブラリで実測: エントリ 1k / 総数 56k)、変更検知のオーバーレイとしてだけ使う。
-       エントリが無い item は「前回読み込み以降未変更」とみなす。 *)
+       mtime.json は変更検知のオーバーレイとしてだけ使い、エントリが無い item は
+       「前回読み込み以降未変更」とみなす。載る item の集合は Eagle の版・運用で
+       変わる (実測: 2026-06 時点はエントリ 1k / 総数 56k の部分インデックス、
+       2026-09 時点は 58,750 / 58,793 のほぼ全件) ので、この集合が変わっただけで
+       全件 changed に化けないよう下の reconcile で吸収する。 *)
     mt = iSVEGMtimes[lib];
     If[! AssociationQ[mt],
       If[! iSVEGOnlineProbe[lib],
@@ -606,20 +623,55 @@ SourceVaultEagleItems[OptionsPattern[]] :=
       (* NAS 瞬断で空走査になった場合はキャッシュを破棄せず温存 *)
       iSVEGMarkOffline[lib]; Return[Values[cache]]];
     seen = Lookup[$iSVEGItemCacheSeen, lib, <||>];
-    changed = If[force, ids,
+    suspect = If[force, ids,
       Select[ids,
         ! KeyExistsQ[cache, #] || Lookup[seen, #, -2] =!= Lookup[mt, #, -1] &]];
-    Scan[
-      Function[id,
-        With[{m = iSVEGLoadItemMeta[lib, id]},
-          If[AssociationQ[m],
-            (cache[id] = m;
-             seen[id] = Lookup[mt, id, -1];
-             nChanged++),
-            (* 読込失敗 (Eagle 書込途中 / NAS 瞬断): 既存 entry は保持し、
-               seen を更新しないことで次回再試行する *)
-            Null]]],
-      changed];
+    (* seen と mtime.json の突き合わせだけでは、mtime.json の「載っている item の
+       集合」が変わった瞬間に全件が changed に化ける (Eagle が部分インデックスから
+       全 item 版へ書き換えると、-1 で記録した seen が 5 万件まるごと不一致になり、
+       検索のたびに metadata.json を 5 万回読んで数分固まる)。
+       キャッシュ済み record 自身の lastModified が mtime.json と一致する
+       (または mtime.json に載っていない = 変更記録なし) なら、その entry は最新
+       なのでファイルを読まずに seen だけ直す。判定できないものだけ読み直す。 *)
+    reconciled = If[force, {},
+      Select[suspect,
+        With[{c = Lookup[cache, #, Missing[]]},
+          AssociationQ[c] &&
+            With[{m = Lookup[mt, #, Missing[]]},
+              MissingQ[m] || iSVEGItemStamp[c] === m]] &]];
+    If[reconciled =!= {},
+      Scan[Function[id, seen[id] = Lookup[mt, id, -1]], reconciled];
+      nChanged += Length[reconciled]];
+    changed = If[reconciled === {}, suspect, Complement[suspect, reconciled]];
+    (* 長時間スキャンの中断対策: 途中経過をメモリ + ディスクへ定期的に確定する。
+       これが無いと 5 万件級のコールドスキャンは timeout/Abort のたびに進捗 0 で
+       捨てられ、次回も同じ全件走査を繰り返す。stamp は最後まで走り切った時だけ
+       更新するので、中断後の次回呼び出しは残りだけを読む。 *)
+    commit := (AssociateTo[$iSVEGItemCache, lib -> cache];
+      AssociateTo[$iSVEGItemCacheSeen, lib -> seen]);
+    flush := (commit;
+      $iSVEGCacheDirty[lib] = Lookup[$iSVEGCacheDirty, lib, 0] + nChanged;
+      nChanged = 0;
+      Quiet@Check[iSVEGDiskCacheSave[lib], Null];
+      lastFlush = AbsoluteTime[]);
+    flushTTL = If[NumericQ[$SourceVaultEagleScanFlushSeconds],
+      $SourceVaultEagleScanFlushSeconds, 30];
+    lastFlush = AbsoluteTime[];
+    CheckAbort[
+      Scan[
+        Function[id,
+          With[{m = iSVEGLoadItemMeta[lib, id]},
+            If[AssociationQ[m],
+              (cache[id] = m;
+               seen[id] = Lookup[mt, id, -1];
+               nChanged++),
+              (* 読込失敗 (Eagle 書込途中 / NAS 瞬断): 既存 entry は保持し、
+                 seen を更新しないことで次回再試行する *)
+              Null];
+            If[nChanged > 0 && AbsoluteTime[] - lastFlush > flushTTL, flush]]],
+        changed],
+      (* TimeConstrained / ユーザー Abort: 成果を確定してから再送出する *)
+      flush; Abort[]];
     dropped = Length[cache];
     cache = KeyTake[cache, ids];   (* ディレクトリから消えた item を落とす *)
     dropped = dropped - Length[cache];
@@ -3058,6 +3110,64 @@ iSVEGTextCell[s_] :=
   With[{t = If[StringQ[s], s, ToString[s]], ff = iSVEGFont[]},
     Item[Tooltip[Style[t, "Text", FontFamily -> ff], t], Alignment -> Left]];
 
+(* ══════════ Dataset 内のボタンが押せない / "…" になる問題 ══════════
+   maildb の View 層 (iSVUIActionRow / iSVUIActDisplay) で実機確定した規約を
+   そのまま踏襲する。2 点とも Dataset 固有で、Grid では起きない。
+
+   (1) 行アクションは必ず **1 列目にまとめる**。Dataset に ItemSize を渡すと
+       **2 列目以降の埋め込みボタンは当たり判定が描画とズレて押せなくなる**
+       (幅を広げても、{2,幅}/{Automatic,幅} どちらでもダメ)。
+       ⌂ (App) / ☰ (Sum) を 2・3 列目に置いていたのが「押せない」の正体。
+   (2) セル値の LeafCount が 32 を超えると中身を描画せず "…" に省略される。
+       3 ボタンを 1 セルに詰めると Spacer 込みで超えるので、**セルには小さい
+       タグ (iSVEGAct) だけを入れ、実際のボタンは ItemDisplayFunction で
+       表示時に組む**。省略判定は表示関数を通す前の値に対して行われる。
+
+   アクションを足すときは必ずタグ側 (小さいまま) に足すこと。
+   ItemDisplayFunction は **可変長引数で受ける** こと: Dataset は表示関数を
+   1 引数で呼ぶとは限らず、1 引数定義のシンボルを渡すと未評価の f[item, ...]
+   がセルに文字列として描画される。呼び出し側も (iSVEGActDisplay[#] &) の
+   純関数形で渡す。 *)
+
+iSVEGActionRow[items_List] :=
+  Row[Riffle[DeleteCases[items, Null | ""], Spacer[5]]];
+
+iSVEGActRow[id_String, lsp_String] :=
+  iSVEGActionRow[{
+    Tooltip[Button["\:25b6", SourceVaultEagleOpenItem[id, "Library" -> lsp],
+      Appearance -> "Frameless", Method -> "Queued"], "原本ファイルを開く"],
+    Tooltip[Button["\:2302", SourceVaultEagleShowInApp[id],
+      Appearance -> "Frameless", Method -> "Queued"], "Eagle で表示"],
+    Tooltip[Button["\:2630", SourceVaultEagleShowSummary[id],
+      Appearance -> "Frameless", Method -> "Queued"], "サマリー表示"]}];
+
+(* PDF には 4 つ目のボタン「訳」= 和訳ノートブック (SourceVault_papernb.wl)。登録済みなら開く、無ければ
+   生成 (item の実効 PL を継承)。ボタンには正準 URI だけを焼く。登録簿が無ければ出さない *)
+iSVEGActRow[id_String, lsp_String, ext_String] := Module[{uri = iSVEGObjectURI[id], reg, base},
+  base = {
+    Tooltip[Button["\:25b6", SourceVaultEagleOpenItem[id, "Library" -> lsp],
+      Appearance -> "Frameless", Method -> "Queued"], "原本ファイルを開く"],
+    Tooltip[Button["\:2302", SourceVaultEagleShowInApp[id],
+      Appearance -> "Frameless", Method -> "Queued"], "Eagle で表示"],
+    Tooltip[Button["\:2630", SourceVaultEagleShowSummary[id],
+      Appearance -> "Frameless", Method -> "Queued"], "サマリー表示"]};
+  If[ToLowerCase[ext] =!= "pdf" || Length[DownValues[SourceVault`SourceVaultPaperNotebook]] === 0,
+    Return[iSVEGActionRow[base]]];
+  reg = Quiet @ Check[SourceVault`SourceVaultPaperNotebook[uri], $Failed];
+  iSVEGActionRow[Append[base,
+    If[StringQ[reg],
+      With[{u = uri},
+        Tooltip[Button[Style["訳", Bold], SourceVault`SourceVaultOpenPaperNotebook[u],
+          Appearance -> "Frameless", Method -> "Queued"], "和訳ノートブックを開く: " <> reg]],
+      With[{u = uri},
+        Tooltip[Button["訳", SourceVault`SourceVaultMakePaperNotebook[u, "Interactive" -> True],
+          Appearance -> "Frameless", Method -> "Queued"],
+          "DocImportPaper で和訳ノートブックを生成して登録 (item の実効 PL を継承)"]]]]]];
+
+iSVEGActDisplay[x_, ___] := Replace[x, {
+  iSVEGAct[id_, lsp_, ext_] :> iSVEGActRow[id, lsp, ToString[ext]],
+  iSVEGAct[id_, lsp_] :> iSVEGActRow[id, lsp]}];
+
 (* Summary 列セル (旧 Memo): Dataset はセル内容が大きいとセル全体を "…" に折りたたむため
    (長いサマリーが先頭から "…" になる)、表示は先頭プレビューに切り詰める。
    全文は行の ☰ (SourceVaultEagleShowSummary) ボタンで開ける。 *)
@@ -3071,6 +3181,25 @@ iSVEGMemoCell[s_, maxChars_Integer] :=
 (* Eagle item の正準 SourceVault URI (SourceVault_mcp.wl の object adapter が解決する形)。
    id は英数の Eagle id なので percent-encode 不要。 *)
 iSVEGObjectURI[id_String] := "sv://object/eagle-" <> id;
+
+(* 参照 (sv://object/eagle-<id> / eagle:<id> / id) → id *)
+iSVEGRefToId[ref_String] := Which[
+  StringStartsQ[ref, "sv://object/eagle-"], StringDrop[ref, StringLength["sv://object/eagle-"]],
+  StringStartsQ[ref, "eagle:", IgnoreCase -> True], StringDrop[ref, 6],
+  True, ref];
+
+Options[SourceVaultEagleObjectInfo] = {"Library" -> Automatic};
+SourceVaultEagleObjectInfo[ref_String, OptionsPattern[]] := Module[{lib = iSVEGLib[OptionValue["Library"]], id, item, row},
+  id = StringTrim[iSVEGRefToId[ref]];
+  If[lib === $Failed || id === "", Return[<|"Status" -> "NotFound", "Ref" -> ref|>]];
+  item = Quiet @ Check[SourceVaultEagleItem[id, "Library" -> lib], $Failed];
+  If[! AssociationQ[item], Return[<|"Status" -> "NotFound", "Ref" -> ref|>]];
+  row = Quiet @ Check[SourceVaultEagleSummaryRow[item, "Library" -> lib], $Failed];
+  If[! AssociationQ[row], Return[<|"Status" -> "NotFound", "Ref" -> ref|>]];
+  <|"Status" -> "OK", "SourceId" -> "", "URI" -> iSVEGObjectURI[id],
+    "File" -> ToString @ Lookup[row, "File", ""], "Title" -> ToString @ Lookup[row, "Title", ""],
+    "PrivacyLevel" -> With[{p = Lookup[row, "PrivacyLevel", 1.0]}, If[NumericQ[p], N[p], 1.0]],
+    "Kind" -> "eagle", "Ext" -> ToString @ Lookup[item, "ext", ""]|>];
 
 (* item の実効 PrivacyLevel: summary record の "PrivacyLevel" があればそれ、
    無ければライブラリ既定 (iSVEGLibraryPL) に Cloud-Publishable タグ上限
@@ -3573,13 +3702,9 @@ SourceVaultEagleView[query_String : "", opts : OptionsPattern[]] :=
       With[{id = iSVEGItemId[it], sm = SourceVaultEagleSummary[it, "Library" -> lib],
             lsp = libSpec},
         Join[
-          <|"" -> Tooltip[Button["\:25b6",
-               SourceVaultEagleOpenItem[id, "Library" -> lsp],
-               Appearance -> "Frameless", Method -> "Queued"], "原本ファイルを開く"],
-            "App" -> Tooltip[Button["\:2302", SourceVaultEagleShowInApp[id],
-               Appearance -> "Frameless", Method -> "Queued"], "Eagle で表示"],
-            "Sum" -> Tooltip[Button["\:2630", SourceVaultEagleShowSummary[id],
-               Appearance -> "Frameless", Method -> "Queued"], "サマリー表示"]|>,
+          (* ▶ 原本 / ⌂ Eagle / ☰ サマリー は 1 列目にまとめる (上記規約 (1))。
+             セルに入れるのは小さいタグだけで、ボタンは ItemDisplayFunction が組む *)
+          <|"" -> iSVEGAct[id, lsp, ToString@Lookup[it, "ext", ""]]|>,
           If[showThumbs,
             <|"Img" -> With[{th = SourceVaultEagleThumbnail[id, "Library" -> lib,
                   "Size" -> tsz]},
@@ -3601,9 +3726,12 @@ SourceVaultEagleView[query_String : "", opts : OptionsPattern[]] :=
             "URI" -> iSVEGTextCell[iSVEGObjectURI[id]]|>]]] /@ items;
     out = Pane[
       Dataset[rows,
+        (* ItemSize は {行, 列} の順。1 列目 = ▶⌂☰ の 3 ボタン分 (maildb の
+           "Act" -> 10 と同趣旨。狭いとボタンが折り返す) *)
         ItemSize -> {2, If[showThumbs,
-          {2, 2, 2, 6, 12, 22, 4, 6, 18, 36, 5, 26},
-          {2, 2, 2, 12, 22, 4, 6, 18, 36, 5, 26}]},
+          {11, 6, 12, 22, 4, 6, 18, 36, 5, 26},
+          {11, 12, 22, 4, 6, 18, 36, 5, 26}]},
+        ItemDisplayFunction -> (iSVEGActDisplay[#] &),
         Alignment -> {Left, Center},
         MaxItems -> {All, All}],
       ImageSize -> Full];

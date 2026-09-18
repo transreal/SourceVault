@@ -3661,7 +3661,12 @@ SourceVaultResolveReference[ref_String] :=
       "Authors" -> ToString @ Lookup[hit, "Authors", ""],
       "Published" -> ToString @ Lookup[hit, "Published", ""],
       "Kind" -> ToString @ Lookup[hit, "Kind", ""],
-      "PrivacyLevel" -> Lookup[hit, "PrivacyLevel", 1.0]|>
+      "PrivacyLevel" -> Lookup[hit, "PrivacyLevel", 1.0],
+      (* 和訳ノートブックが登録されていればそのパス (SourceVault_papernb.wl) *)
+      "Notebook" -> If[Length[DownValues[SourceVault`SourceVaultPaperNotebook]] > 0,
+        Replace[Quiet @ Check[SourceVault`SourceVaultPaperNotebook[Lookup[hit, "Id", ""]], Missing["NotRegistered"]],
+          Except[_String] -> Missing["NotRegistered"]],
+        Missing["NotRegistered"]]|>
   ];
 
 (* ソース 1 件の全メタ情報を別ウインドウで表示 (タイトルクリック既定動作) *)
@@ -3811,7 +3816,7 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
     If[rows === {},
       Return[Style["該当するデータはありません。", "Text", FontFamily -> ff]]];
     header = (Style[#, Bold, FontFamily -> ff] &) /@
-      {"種別", "タイトル", "著者", "出版", "サマリー", "PL", "URL", "ファイル", "登録"};
+      {"種別", "タイトル", "著者", "出版", "サマリー", "PL", "URL", "ファイル", "和訳NB", "登録"};
     body = Function[row,
       Module[{kind, id, title, authors, published, summary, pl, url, file,
               date, titleAct, openAct, act, clickHint},
@@ -3869,6 +3874,27 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
                    SourceVaultOpenSourceFile[theId],
                    Appearance -> "Frameless", Method -> "Queued",
                    BaseStyle -> "Hyperlink"], f]],
+           True, ""],
+         (* 和訳ノートブック (SourceVault_papernb.wl): 登録済みなら開く、無ければ生成 (PL 継承)。
+            ボタンには sourceId だけを焼く *)
+         Which[
+           ! MemberQ[{"arxiv", "web", "local"}, kind] || id === "", "",
+           Length[DownValues[SourceVault`SourceVaultPaperNotebook]] === 0, "",
+           StringQ[Quiet @ Check[SourceVault`SourceVaultPaperNotebook[id], $Failed]],
+             With[{theId = id, p = SourceVault`SourceVaultPaperNotebook[id]},
+               Tooltip[
+                 Button[Style["▶ 和訳NB", "Hyperlink", FontFamily -> ff],
+                   SourceVault`SourceVaultOpenPaperNotebook[theId],
+                   Appearance -> "Frameless", Method -> "Queued", BaseStyle -> "Hyperlink"],
+                 p]],
+           file =!= "",
+             With[{theId = id},
+               Tooltip[
+                 Button[Style["＋ 和訳NB", "Hyperlink", FontFamily -> ff],
+                   SourceVault`SourceVaultMakePaperNotebook[theId, "Interactive" -> True],
+                   Appearance -> "Frameless", Method -> "Queued", BaseStyle -> "Hyperlink"],
+                 "DocImportPaper で和訳ノートブックを生成して登録 (元ソースの PL " <>
+                   If[NumericQ[pl], ToString[N[pl]], "?"] <> " を継承)"]],
            True, ""],
          If[date === "", "",
            Tooltip[Style[StringTake[date, UpTo[10]], FontFamily -> ff], date]]}
@@ -16127,11 +16153,15 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        (* 発表 (スライド + 発表シナリオ) 登録簿。core の root 解決だけに依存する
           ので早い段階でよい。MCP tool / service command は呼び出し時解決。 *)
        "SourceVault_slidedeck.wl",
+       (* 取り込み済み論文 → 和訳ノートブックの登録簿 (PL 継承)。root 解決だけに依存 *)
+       "SourceVault_papernb.wl",
        "SourceVault_contracts.wl", "SourceVault_wiring.wl",
        "SourceVault_packageapi.wl", "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl",
        (* KB (Graph-RAG 低遅延応答層) は lexical/searchindex に依存するのでこの順 *)
        "SourceVault_kb.wl", "SourceVault_talkqa.wl", "SourceVault_oopsseed.wl",
+       (* 発表用知識グラフ層 (順序木 / 聴き手 / 詰め込み)。kb (過去デッキ検索) と oopsseed (描画) に弱結合 *)
+       "SourceVault_knowledgegraph.wl",
        "SourceVault_mailstructure.wl", "SourceVault_mailbrowse.wl",
        "SourceVault_crosslink.wl", "SourceVault_mailsuggest.wl",
        (* Microsoft Graph 取得 provider: maildb の $SourceVaultMailSourceProviders

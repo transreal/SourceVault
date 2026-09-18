@@ -28,7 +28,8 @@ privacy 伝達の正準層。「入力変数や内部でインポートしたデ
 ## 1. 評価スコープ透かし (runtime)
 
 ### SourceVaultNotePrivacy[pl] → Real
-現在の評価に PrivacyLevel を記録する (Max 伝搬)。FE があり `pl >= $SourceVaultPrivacyMarkThreshold` なら評価セルを同期で機密マークし、出力セルを **CellObject 同一性ベース**の遅延マーカーへ登録する (index 依存なし)。非数値/引数なしは fail-closed で `$SourceVaultPrivacyDefaultLevel` 扱い。
+現在の評価に PrivacyLevel を記録する (Max 伝搬)。FE があり `pl >= $SourceVaultPrivacyMarkThreshold` なら評価セルを同期で機密マークし、出力セルを **CellObject 同一性ベース**の遅延マーカーへ登録する (index 依存なし)。加えて `$SourceVaultPrivacyCellEpilog` が True なら評価セルに `CellEpilog :> SourceVaultMarkEvaluationPrivacyCells[]` を armed し、評価完了直後にも flush する (ScheduledTask が走らない環境の保険)。非数値/引数なしは fail-closed で `$SourceVaultPrivacyDefaultLevel` 扱い。
+NBAccess がロードされていれば同じ pl を `NBAccess`NBNoteEvaluationPrivacy` にも渡す (2026-09-18)。LLM が提案したコードは `NBExecuteHeldExpr` 内で評価され、結果を LLM に返すか (スキーマのみにするか) は NBAccess の透かし `EvaluationPrivacy` で決まるため、ここで合流しないと PL の高い View / record がクラウド LLM に渡る。
 → clip 後の pl
 
 ### SourceVaultNotePrivacyOf[data] → Real
@@ -46,14 +47,14 @@ data (Association / 行リスト / snapshot 群) から PrivacyLevel を収集�
 → `<|"Value" -> 結果, "Privacy" -> スコープ内の最大 PL|>` 。外側の透かしは Max で更新される。適合テストの計測はこれで行う。
 
 ### SourceVaultMarkEvaluationPrivacyCells[nb] / SourceVaultMarkEvaluationPrivacyCells[] → List
-透かし由来の未処理マークを流し込む backstop。入力セルのテキストは一切見ない。引数なし形は現在の pending 全体を対象にする。`SourceVaultMarkConfidentialViewCells` の先頭と `NBMakeContextPacket` フックから呼ばれる。
+透かし由来の未処理マークを流し込む backstop。入力セルのテキストは一切見ない。引数なし形は現在の pending 全体を対象にする。`SourceVaultMarkConfidentialViewCells` の先頭・`NBMakeContextPacket` フック・評価セルの `CellEpilog` (`$SourceVaultPrivacyCellEpilog`) から呼ばれる。
 → マークしたセルの記述リスト
 
 ### SourceVaultPendingPrivacyMarks[] → List
 未処理の出力セルマーク要求一覧 (診断用)。0 なら遅延マーカーは全部処理済み。
 
 ### 遅延マーカーの挙動
-評価中は出力セルがまだ存在しないので、`SourceVaultNotePrivacy` は要求を積んで `SessionSubmit[ScheduledTask[..., {0.4}]]` の one-shot を予約し、未処理が残る間だけ自分で次の一発を予約する (タスクが積み上がらない)。
+評価中は出力セルがまだ存在しないので、`SourceVaultNotePrivacy` は要求を積んで `SessionSubmit[ScheduledTask[..., {0.4}]]` の one-shot を予約し、未処理が残る間だけ自分で次の一発を予約する (タスクが積み上がらない)。加えて評価セルの `CellEpilog` から FE が評価完了直後に一度 flush する (ScheduledTask がセッション状態次第で走らないケースの保険。2026-09-11 実機報告で追加)。
 
 - 鍵は **CellObject**。index ではないのでセル挿入でずれない。
 - 評価セルの直後から `Output`/`Print`/`Message` を連続でマークし、**それ以外のスタイルが現れたら打ち切る** (無関係なセルを巻き込まない)。
@@ -65,6 +66,7 @@ data (Association / 行リスト / snapshot 群) から PrivacyLevel を収集�
 - `$SourceVaultPrivacyMarkThreshold` = 0.5 (これ以上でセルマーク)
 - `$SourceVaultPrivacyDefaultLevel` = 0.85 (fail-closed 既定)
 - `$SourceVaultPrivacyViewBadge` = True (False でバッジのみ無効化。透かしは常に有効)
+- `$SourceVaultPrivacyCellEpilog` = True (評価セルの `CellEpilog` から評価完了直後に flush する保険機構を有効化。同一セルへの `SetOptions` は 1 回だけ)
 
 ## 2. 正準 exit
 
@@ -188,3 +190,11 @@ wolframscript -file "test codes/SourceVault_privacy_conformance_test.wls"
 ## 2026-09-01 の追補監査
 
 Source モード監査で `mailbrowse` / `crosslink` / `oopsseed` の public 関数群 (§7b) が、それぞれ mail/oops ストアおよび provider 経由のサマリーに到達するのに契約未登録だったため追加。同時に `eagle`/`llmlog` ストアの `Readers` に実在しないシンボル名 (幽霊名) が登録されており、runtime 監査がこれら 2 ストアへの到達を検出できていなかったのを実名へ修正した結果、新たに 69 件 + `SourceVaultEagleIngestInfo` の到達が判明し分類・登録した (§7b 末尾)。自前登録へ移行した関数は §7b から削除してよい。
+
+## 2026-09-11 の実機報告 (flush backstop)
+
+出力セルが赤くならない (入力セルだけ赤い) 実機報告があり、原因は2つ判明した。(1) `iPRegisterPending` の未登録判定が誤って `{0}` (= `{_Integer}` に一致) を既定値にしており、初回登録が失敗して要求が一度も積まれないケースがあった。(2) `SessionSubmit[ScheduledTask[...]]` による遅延 flush が FE/セッション状態次第で走らないことがあった。前者は判定ロジック修正、後者は `$SourceVaultPrivacyCellEpilog` (既定 True) による評価セル `CellEpilog` 経由の確実な flush を追加して対処した。
+
+## 2026-09-18 の追補 (NBAccess 評価スコープ透かしへの合流)
+
+`SourceVaultNotePrivacy` は自分のスコープを更新した直後に、NBAccess がロードされていれば `NBAccess`NBNoteEvaluationPrivacy[lv]` へ同じ PL を橋渡しする (`NBAccess`DownValues` の存在チェックで未ロード時は no-op)。動機: `NBExecuteHeldExpr` 内で LLM 提案コードが評価された際、結果を LLM (クラウド含む) にそのまま返すかスキーマのみに丸めるかは NBAccess 側の透かし `"EvaluationPrivacy"` だけで決まる。SourceVault 側の読み取りがここに合流しないと、PL 0.85 の View / record が `ToString` のまま LLM に渡ってしまう。NBAccess は SourceVault 非依存の設計を保つため、合流はデータ層である SourceVault_privacy 側から一方向に押し込む。

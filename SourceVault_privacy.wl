@@ -104,6 +104,11 @@ SourceVaultPendingPrivacyMarks::usage =
 $SourceVaultPrivacyMarkThreshold::usage =
   "$SourceVaultPrivacyMarkThreshold はセル機密マークの閾値 (既定 0.5、以上でマーク)。";
 
+$SourceVaultPrivacyCellEpilog::usage =
+  "$SourceVaultPrivacyCellEpilog が True (既定) のとき、SourceVaultNotePrivacy は評価中の入力セルに\n" <>
+  "CellEpilog :> SourceVaultMarkEvaluationPrivacyCells[] を付け、評価完了後 (出力セルが存在する時点) に\n" <>
+  "出力セルのマークを確実に流す。ScheduledTask による遅延 flush が走らない環境の保険。";
+
 $SourceVaultPrivacyDefaultLevel::usage =
   "$SourceVaultPrivacyDefaultLevel は PL 判定不能時の fail-closed 既定値 (0.85)。";
 
@@ -266,10 +271,21 @@ SourceVault`SourceVaultWithPrivacyScope[expr_] :=
     $svPMax = Max[N[$svPMax], inner];
     <|"Value" -> val, "Privacy" -> inner|>];
 
+(* NBAccess の評価スコープ透かしへの合流 (2026-09-18)。
+   LLM が提案したコードは NBAccess`NBExecuteHeldExpr の中で評価され、その結果を
+   LLM に返すか (スキーマのみに落とすか) は NBAccess の透かし "EvaluationPrivacy"
+   だけで決まる。SourceVault の読み取りがそこに載らないと、PL 0.85 の View / record
+   が ToString のまま LLM (クラウド含む) に渡る。NBAccess は SourceVault 非依存の
+   設計なので、合流はデータ層であるこちらから押し込む。NBAccess 未ロードなら何もしない。 *)
+iPBridgeToNBAccess[lv_] :=
+  If[Length[DownValues[NBAccess`NBNoteEvaluationPrivacy]] > 0,
+    Quiet @ Check[NBAccess`NBNoteEvaluationPrivacy[lv], Null]];
+
 SourceVault`SourceVaultNotePrivacy[pl_] :=
   Module[{lv = iPClip[pl], cell, nb},
     iPSyncScope[];
     $svPMax = Max[N[$svPMax], lv];
+    iPBridgeToNBAccess[lv];
     If[lv >= iPThreshold[],
       cell = iPEvalCell[]; nb = iPEvalNotebook[];
       If[MatchQ[cell, _CellObject] && MatchQ[nb, _NotebookObject] &&
@@ -278,6 +294,8 @@ SourceVault`SourceVaultNotePrivacy[pl_] :=
         Quiet @ Check[iPMarkCellObject[nb, cell, lv], Null];
         (* 出力セルは CellObject 同一性ベースの遅延マーカーへ登録 *)
         Quiet @ Check[iPRegisterPending[nb, cell, lv], Null];
+        (* 評価完了後に確実に flush する保険 (CellEpilog) + 従来の遅延タスク *)
+        Quiet @ Check[iPArmEpilog[nb, cell], Null];
         Quiet @ Check[iPScheduleFlush[], Null]]];
     lv];
 SourceVault`SourceVaultNotePrivacy[___] :=
@@ -359,9 +377,12 @@ iPMarkCellObject[___] := False;
 
 iPRegisterPending[nb_NotebookObject, cell_CellObject, lv_?NumericQ] :=
   Module[{hit},
+    (* 既定値を {0} にしていたため、未登録時に {0} が {_Integer} に一致して
+       $svPPending[[0, "Level"]] への代入で失敗し、要求が一度も登録されなかった
+       (= 出力セルが決して赤くならない)。2026-09-11 実機で判明。 *)
     hit = FirstPosition[$svPPending, e_Association /; Lookup[e, "Cell", Null] === cell,
-      {0}, {1}];
-    If[MatchQ[hit, {_Integer}],
+      Missing["NotFound"], {1}];
+    If[MatchQ[hit, {_Integer?Positive}],
       With[{i = First[hit]},
         $svPPending[[i, "Level"]] = Max[$svPPending[[i, "Level"]], lv]],
       AppendTo[$svPPending,
@@ -401,6 +422,27 @@ iPFlushEntry[_] := 0;
 (* 出力セルを待つ上限秒数。出力は通常 1 秒以内に現れる。抑制評価 (末尾 ;) では
    永遠に現れないので、この秒数で諦めて破棄する (無限ポーリング防止)。 *)
 If[! NumberQ[$svPPendingTTL], $svPPendingTTL = 20.];
+
+(* ---- CellEpilog による確実な flush ----
+   出力セルは評価が終わるまで存在しないので、カーネル側からは「評価完了後」に
+   マークするしかない。ScheduledTask (iPScheduleFlush) は FE/セッション状態に
+   よっては走らず「入力セルだけ赤い」状態になる (2026-09-11 実機報告: Zelkova の
+   学生リスト[4] の Dataset 出力)。入力セルの CellEpilog は FE が評価完了後に
+   カーネルへ送る後処理で、そのとき出力セルは既に挿入済み。ここから flush する。
+   同一セルへの SetOptions は 1 回だけ (FE 往復の節約)。 *)
+If[! BooleanQ[SourceVault`$SourceVaultPrivacyCellEpilog],
+  SourceVault`$SourceVaultPrivacyCellEpilog = True];
+If[! MatchQ[$svPEpilogArmed, _CellObject], $svPEpilogArmed = Null];
+
+iPArmEpilog[nb_NotebookObject, cell_CellObject] :=
+  If[TrueQ[SourceVault`$SourceVaultPrivacyCellEpilog] && cell =!= $svPEpilogArmed,
+    $svPEpilogArmed = cell;
+    Quiet @ Check[
+      SetOptions[cell, CellEpilog :> SourceVault`SourceVaultMarkEvaluationPrivacyCells[]],
+      Null];
+    True,
+    False];
+iPArmEpilog[___] := False;
 
 (* 未処理要求を流す。期限切れの要求は破棄する。 *)
 iPFlushPending[] :=

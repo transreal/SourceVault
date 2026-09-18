@@ -51,7 +51,9 @@
 		"SourceVault_kb.wl",
 		"SourceVault_talkqa.wl",
 		"SourceVault_slidedeck.wl",
-		"SourceVault_todo.wl"
+		"SourceVault_todo.wl",
+		"SourceVault_knowledgegraph.wl",
+		"SourceVault_papernb.wl"
 	],
 	"directories":[
 		"SourceVault_info",

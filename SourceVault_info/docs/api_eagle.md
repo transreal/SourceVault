@@ -367,6 +367,9 @@ Options: "Library" -> Automatic
 → Dataset
 Options: SourceVaultEagleSearch と同じ全オプション
 
+### SourceVaultEagleObjectInfo[ref, "Library" -> lib] → Association
+Eagle item の参照 (`sv://object/eagle-<id>` / `eagle:<id>` / id) を SourceVault 共通スキーマ `<|"Status" (OK|NotFound), "SourceId" (""), "URI", "File", "Title", "PrivacyLevel" (実効 PL), "Kind" -> "eagle", "Ext"|>` に解決する。和訳ノートブック登録簿 (`SourceVault_papernb.wl`) が Eagle の PDF を元ソースとして扱うための読み口。
+
 ### SourceVaultEagleView[query, opts]
 検索結果を行ごとに 原本を開く(▶)/Eagle で表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表で返す。列: ▶/⌂/☰・サムネイル・Date・Name・Ext・Size・Tags・Summary(先頭 150 字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(`sv://object/eagle-<id>`、`SourceVaultMCPGet` で解決可)。
 → Dataset
@@ -421,14 +424,3 @@ Options: "Notebook" -> Automatic (省略時 `InputNotebook[]`), "Show" -> "Both"
 - "Video": mp4, mov, avi, mkv, webm, m4v, wmv
 - "Audio": mp3, wav, m4a, flac, ogg
 - "Other": 上記以外
-
----
-
-Summary of what I changed after diffing against the actual source (`SourceVault_eagle.wl` on disk, not just the truncated excerpt in the prompt):
-
-- **Removed** the `"Online"->False` option from `SourceVaultEagleIngest` — it no longer exists; offline now unconditionally returns `LibraryOffline`. Updated the 動作原則 prose to match.
-- **Fixed wrong defaults**: `SourceVaultEagleSummarize`'s `MaxLength`/`MaxChars`/`MaxPages` are `400`/`8000`/`15`, not `Automatic`; added missing `"Timeout"->240`. `SourceVaultEagleView`'s `ThumbnailSize` default is `48`. `SourceVaultEagleGeoView`'s `MarkerScale`/`ThumbnailSize` are `0.003`/`64`. `SourceVaultEagleFolderView`'s `"Where"` default is `All`, not `None`. `SourceVaultEagleIndexSearch`'s `"Query"` default is `""`, not `Automatic`. `SourceVaultEagleItemsInFolder`'s `"Recursive"` default is `False`, not `True`.
-- **Added missing options**: `SourceVaultEagleItems` (`"Force"->False`), `SourceVaultEagleThumbnail` (`"Size"->Automatic`), `SourceVaultEagleFolderList`/`SourceVaultEagleItemsInFolder` (`"IncludeDeleted"->False`), `SourceVaultEagleIngestFolder` (`"Limit"->Automatic`), `SourceVaultEagleAddItem` (`"Library"->Automatic`), and fully expanded `SourceVaultEagleSummarizeBatch`'s inherited option set.
-- **Removed** a nonexistent `"Library"` option from `SourceVaultEagleShowSummary` (it always targets the current library).
-- **Converted** `SourceVaultEagleFindFolder` from a plain function to an option-taking function (it now has `"Library"->Automatic`).
-- All other functions, options, and the curated prose/overview sections were verified against source and left unchanged.
