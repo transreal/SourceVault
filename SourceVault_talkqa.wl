@@ -510,8 +510,13 @@ iTQQuestionsFor[title_, slideText_, talkText_, k_, fn_, pl_ : 0.3] := Module[{qs
 
 (* ---- build ---- *)
 
+(* デッキの PrivacyLevel: 数値が明示されればそれ、Automatic はノートブックの公開宣言
+   (Public -> 0.0、それ以外 0.3)。KB 側 (iKBDeckPrivacy) と同じ規則 *)
+iTQDeckPL[pl_?NumericQ, _] := N[Clip[pl, {0., 1.}]];
+iTQDeckPL[_, deck_String] := If[iTQDeckCloudOK[deck], 0., 0.3];
+
 Options[SourceVaultTalkQABuild] = {"PackId" -> Automatic, "KBId" -> Automatic,
-  "PrivacyLevel" -> 0.3, "QuestionsPerSlide" -> 3, "Ingest" -> True,
+  "PrivacyLevel" -> Automatic, "QuestionsPerSlide" -> 3, "Ingest" -> True,
   "Rebuild" -> Automatic, "QuestionFn" -> Automatic, "Slides" -> All,
   "QuestionModel" -> Automatic, "Verbose" -> True, "AnswerLimit" -> 3};
 
@@ -546,7 +551,7 @@ SourceVaultTalkQABuild[deck_String, OptionsPattern[]] := Module[
   If[TrueQ[OptionValue["Ingest"]],
     If[verbose, Print["[talkqa] KB へ取り込み: " <> sourceId]];
     ing = Quiet @ Check[SourceVault`SourceVaultKBIngestSlideDeck[kbId, deck,
-      "SourceId" -> sourceId, "PrivacyLevel" -> iNum[OptionValue["PrivacyLevel"], 0.3],
+      "SourceId" -> sourceId, "PrivacyLevel" -> OptionValue["PrivacyLevel"],
       "SlideNotes" -> talkTexts, "MaxSlideCharacters" -> 2500], $Failed];
     If[FailureQ[ing] || ing === $Failed,
       Return[iFail["IngestFailed", "KB への取り込みに失敗しました。", <|"Result" -> ing|>]]];
@@ -572,7 +577,7 @@ SourceVaultTalkQABuild[deck_String, OptionsPattern[]] := Module[
       talkText = iStr[Lookup[talkTexts, n, ""]];
       If[verbose, Print["[talkqa] スライド " <> ToString[n] <> " " <> title]];
       qs = iTQQuestionsFor[title, body <> "\n" <> talkText, talkText, k, qfn,
-        iNum[sl["PrivacyLevel"], iNum[OptionValue["PrivacyLevel"], 0.3]]];
+        iNum[sl["PrivacyLevel"], iTQDeckPL[OptionValue["PrivacyLevel"], deck]]];
       Do[
         Module[{ans},
           ans = iTQAnswerFor[kbId, q, OptionValue["AnswerLimit"], sourceId];
@@ -720,7 +725,7 @@ iTQImportEntry[kbId_String, sourceId_String, n_Integer, e_Association,
     "Count" -> 1, "Origin" -> "Cells"|>];
 
 Options[SourceVaultTalkQAImport] = {"PackId" -> Automatic, "KBId" -> Automatic,
-  "SourceId" -> Automatic, "PrivacyLevel" -> 0.3, "Ingest" -> True,
+  "SourceId" -> Automatic, "PrivacyLevel" -> Automatic, "Ingest" -> True,
   "Rebuild" -> Automatic, "Enrich" -> True, "Verbose" -> False};
 
 SourceVaultTalkQAImport[deck_String, slidesIn_List, OptionsPattern[]] := Module[
@@ -750,7 +755,7 @@ SourceVaultTalkQAImport[deck_String, slidesIn_List, OptionsPattern[]] := Module[
     With[{k = iStr[Lookup[prior, "KBId", ""]]},
       If[k =!= "", k, SourceVault`$SourceVaultKBDefaultId]]];
   If[! StringQ[kbId] || kbId === "", kbId = "cn"];
-  deckPL = iNum[OptionValue["PrivacyLevel"], 0.3];
+  deckPL = iTQDeckPL[OptionValue["PrivacyLevel"], deck];
 
   talkTexts = Select[Association[Table[
     Lookup[s, "Slide", 0] -> iStr[Lookup[s, "Talk", ""]], {s, slides}]],
@@ -761,7 +766,7 @@ SourceVaultTalkQAImport[deck_String, slidesIn_List, OptionsPattern[]] := Module[
   If[TrueQ[OptionValue["Ingest"]] && FileExistsQ[deck],
     If[verbose, Print["[talkqa] KB へ取り込み: " <> sourceId]];
     ing = Quiet @ Check[SourceVault`SourceVaultKBIngestSlideDeck[kbId, deck,
-      "SourceId" -> sourceId, "PrivacyLevel" -> deckPL,
+      "SourceId" -> sourceId, "PrivacyLevel" -> OptionValue["PrivacyLevel"],
       "SlideNotes" -> talkTexts, "MaxSlideCharacters" -> 2500], $Failed];
     If[AssociationQ[ing] && OptionValue["Rebuild"] =!= False &&
         (OptionValue["Rebuild"] === True || Lookup[ing, "Status", ""] =!= "Unchanged"),
@@ -1492,6 +1497,9 @@ SourceVaultTalkQAHandler[req_Association] := Module[{q, allowWeb, slide, res},
     "answer" -> iStr[res["SpeakText"]],
     "route" -> iStr[res["Route"]],
     "source" -> iStr[Lookup[res, "Source", ""]],
+    (* 作り置きのどの問いに当たったか。音声側 (GPT-Live) が、答えが質問に
+       合っているかを判断するのに使う (合っていなければ資料に頼らず答える) *)
+    "matchedQuestion" -> iStr[Lookup[res, "Question", ""]],
     "slide" -> Lookup[res, "Slide", 0],
     "needWeb" -> (res["Status"] === "NeedWeb"),
     "serviceDown" -> (res["Status"] === "Unavailable"),

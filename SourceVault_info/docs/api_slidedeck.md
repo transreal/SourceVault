@@ -3,7 +3,7 @@ SourceVault_slidedeck (`SourceVault\`` context, private impl in `SlideDeckPrivat
 Service-loadable constraint: no FrontEnd/Notebook/NBAccess/UI dependency, no dependency on other SourceVault modules (root resolution optionally consults [SourceVault_core](https://github.com/transreal/SourceVault_core) via a DownValues guard, so a standalone `Get` still works if `$SourceVaultSlideDeckRoot` is set).
 Privacy: every entry declares `PrivacyLevel` at registration (default 0.0 = public). Readers treat a missing/non-numeric level as 1.0 (fail-closed). Entries with `PrivacyLevel >= $SourceVaultSlideDeckReleaseCeiling` (default 0.5) have their narration withheld (`talkWithheld -> True`, `talk -> Null`, URL omitted) from `SourceVaultSlideDeckPresentationSpec`. `DeckFile` is a local absolute path and is never included in payloads.
 Storage layout: root/`registry.json` (all entries) + root/`talks/<id>.json` (compiled scenario) + root/`talks/<id>.md` (optional raw narration markdown, if `TalkMarkdown` was given at registration). JSON is written/read via `ExportByteArray`/`ReadByteArray` with `"RawJSON"` (never `ExportString`, which mangles UTF-8 on Japanese Windows) and short retries (5x, 0.05s pause) to tolerate transient Dropbox-sync lock failures.
-Title matching: normalized (NFKC, lowercased, letters/digits only) bigram-Jaccard/substring scoring via `SourceVaultSlideDeckMatchScore`, with a hard rule that trailing-digit mismatches (e.g. "31" vs "30") never match. Lookup threshold is 0.34.
+Title matching: normalized (NFKC, lowercased, letters/digits only, trailing kanji numerals converted to digits e.g. "三十一" -> "31" so "31" and "三十一" are treated as the same entry, a lone leading "一" left as-is since "一つ"/"一度" usage outnumbers ordinal usage, a trailing "回" suffix stripped as decoration) bigram-Jaccard/substring scoring via `SourceVaultSlideDeckMatchScore`, with a hard rule that trailing-digit mismatches (e.g. "31" vs "30") never match. Lookup threshold is 0.34; if two or more distinct entries tie for the top score, `SourceVaultSlideDeckLookup` refuses to guess and returns `Missing["Ambiguous", query]`.
 Re-registration: pushing "register" again for the same talk merges onto the prior entry instead of forking a new one — see `SourceVaultSlideDeckRegister`'s `"Merge"` option.
 
 ### $SourceVaultSlideDeckRoot
@@ -33,11 +33,11 @@ Removes the matched entry (via `SourceVaultSlideDeckLookup`) from the registry. 
 ### SourceVaultSlideDeckRegistry[] → {Association...}
 Returns all registered entries as-stored (internal keys, not JSON-safe/lowercase; includes all privacy levels).
 
-### SourceVaultSlideDeckLookup[query] → Association | Missing["NotFound", query]
-Resolves a title/alias/id (with fuzzy matching, typo/wording tolerant) to one stored entry. Matches Title, Id, and each Aliases entry; picks the highest-scoring candidate at or above threshold 0.34. Trailing-number mismatches (e.g. querying "31" against a "30" entry) never match.
+### SourceVaultSlideDeckLookup[query] → Association | Missing["NotFound", query] | Missing["Ambiguous", query]
+Resolves a title/alias/id (with fuzzy matching, typo/wording tolerant, trailing kanji numerals normalized to digits) to one stored entry. Matches Title, Id, and each Aliases entry; picks the highest-scoring candidate at or above threshold 0.34. Trailing-number mismatches (e.g. querying "31" against a "30" entry) never match. If two or more distinct entries tie for the top score (within 1e-9), returns `Missing["Ambiguous", query]` instead of arbitrarily picking one.
 
 ### SourceVaultSlideDeckMatchScore[query, candidate] → Real
-Normalizes both strings (NFKC, lowercase, letters/digits only) and scores 0.0-1.0: 0. if either is empty or trailing digits differ; 1. if equal; 0.9 if one starts with the other; 0.8 if one contains the other; else bigram Jaccard similarity.
+Normalizes both strings (NFKC, lowercase, letters/digits only, trailing kanji numerals converted to digits, trailing "回" stripped) and scores 0.0-1.0: 0. if either is empty or trailing digits differ; 1. if equal; 0.9 if one starts with the other; 0.8 if one contains the other; else bigram Jaccard similarity.
 
 ### SourceVaultSlideDeckTalk[idOrTitle] → Association | Missing
 Accepts a query string or an already-resolved entry Association. Returns the compiled scenario `<|"Version"->1,"Id"->String,"Title"->String,"Language"->String,"Opening"->String,"Closing"->String,"Slides"->{<|"Slide"->Integer,"Title"->String,"Seconds"->Real|Null,"Text"->String|>...}|>`. Returns `Missing["NotFound", query]` if no entry matches, or `Missing["NoTalk", id]` if the entry has no compiled talk JSON.

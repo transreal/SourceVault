@@ -25,6 +25,16 @@
      読むだけで、音声やネットワークのホットパスに座らない。この分離は
      VRCRealtime と同じ理由 — FE とカーネルを止めないため。
 
+   == 2 つの API (モデルで決まる) ==
+     gpt-realtime-*  Realtime API。1 つのモデルが聞いて考えて話し、show_slide /
+                     ask_sourcevault を関数呼び出しで呼ぶ。
+     gpt-live-*      GPT-Live (全二重: 聞きながら話す)。作業はクライアント委譲で
+                     アプリ側へ回ってくる。ワーカーが直近の書き起こしから依頼を読み、
+                     同じ handler ($SourceVaultRealtimeSlideHandler /
+                     $SourceVaultRealtimeAskHandler = SourceVault → 許可が出たらウェブ)
+                     で答えを作って返す。カーネル側の契約 (状態ファイルの slideRequest /
+                     askRequest、Narrate / NarrationDone) は両者で同じ。
+
    == プライバシー (重要) ==
      これはクラウド経路である。マイク音声と会話テキストは OpenAI へ送られる。
      ローカルで完結させたい読み上げ (PL >= 0.5 の資料) は従来どおり
@@ -45,7 +55,19 @@ BeginPackage["SourceVault`"];
 (* ---- 設定 ---- *)
 
 $SourceVaultRealtimeModel::usage =
-  "$SourceVaultRealtimeModel は音声会話に使う OpenAI Realtime モデル (既定 \"gpt-realtime-2.1\")。";
+  "$SourceVaultRealtimeModel は音声会話に使うモデル (既定 \"gpt-realtime-2.1\")。\n" <>
+  "\"gpt-live-1\" にすると GPT-Live (全二重・クライアント委譲) で会話する。候補は SourceVaultRealtimeModels[]。";
+
+$SourceVaultRealtimeModels::usage =
+  "$SourceVaultRealtimeModels は利用者が足す/上書きする音声会話モデル (既定 <||>)。\n" <>
+  "形は <|\"モデル名\" -> <|\"Provider\" -> \"OpenAI\", \"API\" -> \"Realtime\"|\"Live\", \"Label\" -> 短い表示名, \"Description\" -> 説明|>|>。組み込みの登録簿に足される。";
+
+SourceVaultRealtimeModels::usage =
+  "SourceVaultRealtimeModels[] は選べる音声会話モデルの登録簿 (モデル名 -> <|Provider, API, Label, Description|>) を返す。\n" <>
+  "SourceVaultRealtimeModels[\"ByProvider\"] はプロバイダ -> モデル名の一覧、SourceVaultRealtimeModels[provider] はそのプロバイダのモデル名の一覧。";
+
+SourceVaultRealtimeModelAPI::usage =
+  "SourceVaultRealtimeModelAPI[model] はモデルが話す API (\"Realtime\" | \"Live\") を返す。登録簿に無い gpt-live-* も \"Live\"。";
 
 $SourceVaultRealtimeVoice::usage =
   "$SourceVaultRealtimeVoice は Realtime の声 (既定 \"marin\")。";
@@ -75,7 +97,7 @@ SourceVaultRealtimeRuntime::usage =
 
 SourceVaultRealtimeInstall::usage =
   "SourceVaultRealtimeInstall[] は音声会話ワーカー用の Python venv を作り、websocket-client と sounddevice を導入する。\n" <>
-  "既に使える状態なら何もしない。\"Force\" -> True で再導入。";
+  "既に使える状態なら何もしない。\"Force\" -> True で再導入。\"Vosk\" -> True で vosk も入れる (発表中の許可ワードでの割り込みに使う。モデルは SourceVault_voice の SourceVaultSpeechModel[])。";
 
 SourceVaultRealtimeDevices::usage =
   "SourceVaultRealtimeDevices[] は Python から見えるオーディオデバイスの一覧を返す (既定デバイスに \"DefaultInput\" / \"DefaultOutput\" が立つ)。";
@@ -83,9 +105,9 @@ SourceVaultRealtimeDevices::usage =
 (* ---- 会話の開始 / 停止 ---- *)
 
 SourceVaultRealtimeStart::usage =
-  "SourceVaultRealtimeStart[] はこの機械の既定のマイクとスピーカーで gpt-realtime との音声会話を開始する (非ブロック)。\n" <>
+  "SourceVaultRealtimeStart[] はこの機械の既定のマイクとスピーカーで音声会話 (既定 gpt-realtime、\"Model\" -> \"gpt-live-1\" で GPT-Live) を開始する (非ブロック)。\n" <>
   "経過はノートブックのウインドウステータスバーへ 1 行ずつ出る。宛先は \"Notebook\" (既定 Automatic = 評価中のノートブック)。\n" <>
-  "主なオプション: \"Model\", \"Voice\", \"Instructions\", \"InputDevice\", \"OutputDevice\", \"AllowBargeIn\" (既定 False = 応答中はマイクを送らない), \"StartMuted\" (接続だけ先にしてマイクは後から), \"TranscribeInput\" (既定 False = こちらの発話は文字にしない), \"RequirePaidAPIApproval\" (既定 True), \"StatusBar\", \"PollSeconds\"。";
+  "主なオプション: \"Model\", \"API\" (既定 Automatic = モデルから決める), \"Voice\", \"Instructions\", \"InputDevice\", \"OutputDevice\", \"AllowBargeIn\" (既定 False = 応答中はマイクを送らない), \"StartMuted\" (接続だけ先にしてマイクは後から), \"TranscribeInput\" (既定 False = こちらの発話は文字にしない。GPT-Live は常に書き起こす), \"RequirePaidAPIApproval\" (既定 True), \"StatusBar\", \"PollSeconds\"。";
 
 SourceVaultRealtimeStop::usage =
   "SourceVaultRealtimeStop[] は音声会話を終了する (最大 8 秒待ち、応答しなければ強制終了)。";
@@ -112,7 +134,12 @@ SourceVaultRealtimeSetInstructions::usage =
 SourceVaultRealtimeNarrate::usage =
   "SourceVaultRealtimeNarrate[id, text] は用意した原稿を Realtime の声で読み上げさせる (発表用)。\n" <>
   "読み終えて実際に音が鳴り終わると SourceVaultRealtimeStatus[][\"NarrationDone\"] が id になる。\n" <>
-  "オプション: \"Heading\" (「スライド 3」など見出し), \"Instructions\" (この原稿だけへの追加指示)。";
+  "オプション: \"Heading\" (「スライド 3」など見出し), \"Instructions\" (この原稿だけへの追加指示), \"Slide\" (スライド番号。質疑でスライドが動いたら再開時に戻す),\n" <>
+  "\"Interrupt\" (GPT-Live のみ。None = 割り込みなし (質問タイム)、\"Words\" = 許可ワード (\"InterruptWords\"、既定 $SourceVaultRealtimeInterruptWords) を含む発話でだけ中断して質疑、\"Detect\" = 別の声を検知したら中断し質問かどうかはモデルが判断)。\n" <>
+  "中断中も NarrationDone は出ない (質疑が静かになったら中断した文から再開し、読み終えて出る)。";
+
+$SourceVaultRealtimeInterruptWords::usage =
+  "$SourceVaultRealtimeInterruptWords は発表中の割り込み (\"Interrupt\" -> \"Words\") を許す語 (既定 {\"質問\", \"スライド\"})。ローカルの Vosk (文法制限) で聞き取る。";
 
 SourceVaultRealtimeCancel::usage =
   "SourceVaultRealtimeCancel[] は今しゃべっている応答を中断し、溜まっている音声を捨てる。";
@@ -171,12 +198,58 @@ If[! ValueQ[SourceVault`$SourceVaultRealtimeSlideHandler],
   SourceVault`$SourceVaultRealtimeSlideHandler = None];
 If[! ValueQ[SourceVault`$SourceVaultRealtimeAskHandler],
   SourceVault`$SourceVaultRealtimeAskHandler = None];
+If[! ValueQ[SourceVault`$SourceVaultRealtimeModels],
+  SourceVault`$SourceVaultRealtimeModels = <||>];
+If[! ValueQ[SourceVault`$SourceVaultRealtimeInterruptWords],
+  SourceVault`$SourceVaultRealtimeInterruptWords = {"質問", "スライド"}];
 
 $iSVRTPackageDirectory = Quiet @ Check[DirectoryName[$InputFileName], ""];
 
 (* 走っているワーカーが古い契約のままなら、黙って知らないコマンドを捨てるより
-   入れ直したい。利用側 (SlideWorkflow) はこの値と Status の "WorkerVersion" を比べる *)
-SourceVault`$SourceVaultRealtimeWorkerVersion = "1.4";
+   入れ直したい。利用側 (SlideWorkflow) はこの値と Status の "WorkerVersion" を比べる。
+   1.5 = GPT-Live (--api live)、1.6 = 発表中の割り込み (narrate の interrupt / slide)、
+   1.7 = 原稿は先に文脈として渡してから読ませる / 答えはモデルが資料から組み立てる *)
+SourceVault`$SourceVaultRealtimeWorkerVersion = "1.7";
+
+(* ---- 音声会話モデルの登録簿 ----
+   組み込みは毎回ここで作り直す (再ロードで新しいモデルが見えるように)。
+   利用者の追加/上書きは $SourceVaultRealtimeModels に置く *)
+$iSVRTBuiltinModels = <|
+  "gpt-realtime-2.1" -> <|"Provider" -> "OpenAI", "API" -> "Realtime",
+    "Label" -> "realtime-2.1",
+    "Description" -> "1 つのモデルが聞いて考えて話す。スライド操作と資料の問い合わせは関数呼び出し。"|>,
+  "gpt-realtime-2.1-mini" -> <|"Provider" -> "OpenAI", "API" -> "Realtime",
+    "Label" -> "rt-2.1-mini",
+    "Description" -> "gpt-realtime-2.1 の軽量・低価格版。"|>,
+  "gpt-live-1" -> <|"Provider" -> "OpenAI", "API" -> "Live",
+    "Label" -> "live-1",
+    "Description" -> "GPT-Live。全二重 (聞きながら話す)。作業はアプリ側へ委譲 (スライド操作 / SourceVault / 許可を得てウェブ)。音声 $0.05/分。"|>|>;
+
+iSVRTModelRegistry[] := Join[$iSVRTBuiltinModels,
+  If[AssociationQ[SourceVault`$SourceVaultRealtimeModels],
+    Select[SourceVault`$SourceVaultRealtimeModels, AssociationQ], <||>]];
+
+SourceVaultRealtimeModels[] := iSVRTModelRegistry[];
+
+SourceVaultRealtimeModels["ByProvider"] :=
+  GroupBy[Normal[iSVRTModelRegistry[]],
+    (With[{p = Lookup[Last[#], "Provider", "OpenAI"]}, If[StringQ[p], p, "OpenAI"]] &) -> First];
+
+SourceVaultRealtimeModels[provider_String] :=
+  Lookup[SourceVaultRealtimeModels["ByProvider"], provider, {}];
+
+SourceVaultRealtimeModelAPI[Automatic] :=
+  SourceVaultRealtimeModelAPI[SourceVault`$SourceVaultRealtimeModel];
+
+SourceVaultRealtimeModelAPI[model_String] := Module[{entry},
+  entry = Lookup[iSVRTModelRegistry[], model, None];
+  Which[
+    AssociationQ[entry] && MemberQ[{"Realtime", "Live"}, Lookup[entry, "API", None]],
+      entry["API"],
+    StringStartsQ[ToLowerCase[StringTrim[model]], "gpt-live"], "Live",
+    True, "Realtime"]];
+
+SourceVaultRealtimeModelAPI[_] := "Realtime";
 
 $iSVRTProcess = None;
 $iSVRTStateFile = None;
@@ -188,6 +261,7 @@ $iSVRTLastSlideRequest = None;
 $iSVRTLastAskRequest = None;
 $iSVRTCommandCount = 0;
 $iSVRTDepsOK = None;   (* セッションキャッシュ: 依存の確認は毎回プロセスを起こさない *)
+$iSVRTVoskOK = None;   (* 同上: 発表中の割り込み (許可ワード) に使う vosk の有無 *)
 
 iSVRTFailure[tag_String, message_String, extra_: <||>] :=
   Failure[tag, Join[<|"MessageTemplate" -> message|>, extra]];
@@ -235,6 +309,14 @@ iSVRTDepsQ[exe_] := If[$iSVRTDepsOK === True, True,
     $iSVRTDepsOK = AssociationQ[r] && Lookup[r, "ExitCode", 1] === 0 &&
       StringContainsQ[Lookup[r, "StandardOutput", ""], "deps-ok"];
     $iSVRTDepsOK]];
+
+(* vosk (任意): 許可ワードでの割り込みにだけ要る。無ければワーカーは「別の声の検知」
+   だけで動く。確認は 1 度だけ (Install で無効化) *)
+iSVRTVoskQ[exe_] := If[BooleanQ[$iSVRTVoskOK], $iSVRTVoskOK,
+  With[{r = iSVRTRunPython[exe, {"-c", "import vosk; print('vosk-ok')"}, 60]},
+    $iSVRTVoskOK = AssociationQ[r] && Lookup[r, "ExitCode", 1] === 0 &&
+      StringContainsQ[Lookup[r, "StandardOutput", ""], "vosk-ok"];
+    $iSVRTVoskOK]];
 
 (* venv を作るための「素の」Python。Windows の PATH 上の python.exe は Store の
    スタブのことがあるので、必ず実際に動くか確かめてから採る。 *)
@@ -288,6 +370,8 @@ SourceVaultRealtimeRuntime[] := Module[{python, worker, missing = {}, hints = {}
       AppendTo[missing, "PythonPackages"];
       AppendTo[hints, "websocket-client / sounddevice が入っていません。SourceVaultRealtimeInstall[] を評価してください。"]]];
   <|"Status" -> If[missing === {}, "OK", "Missing"],
+    (* 任意: 許可ワードでの割り込み。False なら SourceVaultRealtimeInstall["Vosk" -> True] *)
+    "Vosk" -> If[StringQ[python] && TrueQ[deps], TrueQ[iSVRTVoskQ[python]], False],
     "Python" -> If[StringQ[python], python, None],
     "PythonSource" -> Which[
       ! StringQ[python], None,
@@ -299,16 +383,21 @@ SourceVaultRealtimeRuntime[] := Module[{python, worker, missing = {}, hints = {}
     "Missing" -> missing,
     "Hint" -> If[hints === {}, None, StringRiffle[hints, "\n"]]|>];
 
-Options[SourceVaultRealtimeInstall] = {"Force" -> False, "BasePython" -> Automatic};
+Options[SourceVaultRealtimeInstall] = {"Force" -> False, "BasePython" -> Automatic,
+  "Vosk" -> False};
 
 SourceVaultRealtimeInstall[OptionsPattern[]] := Module[
-  {force, base, venvPython, root, r, packages},
+  {force, base, venvPython, root, r, packages, vosk},
   force = TrueQ[OptionValue["Force"]];
+  vosk = TrueQ[OptionValue["Vosk"]];
   $iSVRTDepsOK = None;
+  $iSVRTVoskOK = None;
   venvPython = iSVRTVenvPython[];
-  If[! force && iSVRTPythonWorksQ[venvPython] && iSVRTDepsQ[venvPython],
+  If[! force && iSVRTPythonWorksQ[venvPython] && iSVRTDepsQ[venvPython] &&
+      (! vosk || TrueQ[iSVRTVoskQ[venvPython]]),
     Return[<|"Status" -> "OK", "Reason" -> "AlreadyInstalled",
       "Python" -> venvPython|>]];
+  $iSVRTVoskOK = None;
   base = OptionValue["BasePython"];
   If[base === Automatic, base = iSVRTBasePython[]];
   If[! iSVRTPythonWorksQ[base],
@@ -323,7 +412,7 @@ SourceVaultRealtimeInstall[OptionsPattern[]] := Module[
       Return[iSVRTFailure["SourceVaultRealtimeVenvFailed",
         "venv を作れませんでした。",
         <|"BasePython" -> base, "Result" -> r|>]]]];
-  packages = {"websocket-client", "sounddevice"};
+  packages = Join[{"websocket-client", "sounddevice"}, If[vosk, {"vosk>=0.3.45"}, {}]];
   r = iSVRTRunPython[venvPython,
     Join[{"-m", "pip", "install", "--upgrade", "--disable-pip-version-check"}, packages], 600];
   If[! AssociationQ[r] || Lookup[r, "ExitCode", 1] =!= 0,
@@ -331,10 +420,14 @@ SourceVaultRealtimeInstall[OptionsPattern[]] := Module[
       "依存パッケージ (websocket-client / sounddevice) を導入できませんでした。",
       <|"Python" -> venvPython, "Result" -> r|>]]];
   $iSVRTDepsOK = None;
+  $iSVRTVoskOK = None;
   If[! iSVRTDepsQ[venvPython],
     Return[iSVRTFailure["SourceVaultRealtimeDepsMissing",
       "導入後も websocket-client / sounddevice を読み込めません。",
       <|"Python" -> venvPython|>]]];
+  If[vosk && ! TrueQ[iSVRTVoskQ[venvPython]],
+    Return[iSVRTFailure["SourceVaultRealtimeDepsMissing",
+      "導入後も vosk を読み込めません。", <|"Python" -> venvPython|>]]];
   <|"Status" -> "OK", "Reason" -> "Installed", "Python" -> venvPython,
     "Packages" -> packages, "Root" -> root|>];
 
@@ -504,6 +597,7 @@ Options[SourceVaultRealtimeStart] = {
   "Notebook" -> Automatic,
   "RequirePaidAPIApproval" -> True,
   "Model" -> Automatic,
+  "API" -> Automatic,
   "Voice" -> Automatic,
   "Instructions" -> Automatic,
   "InputDevice" -> Automatic,
@@ -526,10 +620,17 @@ Options[SourceVaultRealtimeStart] = {
   "SafetyIdentifier" -> "",
   "StatusBar" -> True,
   "PollSeconds" -> 0.4,
+  (* GPT-Live の発表中の割り込み: 自分の声 (エコー) より何倍大きければ人の声か /
+     "Detect" で質疑を開くまでの連続発話 / 人の声と数える最小の音量 / 質疑が
+     静かになってから発表に戻るまで *)
+  "InterruptMargin" -> 2.0,
+  "InterruptMilliseconds" -> 350,
+  "InterruptFloor" -> 0.03,
+  "ResumeQuietSeconds" -> 4,
   "Python" -> Automatic};
 
 SourceVaultRealtimeStart[OptionsPattern[]] := Module[
-  {runtime, python, worker, nb, apiKey, model, voice, instructions,
+  {runtime, python, worker, nb, apiKey, model, api, voice, instructions,
    inputDevice, outputDevice, stateFile, controlFile, command,
    process, deadline, state, workerError, instructionsFile},
 
@@ -571,6 +672,10 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
       "OPENAI_API_KEY を NBAccess / SystemCredential から取得できませんでした。"]]];
 
   model = Replace[OptionValue["Model"], Automatic :> SourceVault`$SourceVaultRealtimeModel];
+  If[! StringQ[model] || StringTrim[model] === "", model = "gpt-realtime-2.1"];
+  (* どちらの API で話すか: 明示が無ければモデルから (gpt-live-* = Live) *)
+  api = Replace[OptionValue["API"], Automatic :> SourceVaultRealtimeModelAPI[model]];
+  If[! MemberQ[{"Realtime", "Live"}, api], api = SourceVaultRealtimeModelAPI[model]];
   voice = Replace[OptionValue["Voice"], Automatic :> SourceVault`$SourceVaultRealtimeVoice];
   instructions = Replace[OptionValue["Instructions"],
     Automatic :> SourceVault`$SourceVaultRealtimeInstructions];
@@ -598,6 +703,7 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
      "--state-file", stateFile,
      "--control-file", controlFile,
      "--model", ToString[model],
+     "--api", ToLowerCase[api],
      "--voice", ToString[voice],
      "--chunk-ms", ToString[OptionValue["ChunkMilliseconds"]],
      "--vad-threshold", iSVRTNumberString[OptionValue["VADThreshold"]],
@@ -608,6 +714,10 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
      "--turn-detection", ToLowerCase[ToString[OptionValue["TurnDetection"]]],
      "--vad-eagerness", ToLowerCase[ToString[OptionValue["Eagerness"]]],
      "--verbosity", iSVRTVerbosityString[OptionValue["Verbosity"]],
+     "--bargein-margin", iSVRTNumberString[OptionValue["InterruptMargin"]],
+     "--bargein-ms", ToString[Round[OptionValue["InterruptMilliseconds"]]],
+     "--bargein-floor", iSVRTNumberString[OptionValue["InterruptFloor"]],
+     "--resume-quiet-ms", ToString[Round[1000 OptionValue["ResumeQuietSeconds"]]],
      "--instructions-file", instructionsFile, "--api-key-stdin"},
     If[StringQ[inputDevice] && inputDevice =!= "", {"--input-device", inputDevice}, {}],
     If[StringQ[outputDevice] && outputDevice =!= "", {"--output-device", outputDevice}, {}],
@@ -670,7 +780,7 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
 
   If[TrueQ[OptionValue["StatusBar"]], iSVRTPumpStart[OptionValue["PollSeconds"]]];
 
-  <|"Status" -> "Started", "Model" -> model, "Voice" -> voice,
+  <|"Status" -> "Started", "Model" -> model, "API" -> api, "Voice" -> voice,
     "Notebook" -> $iSVRTNotebook, "StateFile" -> stateFile,
     "Python" -> python, "AllowBargeIn" -> TrueQ[OptionValue["AllowBargeIn"]],
     "TranscribeInput" -> TrueQ[OptionValue["TranscribeInput"]]|>];
@@ -698,6 +808,9 @@ SourceVaultRealtimeStatus[] := Module[{state = iSVRTReadState[]},
     "WorkerStatus" -> Lookup[state, "status", None],
     "WorkerVersion" -> Lookup[state, "workerVersion", None],
     "Model" -> Lookup[state, "model", None],
+    (* 1.4 以前のワーカーは api を書かない = Realtime *)
+    "API" -> Replace[Lookup[state, "api", None],
+      {"live" -> "Live", "realtime" -> "Realtime", None -> If[state === <||>, None, "Realtime"]}],
     "Voice" -> Lookup[state, "voice", None],
     "Muted" -> TrueQ[Lookup[state, "muted", False]],
     "Verbosity" -> Lookup[state, "verbosity", None],
@@ -717,6 +830,22 @@ SourceVaultRealtimeStatus[] := Module[{state = iSVRTReadState[]},
     "LastAssistantText" -> Lookup[state, "lastAssistantText", ""],
     "LastError" -> Lookup[state, "lastError", None],
     "Reconnects" -> Lookup[state, "reconnects", 0],
+    (* GPT-Live だけが書く: セッション ID / 累計の音声秒数 (課金の元) / 委譲の回数と直近 *)
+    "SessionId" -> Lookup[state, "sessionId", None],
+    "UsageSeconds" -> Lookup[state, "usageSeconds", None],
+    "Delegations" -> Lookup[state, "delegations", None],
+    "LastDelegation" -> Lookup[state, "lastDelegation", None],
+    "CloseReason" -> Lookup[state, "closeReason", None],
+    (* 発表中の割り込み (GPT-Live): 指定されたモード / 実際に効いている門
+       ("words" でも Vosk が無ければ "detect") / 質疑中か / 発表を中断中か *)
+    "InterruptMode" -> Lookup[state, "interruptMode", None],
+    "InterruptGate" -> Lookup[state, "interruptGate", None],
+    "QAOpen" -> TrueQ[Lookup[state, "qaOpen", False]],
+    "Interrupted" -> TrueQ[Lookup[state, "interrupted", False]],
+    "Interruptions" -> Lookup[state, "interruptions", None],
+    "LastInterrupt" -> Lookup[state, "lastInterrupt", None],
+    "KeywordStatus" -> Lookup[state, "keywordStatus", None],
+    "EchoCoupling" -> Lookup[state, "echoCoupling", None],
     "Notebook" -> $iSVRTNotebook,
     "StateFile" -> $iSVRTStateFile|>];
 
@@ -749,12 +878,43 @@ SourceVaultRealtimeSetVerbosity[level_] := (
 SourceVaultRealtimeLine[text_String] :=
   iSVRTSend[<|"command" -> "line", "text" -> text|>];
 
-Options[SourceVaultRealtimeNarrate] = {"Heading" -> "", "Instructions" -> ""};
+Options[SourceVaultRealtimeNarrate] = {"Heading" -> "", "Instructions" -> "",
+  "Slide" -> None, "Interrupt" -> None, "InterruptWords" -> Automatic,
+  "SpeechModel" -> Automatic};
 
-SourceVaultRealtimeNarrate[id_, text_String, OptionsPattern[]] :=
-  iSVRTSend[<|"command" -> "narrate", "id" -> ToString[id], "text" -> text,
-    "heading" -> ToString[OptionValue["Heading"]],
-    "instructions" -> ToString[OptionValue["Instructions"]]|>];
+(* 許可ワードの聞き取りに使う Vosk モデルのディレクトリ (SourceVault_voice の資産)。
+   見つからなければ "" = ワーカーは別の声の検知だけで判断する *)
+iSVRTSpeechModelDirectory[Automatic] := Module[{m},
+  If[Length[DownValues[SourceVault`SourceVaultSpeechModel]] === 0, Return[""]];
+  m = Quiet @ Check[SourceVault`SourceVaultSpeechModel[], $Failed];
+  If[AssociationQ[m] && StringQ[Lookup[m, "Directory", None]], m["Directory"], ""]];
+iSVRTSpeechModelDirectory[dir_String] := dir;
+iSVRTSpeechModelDirectory[_] := "";
+
+iSVRTInterruptMode[None | False | "None" | "QuestionTime"] := "none";
+iSVRTInterruptMode[s_String] := Switch[ToLowerCase[s],
+  "words" | "keyword" | "keywords", "words",
+  "detect" | "always" | "voice", "detect",
+  _, "none"];
+iSVRTInterruptMode[_] := "none";
+
+SourceVaultRealtimeNarrate[id_, text_String, OptionsPattern[]] := Module[
+  {mode, words, slide},
+  mode = iSVRTInterruptMode[OptionValue["Interrupt"]];
+  words = Replace[OptionValue["InterruptWords"],
+    Automatic :> SourceVault`$SourceVaultRealtimeInterruptWords];
+  words = Select[Flatten[{words}], StringQ[#] && StringTrim[#] =!= "" &];
+  slide = OptionValue["Slide"];
+  iSVRTSend[Join[
+    <|"command" -> "narrate", "id" -> ToString[id], "text" -> text,
+      "heading" -> ToString[OptionValue["Heading"]],
+      "instructions" -> ToString[OptionValue["Instructions"]],
+      "interrupt" -> mode|>,
+    If[IntegerQ[slide] && slide > 0, <|"slide" -> slide|>, <||>],
+    If[mode === "words",
+      <|"interruptWords" -> words,
+        "speechModel" -> iSVRTSpeechModelDirectory[OptionValue["SpeechModel"]]|>,
+      <||>]]]];
 
 SourceVaultRealtimeCancel[] := iSVRTSend[<|"command" -> "cancel"|>];
 

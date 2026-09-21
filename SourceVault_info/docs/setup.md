@@ -24,7 +24,7 @@ GitHubInstallPackage["SourceVault",
 
 - `SourceVault_core.wl` — コア基盤（排他制御・不変 snapshot・event log・blob・pointer）
 - `SourceVault_voice.wl` — ローカル音声資産（音声合成・音声認識）の解決層。この機械の中だけで完結し、テキストも音声も外部へ出ない
-- `SourceVault_realtime.wl` — クラウド経路の音声会話（OpenAI Realtime、既定のマイク/スピーカーを使用）の解決層。ローカル音声資産の解決層である voice と対になるが、依存関係は起動時にだけ効くため独立してロードされる
+- `SourceVault_realtime.wl` — クラウド経路の音声会話（OpenAI Realtime または GPT-Live、既定のマイク/スピーカーを使用）の解決層。GPT-Live は全二重（聞きながら話す）でスライド操作・SourceVault 問い合わせ等をクライアント側へ委譲する。ローカル音声資産の解決層である voice と対になるが、依存関係は起動時にだけ効くため独立してロードされる
 - `SourceVault_vision.wl` — ローカル視覚資産（人物検出・姿勢推定 ONNX モデル）の解決層
 - `SourceVault_slidedeck.wl` — 発表（スライド + 発表シナリオ）登録簿
 - `SourceVault_knowledgegraph.wl` — 発表用知識グラフ（KG）層。論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手（理解度）と時間（枚数・分）を与えて最小全域順序木・階層概要・詰め込み（packing）・言語別アウトラインを決定的に計算する（LLM は呼ばない）。kb（過去デッキ検索）・oopsseed（グラフ描画）に弱結合
@@ -99,7 +99,7 @@ $packageDirectory\
   SourceVault.wl                 ← 本体
   SourceVault_core.wl            ← コア基盤(本体ロード時に自動ロード)
   SourceVault_voice.wl           ← ローカル音声資産の解決層(本体ロード時に自動ロード)
-  SourceVault_realtime.wl        ← クラウド音声会話 (OpenAI Realtime) の解決層(本体ロード時に自動ロード)
+  SourceVault_realtime.wl        ← クラウド音声会話 (OpenAI Realtime / GPT-Live) の解決層(本体ロード時に自動ロード)
   SourceVault_vision.wl          ← ローカル視覚資産の解決層(本体ロード時に自動ロード)
   SourceVault_slidedeck.wl       ← 発表(スライド)登録簿(本体ロード時に自動ロード)
   SourceVault_knowledgegraph.wl  ← 発表用知識グラフ(KG)層(本体ロード時に自動ロード)
@@ -776,10 +776,13 @@ SourceVault`SourceVaultWebSearchRunList[]            (* WebSearchRun の監査�
 ローカル読み上げ(Privacy.Level >= 0.5 の資料を OpenAI へ渡さずに読む経路)はこの層の
 上に乗っています。
 
-一方、`SourceVault_realtime.wl` は **クラウド経路の音声会話**(OpenAI Realtime、既定の
-マイク/スピーカーを使用)を提供する層です。`SourceVault_voice.wl`(ローカル完結)と
-対になる存在ですが、依存関係は起動時にだけ効くため、ロード順・可用性は独立に扱われます
-(ローカル資産が未導入でもクラウド音声会話は動作し得ます)。
+一方、`SourceVault_realtime.wl` は **クラウド経路の音声会話**(OpenAI Realtime API、または
+全二重の GPT-Live。既定のマイク/スピーカーを使用)を提供する層です。`SourceVault_voice.wl`
+(ローカル完結)と対になる存在ですが、依存関係は起動時にだけ効くため、ロード順・可用性は
+独立に扱われます(ローカル資産が未導入でもクラウド音声会話は動作し得ます)。GPT-Live で
+発表中に許可ワードでの割り込み(質疑への切替)を使いたい場合は、
+`SourceVaultRealtimeInstall["Vosk" -> True]` で vosk(音声認識。下記 ASR と同じ資産)も
+併せて導入してください(既定では入りません)。
 
 どちらも**何も導入しなくてもロードは通り**、必要とする機能だけが静かに落ちます。
 状態は次で確認できます。
@@ -867,6 +870,10 @@ SourceVaultInstallSpeechModel["en"]    (* 英語小モデル *)
 冪等です。導入先は `SourceVaultSpeechModelDirectory[]`(既定 `SourceVault_voice/asr/models`)。
 旧 `%LOCALAPPDATA%\VRCRealtime\models` に既にあるモデルは**読み取り互換で
 そのまま使われる**ので、移行のために再ダウンロードする必要はありません。
+
+> GPT-Live の発表中割り込み(許可ワード検知)に使う vosk は、上記 ASR とは別に
+> `SourceVaultRealtimeInstall["Vosk" -> True]` で venv 内に導入します(モデル自体は
+> `SourceVaultSpeechModel[]` が解決する同じ資産を使います)。
 
 ### 視覚モデル(ONNX)
 
@@ -1052,6 +1059,18 @@ SourceVault`SourceVaultReclassifyPublicPrivacy[]
 
 > `"RecheckTrust" -> True`(既定)を指定すると、保存済み URL から TrustLevel を再判定します(LAN 内ページ等は `PrivateHost` へ引き上げられます)。`"DryRun" -> True` で実際には書き換えず対象だけを確認できます。ユーザーが意図的に付けた 0.4 以外の低い PrivacyLevel には触れません。arXiv・wikipedia・公式 docs・一般公開 web データはすべて PrivacyLevel 0.0(クラウド LLM 可・機密閾値 0.5 未満)として扱われます。一覧(`SourceVaultSources["", "Kind" -> "arxiv"]` 等)の公開 arxiv セルが Max PL 1.0 と誤判定され機密化される不具合は修正済みで、本関数で過去分を是正できます。
 
+#### 発表(スライドデッキ)の PrivacyLevel 是正(KB 索引)
+
+KB(`SourceVault_kb.wl`)に取り込み済みのスライドデッキも、上記と同様の考え方で元ノートブックの公開宣言(`CloudPublishable`)に揃えて是正できます。KB へのスライドデッキ登録時の既定 PrivacyLevel は `Automatic`(公開宣言が True なら 0.0、宣言なし・Private は 0.3)になっているため、この関数は主に「公開宣言を後から付けた・外した」デッキの追従に使います。
+
+```mathematica
+SourceVault`SourceVaultKBRefreshDeckPrivacy[kbId]
+(* → <|"Status" -> "OK" | "DryRun", "KBId" -> kbId,
+       "Changed" -> {<|"SourceId", "From", "To"|>...}, "Skipped" -> {...}, "Rebuilt" -> _Bool|> *)
+```
+
+> 対象は公開宣言に従うべき source だけです: `PrivacySource` が `"Declaration"` のもの、および `PrivacySource` を持たない旧 source のうち旧既定値 0.3 のもの。明示指定された PrivacyLevel(`PrivacySource` `"Explicit"`)や、ノートブックが見当たらない source には触れません(`Skipped` に理由付きで記録)。Options: `"Rebuild" -> True`(既定。変更があれば `SourceVaultKBBuild` で索引を自動的に作り直す)、`"ReleaseContext" -> Automatic`(既定。前回構築時の値を使用)、`"DryRun" -> False`(True で実際には書き換えず対象だけ確認)。`kbId` 省略時は `$SourceVaultKBDefaultId` が使われます。
+
 ### Claude Code セッションログ(llmlog)の動作確認
 
 `SourceVault_llmlog.wl`(本体ロード時に自動ロード)は、Claude Code のセッションログ(実行ログ・作業ログ)を PrivateVault に取り込み、検索・共有するサブシステムです。「Claude Code のログ」を GitHub のコミット履歴(`GitHubCommitLog`)や GitHub リポジトリ検索と混同させないよう、専用のルーティングキーワード(`"Claude Code"` / `"セッションログ"` / `"実行ログ"` / `"作業ログ"` / `"過去のセッション"` / `"svcclog"` 等)で扱われます(過剰マッチを避けるため、単独の「ログ」だけではルーティングされません)。
@@ -1155,6 +1174,7 @@ SourceVaultNotebookSummary[nbPath]
 | arXiv ソースの Summary が空・英語のまま | `SourceVaultBackfillArXivSummaries[]` を `$Language = "Japanese"` のセッションで実行。LLM エラー本文が残っている場合は `"Force" -> True` で再生成 |
 | web / local ソースの Summary が空・英語のまま | `SourceVaultBackfillSourceSummaries[]` を `$Language = "Japanese"` のセッションで実行。機密ソース(PrivacyLevel >= 0.5)はローカル LLM (`$ClaudePrivateModel`) が必要(未設定なら fail-closed で失敗)。本文が prescan で危険と判定されると `"Quarantined"` として要約されない(意図した挙動) |
 | 公開 arXiv / Web ソースが機密扱い(PrivacyLevel 0.5 以上)になっている、または旧既定 `PublicWeb = 0.4` のまま残っている | `SourceVaultReclassifyPublicPrivacy[]` で公開既定値(すべて 0.0)に一括是正(冪等)。旧既定 0.4 の移行だけを対象から外したい場合は `"LegacyPublicWeb" -> False` |
+| KB に取り込んだスライドデッキの PrivacyLevel が、公開宣言(CloudPublishable)を後から付けた・外した後も追従しない | `SourceVaultKBRefreshDeckPrivacy[kbId]` を実行する(冪等。既定で変更があれば索引も自動再構築)。明示指定した PrivacyLevel(`PrivacySource` `"Explicit"`)は対象外。書き換え内容だけ確認したい場合は `"DryRun" -> True` |
 | モデルのバージョン比較が誤る(新メジャー版に旧マイナー付き版が負ける) | `iSVParseModelVersion` の数値キーを固定幅パディング方式(base-100000・width 6)に修正済み。旧実装は指数に桁数 `Length` を使っていたため、桁数の異なるバージョン間(例: `claude-sonnet-4-6` の `{4,6}` と `claude-sonnet-5` の `{5}`)で、桁数の多い `{4,6}`(`4*1000+6=4006`)が桁数の少ない `{5}`(`5`)を誤って上回っていました。SourceVault を最新版に更新すれば、固定幅パディングにより `{5}`(新メジャー版)が `{4,6}` を正しく上回ります。日付らしき数値は `iSVParseModelVersion` で事前に除外されるため(10000 未満のみ通す)、固定幅パディング(base-100000・width 6)と衝突して桁上がりすることはありません。2026-07-06 に、この不具合で LM Studio モデルが誤ルートした実例が確認され対処済みです。 |
 | `SourceVaultShowSourceSummary` がいつも自動生成版を開く(追記が反映されない) | ノート内の「このノートを保存する」ボタンを押して `<PrivateVault>/sources/summary-notes/` に保存したか確認。保存版が正本として優先されます。逆に保存版を無視して record から作り直したい場合は `"Fresh" -> True` |
 | `SourceVaultWebSearch` / `SourceVaultSearXNGAvailableQ` が失敗・空を返す | SearXNG が `127.0.0.1:8888`(`$SourceVaultSearXNGEndpoint`)で稼働しているか、`settings.yml` の `search.formats` に `json` が含まれるか、`limiter`/`botdetection` がローカルアクセスをブロックしていないか確認 |
@@ -1174,6 +1194,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultVoice[]` が `SourceVaultVoiceUnavailable` を返す / VRCRealtime が「ローカル音声合成の資産が無いため SourceVault 連携を切って起動します」と言う | 合成ランタイムか声モデルが未導入。`SourceVaultVoiceStatus[]` の `"Missing"` と `"Hint"` を見る。上の「ローカル音声・視覚資産のセットアップ」に従って `SourceVault_voice/tts/` へ導入する。資産が無いときに非公開資料を OpenAI へ 回すことはしない設計なので、連携が切れるのは安全側の挙動 |
 | `SourceVaultVoiceSpeak` が `SourceVaultVoiceSynthesisFailed` / `"Response" -> EndOfFile` を返す | piper が要求を読めずに即終了している。まず `"StandardError"` を見る。 2026-08-21 以前は要求を `WriteLine` で書いており、`$CharacterEncoding` が UTF-8 でないカーネル(日本語 Windows の FE メインカーネルは既定 ShiftJIS)で JSON 内の日本語が化けて必ずこうなった。現在は生の UTF-8 バイトで書き込む。 回帰テストは `test codes/sourcevault_voice_test.wls` |
 | 別の声に替えたら合成が失敗する・無音になる | 単言語の声に多言語用の `language` を送っている可能性。`SourceVaultVoices[]` の `"Multilingual"` を確認する(`False` の声には `language` を送らない)。声ごとの 言語・サンプリング周波数は config から読むので、config が欠けている声は `SourceVaultVoices[]` の `"Config"` が `None` になる |
+| GPT-Live の発表中割り込み(許可ワード)を使いたいのに反応しない | `SourceVaultRealtimeInstall["Vosk" -> True]` で vosk を導入したか確認(既定では入りません)。導入後は `SourceVaultRealtimeStart["Interrupt" -> "Words"]` のように明示するか、`SourceVaultRealtimeNarrate` 呼び出し側で意図した割り込みモードになっているかを確認してください |
 | 手元の声モデルが公開リポジトリに入りそうになる | `upload_manifest.json` の `excludePatterns` から `SourceVault_voice/tts/models/` 等の 行が消えていないか確認する。`GitHubValidateManifest["SourceVault"]` の `"ExcludePatterns"` で実効値を見られる |
 | `SourceVaultSetModelIntent["$ClaudeAdvisaryModel", ...]` を設定したのに再起動後に反映されていない・codex に戻ってしまう | 2026-08-20 以前は `$ClaudeAdvisaryModel` が `$iSVModelIntentMap` の既定キーに含まれておらず、カーネル起動のたびにパッケージ既定 `{"chatgptcodex", "Automatic"}` へ戻っていた(手で設定しても再起動後の仕様生成が黙って codex を呼ぶ不具合)。修正版では既定キーに追加済み。`SourceVaultModelIntentMap[]` で `"$ClaudeAdvisaryModel"` キーの値を確認し、期待と違う場合は `SourceVaultSetModelIntent["$ClaudeAdvisaryModel", {provider, intent}]` で設定し直す |
 

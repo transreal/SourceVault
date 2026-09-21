@@ -72,7 +72,8 @@ SourceVaultKBIngestSlideDeck::usage =
   "SourceVaultKBIngestSlideDeck[kbId, nbPath, opts] はスライドノートブック 1 冊を解析し、\n" <>
   "スライド単位のテキストと図 (レンダリング済み PNG + ハッシュ) を source document として保存する。\n" <>
   "LLM は呼ばない (図の説明は SourceVaultKBCaptionFigures が後段で埋める)。\n" <>
-  "opts: \"SourceId\" (既定=ファイル名), \"Title\", \"PrivacyLevel\" (既定 0.3), \"Tags\",\n" <>
+  "opts: \"SourceId\" (既定=ファイル名), \"Title\", \"PrivacyLevel\" (既定 Automatic = ノートブックの\n" <>
+  "公開宣言 (CloudPublishable) が True なら 0.0、宣言なし・Private は 0.3。数値を渡せばそれが優先), \"Tags\",\n" <>
   "\"RenderFigures\" (既定 Automatic = FE があれば True), \"MaxFiguresPerSlide\" (既定 4),\n" <>
   "\"FigureImageWidth\" (既定 1024), \"IncludeCode\" (既定 False), \"Force\" (既定 False = 未変更なら再解析しない)。";
 
@@ -132,6 +133,15 @@ SourceVaultKBAnswer::usage =
   "opts: SourceVaultKBSearch のオプションに加えて \"MaxContextCharacters\" (既定 1200),\n" <>
   "\"MaxAnswerCharacters\" (既定 160), \"TPO\" -> 登録済み TPOProfile 名 (任意の話題ゲート)。";
 
+SourceVaultKBRefreshDeckPrivacy::usage =
+  "SourceVaultKBRefreshDeckPrivacy[kbId, opts] は取り込み済みスライドデッキの PrivacyLevel を、\n" <>
+  "元ノートブックの公開宣言 (CloudPublishable) に合わせて更新し、変わったものがあれば索引を作り直す。\n" <>
+  "対象は公開宣言に従うべき source だけ: PrivacySource が \"Declaration\" のもの、および PrivacySource を\n" <>
+  "持たない旧 source のうち旧既定値 0.3 のもの。明示指定された PL (PrivacySource \"Explicit\") は変えない。\n" <>
+  "Public -> 0.0、宣言なし・Private -> 0.3 (宣言を外したデッキは 0.3 に戻る)。\n" <>
+  "opts: \"Rebuild\" (既定 True), \"ReleaseContext\" (既定 Automatic = 前回構築時の値), \"DryRun\" (既定 False)。\n" <>
+  "戻り値 <|\"Status\", \"KBId\", \"Changed\" -> {<|SourceId, From, To|>...}, \"Skipped\", \"Rebuilt\"|>。";
+
 SourceVaultKBIngestTexts::usage =
   "SourceVaultKBIngestTexts[kbId, sourceId, items, opts] は任意のテキスト片を source document として\n" <>
   "取り込む (web 取得分・手で足した補足など)。items は文字列のリスト、または\n" <>
@@ -174,6 +184,12 @@ $kbCJKAny = $kbHiragana <> $kbKatakana <> $kbKanji;
 
 (* メモリ常駐 KB。service kernel / FE kernel それぞれに 1 つ載る *)
 If[! AssociationQ[$kbLoaded], $kbLoaded = <||>];
+(* 読み込んだ索引ファイルの版 (更新時刻 + サイズ)。別のカーネル (ノートブックでの
+   登録) が作り直した索引を、常駐サービスが古いまま使い続けないために見る *)
+If[! AssociationQ[$kbLoadedStamp], $kbLoadedStamp = <||>];
+iKBIndexStamp[kbId_String] := Quiet @ Check[
+  With[{p = iKBIndexPath[kbId]},
+    If[FileExistsQ[p], {AbsoluteTime[FileDate[p]], FileByteCount[p]}, None]], None];
 
 $kbSchemaVersion = 1;
 
@@ -405,10 +421,21 @@ SourceVaultKBSources[kbId_String] := Map[
    ============================================================ *)
 
 Options[SourceVaultKBIngestSlideDeck] = {
-  "SourceId" -> Automatic, "Title" -> Automatic, "PrivacyLevel" -> 0.3,
+  "SourceId" -> Automatic, "Title" -> Automatic, "PrivacyLevel" -> Automatic,
   "Tags" -> {}, "RenderFigures" -> Automatic, "MaxFiguresPerSlide" -> 4,
   "FigureImageWidth" -> 1024, "IncludeCode" -> False, "Force" -> False,
   "MaxSlideCharacters" -> 1500, "SlideNotes" -> <||>, "Verbose" -> True};
+
+(* スライドデッキの PrivacyLevel。明示された数値が最優先。Automatic はノートブック
+   自身の公開宣言 (TaggingRules > SourceVault > CloudPublishable、NBGetCloudPublishable)
+   で決める: Public (True) -> 0.0。宣言なし・Private は従来どおり 0.3 (下げない)。
+   以前は常に 0.3 で、Public 宣言済みの発表 (計算と自然 33) の KB chunk が 0.3 になり、
+   VRChat の音声応答が「オーナーが近くにいるときだけ」(閾値 0.25) と答えを拒んだ
+   (2026-09-19)。NBAccess が読めない・判定できないときも 0.3 (fail-closed)。 *)
+iKBDeckPublicQ[path_String] := TrueQ[Quiet @ Check[
+  NBAccess`NBGetCloudPublishable[path] === True, False]];
+iKBDeckPrivacy[pl_?NumericQ, _] := N[Clip[pl, {0., 1.}]];
+iKBDeckPrivacy[_, path_String] := If[iKBDeckPublicQ[path], 0., 0.3];
 
 SourceVaultKBIngestSlideDeck[nbPath_String, opts : OptionsPattern[]] :=
   SourceVaultKBIngestSlideDeck[$SourceVaultKBDefaultId, nbPath, opts];
@@ -416,7 +443,7 @@ SourceVaultKBIngestSlideDeck[nbPath_String, opts : OptionsPattern[]] :=
 SourceVaultKBIngestSlideDeck[kbId_String, nbPath_String, OptionsPattern[]] := Module[
   {path, sourceId, title, nb, split, slides, render, maxFigs, imgWidth, includeCode,
    maxChars, verbose, mediaDir, digest, existing, doc, slideRecs, figureCount, notes,
-   renderedCount, t0},
+   renderedCount, t0, pl},
   t0 = AbsoluteTime[];
   path = ExpandFileName[nbPath];
   If[! FileExistsQ[path],
@@ -439,6 +466,7 @@ SourceVaultKBIngestSlideDeck[kbId_String, nbPath_String, OptionsPattern[]] := Mo
      ここで渡された原稿が chunk の中身になる *)
   notes = OptionValue["SlideNotes"];
   If[! AssociationQ[notes], notes = <||>];
+  pl = iKBDeckPrivacy[OptionValue["PrivacyLevel"], path];
 
   (* 変更検知: サイズ + 更新時刻 + 原稿。未変更なら再解析しない *)
   digest = Quiet @ Check[
@@ -447,6 +475,18 @@ SourceVaultKBIngestSlideDeck[kbId_String, nbPath_String, OptionsPattern[]] := Mo
   existing = iKBLoadSource[kbId, sourceId];
   If[! TrueQ[OptionValue["Force"]] && AssociationQ[existing] &&
      Lookup[existing, "SourceDigest", ""] === digest && digest =!= "",
+    (* 内容は同じでも PrivacyLevel だけ変わった (公開宣言を付けた・外した) ときは
+       再解析せず PL だけ書き換え、索引の作り直しが要ることを Status で知らせる *)
+    If[iNum[Lookup[existing, "PrivacyLevel", Null], -1.] =!= pl,
+      If[iKBSaveSource[kbId, Join[existing, <|"PrivacyLevel" -> pl,
+          "PrivacySource" -> If[NumericQ[OptionValue["PrivacyLevel"]], "Explicit", "Declaration"]|>]] === $Failed,
+        Return[iFail["SourceSaveFailed", "source document の保存に失敗しました。",
+          <|"SourceId" -> sourceId|>]]];
+      Return[<|"Status" -> "PrivacyUpdated", "KBId" -> kbId, "SourceId" -> sourceId,
+        "PrivacyLevel" -> pl,
+        "PreviousPrivacyLevel" -> Lookup[existing, "PrivacyLevel", Missing["NotSet"]],
+        "Slides" -> Length[Lookup[existing, "Slides", {}]],
+        "ElapsedSeconds" -> Round[AbsoluteTime[] - t0, 0.01]|>]];
     Return[<|"Status" -> "Unchanged", "KBId" -> kbId, "SourceId" -> sourceId,
       "Slides" -> Length[Lookup[existing, "Slides", {}]],
       "ElapsedSeconds" -> Round[AbsoluteTime[] - t0, 0.01]|>]];
@@ -507,7 +547,10 @@ SourceVaultKBIngestSlideDeck[kbId_String, nbPath_String, OptionsPattern[]] := Mo
   doc = <|"ObjectClass" -> "SourceVaultKBSourceDocument", "SchemaVersion" -> $kbSchemaVersion,
     "SourceId" -> sourceId, "Kind" -> "SlideDeck", "Title" -> title,
     "Path" -> path, "SourceDigest" -> digest,
-    "PrivacyLevel" -> iNum[OptionValue["PrivacyLevel"], 0.3],
+    "PrivacyLevel" -> pl,
+    (* 公開宣言に従う PL か、明示指定か。SourceVaultKBRefreshDeckPrivacy は
+       前者だけを宣言に合わせ直す *)
+    "PrivacySource" -> If[NumericQ[OptionValue["PrivacyLevel"]], "Explicit", "Declaration"],
     "Tags" -> Flatten[{OptionValue["Tags"]}],
     "State" -> "Published",
     "Slides" -> slideRecs, "SlideCount" -> Length[slideRecs],
@@ -520,9 +563,50 @@ SourceVaultKBIngestSlideDeck[kbId_String, nbPath_String, OptionsPattern[]] := Mo
     Print["  スライド " <> ToString[Length[slideRecs]] <> " 枚 / 図 " <>
       ToString[figureCount] <> " 枚 (新規描画 " <> ToString[renderedCount] <> ")"]];
   <|"Status" -> "OK", "KBId" -> kbId, "SourceId" -> sourceId, "Title" -> title,
+    "PrivacyLevel" -> pl,
     "Slides" -> Length[slideRecs], "Figures" -> figureCount,
     "RenderedFigures" -> renderedCount, "FiguresRendered" -> render,
     "ElapsedSeconds" -> Round[AbsoluteTime[] - t0, 0.01]|>];
+
+Options[SourceVaultKBRefreshDeckPrivacy] = {
+  "Rebuild" -> True, "ReleaseContext" -> Automatic, "DryRun" -> False};
+
+SourceVaultKBRefreshDeckPrivacy[opts : OptionsPattern[]] :=
+  SourceVaultKBRefreshDeckPrivacy[$SourceVaultKBDefaultId, opts];
+
+SourceVaultKBRefreshDeckPrivacy[kbId_String, OptionsPattern[]] := Module[
+  {changed = {}, skipped = {}, dry, rebuilt = False, context, manifest},
+  dry = TrueQ[OptionValue["DryRun"]];
+  Do[
+    Module[{sid = Lookup[d, "SourceId", ""], path = Lookup[d, "Path", ""],
+            src = Lookup[d, "PrivacySource", Missing["Legacy"]],
+            old = iNum[Lookup[d, "PrivacyLevel", Null], -1.], new},
+      Which[
+        Lookup[d, "Kind", ""] =!= "SlideDeck", Null,
+        src === "Explicit",
+          AppendTo[skipped, <|"SourceId" -> sid, "Reason" -> "ExplicitPrivacyLevel"|>],
+        MissingQ[src] && old =!= 0.3,
+          (* 旧 source で旧既定値以外 = 誰かが明示した値。触らない *)
+          AppendTo[skipped, <|"SourceId" -> sid, "Reason" -> "LegacyNonDefault", "PrivacyLevel" -> old|>],
+        ! StringQ[path] || ! FileExistsQ[path],
+          AppendTo[skipped, <|"SourceId" -> sid, "Reason" -> "NotebookMissing"|>],
+        True,
+          new = iKBDeckPrivacy[Automatic, path];
+          If[new =!= old,
+            AppendTo[changed, <|"SourceId" -> sid, "From" -> old, "To" -> new|>];
+            If[! dry,
+              iKBSaveSource[kbId, Join[d, <|"PrivacyLevel" -> new,
+                "PrivacySource" -> "Declaration"|>]]]]]],
+    {d, iKBAllSources[kbId]}];
+  If[! dry && changed =!= {} && TrueQ[OptionValue["Rebuild"]],
+    manifest = Quiet @ Check[Import[iKBManifestPath[kbId], "JSON"], $Failed];
+    context = Replace[OptionValue["ReleaseContext"], Automatic :>
+      Lookup[If[ListQ[manifest] || AssociationQ[manifest], Association[manifest], <||>],
+        "ReleaseContext", $SourceVaultKBReleaseContext]];
+    rebuilt = AssociationQ[Quiet @ Check[
+      SourceVaultKBBuild[kbId, "ReleaseContext" -> context, "Verbose" -> False], $Failed]]];
+  <|"Status" -> If[dry, "DryRun", "OK"], "KBId" -> kbId, "Changed" -> changed,
+    "Skipped" -> skipped, "Rebuilt" -> rebuilt|>];
 
 Options[SourceVaultKBIngestSlideDecks] = Join[
   Options[SourceVaultKBIngestSlideDeck],
@@ -1140,6 +1224,7 @@ SourceVaultKBLoad[kbId_String] := Module[{rec, t0 = AbsoluteTime[]},
     Return[iFail["KBNotBuilt", "索引がありません。SourceVaultKBBuild を実行してください。",
       <|"KBId" -> kbId|>]]];
   $kbLoaded[kbId] = rec;
+  $kbLoadedStamp[kbId] = iKBIndexStamp[kbId];
   <|"Status" -> "Loaded", "KBId" -> kbId, "ChunkCount" -> Lookup[rec, "ChunkCount", 0],
     "NodeCount" -> Length[Lookup[rec, "Nodes", <||>]],
     "BuiltAtUTC" -> Lookup[rec, "BuiltAtUTC", ""],
@@ -1151,7 +1236,11 @@ SourceVaultKBUnload[kbId_String] :=
 SourceVaultKBLoadedQ[kbId_String] := AssociationQ[Lookup[$kbLoaded, kbId, Null]];
 
 iKBEnsureLoaded[kbId_String] := Module[{r},
-  If[SourceVaultKBLoadedQ[kbId], Return[$kbLoaded[kbId]]];
+  (* 索引が作り直されていたら読み直す (PL を直して再構築しても、サービスが
+     再起動まで古い 0.3 のまま答え続けた) *)
+  If[SourceVaultKBLoadedQ[kbId] &&
+     Lookup[$kbLoadedStamp, kbId, None] === iKBIndexStamp[kbId],
+    Return[$kbLoaded[kbId]]];
   r = SourceVaultKBLoad[kbId];
   If[FailureQ[r], r, $kbLoaded[kbId]]];
 

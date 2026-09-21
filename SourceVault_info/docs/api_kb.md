@@ -39,9 +39,14 @@ Whether the KB is currently loaded in memory.
 
 ## Ingest
 ### SourceVaultKBIngestSlideDeck[kbId, nbPath, opts]
-Parses one slide notebook and stores per-slide text plus figures (rendered PNG + hash) as a source document. No LLM call (figure captions are filled later by SourceVaultKBCaptionFigures). Skips re-parsing if file size/mtime/SlideNotes digest is unchanged, unless "Force"->True.
-→ Association (<|"Status"->"OK"|"Unchanged", "KBId", "SourceId", "Slides", "ElapsedSeconds"|> or Failure)
-Options: "SourceId" -> Automatic (default: file base name), "Title" -> Automatic, "PrivacyLevel" -> 0.3, "Tags" -> {}, "RenderFigures" -> Automatic (True if front end available), "MaxFiguresPerSlide" -> 4, "FigureImageWidth" -> 1024, "IncludeCode" -> False, "Force" -> False, "MaxSlideCharacters" -> 1500, "SlideNotes" -> <||> (Association slideIndex -> narration text; becomes the chunk body for image-only slides that have no extractable text), "Verbose" -> True
+Parses one slide notebook and stores per-slide text plus figures (rendered PNG + hash) as a source document. No LLM call (figure captions are filled later by SourceVaultKBCaptionFigures). Skips re-parsing if file size/mtime/SlideNotes digest is unchanged, unless "Force"->True; when only the PrivacyLevel differs, only the level is rewritten (Status "PrivacyUpdated", the index needs a rebuild).
+→ Association (<|"Status"->"OK"|"Unchanged"|"PrivacyUpdated", "KBId", "SourceId", "PrivacyLevel", "Slides", "ElapsedSeconds"|> or Failure)
+Options: "SourceId" -> Automatic (default: file base name), "Title" -> Automatic, "PrivacyLevel" -> Automatic (the notebook's own public declaration: CloudPublishable True → 0.0, undeclared/Private → 0.3; a number given explicitly wins), "Tags" -> {}, "RenderFigures" -> Automatic (True if front end available), "MaxFiguresPerSlide" -> 4, "FigureImageWidth" -> 1024, "IncludeCode" -> False, "Force" -> False, "MaxSlideCharacters" -> 1500, "SlideNotes" -> <||> (Association slideIndex -> narration text; becomes the chunk body for image-only slides that have no extractable text), "Verbose" -> True
+### SourceVaultKBRefreshDeckPrivacy[kbId, opts] → Association
+Updates the PrivacyLevel of ingested slide decks to match each notebook's own public declaration (TaggingRules > SourceVault > CloudPublishable, read with NBAccess`NBGetCloudPublishable): Public → 0.0; undeclared or Private → 0.3. Only sources whose level follows the declaration are touched — those ingested with "PrivacyLevel" -> Automatic (PrivacySource "Declaration") and older sources still at the former default 0.3; explicitly given levels (PrivacySource "Explicit") are left alone. Rebuilds the index when anything changed. A running service reloads a rebuilt index on its next query.
+Options: "Rebuild" -> True, "ReleaseContext" -> Automatic (the one the index was last built with), "DryRun" -> False
+Returns: <|"Status", "KBId", "Changed" -> {<|"SourceId", "From", "To"|>...}, "Skipped", "Rebuilt"|>
+
 ### SourceVaultKBIngestSlideDecks[kbId, dirOrFiles, opts]
 Batch-ingests multiple slide notebooks; a directory is searched recursively for .nb files.
 → Association (batch summary)

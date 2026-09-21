@@ -89,7 +89,7 @@ SourceVault をロードすると、以下が自動的に有効になります�
 | SIEM / システム診断層 | `SourceVault_diagnostics.wl` が NBAccess / claudecode / ClaudeOrchestrator / サービスマネージャ横断の診断情報を集約する collector / store / doctor 層を提供 (Phase 0 最小コア)。詳細は「システム診断 / SIEM 基盤 (SourceVault_diagnostics)」節を参照 |
 | 論文の和訳ノートブック登録簿 | `SourceVault_papernb.wl` が、取り込み済み論文 (arXiv/web/local ソースおよび Eagle の PDF 項目) に対する和訳ノートブックの生成・登録簿を提供する (PL 継承)。core の root 解決だけに依存するため早い段階でロードされる。詳細は後述の「論文の和訳ノートブック (SourceVault_papernb)」節を参照 |
 | 発表用知識グラフ層 (KG) | `SourceVault_knowledgegraph.wl` が、論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手 (理解度・前提知識) と時間 (枚数・分) から階層構成・アウトラインを決定的に計算する機能を提供する (LLM 非依存、FrontEnd/Notebook 非依存)。詳細は後述の「発表用知識グラフ (SourceVault_knowledgegraph)」節を参照 |
-| ローカル資産解決層 / 発表登録簿 / KB 層・対話 QA・音声会話層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_talkqa.wl` (KB の上に載る対話型 QA 層) / `SourceVault_oopsseed.wl` / `SourceVault_realtime.wl` (クラウド経路の音声会話。OpenAI Realtime を既定のマイク/スピーカーで使う。`SourceVault_voice.wl` と対になる層だが、依存は呼び出し時にだけ効くため、この位置での自動ロードで問題ない) を自動ロード |
+| ローカル資産解決層 / 発表登録簿 / KB 層・対話 QA・音声会話層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_talkqa.wl` (KB の上に載る対話型 QA 層) / `SourceVault_oopsseed.wl` / `SourceVault_realtime.wl` (クラウド経路の音声会話。OpenAI Realtime / GPT-Live を既定のマイク/スピーカーで使う。`SourceVault_voice.wl` と対になる層だが、依存は呼び出し時にだけ効くため、この位置での自動ロードで問題ない) を自動ロード。これら発表インフラの詳細は後述の「発表インフラ: スライド登録簿・低遅延 QA・クラウド音声会話」節を参照 |
 | Cane 認知支援基盤 (既定 observe-only) | `SourceVault_knowledgehome.wl` (Knowledge Home 閲覧・非破壊追記・位置づけ/近傍提案) / `SourceVault_cognition.wl` (認知系イベントの暗号化保存・Guard shadow・owner 入力支援) / `SourceVault_adjudication.wl` (複数 LLM 裁定コア + runnable driver) / `SourceVault_capbroker.wl` (capability broker・LLM boundary shadow/gate・観測設定の永続化) / `SourceVault_taint.wl` (入力信頼度評価・taint 伝播) / `SourceVault_anomaly.wl` (統計的異常検知、既定オフ)。いずれも既定は「判定を記録するだけ」(shadow/observe-only) で、明示的な owner 操作なしに送信をブロックしたり通知したりしない (詳細は後述の「Boundary Observation」コールアウトを参照) |
 | シミュレーション実行基盤 | `SourceVault_simrun.wl` がマシンプロファイル共有・GPU/CUDA サポート・サブカーネル burst 管理・SimulationRun 記録 (実行フォルダ + immutable snapshot の 2 層設計) を提供 (詳細は「シミュレーション実行基盤」節を参照) |
 | Claude Code セッションログ ingest | `SourceVault_llmlog.wl` が Claude Code のセッションログ (実行ログ) をソースとして取り込む機能を提供。`GitHubCommitLog` (コミット履歴) とは別種別として扱われる (詳細は「Claude Code セッションログの ingest」節を参照) |
@@ -102,7 +102,7 @@ SourceVault をロードすると、以下が自動的に有効になります�
 | Header parser MakeExpression 第一選択 | InitializationCell の副作用を回避 |
 | Header フィルタ | TodoItem cell の TaggingRules を Header と誤認しない |
 
-> **KB 層 / 対話 QA 層 / 音声会話層について:** `SourceVault_kb.wl` は Graph-RAG による低遅延応答層で、`SourceVault_lexical.wl` / `SourceVault_searchindex.wl` に依存するためそれらのロード後に読み込まれます。`SourceVault_talkqa.wl` はこの KB 層の上に構築された対話型 QA 層で、`SourceVault_kb.wl` の直後にロードされます。`SourceVault_realtime.wl` は OpenAI Realtime API を経由した**クラウド経路の音声会話**を提供し、既定ではこのマシンのマイク/スピーカーをそのまま使います。ローカル資産解決層の `SourceVault_voice.wl` と役割上は対になる層ですが、`SourceVault_realtime.wl` の依存は関数が実際に呼び出されたときにだけ効くため (ロード時点では重い初期化を行わない)、`SourceVault_voice.wl` の直後ではなく `SourceVault_oopsseed.wl` の後というこの位置での自動ロードでも問題ありません。
+> **KB 層 / 対話 QA 層 / 音声会話層について:** `SourceVault_kb.wl` は Graph-RAG による低遅延応答層で、`SourceVault_lexical.wl` / `SourceVault_searchindex.wl` に依存するためそれらのロード後に読み込まれます。`SourceVault_talkqa.wl` はこの KB 層の上に構築された対話型 QA 層で、`SourceVault_kb.wl` の直後にロードされます。`SourceVault_realtime.wl` は OpenAI Realtime API / GPT-Live を経由した**クラウド経路の音声会話**を提供し、既定ではこのマシンのマイク/スピーカーをそのまま使います。ローカル資産解決層の `SourceVault_voice.wl` と役割上は対になる層ですが、`SourceVault_realtime.wl` の依存は関数が実際に呼び出されたときにだけ効くため (ロード時点では重い初期化を行わない)、`SourceVault_voice.wl` の直後ではなく `SourceVault_oopsseed.wl` の後というこの位置での自動ロードでも問題ありません。これら 4 層の詳細な API は後述の「発表インフラ: スライド登録簿・低遅延 QA・クラウド音声会話」節を参照してください。
 
 > **自動トリガスケジューラの自動起動:** SourceVault をロードすると、実行環境が Front End のメインカーネル (`$FrontEnd =!= Null`) の場合に限り `SourceVaultAutoTriggerStartScheduler[]` が自動的に呼ばれます。これは「他 PC から『このマシンでこのワークフローを実行して』と依頼されたジョブを、このマシンが常に拾えるようにする」ためのものです。SourceVault.wl はサブカーネル・wolframscript の外部ジョブ・SourceVault サービスカーネル・MCP ゲートウェイカーネルなど、多くのプロセスからロードされますが、スケジューラは **1 マシンにつき 1 箇所 (対話的 FE) だけ**で起動するようガードされています。すべてのカーネルで無条件に起動すると、Wolfram ライセンスの同時カーネル席を浪費し、ジョブが多重ディスパッチされてしまいます。起動は冪等 (`StartScheduler` は同じ tick 登録を再登録するだけ) で、結果は `SourceVault\`Private\`$iSVAutoTriggerSchedulerAutoStartResult` に記録されます (同一カーネルセッション内では 1 回のみ実行)。FE-less の計算ノード (例: rapterlake4t) はこのガードの対象外で、代わりにサービス側の HEADLESS DISPATCH モード (`SourceVaultEnableHeadlessDispatch` によるマシン単位オプトイン) を使います。なお、スケジューラの起動箇所そのものを 1 台 1 箇所に絞るこのガードとは別に、ワークフローカタログの実際の起動 (dispatch) は複数プロセスから並行して呼ばれ得るため、内部の `SourceVaultAutoTriggerDispatchCatalogRuns` が per-slot の atomic dispatch claim によって同一ジョブの二重実行を防いでいます。
 >
@@ -1558,7 +1558,7 @@ $packageDirectory\
   SourceVault_talkqa.wl            ← KB の上に載る対話型 QA 層 (自動ロード)
   SourceVault_oopsseed.wl          ← (自動ロード)
   SourceVault_knowledgegraph.wl    ← 発表用知識グラフ層 (論文内容 + 周辺知識の順序・難易度つき KG、聴き手/時間からの階層構成計算。LLM 非依存・FrontEnd 非依存、自動ロード)
-  SourceVault_realtime.wl          ← クラウド経路の音声会話 (OpenAI Realtime、既定のマイク/スピーカー。SourceVault_voice.wl と対になる層だが依存は呼び出し時にだけ効くためこの位置で自動ロード)
+  SourceVault_realtime.wl          ← クラウド経路の音声会話 (OpenAI Realtime / GPT-Live、既定のマイク/スピーカー。SourceVault_voice.wl と対になる層だが依存は呼び出し時にだけ効くためこの位置で自動ロード)
   SourceVault_searchview.wl        ← 検索ビュー / 横断検索の表示層 (自動ロード)
   SourceVault_servicemanager.wl    ← サービスマネージャ (自動ロード)
   SourceVault_promptrouter.wl      ← PromptRouter 拡張 (自動ロード)
@@ -1590,7 +1590,7 @@ $packageDirectory\
   NBAccess.wl / claudecode.wl / ...
 ```
 
-> 旧来の細分化ファイル (`SourceVault_keys.wl` / `_encryptedstore.wl` / `_addressbook.wl` / `_imap.wl` / `_mailui.wl` など) は上記 5 ファイルに統合済みです。`sv://` の実データ/プロパティ取得は `SourceVault_mcp.wl`、privacy 継承付きのセル出力は `SourceVault_eagle.wl` に統合され、旧 `SourceVault_objectview.wl` は廃止されました。詳細な関数シグネチャは API リファレンス (`api_crypto.md` / `api_identity.md` / `api_privacy.md` / `api_maildb.md` / `api_llmlog.md` / `api_mcp.md` / `api_todo.md` / `api_anonymize.md` / `api_diagnostics.md` / `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md` / `api_papernb.md` / `api_knowledgegraph.md`) を参照してください。
+> 旧来の細分化ファイル (`SourceVault_keys.wl` / `_encryptedstore.wl` / `_addressbook.wl` / `_imap.wl` / `_mailui.wl` など) は上記 5 ファイルに統合済みです。`sv://` の実データ/プロパティ取得は `SourceVault_mcp.wl`、privacy 継承付きのセル出力は `SourceVault_eagle.wl` に統合され、旧 `SourceVault_objectview.wl` は廃止されました。詳細な関数シグネチャは API リファレンス (`api_crypto.md` / `api_identity.md` / `api_privacy.md` / `api_maildb.md` / `api_llmlog.md` / `api_mcp.md` / `api_todo.md` / `api_anonymize.md` / `api_diagnostics.md` / `api_knowledgehome.md` / `api_cognition.md` / `api_adjudication.md` / `api_capbroker.md` / `api_taint.md` / `api_anomaly.md` / `api_papernb.md` / `api_knowledgegraph.md` / `api_slidedeck.md` / `api_kb.md` / `api_talkqa.md` / `api_realtime.md`) を参照してください。
 
 ---
 
@@ -1824,7 +1824,7 @@ SourceVaultDiagnosticsIngestSpool[]
 
 ## シミュレーション実行基盤 (SourceVault_simrun)
 
-`SourceVault_simrun.wl` は、高負荷な数値シミュレーションワークフローを支える基盤機能を提供する**自動ロード**サブファイルです。マシンスペックの実測・共有、GPU/CUDA サポート、サブカーネル burst 管理、および「SimulationRun」という単位でのシミュレーション実行記録の保存・参照を扱います。
+`SourceVault_simrun.wl` は、高負荷な数値シミュレーションワークフローを支える基盤機能を提供する**自動ロード**サブファイルです。マシンスペックの実測・共有、GPU/CUDGPU/CUDA サポート、サブカーネル burst 管理、および「SimulationRun」という単位でのシミュレーション実行記録の保存・参照を扱います。
 
 設計の要点:
 
@@ -2055,3 +2055,158 @@ tree["Depth"]
 `SourceVaultKGOrderedTree[kg, opts]` の戻り値は `<|"Root", "Order", "Parent", "Children", "Depth", "Score", "Strategy", "Diagnostics"|>`。opts: `"Strategy"` (既定 `"Source"`) / `"MaxDepth"` (既定 3) / `"DepthPenalty"` (既定 0.02)。
 
 > 詰め込み (packing) / 枝刈り (pruning) や、トポロジカル順から言語別アウトライン・シナリオ md へのシリアライズ (処理段階 5〜6) は設計仕様 `SlideWorkflow_info/design/slide_knowledge_graph_spec_v0_1.md` に定義されていますが、詳細な API は `api_knowledgegraph.md` を参照してください。
+
+---
+
+## 発表インフラ: スライド登録簿・低遅延 QA・クラウド音声会話
+
+発表 (プレゼンテーション) を回すためのサブシステムは 4 層に分かれています。上から順に、**スライド登録簿** (どのタイトルにどの mp4 / 原稿があるか) → **KB** (原稿・スライドを Graph-RAG で索引化) → **対話型 QA 層** (質疑応答をあらかじめ準備しておく) → **音声会話層** (実際にマイク/スピーカーで会話する) という積み重ねです。いずれも [SlideWorkflow](https://github.com/transreal/SlideWorkflow) がスライド・原稿そのものを作る層で、SourceVault 側は「置き場所と公開ポリシー」だけを持ちます。
+
+### スライドデッキ登録簿 (SourceVault_slidedeck)
+
+`SourceVault_slidedeck.wl` は、発表タイトル (例:「計算と自然集会31の発表」) を Sliden 用 mp4 の URL とコンパイル済み発表シナリオ (原稿) に対応付けるレジストリです。スライド/原稿そのものは作らず、置き場所と公開ポリシーだけを保持します。
+
+```mathematica
+(* 登録 (再登録は同じ Id/DeckFile/SlideURL に対してマージされ、新規に分岐しない) *)
+SourceVaultSlideDeckRegister[<|
+  "Title" -> "計算と自然集会31",
+  "SlideURL" -> "https://example.com/talk31.mp4",
+  "PrivacyLevel" -> 0.|>,
+  <|"Opening" -> "...", "Closing" -> "...",
+    "Slides" -> {<|"Slide" -> 1, "Text" -> "..."|>}|>]
+
+(* タイトル・エイリアス・Id から曖昧一致で解決 *)
+SourceVaultSlideDeckLookup["計算と自然三十一"]   (* "31" と同一視される *)
+
+(* 発表実行に必要な全情報 (URL・タイミング・公開されていれば原稿) *)
+SourceVaultSlideDeckPresentationSpec["計算と自然31"]
+
+SourceVaultSlideDeckTalk[idOrTitle]     (* コンパイル済みシナリオ *)
+SourceVaultSlideDeckList[]              (* 公開エントリ (PrivacyLevel < ceiling) の一覧 *)
+SourceVaultSlideDeckUnregister[idOrTitle]
+SourceVaultSlideDeckRegistry[]          (* 全エントリ (非公開含む、内部キーのまま) *)
+```
+
+**タイトル照合の規則:** 正規化 (NFKC・小文字化・英数字以外除去) の後、**末尾の漢数字は数字に変換**されます (「三十一」→「31」。ただし「一つ」「一度」のような用法のほうが多いため、先頭が単独の「一」の場合はそのまま残す)。末尾の「回」は番号の飾りとして除去されます (「31回」→「31」)。スコアリングはバイグラム Jaccard / 部分一致 (`SourceVaultSlideDeckMatchScore`、0.0-1.0) で行われますが、**末尾の数字が食い違う場合は絶対に一致しません** (「31」と「30」は別物)。しきい値 0.34 以上で最高スコアの候補が採用されますが、**2 件以上が同点で並んだ場合は `Missing["Ambiguous", query]` を返し、どちらかを勝手に選びません**。これは、番号違いの複数回の発表が漢数字表記のせいで同点になり、誤って別回の発表が選ばれる事故 (2026-09-19 に確認) を防ぐためです。
+
+`PrivacyLevel` (既定 0.0) が `$SourceVaultSlideDeckReleaseCeiling` (既定 0.5) 以上のエントリは、`SourceVaultSlideDeckPresentationSpec` で原稿が伏せられます (`talkWithheld -> True`, `talk -> Null`, URL も省略)。`DeckFile` (ローカル絶対パス) はどの payload にも含まれません。
+
+### 低遅延 Graph-RAG ナレッジベース (SourceVault_kb)
+
+`SourceVault_kb.wl` は、VRCRealtime 等の音声応答のために、既存の MCP 横断検索 (数十秒かかりうる) の代わりに使う低遅延専用 DB です。索引はメモリに載せ、質問時は BM25 + グラフ伝播だけで数十 ms 応答します。索引の単位は「スライド」と「図」で、Deck -- Slide -- Chunk -- Topic のグラフを構築し (単なる chunk RAG ではない)、BM25/トピックの seed から数ホップ伝播して前後の文脈を引き込みます。
+
+```mathematica
+(* スライドデッキ 1 本を取り込む (LLM 呼び出しなし。図キャプションは後で別途生成) *)
+SourceVaultKBIngestSlideDeck["cn", "20260901-計算と自然33.nb"]
+
+(* 図キャプションをまとめて生成 (vision LLM、hash キャッシュ・再開可能) *)
+SourceVaultKBCaptionFigures["cn"]
+
+(* 索引を構築 (release gate 適用) してメモリにロード *)
+SourceVaultKBBuild["cn"]
+
+(* 検索 / 音声向け即答 *)
+SourceVaultKBSearch["cn", "フレドキンゲート"]
+SourceVaultKBAnswer["cn", "第9回の計算と自然では何を扱った?"]
+```
+
+`SourceVaultKBIngestSlideDeck` の `"PrivacyLevel"` オプションは既定 `Automatic` で、**ノートブック自身の公開宣言** (`NBAccess\`NBGetCloudPublishable`、TaggingRules の `CloudPublishable`) に従います: `CloudPublishable -> True` なら 0.0、未宣言または Private なら 0.3。数値を明示すればそちらが優先されます (この場合 `PrivacySource -> "Explicit"` として記録され、以後の自動同期の対象から外れます)。
+
+#### SourceVaultKBRefreshDeckPrivacy — 公開宣言との再同期
+
+```mathematica
+(* 対象を確認するだけ (書き換えない) *)
+SourceVaultKBRefreshDeckPrivacy["cn", "DryRun" -> True]
+
+(* 実際に同期し、変更があれば索引を作り直す *)
+SourceVaultKBRefreshDeckPrivacy["cn"]
+(* → <|"Status" -> "OK", "KBId" -> "cn",
+       "Changed" -> {<|"SourceId" -> ..., "From" -> 0.3, "To" -> 0., ...|>...},
+       "Skipped" -> {...}, "Rebuilt" -> True|> *)
+
+(* $SourceVaultKBDefaultId ("cn") を対象にする省略形 *)
+SourceVaultKBRefreshDeckPrivacy[]
+```
+
+`SourceVaultKBRefreshDeckPrivacy[kbId, opts]` は、取り込み済みスライドデッキの `PrivacyLevel` を、元ノートブックの現在の公開宣言に合わせて更新します。対象になるのは、公開宣言に従うべき source だけです: `PrivacySource` が `"Declaration"` のもの、および `PrivacySource` を持たない旧 source のうち旧既定値 0.3 のままのもの。**明示指定された PL (`PrivacySource -> "Explicit"`) には触れません**。変更があれば索引を自動的に作り直すため、常駐サービスが古い PrivacyLevel を読み続ける事故 (公開宣言を後から付けた/外したのに、常駐カーネルの索引だけ古いまま = 実測で発表当日に古い 0.3 のまま答え続けた事例、2026-09-19) を防げます。
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"Rebuild"` | `True` | 変更があれば `SourceVaultKBBuild` で索引を作り直す |
+| `"ReleaseContext"` | `Automatic` | 前回構築時に使った値をそのまま使う |
+| `"DryRun"` | `False` | `True` で書き換えず対象だけ返す |
+
+戻り値: `<|"Status", "KBId", "Changed" -> {<|"SourceId", "From", "To"|>...}, "Skipped", "Rebuilt"|>`。**常駐サービスは次回クエリ時に、作り直された索引を自動的に読み直します** (下記 `$kbLoadedStamp` の版チェックによる)。
+
+> **内部メモ (索引の版チェック):** KB はロード済み索引の版 (索引ファイルの更新時刻 + サイズ) を記憶しており、別カーネル (常駐サービス) がその索引を作り直した場合、次回参照時に自動で読み直します。NBAccess が公開宣言を読めない・判定できない場合も、安全側 (fail-closed) の 0.3 として扱われます。
+
+### 対話型 QA 層 (SourceVault_talkqa)
+
+`SourceVault_talkqa.wl` は KB の上に構築された「あらかじめ用意しておく」ライブ Q&A 層です。`SourceVaultTalkQABuild` (LLM に想定質問を生成させる) または `SourceVaultTalkQAImport` (SlideWorkflow の SlideQA セル等、著者自身が書いた Q&A をそのまま使う) でスライドごとに「想定質問→候補回答→`sv://` 引用」を事前計算し、`SourceVaultTalkQAAsk` が実際の質問をこのパックから瞬時に照合します (無ければ KB へフォールバック、それでも無ければ Web 検索を提案)。
+
+```mathematica
+SourceVaultTalkQABuild["talk.nb", "QuestionsPerSlide" -> 5]
+SourceVaultTalkQAAsk["フレドキンゲートとは何ですか", "AllowWeb" -> True]
+```
+
+`SourceVaultTalkQABuild` / `SourceVaultTalkQAImport` の `"PrivacyLevel"` オプションは、KB の ingest と同じく既定 `Automatic` で、**デッキの公開宣言から解決した値** (Public なら 0.0、未宣言/Private なら 0.3) が ingest とエントリ既定 PL の両方に使われます (数値を渡せば優先)。回答の `Route` (`"Public"`/`"Local"`/`"Deny"`) はビルド時に `PrivacyLevel` から確定し、実行時には再評価されません — 発表モード (`$SourceVaultTalkQAMode = "Presentation"`、既定) では非公開素材が必要な質問には答えず `Status -> "Blocked"` を返します。
+
+`SourceVaultTalkQAHandler[req]` は音声会話ブリッジ (下記 SourceVault_realtime) からの問い合わせ入口で、[SourceVault_realtime](https://github.com/transreal/SourceVault_realtime) がロードされていれば `$SourceVaultRealtimeAskHandler` として自動登録されます。
+
+### クラウド音声会話 (SourceVault_realtime) — Realtime API / GPT-Live
+
+`SourceVault_realtime.wl` は、このマシンの既定のマイク/スピーカーで OpenAI の音声モデルとリアルタイムに会話する層です (VRChat は介さない。VRChat 越しの音声会話は [VRCRealtime](https://github.com/transreal/VRCRealtime) が別途担当)。音声の録音/再生と WebSocket 接続は外部 Python worker プロセスが担い、カーネルは制御ファイルを書いて JSON 状態ファイルを polling するだけなので、音声/ネットワークのホットパスに乗りません。既定はクラウド経路 (PrivacyLevel 0.5 未満のみ許可) で、`NBAccess\`NBProviderCanAccess["openai", 0.5]` が拒否する場合や、対象ノートブックの Paid API 承認 (`"RequirePaidAPIApproval" -> False` で無効化可) が無い場合は起動しません。
+
+```mathematica
+SourceVaultRealtimeInstall[]                     (* 専用 venv を用意 (初回のみ) *)
+SourceVaultRealtimeStart[]                       (* 既定モデルで会話開始 (非ブロック) *)
+SourceVaultRealtimeStatus[]                       (* 現在の状態 *)
+SourceVaultRealtimeStop[]
+```
+
+#### 2 つの API (モデルで自動選択)
+
+| API | 対象モデル | 特徴 |
+|---|---|---|
+| **Realtime** | `gpt-realtime-2.1` (既定) / `gpt-realtime-2.1-mini` | 1 つのモデルが聞いて考えて話し、`show_slide` / `ask_sourcevault` を関数呼び出しで直接呼ぶ |
+| **Live (GPT-Live)** | `gpt-live-1` | 全二重 (聞きながら話す)。作業はクライアント側に委譲される: モデルは `session.delegation.created` を発行するだけで、worker が直近の書き起こしから依頼を読み取り、同じハンドラ (スライド操作・SourceVault 問い合わせ) で処理する。音声セッションは秒単位課金 ($0.05/分) |
+
+```mathematica
+(* モデル登録簿を確認 *)
+SourceVaultRealtimeModels[]                 (* model -> <|"Provider","API","Label","Description"|> *)
+SourceVaultRealtimeModels["ByProvider"]     (* <|"OpenAI" -> {"gpt-realtime-2.1", ...}|> *)
+SourceVaultRealtimeModelAPI["gpt-live-1"]   (* "Live" *)
+
+SourceVaultRealtimeStart["Model" -> "gpt-live-1"]   (* API は Automatic でモデルから自動決定 *)
+```
+
+`$SourceVaultRealtimeModels` (既定 `<||>`) でユーザー独自のモデルを登録簿に追加/上書きできます。`SourceVaultRealtimeInstall` に `"Vosk" -> True` を渡すと、後述の許可ワード割り込みに使う `vosk` パッケージも併せてインストールされます (既定ではインストールされません)。
+
+#### 発表原稿の読み上げと割り込み (Interrupt、GPT-Live のみ)
+
+```mathematica
+(* スライド見出し・追加指示・スライド番号 (Q&A で動いた場合の再開先) 付きで読ませる *)
+id = SourceVaultRealtimeNarrate[nextId, scriptText,
+  "Heading" -> "スライド 3", "Slide" -> 3, "Interrupt" -> "Words"]
+
+(* 読了は Status の NarrationDone で判定 *)
+While[SourceVaultRealtimeStatus[]["NarrationDone"] =!= id, Pause[0.2]]
+```
+
+`"Interrupt"` オプションは、聴衆がどう割り込めるかを 3 通りから選びます。
+
+| `"Interrupt"` | 動作 |
+|---|---|
+| `None` (既定、質問タイム方式) | 何もしない。原稿読み上げ中はマイクをミュートするのが呼び出し側 (SlideWorkflow) の責務 |
+| `"Words"` | モデルは会話中の音を一切聞かない。worker がローカルでエコー除去した音量差分と、Vosk による許可ワード検出 (既定 `$SourceVaultRealtimeInterruptWords = {"質問", "スライド"}`) を組み合わせ、許可ワードが人の声で発話されたときだけ割り込みを開く。`vosk` と音声モデル (`SourceVaultSpeechModel[]`) が無ければ `"Detect"` にフォールバックする |
+| `"Detect"` | 人の声が `"InterruptMilliseconds"` (既定 350ms) 継続したら Q&A を開き、話された内容をモデルに渡して質問かどうかを判断させる |
+
+割り込みが開くと、原稿の読み上げは一時停止され (再生中の尾も破棄)、`"ResumeQuietSeconds"` (既定 4 秒、無音のまま静かになるまで) 静かになるまで応答を聞き続けます。その後、Q&A 中にスライドが動いていれば元のスライドを再表示してから、止まった文から読み上げを再開します。`NarrationActive` は Q&A の間ずっと立ったままなので、`NarrationDone` を待つ呼び出し側はそのまま待機し続けられます。
+
+`SourceVaultRealtimeStart` の割り込み関連オプション: `"InterruptFloor"` (既定 0.03、声とみなす最小マイク音量)、`"InterruptMargin"` (既定 2.0、エコー音量の何倍大きければ人の声か)、`"InterruptMilliseconds"` (既定 350、`"Detect"` モードでの継続時間)。
+
+`SourceVaultRealtimeStatus[]` には GPT-Live 特有のフィールドが追加されています: `"SessionId"` / `"UsageSeconds"` (累計課金秒数) / `"Delegations"` (委譲回数) / `"LastDelegation"` / `"CloseReason"` / `"InterruptMode"` / `"InterruptGate"` (`"none"`\|`"words"`\|`"detect"`) / `"QAOpen"` / `"Interrupted"` / `"Interruptions"` / `"LastInterrupt"` / `"KeywordStatus"` (`"off"`\|`"loading"`\|`"ready"`\|`"unavailable: …"`) / `"EchoCoupling"`。
+
+> **ワーカー契約バージョン:** `$SourceVaultRealtimeWorkerVersion` (現在 `"1.7"`) は、この Wolfram パッケージが期待する Python worker のプロトコル版です。1.5 で GPT-Live (`--api live`) 対応、1.6 で発表中の割り込み (narrate の `interrupt`/`slide`)、1.7 で二段階スクリプト配信とモデルによる回答組み立てが追加されました。`SourceVaultRealtimeStatus[]["WorkerVersion"]` と突き合わせて worker の再インストールが必要かを判断できます。
+
+詳細な全オプション・戻り値スキーマは `api_realtime.md` / `api_kb.md` / `api_slidedeck.md` / `api_talkqa.md` を参照してください。

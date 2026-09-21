@@ -164,12 +164,45 @@ iSDReadJSON[path_String] := Module[{bytes, parsed},
 
 (* ---------------- 正規化と照合 ---------------- *)
 
+(* 末尾の漢数字の番号を数字にする: 「計算と自然三十三」 -> 「計算と自然33」。
+   照合は末尾の数字で発表を区別するので、漢数字のままだと 31/32/33 が同点になり、
+   先頭の 31 が始まった (VRChat の音声、2026-09-19)。一文字の「一」は変えない
+   (「一つ」「一度」のほうがずっと多い)。末尾の「回」は番号の飾りとして落とす。 *)
+$iSDKanjiDigit = <|"〇" -> 0, "零" -> 0, "一" -> 1, "二" -> 2, "三" -> 3,
+  "四" -> 4, "五" -> 5, "六" -> 6, "七" -> 7, "八" -> 8, "九" -> 9|>;
+
+iSDSplitAt[t_String, u_String] := With[{p = StringPosition[t, u, 1]},
+  If[p === {}, None, {StringTake[t, p[[1, 1]] - 1], StringDrop[t, p[[1, 2]]]}]];
+
+iSDKanjiNumber[s_String] := Module[{t = s, total = 0, parts},
+  If[s === "", Return[Missing["NotANumber"]]];
+  If[StringFreeQ[t, "十" | "百"],
+    Return[If[AllTrue[Characters[t], KeyExistsQ[$iSDKanjiDigit, #] &],
+      FromDigits[Lookup[$iSDKanjiDigit, Characters[t]]], Missing["NotANumber"]]]];
+  Do[
+    parts = iSDSplitAt[t, First[u]];
+    If[parts =!= None,
+      total += If[First[parts] === "", 1,
+        Lookup[$iSDKanjiDigit, First[parts], Missing["NotANumber"]]] * Last[u];
+      t = Last[parts]],
+    {u, {{"百", 100}, {"十", 10}}}];
+  If[t =!= "", total += Lookup[$iSDKanjiDigit, t, Missing["NotANumber"]]];
+  If[IntegerQ[total], total, Missing["NotANumber"]]];
+
+iSDTrailingNumberDigits[t_String] := Module[{m, v, s = t},
+  s = StringReplace[s, RegularExpression["(\\d+)回$"] -> "$1"];
+  m = StringCases[s,
+    RegularExpression["^(.*?)([〇零一二三四五六七八九十百]+)回?$"] :> {"$1", "$2"}];
+  If[m === {} || m[[1, 2]] === "一", Return[s]];
+  v = iSDKanjiNumber[m[[1, 2]]];
+  If[IntegerQ[v], m[[1, 1]] <> ToString[v], s]];
+
 iSDNormalize[value_] := Module[{t},
   t = ToString[value];
   t = Quiet @ Check[CharacterNormalize[t, "NFKC"], t];
   If[! StringQ[t], t = ToString[value]];
   t = ToLowerCase[t];
-  StringJoin @ Select[Characters[t],
+  iSDTrailingNumberDigits @ StringJoin @ Select[Characters[t],
     StringMatchQ[#, LetterCharacter | DigitCharacter] &]];
 
 iSDTrailingDigits[s_String] := Module[{m},
@@ -375,6 +408,11 @@ SourceVaultSlideDeckLookup[query_] := Module[{entries, scored, best},
   scored = Select[scored, First[#] >= $iSDMatchThreshold &];
   If[scored === {}, Return[Missing["NotFound", query]]];
   best = First @ SortBy[scored, -First[#] &];
+  (* 別々の発表が同点で並ぶなら選ばない。並びの先頭を返していたので、番号の
+     読めない依頼で 31 が始まった (2026-09-19) *)
+  If[Length[DeleteDuplicates[Lookup[Last /@
+       Select[scored, Abs[First[#] - First[best]] < 10^-9 &], "Id", Null]]] > 1,
+    Return[Missing["Ambiguous", query]]];
   Last[best]];
 
 (* ---------------- 発表シナリオ ---------------- *)
