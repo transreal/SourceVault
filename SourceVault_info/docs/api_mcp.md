@@ -6,17 +6,25 @@
 `<|"name" -> "sourcevault", "version" -> "0.1.0"|>` を返す。
 
 ### SourceVaultMCPTools[] → List
-MCP tool 定義 (name/description/inputSchema) のリストを返す (現在 26 tool)。一覧は次節「MCP tool 一覧」参照。
+MCP tool 定義 (name/description/inputSchema) のリストを返す (組み込み 26 tool + `SourceVaultMCPRegisterTools` で外部登録された tool)。一覧は次節「MCP tool 一覧」参照。
 
 ### SourceVaultMCPCallTool[name, args] → Association
-tool を実行し MCP result `<|"content", "isError"|>` を返す。内部は `Switch[name, ...]` dispatch で各 tool を対応する内部関数に委譲、未知 tool は Failure ではなく `isError:true` の text ("Unknown tool: ...")。`args["_mcpClient"]` から `iMCPProvenance` (Actor/RequestChannel/InitiationType) を組み立て検索・deposit 系呼び出しの provenance に付与する。読み取り系 tool は `iSVRecordToolCall` で observed-read-max 用の監査ログを書く (§13.3/§13.4 の入力になる)。`sourcevault_deposit`/`sourcevault_workflow_write` は自前の append-only 監査ログを持つため対象外。mail/OOPS 系 tool は "CloudSafe"->True を下位関数に渡し私的コンテンツを除外する。
+tool を実行し MCP result `<|"content", "isError"|>` を返す。内部は `Switch[name, ...]` dispatch で各 tool を対応する内部関数に委譲、組み込み tool に無ければ `$SourceVaultMCPExternalTools` の登録 Handler を試す。未知 tool は Failure ではなく `isError:true` の text ("Unknown tool: ...")。`args["_mcpClient"]` から `iMCPProvenance` (Actor/RequestChannel/InitiationType) を組み立て検索・deposit 系呼び出しの provenance に付与する。読み取り系 tool は `iSVRecordToolCall` で observed-read-max 用の監査ログを書く (§13.3/§13.4 の入力になる)。`sourcevault_deposit`/`sourcevault_workflow_write` は自前の append-only 監査ログを持つため対象外。mail/OOPS 系 tool は "CloudSafe"->True を下位関数に渡し私的コンテンツを除外する。
+
+### SourceVaultMCPRegisterTools[id, spec] → Association
+外部パッケージが MCP tool 群を登録する package-neutral な拡張点 (2026-09-22 追加)。`SourceVaultMCPTools[]`/`SourceVaultMCPCallTool` は組み込み tool の後に登録簿 `$SourceVaultMCPExternalTools` (id -> spec) を参照する。SourceVault より先にロードされるパッケージはこの連想へ直接書いてもよい (ロード時に保持される)。
+spec key: "Tools" -> {tool 定義 (name/description/inputSchema)...}, "Handler" -> `Function[{name, args}, MCP result | String | Failure]`, "AllowedTools" -> {headless CLI で pre-allow する tool 名}, "PromptDirective" -> String | Function
+
+### $SourceVaultMCPExternalTools
+型: Association, 初期値: <||>
+`SourceVaultMCPRegisterTools` で外部登録された MCP tool 群 (id -> `<|"Tools","Handler","AllowedTools","PromptDirective"|>`)。`SourceVaultMCPTools[]`/`SourceVaultMCPCallTool` が組み込み tool の後にこれを見る。
 
 ### SourceVaultMCPDispatch[method, params] → Association
 MCP JSON-RPC の method (initialize/tools/list/tools/call/ping/notifications/initialized) を処理し JSON-RPC result 相当の Association を返す。`initialize` は `<|protocolVersion, capabilities-><|tools-><||>|>, serverInfo|>`、`ping`/`notifications/initialized` は `<||>`。未知 method は `Failure["MCPMethodNotFound", ...]` (proxy が JSON-RPC error に変換)。`params` 省略形 `SourceVaultMCPDispatch[method]` は `params -> <||>` 扱い。
 
 ## MCP tool 一覧 (SourceVaultMCPTools[] / SourceVaultMCPCallTool)
 
-以下のうち主要 tool (`sourcevault_commit_log` / `sourcevault_catalog` / `sourcevault_search` / `sourcevault_get` / `sourcevault_request_access` / `sourcevault_access_status` / `sourcevault_feedback_submit` / `sourcevault_deposit` / `sourcevault_runtime_capabilities` / OOPS・mail thread tool) は本ドキュメントの各節で個別に詳述する。それ以外の残り tool をここにまとめる。
+以下のうち主要 tool (`sourcevault_commit_log` / `sourcevault_catalog` / `sourcevault_search` / `sourcevault_get` / `sourcevault_request_access` / `sourcevault_access_status` / `sourcevault_feedback_submit` / `sourcevault_deposit` / `sourcevault_runtime_capabilities` / OOPS・mail thread tool) は本ドキュメントの各節で個別に詳述する。それ以外の残り tool をここにまとめる。他パッケージが `SourceVaultMCPRegisterTools` 経由で追加する tool (kb_answer / slidedeck / directive_body 等) はそれぞれの実体パッケージの api.md を参照。
 
 ### filesystem / directive tool (実体はこのファイル内 local helper)
 - `sourcevault_fs_list` {path} — allow-list root (`$packageDirectory` / `$ClaudeWorkingDirectory` / `$ClaudeAccessibleDirs`) 配下のディレクトリ一覧 (name/type/bytes/secret flag) を返す。実体 `iSVFSListDir`。read-only、root 外は不可。

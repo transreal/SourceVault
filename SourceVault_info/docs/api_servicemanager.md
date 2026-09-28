@@ -97,7 +97,11 @@ Options: "MailAllowlist" -> {} (許可するメールアドレスリスト), "Ex
 detached WolframScript service を起動する。メイン Mathematica 終了後も service process は heartbeat を更新し続ける。
 → `<|"Status", "ServiceId", "PID", "RuntimeDir"|>`
 Options: "Kind" -> "heartbeat" (サービス種別), "HeartbeatIntervalSeconds" -> 1, "PackageRoot" -> Automatic
-生成される `run.wls` は起動時に以下を順にロードする: SourceVault_core, _crypto, _lexical, _searchindex, _kb, _diagnostics, _issues, _slidedeck, _servicemanager, _webingest, _contracts, _packageapi, _mcp, _llmlog, _autotrigger, _mining, ClaudeOrchestrator_turnwiki(欠落時 fail-soft)。よって service kernel 内では WLMCP・autotrigger・mining 等の機能も利用可能。main kernel の current roots は snapshot として run.wls に注入される(`InjectedRootHash` で検証可能)。
+生成される `run.wls` は起動時に以下を順にロードする: SourceVault_core, _crypto, _lexical, _searchindex, _kb, _diagnostics, _issues, _slidedeck, _servicemanager, _webingest, _contracts, _packageapi, _mcp, _llmlog, _autotrigger, _mining, ClaudeOrchestrator_turnwiki(欠落時 fail-soft)。この標準リストの後、`$SourceVaultServiceExtraPackages` に列挙された追加パッケージも順にロードされる。よって service kernel 内では WLMCP・autotrigger・mining 等の機能も利用可能。main kernel の current roots は snapshot として run.wls に注入される(`InjectedRootHash` で検証可能)。
+
+### $SourceVaultServiceExtraPackages
+型: List, 初期値: (未設定時は実質 `{}`)
+service kernel の起動スクリプト(`run.wls`)が SourceVault 群の後に追加でロードするパッケージファイル名(`MyPackages` 直下からの相対)のリスト。他パッケージ(例: ResoLoop.wl)がロード時に自分を追加する形で使う。存在しないファイルは黙って飛ばす。反映には service の再起動が必要。
 
 ### SourceVaultStopService[serviceId, opts]
 Stop command を queue に入れ、必要なら pid 検証後に kill する。scheduled task も削除する。
@@ -276,8 +280,12 @@ Options: "ServiceId" -> $SourceVaultMCPServiceId
 MCP の状態と公開 URL を返す。`"Running"` は実到達性(/health 接続成功)。`"ProxyState"` / `"ProxyPidAlive"` は pid ベース。両者が食い違う場合(PidAlive だが Running 偽)は stale/再利用 pid を示す。
 Options: "ServiceId" -> $SourceVaultMCPServiceId
 
-### claudecode CLI MCP 自己登録(内部動作, 2026-07-04)
+### claudecode CLI MCP 自己登録(内部動作, 2026-07-04; 外部 tool 合流 2026-09-22)
 パッケージロード時、SourceVault MCP は claudecode の package-neutral CLI MCP レジストリ(`ClaudeRegisterCLIMCPServer`)へ自己登録される(claudecode は SourceVault に依存しない弱参照)。`SourceVaultMCPRunningQ` が真の間だけ `/sv/mcp` の URL(+トークンがあれば `X-SourceVault-Token` ヘッダ)を返し、停止中は None(CLI は MCP なし)。headless `claude --print` は対話承認できないため、pre-allow される read-only tool のみが有効: `sourcevault_catalog/search/get/commit_log/directives/fs_list/fs_read/web_search/request_access/access_status/oops_status/oops_search_threads/oops_thread/mail_status/mail_search_threads/mail_thread`。deposit/workflow_write 等の書き込み系ツールは含まれない。
+外部パッケージが `SourceVaultMCPRegisterTools` で tool を `$SourceVaultMCPExternalTools` に登録している場合、その `AllowedTools`(pre-allow 名)と `PromptDirective`(方針文)がこの CLI MCP 登録に自動合流する。
+
+### SourceVaultRefreshCLIMCP[]
+headless claude CLI 向けの MCP 登録(`ClaudeRegisterCLIMCPServer`)をやり直す。外部パッケージが `SourceVaultMCPRegisterTools` で tool を足した後に呼ぶと、その `AllowedTools` / `PromptDirective` が合流した状態で再登録される。
 
 ## Wolfram AgentTools MCP 集約(WLMCP、プロセス席 3→2 統合)
 

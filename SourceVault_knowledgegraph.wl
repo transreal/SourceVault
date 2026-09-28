@@ -59,6 +59,7 @@ SourceVaultKGNode::usage = "SourceVaultKGNode[kg, id] はノード連想 (無け
 SourceVaultKGText::usage = "SourceVaultKGText[node, key, lang] は言語別テキスト (\"Label\"/\"Summary\"/\"Talk\"/\"Cite\" は String、\"Points\" は List) を返す。lang が無ければ主言語 → 任意の言語の順で落ちる。";
 SourceVaultKGSave::usage = "SourceVaultKGSave[kg] は KG を <root>/graphs/<graphId>.json に保存する (前版は graphs/history/ に退避)。";
 SourceVaultKGLoad::usage = "SourceVaultKGLoad[graphId] は保存済み KG を読む (無ければ Missing)。";
+SourceVaultKGRepairMojibake::usage = "SourceVaultKGRepairMojibake[] は保存済みの KG (graphs/) と周辺知識の書庫 (background/) の文字化け (UTF-8 のバイトを 1 文字ずつ読んだ形。gawé → gawÃ© など) を直して書き戻す。<|\"Checked\", \"Fixed\", \"Files\"|> を返す。取り込み (SourceVaultKGFromJSON / SourceVaultKGMerge) は入口で同じ修復をする。";
 SourceVaultKGList::usage = "SourceVaultKGList[] は保存済み KG の一覧 ({<|\"GraphId\",\"Title\",\"Kind\",\"NodeCount\",\"EdgeCount\",\"UpdatedAtUTC\"|>..})。";
 SourceVaultKGDelete::usage = "SourceVaultKGDelete[graphId] は保存済み KG を削除する (history は残す)。";
 
@@ -212,7 +213,41 @@ iKGParseJSONText[s_String] := Module[{t = s, a, b, parsed},
   parsed = Quiet @ Check[ImportByteArray[StringToByteArray[t, "UTF-8"], "RawJSON"], $Failed];
   If[parsed === $Failed,
     parsed = Quiet @ Check[ImportString[t, "RawJSON"], $Failed]];
-  parsed];
+  If[parsed === $Failed, parsed, iKGFixMojibakeDeep[parsed]]];
+
+(* ---------------- 文字化け (UTF-8 のバイトを 1 文字ずつ読んだ形) の修復 ----------------
+   2026-09-28: 周辺知識をエージェントに作らせたジャワ語のノードが「gawé」→「gawÃ©」の形で
+   保存されていた (JSON に \u00c3\u00a9)。取り込み側は UTF-8 で読んでいるので、渡された
+   文字列が既にこの形だった (どの経路で化けたかは特定できず)。入口で直す。
+   UTF-8 の先頭バイト (C2-F4) に続く継続バイト (80-BF) の並びを 1 塊として UTF-8 で読み直し、
+   正しく読めて短くなったときだけ置き換える。日本語 (U+0100 以上) や単独の é には触れない。 *)
+iKGFixMojibakeRun[r_String] := Module[{d},
+  d = Quiet @ Check[ByteArrayToString[ByteArray[ToCharacterCode[r]], "UTF-8"], $Failed];
+  If[StringQ[d] && StringFreeQ[d, "\:fffd"] && StringLength[d] < StringLength[r], d, r]];
+
+iKGFixMojibake[s_String] := If[
+  StringFreeQ[s, RegularExpression["[\\x{C2}-\\x{F4}][\\x{80}-\\x{BF}]"]], s,
+  StringReplace[s, run : RegularExpression["[\\x{C2}-\\x{F4}][\\x{80}-\\x{BF}]+"] :> iKGFixMojibakeRun[run]]];
+iKGFixMojibake[x_] := x;
+
+(* 値だけをたどる (ReplaceAll だと連想のキーにも当たり、キーが未評価の iKGFixMojibake[..] のまま残る) *)
+iKGFixMojibakeDeep[s_String] := iKGFixMojibake[s];
+iKGFixMojibakeDeep[a_Association] := iKGFixMojibakeDeep /@ a;
+iKGFixMojibakeDeep[l_List] := iKGFixMojibakeDeep /@ l;
+iKGFixMojibakeDeep[x_] := x;
+
+(* 保存済みの KG (graphs/*.json) と周辺知識の書庫 (background/*.json) を直す。直したファイルの数を返す *)
+SourceVaultKGRepairMojibake[] := Module[{files, fixed = {}},
+  files = Join[
+    FileNames["*.json", iKGGraphDir[]],
+    FileNames["*.json", iKGBackgroundDir[]]];
+  Do[
+    With[{d = iKGReadJSON[f]},
+      If[AssociationQ[d] || ListQ[d],
+        With[{g = iKGFixMojibakeDeep[d]},
+          If[g =!= d && StringQ[iKGWriteJSON[f, g]], AppendTo[fixed, f]]]]],
+    {f, files}];
+  <|"Checked" -> Length[files], "Fixed" -> Length[fixed], "Files" -> FileNameTake /@ fixed|>];
 
 (* ---------------- 小さな道具 ---------------- *)
 
@@ -404,7 +439,7 @@ SourceVaultKGFromJSON[s_String] := Module[{parsed = iKGParseJSONText[s]},
   If[! iKGAssocQ[parsed],
     Return[Failure["BadJSON", <|"MessageTemplate" -> "could not parse a JSON object from the text"|>]]];
   SourceVaultKGFromJSON[parsed]];
-SourceVaultKGFromJSON[a_?iKGAssocQ] := Module[{kg = SourceVaultKGValidate[a]},
+SourceVaultKGFromJSON[a_?iKGAssocQ] := Module[{kg = SourceVaultKGValidate[iKGFixMojibakeDeep[a]]},
   If[! AssociationQ[kg], Return[kg]];
   If[kg["Nodes"] === {},
     Return[Failure["NoNodes", <|"MessageTemplate" -> "the graph has no nodes"|>]]];
@@ -447,7 +482,7 @@ iKGMergeListText[old_, _, ___] := old;
 Options[SourceVaultKGMerge] = {"Language" -> Automatic};
 SourceVaultKGMerge[kg_Association, deltaIn_, OptionsPattern[]] := Module[
   {delta, primary = iKGStr[Lookup[kg, "Language", "ja"]], lang, index, newNodes, e2, nodes, edges, res},
-  delta = Which[StringQ[deltaIn], iKGParseJSONText[deltaIn], iKGAssocQ[deltaIn], iKGAssoc[deltaIn], True, $Failed];
+  delta = Which[StringQ[deltaIn], iKGParseJSONText[deltaIn], iKGAssocQ[deltaIn], iKGFixMojibakeDeep[iKGAssoc[deltaIn]], True, $Failed];
   If[! iKGAssocQ[delta], Return[Failure["BadDelta", <|"MessageTemplate" -> "delta must be JSON text or an Association"|>]]];
   delta = KeyMap[ToString, delta];
   lang = Replace[OptionValue["Language"], Automatic -> primary];
@@ -496,7 +531,8 @@ SourceVaultKGMerge[kg_Association, deltaIn_, OptionsPattern[]] := Module[
 
 iKGGraphFile[graphId_String] := FileNameJoin[{iKGGraphDir[], iKGSlug[graphId] <> ".json"}];
 
-SourceVaultKGSave[kg_Association] := Module[{path, prev, hist},
+SourceVaultKGSave[kgIn_Association] := Module[{kg = iKGFixMojibakeDeep[kgIn], path, prev, hist},
+  (* 化けたまま覚えている KG を書き戻さない (修復より前に読み込んだカーネルから保存されても直る) *)
   If[! StringQ[Lookup[kg, "GraphId", None]], Return[$Failed]];
   path = iKGGraphFile[kg["GraphId"]];
   If[FileExistsQ[path],
@@ -510,7 +546,7 @@ SourceVaultKGSave[kg_Association] := Module[{path, prev, hist},
   iKGWriteJSON[path, Append[kg, "UpdatedAtUTC" -> iKGUTCNow[]]]];
 
 SourceVaultKGLoad[graphId_String] := Module[{d = iKGReadJSON[iKGGraphFile[graphId]]},
-  If[MissingQ[d], d, SourceVaultKGValidate[d]]];
+  If[MissingQ[d], d, SourceVaultKGValidate[iKGFixMojibakeDeep[d]]]];
 
 SourceVaultKGList[] := Module[{files},
   files = Quiet @ Check[FileNames["*.json", iKGGraphDir[]], {}];

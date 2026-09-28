@@ -62,7 +62,9 @@ import websocket
 #:      (always-on question modes during a GPT-Live talk).
 #: 1.7: GPT-Live scripts go in as quiet context first (no mid-script stalls);
 #:      answers are composed by the model from the lookup (matchedQuestion).
-WORKER_VERSION = "1.7"
+#: 1.8: answers and fixed lookup lines follow the asker's language (not always Japanese).
+#: 1.10: Latin-script scripts (English, Javanese) split at ". " and chunked by tokens, not 260 chars.
+WORKER_VERSION = "1.10"
 
 RATE = 24_000  # OpenAI Realtime PCM rate, used for both directions.
 
@@ -239,6 +241,10 @@ class RealtimeBridge:
         self.ws: websocket.WebSocketApp | None = None
         self.ws_lock = threading.Lock()
         self.ws_ready = threading.Event()
+        # Scripts that arrive before the connection is up wait for it (see
+        # _narrate_when_ready); a newer script or a cancel supersedes them.
+        self.narrate_wait_seq = 0
+        self.context_text = ""
 
         self.muted = threading.Event()
         if args.start_muted:
@@ -574,6 +580,9 @@ class RealtimeBridge:
         # -- including the silence right after a talk was stopped.
         clause += "\n話しかけられたときだけ答え、自分から話し始めないでください。"
         base = (self.instructions or "").strip()
+        context = (getattr(self, "context_text", "") or "").strip()
+        if context:
+            clause += "\n\n" + context
         return (base + "\n" + clause).strip() if base else clause
 
     def _turn_detection(self) -> dict[str, Any]:
@@ -918,9 +927,28 @@ class RealtimeBridge:
                 )
                 self._send({"type": "response.create"})
                 self._record("user", text)
+        elif name == "context":
+            # Background for answering questions (the talk as a whole).  The
+            # Realtime API takes it with the instructions; Live overrides this.
+            text = str(command.get("text", "")).strip()
+            if text:
+                self.context_text = text
+                self._send(self._session_update())
         elif name == "narrate":
-            self._narrate(command)
+            self.narrate_wait_seq += 1
+            if self.ws_ready.is_set():
+                self._narrate(command)
+            else:
+                # Play starts the worker and sends the first script at once;
+                # the session is up about a second later.  Dropping the script
+                # here left the first slide silent ("接続待ちのため読み上げできません").
+                threading.Thread(
+                    target=self._narrate_when_ready,
+                    args=(dict(command), self.narrate_wait_seq),
+                    daemon=True,
+                ).start()
         elif name == "cancel":
+            self.narrate_wait_seq += 1
             self._cancel_speech()
         elif name == "endtalk":
             self._end_talk(command)
@@ -973,6 +1001,26 @@ class RealtimeBridge:
             if 0 < index <= 60:
                 return head[: index + (1 if stop != "\n" else 0)].strip()
         return head[:40].strip()
+
+    NARRATE_CONNECT_WAIT = 20.0
+
+    def _narrate_when_ready(self, command: dict[str, Any], seq: int) -> None:
+        """Hold a script until the session is up, then speak it.
+
+        Gives up (with the old error) if the connection does not come within
+        NARRATE_CONNECT_WAIT seconds or the worker is stopping.  A newer
+        narrate or a cancel meanwhile makes this one stale.
+        """
+        deadline = time.monotonic() + self.NARRATE_CONNECT_WAIT
+        while not self.ws_ready.is_set():
+            if self.stop_event.is_set() or seq != self.narrate_wait_seq:
+                return
+            if time.monotonic() >= deadline:
+                break
+            self.ws_ready.wait(0.2)
+        if self.stop_event.is_set() or seq != self.narrate_wait_seq:
+            return
+        self._narrate(command)
 
     def _narrate(self, command: dict[str, Any]) -> None:
         """Speak one prepared script and report when the room has heard it."""
@@ -1154,7 +1202,7 @@ class RealtimeBridge:
                         "metadata": {"sourcevault_purpose": "ask_wait"},
                         "output_modalities": ["audio"],
                         "instructions": (
-                            "「少し調べますね」とだけ短く言ってください。"
+                            "「少し調べますね」とだけ、質問した人が使った言語で短く言ってください。"
                             "内容についての推測は言わないでください。"
                         ),
                         "tool_choice": "none",
@@ -1183,7 +1231,7 @@ class RealtimeBridge:
                     "metadata": {"sourcevault_purpose": "ask_ack"},
                     "output_modalities": ["audio"],
                     "instructions": (
-                        "いま返ってきた資料の answer だけを根拠に、日本語で短く答えてください。"
+                        "いま返ってきた資料の answer だけを根拠に、質問した人が使った言語で短く答えてください。"
                         "answer に無いことを足さないでください。"
                         "status が blocked なら、その内容は非公開の資料が必要なので"
                         "この場では答えられない、と一言で伝えてください。"
@@ -1470,8 +1518,38 @@ LIVE_NARRATION_CHUNK_CHARS = 260
 LIVE_VOICED_PEAK = 0.01
 #: A needWeb answer waits this long for the room's yes/no.
 LIVE_WEB_PERMISSION_SECONDS = 45.0
+#: What a delegation is about: the last run of transcript fragments, cut at a
+#: pause longer than this and never older than the horizon.  "Everything since
+#: the previous delegation" made the first delegation of a talk carry every
+#: stray word heard during the whole narration (2026-09-28 rehearsal: noise
+#: from 8 minutes earlier, a half-heard question and the real one, run together).
+LIVE_QUESTION_GAP_SECONDS = 6.0
+LIVE_QUESTION_HORIZON_SECONDS = 30.0
 
-_SENTENCE_END = re.compile(r"(?<=[。！？!?\n])")
+
+def latest_question_fragments(
+    fragments: list[tuple[int, float, str]],
+    gap: float = LIVE_QUESTION_GAP_SECONDS,
+    horizon: float = LIVE_QUESTION_HORIZON_SECONDS,
+) -> list[tuple[int, float, str]]:
+    """The trailing run of (seq, monotonic time, text) fragments that make the
+    current question: walk back from the newest one while the pauses stay
+    under ``gap`` and the start stays within ``horizon`` of the newest."""
+    if not fragments:
+        return []
+    run = [fragments[-1]]
+    newest = fragments[-1][1]
+    for fragment in reversed(fragments[:-1]):
+        if run[0][1] - fragment[1] > gap or newest - fragment[1] > horizon:
+            break
+        run.insert(0, fragment)
+    return run
+
+#: Sentence ends: Japanese punctuation, and for Latin-script talks (English,
+#: Javanese, ...) a period / colon / semicolon followed by a space.  Without
+#: the latter a whole non-Japanese script was one "sentence" and got cut
+#: mid-word (measured 2026-09-27: a Javanese slide re-read for minutes).
+_SENTENCE_END = re.compile(r"(?<=[。！？!?\n])|(?<=[.;:]\s)")
 _KANJI_DIGITS = {
     "〇": 0, "零": 0, "一": 1, "二": 2, "三": 3, "四": 4,
     "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
@@ -1508,10 +1586,18 @@ def resolve_api(model: str, requested: str = "auto") -> str:
     return "live" if str(model).strip().casefold().startswith("gpt-live") else "realtime"
 
 
+def _char_thirds(ch: str) -> int:
+    """A character's cost in thirds of a token: ASCII a third, anything else a
+    whole token.  Deliberately on the heavy side -- the server refuses an
+    append over 500 tokens, and "four ASCII characters a token, accents and
+    symbols a quarter" let a Javanese background block through at >500
+    (2026-09-28: "Context append text must not exceed 500 tokens")."""
+    return 1 if ord(ch) < 0x80 else 3
+
+
 def estimate_tokens(text: str) -> int:
-    """Rough token count: CJK about one token a character, other text a quarter."""
-    wide = sum(1 for ch in text if ord(ch) > 0x2E7F)
-    return wide + (len(text) - wide + 3) // 4
+    """Rough (upper-leaning) token count; see _char_thirds."""
+    return (sum(_char_thirds(ch) for ch in text) + 2) // 3
 
 
 def split_sentences(text: str) -> list[str]:
@@ -1535,25 +1621,43 @@ def clip_for_append(text: str, limit: int = LIVE_APPEND_MAX_TOKENS) -> str:
     return out.rstrip() + "…"
 
 
-def narration_chunks(text: str, limit: int = LIVE_NARRATION_CHUNK_CHARS) -> list[str]:
-    """Split a script into appends of at most ``limit`` characters.
+def _token_cut(sentence: str, limit: int) -> int:
+    """Where to cut an overlong sentence: the longest prefix within ``limit``
+    estimated tokens, pulled back to a comma or a space when one is near."""
+    end, thirds = 0, 0
+    for index, ch in enumerate(sentence, 1):
+        thirds += _char_thirds(ch)
+        if (thirds + 2) // 3 > limit:   # estimate_tokens(sentence[:index])
+            break
+        end = index
+    end = max(end, 1)
+    if end >= len(sentence):
+        return end
+    best = max(sentence.rfind(mark, 0, end) for mark in ("、", "，", ",", " "))
+    return best + 1 if best > end // 3 else end
 
+
+def narration_chunks(text: str, limit: int = LIVE_NARRATION_CHUNK_CHARS) -> list[str]:
+    """Split a script into appends of at most ``limit`` estimated tokens.
+
+    Japanese runs about one token a character, so this is ``limit``
+    characters there; Latin-script text (English, Javanese) carries about
+    four times as many characters per token and is not cut into slivers.
     Cuts fall between sentences; a single sentence longer than the limit is
-    cut at a comma (or hard, as a last resort).  Nothing is dropped: joining
-    the chunks gives the script back.
+    cut at a comma or a space (or hard, as a last resort).  Nothing is
+    dropped: joining the chunks gives the script back.
     """
     chunks: list[str] = []
     current = ""
     for sentence in split_sentences(text.strip()):
-        while len(sentence) > limit:
+        while estimate_tokens(sentence) > limit:
             if current:
                 chunks.append(current)
                 current = ""
-            cut = sentence.rfind("、", 0, limit)
-            cut = cut + 1 if cut > limit // 3 else limit
+            cut = _token_cut(sentence, limit)
             chunks.append(sentence[:cut])
             sentence = sentence[cut:]
-        if current and len(current) + len(sentence) > limit:
+        if current and estimate_tokens(current + sentence) > limit:
             chunks.append(current)
             current = sentence
         else:
@@ -1561,6 +1665,33 @@ def narration_chunks(text: str, limit: int = LIVE_NARRATION_CHUNK_CHARS) -> list
     if current.strip():
         chunks.append(current)
     return [chunk for chunk in chunks if chunk.strip()]
+
+
+def context_chunks(text: str, limit: int) -> list[str]:
+    """Split background text into appends of at most ``limit`` estimated
+    tokens, keeping its line breaks (Q: / A: lines, bullets).  Whole lines are
+    grouped; only a line longer than the limit is cut, as a script would be
+    (narration_chunks drops bare line breaks, which is fine for speech only)."""
+    pieces: list[str] = []
+    current = ""
+    for line in text.strip().splitlines(keepends=True):
+        if estimate_tokens(line) <= limit:
+            parts = [line]
+        else:
+            # narration_chunks strips the line; give back its indent and its
+            # trailing space / line break so the pieces join to the text.
+            parts = narration_chunks(line, limit)
+            if parts:
+                parts[0] = line[: len(line) - len(line.lstrip())] + parts[0]
+                parts[-1] += line[len(line.rstrip()):]
+        for part in parts:
+            if current and estimate_tokens(current + part) > limit:
+                pieces.append(current)
+                current = ""
+            current += part
+    if current.strip():
+        pieces.append(current)
+    return pieces
 
 
 def _to_int(token: str) -> int | None:
@@ -1655,6 +1786,17 @@ def strip_fillers(text: str) -> str:
     return text.strip() or original
 
 
+def asker_speaks_japanese(text: str) -> bool:
+    """Whether a question was asked in Japanese (it has kana).
+
+    Fixed lines (a refusal, "少し調べますね") are written in Japanese and
+    spoken verbatim; anyone asking in another language is answered in theirs.
+    An empty transcript counts as Japanese, the long-standing default.
+    """
+    t = str(text or "")
+    return not t.strip() or any("぀" <= ch <= "ヿ" for ch in t)
+
+
 def is_affirmative(text: str) -> bool:
     t = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text))).casefold()
     return bool(t) and not _NO.search(t) and bool(_YES.search(t))
@@ -1698,6 +1840,14 @@ class LiveBridge(RealtimeBridge):
         #: Acknowledgments of our appends (client_event_id -> event).
         self.ack_lock = threading.Lock()
         self.acks: dict[str, threading.Event] = {}
+        #: Appends the server refused as too long (see _append_context).
+        self.refused_appends: set[str] = set()
+        #: Set while no background is being handed over.  A script waits for it:
+        #: the background (every slide's script, ~25 appends / ~30 s) running
+        #: into slide 1 made the model read on through the other slides,
+        #: translating them, as if they were the script (2026-09-28).
+        self.context_idle = threading.Event()
+        self.context_idle.set()
         #: Bumped whenever the narration being delivered changes (new piece,
         #: cancel, suspend), so a late delivery thread knows to stand down.
         self.narration_gen = 0
@@ -1853,6 +2003,49 @@ class LiveBridge(RealtimeBridge):
             waiter = self.acks.get(str(event_id)) if event_id else None
         if waiter is not None:
             waiter.set()
+
+    def _append_context(self, text: str) -> None:
+        """Hand the talk's background to the model in appends of at most
+        LIVE_APPEND_MAX_TOKENS, each after the previous one was taken in.
+
+        A long block in session.start stalled the first narration (the model
+        answered "はい、お待ちします" and read only fragments), so the
+        notebook sends this only when no script is being read.
+        """
+        if not self.ws_ready.wait(20.0):
+            return
+        # A line with no sentence end (a bullet list, a Javanese paragraph)
+        # used to go out whole and be refused; context_chunks also cuts an
+        # overlong line.  The head below costs ~40 tokens of the budget.
+        pieces = context_chunks(text, LIVE_APPEND_MAX_TOKENS - 60)
+        total = len(pieces)
+        timeout = self.args.live_ack_timeout_ms / 1000.0 + 5.0
+        self.context_idle.clear()
+        try:
+            for index, piece in enumerate(pieces, 1):
+                if self.stop_event.is_set():
+                    return
+                head = ("この発表の背景 (" + str(index) + "/" + str(total)
+                        + "。読み上げる原稿ではありません。声に出さず、質問に答えるときの前提にする):\n")
+                event_id = self._append("instructions", None, head + piece)
+                self._wait_ack(event_id, timeout)
+                if self._take_refused(event_id):
+                    # Still too long for the server: send it again in halves.
+                    for half in context_chunks(piece, max(40, estimate_tokens(piece) // 2)):
+                        self._wait_ack(self._append("instructions", None, head + half), timeout)
+        finally:
+            self.context_idle.set()
+        self._record("status", "発表の背景を渡しました (" + str(total) + " 回)")
+
+    def _take_refused(self, event_id: str | None) -> bool:
+        """Whether the server refused this append for its length (once)."""
+        if not event_id:
+            return False
+        with self.ack_lock:
+            if event_id in self.refused_appends:
+                self.refused_appends.discard(event_id)
+                return True
+        return False
 
     def _wait_ack(self, event_id: str | None, timeout: float) -> bool:
         """Wait until the model has taken an append in (or it was refused)."""
@@ -2266,6 +2459,10 @@ class LiveBridge(RealtimeBridge):
             text = json.dumps(detail, ensure_ascii=False)[:400]
             self._write_state(lastError=text)
             if isinstance(detail, dict):
+                refused = detail.get("client_event_id")
+                if refused and "exceed" in str(detail.get("message", "")):
+                    with self.ack_lock:
+                        self.refused_appends.add(str(refused))
                 # A refused append must not leave a waiter hanging.
                 self._ack(detail.get("client_event_id"))
             self._line(
@@ -2317,12 +2514,14 @@ class LiveBridge(RealtimeBridge):
                 break
             time.sleep(0.05)
         with self.transcript_lock:
-            fresh = [f for f in self.user_fragments if f[0] > self.user_cut]
+            fresh = latest_question_fragments(
+                [f for f in self.user_fragments if f[0] > self.user_cut])
             if self.user_fragments:
                 self.user_cut = self.user_fragments[-1][0]
             if not fresh:
                 horizon = time.monotonic() - 20.0
-                fresh = [f for f in self.user_fragments if f[1] >= horizon]
+                fresh = latest_question_fragments(
+                    [f for f in self.user_fragments if f[1] >= horizon])
         return "".join(f[2] for f in fresh).strip()
 
     def _claim_pending_web(self) -> tuple[str, str, float] | None:
@@ -2345,6 +2544,7 @@ class LiveBridge(RealtimeBridge):
             count = int(self.state.get("delegations", 0)) + 1
         self._write_state(delegations=count)
         self._mode("thinking")
+        text = ""
         try:
             text = self._settled_user_text()
             self._write_state(lastDelegation={"id": delegation_id, "text": text[-300:]})
@@ -2352,7 +2552,8 @@ class LiveBridge(RealtimeBridge):
             self._handle_request(delegation_id, text)
         except Exception as exc:
             self._write_state(lastError=f"delegation: {type(exc).__name__}: {exc}")
-            self._append("commentary", delegation_id, "うまく調べられませんでした。")
+            kind, content = self._fixed_line("うまく調べられませんでした。", text)
+            self._append(kind, delegation_id, content)
         finally:
             with self.delegation_lock:
                 self.active_delegations.discard(delegation_id)
@@ -2448,7 +2649,8 @@ class LiveBridge(RealtimeBridge):
     def _run_ask(self, delegation_id: str, query: str, *, allow_web: bool) -> None:
         if allow_web:
             # A web lookup takes ten-odd seconds; silence reads as a freeze.
-            self._append("commentary", delegation_id, "少し調べますね。")
+            kind, content = self._fixed_line("少し調べますね。", query)
+            self._append(kind, delegation_id, content)
         else:
             self._append(
                 "thinking", delegation_id,
@@ -2477,16 +2679,33 @@ class LiveBridge(RealtimeBridge):
     #: script: read out verbatim, a prepared answer to a *neighbouring*
     #: question answered "ハイドロゲルって何?" with "ただしそれは今後の検証
     #: 課題で…" (measured 2026-09-19).
+    #: Answers follow the asker's language, whatever the material's language.
+    _ANSWER_LANGUAGE = "質問した人が使った言語で答えてください。"
     _ANSWER_FROM_MATERIAL = (
         "聞き手の質問に短く答えてください。いま渡した資料が質問に合っていれば資料に沿って答え、"
         "合っていなければ資料には触れず一般的な知識で答えてください。"
-        "資料と違うことを事実のように言わないでください。"
+        "資料と違うことを事実のように言わないでください。" + _ANSWER_LANGUAGE
     )
     _ANSWER_WITHOUT_MATERIAL = (
         "手元の資料には答えがありません。一般的な知識で答えられる質問なら短く答えてください。"
         "最新の情報や、この発表に固有の事実が必要なら、ウェブで調べてよいか一言だけ尋ねてください。"
-        "推測を事実のように言わないでください。"
+        "推測を事実のように言わないでください。" + _ANSWER_LANGUAGE
     )
+
+    def _fixed_line(self, text_ja: str, question: str) -> tuple[str, str]:
+        """A fixed line (refusal, holding line, failure) as (kind, content).
+
+        Asked in Japanese: the line itself, spoken verbatim (commentary).
+        Asked in another language: the model says the same thing in that
+        language (instructions), adding nothing.
+        """
+        if asker_speaks_japanese(question):
+            return ("commentary", text_ja)
+        return (
+            "instructions",
+            "次の内容だけを、質問「" + str(question)[:200] + "」と同じ言語で一言で伝えてください。"
+            "内容を足したり省いたりしないでください:「" + text_ja + "」",
+        )
 
     def _ask_updates(self, result: dict[str, Any] | None, query: str, delegation_id: str,
                      *, from_web: bool = False) -> list[tuple[str, str]]:
@@ -2497,12 +2716,12 @@ class LiveBridge(RealtimeBridge):
         model is told how to use it -- it composes the answer itself.
         """
         if result is None:
-            return [("commentary", "資料を引けませんでした。")]
+            return [self._fixed_line("資料を引けませんでした。", query)]
         status = str(result.get("status", "")).lower()
         answer = str(result.get("answer", "") or "").strip()
         matched = str(result.get("matchedQuestion", "") or "").strip()
         if status == "blocked":
-            return [("commentary", "その内容は非公開の資料が必要なため、この場ではお答えできません。")]
+            return [self._fixed_line("その内容は非公開の資料が必要なため、この場ではお答えできません。", query)]
         if result.get("needWeb") or status == "needweb":
             with self.delegation_lock:
                 self.pending_web = (query, delegation_id, time.monotonic())
@@ -2515,11 +2734,13 @@ class LiveBridge(RealtimeBridge):
                     ("instructions", self._ANSWER_FROM_MATERIAL)]
         if result.get("serviceDown") or status == "unavailable":
             return [("thinking", "いまは手元の資料を引けません。"),
-                    ("instructions", "資料が引けないことを一言伝え、一般的な知識で答えられる範囲だけ短く答えてください。")]
+                    ("instructions", "資料が引けないことを一言伝え、一般的な知識で答えられる範囲だけ短く答えてください。"
+                     + self._ANSWER_LANGUAGE)]
         if status == "notfound":
             return [("thinking", f"質問「{query}」について、手元の資料には答えがありませんでした。"),
-                    ("instructions", "一般的な知識で答えられる範囲だけ短く答え、分からなければそう伝えてください。")]
-        return [("commentary", str(result.get("message", "") or "資料を引けませんでした。"))]
+                    ("instructions", "一般的な知識で答えられる範囲だけ短く答え、分からなければそう伝えてください。"
+                     + self._ANSWER_LANGUAGE)]
+        return [self._fixed_line(str(result.get("message", "") or "資料を引けませんでした。"), query)]
 
     # ------------------------------------------------- interruptions (talk)
 
@@ -2961,6 +3182,11 @@ class LiveBridge(RealtimeBridge):
             if text:
                 self.instructions = text
                 self._append("instructions", None, "以後は次の方針で会話してください。\n" + text)
+        elif name == "context":
+            text = str(command.get("text", "")).strip()
+            if text:
+                self.context_text = text
+                threading.Thread(target=self._append_context, args=(text,), daemon=True).start()
         elif name == "verbosity":
             level = normalise_verbosity(command.get("value", "normal"))
             self.verbosity = level
@@ -2996,16 +3222,25 @@ class LiveBridge(RealtimeBridge):
             except Exception:
                 pass
 
-    def _narration_direction(self, *, first: bool = True, resume: bool = False) -> str:
+    def _narration_direction(self, *, first: bool = True, resume: bool = False,
+                             urgent: bool = False) -> str:
         """The short spoken-now instruction; the script itself is already in
-        the model's context (_deliver_piece)."""
+        the model's context (_deliver_piece).
+
+        A new script says outright that no reply is awaited: right after the
+        model had asked the room to repeat ("すみません、もう一度お願いします"),
+        it kept waiting for that reply and never read slide 1, nor after the
+        re-request (2026-09-28 rehearsal).  ``urgent`` is the re-request."""
         head = (
             "質疑はここまでです。「それでは、説明に戻ります」と言ってから、" if resume
-            else "" if first else "続けて、"
+            else "続けて、" if not first
+            else "会話や聞き返しはここで終わりです。返事は待たずに、いますぐ、" if urgent
+            else "会話や聞き返しの返事は待たずに、"
         )
         direction = (
-            head + "いま渡した原稿を、書かれたとおりに最後まで声に出して読んでください。"
-            "前置き・言い換え・感想は付けず、読み終えたら黙って待ってください。"
+            head + "直前に「次に読み上げる原稿」として渡した原稿だけを、書かれたとおりに最後まで声に出して読んでください。"
+            "発表の背景に書かれた他のスライドの内容は読まないでください。"
+            "前置き・言い換え・翻訳・感想は付けず、読み終えたら黙って待ってください。"
         )
         if self.narration_extra:
             direction += "話し方 (声に出さない): " + self.narration_extra
@@ -3026,8 +3261,11 @@ class LiveBridge(RealtimeBridge):
             generation = self.narration_gen
             self.narration_current = piece
             # The start timeout counts from the instruction, not from here
-            # (the script is still being taken in): _deliver_piece resets it.
+            # (the script is still being taken in, maybe after a background
+            # hand-over): _deliver_piece resets it.
             self.narration_sent_at = time.monotonic() + self.args.live_ack_timeout_ms / 1000.0
+            if not self.context_idle.is_set():
+                self.narration_sent_at = time.monotonic() + 120.0
             self.narration_resent = False
             self.narration_started_speaking = False
             self.narration_spoken = ""
@@ -3040,6 +3278,11 @@ class LiveBridge(RealtimeBridge):
 
     def _deliver_piece(self, generation: int, piece: str, first: bool, resume: bool) -> None:
         label = "次に読み上げる原稿" if first or resume else "次に読み上げる原稿の続き"
+        # Never interleave a script with the background hand-over.
+        self.context_idle.wait(90.0)
+        with self.purpose_lock:
+            if generation != self.narration_gen or self.pending_narration is None:
+                return
         context = self._append(
             "thinking", None, f"{label}です。指示があるまで声に出さないでください。\n{piece}"
         )
@@ -3196,7 +3439,7 @@ class LiveBridge(RealtimeBridge):
             piece = self.narration_current
         if narration is not None and not started and not self.output_active.is_set():
             if resend and piece:
-                self._append("instructions", None, self._narration_direction(first=True))
+                self._append("instructions", None, self._narration_direction(first=True, urgent=True))
                 self._record("status", "読み上げを再依頼しました")
             elif waited > 25.0:
                 with self.purpose_lock:

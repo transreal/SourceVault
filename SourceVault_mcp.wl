@@ -34,6 +34,15 @@ SourceVaultMCPTools::usage =
 SourceVaultMCPCallTool::usage =
   "SourceVaultMCPCallTool[name, args] は tool を実行し MCP result <|\"content\",\"isError\"|> を返す。";
 
+SourceVaultMCPRegisterTools::usage =
+  "SourceVaultMCPRegisterTools[id, spec] は外部パッケージの MCP tool 群を登録する (package-neutral な拡張点、2026-09-22)。\n" <>
+  "spec: <|\"Tools\" -> {tool 定義 (name/description/inputSchema) ...}, \"Handler\" -> Function[{name, args}, MCP result | String | Failure],\n" <>
+  "  \"AllowedTools\" -> {headless CLI で pre-allow する tool 名}, \"PromptDirective\" -> String | Function|>。\n" <>
+  "登録簿は $SourceVaultMCPExternalTools (id -> spec)。SourceVault より先にロードされる側はこの連想へ直接書いてもよい (ロード時に保持される)。";
+$SourceVaultMCPExternalTools::usage =
+  "$SourceVaultMCPExternalTools は外部登録された MCP tool 群 (id -> <|\"Tools\",\"Handler\",\"AllowedTools\",\"PromptDirective\"|>)。\n" <>
+  "SourceVaultMCPTools[] / SourceVaultMCPCallTool は組み込み tool の後にこれを見る。";
+
 SourceVaultMCPServerInfo::usage =
   "SourceVaultMCPServerInfo[] は MCP serverInfo (<|\"name\",\"version\"|>) を返す。";
 
@@ -3589,8 +3598,46 @@ iSVRegisterDefaultAdapters[] := (
 
 iSVRegisterDefaultAdapters[];
 
+(* ---- 外部登録 (2026-09-22): 他パッケージ (例: ResoLoop_mcp.wl) が tool を足す拡張点。
+   registry は SourceVault`$SourceVaultMCPExternalTools。ロード順に依存しないよう、既に
+   Association なら保持する (SourceVault より先にロードした側が直接書いている場合)。
+   組み込み tool と名前が衝突したら組み込みが勝つ (Switch が先に評価される)。 ---- *)
+If[!AssociationQ[SourceVault`$SourceVaultMCPExternalTools],
+  SourceVault`$SourceVaultMCPExternalTools = <||>];
+
+SourceVaultMCPRegisterTools[id_String, spec_Association] :=
+  (SourceVault`$SourceVaultMCPExternalTools[id] = spec; id);
+
+iSVMCPExternalSpecs[] :=
+  If[AssociationQ[SourceVault`$SourceVaultMCPExternalTools],
+    Select[Values[SourceVault`$SourceVaultMCPExternalTools], AssociationQ], {}];
+
+iSVMCPExternalTools[] :=
+  Flatten[Map[Function[s, Select[Replace[Lookup[s, "Tools", {}], Except[_List] -> {}], AssociationQ]],
+    iSVMCPExternalSpecs[]], 1];
+
+iSVMCPExternalToolNames[spec_Association] :=
+  Map[Lookup[#, "name", ""] &, Select[Replace[Lookup[spec, "Tools", {}], Except[_List] -> {}], AssociationQ]];
+
+(* 外部 tool の実行。handler は MCP result <|"content",...|> / String / Failure のどれを返してもよい。 *)
+iSVMCPCallExternalTool[name_String, args_Association] :=
+  Module[{spec, handler, r},
+    spec = SelectFirst[iSVMCPExternalSpecs[], MemberQ[iSVMCPExternalToolNames[#], name] &, None];
+    If[spec === None, Return[iMCPError["Unknown tool: " <> name]]];
+    handler = Lookup[spec, "Handler", None];
+    If[handler === None, Return[iMCPError["No handler registered for tool: " <> name]]];
+    r = Quiet @ Check[handler[name, args], $Failed];
+    Which[
+      AssociationQ[r] && KeyExistsQ[r, "content"], r,
+      StringQ[r], iMCPText[r],
+      FailureQ[r],
+        iMCPError[name <> " failed: " <> ToString[Lookup[r[[2]], "MessageTemplate", ToString[r[[1]]]]]],
+      True, iMCPError[name <> " failed: " <> StringTake[ToString[r, InputForm], UpTo[500]]]]];
+
+SourceVaultMCPTools[] := Join[iSVMCPBuiltinTools[], iSVMCPExternalTools[]];
+
 (* ---- tool 定義 (JSON Schema inputSchema) ---- *)
-SourceVaultMCPTools[] := {
+iSVMCPBuiltinTools[] := {
   <|"name" -> "sourcevault_web_search",
     "description" -> "Search the local web via SearXNG and return candidate results " <>
       "(title, url, snippet). Does NOT fetch page bodies. To read a result's page, " <>
@@ -4390,7 +4437,8 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
             iMCPJSONText[KeyTake[o, {"SessionId", "Subject", "MailCount", "Topics",
               "CurrentDigest", "HistoricalReferences", "Released"}]]]],
     _,
-      iMCPError["Unknown tool: " <> name]
+      (* 組み込みに無い名前は外部登録 (SourceVaultMCPRegisterTools) を見る。無ければ Unknown tool *)
+      iSVMCPCallExternalTool[name, args]
   ]];
 
 (* ---- JSON-RPC method dispatch ---- *)

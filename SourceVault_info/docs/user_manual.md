@@ -88,7 +88,7 @@ SourceVault をロードすると、以下が自動的に有効になります�
 | 匿名化 (declassification) 拡張 | `SourceVault_anonymize.wl` が canonicalization / KeyRing (NBAccess MAC KeyRef 上) / 衝突耐性 ID 式 (EntityID / SourceObjectID / SourceUnitID / DerivedUnitID) / 役割別 token (Subject / Item / Job / ResultSlot) + ReleaseHandle (CSPRNG) を提供。現時点では本文を読まない schema-only の `SourceVaultAnonymizationPlan` までが実装されており、高 PrivacyLevel の本文を実際に読んで匿名化する Execute 相当の関数は未実装 (grant gate の実装後に追加予定) |
 | SIEM / システム診断層 | `SourceVault_diagnostics.wl` が NBAccess / claudecode / ClaudeOrchestrator / サービスマネージャ横断の診断情報を集約する collector / store / doctor 層を提供 (Phase 0 最小コア)。詳細は「システム診断 / SIEM 基盤 (SourceVault_diagnostics)」節を参照 |
 | 論文の和訳ノートブック登録簿 | `SourceVault_papernb.wl` が、取り込み済み論文 (arXiv/web/local ソースおよび Eagle の PDF 項目) に対する和訳ノートブックの生成・登録簿を提供する (PL 継承)。core の root 解決だけに依存するため早い段階でロードされる。詳細は後述の「論文の和訳ノートブック (SourceVault_papernb)」節を参照 |
-| 発表用知識グラフ層 (KG) | `SourceVault_knowledgegraph.wl` が、論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手 (理解度・前提知識) と時間 (枚数・分) から階層構成・アウトラインを決定的に計算する機能を提供する (LLM 非依存、FrontEnd/Notebook 非依存)。詳細は後述の「発表用知識グラフ (SourceVault_knowledgegraph)」節を参照 |
+| 発表用知識グラフ層 (KG) | `SourceVault_knowledgegraph.wl` が、論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手 (理解度・前提知識) と時間 (枚数・分) から階層構成・アウトラインを決定的に計算する機能を提供する (LLM 非依存、FrontEnd/Notebook 非依存)。取り込み・保存の入口では UTF-8 の文字化けも自動修復する。詳細は後述の「発表用知識グラフ (SourceVault_knowledgegraph)」節を参照 |
 | ローカル資産解決層 / 発表登録簿 / KB 層・対話 QA・音声会話層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_talkqa.wl` (KB の上に載る対話型 QA 層) / `SourceVault_oopsseed.wl` / `SourceVault_realtime.wl` (クラウド経路の音声会話。OpenAI Realtime / GPT-Live を既定のマイク/スピーカーで使う。`SourceVault_voice.wl` と対になる層だが、依存は呼び出し時にだけ効くため、この位置での自動ロードで問題ない) を自動ロード。これら発表インフラの詳細は後述の「発表インフラ: スライド登録簿・低遅延 QA・クラウド音声会話」節を参照 |
 | Cane 認知支援基盤 (既定 observe-only) | `SourceVault_knowledgehome.wl` (Knowledge Home 閲覧・非破壊追記・位置づけ/近傍提案) / `SourceVault_cognition.wl` (認知系イベントの暗号化保存・Guard shadow・owner 入力支援) / `SourceVault_adjudication.wl` (複数 LLM 裁定コア + runnable driver) / `SourceVault_capbroker.wl` (capability broker・LLM boundary shadow/gate・観測設定の永続化) / `SourceVault_taint.wl` (入力信頼度評価・taint 伝播) / `SourceVault_anomaly.wl` (統計的異常検知、既定オフ)。いずれも既定は「判定を記録するだけ」(shadow/observe-only) で、明示的な owner 操作なしに送信をブロックしたり通知したりしない (詳細は後述の「Boundary Observation」コールアウトを参照) |
 | シミュレーション実行基盤 | `SourceVault_simrun.wl` がマシンプロファイル共有・GPU/CUDA サポート・サブカーネル burst 管理・SimulationRun 記録 (実行フォルダ + immutable snapshot の 2 層設計) を提供 (詳細は「シミュレーション実行基盤」節を参照) |
@@ -1557,13 +1557,13 @@ $packageDirectory\
   SourceVault_kb.wl                ← KB (Graph-RAG 低遅延応答層。lexical/searchindex に依存するためそれらの後にロード、自動ロード)
   SourceVault_talkqa.wl            ← KB の上に載る対話型 QA 層 (自動ロード)
   SourceVault_oopsseed.wl          ← (自動ロード)
-  SourceVault_knowledgegraph.wl    ← 発表用知識グラフ層 (論文内容 + 周辺知識の順序・難易度つき KG、聴き手/時間からの階層構成計算。LLM 非依存・FrontEnd 非依存、自動ロード)
+  SourceVault_knowledgegraph.wl    ← 発表用知識グラフ層 (論文内容 + 周辺知識の順序・難易度つき KG、聴き手/時間からの階層構成計算、取り込み・保存時の文字化け修復。LLM 非依存・FrontEnd 非依存、自動ロード)
   SourceVault_realtime.wl          ← クラウド経路の音声会話 (OpenAI Realtime / GPT-Live、既定のマイク/スピーカー。SourceVault_voice.wl と対になる層だが依存は呼び出し時にだけ効くためこの位置で自動ロード)
   SourceVault_searchview.wl        ← 検索ビュー / 横断検索の表示層 (自動ロード)
   SourceVault_servicemanager.wl    ← サービスマネージャ (自動ロード)
   SourceVault_promptrouter.wl      ← PromptRouter 拡張 (自動ロード)
   SourceVault_webingest.wl         ← Web 検索 / SearXNG / job 二層 / 参照イベント (自動ロード)
-  SourceVault_mcp.wl               ← MCP tool schema・dispatch / sv:// オブジェクト解決 / Universal MCP Access URI 層・アダプタ登録 (自動ロード)
+  SourceVault_mcp.wl               ← MCP tool schema・dispatch / sv:// オブジェクト解決 / Universal MCP Access URI 層・アダプタ登録 / 外部パッケージからの MCP tool 拡張点 (自動ロード)
   SourceVault_llmlog.wl            ← Claude Code セッションログ ingest / 検索 / 要約 / transcript 表示 (自動ロード)
   SourceVault_mailstructure.wl     ← メール構造の正規化・解析 (自動ロード)
   SourceVault_mailsuggest.wl       ← メール返信文面などの提案機能 (自動ロード)
@@ -1612,7 +1612,7 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy
 ```
 
 - `SourceVault_webingest.wl` — SearXNG クライアント / Web 検索 / 本文取得 / clean-text / job 二層 / 参照イベント / importance / 要約。
-- `SourceVault_mcp.wl` — MCP tool schema・dispatch（protocol endpoint は Python proxy 側）。`sv://` オブジェクトの実データ/プロパティ解決、および Universal MCP Access の URI 正準化・データアダプタ登録もここに統合。
+- `SourceVault_mcp.wl` — MCP tool schema・dispatch（protocol endpoint は Python proxy 側）。`sv://` オブジェクトの実データ/プロパティ解決、Universal MCP Access の URI 正準化・データアダプタ登録、および外部パッケージからの MCP tool 拡張点もここに統合。
 - `SourceVault_eagle.wl` — privacy 継承付きセル出力（WebDocument 等のオブジェクトビューを提供。旧 `SourceVault_objectview.wl` を統合）。
 - いずれも **service-loadable**（FrontEnd / NBAccess 非依存）で、`SourceVault.wl` ロード時に自動読み込み。
 
@@ -1693,7 +1693,62 @@ SourceVaultStopMCP[]
 
 `ShowClaudePalette[]`（claudecode）のプライバシー直下に **MCP 起動/停止トグル**が出ます（実状態に追従）。これは claudecode の package-neutral レジストリ `$ClaudePalet`$ClaudePaletteServiceControls`（`ClaudeRegisterPaletteServiceControl`）に SourceVault が登録する形で、claudecode は SourceVault に依存しません。
 
-MCP が公開するツール：`sourcevault_web_search`（同期）/ `sourcevault_submit_web_search`（非同期・本文取得可）/ `sourcevault_job_status` / `sourcevault_job_result` / `sourcevault_get_document` / `sourcevault_commit_log`（後述の `SourceVaultPackageCommitLog` の実体）。いずれの検索も `RequestChannel="MCP"`・`Actor=MCPClient` として監査記録されます。
+MCP が公開するツール：`sourcevault_web_search`（同期）/ `sourcevault_submit_web_search`（非同期・本文取得可）/ `sourcevault_job_status` / `sourcevault_job_result` / `sourcevault_get_document` / `sourcevault_commit_log`（後述の `SourceVaultPackageCommitLog` の実体）。いずれの検索も `RequestChannel="MCP"`・`Actor=MCPClient` として監査記録されます。組み込み tool に加え、下記「外部パッケージからの MCP tool 拡張」で登録された tool も `SourceVaultMCPTools[]` / `SourceVaultMCPCallTool` を通じて同様に公開されます。
+
+### 外部パッケージからの MCP tool 拡張 (SourceVaultMCPRegisterTools)
+
+SourceVault 自身の知らない他パッケージ (例: [ResoLoop_mcp](https://github.com/transreal/ResoLoop_mcp)) が MCP tool を追加登録できる **package-neutral な拡張点** です (2026-09-22 追加)。ロード順に依存しないよう、`SourceVault_mcp.wl` より**先に**ロードされる側は `SourceVault\`$SourceVaultMCPExternalTools` へ直接連想を書き込んでもよく (ロード時に保持される)、`SourceVault` の**後に**ロードされる側は `SourceVaultMCPRegisterTools` を呼びます。
+
+```mathematica
+SourceVaultMCPRegisterTools["resoloop", <|
+  "Tools" -> {<|"name" -> "resoloop_status", "description" -> "...",
+     "inputSchema" -> <|...|>|>, ...},
+  "Handler" -> Function[{name, args},
+    (* MCP result <|"content", ...|> / 生の String / Failure のいずれを返してもよい *)
+    ...],
+  "AllowedTools" -> {"resoloop_status"},
+  "PromptDirective" -> "..." | Function[...]
+|>]
+```
+
+`spec` のキー:
+
+| キー | 説明 |
+|---|---|
+| `"Tools"` | tool 定義 (`name`/`description`/`inputSchema`) のリスト (必須) |
+| `"Handler"` | `Function[{name, args}, result]`。`args` は `Association`。返り値は MCP result `<|"content",...|>` / 生の `String` / `Failure` のいずれでもよく、`SourceVaultMCPCallTool` 経由で正規化される |
+| `"AllowedTools"` | headless `claude` CLI で pre-allow する tool 名のリスト |
+| `"PromptDirective"` | `String`、または呼び出し時に評価される `Function[]`。既存の方針文に合流される |
+
+`SourceVaultMCPRegisterTools[id, spec]` は `id` (登録主体を表す文字列) をキーに `$SourceVaultMCPExternalTools` へ `spec` を書き込み、`id` をそのまま返します。**組み込み tool と名前が衝突した場合は組み込みが勝ちます** (dispatch の `Switch` が先に評価されるため)。登録済みの外部 tool は、`SourceVaultMCPTools[]`（組み込み tool のリストの後に連結される）と `SourceVaultMCPCallTool` の両方で、組み込み tool と同じように扱われます (組み込みで見つからない名前は「Unknown tool」を返す前に外部登録を確認します)。
+
+```mathematica
+$SourceVaultMCPExternalTools
+(* → <|"resoloop" -> <|"Tools" -> {...}, "Handler" -> Function[...],
+        "AllowedTools" -> {...}, "PromptDirective" -> ...|>, ...|> *)
+```
+
+`$SourceVaultMCPExternalTools` (`id -> spec` の `Association`) が登録簿の実体で、`SourceVault_mcp.wl` のロード時に既存値が無ければ `<||>` へ初期化されます (既に他パッケージが直接書き込んでいた場合はその内容を保持)。
+
+#### service kernel での自動ロードと CLI 登録のやり直し (SourceVault_servicemanager)
+
+外部パッケージが SourceVault 本体のロードより後に読み込まれる運用 (service kernel の起動スクリプト等) では、`$SourceVaultServiceExtraPackages` に自分のファイル名を追加しておくと、SourceVault 群の後で自動的に `Get` されます。
+
+```mathematica
+SourceVault`$SourceVaultServiceExtraPackages = {"ResoLoop_mcp.wl"};
+```
+
+- `$SourceVaultServiceExtraPackages` (既定 `{}`) は、`MyPackages` 直下からの相対パッケージファイル名のリストです。SourceVault は個別パッケージ名を知らないため、他パッケージ (例: `ResoLoop.wl`) がロード時に自分自身をこのリストへ追加する形で使います。存在しないファイルは存在ガードにより黙って飛ばされます (fail-soft)。設定の反映には service の再起動が必要です。
+
+外部パッケージが tool を登録した後、headless `claude` CLI 向けの MCP 登録をやり直したい場合は次を呼びます。
+
+```mathematica
+SourceVaultRefreshCLIMCP[]
+```
+
+`SourceVaultRefreshCLIMCP[]` は `ClaudeRegisterCLIMCPServer` による CLI 向け MCP 登録を、外部登録された `AllowedTools` / `PromptDirective` を合流させた状態でやり直します。内部では、外部の `AllowedTools` は `Function` 化されて呼び出し時に評価され (claudecode の `iCLIMCPServerConfigs` は `Function` を受け付ける)、既存の `AllowedTools` リストへ `Join` されます — 空リストのままにすると claudecode 側で `{}` として扱われ SourceVault の全 tool が CLI から使えなくなる、という実機で確認された問題を避けるためです。`PromptDirective` も同様に、複数の外部パッケージの方針文 (`String` または呼び出し時評価の `Function[]`) が既存の方針文へ合流されます。
+
+---
 
 ### Universal MCP Access — URI 層とデータアダプタ (Phase A)
 
@@ -1966,6 +2021,7 @@ SourceVaultSimRuns["ising-sweep"]
 - **oops-ml のグラフ枠組みを再利用**: 辺レコードは `SourceVault_oopsseed.wl` の TopicItemGraph と同形 (`{From, To, EdgeKind, Weight, EvidenceRefs}` + `Order` / `OrderKind` / `Confidence`) で、`SourceVaultKGToTopicItemGraph` により `SourceVaultOOPSTopicGraphPlot` へそのまま渡せます。
 - **周辺知識ノードの共有**: background ノードは `bg:<slug>` の共有 ID を持ち、複数論文の KG から参照されます (Knowledge Home の `svtopic:kh:*` と同じ「追記して共有する」思想)。過去デッキの再利用は `SourceVault_kb.wl` (Graph-RAG) の検索で提案されます。
 - **privacy**: KG / ノードは `PrivacyLevel` (0.0-1.0、大きいほど厳格) を持ち、既定は 0.0 (公開論文)。アウトライン化の際は `"ReleaseCeiling"` (既定 0.5) を超えるノードを fail-closed で落とします。
+- **文字化けの自動修復**: 取り込み (`SourceVaultKGFromJSON` / `SourceVaultKGMerge`)・保存 (`SourceVaultKGSave`)・読み込み (`SourceVaultKGLoad`) の各入口で、UTF-8 のバイトを 1 文字ずつ読んだ形の文字化け (後述) を自動的に直します。
 
 ### 主な定数
 
@@ -2001,8 +2057,35 @@ SourceVaultKGDelete["kg-my-paper"]   (* history は残る *)
 
 - `SourceVaultKGNew[graphId, opts]` の opts: `"Title"` / `"Language"` (既定 `"ja"`) / `"Sources"` (`{<|"Key","Locator","Kind","Note"|>..}`) / `"Kind"` (Paper\|Survey\|Background) / `"PrivacyLevel"`。
 - `SourceVaultKGValidate[kg]` はすべての取り込み口が通る正規化ステップで、ノード・辺の既定値補完、未知の辺種別の `RelatedTo` への丸め込み、端点の無い辺や自己ループの除去、Root の決定を行い、`"Warnings"` を付けた KG を返します。
-- `SourceVaultKGMerge[kg, delta, opts]` は差分 KG を取り込みます。同じ `Id` のノードは delta のキーだけ上書きし、辺は `(From, To, EdgeKind)` で重複排除されます。`"Language" -> "en"` を渡すと、delta の文字列テキスト (Label/Summary/Points/Talk) はその言語の訳として既存テキストに併記されます。
+- `SourceVaultKGMerge[kg, delta, opts]` は差分 KG を取り込みます。同じ `Id` のノードは delta のキーだけ上書きし、辺は `(From, To, EdgeKind)` で重複排除されます。`"Language" -> "en"` を渡すと、delta の文字列テキスト (Label/Summary/Points/Talk) はその言語の訳として既存テキストに併記されます。`delta` が JSON 文字列でも連想でも、文字化けは取り込み前に修復されます。
 - `SourceVaultKGToJSON[kg]` は KG を JSON 文字列に戻します。
+
+### 文字化けの自動修復 (SourceVaultKGRepairMojibake)
+
+周辺知識をエージェントに作らせたときなど、UTF-8 のバイト列が 1 文字ずつ別の文字として読まれた形の文字化けが KG に混入することがあります (例: ジャワ語のノード「gawé」が「gawÃ©」の形で保存されていた事例、2026-09-28。JSON 上は `\u00c3\u00a9` の並び)。取り込み側は UTF-8 で読んでいるため、渡された文字列がすでにこの形になっており、どの経路で化けたかは特定できません。そこで、入口で直す方針になっています。
+
+修復の規則:
+
+- UTF-8 の先頭バイト (`C2`-`F4`) に続く継続バイト (`80`-`BF`) の並びを 1 塊として UTF-8 で読み直し、**正しく読めて (置換文字 U+FFFD を含まず) 文字列が短くなったときだけ**置き換えます。
+- 日本語 (U+0100 以上) や単独の `é` などの正しい文字には触れません。
+- 文字列の**値だけ**をたどり、連想のキーには触れません (`ReplaceAll` だとキーにも当たり、キーが未評価の内部関数呼び出しのまま残るため)。
+
+```mathematica
+(* 保存済みの KG (graphs/*.json) と周辺知識の書庫 (background/*.json) をまとめて直して書き戻す *)
+SourceVaultKGRepairMojibake[]
+(* → <|"Checked" -> 検査したファイル数, "Fixed" -> 直したファイル数,
+       "Files" -> {直したファイル名..}|> *)
+```
+
+| 入口 | 修復のタイミング |
+|---|---|
+| `SourceVaultKGFromJSON[a]` | 検証 (`SourceVaultKGValidate`) の前に、連想・JSON 文字列とも修復 |
+| `SourceVaultKGMerge[kg, delta]` | `delta` (文字列・連想とも) を取り込む前に修復 |
+| `SourceVaultKGLoad[id]` / 周辺知識の読み込み | 読み込んだ内容を修復してから検証 |
+| `SourceVaultKGSave[kg]` | 書き出す前に修復。化けたまま覚えている KG を持つカーネル (修復より前に読み込んだもの) から保存されても、化けたまま書き戻されない |
+| `SourceVaultKGRepairMojibake[]` | 既存のファイルを一括修復し、変更があったファイルだけ書き戻す |
+
+既に保存済みの KG に化けが残っている場合は、一度 `SourceVaultKGRepairMojibake[]` を実行してください。
 
 ### ノードの参照とテキスト取得
 
@@ -2207,6 +2290,27 @@ While[SourceVaultRealtimeStatus[]["NarrationDone"] =!= id, Pause[0.2]]
 
 `SourceVaultRealtimeStatus[]` には GPT-Live 特有のフィールドが追加されています: `"SessionId"` / `"UsageSeconds"` (累計課金秒数) / `"Delegations"` (委譲回数) / `"LastDelegation"` / `"CloseReason"` / `"InterruptMode"` / `"InterruptGate"` (`"none"`\|`"words"`\|`"detect"`) / `"QAOpen"` / `"Interrupted"` / `"Interruptions"` / `"LastInterrupt"` / `"KeywordStatus"` (`"off"`\|`"loading"`\|`"ready"`\|`"unavailable: …"`) / `"EchoCoupling"`。
 
-> **ワーカー契約バージョン:** `$SourceVaultRealtimeWorkerVersion` (現在 `"1.7"`) は、この Wolfram パッケージが期待する Python worker のプロトコル版です。1.5 で GPT-Live (`--api live`) 対応、1.6 で発表中の割り込み (narrate の `interrupt`/`slide`)、1.7 で二段階スクリプト配信とモデルによる回答組み立てが追加されました。`SourceVaultRealtimeStatus[]["WorkerVersion"]` と突き合わせて worker の再インストールが必要かを判断できます。
+#### 質問に答えるときの背景を渡す (SourceVaultRealtimeAddContext)
+
+```mathematica
+(* 発表全体の要約などを、質問に答えるときの背景として音声会話へ渡す *)
+SourceVaultRealtimeAddContext[
+  "この発表は「計算と自然」第33回で、可逆計算とフレドキンゲートを扱う。..."]
+```
+
+`SourceVaultRealtimeAddContext[text]` は、質問に答えるときの背景 (発表全体の要約など) を音声会話に渡します (ワーカー 1.9 以降)。GPT-Live では 1 回に渡せる量に上限があるため、ワーカーが上限ごとに分けて順に渡します。**読み上げ中に送ると読み上げが遅れる**ので、読み上げの無いとき (会話開始直後や質問タイムなど) に使ってください。内部的にはワーカーへ `context` コマンド (`<|"command" -> "context", "text" -> text|>`) を送るだけで、長い背景を渡してもカーネルはブロックしません。
+
+#### 診断用の変数
+
+| 変数 | 既定 | 説明 |
+|---|---|---|
+| `$SourceVaultRealtimeTrace` | `False` | `True` にすると、`SourceVaultRealtimeStart` の各段階 (key / nbaccess / process / runtime / waited) やステータスバー更新・状態 polling (`Pump`) の出入りを `$TemporaryDirectory/slideworkflow-trace.log` に時刻付きで追記する (SlideWorkflow の `$SlideTrace` と同じファイル。各行は `SV:` で始まる)。FE を使わずに記録するので、FE とのやり取りで止まる箇所の切り分けに使える。既定では何も書かない |
+| `$SourceVaultRealtimeHoldFE` | `False` | `True` の間、状態 polling (`Pump`) は FE へ触る処理を含む回を飛ばす。呼び出し側 (SlideWorkflow のボタン) が FE とやり取りしている間に、割り込みから FE を呼ぶと互いの返事を待ち合って止まるため、呼び出し側が立てて使う (2026-09-28) |
+
+> **ワーカーの標準エラー出力の読み方 (内部メモ):** ワーカーは音声デバイス・WebSocket の間は生きているため、標準エラーを素の `ReadString` で読むと終わり (EOF = ワーカー終了) を待ってカーネルがそこで止まります。現在は `ReadString[..., EndOfBuffer]` で「溜まっている分だけ」を読むので、ワーカーが動いたままでも止まりません。`status` が `error` のときの後片付けでは、ワーカーが終了済みの場合に限って残りを読み、読み終えたら接続を閉じます (閉じた後の接続は読めない)。
+
+> **ワーカー契約バージョン:** `$SourceVaultRealtimeWorkerVersion` (現在 `"1.10"`) は、この Wolfram パッケージが期待する Python worker のプロトコル版です。1.5 で GPT-Live (`--api live`) 対応、1.6 で発表中の割り込み (narrate の `interrupt`/`slide`)、1.7 で二段階スクリプト配信とモデルによる回答組み立てが追加されました。1.8 で資料を引いた答えや定型の一言 (非公開のため答えられない等) が質問者の言語に合わせるようになりました。1.9 で質問に答えるときの背景を渡せるようになりました (`SourceVaultRealtimeAddContext`)。1.10 で英語・ジャワ語などラテン文字の原稿を「. 」で文に分け、トークン数で分割するようになりました (以前は 260 文字で単語の途中から切れ、同じ枚を読み直し続けた)。`SourceVaultRealtimeStatus[]["WorkerVersion"]` と突き合わせて worker の再インストールが必要かを判断できます。
+
+質問ハンドラ (`$SourceVaultRealtimeAskHandler`) が非同期 (LLM など) で答える場合は、ハンドラが先に受け取りだけ返し、後から `SourceVaultRealtimeAskResult` で答えを渡します。
 
 詳細な全オプション・戻り値スキーマは `api_realtime.md` / `api_kb.md` / `api_slidedeck.md` / `api_talkqa.md` を参照してください。

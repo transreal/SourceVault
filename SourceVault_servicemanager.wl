@@ -309,12 +309,24 @@ $SourceVaultServiceFastPoll::usage =
 $SourceVaultServiceFastPollSeconds::usage =
   "$SourceVaultServiceFastPollSeconds は fast poll の周期秒 (既定 0.05)。";
 
+SourceVaultRefreshCLIMCP::usage =
+  "SourceVaultRefreshCLIMCP[] は headless claude CLI 向けの MCP 登録 (ClaudeRegisterCLIMCPServer) をやり直す。\n" <>
+  "外部パッケージが SourceVaultMCPRegisterTools で tool を足した後に呼ぶと、その AllowedTools / PromptDirective が合流する (2026-09-22)。";
+$SourceVaultServiceExtraPackages::usage =
+  "$SourceVaultServiceExtraPackages は service kernel の起動スクリプトが SourceVault 群の後に追加でロードする\n" <>
+  "パッケージファイル名 (MyPackages 直下からの相対) のリスト (2026-09-22)。他パッケージ (例: ResoLoop.wl) がロード時に\n" <>
+  "自分を追加する。存在しないファイルは黙って飛ばす。反映には service の再起動が要る。";
+
 Begin["`ServiceManagerPrivate`"]
 
 If[! BooleanQ[SourceVault`$SourceVaultServiceFastPoll],
   SourceVault`$SourceVaultServiceFastPoll = True];
 If[! NumericQ[SourceVault`$SourceVaultServiceFastPollSeconds],
   SourceVault`$SourceVaultServiceFastPollSeconds = 0.05];
+If[! ListQ[SourceVault`$SourceVaultServiceExtraPackages],
+  SourceVault`$SourceVaultServiceExtraPackages = {}];
+iSMExtraServicePackages[] := DeleteDuplicates @ Select[
+  Replace[SourceVault`$SourceVaultServiceExtraPackages, Except[_List] -> {}], StringQ];
 
 iSMFastPollQ[] := TrueQ[SourceVault`$SourceVaultServiceFastPoll];
 iSMFastPollSeconds[] := With[{s = SourceVault`$SourceVaultServiceFastPollSeconds},
@@ -2304,6 +2316,13 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
            ClaudeOrchestrator 本体には依存しない (弱結合)。ロード時の注入復元は
            ClaudeDirectives 不在の service では no-op。存在ガードで fail-soft。 *)
         "  With[{ypath = FileNameJoin[{", q[pkgRoot], ", \"ClaudeOrchestrator_turnwiki.wl\"}]}, If[FileExistsQ[ypath], Get[ypath]]];\n",
+        (* 外部パッケージ (2026-09-22): $SourceVaultServiceExtraPackages に載った .wl を
+           SourceVault 群の後に load する (例: ResoLoop.wl → MCP tool を自己登録)。
+           存在ガードで fail-soft。SourceVault は個別パッケージ名を知らない。 *)
+        Sequence @@ Map[
+          Function[name, StringJoin["  With[{epath = FileNameJoin[{", q[pkgRoot], ", ", q[name],
+            "}]}, If[FileExistsQ[epath], Get[epath]]];\n"]],
+          iSMExtraServicePackages[]],
         "];\n",
         "SourceVault`$SourceVaultCoreRoot = ", q[root], ";\n",
         (* root snapshot 注入 (spec v6 §3.7): service kernel は注入値を最優先する。
@@ -3709,6 +3728,23 @@ iRegisterMCPPaletteControl[];
    - PromptDirective: 「本システムに関する情報はまず MCP 経由で解決し、
      見つからなければ次の方策へ」という解決順序方針を prompt に注入する。
    ============================================================ *)
+(* 外部登録 tool (SourceVaultMCPRegisterTools / $SourceVaultMCPExternalTools) の pre-allow 名と
+   方針文を合流させる (2026-09-22)。AllowedTools は Function にして呼び出し時に評価する
+   (claudecode の iCLIMCPServerConfigs が Function を受ける)。 *)
+iSMExternalMCPSpecs[] :=
+  If[AssociationQ[SourceVault`$SourceVaultMCPExternalTools],
+    Select[Values[SourceVault`$SourceVaultMCPExternalTools], AssociationQ], {}];
+iSMExternalMCPAllowedTools[] := Flatten[Map[
+  Function[s, Select[Replace[Lookup[s, "AllowedTools", {}], Except[_List] -> {}], StringQ]],
+  iSMExternalMCPSpecs[]]];
+iSMWithExternalMCPDirectives[base_] := Module[{ext},
+  ext = Select[
+    Map[Function[s, With[{d = Lookup[s, "PromptDirective", None]},
+      Which[StringQ[d], d, Head[d] === Function, Quiet @ Check[d[], ""], True, ""]]],
+      iSMExternalMCPSpecs[]],
+    StringQ[#] && StringTrim[#] =!= "" &];
+  If[ext === {}, base, StringJoin[If[StringQ[base], base, ""], "\n", StringRiffle[ext, "\n"]]]];
+
 iRegisterSourceVaultCLIMCP[] := If[
   Length[Names["ClaudeCode`ClaudeRegisterCLIMCPServer"]] > 0,
   Quiet @ Check[
@@ -3730,7 +3766,10 @@ iRegisterSourceVaultCLIMCP[] := If[
          Mathematica 側で承認した grant に限られる。ここに無いと --print モード
          (対話承認不可) では申請そのものが拒否され、MCP が案内する
          「grant を申請してから本文を取得」経路が構造的に成立しなかった。 *)
-      "AllowedTools" -> {
+      (* 2026-09-22: 外部登録 tool を合流させた List で登録する (Function にすると Function 非対応の
+         claudecode では {} になり SourceVault の全 tool が CLI から使えなくなる。実機で踏んだ)。
+         外部登録が後から来たら SourceVaultRefreshCLIMCP[] で再登録する。 *)
+      "AllowedTools" -> Join[{
         "sourcevault_catalog", "sourcevault_search", "sourcevault_get",
         "sourcevault_commit_log", "sourcevault_directives",
         "sourcevault_fs_list", "sourcevault_fs_read",
@@ -3739,8 +3778,8 @@ iRegisterSourceVaultCLIMCP[] := If[
         "sourcevault_oops_status", "sourcevault_oops_search_threads",
         "sourcevault_oops_thread",
         "sourcevault_mail_status", "sourcevault_mail_search_threads",
-        "sourcevault_mail_thread"},
-      "PromptDirective" -> Function[
+        "sourcevault_mail_thread"}, iSMExternalMCPAllowedTools[]],
+      "PromptDirective" -> Function[iSMWithExternalMCPDirectives @
         If[$Language === "Japanese",
           "本システム (SourceVault / claudecode / github / NBAccess 等の\n" <>
           "パッケージ群、およびそのデータ・履歴・ドキュメント) に関する情報は、\n" <>
@@ -3769,6 +3808,9 @@ iRegisterSourceVaultCLIMCP[] := If[
     Null],
   Missing["NoClaudeCode"]];
 iRegisterSourceVaultCLIMCP[];
+
+(* 外部パッケージが tool を登録した後に呼ぶ再登録 (AllowedTools を List で登録し直す) *)
+SourceVaultRefreshCLIMCP[] := iRegisterSourceVaultCLIMCP[];
 
 (* ============================================================
    §9.8 channel pipeline / §13 Phase 6 mail・Discord / §17.9 OutputGate

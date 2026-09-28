@@ -1,7 +1,3 @@
-### $SourceVaultVersion
-型: String
-パッケージバージョン文字列。現行値 `"2026-05-29-stage-9-p1.5-model-registry-autoupdate"`。
-
 ### $SourceVaultRoots
 型: Association
 物理 root ディレクトリマッピング。Keys: `"PrivateVault"` | `"CloudMirror"` | `"Tmp"` | `"AttachmentMirror"` | `"ExternalOwned"`。PrivateVault が authoritative storage で cloud LLM / Claude Code CLI には直接読ませない。CloudMirror / AttachmentMirror は materialized projection のみ。
@@ -49,7 +45,7 @@ vault 内の全 source ID リスト。
 ### SourceVaultSources[query, opts]
 ingest 済み全ソースの共通スキーマ行を `List[Association]` で返す (core)。arXiv は論文タイトル・著者・出版日を arXiv API から自動取得して meta にキャッシュ。Web ページは HTML `<title>`、ローカルファイルはファイル名を Title に出す。query は Title/Authors/Summary/URL/Id 等の部分一致 (`""` または省略で全件)。
 → List[Association] | Dataset | Grid (後方互換)
-Options: `"Limit"` -> Automatic|n (データ件数の上限。表示件数は View 側), `"Kind"` -> All|`"arxiv"`|`"web"`|`"local"`, `"FetchMetadata"` -> Automatic (未取得のみ取得)|False (network なし)|True (再取得), `"Since"`/`"Until"`/`"On"` -> ingest 日での絞り込み (日付文字列 `"yyyy-mm-dd"` / Today / DateObject。`"On"` は単日、`"Since"`/`"Until"` は範囲、両端含む), `"Author"` -> 著者名の部分一致, `"Format"` -> `"Rows"` (既定)|`"Dataset"`|`"Grid"` (View へ委譲)
+Options: `"Limit"` -> Automatic|n (データ件数の上限。表示件数は View 側), `"Kind"` -> All|`"arxiv"`|`"web"`|`"local"`, `"FetchMetadata"` -> Automatic (未取得のみ取得)|False (network なし)|True (再取得), `"Since"`/`"Until"`/`"On"` -> None (ingest 日での絞り込み。日付文字列 `"yyyy-mm-dd"` / Today / DateObject。`"On"` は単日、`"Since"`/`"Until"` は範囲、両端含む), `"Author"` -> None (著者名の部分一致), `"Format"` -> `"Rows"` (既定)|`"Dataset"`|`"Grid"` (View へ委譲)
 例: `SourceVaultSources["", "Kind" -> "arxiv", "On" -> Today]` (今日 ingest した arXiv)
 注意: 対象は SourceVault ingest 済みソース (src-* record) のみ。PDF 検索索引 (PDFIndex collection。学生便覧等) は含まれない — それらの横断は SourceVaultSummaries (pdfindex provider)、本文検索は SourceVaultSearch[query, "Group" -> name] を使うこと。
 
@@ -101,14 +97,14 @@ Options: `"Fresh"` -> False (True で保存版を無視し record から新規�
 ingest 済みソースの raw ファイルを ContentHash から現 PC の vault パスを live 再算出して SystemOpen で開く。別 PC (Dropbox 同期) でも開ける。SourceVaultSourcesView / SourceVaultArXivView の「▶ 開く」ボタンの実体。
 → なし (SystemOpen 副作用)
 
-### SourceVaultSourceRow[sourceId] → Association
+### SourceVaultSourceRow[sourceId, opts] → Association
 1 ソースの共通スキーマ行を返す。キー: `"Kind"`, `"Id"`, `"URI"` (sv://snapshot/sha256/<hex>), `"Title"`, `"Authors"`, `"Published"`, `"Summary"`, `"URL"`, `"File"`, `"Date"`, `"PrivacyLevel"`。SourceVaultEagleSummaryRow と同じキーを共有する。混在データセットの join/参照キーとして URI を使う。
 Options: `"FetchMetadata"` -> Automatic
 
 ### SourceVaultSummaries[query, opts]
 SourceVault が抱えるデータ全体 (ingest 済みソース + Eagle 保存済みサマリー + メール + PDF 検索索引ドキュメント (pdfindex provider。学生便覧等) 等、登録 provider 横断) を検索し、共通スキーマ行を `List[Association]` で返す (core)。
 → List[Association] | Dataset | Grid (後方互換)
-Options: `"Providers"` -> All|`{"sources", "eagle", "mail", "pdfindex", "workflow", ...}`, `"Kind"` -> All|`{"web", "arxiv", "local", "mail", "eagle", ...}` (行の種別。**provider 非依存に効く** — `"Kind"` を無視する provider の行も落とす。`"Providers"` に provider 名でない語 (`"web"` 等) を書いた場合も種別指定として解釈する。どちらでもない語は `SourceVaultSummaries::unkfilter` で知らせる), `"Limit"`, `"Since"`/`"Until"`/`"On"` -> 登録/生成日での絞り込み, `"Author"` -> 著者部分一致, `"FetchMetadata"`, `"Format"` -> `"Rows"` (既定)|`"Dataset"`|`"Grid"` (View へ委譲)
+Options: `"Providers"` -> All|`{"sources", "eagle", "mail", "pdfindex", "workflow", ...}`, `"Kind"` -> All|`{"web", "arxiv", "local", "mail", "eagle", ...}` (行の種別。**provider 非依存に効く** — `"Kind"` を無視する provider の行も落とす。`"Providers"` に provider 名でない語 (`"web"` 等) を書いた場合も種別指定として解釈する。どちらでもない語は `SourceVaultSummaries::unkfilter` で知らせる), `"Limit"` -> Automatic, `"Since"`/`"Until"`/`"On"` -> None (登録/生成日での絞り込み), `"Author"` -> None (著者部分一致), `"FetchMetadata"` -> Automatic, `"Format"` -> `"Rows"` (既定)|`"Dataset"`|`"Grid"` (View へ委譲)
 例: `SourceVaultSummaries["可逆計算"]`、`SourceVaultSummariesView["便覧", "Providers" -> {"pdfindex"}]`
 pdfindex 行の本文検索 (チャンク単位・gate 付き) は SourceVaultSearch[query, "Group" -> name] を使うこと。
 
@@ -185,7 +181,7 @@ Options: `"LegacyPublicWeb"` -> True ((b) を対象にするか), `"RecheckTrust
 
 ### SourceVaultSpan[snapshotOrRef, opts] → Association
 SourceSpan association を作る。snapshotOrRef は SnapshotId / SourceRef / file path のいずれか。
-Options: `"Pages"` -> All | Integer | `{1,3,5}`, `"Role"` -> `"ReferenceContext"` | `"Evidence"` | `"ExtractionInput"`, `"Purpose"` -> `"Generic"` (既定) | `"LaTeXMathFormatting"` | String, `"EquationLabels"` -> Missing["NotSpecified"] (数式ラベルの明示指定、Locator に格納)
+Options: `"Pages"` -> All | Integer | `{1,3,5}`, `"Role"` -> `"ReferenceContext"` (既定) | `"Evidence"` | `"ExtractionInput"`, `"Purpose"` -> `"Generic"` (既定) | `"LaTeXMathFormatting"` | String, `"EquationLabels"` -> Missing["NotSpecified"] (数式ラベルの明示指定、Locator に格納)
 
 ### SourceVaultContext[sourceSpan, opts]
 sourceSpan の plaintext を取り出し、NBAuthorize の判定付きで LLM 文脈として返す。RequireApproval も block する。
@@ -223,7 +219,7 @@ Options: `"Force"` -> False
 ### SourceVaultResolvePath[ref, opts]
 source/snapshot の物理 path を返す。`"Tier"` -> `"PrivateVault"` は local kernel / maintenance 専用。cloud LLM 向けには SourceVaultMaterializeForSink を使うこと。
 → String
-Options: `"Tier"` -> `"PrivateVault"` 等
+Options: `"Tier"` -> `"PrivateVault"` (既定)
 
 ### SourceVaultObjectSpec[ref, opts] → Association
 source/snapshot を NBAuthorize が受け取れる object spec association に変換する。
@@ -382,11 +378,13 @@ event Association を `events/source-events.jsonl` に append する。event に
 指定 provider に登録された選択可能な全モデル ID リスト。SourceVaultResolve が intent 単位の最適 1 件を返すのに対し、これは catalog を列挙する (例: パレットのモデル選択)。compiled registry を優先し、無ければ seed に fallback。Availability が Unavailable のエントリは除外。
 Options: `"Channel"` -> `"public"` (既定)|`"private"`, `"AllowSeed"` -> True
 
-### SourceVaultModelContextLength[provider, modelId] → Integer | None
-モデルに紐づく ContextLength を返す。`SourceVaultSetModel[..., "ContextLength" -> n]` で永続化された値。LM Studio 等ローカル LLM の context_length に使う。未設定なら None。
+### SourceVaultModelContextLength[provider, modelId, opts] → Integer | None
+モデルに紐づく ContextLength を返す。`SourceVaultSetModel[..., "ContextLength" -> n]` で永続化された値。LM Studio 等ローカル LLM の context_length に使う。modelId 完全一致エントリのみ参照 (fallback なし)。未設定なら None。
+Options: `"Channel"` -> `"public"` (既定)|`"private"`
 
-### SourceVaultModelIntegrations[provider, modelId] → List | None
-モデルに紐づく LM Studio MCP の integrations リストを返す。`SourceVaultSetModel[..., "Integrations" -> {...}]` で永続化された値。LM Studio `/api/v1/chat` の integrations パラメータに使う。MCP ID (`"mcp/exa"` 等) をコードにハードコードせず SourceVault ストアに永続化するための機構。未設定なら None。
+### SourceVaultModelIntegrations[provider, modelId, opts] → List | None
+モデルに紐づく LM Studio MCP の integrations リストを返す。`SourceVaultSetModel[..., "Integrations" -> {...}]` で永続化された値。LM Studio `/api/v1/chat` の integrations パラメータに使う。MCP ID (`"mcp/exa"` 等) をコードにハードコードせず SourceVault ストアに永続化するための機構。modelId 完全一致エントリのみ参照。未設定なら None。
+Options: `"Channel"` -> `"public"` (既定)|`"private"`
 
 ### SourceVaultListRegistries[opts] → Association
 登録済み registry topic と channel を返す。
@@ -433,8 +431,8 @@ compiled model registry を削除し、次回アクセス時に seed (コード�
 Options: `"Channel"` -> `"public"` (既定)
 
 ### SourceVaultSetModelIntent[variable, spec]
-SourceVault が選択するモデルの intent 割り当てを変更する。variable: `"$ClaudeModel"` | `"$ClaudeDocModel"` | `"$ClaudeAdvisaryModel"` | `"$ClaudePrivateModel"` | `"$ClaudeFallbackModels"`。spec: `{provider, intent}` (例 `{"anthropic", "heavy"}`)、FallbackModels は `{{provider,intent}, ...}`。設定後 `SourceVaultAssignClaudeModels[]` を呼んで実変数に反映する。$NBApprovalHeads に登録され ClaudeEval 経由では Hold -> Approve が必要。
-→ Association
+SourceVault が選択するモデルの intent 割り当てを変更する。variable: `"$ClaudeModel"` | `"$ClaudeDocModel"` | `"$ClaudeAdvisaryModel"` | `"$ClaudePrivateModel"` | `"$ClaudeFallbackModels"`。spec: `{provider, intent}` (例 `{"anthropic", "heavy"}`)、FallbackModels は `{{provider,intent}, ...}`。2 要素目は intent 名のほか、catalog に実在する具体モデル ID (例 `{"claudecode", "claude-opus-5"}`) または `"Automatic"` (provider CLI 既定) も指定でき、intent 解決を経ずそのまま採用・永続化される。変更はディスクに永続化され、内部で `SourceVaultAssignClaudeModels["Force" -> True]` が呼ばれて実変数に即反映される。$NBApprovalHeads に登録され ClaudeEval 経由では Hold -> Approve が必要。未知の variable は `<|"Status" -> "Failed", "Reason" -> "UnknownVariable"|>`。
+→ Association (`"Status" -> "OK"`, `"Variable"`, `"Spec"`, `"Note"`)
 例: `SourceVaultSetModelIntent["$ClaudeModel", {"anthropic", "heavy"}]`
 
 ### SourceVaultModelIntentMap[] → Association
@@ -447,7 +445,7 @@ intent マッピング (SourceVault) と信頼ローカルサーバ (`NBAccess`N
 Options: `"Verbose"` -> False (既定), `"Force"` -> False (既定。True で $ClaudeAdvisaryModel のセッション上書き保護を無視して強制反映。SourceVaultSetModelIntent が内部でこれを使う)
 
 ### SourceVaultRefreshModelRegistry[opts]
-クラウド (anthropic/openai) とローカル (LM Studio) のエンドポイントからモデル一覧を取得し compiled model registry を更新する。クラウド API キーは `NBAccess`NBGetAPIKey` 経由で取得し、キーが無い provider はスキップ。取得エントリは Source -> "auto-fetch" でマークし、既存の seed/manual エントリは温存してマージする。
+クラウド (anthropic/openai) とローカル (LM Studio) のエンドポイントからモデル一覧を取得し compiled model registry を更新する。クラウド API キーは `NBAccess`NBGetAPIKey` 経由で取得し、キーが無い provider はスキップ。取得エントリは Source -> "auto-fetch" でマークし、既存の seed/manual エントリは温存してマージする。registry エントリ形式: `{Provider, ModelId, Endpoint, Class, Availability, Source}`。
 → `<|"Status" -> _, "FetchedCount" -> _, "RegistryTotal" -> _, "PerProvider" -> _, "RegistryPath" -> _|>`
 Options: `"Providers"` -> All (既定), `"IncludeCloud"` -> Automatic, `"DryRun"` -> False
 
@@ -538,8 +536,8 @@ index 済み notebook を検索する。LLM 不要の deterministic query。
 → `{record, ...}` (各 record は Association)
 record キー: `"Path"` / `"OriginalPath"` (同値エイリアス), `"Title"`, `"NotebookRef"`, `"Header"` (Keywords/Deadline/NextReview/Status/Title), `"Todos"` (`{<|"Text", "Status"(Open|Done|Pass), ...|>, ...}`), `"TodoCount"` / `"OpenTodoCount"` / `"DoneTodoCount"` / `"PassTodoCount"`, `"ReviewState"` / `"DeadlineState"`, `"Lint"`
 Options:
-- `"OpenTodos"` -> True | False (未完了 Todo を含む / 含まない notebook)
-- `"NextReview"` -> `"Today"` | `"Overdue"` | `"ThisWeek"` | `"DueSoon"` | `<|"From" -> _, "To" -> _|>`  (`"Today"` は厳密に今日のみ、`"ThisWeek"`/`"DueSoon"` は今日±7 日以内で遠い過去は除外、`"Overdue"` は期限切れ全部)
+- `"OpenTodos"` -> True | False (未完了 Todo を含む / 含まない notebook。既定 Missing[] = 絞り込まない)
+- `"NextReview"` -> `"Today"` | `"Overdue"` | `"ThisWeek"` | `"DueSoon"` | `<|"From" -> _, "To" -> _|>`  (`"Today"` は厳密に今日のみ、`"ThisWeek"`/`"DueSoon"` は今日±7 日以内で遠い過去は除外、`"Overdue"` は期限切れ全部。既定 Missing[])
 - `"Deadline"` -> `"Today"` | `"Overdue"` | `"ThisWeek"` | `"DueSoon"` | `<|"From" -> _, "To" -> _|>`
 - `"Keywords"` -> `{_String, ...}` | String (部分一致 OR。検索対象: Header.Keywords + Header.Title + FileBaseName[Path] + 親フォルダ名)
 - `"Title"` -> String | `{_String, ...}` (`"Keywords"` と同じ検索プールを見るエイリアス)

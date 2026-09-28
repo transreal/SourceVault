@@ -56,6 +56,9 @@ LLM 応答 (```json フェンス可) から KG。ノード 0 なら Failure。
 
 ### SourceVaultKGSave[kg] / SourceVaultKGLoad[graphId] / SourceVaultKGList[] / SourceVaultKGDelete[graphId]
 
+### SourceVaultKGRepairMojibake[] → <|"Checked", "Fixed", "Files"|>
+保存済みの KG (`graphs/`) と周辺知識の書庫 (`background/`) のうち、UTF-8 バイトを 1 文字ずつ読んだ形の文字化け (`gawé` → `gawÃ©` など) を直して書き戻す。取り込み (`SourceVaultKGFromJSON` / `SourceVaultKGMerge`) は入口で同じ修復を行うので通常は不要。
+
 ## 聴き手
 
 ### SourceVaultKGAudience[spec] → Association
@@ -135,7 +138,3 @@ Options: `"Order" -> False` (True で順序辺だけに絞る), `"Labels" -> Tru
 ## 検証
 
 `test codes/SourceVault_knowledgegraph_test.wls` (headless、84 チェック。ソースは `_src.wls`、`\:XXXX` エスケープ版を実行)。
-
----
-
-Summary of sync changes: added the previously-undocumented `SourceVaultKGRoot[]` function, filled in missing `Options[...]` for `SourceVaultKGGraph`, `SourceVaultKGLevelSummaries`, `SourceVaultKGBackgroundLink`, `SourceVaultKGBackgroundSearch`, and `SourceVaultKGSuggestPastSlides`, added the `"Edges"` option to `SourceVaultKGCompose`, and updated `SourceVaultKGText`'s key list to include `Lead`/`Details` (added per source in v1.26). All curated prose (design notes, v1.26–v1.30 narratives, worked-example explanations) is preserved unchanged.

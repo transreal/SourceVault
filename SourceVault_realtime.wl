@@ -165,6 +165,10 @@ $SourceVaultRealtimeAskHandler::usage =
   "要求 <|\"id\", \"query\", \"allowWeb\"|> を受け取り、<|\"status\", \"answer\", \"route\", \"needWeb\", ...|> を返す。\n" <>
   "SourceVault_talkqa がロード時に登録する。None のときは ask_sourcevault ツールを出さない。";
 
+SourceVaultRealtimeAddContext::usage =
+  "SourceVaultRealtimeAddContext[text] は質問に答えるときの背景 (発表全体の要約など) を音声会話に渡す (ワーカー 1.9 以降)。\n" <>
+  "GPT-Live では 1 回に渡せる量に上限があるので、ワーカーが分けて順に渡す。読み上げ中に送ると読み上げが遅れるので、読み上げの無いときに使う。";
+
 SourceVaultRealtimeAskResult::usage =
   "SourceVaultRealtimeAskResult[id, result] は資料問い合わせの結果をワーカーへ返す (通常は handler 経由で自動)。";
 
@@ -209,7 +213,7 @@ $iSVRTPackageDirectory = Quiet @ Check[DirectoryName[$InputFileName], ""];
    入れ直したい。利用側 (SlideWorkflow) はこの値と Status の "WorkerVersion" を比べる。
    1.5 = GPT-Live (--api live)、1.6 = 発表中の割り込み (narrate の interrupt / slide)、
    1.7 = 原稿は先に文脈として渡してから読ませる / 答えはモデルが資料から組み立てる *)
-SourceVault`$SourceVaultRealtimeWorkerVersion = "1.7";
+SourceVault`$SourceVaultRealtimeWorkerVersion = "1.10";
 
 (* ---- 音声会話モデルの登録簿 ----
    組み込みは毎回ここで作り直す (再ロードで新しいモデルが見えるように)。
@@ -489,11 +493,21 @@ iSVRTSend[command_Association] := Module[{payload, temporary, bytes},
 
 (* 宛先が閉じられていたら書かない。ただし Notebooks[] が取れないときは
    「閉じた」ではなく「判定材料が無い」なので、書きにいって静かに失敗させる *)
+(* 診断用の記録 (SlideWorkflow の $SlideTrace と同じファイル)。FE を使わない *)
+iSVRTTrace[tag_String] := If[TrueQ[SourceVault`$SourceVaultRealtimeTrace], Quiet @ Check[
+  Module[{strm = OpenAppend[FileNameJoin[{$TemporaryDirectory, "slideworkflow-trace.log"}], CharacterEncoding -> "UTF-8"]},
+    If[Head[strm] === OutputStream,
+      WriteString[strm, DateString[{"Hour", ":", "Minute", ":", "Second", ".", "Millisecond"}] <> " SV:" <> tag <> "\n"];
+      Close[strm]]], Null]];
+
 iSVRTSetStatusBar[line_] := Module[{nbs},
   If[Head[$iSVRTNotebook] =!= NotebookObject, Return[Null]];
+  iSVRTTrace["StatusBar Notebooks >"];
   nbs = Quiet[Notebooks[]];
+  iSVRTTrace["StatusBar Notebooks <"];
   If[ListQ[nbs] && ! MemberQ[nbs, $iSVRTNotebook], Return[Null]];
   Quiet[CurrentValue[$iSVRTNotebook, WindowStatusArea] = line];
+  iSVRTTrace["StatusBar set <"];
   Null];
 
 iSVRTPumpStop[] := (
@@ -507,6 +521,10 @@ iSVRTPumpStart[seconds_] := (iSVRTPumpStop[];
 (* ワーカーが出した行だけをステータスバーへ移す。カーネル側で文面を作らないのは、
    表示と実際の状態がずれないようにするため (行の出所は 1 つ)。 *)
 iSVRTPump[] := Module[{state, seq, line},
+  (* 呼び出し側 (SlideWorkflow のボタン) が FE とやり取りしている間はこの回を飛ばす。
+     割り込みから FE を呼ぶと互いの返事を待ち合って止まる (2026-09-28) *)
+  If[TrueQ[SourceVault`$SourceVaultRealtimeHoldFE], Return[Null]];
+  iSVRTTrace["Pump >"];
   state = iSVRTReadState[];
   seq = Lookup[state, "statusSeq", None];
   If[NumericQ[seq] && seq =!= $iSVRTLastSeq,
@@ -516,6 +534,7 @@ iSVRTPump[] := Module[{state, seq, line},
   iSVRTDispatchSlideRequest[state];
   iSVRTDispatchAskRequest[state];
   If[! iSVRTRunningQ[], iSVRTPumpStop[]];
+  iSVRTTrace["Pump <"];
   Null];
 
 (* 声からのスライド表示要求。FE を触れるのはカーネルだけなので、ワーカーは
@@ -551,6 +570,8 @@ iSVRTDispatchAskRequest[state_Association] := Module[{req, id, handler, res},
       <|"status" -> "error", "message" -> "資料を引ける相手がいません。"|>];
     Return[Null]];
   res = Quiet[handler[req]];
+  (* 受け口が後から SourceVaultRealtimeAskResult で答える (非同期の LLM など) *)
+  If[res === "Deferred", Return[Null]];
   SourceVaultRealtimeAskResult[id,
     If[AssociationQ[res], res,
       <|"status" -> "error", "message" -> "資料を引けませんでした。"|>]];
@@ -639,8 +660,10 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
       "音声会話は既に動いています (SourceVaultRealtimeStop[] で終了)。",
       <|"Status" -> SourceVaultRealtimeStatus[]|>]]];
 
+  iSVRTTrace["Start runtime >"];
   runtime = SourceVaultRealtimeRuntime[];
   python = iSVRTResolvePython[OptionValue["Python"]];
+  iSVRTTrace["Start runtime <"];
   If[! StringQ[python] || runtime["Status"] =!= "OK",
     Return[iSVRTFailure["SourceVaultRealtimeUnavailable",
       "音声会話ワーカーを実行できません。",
@@ -651,6 +674,7 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
     Return[iSVRTFailure["SourceVaultRealtimeNBAccessUnavailable",
       "NBAccess.wl を読み込めません (API キーの取得に必要)。"]]];
 
+  iSVRTTrace["Start nbaccess <"];
   nb = iSVRTResolveNotebook[OptionValue["Notebook"]];
   If[TrueQ[OptionValue["RequirePaidAPIApproval"]],
     If[! MatchQ[nb, _NotebookObject],
@@ -671,6 +695,7 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
     Return[iSVRTFailure["SourceVaultRealtimeAPIKeyMissing",
       "OPENAI_API_KEY を NBAccess / SystemCredential から取得できませんでした。"]]];
 
+  iSVRTTrace["Start key <"];
   model = Replace[OptionValue["Model"], Automatic :> SourceVault`$SourceVaultRealtimeModel];
   If[! StringQ[model] || StringTrim[model] === "", model = "gpt-realtime-2.1"];
   (* どちらの API で話すか: 明示が無ければモデルから (gpt-live-* = Live) *)
@@ -739,6 +764,7 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
 
   (* 環境も渡さない ($Language が Japanese だと StartProcess ごと落ちる)。
      キーは標準入力から 1 行だけ渡す: 環境にもディスクにも残さない *)
+  iSVRTTrace["Start process >"];
   process = Quiet @ Check[StartProcess[command], $Failed];
   If[MatchQ[process, _ProcessObject],
     Quiet @ Check[WriteLine[process, apiKey], Null]];
@@ -764,12 +790,16 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
     If[AssociationQ[state] && Lookup[state, "status", ""] === "error", Break[]];
     If[AssociationQ[state] && KeyExistsQ[state, "connected"], Break[]]];
   state = iSVRTReadState[];
+  iSVRTTrace["Start waited <"];
   (* Module を挟まずに書くのは、Return が最内 Module から返ってしまい
      失敗しても後続が走ってしまうため (VRCRealtime で踏んだ形) *)
   If[ProcessStatus[process] =!= "Running" ||
       (AssociationQ[state] && Lookup[state, "status", ""] === "error"),
+    (* 溜まっている分だけ読む (EndOfBuffer)。status が error でもワーカーは後片付け
+       (音声デバイス・WebSocket) の間は生きていて、素の ReadString は標準エラーの終わり
+       (= 終了) を待つのでカーネルがそこで止まる。止めた後は接続が消えて読めない *)
     workerError = Quiet @ Check[
-      ReadString[ProcessConnection[process, "StandardError"]], ""];
+      ReadString[ProcessConnection[process, "StandardError"], EndOfBuffer], ""];
     Quiet[KillProcess[process]];
     $iSVRTProcess = None;
     Return[iSVRTFailure["SourceVaultRealtimeWorkerDied",
@@ -869,6 +899,10 @@ SourceVaultRealtimeSay[text_String] :=
 
 SourceVaultRealtimeSetInstructions[text_String] :=
   iSVRTSend[<|"command" -> "instructions", "text" -> text|>];
+
+(* 質問に答えるときの背景 (発表全体など)。GPT-Live は上限ごとに分けて順に渡す *)
+SourceVaultRealtimeAddContext[text_String] :=
+  iSVRTSend[<|"command" -> "context", "text" -> text|>];
 
 SourceVaultRealtimeSetVerbosity[level_] := (
   SourceVault`$SourceVaultRealtimeVerbosity = level;
