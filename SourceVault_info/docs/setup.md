@@ -27,7 +27,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_realtime.wl` — クラウド経路の音声会話(OpenAI Realtime または GPT-Live、既定のマイク/スピーカーを使用)の解決層。GPT-Live は全二重(聞きながら話す)でスライド操作・SourceVault 問い合わせ等をクライアント側へ委譲する。質問に答えるときの背景(発表全体の要約など)は `SourceVaultRealtimeAddContext[text]` で音声会話へ渡せる(ワーカー 1.9 以降。現行ワーカーは 1.10)。ローカル音声資産の解決層である voice と対になるが、依存関係は起動時にだけ効くため独立してロードされる
 - `SourceVault_vision.wl` — ローカル視覚資産(人物検出・姿勢推定 ONNX モデル)の解決層
 - `SourceVault_slidedeck.wl` — 発表(スライド + 発表シナリオ)登録簿
-- `SourceVault_knowledgegraph.wl` — 発表用知識グラフ(KG)層。論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手(理解度)と時間(枚数・分)を与えて最小全域順序木・階層概要・詰め込み(packing)・言語別アウトラインを決定的に計算する(LLM は呼ばない)。kb(過去デッキ検索)・oopsseed(グラフ描画)に弱結合。取り込み・保存の入口で文字化け(UTF-8 のバイトを 1 文字ずつ読んだ形)を自動修復し、保存済みの KG・周辺知識の書庫は `SourceVaultKGRepairMojibake[]` で一括修復できる
+- `SourceVault_knowledgegraph.wl` — 発表用知識グラフ(KG)層。論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手(理解度)と時間(枚数・分)を与えて最小全域順序木・階層概要・詰め込み(packing)・言語別アウトラインを決定的に計算する(LLM は呼ばない)。kb(過去デッキ検索)・oopsseed(グラフ描画)に弱結合。取り込み・保存の入口で文字化け(UTF-8 のバイトを 1 文字ずつ読んだ形)を自動修復し、保存済みの KG・周辺知識の書庫は `SourceVaultKGRepairMojibake[]` で一括修復できる。スライド計画では 1 枚あたりの行数予算(長い行の折り返しも考慮)、図表の継承・再掲(図ごとに `"FigureReuse"` 回まで)、周辺知識の用語ミニ辞書(表への集約。`"GlossaryRows"`)、部の入口の橋渡し文、枚数の少ない節の畳み込みなどが決定的に処理される。計算ノートブック(下記 `SourceVault_papernb.wl`)も 1 つのストーリーとして KG(Kind = Notebook)に入れられる
 - `SourceVault_contracts.wl` — サブシステム間のコントラクト(型・不変条件)定義
 - `SourceVault_wiring.wl` — サブシステム間の配線・初期化
 - `SourceVault_simrun.wl` — シミュレーション実行との連携
@@ -45,7 +45,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_routineplan.wl` — ルーティン計画(routine plan)
 - `SourceVault_mailagenda.wl` — メールアジェンダ(オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層。maildb の既存派生 (Summary/Category/Priority/Deadline) を索引だけで読み、LLM/IMAP/シャード本体はロードしない。routineplan の日別カレンダー・「✉ 要対応メール」バンドに統合される)
 - `SourceVault_todo.wl` — Todo キャッシュ DB。notebook 内 TodoItem の状態と最終セル変更時刻(LastChanged)を蓄積するストア。routineplan / mailagenda からは弱結合(索引参照のみ)で使われる
-- `SourceVault_diagnostics.wl` — 横断診断 / SIEM 層(collector・store・doctor)。Wolfram ライセンス席の実測プローブ・カーネルプロセストポロジ分類・重複 MCP カーネル等の reclaimable capacity 検出・service manager health を集約する `SourceVaultSystemDoctor`・マシンローカル heartbeat を提供する。NBAccess / claudecode / Orchestrator / service manager / auto-trigger など各プロデューサ側は本ファイル不在でも壊れない弱結合(no-op fallback)で診断を投入する
+- `SourceVault_diagnostics.wl` — 横断診断 / SIEM 層(collector・store・doctor)。Wolfram ライセンス席の実測プローブ・カーネルプロセストポロジ分類・重複 MCP カーネル等の reclaimable capacity 検出・service manager health を集約する `SourceVaultSystemDoctor`・マシンローカル heartbeat を提供する。さらに、LLM 呼び出しログの取りこぼし・取り込み停止・破損行を検出するログ網羅性プローブ(`SourceVaultDiagnosticsLogCoverageProbe`)と、claudecode 側の Codex ヘルスプローブの取り込み・エスカレーションを担う。対話 FE カーネルでは診断 tick が自動起動する。NBAccess / claudecode / Orchestrator / service manager / auto-trigger など各プロデューサ側は本ファイル不在でも壊れない弱結合(no-op fallback)で診断を投入する
 - `SourceVault_servicemanager.wl` — サービス管理・Python proxy・headless dispatch。他パッケージ(例: ResoLoop.wl)が MCP tool を自己登録できるよう、SourceVault 群の後に追加でロードするパッケージファイルの一覧(`$SourceVaultServiceExtraPackages`)を service kernel の起動スクリプトへ橋渡しする
 - `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得
 - `SourceVault_mcp.wl` — MCP tool schema / dispatch ＋ sv:// オブジェクト解決。外部パッケージが tool を足せる拡張点(`SourceVaultMCPRegisterTools` / `$SourceVaultMCPExternalTools`)を提供する
@@ -54,7 +54,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_autotrigger.wl` — 自動トリガスケジューラ(対話 FE カーネルで自動起動)
 - `SourceVault_promptrouter.wl` — PromptRouter 拡張
 
-リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。暗号化・メールを使う場合は `SourceVault_crypto.wl` / `SourceVault_identity.wl` / `SourceVault_privacy.wl` / `SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` も、Eagle 統合を使う場合は `SourceVault_eagle.wl`(手動ロード)も同様に配置します(メール系サブファイルは各 Mail 関数の初回呼び出し時にオンデマンドで読み込まれます。`SourceVault_privacy.wl` は View/Core の正準プライバシー判定 exit(`SourceVaultPrivateView` / `SourceVaultNotePrivacyOf`)を提供し maildb より先にロードされます。弱結合のため未ロードでも maildb 自体は動作しますが、その場合は旧来のテキスト走査によるプライバシー判定にフォールバックします)。Eagle 保存論文の和訳ノートブックを生成・登録する機能(Eagle View の「訳」ボタン)を使う場合は `SourceVault_papernb.wl`(初回呼び出し時にオンデマンドロード)も同様に配置してください。
+リポジトリに同梱されている場合は同時に取得されます。別ファイルとして配布されている場合は、同じ要領で `$packageDirectory` へ配置してください。暗号化・メールを使う場合は `SourceVault_crypto.wl` / `SourceVault_identity.wl` / `SourceVault_privacy.wl` / `SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` も、Eagle 統合を使う場合は `SourceVault_eagle.wl`(手動ロード)も同様に配置します(メール系サブファイルは各 Mail 関数の初回呼び出し時にオンデマンドで読み込まれます。`SourceVault_privacy.wl` は View/Core の正準プライバシー判定 exit(`SourceVaultPrivateView` / `SourceVaultNotePrivacyOf`)を提供し maildb より先にロードされます。弱結合のため未ロードでも maildb 自体は動作しますが、その場合は旧来のテキスト走査によるプライバシー判定にフォールバックします)。取り込み済み論文(SourceVault に ingest した `src-...` / `sv://snapshot/...`、および Eagle 保存論文)の和訳ノートブックを生成・登録する機能(Eagle View の「訳」ボタン、`SourceVaultMakePaperNotebook`)と、素材から作った Mathematica の計算と結果の「計算ノートブック」の登録簿を使う場合は `SourceVault_papernb.wl`(初回呼び出し時にオンデマンドロード)も同様に配置してください。
 
 依存パッケージも同様にインストールできます。
 
@@ -128,6 +128,7 @@ $packageDirectory\
   SourceVault_workflowregistry.wl ← ワークフローレジストリ(本体ロード時に自動ロード)
   SourceVault_autotrigger.wl     ← 自動トリガスケジューラ(本体ロード時に自動ロード)
   SourceVault_promptrouter.wl    ← PromptRouter 拡張
+  SourceVault_papernb.wl         ← 和訳ノートブック / 計算ノートブック登録簿(初回呼び出し時にオンデマンドロード)
   NBAccess.wl
   claudecode.wl
   ...
@@ -135,7 +136,7 @@ $packageDirectory\
 
 > サブフォルダには配置しないでください(コード化ワークフローを置く `SourceVault_workflows/` のみ例外で、これは本体が自動で解決します)。
 >
-> 上記の `SourceVault_*.wl` はいずれも `SourceVault.wl` のロード時に同じディレクトリから自動的に読み込まれます(旧 `SourceVault_objectview.wl` は `mcp`/`eagle` に統合され廃止)。メール系サブファイル(`SourceVault_privacy.wl` / `SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` など)は、メール関数の初回呼び出し時にオンデマンドでロードされます(`SourceVault_privacy.wl` は maildb より先にロードされ、View/Core の正準プライバシー判定 exit を提供します)。
+> 上記の `SourceVault_*.wl` はいずれも `SourceVault.wl` のロード時に同じディレクトリから自動的に読み込まれます(旧 `SourceVault_objectview.wl` は `mcp`/`eagle` に統合され廃止)。メール系サブファイル(`SourceVault_privacy.wl` / `SourceVault_maildb.wl` / `SourceVault_mailstructure.wl` / `SourceVault_mailsuggest.wl` など)と `SourceVault_papernb.wl` は、初回呼び出し時にオンデマンドでロードされます(`SourceVault_privacy.wl` は maildb より先にロードされ、View/Core の正準プライバシー判定 exit を提供します)。
 
 ### 3. `$Path` の設定
 
@@ -245,6 +246,8 @@ SourceVault`Private`$iSVDisableAutoTriggerScheduler = True;
 ```mathematica
 SourceVault`SourceVaultAutoTriggerStartScheduler[]
 ```
+
+> **診断 tick の自動起動(2026-10-02)**: 同様に、`SourceVault_diagnostics.wl` の診断 tick(包括診断・ログ網羅性の定期チェック・heartbeat)も、対話 FE カーネルでは SourceVault の (再)ロード時に自動で起動します(claudecode の共有ポーリング tick に相乗りし、claudecode が無ければ何もしません)。これが無かった頃は、包括診断や heartbeat が定期実行されず、警告が一度も出ない状態になり得ました。包括診断は毎 tick ではなく **1 日 1 回**だけ実行されます。headless カーネルでは起動しません。
 
 ### FE レス compute ノードでの headless dispatch(任意)
 
@@ -983,7 +986,7 @@ NBReadTodos[nbPath]
 
 ### ソース一覧・横断検索の動作確認(SourceVaultSources / SourceVaultArXiv / SourceVaultSummaries)
 
-登録済みのすべてのソースを一覧表示する `SourceVaultSources`、arXiv ソースだけを表示する `SourceVaultArXiv`、Eagle 保存済みサマリー・PDF 検索索引ドキュメント(pdfindex provider。学生便覧等)等の登録プロバイダ横断で検索・統合表示する `SourceVaultSummaries` が利用できます。これら 3 つはいずれも **core / View に分離**されています。`SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries` 本体(core)は共通スキーマ行を `List[Association]`(既定 `"Format" -> "Rows"`)で返し、後段の `Select`/`SortBy`/LLM 処理へそのまま連鎖できます。ノートブックへ表として提示するときは、対応する View 関数 `SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView` を使ってください(`"Format" -> "Grid"` を指定すると後方互換で内部的に View へ委譲されます)。arXiv 論文ソースについては、タイトル・著者・出版日が arXiv API(export.arxiv.org)から自動取得され、メタデータとしてキャッシュされます。ingest 時には arXiv アブストラクトを取得して `$Language` へ翻訳したものが Summary として自動付与されます。View が描画する各行には URL リンク(▶ URL)と、ingest 済みファイルを現在の PC で開くリンク(▶ 開く)が付きます。
+登録済みのすべてのソースを一覧表示する `SourceVaultSources`、arXiv ソースだけを表示する `SourceVaultArXiv`、Eagle 保存済みサマリー・PDF 検索索引ドキュメント(pdfindex provider。学生便覧等)等の登録プロバイダ横断で検索・統合表示する `SourceVaultSummaries` が利用できます。これら 3 つはいずれも **core / View に分離**されています。`SourceVaultSources` / `SourceVaultArXiv` / `SourceVaultSummaries` 本体(core)は共通スキーマ行を `List[Association]`(既定 `"Format" -> "Rows"`)で返し、後段の `Select`/`SortBy`/LLM 処理へそのまま連鎖できます。ノートブックへ表として提示するときは、対応する View 関数 `SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView` を使ってください(`"Format" -> "Grid"` を指定すると後方互換で内部的に View へ委譲されます)。arXiv 論文ソースについては、タイトル・著者・出版日が arXiv API(export.arxiv.org)から自動取得され、メタデータとしてキャッシュされます。ingest 時には arXiv アブストラクトを取得して `$Language` へ翻訳したものが Summary として自動付与されます。View が描画する各行には URL リンク(▶ URL)と、ingest 済みファイルを現在の PC で開くリンク(▶ 開く)が付きます。一覧の「和訳NB」列には、`SourceVault_papernb.wl` の登録簿(後述「論文の和訳ノートブック・計算ノートブック」)に登録済みの和訳ノートブックが表示されます。
 
 > `SourceVaultSources` / `SourceVaultArXiv` の対象は SourceVault ingest 済みソース(`src-*` record)のみです。PDF 検索索引(PDFIndex collection。学生便覧等)はここには含まれません。それらの横断検索は `SourceVaultSummaries`(pdfindex provider)、本文検索(チャンク単位・gate 付き)は `SourceVaultSearch[query, "Group" -> name]` を使ってください。
 >
@@ -1108,6 +1111,47 @@ SourceVault`SourceVaultKBRefreshDeckPrivacy[kbId]
 
 > 対象は公開宣言に従うべき source だけです: `PrivacySource` が `"Declaration"` のもの、および `PrivacySource` を持たない旧 source のうち旧既定値 0.3 のもの。明示指定された PrivacyLevel(`PrivacySource` `"Explicit"`)や、ノートブックが見当たらない source には触れません(`Skipped` に理由付きで記録)。Options: `"Rebuild" -> True`(既定。変更があれば `SourceVaultKBBuild` で索引を自動的に作り直す)、`"ReleaseContext" -> Automatic`(既定。前回構築時の値を使用)、`"DryRun" -> False`(True で実際には書き換えず対象だけ確認)。`kbId` 省略時は `$SourceVaultKBDefaultId` が使われます。
 
+### 論文の和訳ノートブック・計算ノートブック(SourceVault_papernb.wl)
+
+`SourceVault_papernb.wl`(初回呼び出し時にオンデマンドロード。単体 `Get` でも動作し、`$SourceVaultPaperNBRoot` を与えればテスト可能)は、SourceVault に ingest 済みの論文(`src-...` / `sv://snapshot/...`)と、documentation.wl の `DocImportPaper` で作った和訳ノートブックを対応づける**登録簿**です。FrontEnd / NBAccess / documentation への依存はすべて弱結合です。登録簿の保存先は `<SourceVaultCoreRoot>/papernb/registry.json`、生成ノートブックの既定の保存先は `<SourceVaultCoreRoot>/papernb/<題名>_<SourceId>.nb` です(File は root 内なら相対パスで持つため、PC ごとに Dropbox の root が違っても使えます)。保存先は `$SourceVaultPaperNBRoot`(`Automatic` = `SourceVaultCoreRoot[]/papernb`、無ければ `LOCALAPPDATA/SourceVault/papernb`)で上書きできます。
+
+```mathematica
+(* 取り込み済み論文の和訳ノートブックを生成・登録(登録済みでファイルがあれば生成せず開く) *)
+SourceVault`SourceVaultMakePaperNotebook["src-..."]
+SourceVault`SourceVaultMakePaperNotebook["src-...", "Force" -> True]     (* 作り直し *)
+SourceVault`SourceVaultMakePaperNotebook["src-...", "Interactive" -> True] (* 現在のノートブックに評価セルを書いて実行(進捗が見える・やり直せる) *)
+
+(* 登録済みの和訳ノートブックを開く(未登録なら Make を呼ぶ) *)
+SourceVault`SourceVaultOpenPaperNotebook["src-..."]
+
+(* 既存ノートブックを登録 / 登録を外す(ファイルは消さない) *)
+SourceVault`SourceVaultRegisterPaperNotebook["src-...", nbPath]
+SourceVault`SourceVaultUnregisterPaperNotebook["src-..."]
+
+(* 登録簿の参照 *)
+SourceVault`SourceVaultPaperNotebook["src-..."]       (* 登録済み和訳ノートブックの絶対パス。未登録・ファイル無しは Missing *)
+SourceVault`SourceVaultPaperNotebookEntry["src-..."]  (* <|SourceId, URI, File, Title, PrivacyLevel, CloudPublishable, TargetLanguage, Status, ..|> *)
+SourceVault`SourceVaultPaperNotebookPath["src-..."]   (* 新しく生成するときの既定の保存パス *)
+SourceVault`SourceVaultPaperNotebookRoot[]            (* 登録簿と生成ノートブックの保存ディレクトリ *)
+SourceVault`SourceVaultPaperNotebooks[]               (* 登録一覧(連想のリスト。core) *)
+SourceVault`SourceVaultPaperNotebooksView[]           (* 登録一覧の Dataset(View) *)
+SourceVault`SourceVaultSourcePrivacy["src-..."]       (* 取り込み済みソースの PrivacyLevel。解決できなければ 1.0 = fail-closed *)
+```
+
+- ref には SourceId(`src-...`)・正準 URI(`sv://snapshot/...`)・`arxiv:ID`・URL・Eagle の PDF(`sv://object/eagle-<id>` / `eagle:<id>`。Eagle 側の読み口で解決)を使えます。まず登録簿を ref そのもの(SourceId / URI)で引き、見つからないときだけ参照解決(`SourceVaultResolveReference`)を通します。
+- **PrivacyLevel を継承**します。登録時の PrivacyLevel は元ソースから引き継がれ(`"PrivacyLevel" -> 値` で明示も可)、`"Declare" -> True`(既定)なら NBAccess が使えるときノートブックに `NBSetCloudPublishable` の宣言(PL < 0.5 で Public)を書きます。翻訳の LLM 経路も PL で決まり、PL >= 0.5 は `$ClaudePrivateModel` のみ(未設定なら fail-closed)、PL < 0.5 は既定(Claude Code CLI / パレットのモデル)です。
+- 同じ SourceId の再登録は差分マージで上書きされます。`SourceVaultMakePaperNotebook` のオプション: `"Force"` / `"Open"`(`Automatic` = FE なら開く)/ `"Interactive"` と、`DocImportPaper` のオプション(`"Pages"` / `"Reconstruct"` / `"TargetLanguage"` / Model / Fallback など)。
+- 登録簿は、一覧(`SourceVaultSourcesView` / `SourceVaultArXivView`)の「和訳NB」列と、SlideWorkflow の文献解決(`sv://` / `src-` を指定したら登録済みの和訳ノートを自動で使う)から引かれます。両者が互いに引き合って再帰しないよう、解決中は再入が遮断されます。一覧は 1 行ごとに登録簿を読むため、ファイルの更新日付でキャッシュされます。
+- 一覧のボタンから既に開いているノートを開くとき、`NotebookOpen` だけでは前面に来ないことがあるため、開いている窓を探して前面へ出し、無ければ開いて前面へ出します。
+
+#### 計算ノートブック(v1.47)
+
+同じ `SourceVault_papernb.wl` は、1 本の論文に付随するのではなく、複数の素材(論文・SourceVault の文書・KG のノード・過去のスライド)から作った **Mathematica の計算と結果のノートブック**(計算ノートブック)も登録簿で管理します。
+
+- Id は `cnb-<8 桁>`、URI は `sv://computenb/<Id>`。登録簿は `<SourceVaultCoreRoot>/computenb/registry.json`、ノートブックは `<題名>_<Id>.nb`(File は root 内なら相対パス)です。既定の保存パスは `SourceVaultComputeNotebookPath[title, id]` で得られます。
+- セルの単位(CellTags `"CNU:<unit>"`)は KG のノードになり、セルの並びはその 1 つのストーリーとして KG(GraphId = Id、Kind = Notebook)に入ります(SlideWorkflow の SlideComputeGraph)。
+- 素材の PL は、`sv://` / `src-` / Eagle は解決した PL(解決できなければ 1.0 = fail-closed)、計算ノートはその登録の PL、それ以外(URL・arXiv・ローカルファイル・KG のノード)は 0 として扱われ、ノートブック全体の PL は素材の最大値で決まります(PL >= 0.5 は `$ClaudePrivateModel` のみ。無ければ fail-closed)。
+
 ### 知識グラフ(KG)の文字化け修復(SourceVaultKGRepairMojibake)
 
 `SourceVault_knowledgegraph.wl`(本体ロード時に自動ロード)で扱う知識グラフでは、周辺知識をエージェントに作らせたノードなどが、UTF-8 のバイトを 1 文字ずつ読んだ形に化けて保存されることがありました(例: ジャワ語の「gawé」→「gawÃ©」。JSON 上では `\u00c3\u00a9`)。取り込み側は UTF-8 で読むため、渡された文字列が既にこの形だった場合は入口で直す必要があります。現在は次のように扱われます。
@@ -1152,6 +1196,25 @@ SourceVault`SourceVaultDiagnosticsStatus[]
 ```
 
 > `SourceVaultSystemDoctor[]` は、後述の「サービスカーネルが起動直後に消える」(Wolfram ライセンス席枯渇)のようなトラブルの一次切り分けに使えます。`$LicenseProcesses` / `$MaxLicenseProcesses` / `$MaxLicenseSubprocesses` の実測値と、重複する MCP サーバカーネルなどの reclaimable capacity を集約して返します。
+
+#### ログ網羅性プローブ(SourceVaultDiagnosticsLogCoverageProbe)
+
+LLM 呼び出しの診断ログが取りこぼされていないか、また取り込みが止まっていないかを確認するプローブです(読み取り専用。結果は 10 分キャッシュされ、包括診断からも呼ばれます)。ローカルの活動記録(Claude Code のプロジェクトフォルダ `claude-project-<unixtime>-*`、Codex の作業ディレクトリ `codex_project_*`)と、正準診断ログ内の `LLMCall` 記録、およびローカルの取り込み状態(`*.ingest.json`)を突き合わせます。
+
+```mathematica
+SourceVault`SourceVaultDiagnosticsLogCoverageProbe[]
+(* → <|"Health" -> "OK" | "Degraded", "ReasonCode" -> ..., "Detail" -> ...|> *)
+```
+
+- **取りこぼし**: (プロバイダ, 現地日) ごとに、活動が `MinActivity`(既定 3)以上あるのに記録が `MinCoverage`(既定 0.25)未満の日があれば `Degraded` / `LLMLogGap`(`chatgptcodex` / `claudecode` の別、日付、未取り込み件数つきのメッセージ)。
+- **破損行**: 診断ログの直近 `WindowDays` 日に壊れた行が見つかると `Degraded` / `LogCorruptLines`。
+- **取り込み停止**: 取り込みが `IngestStallHours` 時間以上止まっているのに未取り込みの活動が残っていると `Degraded` / `LogIngestStalled`。
+- 正常なら `OK` / `LogCoverageOK`。正準ログが 30 日間まったく無いマシン(SourceVault サービスが無い PC)は `NotApplicable`(警告なし)。
+- オプション: `"WindowDays"`, `"MinActivity"`, `"MinCoverage"`, `"IngestStallHours"`, `"ClaudeProjectsDir"`(既定 `~/.claude/projects`)、`"CodexWorkingDir"`、`"Now"`(テスト用)。
+
+> **Codex ヘルス**: claudecode 側の Codex ヘルスプローブ(`ClaudeCode`ClaudeCodexHealthProbe`、ローカルファイルのみ)も診断に取り込まれます。claudecode が無いときは何も起きません。
+>
+> **エスカレーション(2026-10-02)**: 監視対象のコンポーネント(ログ網羅性・Codex)の劣化は、(コンポーネント, 理由) ごとに **24 時間に 1 回**だけ、issue DB へのシグナルなどとしてエスカレーションされます。従来は警告が出る前提の定期実行自体が走らず、警告が一度も発火しない状況があったため、前述の診断 tick の自動起動と合わせて対処されています。
 
 ### メールサブシステムの動作確認(IMAP アカウント登録済みが前提)
 
@@ -1213,6 +1276,10 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultNotebookSummary` が失敗する | ClaudeRuntime がロードされているか、API キーまたはローカル LLM が利用可能か確認 |
 | `SourceVaultNotebookSummary` 等の LLM 呼び出しが `LLMBoundaryRefused` で失敗する | 境界観測 (Boundary Observation) の self-gate により、その呼び出し元(例: `sourcevault:iCallSummaryLLM`)が拒否されています。`SourceVault`Private`$iSVBoundaryObsApplyResult` と `SourceVaultSetBoundaryObservation` の設定を確認してください |
 | LLM 呼び出しが `Failed["PrivateModelUnavailable"]` を返す | 対象データが機密扱い(PrivacyLevel >= 0.5、または PL 不明で 1.0 にフォールバック)なのに `$ClaudePrivateModel` が未設定・解決不能です(2026-09-01 以降、fail-closed でクラウドへは自動フォールバックしません)。「初回セットアップ」手順 4 に従って `$ClaudePrivateModel` / `NBRegisterTrustedLocalServer` を設定してください |
+| `SourceVaultMakePaperNotebook` が機密論文(PL >= 0.5)の和訳で失敗する | 翻訳の LLM 経路は元ソースの PrivacyLevel を継承し、PL >= 0.5 は `$ClaudePrivateModel` のみを使います(未設定なら fail-closed)。手順 4 のローカルサーバ登録を行ってください。`SourceVaultSourcePrivacy[ref]` で解決された PL を確認できます(解決できないと 1.0) |
+| 一覧の「和訳NB」ボタンを押しても既に開いているノートが前面に来ない／反応しない | `SourceVaultOpenPaperNotebook` は開いている窓を探して前面へ出し、無ければ開いて前面へ出します。登録簿 (`SourceVaultPaperNotebookEntry[ref]`) の `File` が現在の PC で存在するか確認してください(root 内なら相対パスで持つので、`$SourceVaultPaperNBRoot` が正しく解決されているかも確認) |
+| `SourceVaultSystemDoctor[]` / 診断が `LLMLogGap` / `LogIngestStalled` / `LogCorruptLines` で Degraded | ログ網羅性プローブ(`SourceVaultDiagnosticsLogCoverageProbe[]`)が、LLM 呼び出しの記録が活動量に対し足りない、取り込みが `IngestStallHours` 以上停止、または診断ログに壊れた行を検出しています。メッセージ中の日付・プロバイダ・未取り込み件数と、SourceVault サービス(取り込み側)が稼働しているかを確認してください。SourceVault サービスの無い PC では `NotApplicable` となり警告は出ません |
+| 診断 tick / 包括診断・heartbeat が定期的に動いていない | 対話 FE カーネルでは SourceVault の (再)ロードで診断 tick が自動起動します(claudecode が無いと何もしません)。headless カーネルでは起動しません。包括診断は 1 日 1 回です |
 | `SourceVaultNotePrivacy` でマークした入力セルが赤くならない(出力セルは正しく機密表示される) | 2026-09-11 実機で判明した、環境によっては出力セル確定前に評価完了扱いとなり ScheduledTask 経由の遅延 flush が走らないケースがあった問題。`$SourceVaultPrivacyCellEpilog`(既定 True)により、評価完了後(出力セルが存在する時点)の CellEpilog で確実に flush するよう修正済み。SourceVault を最新版に更新すれば自動的に有効になります |
 | 大きい notebook(`SkipReason` -> `"FileTooLarge"`)の Header/Todo が再 index しても復元されない | skip 済み (too-large) snapshot は Header/Todos を保持しない仕様(再生成不可)。旧形式 (`SourceSize` フィールド無しの `snap-toolarge-*`) は最新形式へ自動アップグレードされ、以後は毎回ではなく 1 度だけ ForceReindex すれば済みます |
 | `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |

@@ -2,7 +2,7 @@
 
 Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter**、release context に基づく公開ポリシー基盤と Web 検索サービス管理 (**SourceVault_searchindex** / **SourceVault_servicemanager**)、[Eagle](https://eagle.cool) デジタルアセットライブラリ統合 (**SourceVault_eagle**)、排他制御・immutable snapshot・append-only event log を提供するコア基盤 (**SourceVault_core**) を備えます。加えて、関数契約と型付き配線による API コンパイラ層 (**SourceVault_contracts** / **SourceVault_wiring**)、シミュレーション実行基盤 (**SourceVault_simrun**)、検索結果を「たどれる作業面」として扱う検索ビュー層 (**SourceVault_searchview**)、一般メールの構造化・スレッド提案 (**SourceVault_mailstructure** / **SourceVault_mailsuggest**)、オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層 (**SourceVault_mailagenda**)、Claude Code セッションログ統合 (**SourceVault_llmlog**)、コード化ワークフローのレジストリ・カタログ管理 (**SourceVault_workflowregistry** / **SourceVault_workflowcatalog**)、自動トリガスケジューラ (**SourceVault_autotrigger**)、クロスパッケージ診断層 (**SourceVault_diagnostics**)、関数粒度のパッケージ API 索引 (**SourceVault_packageapi**)、[ComfyUI](https://github.com/comfyanonymous/ComfyUI) 画像・動画生成統合 (**SourceVault_comfyui**) も備えます。さらに、oops メーリングリストのアーカイブを「ベース基準座標」とする認知支援・安全基盤 (Cane: **SourceVault_knowledgehome** / **SourceVault_cognition** / **SourceVault_adjudication** / **SourceVault_capbroker** / **SourceVault_taint** / **SourceVault_anomaly** / **SourceVault_routine** / **SourceVault_routineplan**) も統合しており、いずれも既定では判定を記録するだけの observe-only / shadow モードで動作します。私的データを扱う全関数の出力が別名呼び出しや `Map`・`ClaudeEval` 越しでも確実に機密マークされるようにする、プライバシー伝達の正準層 (**SourceVault_privacy**) も統合されています。
 
-加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、論文内容を「関連度 + 順序制約（因果・年代・導出・難易度）」つきの知識グラフとして保持し聴き手の理解度と時間から発表スライド構成を決定的に計算する発表用知識グラフ基盤 (**SourceVault_knowledgegraph**)、取り込み済み論文・Eagle 上の PDF の和訳ノートブックを生成・登録する層 (**SourceVault_papernb**)、notebook 由来 Todo とスタンドアロン Todo を横断的に統合管理する Todo キャッシュ DB (**SourceVault_todo**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
+加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、論文内容を「関連度 + 順序制約（因果・年代・導出・難易度）」つきの知識グラフとして保持し聴き手の理解度と時間から発表スライド構成を決定的に計算する発表用知識グラフ基盤 (**SourceVault_knowledgegraph**)、取り込み済み論文・Eagle 上の PDF の和訳ノートブックと、素材から作った計算ノートブックを登録する層 (**SourceVault_papernb**)、notebook 由来 Todo とスタンドアロン Todo を横断的に統合管理する Todo キャッシュ DB (**SourceVault_todo**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
 
 ## 設計思想と実装の概要
 
@@ -187,11 +187,13 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ W
 
 ### 発表用知識グラフ (SourceVault_knowledgegraph)
 
-`SourceVault_knowledgegraph.wl` は、論文の内容と周辺知識を「関連度 + 順序制約（因果・年代・導出・難易度）」つきのグラフとして保持する発表用知識グラフ（KG）層です。`SourceVaultKGNew` で作成した KG（Kind は Paper / Survey / Background / Scenario）に、聴き手の理解度プロファイル（`SourceVaultKGAudience`）と時間（枚数・分）を与えると、`SourceVaultKGOrderedTree` が最小全域順序木を、`SourceVaultKGPlan` が詰め込み（packing）・枝刈りを経たスライド構成を決定的に計算し、`SourceVaultKGOutline` が言語別のスライドアウトライン（題目・導入文・要点・補足・原稿）を生成します。LLM も FrontEnd も呼ばない純関数層で、過去デッキ検索（SourceVault_kb）や OOPS のグラフ描画とは弱結合です。取り込み・保存の入口で UTF-8 文字化けを自動修復し、保存済みデータは `SourceVaultKGRepairMojibake[]` で一括修復できます。
+`SourceVault_knowledgegraph.wl` は、論文の内容と周辺知識を「関連度 + 順序制約（因果・年代・導出・難易度）」つきのグラフとして保持する発表用知識グラフ（KG）層です。`SourceVaultKGNew` で作成した KG（Kind は Paper / Survey / Background / Scenario。Scenario は文書の無い発表の筋書きから作る KG、計算ノートブックは Notebook Kind として入ります）に、聴き手の理解度プロファイル（`SourceVaultKGAudience`）と時間（枚数・分）を与えると、`SourceVaultKGOrderedTree` が最小全域順序木を、`SourceVaultKGPlan` が詰め込み（packing）・枝刈りを経たスライド構成を決定的に計算し、`SourceVaultKGOutline` が言語別のスライドアウトライン（題目・導入文・要点・補足・原稿）を生成します。順序木のどのノードも子が上限（既定 5）以下になるよう段を足す `SourceVaultKGBalance` と、目次（`kg["Toc"]`、節ごとの一行要約つき）を優先して順序木に使う仕組みも備えます。LLM も FrontEnd も呼ばない純関数層で、過去デッキ検索（SourceVault_kb）や OOPS のグラフ描画とは弱結合です。取り込み・保存の入口で UTF-8 文字化けを自動修復し、保存済みデータは `SourceVaultKGRepairMojibake[]` で一括修復できます。
 
-### 論文和訳ノートブック登録簿 (SourceVault_papernb)
+### 論文和訳ノートブック・計算ノートブック登録簿 (SourceVault_papernb)
 
-`SourceVault_papernb.wl` は、取り込み済みソース（`src-…` / arXiv / URL）や Eagle 上の PDF と、[documentation_paper2nb](https://github.com/transreal/documentation_paper2nb) の `DocImportPaper` が生成する和訳ノートブックを対応づける登録簿です（Eagle 一覧・ソース一覧の「訳」/「和訳NB」ボタンから利用）。生成ノートブックは元ソースの PrivacyLevel を継承し、`CloudPublishable` 宣言と翻訳に使う LLM 経路（クラウド／ローカル）を PrivacyLevel に応じて自動選択します。[SlideWorkflow](https://github.com/transreal/SlideWorkflow) の文献解決もこの登録簿を参照します。各 Mail 関数と同様、初回呼び出し時にオンデマンドでロードされます。
+`SourceVault_papernb.wl` は、取り込み済みソース（`src-…` / arXiv / URL）や Eagle 上の PDF と、[documentation_paper2nb](https://github.com/transreal/documentation_paper2nb) の `DocImportPaper` が生成する和訳ノートブックを対応づける登録簿です（Eagle 一覧・ソース一覧の「訳」/「和訳NB」ボタンから利用）。生成ノートブックは元ソースの PrivacyLevel を継承し、`CloudPublishable` 宣言と翻訳に使う LLM 経路（クラウド／ローカル）を PrivacyLevel に応じて自動選択します。[SlideWorkflow](https://github.com/transreal/SlideWorkflow) の文献解決もこの登録簿を参照します。
+
+同ファイルは **計算ノートブック**（論文・SourceVault の文書・KG のノード・過去のスライドなど複数素材から作った、Mathematica の計算と結果のノートブック）の登録簿も持ちます（`SourceVaultRegisterComputeNotebook` / `SourceVaultComputeNotebook` / `SourceVaultComputeNotebooks[View]`、URI は `sv://computenb/<Id>`）。素材の最大 PrivacyLevel を継承し、セルの単位は KG のノードとして 1 つのストーリーにまとめられます。各 Mail 関数と同様、初回呼び出し時にオンデマンドでロードされます。
 
 ### 検索ビューと行動ログ (SourceVault_searchview)
 
@@ -245,7 +247,7 @@ VRCRealtime のような音声対話では、既存の MCP 検索（Web / メー
 
 ### 診断基盤 (SourceVault_diagnostics)
 
-`SourceVault_diagnostics.wl` は NBAccess / claudecode / ClaudeOrchestrator / servicemanager / autotrigger が emit する診断イベントを集約する、クロスパッケージの SIEM 的な収集・保存・診断（doctor）層です。プロデューサ側の per-process spool や PS watchdog のログは service の低頻度 hook が正準ログへ転記し（冪等）、`SourceVaultDiagnosticsPublish` が issue DB (**SourceVault_issues**) へ弱結合で fan-out します。Wolfram ライセンス容量（宣言値でなく実測）・kernel プロセストポロジ・再利用可能容量（重複 MCP-server kernel の検出等）をプローブし、`SourceVaultSystemDoctor` がコンポーネント別ヘルス（OK / Degraded / Failing）を集約します。マシンごとの heartbeat（`SourceVaultDiagnosticsMachineHeartbeat`）とマルチ PC rollup により、Dropbox 同期越しの稼働状況を把握できます。
+`SourceVault_diagnostics.wl` は NBAccess / claudecode / ClaudeOrchestrator / servicemanager / autotrigger が emit する診断イベントを集約する、クロスパッケージの SIEM 的な収集・保存・診断（doctor）層です。プロデューサ側の per-process spool や PS watchdog のログは service の低頻度 hook が正準ログへ転記し（冪等）、`SourceVaultDiagnosticsPublish` が issue DB (**SourceVault_issues**) へ弱結合で fan-out します。Wolfram ライセンス容量（宣言値でなく実測）・kernel プロセストポロジ・再利用可能容量（重複 MCP-server kernel の検出等）をプローブし、`SourceVaultSystemDoctor` がコンポーネント別ヘルス（OK / Degraded / Failing）を集約します。LLM 呼び出しログの取りこぼし・取り込み停止・破損行を検出するログ網羅性プローブ（`SourceVaultDiagnosticsLogCoverageProbe`）や、claudecode 側の Codex ヘルスプローブの取り込み・エスカレーションも担います。マシンごとの heartbeat（`SourceVaultDiagnosticsMachineHeartbeat`）とマルチ PC rollup により、Dropbox 同期越しの稼働状況を把握できます。
 
 ### パッケージ API 索引 (SourceVault_packageapi)
 
@@ -350,7 +352,7 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 
 ### 永続化レイアウト
 
-すべての永続化は `<PrivateVault>` 配下に集約されます（Cane 認知系の一部データと、KB (SourceVault_kb) / 発表登録簿 (SourceVault_slidedeck) / 音声・視覚資産 (SourceVault_voice / SourceVault_vision) は意図的にこの外側の `<LocalState>` や `$packageDirectory` 配下に保存されます。上記「安全設計の不変条件」を参照）。
+すべての永続化は `<PrivateVault>` 配下に集約されます（Cane 認知系の一部データと、KB (SourceVault_kb) / 発表登録簿 (SourceVault_slidedeck) / 音声・視覚資産 (SourceVault_voice / SourceVault_vision) は意図的にこの外側の `<LocalState>` や `$packageDirectory` 配下に保存されます。上記「安全設計の不変条件」を参照。論文和訳・計算ノートブック・知識グラフの登録簿は core root 配下の `papernb/` `computenb/` `knowledgegraph/` に置かれます）。
 
 ```
 <PrivateVault>/
@@ -383,6 +385,9 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
   todo/items/<id>.json                 (スタンドアロン Todo レコード)
   todo/overlays/<id>.json              (notebook Todo へのオーバレイ状態)
   todo/notes/<id>.nb                   (Todo 要約ノートの canonical 保存先)
+  papernb/registry.json                (論文和訳ノートブック登録簿 + 生成 .nb)
+  computenb/registry.json              (計算ノートブック登録簿 + .nb)
+  knowledgegraph/graphs/<graphId>.json (発表用知識グラフ。前版は graphs/history/)
   promptrouter/runs/prompt-runs.jsonl  (PromptRun ストア、append-only)
   promptrouter/artifacts/wf-code/      (WorkflowRoute コード artifact)
   promptrouter/routes/                 (コンパイル済み PromptRoute レジストリ)
@@ -660,7 +665,7 @@ $packageDirectory\
   SourceVault_diagnostics.wl     ← クロスパッケージ診断 (任意)
   SourceVault_issues.wl          ← 汎用Issue管理 (任意)
   SourceVault_eagle.wl           ← Eagle 統合 (任意、手動ロード)
-  SourceVault_papernb.wl         ← 論文和訳ノートブック登録簿 (任意、Eagle 統合等の初回呼び出し時にオンデマンドロード)
+  SourceVault_papernb.wl         ← 論文和訳・計算ノートブック登録簿 (任意、Eagle 統合等の初回呼び出し時にオンデマンドロード)
   SourceVault_comfyui.wl         ← ComfyUI 統合 (任意、手動ロード)
   SourceVault_course.wl          ← 授業支援 (任意、手動ロード)
   SourceVault_course_private.wl  ← 授業支援 非公開拡張 (任意、course.wl が自動検出)
@@ -913,15 +918,18 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultTalkQAAsk[question, opts]` | ライブ質問に QA パック→KB→Web 検索提案の順で低遅延に回答する。PrivacyLevel/`Route` に応じて公開/拒否を判定。 |
 | `SourceVaultTalkQANeighbors[opts]` | 現在開いているスライドを起点に k-hop 近傍の関連トピックを返す。 |
 | **発表用知識グラフ (SourceVault_knowledgegraph)** | |
-| `SourceVaultKGNew[graphId, opts]` | 空の知識グラフ (KG) を作成する。 |
+| `SourceVaultKGNew[graphId, opts]` | 空の知識グラフ (KG) を作成する（Kind: Paper / Survey / Background / Scenario）。 |
 | `SourceVaultKGAudience[spec]` | 聴き手の理解度プロファイル（領域→理解度）を解析する。 |
-| `SourceVaultKGOrderedTree[kg, opts]` | 順序制約から最小全域順序木（階層概要）を計算する。 |
+| `SourceVaultKGOrderedTree[kg, opts]` | 順序制約から最小全域順序木（階層概要）を計算する。目次があれば既定で目次の木を返す（`"UseToc"`）。 |
+| `SourceVaultKGBalance[kg, opts]` | 順序木のどのノードも子が `"MaxDegree"`（既定 5）以下になるよう「まとまり」の段を足す。 |
 | `SourceVaultKGPlan[kg, tree, opts]` | 聴き手・スライド枚数/時間から詰め込み（packing）・枝刈り済みのスライド構成を決定的に計算する。 |
 | `SourceVaultKGOutline[kg, plan, opts]` | 計画から言語別スライドアウトライン（題目・導入文・要点・補足・原稿）を生成する。 |
 | `SourceVaultKGRepairMojibake[]` | 保存済み KG・周辺知識の UTF-8 文字化けを一括修復する。 |
-| **論文和訳ノートブック登録簿 (SourceVault_papernb)** | |
+| **論文和訳・計算ノートブック登録簿 (SourceVault_papernb)** | |
 | `SourceVaultMakePaperNotebook[ref, opts]` | 取り込み済みソース / Eagle PDF から `DocImportPaper` 経由で和訳ノートブックを生成・登録する（元ソースの PrivacyLevel を継承）。 |
 | `SourceVaultPaperNotebook[ref]` | 登録済み和訳ノートブックの絶対パスを返す。 |
+| `SourceVaultRegisterComputeNotebook[nbPath, opts]` | 複数素材から作った計算ノートブックを登録する（素材の最大 PrivacyLevel を継承、URI は `sv://computenb/<Id>`）。 |
+| `SourceVaultComputeNotebook[ref]` / `SourceVaultComputeNotebooks[]` | 登録済み計算ノートブックの絶対パス取得 / 登録一覧。 |
 | **DB横断ハイパーリンク (SourceVault_crosslink)** | |
 | `SourceVaultCrossLinksView[anchor, opts]` | メール・OOPS・Eagle・ingest ソース横断の関連リンクを RRF ランキングで表示（クリックでネイティブビューへ遷移）。 |
 | `SourceVaultRegisterCrossLinkProvider[name, spec]` | 横断検索 provider（notebook DB 等）を追加登録。 |
@@ -1110,7 +1118,7 @@ SourceVaultNotebookSummary[nbPath]
 | `api_searchindex.md` | 検索基盤 API（release context・profiles・revocation・versioned snapshot） |
 | `api_searchview.md` | 検索ビュー API（live hypertext view・interaction meta-layer・retrieval episode） |
 | `api_kb.md` | Graph-RAG 低遅延ナレッジベース API（slide/figure 索引・caption・BM25+グラフ伝播検索・デッキ PrivacyLevel の公開宣言追従） |
-| `api_knowledgegraph.md` | 発表用知識グラフ API（順序制約つき KG・聴き手モデル・最小全域順序木・詰め込み/枝刈り・言語別アウトライン・サーベイ合成） |
+| `api_knowledgegraph.md` | 発表用知識グラフ API（順序制約つき KG・聴き手モデル・最小全域順序木・目次・子数バランス・詰め込み/枝刈り・言語別アウトライン・サーベイ合成） |
 | `api_talkqa.md` | 発表ライブ Q&A API（QA パック構築・ライブ質問応答・近傍探索） |
 | `api_servicemanager.md` | サービス管理 API（Web サービス・HTTP proxy・detached service・PDF グループ検索 profile・headless CLI MCP 再登録） |
 | `api_webingest.md` | Web 検索 API（SearXNG・本文取得・importance・参照イベント rollup・要約・job 実行体） |
@@ -1123,7 +1131,7 @@ SourceVaultNotebookSummary[nbPath]
 | `api_course.md` | 授業支援 API（演習ストア・試験構成・答案採点・履修者名簿・成績簿・Web レポート採点） |
 | `api_course_private.md` | 授業支援 非公開拡張 API（配点シミュレーション、非公開・CodePrivacyLevel 0.1） |
 | `api_slidedeck.md` | 発表登録簿 API（発表タイトル→Sliden mp4 URL・発表シナリオ対応表） |
-| `api_papernb.md` | 取り込み済み論文の和訳ノートブック登録簿 API（DocImportPaper 委譲・元ソースの PrivacyLevel 継承・一覧の「和訳NB」列・SlideWorkflow 文献解決） |
+| `api_papernb.md` | 論文和訳ノートブック登録簿 + 計算ノートブック登録簿 API（DocImportPaper 委譲・元ソース/素材の PrivacyLevel 継承・一覧の「和訳NB」列・SlideWorkflow 文献解決） |
 | `api_voice.md` | ローカル音声資産 API（Piper Plus TTS・AivisSpeech Engine・Vosk ASR の解決・合成） |
 | `api_vision.md` | ローカル視覚資産 API（人物検出・姿勢推定 ONNX モデルの解決・導入） |
 | `api_realtime.md` | クラウド音声対話 API（OpenAI Realtime / GPT-Live・Python worker 連携・スライド制御/QA ツール接続・GPT-Live の割り込み処理・背景コンテキスト注入） |

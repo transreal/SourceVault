@@ -1,104 +1,113 @@
 (* ::Package:: *)
 
 (* ============================================================
-   SourceVault_knowledgegraph.wl -- 発表用知識グラフ (KG) 層
+   SourceVault_knowledgegraph.wl -- \:767a\:8868\:7528\:77e5\:8b58\:30b0\:30e9\:30d5 (KG) \:5c64
 
    This file is encoded in UTF-8.
    Load via: Block[{$CharacterEncoding = "UTF-8"}, Get["SourceVault_knowledgegraph.wl"]]
 
-   仕様書: SlideWorkflow_info/design/slide_knowledge_graph_spec_v0_1.md
+   \:4ed5\:69d8\:66f8: SlideWorkflow_info/design/slide_knowledge_graph_spec_v0_1.md
 
-   位置づけ:
-     論文 1 本 (または複数) の内容と周辺知識を「順序・難易度つきの知識グラフ」として
-     保持し、聴き手 (理解度・前提知識) と時間 (枚数・分) を与えると
-       I  知識グラフ (Nodes / Edges: 関連度 + 因果/年代/導出/難易度の順序辺)
-       II 周辺知識ノードの追加と共有 background 層への連結
-       III 最小全域順序木 (複数候補: 右背骨貪欲 = 線形拡張の階層分割)
-       IV 階層ごとの概要 + 破綻検証 (順序違反 / 前提欠落 / 循環)
-       V  枚数・時間による詰め込み (packing) と枝刈り (pruning)
-       VI トポロジカル順のシリアライズ → 言語別アウトライン → シナリオ md
-     を決定的に計算する。生成物はスライドではなく KG (スライドは KG の投影)。
+   \:4f4d\:7f6e\:3065\:3051:
+     \:8ad6\:6587 1 \:672c (\:307e\:305f\:306f\:8907\:6570) \:306e\:5185\:5bb9\:3068\:5468\:8fba\:77e5\:8b58\:3092\:300c\:9806\:5e8f\:30fb\:96e3\:6613\:5ea6\:3064\:304d\:306e\:77e5\:8b58\:30b0\:30e9\:30d5\:300d\:3068\:3057\:3066
+     \:4fdd\:6301\:3057\:3001\:8074\:304d\:624b (\:7406\:89e3\:5ea6\:30fb\:524d\:63d0\:77e5\:8b58) \:3068\:6642\:9593 (\:679a\:6570\:30fb\:5206) \:3092\:4e0e\:3048\:308b\:3068
+       I  \:77e5\:8b58\:30b0\:30e9\:30d5 (Nodes / Edges: \:95a2\:9023\:5ea6 + \:56e0\:679c/\:5e74\:4ee3/\:5c0e\:51fa/\:96e3\:6613\:5ea6\:306e\:9806\:5e8f\:8fba)
+       II \:5468\:8fba\:77e5\:8b58\:30ce\:30fc\:30c9\:306e\:8ffd\:52a0\:3068\:5171\:6709 background \:5c64\:3078\:306e\:9023\:7d50
+       III \:6700\:5c0f\:5168\:57df\:9806\:5e8f\:6728 (\:8907\:6570\:5019\:88dc: \:53f3\:80cc\:9aa8\:8caa\:6b32 = \:7dda\:5f62\:62e1\:5f35\:306e\:968e\:5c64\:5206\:5272)
+       IV \:968e\:5c64\:3054\:3068\:306e\:6982\:8981 + \:7834\:7dbb\:691c\:8a3c (\:9806\:5e8f\:9055\:53cd / \:524d\:63d0\:6b20\:843d / \:5faa\:74b0)
+       V  \:679a\:6570\:30fb\:6642\:9593\:306b\:3088\:308b\:8a70\:3081\:8fbc\:307f (packing) \:3068\:679d\:5208\:308a (pruning)
+       VI \:30c8\:30dd\:30ed\:30b8\:30ab\:30eb\:9806\:306e\:30b7\:30ea\:30a2\:30e9\:30a4\:30ba \[RightArrow] \:8a00\:8a9e\:5225\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3 \[RightArrow] \:30b7\:30ca\:30ea\:30aa md
+     \:3092\:6c7a\:5b9a\:7684\:306b\:8a08\:7b97\:3059\:308b\:3002\:751f\:6210\:7269\:306f\:30b9\:30e9\:30a4\:30c9\:3067\:306f\:306a\:304f KG (\:30b9\:30e9\:30a4\:30c9\:306f KG \:306e\:6295\:5f71)\:3002
 
-   資産の再利用 (oops-ml 由来のグラフ枠組み):
-     - 辺レコードは SourceVault_oopsseed.wl の TopicItemGraph と同形
-       {From, To, EdgeKind, Weight, EvidenceRefs} (+ Order / OrderKind / Confidence)。
-       SourceVaultKGToTopicItemGraph で SourceVaultOOPSTopicGraphPlot にそのまま渡せる。
-     - 周辺知識 (background) ノードは bg:<slug> の共有 ID で複数論文から参照される
-       (Knowledge Home の svtopic:kh:* と同じ「追記して共有する」考え方)。
-     - 過去デッキの再利用は SourceVault_kb.wl (Graph-RAG) の検索で slide 資産を提案する。
+   \:8cc7\:7523\:306e\:518d\:5229\:7528 (oops-ml \:7531\:6765\:306e\:30b0\:30e9\:30d5\:67a0\:7d44\:307f):
+     - \:8fba\:30ec\:30b3\:30fc\:30c9\:306f SourceVault_oopsseed.wl \:306e TopicItemGraph \:3068\:540c\:5f62
+       {From, To, EdgeKind, Weight, EvidenceRefs} (+ Order / OrderKind / Confidence)\:3002
+       SourceVaultKGToTopicItemGraph \:3067 SourceVaultOOPSTopicGraphPlot \:306b\:305d\:306e\:307e\:307e\:6e21\:305b\:308b\:3002
+     - \:5468\:8fba\:77e5\:8b58 (background) \:30ce\:30fc\:30c9\:306f bg:<slug> \:306e\:5171\:6709 ID \:3067\:8907\:6570\:8ad6\:6587\:304b\:3089\:53c2\:7167\:3055\:308c\:308b
+       (Knowledge Home \:306e svtopic:kh:* \:3068\:540c\:3058\:300c\:8ffd\:8a18\:3057\:3066\:5171\:6709\:3059\:308b\:300d\:8003\:3048\:65b9)\:3002
+     - \:904e\:53bb\:30c7\:30c3\:30ad\:306e\:518d\:5229\:7528\:306f SourceVault_kb.wl (Graph-RAG) \:306e\:691c\:7d22\:3067 slide \:8cc7\:7523\:3092\:63d0\:6848\:3059\:308b\:3002
 
-   service-loadable 制約:
-     FrontEnd / Notebook / NBAccess / UI 依存を持たない。他 SourceVault モジュールは
-     DownValues guard 付きの弱結合 (CoreRoot / KB / OOPS plot) のみ。
-     単体 Get でも動く ($SourceVaultKGRoot を与えればテスト可能)。
-     LLM は呼ばない: プロンプトは純関数で組み立て、応答 JSON は SourceVaultKGFromJSON /
-     SourceVaultKGMerge で検証して取り込む (実行はエージェント側の責務)。
+   service-loadable \:5236\:7d04:
+     FrontEnd / Notebook / NBAccess / UI \:4f9d\:5b58\:3092\:6301\:305f\:306a\:3044\:3002\:4ed6 SourceVault \:30e2\:30b8\:30e5\:30fc\:30eb\:306f
+     DownValues guard \:4ed8\:304d\:306e\:5f31\:7d50\:5408 (CoreRoot / KB / OOPS plot) \:306e\:307f\:3002
+     \:5358\:4f53 Get \:3067\:3082\:52d5\:304f ($SourceVaultKGRoot \:3092\:4e0e\:3048\:308c\:3070\:30c6\:30b9\:30c8\:53ef\:80fd)\:3002
+     LLM \:306f\:547c\:3070\:306a\:3044: \:30d7\:30ed\:30f3\:30d7\:30c8\:306f\:7d14\:95a2\:6570\:3067\:7d44\:307f\:7acb\:3066\:3001\:5fdc\:7b54 JSON \:306f SourceVaultKGFromJSON /
+     SourceVaultKGMerge \:3067\:691c\:8a3c\:3057\:3066\:53d6\:308a\:8fbc\:3080 (\:5b9f\:884c\:306f\:30a8\:30fc\:30b8\:30a7\:30f3\:30c8\:5074\:306e\:8cac\:52d9)\:3002
 
    privacy:
-     KG / ノードは PrivacyLevel (0.0-1.0, 大きいほど厳格) を持つ。既定 0.0 (公開論文)。
-     アウトライン化は "ReleaseCeiling" (既定 0.5) を超えるノードを fail-closed で落とす。
+     KG / \:30ce\:30fc\:30c9\:306f PrivacyLevel (0.0-1.0, \:5927\:304d\:3044\:307b\:3069\:53b3\:683c) \:3092\:6301\:3064\:3002\:65e2\:5b9a 0.0 (\:516c\:958b\:8ad6\:6587)\:3002
+     \:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:5316\:306f "ReleaseCeiling" (\:65e2\:5b9a 0.5) \:3092\:8d85\:3048\:308b\:30ce\:30fc\:30c9\:3092 fail-closed \:3067\:843d\:3068\:3059\:3002
    ============================================================ *)
 
 BeginPackage["SourceVault`"]
 
-$SourceVaultKGRoot::usage = "$SourceVaultKGRoot は知識グラフ層の保存先 (Automatic = SourceVaultCoreRoot[]/knowledgegraph、無ければ LOCALAPPDATA/SourceVault/knowledgegraph)。テストではディレクトリを与えて隔離する。";
-$SourceVaultKGEdgeKinds::usage = "$SourceVaultKGEdgeKinds は辺種別の表。<|kind -> <|\"Order\" (From を To より先に提示する順序制約か), \"OrderKind\" (Difficulty|Temporal|Derivation|Narrative|Causal|Hierarchy|None), \"Parent\" (階層化で親候補になる側: From|To|Either|None), \"Affinity\" (親子親和度の係数)|>|>。";
-$SourceVaultKGNodeKinds::usage = "$SourceVaultKGNodeKinds はノード種別の一覧 (Claim / Concept / Definition / Method / Experiment / Result / Equation / Figure / Question / Conclusion / Background / Section / Survey)。";
-$SourceVaultKGAudiencePresets::usage = "$SourceVaultKGAudiencePresets は聴き手プリセット (\"高校生\" / \"大学理系学部卒\" / \"ITエンジニア\" / \"高校数学III\" など) -> <|\"Level\", \"Knowledge\" -> <|領域 -> 理解度|>|> の表。SourceVaultKGAudience が参照する。";
-$SourceVaultKGDomainAliases::usage = "$SourceVaultKGDomainAliases は領域名の別名表 (英語名 -> 正準日本語名)。ノードの Domains と聴き手の Knowledge の照合に使う。";
-$SourceVaultKGViewMaxRows::usage = "$SourceVaultKGViewMaxRows は View 関数が Dataset に出す最大行数 (既定 200)。";
-$SourceVaultKGTooHard::usage = "$SourceVaultKGTooHard は「聴き手にとって難しすぎる」と判定する need (難易度 - 既知度) の閾値 (既定 0.6)。超えたノードは score を半減し TooHard フラグを付ける。";
+$SourceVaultKGRoot::usage = "$SourceVaultKGRoot \:306f\:77e5\:8b58\:30b0\:30e9\:30d5\:5c64\:306e\:4fdd\:5b58\:5148 (Automatic = SourceVaultCoreRoot[]/knowledgegraph\:3001\:7121\:3051\:308c\:3070 LOCALAPPDATA/SourceVault/knowledgegraph)\:3002\:30c6\:30b9\:30c8\:3067\:306f\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:3092\:4e0e\:3048\:3066\:9694\:96e2\:3059\:308b\:3002";
+$SourceVaultKGEdgeKinds::usage = "$SourceVaultKGEdgeKinds \:306f\:8fba\:7a2e\:5225\:306e\:8868\:3002<|kind -> <|\"Order\" (From \:3092 To \:3088\:308a\:5148\:306b\:63d0\:793a\:3059\:308b\:9806\:5e8f\:5236\:7d04\:304b), \"OrderKind\" (Difficulty|Temporal|Derivation|Narrative|Causal|Hierarchy|None), \"Parent\" (\:968e\:5c64\:5316\:3067\:89aa\:5019\:88dc\:306b\:306a\:308b\:5074: From|To|Either|None), \"Affinity\" (\:89aa\:5b50\:89aa\:548c\:5ea6\:306e\:4fc2\:6570)|>|>\:3002";
+$SourceVaultKGNodeKinds::usage = "$SourceVaultKGNodeKinds \:306f\:30ce\:30fc\:30c9\:7a2e\:5225\:306e\:4e00\:89a7 (Claim / Concept / Definition / Method / Experiment / Result / Equation / Figure / Question / Conclusion / Background / Section / Survey)\:3002";
+$SourceVaultKGAudiencePresets::usage = "$SourceVaultKGAudiencePresets \:306f\:8074\:304d\:624b\:30d7\:30ea\:30bb\:30c3\:30c8 (\"\:9ad8\:6821\:751f\" / \"\:5927\:5b66\:7406\:7cfb\:5b66\:90e8\:5352\" / \"IT\:30a8\:30f3\:30b8\:30cb\:30a2\" / \"\:9ad8\:6821\:6570\:5b66III\" \:306a\:3069) -> <|\"Level\", \"Knowledge\" -> <|\:9818\:57df -> \:7406\:89e3\:5ea6|>|> \:306e\:8868\:3002SourceVaultKGAudience \:304c\:53c2\:7167\:3059\:308b\:3002";
+$SourceVaultKGDomainAliases::usage = "$SourceVaultKGDomainAliases \:306f\:9818\:57df\:540d\:306e\:5225\:540d\:8868 (\:82f1\:8a9e\:540d -> \:6b63\:6e96\:65e5\:672c\:8a9e\:540d)\:3002\:30ce\:30fc\:30c9\:306e Domains \:3068\:8074\:304d\:624b\:306e Knowledge \:306e\:7167\:5408\:306b\:4f7f\:3046\:3002";
+$SourceVaultKGViewMaxRows::usage = "$SourceVaultKGViewMaxRows \:306f View \:95a2\:6570\:304c Dataset \:306b\:51fa\:3059\:6700\:5927\:884c\:6570 (\:65e2\:5b9a 200)\:3002";
+$SourceVaultKGTooHard::usage = "$SourceVaultKGTooHard \:306f\:300c\:8074\:304d\:624b\:306b\:3068\:3063\:3066\:96e3\:3057\:3059\:304e\:308b\:300d\:3068\:5224\:5b9a\:3059\:308b need (\:96e3\:6613\:5ea6 - \:65e2\:77e5\:5ea6) \:306e\:95be\:5024 (\:65e2\:5b9a 0.6)\:3002\:8d85\:3048\:305f\:30ce\:30fc\:30c9\:306f score \:3092\:534a\:6e1b\:3057 TooHard \:30d5\:30e9\:30b0\:3092\:4ed8\:3051\:308b\:3002";
 
-SourceVaultKGRoot::usage = "SourceVaultKGRoot[] は知識グラフ層の保存ディレクトリを返す (無ければ作る)。";
-SourceVaultKGNew::usage = "SourceVaultKGNew[graphId, opts] は空の知識グラフ連想を返す。opts: \"Title\" / \"Language\" (既定 \"ja\") / \"Sources\" ({<|\"Key\",\"Locator\",\"Kind\",\"Note\"|>..}) / \"Kind\" (Paper|Survey|Background) / \"PrivacyLevel\"。";
-SourceVaultKGValidate::usage = "SourceVaultKGValidate[kg] はノード・辺を正規化し (既定値補完・未知の辺種別を RelatedTo に丸める・端点の無い辺や自己ループを落とす・Root を決める)、\"Warnings\" を付けた KG を返す。すべての取り込み口がこれを通る。";
-SourceVaultKGFromJSON::usage = "SourceVaultKGFromJSON[json] は LLM 応答 (```json フェンス付き可) や JSON 文字列 / 連想を KG に変換して SourceVaultKGValidate を通す。失敗は Failure。";
-SourceVaultKGToJSON::usage = "SourceVaultKGToJSON[kg] は KG を JSON 文字列にする。";
-SourceVaultKGMerge::usage = "SourceVaultKGMerge[kg, delta, opts] は差分 KG (ノード/辺の追加・上書き) を取り込む。同じ Id のノードは delta のキーだけ上書き、辺は (From, To, EdgeKind) で重複排除。\"Language\"->\"en\" を与えると delta の文字列テキスト (Label/Summary/Points/Talk) はその言語の訳として既存テキストに併記される。";
-SourceVaultKGNode::usage = "SourceVaultKGNode[kg, id] はノード連想 (無ければ Missing)。";
-SourceVaultKGText::usage = "SourceVaultKGText[node, key, lang] は言語別テキスト (\"Label\"/\"Summary\"/\"Talk\"/\"Cite\" は String、\"Points\" は List) を返す。lang が無ければ主言語 → 任意の言語の順で落ちる。";
-SourceVaultKGSave::usage = "SourceVaultKGSave[kg] は KG を <root>/graphs/<graphId>.json に保存する (前版は graphs/history/ に退避)。";
-SourceVaultKGLoad::usage = "SourceVaultKGLoad[graphId] は保存済み KG を読む (無ければ Missing)。";
-SourceVaultKGRepairMojibake::usage = "SourceVaultKGRepairMojibake[] は保存済みの KG (graphs/) と周辺知識の書庫 (background/) の文字化け (UTF-8 のバイトを 1 文字ずつ読んだ形。gawé → gawÃ© など) を直して書き戻す。<|\"Checked\", \"Fixed\", \"Files\"|> を返す。取り込み (SourceVaultKGFromJSON / SourceVaultKGMerge) は入口で同じ修復をする。";
-SourceVaultKGList::usage = "SourceVaultKGList[] は保存済み KG の一覧 ({<|\"GraphId\",\"Title\",\"Kind\",\"NodeCount\",\"EdgeCount\",\"UpdatedAtUTC\"|>..})。";
-SourceVaultKGDelete::usage = "SourceVaultKGDelete[graphId] は保存済み KG を削除する (history は残す)。";
+SourceVaultKGRoot::usage = "SourceVaultKGRoot[] \:306f\:77e5\:8b58\:30b0\:30e9\:30d5\:5c64\:306e\:4fdd\:5b58\:30c7\:30a3\:30ec\:30af\:30c8\:30ea\:3092\:8fd4\:3059 (\:7121\:3051\:308c\:3070\:4f5c\:308b)\:3002";
+SourceVaultKGNew::usage = "SourceVaultKGNew[graphId, opts] \:306f\:7a7a\:306e\:77e5\:8b58\:30b0\:30e9\:30d5\:9023\:60f3\:3092\:8fd4\:3059\:3002opts: \"Title\" / \"Language\" (\:65e2\:5b9a \"ja\") / \"Sources\" ({<|\"Key\",\"Locator\",\"Kind\",\"Note\"|>..}) / \"Kind\" (Paper|Survey|Background) / \"PrivacyLevel\"\:3002";
+SourceVaultKGValidate::usage = "SourceVaultKGValidate[kg] \:306f\:30ce\:30fc\:30c9\:30fb\:8fba\:3092\:6b63\:898f\:5316\:3057 (\:65e2\:5b9a\:5024\:88dc\:5b8c\:30fb\:672a\:77e5\:306e\:8fba\:7a2e\:5225\:3092 RelatedTo \:306b\:4e38\:3081\:308b\:30fb\:7aef\:70b9\:306e\:7121\:3044\:8fba\:3084\:81ea\:5df1\:30eb\:30fc\:30d7\:3092\:843d\:3068\:3059\:30fbRoot \:3092\:6c7a\:3081\:308b)\:3001\"Warnings\" \:3092\:4ed8\:3051\:305f KG \:3092\:8fd4\:3059\:3002\:3059\:3079\:3066\:306e\:53d6\:308a\:8fbc\:307f\:53e3\:304c\:3053\:308c\:3092\:901a\:308b\:3002";
+SourceVaultKGFromJSON::usage = "SourceVaultKGFromJSON[json] \:306f LLM \:5fdc\:7b54 (```json \:30d5\:30a7\:30f3\:30b9\:4ed8\:304d\:53ef) \:3084 JSON \:6587\:5b57\:5217 / \:9023\:60f3\:3092 KG \:306b\:5909\:63db\:3057\:3066 SourceVaultKGValidate \:3092\:901a\:3059\:3002\:5931\:6557\:306f Failure\:3002";
+SourceVaultKGToJSON::usage = "SourceVaultKGToJSON[kg] \:306f KG \:3092 JSON \:6587\:5b57\:5217\:306b\:3059\:308b\:3002";
+SourceVaultKGMerge::usage = "SourceVaultKGMerge[kg, delta, opts] \:306f\:5dee\:5206 KG (\:30ce\:30fc\:30c9/\:8fba\:306e\:8ffd\:52a0\:30fb\:4e0a\:66f8\:304d) \:3092\:53d6\:308a\:8fbc\:3080\:3002\:540c\:3058 Id \:306e\:30ce\:30fc\:30c9\:306f delta \:306e\:30ad\:30fc\:3060\:3051\:4e0a\:66f8\:304d\:3001\:8fba\:306f (From, To, EdgeKind) \:3067\:91cd\:8907\:6392\:9664\:3002\"Language\"->\"en\" \:3092\:4e0e\:3048\:308b\:3068 delta \:306e\:6587\:5b57\:5217\:30c6\:30ad\:30b9\:30c8 (Label/Summary/Points/Talk) \:306f\:305d\:306e\:8a00\:8a9e\:306e\:8a33\:3068\:3057\:3066\:65e2\:5b58\:30c6\:30ad\:30b9\:30c8\:306b\:4f75\:8a18\:3055\:308c\:308b\:3002";
+SourceVaultKGNode::usage = "SourceVaultKGNode[kg, id] \:306f\:30ce\:30fc\:30c9\:9023\:60f3 (\:7121\:3051\:308c\:3070 Missing)\:3002";
+SourceVaultKGText::usage = "SourceVaultKGText[node, key, lang] \:306f\:8a00\:8a9e\:5225\:30c6\:30ad\:30b9\:30c8 (\"Label\"/\"Summary\"/\"Talk\"/\"Cite\" \:306f String\:3001\"Points\" \:306f List) \:3092\:8fd4\:3059\:3002lang \:304c\:7121\:3051\:308c\:3070\:4e3b\:8a00\:8a9e \[RightArrow] \:4efb\:610f\:306e\:8a00\:8a9e\:306e\:9806\:3067\:843d\:3061\:308b\:3002";
+SourceVaultKGSave::usage = "SourceVaultKGSave[kg] \:306f KG \:3092 <root>/graphs/<graphId>.json \:306b\:4fdd\:5b58\:3059\:308b (\:524d\:7248\:306f graphs/history/ \:306b\:9000\:907f)\:3002";
+SourceVaultKGLoad::usage = "SourceVaultKGLoad[graphId] \:306f\:4fdd\:5b58\:6e08\:307f KG \:3092\:8aad\:3080 (\:7121\:3051\:308c\:3070 Missing)\:3002";
+SourceVaultKGRepairMojibake::usage = "SourceVaultKGRepairMojibake[] \:306f\:4fdd\:5b58\:6e08\:307f\:306e KG (graphs/) \:3068\:5468\:8fba\:77e5\:8b58\:306e\:66f8\:5eab (background/) \:306e\:6587\:5b57\:5316\:3051 (UTF-8 \:306e\:30d0\:30a4\:30c8\:3092 1 \:6587\:5b57\:305a\:3064\:8aad\:3093\:3060\:5f62\:3002gaw\[EAcute] \[RightArrow] gaw\[CapitalATilde]\[Copyright] \:306a\:3069) \:3092\:76f4\:3057\:3066\:66f8\:304d\:623b\:3059\:3002<|\"Checked\", \"Fixed\", \"Files\"|> \:3092\:8fd4\:3059\:3002\:53d6\:308a\:8fbc\:307f (SourceVaultKGFromJSON / SourceVaultKGMerge) \:306f\:5165\:53e3\:3067\:540c\:3058\:4fee\:5fa9\:3092\:3059\:308b\:3002";
+SourceVaultKGList::usage = "SourceVaultKGList[] \:306f\:4fdd\:5b58\:6e08\:307f KG \:306e\:4e00\:89a7 ({<|\"GraphId\",\"Title\",\"Kind\",\"NodeCount\",\"EdgeCount\",\"UpdatedAtUTC\"|>..})\:3002";
+SourceVaultKGDelete::usage = "SourceVaultKGDelete[graphId] \:306f\:4fdd\:5b58\:6e08\:307f KG \:3092\:524a\:9664\:3059\:308b (history \:306f\:6b8b\:3059)\:3002";
 
-SourceVaultKGAudience::usage = "SourceVaultKGAudience[spec] は聴き手指定を正規化する。spec: プリセット名 (\"大学理系学部卒\") / カンマ区切り (\"高校生, 電気化学=0.3, 高校数学III\") / リスト / <|\"Level\", \"Knowledge\", \"Presets\", \"Language\", \"Description\"|>。結果は <|\"Level\" (主題の理解度 0-1), \"Knowledge\" -> <|領域 -> 理解度|>, \"Presets\", \"Language\", \"Description\", \"Unknown\" (解釈できなかった語)|>。";
-SourceVaultKGNeed::usage = "SourceVaultKGNeed[kg, audience] は各ノードの need = 難易度 - 聴き手の既知度 (<|id -> Real|>)。0 以下なら既知として扱える。";
-SourceVaultKGScores::usage = "SourceVaultKGScores[kg, audience] は各ノードの <|\"Need\", \"Known\", \"Score\" (重要度 x 聴き手にとっての必要度), \"Flags\" (TooHard / Assumed)|>。";
+SourceVaultKGAudience::usage = "SourceVaultKGAudience[spec] \:306f\:8074\:304d\:624b\:6307\:5b9a\:3092\:6b63\:898f\:5316\:3059\:308b\:3002spec: \:30d7\:30ea\:30bb\:30c3\:30c8\:540d (\"\:5927\:5b66\:7406\:7cfb\:5b66\:90e8\:5352\") / \:30ab\:30f3\:30de\:533a\:5207\:308a (\"\:9ad8\:6821\:751f, \:96fb\:6c17\:5316\:5b66=0.3, \:9ad8\:6821\:6570\:5b66III\") / \:30ea\:30b9\:30c8 / <|\"Level\", \"Knowledge\", \"Presets\", \"Language\", \"Description\"|>\:3002\:7d50\:679c\:306f <|\"Level\" (\:4e3b\:984c\:306e\:7406\:89e3\:5ea6 0-1), \"Knowledge\" -> <|\:9818\:57df -> \:7406\:89e3\:5ea6|>, \"Presets\", \"Language\", \"Description\", \"Unknown\" (\:89e3\:91c8\:3067\:304d\:306a\:304b\:3063\:305f\:8a9e)|>\:3002";
+SourceVaultKGNeed::usage = "SourceVaultKGNeed[kg, audience] \:306f\:5404\:30ce\:30fc\:30c9\:306e need = \:96e3\:6613\:5ea6 - \:8074\:304d\:624b\:306e\:65e2\:77e5\:5ea6 (<|id -> Real|>)\:30020 \:4ee5\:4e0b\:306a\:3089\:65e2\:77e5\:3068\:3057\:3066\:6271\:3048\:308b\:3002";
+SourceVaultKGScores::usage = "SourceVaultKGScores[kg, audience] \:306f\:5404\:30ce\:30fc\:30c9\:306e <|\"Need\", \"Known\", \"Score\" (\:91cd\:8981\:5ea6 x \:8074\:304d\:624b\:306b\:3068\:3063\:3066\:306e\:5fc5\:8981\:5ea6), \"Flags\" (TooHard / Assumed)|>\:3002";
 
-SourceVaultKGOrderGraph::usage = "SourceVaultKGOrderGraph[kg] は順序制約辺 (Order->True の種別 + Contains) だけの有向 Graph と、循環を切るために落とした辺の一覧を <|\"Graph\", \"Dropped\"|> で返す。";
-SourceVaultKGLinearOrder::usage = "SourceVaultKGLinearOrder[kg, strategy] は順序制約を満たす線形拡張 (トポロジカル順) を返す。strategy: \"Source\" (論文の出現順優先) / \"Importance\" / \"Difficulty\" (易→難) / \"Coherent\" (直前ノードとの関連度優先)。";
-SourceVaultKGOrderedTree::usage = "SourceVaultKGOrderedTree[kg, opts] は最小全域順序木 (線形拡張の階層分割) を返す。<|\"Root\", \"Order\" (前順走査 = 線形拡張), \"Parent\", \"Children\", \"Depth\", \"Score\", \"Strategy\", \"Diagnostics\"|>。opts: \"Strategy\" (既定 \"Source\") / \"MaxDepth\" (既定 3) / \"DepthPenalty\" (既定 0.02)。";
-SourceVaultKGOrderedTrees::usage = "SourceVaultKGOrderedTrees[kg, opts] は複数戦略で順序木候補を作り Score 降順で返す。\"Strategies\"->{...}。";
-SourceVaultKGLevelSummaries::usage = "SourceVaultKGLevelSummaries[kg, tree, opts] は木の内部ノードごとに概要 (自身の Summary + 子ラベル) を <|id -> <|\"Depth\", \"Label\", \"Summary\", \"Children\"|>|> で返す (決定的)。LLM で磨くには SourceVaultKGSummaryPrompt。";
-SourceVaultKGVerify::usage = "SourceVaultKGVerify[kg, tree] は順序木の破綻検証: <|\"Status\" (OK|Warnings|Broken), \"OrderViolations\", \"Cycles\" (落とした辺), \"Orphans\", \"RootMismatch\", \"MissingPrerequisites\"|>。";
+SourceVaultKGOrderGraph::usage = "SourceVaultKGOrderGraph[kg] \:306f\:9806\:5e8f\:5236\:7d04\:8fba (Order->True \:306e\:7a2e\:5225 + Contains) \:3060\:3051\:306e\:6709\:5411 Graph \:3068\:3001\:5faa\:74b0\:3092\:5207\:308b\:305f\:3081\:306b\:843d\:3068\:3057\:305f\:8fba\:306e\:4e00\:89a7\:3092 <|\"Graph\", \"Dropped\"|> \:3067\:8fd4\:3059\:3002";
+SourceVaultKGLinearOrder::usage = "SourceVaultKGLinearOrder[kg, strategy] \:306f\:9806\:5e8f\:5236\:7d04\:3092\:6e80\:305f\:3059\:7dda\:5f62\:62e1\:5f35 (\:30c8\:30dd\:30ed\:30b8\:30ab\:30eb\:9806) \:3092\:8fd4\:3059\:3002strategy: \"Source\" (\:8ad6\:6587\:306e\:51fa\:73fe\:9806\:512a\:5148) / \"Importance\" / \"Difficulty\" (\:6613\[RightArrow]\:96e3) / \"Coherent\" (\:76f4\:524d\:30ce\:30fc\:30c9\:3068\:306e\:95a2\:9023\:5ea6\:512a\:5148)\:3002";
+SourceVaultKGOrderedTree::usage = "SourceVaultKGOrderedTree[kg, opts] \:306f\:6700\:5c0f\:5168\:57df\:9806\:5e8f\:6728 (\:7dda\:5f62\:62e1\:5f35\:306e\:968e\:5c64\:5206\:5272) \:3092\:8fd4\:3059\:3002<|\"Root\", \"Order\" (\:524d\:9806\:8d70\:67fb = \:7dda\:5f62\:62e1\:5f35), \"Parent\", \"Children\", \"Depth\", \"Score\", \"Strategy\", \"Diagnostics\"|>\:3002opts: \"Strategy\" (\:65e2\:5b9a \"Source\") / \"MaxDepth\" (\:65e2\:5b9a 3) / \"DepthPenalty\" (\:65e2\:5b9a 0.02)\:3002";
+SourceVaultKGOrderedTrees::usage = "SourceVaultKGOrderedTrees[kg, opts] \:306f\:8907\:6570\:6226\:7565\:3067\:9806\:5e8f\:6728\:5019\:88dc\:3092\:4f5c\:308a Score \:964d\:9806\:3067\:8fd4\:3059\:3002\"Strategies\"->{...}\:3002";
+SourceVaultKGOverDegree::usage = "SourceVaultKGOverDegree[kg, d, opts] \:306f\:9806\:5e8f\:6728\:3067\:5b50 (\:96a0\:3059\:30fb\:975e\:516c\:958b\:3092\:9664\:304f) \:304c d \:500b\:3092\:8d85\:3048\:308b\:30ce\:30fc\:30c9\:306e\:4e00\:89a7 <|\"Node\", \"Children\", \"Degree\", \"Depth\"|>\:3002opts: \"Tree\" (\:8a08\:7b97\:6e08\:307f\:306e\:9806\:5e8f\:6728) / \"Strategy\"\:3002";
+SourceVaultKGBalance::usage = "SourceVaultKGBalance[kg, opts] \:306f\:9806\:5e8f\:6728\:306e\:3069\:306e\:30ce\:30fc\:30c9\:3082\:5b50\:304c \"MaxDegree\" (\:65e2\:5b9a 5) \:500b\:4ee5\:4e0b\:306b\:306a\:308b\:3088\:3046\:3001\:8d85\:3048\:308b\:30ce\:30fc\:30c9\:306e\:5b50\:3092\:6728\:306e\:9806\:306e\:307e\:307e\:9023\:7d9a\:3057\:305f\:300c\:307e\:3068\:307e\:308a\:300d(Section\:3001\"Cluster\" -> True\:3001Id grp_<\:89aa>_<n>) \:306b\:5206\:3051\:3066\:6bb5\:3092\:8db3\:3059 (\:6df1\:3044\:65b9\:304b\:3089\:3001\:5168\:90e8\:304c\:4e0a\:9650\:4ee5\:4e0b\:306b\:306a\:308b\:307e\:3067\:3002\:5b50\:304c\:4e0a\:9650\:306e 2 \:4e57\:3092\:8d85\:3048\:308b\:3068\:304d\:306f 2 \:6bb5\:4ee5\:4e0a)\:3002\"Groups\" -> <|\:89aa -> {{\:5b50 Id..}..}|> \:3068 \"Info\" -> <|\:89aa -> {<|\"Label\", \"Gist\", \"Summary\"|>..}|> \:3067\:5206\:3051\:65b9\:3068\:984c\:76ee\:30fb\:4e00\:884c\:8981\:7d04\:3092\:4e0e\:3048\:3089\:308c\:308b (\:9806\:3067\:9023\:7d9a\:30fb\:6f0f\:308c\:306a\:304f\:30fb\:5404\:307e\:3068\:307e\:308a\:304c\:4e0a\:9650\:4ee5\:4e0b\:3067\:306a\:3051\:308c\:3070\:6368\:3066\:3066\:7b49\:5206\:3057 \"Rejected\" \:306b\:8a18\:9332)\:3002\:623b\:308a <|\"KG\", \"Added\", \"Rejected\", \"Unresolved\", \"Rounds\", \"MaxDegree\"|>\:3002\:4fdd\:5b58\:306f\:3057\:306a\:3044\:3002\:9806\:5e8f\:6728\:306e\:6df1\:3055\:306e\:4e0a\:9650 (\"MaxDepth\" -> Automatic) \:306f\:307e\:3068\:307e\:308a\:306e\:6bb5\:306e\:5206\:3060\:3051\:6df1\:304f\:306a\:308b\:3002\:76ee\:6b21 (\:5168\:4f53\:306e\:6d41\:308c) \:306f\:90e8\:306e\:4e00\:884c\:8981\:7d04 \"Gist\" \:3092\:4e26\:3079\:308b\:3002";
+SourceVaultKGTocQ::usage = "SourceVaultKGTocQ[kg] \:306f\:77e5\:8b58\:30b0\:30e9\:30d5\:306b\:76ee\:6b21 (kg[\"Toc\"]) \:304c\:3042\:308b\:304b (v1.46)\:3002";
+SourceVaultKGTocTree::usage = "SourceVaultKGTocTree[kg] \:306f\:76ee\:6b21\:306e\:6728\:3092\:9806\:5e8f\:6728\:3068\:540c\:3058\:5f62 (Root / Order (\:524d\:9806) / Parent / Children / Depth\:3001Strategy \"Toc\") \:3067\:8fd4\:3059\:3002\:76ee\:6b21\:3092\:4f5c\:3063\:305f\:3042\:3068\:306b\:8db3\:3055\:308c\:305f\:30ce\:30fc\:30c9\:306f\:3001\:524d\:306e\:679a (Precedes \:306e\:5143) \:306e\:5f8c\:308d \:2192 Contains \:306e\:89aa\:306e\:672b\:5c3e \:2192 \:524d\:63d0\:5148\:306e\:524d \:2192 \:6839\:306e\:672b\:5c3e \:306b\:7f6e\:304f\:3002SourceVaultKGOrderedTree \:3082\:76ee\:6b21\:304c\:3042\:308c\:3070\:3053\:308c\:3092\:8fd4\:3059 (\"UseToc\" -> False \:3067\:8cc7\:6599\:306e\:6728)\:3002";
+SourceVaultKGTocMove::usage = "SourceVaultKGTocMove[kg, id, after] \:306f\:76ee\:6b21\:306e\:4e2d\:3067 id \:3092 after \:306e\:76f4\:5f8c\:3078\:52d5\:304b\:3059 (\:8abf\:6574\:306e After)\:3002\:4f7f\:308f\:306a\:3044\:3068\:6c7a\:3081\:305f\:9805\:76ee\:306a\:3089\:76ee\:6b21\:306b\:623b\:3059\:3002after \:304c\:76ee\:6b21\:306b\:7121\:3044\:3001\:307e\:305f\:306f id \:306e\:90e8\:5206\:6728\:306e\:4e2d\:306a\:3089 kg \:3092\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002";
+SourceVaultKGImportNodes::usage = "SourceVaultKGImportNodes[kg, from, ids | All, opts] \:306f\:5225\:306e KG (from) \:306e\:30ce\:30fc\:30c9\:3092 kg \:306b\:53d6\:308a\:8fbc\:3080 (v1.47\:3002\:8a08\:7b97\:30ce\:30fc\:30c8\:306e\:5358\:4f4d\:306e\:518d\:5229\:7528\:306a\:3069)\:3002ids \:3068\:305d\:306e Contains \:306e\:5b50\:5b6b\:3092\:65b0\:3057\:3044 Id (\"Prefix\" \:65e2\:5b9a = from \:306e GraphId \:304b\:3089) \:3067\:5199\:3057\:3001\:4e2d\:306e\:8fba\:3082\:5199\:3059\:3002\:3044\:3061\:3070\:3093\:4e0a\:306e\:30ce\:30fc\:30c9\:306f \"Parent\" (\:65e2\:5b9a \:6839) \:306e\:5b50\:3001\"After\" \:304c\:3042\:308c\:3070\:305d\:306e\:5f8c\:308d\:3002\:5143\:306f \"Origin\" -> <|Graph, Id|>\:3002\:30ce\:30fc\:30c9\:306e \"Links\" (\"<GraphId>#<Id>\") \:304c kg \:306e\:30ce\:30fc\:30c9\:3092\:6307\:3057\:3066\:3044\:308c\:3070 Supports \:306e\:8fba (\"Link\" -> False \:3067\:6b62\:3081\:308b)\:3002\"Pin\" -> True \:3067\:3044\:3061\:3070\:3093\:4e0a\:306e\:30ce\:30fc\:30c9\:306b\:5fc5\:305a\:51fa\:3059\:5370\:3002\:623b\:308a <|\"KG\", \"Added\", \"Map\", \"Linked\"|> (\:4fdd\:5b58\:306f\:3057\:306a\:3044)\:3002";
+SourceVaultKGSetToc::usage = "SourceVaultKGSetToc[kg, <|\:89aa -> {\:5b50..}|>, opts] \:306f\:76ee\:6b21\:3092 KG \:306b\:66f8\:304f (\:4fdd\:5b58\:306f\:3057\:306a\:3044)\:3002\"Groups\" = \:76ee\:6b21\:306e\:7bc0\:30ce\:30fc\:30c9 {<|\"Id\", \"Label\", \"Gist\", \"Summary\", \"Importance\", \"Include\" (Must|Optional)|>..} (\:65e2\:5b58\:306e Id \:306a\:3089\:4e00\:884c\:8981\:7d04\:306a\:3069\:3092\:66f8\:304d\:8db3\:3059)\:3001\"Omitted\" = \:4f7f\:308f\:306a\:3044\:8449\:3001\"MaxDegree\" (\:65e2\:5b9a 5) \:3092\:8d85\:3048\:308b\:5b50\:306e\:5217\:306f\:9023\:7d9a\:3057\:305f\:584a\:306b\:5206\:3051\:3001\:5144\:5f1f\:3092\:4f9d\:5b58 (Prerequisite / Derives) \:3067\:4e26\:3079\:66ff\:3048\:308b (\:5b89\:5b9a\:306a\:4f4d\:76f8\:6574\:5217\:3001\:9589\:8def\:306f \"Violations\")\:3002\:6a5f\:68b0\:7684\:306a\:307e\:3068\:307e\:308a (Cluster) \:306f\:5916\:3057\:3066\:5b50\:3092\:5143\:306e\:89aa\:306b\:623b\:3059 (\"DropClusters\")\:3002\:623b\:308a <|\"KG\", \"Added\", \"Split\", \"Violations\"|>\:3002";
+SourceVaultKGMechanicalToc::usage = "SourceVaultKGMechanicalToc[kg, opts] \:306f LLM \:3092\:4f7f\:308f\:306a\:3044\:76ee\:6b21: \:8cc7\:6599\:306e\:69cb\:9020 (\:9806\:5e8f\:6728) \:3092\:305d\:306e\:307e\:307e\:76ee\:6b21\:306b\:3057\:3001\:6b21\:6570\:306e\:4e0a\:9650\:306f SourceVaultKGBalance \:306e\:307e\:3068\:307e\:308a\:3067\:5b88\:308b\:3002\:623b\:308a\:306f SourceVaultKGSetToc \:3068\:540c\:3058\:306b \"Preview\" (\:8db3\:3057\:305f\:307e\:3068\:307e\:308a) \:3092\:52a0\:3048\:305f\:3082\:306e\:3002";
+SourceVaultKGTocPlan::usage = "SourceVaultKGTocPlan[kg, tree, opts] \:306f\:76ee\:6b21\:304b\:3089\:306e\:8a08\:753b (v1.46)\:3002\:76ee\:6b21\:306e\:6728\:3092\:4e0a\:304b\:3089\:958b\:304f: \:3069\:306e\:7bc0\:3082\:6982\:8981\:306e 1 \:679a\:304b\:3001\:958b\:3044\:3066\:5b50\:3092\:305d\:308c\:305e\:308c\:679a\:306b\:3059\:308b\:304b\:3002\:958b\:304f\:306e\:306f\:6d45\:3044\:7bc0\:304b\:3089\:3001\:540c\:3058\:6df1\:3055\:306a\:3089\:91cd\:8981\:5ea6 (Include Must \:306f +1) \:306e\:9ad8\:3044\:9806\:306b\:3001\:679a\:6570 (\"Slides\" / \"Seconds\") \:306b\:53ce\:307e\:308b\:3068\:3053\:308d\:307e\:3067\:3002\:958b\:3044\:305f\:7bc0\:306e\:9053\:6a19\:306e\:679a\:306f\:6839\:3068\:6df1\:3055 \"RoadmapDepth\" (\:65e2\:5b9a 1 = \:90e8) \:307e\:3067\:3001\:305d\:308c\:3088\:308a\:6df1\:3044\:7bc0\:306f\:958b\:304f\:3068\:81ea\:5206\:306e\:679a\:3092\:5b50\:306b\:8b72\:308b (\"Headings\")\:3002\:53ce\:307e\:3089\:306a\:3044\:7bc0\:306f\:6982\:8981\:306e 1 \:679a\:3092\:6b8b\:3057\:3066\:5927\:4e8b\:306a\:5b50\:3060\:3051\:679a\:306b\:3059\:308b (\"Partial\")\:30021 \:679a\:306a\:3089\:6839\:3060\:3051 (\:90e8\:306e\:4e00\:884c\:8981\:7d04\:3092\:4e26\:3079\:308b)\:3002\:5fc5\:305a\:51fa\:3059 (Pinned) \:306f\:7956\:5148\:3092\:958b\:304b\:306a\:304f\:3066\:3082\:524d\:9806\:306e\:4f4d\:7f6e\:306b\:679a\:3068\:3057\:3066\:5165\:308b\:3002\:96a0\:3059\:30fb\:975e\:516c\:958b\:30fbInclude Omit\:30fb\:8074\:304d\:624b\:304c\:77e5\:3063\:3066\:3044\:308b\:5468\:8fba\:77e5\:8b58\:306f\:5916\:3059\:3002\:623b\:308a\:306f SourceVaultKGPlan \:3068\:540c\:3058\:5f62\:306b \"Mode\" -> \"Toc\"\:3001\:5404\:679a\:306e \"AllChildren\" / \"Expanded\" / \"Figure\"\:3001\"TreeParent\" / \"TreeInternal\" \:3092\:52a0\:3048\:305f\:3082\:306e (SourceVaultKGOutline \:306f\:76ee\:6b21\:306e\:7ae0\:7acb\:3066\:3067\:7d44\:3080)\:3002";
+SourceVaultKGLevelSummaries::usage = "SourceVaultKGLevelSummaries[kg, tree, opts] \:306f\:6728\:306e\:5185\:90e8\:30ce\:30fc\:30c9\:3054\:3068\:306b\:6982\:8981 (\:81ea\:8eab\:306e Summary + \:5b50\:30e9\:30d9\:30eb) \:3092 <|id -> <|\"Depth\", \"Label\", \"Summary\", \"Children\"|>|> \:3067\:8fd4\:3059 (\:6c7a\:5b9a\:7684)\:3002LLM \:3067\:78e8\:304f\:306b\:306f SourceVaultKGSummaryPrompt\:3002";
+SourceVaultKGVerify::usage = "SourceVaultKGVerify[kg, tree] \:306f\:9806\:5e8f\:6728\:306e\:7834\:7dbb\:691c\:8a3c: <|\"Status\" (OK|Warnings|Broken), \"OrderViolations\", \"Cycles\" (\:843d\:3068\:3057\:305f\:8fba), \"Orphans\", \"RootMismatch\", \"MissingPrerequisites\"|>\:3002";
 
-SourceVaultKGPlan::usage = "SourceVaultKGPlan[kg, tree, opts] は枚数/時間と聴き手からスライド計画を作る。opts: \"Slides\" (枚数 | Automatic) / \"Seconds\" (総秒数) / \"SecondsPerSlide\" (既定 25) / \"Audience\" / \"MaxPackedPerSlide\" (既定 4) / \"PackRatio\" (既定 0.35) / \"ReleaseCeiling\" (既定 0.5) / \"ForceParts\" (既定 0.5: root 直下の部を必ず 1 枚にする Importance の下限。None で全部)。結果 <|\"Slides\" -> {<|\"NodeId\", \"Packed\", \"Seconds\", \"Flags\"|>..}, \"Pruned\", \"Assumed\", \"Promoted\", \"Threshold\", \"Scores\", \"Diagnostics\"|>。";
-SourceVaultKGVerifyPlan::usage = "SourceVaultKGVerifyPlan[kg, plan] は計画の提示順で順序制約が守られているかを検証する (<|\"Status\", \"Violations\"|>)。";
-SourceVaultKGOutline::usage = "SourceVaultKGOutline[kg, plan, opts] は計画を言語別のアウトライン (1 枚 = <|NodeId, Title, Points, Sub, Assets, Cite, Talk, Seconds, Flags, Depth, Kind, Crumb, Continuation|>) にする。opts: \"Language\" / \"MaxAssetsPerSlide\" (2) / \"MaxPointsPerSlide\" (6) / \"MaxLinesPerSlide\" (8、折り返しは \"CharsPerLine\" 40 で数える、図は \"FigureLines\" 4 行分) / \"Agenda\" (Automatic: 部が 3 つ以上なら根の直後に「全体の流れ」を 1 枚) / \"Roadmap\" (True: 節スライドの要点をその節の子スライドの題目にする) / \"Crumbs\" (True: 各枚に「第k部 … › 親」のパンくず)。収まらない子は同じ題目 + (続き) のスライドへ。原稿は箇条書きと同じ順 (ノードの Talk を表示した要点数に切り詰め、無ければ要点をそのまま文に)。結果に \"Parts\" と \"Agenda\"。";
-SourceVaultKGOutlineToMarkdown::usage = "SourceVaultKGOutlineToMarkdown[outline] は SlideWorkflow のシナリオ Markdown と、<<FIGn>> に対応する資産指定リストを <|\"Markdown\", \"Assets\"|> で返す (資産の実体化は SlideWorkflow 側)。";
+SourceVaultKGPlan::usage = "SourceVaultKGPlan[kg, tree, opts] \:306f\:679a\:6570/\:6642\:9593\:3068\:8074\:304d\:624b\:304b\:3089\:30b9\:30e9\:30a4\:30c9\:8a08\:753b\:3092\:4f5c\:308b\:3002opts: \"Slides\" (\:679a\:6570 | Automatic) / \"Seconds\" (\:7dcf\:79d2\:6570) / \"SecondsPerSlide\" (\:65e2\:5b9a 25) / \"Audience\" / \"MaxPackedPerSlide\" (\:65e2\:5b9a 4) / \"PackRatio\" (\:65e2\:5b9a 0.35) / \"ReleaseCeiling\" (\:65e2\:5b9a 0.5) / \"ForceParts\" (\:65e2\:5b9a 0.5: root \:76f4\:4e0b\:306e\:90e8\:3092\:5fc5\:305a 1 \:679a\:306b\:3059\:308b Importance \:306e\:4e0b\:9650\:3002None \:3067\:5168\:90e8)\:3002\:7d50\:679c <|\"Slides\" -> {<|\"NodeId\", \"Packed\", \"Seconds\", \"Flags\"|>..}, \"Pruned\", \"Assumed\", \"Promoted\", \"Threshold\", \"Scores\", \"Diagnostics\"|>\:3002 v1.42: \:30ce\:30fc\:30c9\:306e \"Pinned\" -> True \:306f\:300c\:5fc5\:305a\:51fa\:3059\:300d\:5370\:3067\:3001\:70b9\:6570\:30fb\:524d\:63d0\:77e5\:8b58\:306e\:5224\:5b9a\:306b\:3088\:3089\:305a\:90e8\:3068\:540c\:3058\:304f\:5148\:306b 1 \:679a\:3092\:53d6\:308b (\:67a0\:3092\:8d85\:3048\:3066\:3082\:51fa\:3059\:3002\:96a0\:3059\:30fb\:975e\:516c\:958b\:306f\:9664\:304f)\:3002\:7d50\:679c\:306e \"Pinned\" \:3068\:5404\:679a\:306e Flags \:306b\:51fa\:308b\:3002";
+SourceVaultKGVerifyPlan::usage = "SourceVaultKGVerifyPlan[kg, plan] \:306f\:8a08\:753b\:306e\:63d0\:793a\:9806\:3067\:9806\:5e8f\:5236\:7d04\:304c\:5b88\:3089\:308c\:3066\:3044\:308b\:304b\:3092\:691c\:8a3c\:3059\:308b (<|\"Status\", \"Violations\"|>)\:3002";
+SourceVaultKGOutline::usage = "SourceVaultKGOutline[kg, plan, opts] \:306f\:8a08\:753b\:3092\:8a00\:8a9e\:5225\:306e\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3 (1 \:679a = <|NodeId, Title, Points, Sub, Assets, Cite, Talk, Seconds, Flags, Depth, Kind, Crumb, Continuation|>) \:306b\:3059\:308b\:3002opts: \"Language\" / \"MaxAssetsPerSlide\" (2) / \"MaxPointsPerSlide\" (6) / \"MaxLinesPerSlide\" (8\:3001\:6298\:308a\:8fd4\:3057\:306f \"CharsPerLine\" 40 \:3067\:6570\:3048\:308b\:3001\:56f3\:306f \"FigureLines\" 4 \:884c\:5206) / \"Agenda\" (Automatic: \:90e8\:304c 3 \:3064\:4ee5\:4e0a\:306a\:3089\:6839\:306e\:76f4\:5f8c\:306b\:300c\:5168\:4f53\:306e\:6d41\:308c\:300d\:3092 1 \:679a) / \"Roadmap\" (True: \:7bc0\:30b9\:30e9\:30a4\:30c9\:306e\:8981\:70b9\:3092\:305d\:306e\:7bc0\:306e\:5b50\:30b9\:30e9\:30a4\:30c9\:306e\:984c\:76ee\:306b\:3059\:308b) / \"Crumbs\" (True: \:5404\:679a\:306b\:300c\:7b2ck\:90e8 \[Ellipsis] \:203a \:89aa\:300d\:306e\:30d1\:30f3\:304f\:305a)\:3002\:53ce\:307e\:3089\:306a\:3044\:5b50\:306f\:540c\:3058\:984c\:76ee + (\:7d9a\:304d) \:306e\:30b9\:30e9\:30a4\:30c9\:3078\:3002\:539f\:7a3f\:306f\:7b87\:6761\:66f8\:304d\:3068\:540c\:3058\:9806 (\:30ce\:30fc\:30c9\:306e Talk \:3092\:8868\:793a\:3057\:305f\:8981\:70b9\:6570\:306b\:5207\:308a\:8a70\:3081\:3001\:7121\:3051\:308c\:3070\:8981\:70b9\:3092\:305d\:306e\:307e\:307e\:6587\:306b)\:3002\:7d50\:679c\:306b \"Parts\" \:3068 \"Agenda\"\:3002";
+SourceVaultKGOutlineToMarkdown::usage = "SourceVaultKGOutlineToMarkdown[outline] \:306f SlideWorkflow \:306e\:30b7\:30ca\:30ea\:30aa Markdown \:3068\:3001<<FIGn>> \:306b\:5bfe\:5fdc\:3059\:308b\:8cc7\:7523\:6307\:5b9a\:30ea\:30b9\:30c8\:3092 <|\"Markdown\", \"Assets\"|> \:3067\:8fd4\:3059 (\:8cc7\:7523\:306e\:5b9f\:4f53\:5316\:306f SlideWorkflow \:5074)\:3002 v1.42: \:30ce\:30fc\:30c9\:306e \"FigureLayout\" -> \"Row\" \:306e\:679a\:306f\:56f3\:3092 4 \:3064\:307e\:3067\:8f09\:305b\:30011 \:884c\:306b <<FIG1>> <<FIG2>> \:3068\:4e26\:3079\:308b (SlideWorkflow \:304c\:9ad8\:3055\:3092\:305d\:308d\:3048\:3066\:6a2a\:306b\:4e26\:3079\:308b)\:3002";
 
-SourceVaultKGCompose::usage = "SourceVaultKGCompose[{kg1, kg2, ..}, opts] は複数 KG を 1 つのサーベイ KG に合成する (ノード Id は <graphId>/<id> に、bg: の周辺知識ノードは共有・統合、共有ノードを介した論文間 RelatedTo を付与)。opts: \"GraphId\" / \"Title\" / \"Language\" / \"Chronological\" (Year で Precedes を付ける) / \"Edges\" (追加辺)。";
+SourceVaultKGCompose::usage = "SourceVaultKGCompose[{kg1, kg2, ..}, opts] \:306f\:8907\:6570 KG \:3092 1 \:3064\:306e\:30b5\:30fc\:30d9\:30a4 KG \:306b\:5408\:6210\:3059\:308b (\:30ce\:30fc\:30c9 Id \:306f <graphId>/<id> \:306b\:3001bg: \:306e\:5468\:8fba\:77e5\:8b58\:30ce\:30fc\:30c9\:306f\:5171\:6709\:30fb\:7d71\:5408\:3001\:5171\:6709\:30ce\:30fc\:30c9\:3092\:4ecb\:3057\:305f\:8ad6\:6587\:9593 RelatedTo \:3092\:4ed8\:4e0e)\:3002opts: \"GraphId\" / \"Title\" / \"Language\" / \"Chronological\" (Year \:3067 Precedes \:3092\:4ed8\:3051\:308b) / \"Edges\" (\:8ffd\:52a0\:8fba)\:3002";
 
-SourceVaultKGBackgroundLink::usage = "SourceVaultKGBackgroundLink[kg] は Layer Background のノードを共有 background 層 (<root>/background/bg-<slug>.json) と照合し、既存なら BackgroundRef を張り、無ければ新規登録する。<|\"Graph\", \"Linked\", \"Created\"|>。";
-SourceVaultKGBackgroundSearch::usage = "SourceVaultKGBackgroundSearch[text, opts] は共有 background ノードをラベル/別名の bigram 類似で検索する ({<|\"Id\",\"Label\",\"Score\",\"Graphs\"|>..})。";
-SourceVaultKGBackgroundList::usage = "SourceVaultKGBackgroundList[] は共有 background ノードの一覧。";
-SourceVaultKGSuggestPastSlides::usage = "SourceVaultKGSuggestPastSlides[kg, kbId] は SourceVault_kb (Graph-RAG) がロード済みなら、周辺知識ノードごとに過去デッキのスライドを検索して引用候補 ({<|\"NodeId\",\"Label\",\"Deck\",\"Slide\",\"Title\",\"Score\"|>..}) を返す。KB が無ければ {}。";
+SourceVaultKGBackgroundLink::usage = "SourceVaultKGBackgroundLink[kg] \:306f Layer Background \:306e\:30ce\:30fc\:30c9\:3092\:5171\:6709 background \:5c64 (<root>/background/bg-<slug>.json) \:3068\:7167\:5408\:3057\:3001\:65e2\:5b58\:306a\:3089 BackgroundRef \:3092\:5f35\:308a\:3001\:7121\:3051\:308c\:3070\:65b0\:898f\:767b\:9332\:3059\:308b\:3002<|\"Graph\", \"Linked\", \"Created\"|>\:3002";
+SourceVaultKGBackgroundSearch::usage = "SourceVaultKGBackgroundSearch[text, opts] \:306f\:5171\:6709 background \:30ce\:30fc\:30c9\:3092\:30e9\:30d9\:30eb/\:5225\:540d\:306e bigram \:985e\:4f3c\:3067\:691c\:7d22\:3059\:308b ({<|\"Id\",\"Label\",\"Score\",\"Graphs\"|>..})\:3002";
+SourceVaultKGBackgroundList::usage = "SourceVaultKGBackgroundList[] \:306f\:5171\:6709 background \:30ce\:30fc\:30c9\:306e\:4e00\:89a7\:3002";
+SourceVaultKGSuggestPastSlides::usage = "SourceVaultKGSuggestPastSlides[kg, kbId] \:306f SourceVault_kb (Graph-RAG) \:304c\:30ed\:30fc\:30c9\:6e08\:307f\:306a\:3089\:3001\:5468\:8fba\:77e5\:8b58\:30ce\:30fc\:30c9\:3054\:3068\:306b\:904e\:53bb\:30c7\:30c3\:30ad\:306e\:30b9\:30e9\:30a4\:30c9\:3092\:691c\:7d22\:3057\:3066\:5f15\:7528\:5019\:88dc ({<|\"NodeId\",\"Label\",\"Deck\",\"Slide\",\"Title\",\"Score\"|>..}) \:3092\:8fd4\:3059\:3002KB \:304c\:7121\:3051\:308c\:3070 {}\:3002";
 
-SourceVaultKGExtractionPrompt::usage = "SourceVaultKGExtractionPrompt[sourceText, opts] は論文本文から KG JSON を抽出させるプロンプト (純関数)。opts: \"GraphId\" / \"Title\" / \"Language\" / \"SourceKey\" / \"PDFKey\" / \"MaxNodes\"。応答は SourceVaultKGFromJSON で取り込む。";
-SourceVaultKGBackgroundPrompt::usage = "SourceVaultKGBackgroundPrompt[kg, audience, opts] は聴き手に足りない周辺知識ノードと Prerequisite 辺を差分 JSON で出させるプロンプト。応答は SourceVaultKGMerge で取り込む。";
-SourceVaultKGSummaryPrompt::usage = "SourceVaultKGSummaryPrompt[kg, tree, opts] は階層ごとの概要と破綻の指摘を出させるプロンプト。";
-SourceVaultKGTalkPrompt::usage = "SourceVaultKGTalkPrompt[outline, opts] はアウトラインの各枚の talk を接続詞つきで磨かせるプロンプト (構成・順序・タイトルは変えない)。";
-SourceVaultKGTranslatePrompt::usage = "SourceVaultKGTranslatePrompt[kg, lang, opts] はノード単位の翻訳 JSON を出させるプロンプト。応答は SourceVaultKGMerge[kg, delta, \"Language\"->lang]。";
+SourceVaultKGExtractionPrompt::usage = "SourceVaultKGExtractionPrompt[sourceText, opts] \:306f\:8ad6\:6587\:672c\:6587\:304b\:3089 KG JSON \:3092\:62bd\:51fa\:3055\:305b\:308b\:30d7\:30ed\:30f3\:30d7\:30c8 (\:7d14\:95a2\:6570)\:3002opts: \"GraphId\" / \"Title\" / \"Language\" / \"SourceKey\" / \"PDFKey\" / \"MaxNodes\"\:3002\:5fdc\:7b54\:306f SourceVaultKGFromJSON \:3067\:53d6\:308a\:8fbc\:3080\:3002";
+SourceVaultKGBackgroundPrompt::usage = "SourceVaultKGBackgroundPrompt[kg, audience, opts] \:306f\:8074\:304d\:624b\:306b\:8db3\:308a\:306a\:3044\:5468\:8fba\:77e5\:8b58\:30ce\:30fc\:30c9\:3068 Prerequisite \:8fba\:3092\:5dee\:5206 JSON \:3067\:51fa\:3055\:305b\:308b\:30d7\:30ed\:30f3\:30d7\:30c8\:3002\:5fdc\:7b54\:306f SourceVaultKGMerge \:3067\:53d6\:308a\:8fbc\:3080\:3002";
+SourceVaultKGSummaryPrompt::usage = "SourceVaultKGSummaryPrompt[kg, tree, opts] \:306f\:968e\:5c64\:3054\:3068\:306e\:6982\:8981\:3068\:7834\:7dbb\:306e\:6307\:6458\:3092\:51fa\:3055\:305b\:308b\:30d7\:30ed\:30f3\:30d7\:30c8\:3002";
+SourceVaultKGTalkPrompt::usage = "SourceVaultKGTalkPrompt[outline, opts] \:306f\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3\:306e\:5404\:679a\:306e talk \:3092\:63a5\:7d9a\:8a5e\:3064\:304d\:3067\:78e8\:304b\:305b\:308b\:30d7\:30ed\:30f3\:30d7\:30c8 (\:69cb\:6210\:30fb\:9806\:5e8f\:30fb\:30bf\:30a4\:30c8\:30eb\:306f\:5909\:3048\:306a\:3044)\:3002";
+SourceVaultKGTranslatePrompt::usage = "SourceVaultKGTranslatePrompt[kg, lang, opts] \:306f\:30ce\:30fc\:30c9\:5358\:4f4d\:306e\:7ffb\:8a33 JSON \:3092\:51fa\:3055\:305b\:308b\:30d7\:30ed\:30f3\:30d7\:30c8\:3002\:5fdc\:7b54\:306f SourceVaultKGMerge[kg, delta, \"Language\"->lang]\:3002";
 
-SourceVaultKGGraph::usage = "SourceVaultKGGraph[kg, opts] は WL の Graph を返す (順序辺は太い矢印、種別で頂点色)。opts: \"Order\" (順序辺だけ) / \"Labels\"。";
-SourceVaultKGToTopicItemGraph::usage = "SourceVaultKGToTopicItemGraph[kg] は oopsseed の TopicItemGraph 形 (SourceVaultOOPSTopicGraphPlot に渡せる) に投影する。";
-SourceVaultKGView::usage = "SourceVaultKGView[kg] はノード一覧 Dataset (行数は $SourceVaultKGViewMaxRows で制限)。";
-SourceVaultKGTreeView::usage = "SourceVaultKGTreeView[kg, tree] は順序木を字下げつきの Dataset で表示する。";
-SourceVaultKGVisualize::usage = "SourceVaultKGVisualize[kg, opts] は知識グラフの図 (Graphics) を返す (v1.30)。\"View\" -> \"Story\" (既定: 節を話の順に横へ、節の中身を縦に並べ、周辺知識は下の帯) | \"Sections\" (節の概観: 節を一列に並べ、節をまたぐ辺を弧で) | \"Focus\" (\"Focus\" -> ノード Id の近傍、\"Radius\" -> 1..3) | \"Graph\" (全ノードをばねモデルで)。色 = 種類、大きさ = 重要度、形 = 層 (本文 丸 / 周辺知識 四角 / 関連研究 菱形 / 節 角丸)、赤枠 = 未推敲、右上の点 = 図・表、左上の点 = 質疑応答、薄い = 隠す・枝刈り。ノードと辺にツールチップ。opts: \"EdgeKinds\" (Order / Prerequisite / Support / Related / Contains か辺の種類の名前)、\"Layers\" (All か {\"Paper\", \"Background\", \"Related\"} の部分)、\"Labels\" (Automatic = 節と重要なもの | All | None)、\"Plan\" (SourceVaultKGPlan の結果を重ねる: 枚番号 #n・詰め込み・枝刈り・既知)、\"Selected\" (太枠にする Id)、\"OnClick\" (クリックで f[id] を呼ぶ)、\"Hidden\" (False で隠したノードを描かない)、\"Legend\" (既定 True = 凡例つき)、\"Language\"。";
-SourceVaultKGLegend::usage = "SourceVaultKGLegend[lang] は SourceVaultKGVisualize の凡例 (種類の色と形・辺の種類・印)。";
-SourceVaultKGPlanView::usage = "SourceVaultKGPlanView[kg, plan] はスライド計画の Dataset (番号 / タイトル / 詰め込み / 秒 / フラグ)。";
+SourceVaultKGGraph::usage = "SourceVaultKGGraph[kg, opts] \:306f WL \:306e Graph \:3092\:8fd4\:3059 (\:9806\:5e8f\:8fba\:306f\:592a\:3044\:77e2\:5370\:3001\:7a2e\:5225\:3067\:9802\:70b9\:8272)\:3002opts: \"Order\" (\:9806\:5e8f\:8fba\:3060\:3051) / \"Labels\"\:3002";
+SourceVaultKGToTopicItemGraph::usage = "SourceVaultKGToTopicItemGraph[kg] \:306f oopsseed \:306e TopicItemGraph \:5f62 (SourceVaultOOPSTopicGraphPlot \:306b\:6e21\:305b\:308b) \:306b\:6295\:5f71\:3059\:308b\:3002";
+SourceVaultKGView::usage = "SourceVaultKGView[kg] \:306f\:30ce\:30fc\:30c9\:4e00\:89a7 Dataset (\:884c\:6570\:306f $SourceVaultKGViewMaxRows \:3067\:5236\:9650)\:3002";
+SourceVaultKGTreeView::usage = "SourceVaultKGTreeView[kg, tree] \:306f\:9806\:5e8f\:6728\:3092\:5b57\:4e0b\:3052\:3064\:304d\:306e Dataset \:3067\:8868\:793a\:3059\:308b\:3002";
+SourceVaultKGVisualize::usage = "SourceVaultKGVisualize[kg, opts] \:306f\:77e5\:8b58\:30b0\:30e9\:30d5\:306e\:56f3 (Graphics) \:3092\:8fd4\:3059 (v1.30)\:3002\"View\" -> \"Story\" (\:65e2\:5b9a: \:7bc0\:3092\:8a71\:306e\:9806\:306b\:6a2a\:3078\:3001\:7bc0\:306e\:4e2d\:8eab\:3092\:7e26\:306b\:4e26\:3079\:3001\:5468\:8fba\:77e5\:8b58\:306f\:4e0b\:306e\:5e2f) | \"Sections\" (\:7bc0\:306e\:6982\:89b3: \:7bc0\:3092\:4e00\:5217\:306b\:4e26\:3079\:3001\:7bc0\:3092\:307e\:305f\:3050\:8fba\:3092\:5f27\:3067) | \"Focus\" (\"Focus\" -> \:30ce\:30fc\:30c9 Id \:306e\:8fd1\:508d\:3001\"Radius\" -> 1..3) | \"Graph\" (\:5168\:30ce\:30fc\:30c9\:3092\:3070\:306d\:30e2\:30c7\:30eb\:3067)\:3002\:8272 = \:7a2e\:985e\:3001\:5927\:304d\:3055 = \:91cd\:8981\:5ea6\:3001\:5f62 = \:5c64 (\:672c\:6587 \:4e38 / \:5468\:8fba\:77e5\:8b58 \:56db\:89d2 / \:95a2\:9023\:7814\:7a76 \:83f1\:5f62 / \:7bc0 \:89d2\:4e38)\:3001\:8d64\:67a0 = \:672a\:63a8\:6572\:3001\:53f3\:4e0a\:306e\:70b9 = \:56f3\:30fb\:8868\:3001\:5de6\:4e0a\:306e\:70b9 = \:8cea\:7591\:5fdc\:7b54\:3001\:8584\:3044 = \:96a0\:3059\:30fb\:679d\:5208\:308a\:3002\:30ce\:30fc\:30c9\:3068\:8fba\:306b\:30c4\:30fc\:30eb\:30c1\:30c3\:30d7\:3002opts: \"EdgeKinds\" (Order / Prerequisite / Support / Related / Contains \:304b\:8fba\:306e\:7a2e\:985e\:306e\:540d\:524d)\:3001\"Layers\" (All \:304b {\"Paper\", \"Background\", \"Related\"} \:306e\:90e8\:5206)\:3001\"Labels\" (Automatic = \:7bc0\:3068\:91cd\:8981\:306a\:3082\:306e | All | None)\:3001\"Plan\" (SourceVaultKGPlan \:306e\:7d50\:679c\:3092\:91cd\:306d\:308b: \:679a\:756a\:53f7 #n\:30fb\:8a70\:3081\:8fbc\:307f\:30fb\:679d\:5208\:308a\:30fb\:65e2\:77e5)\:3001\"Selected\" (\:592a\:67a0\:306b\:3059\:308b Id)\:3001\"OnClick\" (\:30af\:30ea\:30c3\:30af\:3067 f[id] \:3092\:547c\:3076)\:3001\"Hidden\" (False \:3067\:96a0\:3057\:305f\:30ce\:30fc\:30c9\:3092\:63cf\:304b\:306a\:3044)\:3001\"Legend\" (\:65e2\:5b9a True = \:51e1\:4f8b\:3064\:304d)\:3001\"Language\"\:3002 v1.44: \"View\" -> \"Hierarchy\" (\:968e\:5c64) = \:9806\:5e8f\:6728\:3092 1 \:30ce\:30fc\:30c9 1 \:884c\:3067\:6df1\:3055\:306b\:5b57\:4e0b\:3052\:3057\:3066\:63cf\:304f (\:30b9\:30e9\:30a4\:30c9\:306f\:3053\:306e\:6728\:3092\:524d\:304b\:3089\:305f\:3069\:3063\:3066\:4f5c\:308b)\:3002\:5404\:884c\:306f\:984c\:76ee \:2014 \:4e00\:884c\:8981\:7d04 [\:5b50\:306e\:6570, \:7573\:3093\:3060\:8449\:306e\:6570]\:3001\:5b50\:304c \"MaxDegree\" (\:65e2\:5b9a 5) \:3092\:8d85\:3048\:308b\:30ce\:30fc\:30c9\:306f\:8d64\:3001\:307e\:3068\:307e\:308a (Cluster) \:306f\:5b9f\:7dda\:30fb\:4fdd\:5b58\:524d\:306e\:4e0b\:898b\:306f\:70b9\:7dda\:306e\:67a0\:3002\:4e0a\:9650\:3092\:8d85\:3048\:3066\:3044\:308c\:3070\:4fdd\:5b58\:305b\:305a\:306b\:6a5f\:68b0\:7684\:306b\:307e\:3068\:3081\:305f\:6728\:3092\:63cf\:304f (\"Balance\" -> False \:3067\:305d\:306e\:307e\:307e)\:3002\"Labels\" -> All \:3067\:8449\:3082\:51fa\:3059\:3002\"Strategy\" \:306f\:9806\:5e8f\:6728\:306e\:65b9\:91dd\:3002";
+SourceVaultKGLegend::usage = "SourceVaultKGLegend[lang] \:306f SourceVaultKGVisualize \:306e\:51e1\:4f8b (\:7a2e\:985e\:306e\:8272\:3068\:5f62\:30fb\:8fba\:306e\:7a2e\:985e\:30fb\:5370)\:3002";
+SourceVaultKGPlanView::usage = "SourceVaultKGPlanView[kg, plan] \:306f\:30b9\:30e9\:30a4\:30c9\:8a08\:753b\:306e Dataset (\:756a\:53f7 / \:30bf\:30a4\:30c8\:30eb / \:8a70\:3081\:8fbc\:307f / \:79d2 / \:30d5\:30e9\:30b0)\:3002";
 
 Begin["`KGPrivate`"]
 
@@ -108,8 +117,8 @@ If[! ValueQ[SourceVault`$SourceVaultKGTooHard], SourceVault`$SourceVaultKGTooHar
 
 $kgSchemaVersion = 1;
 
-(* ---------------- 辺・ノード種別 ----------------
-   すべての順序辺は「From を To より先に提示する」向きで書く。 *)
+(* ---------------- \:8fba\:30fb\:30ce\:30fc\:30c9\:7a2e\:5225 ----------------
+   \:3059\:3079\:3066\:306e\:9806\:5e8f\:8fba\:306f\:300cFrom \:3092 To \:3088\:308a\:5148\:306b\:63d0\:793a\:3059\:308b\:300d\:5411\:304d\:3067\:66f8\:304f\:3002 *)
 SourceVault`$SourceVaultKGEdgeKinds = <|
   "Prerequisite" -> <|"Order" -> True, "OrderKind" -> "Difficulty", "Parent" -> "From", "Affinity" -> 0.5|>,
   "Precedes" -> <|"Order" -> True, "OrderKind" -> "Temporal", "Parent" -> "From", "Affinity" -> 0.4|>,
@@ -128,10 +137,10 @@ SourceVault`$SourceVaultKGNodeKinds = {"Claim", "Concept", "Definition", "Method
   "RelatedWork", "Example"};
 
 $kgRootKinds = {"Claim", "Conclusion", "Survey"};
-$kgTextKeys = {"Label", "Summary", "Talk", "Cite", "Lead"};
+$kgTextKeys = {"Label", "Summary", "Talk", "Cite", "Lead", "Gist", "Role", "Bridge"};
 $kgListTextKeys = {"Points", "Details"};
 
-(* ---------------- 保存場所 ---------------- *)
+(* ---------------- \:4fdd\:5b58\:5834\:6240 ---------------- *)
 
 iKGLocalFallbackRoot[] := Module[{base},
   base = Quiet @ Check[Environment["LOCALAPPDATA"], $Failed];
@@ -160,7 +169,7 @@ iKGBackgroundDir[] := iKGEnsureDirectory[FileNameJoin[{SourceVaultKGRoot[], "bac
 
 iKGUTCNow[] := DateString[TimeZoneConvert[Now, 0], "ISODateTime"] <> "Z";
 
-(* ---------------- JSON I/O (SourceVault_slidedeck.wl と同じ単一エンコード) ---------------- *)
+(* ---------------- JSON I/O (SourceVault_slidedeck.wl \:3068\:540c\:3058\:5358\:4e00\:30a8\:30f3\:30b3\:30fc\:30c9) ---------------- *)
 
 iKGJSONSafe[expr_] := expr /. {
   m_Missing :> Null, None -> Null,
@@ -203,7 +212,7 @@ iKGJSONString[data_] := Module[{ba},
   ba = Quiet @ Check[ExportByteArray[iKGJSONSafe[data], "RawJSON"], $Failed];
   If[ByteArrayQ[ba], ByteArrayToString[ba, "UTF-8"], $Failed]];
 
-(* LLM 応答: ```json フェンスや前置きを剥がして最初の { .. 最後の } を取る *)
+(* LLM \:5fdc\:7b54: ```json \:30d5\:30a7\:30f3\:30b9\:3084\:524d\:7f6e\:304d\:3092\:5265\:304c\:3057\:3066\:6700\:521d\:306e { .. \:6700\:5f8c\:306e } \:3092\:53d6\:308b *)
 iKGParseJSONText[s_String] := Module[{t = s, a, b, parsed},
   t = StringReplace[t, {"```json" -> "", "```JSON" -> "", "```" -> ""}];
   a = StringPosition[t, "{", 1];
@@ -215,28 +224,28 @@ iKGParseJSONText[s_String] := Module[{t = s, a, b, parsed},
     parsed = Quiet @ Check[ImportString[t, "RawJSON"], $Failed]];
   If[parsed === $Failed, parsed, iKGFixMojibakeDeep[parsed]]];
 
-(* ---------------- 文字化け (UTF-8 のバイトを 1 文字ずつ読んだ形) の修復 ----------------
-   2026-09-28: 周辺知識をエージェントに作らせたジャワ語のノードが「gawé」→「gawÃ©」の形で
-   保存されていた (JSON に \u00c3\u00a9)。取り込み側は UTF-8 で読んでいるので、渡された
-   文字列が既にこの形だった (どの経路で化けたかは特定できず)。入口で直す。
-   UTF-8 の先頭バイト (C2-F4) に続く継続バイト (80-BF) の並びを 1 塊として UTF-8 で読み直し、
-   正しく読めて短くなったときだけ置き換える。日本語 (U+0100 以上) や単独の é には触れない。 *)
+(* ---------------- \:6587\:5b57\:5316\:3051 (UTF-8 \:306e\:30d0\:30a4\:30c8\:3092 1 \:6587\:5b57\:305a\:3064\:8aad\:3093\:3060\:5f62) \:306e\:4fee\:5fa9 ----------------
+   2026-09-28: \:5468\:8fba\:77e5\:8b58\:3092\:30a8\:30fc\:30b8\:30a7\:30f3\:30c8\:306b\:4f5c\:3089\:305b\:305f\:30b8\:30e3\:30ef\:8a9e\:306e\:30ce\:30fc\:30c9\:304c\:300cgaw\[EAcute]\:300d\[RightArrow]\:300cgaw\[CapitalATilde]\[Copyright]\:300d\:306e\:5f62\:3067
+   \:4fdd\:5b58\:3055\:308c\:3066\:3044\:305f (JSON \:306b \u00c3\u00a9)\:3002\:53d6\:308a\:8fbc\:307f\:5074\:306f UTF-8 \:3067\:8aad\:3093\:3067\:3044\:308b\:306e\:3067\:3001\:6e21\:3055\:308c\:305f
+   \:6587\:5b57\:5217\:304c\:65e2\:306b\:3053\:306e\:5f62\:3060\:3063\:305f (\:3069\:306e\:7d4c\:8def\:3067\:5316\:3051\:305f\:304b\:306f\:7279\:5b9a\:3067\:304d\:305a)\:3002\:5165\:53e3\:3067\:76f4\:3059\:3002
+   UTF-8 \:306e\:5148\:982d\:30d0\:30a4\:30c8 (C2-F4) \:306b\:7d9a\:304f\:7d99\:7d9a\:30d0\:30a4\:30c8 (80-BF) \:306e\:4e26\:3073\:3092 1 \:584a\:3068\:3057\:3066 UTF-8 \:3067\:8aad\:307f\:76f4\:3057\:3001
+   \:6b63\:3057\:304f\:8aad\:3081\:3066\:77ed\:304f\:306a\:3063\:305f\:3068\:304d\:3060\:3051\:7f6e\:304d\:63db\:3048\:308b\:3002\:65e5\:672c\:8a9e (U+0100 \:4ee5\:4e0a) \:3084\:5358\:72ec\:306e \[EAcute] \:306b\:306f\:89e6\:308c\:306a\:3044\:3002 *)
 iKGFixMojibakeRun[r_String] := Module[{d},
   d = Quiet @ Check[ByteArrayToString[ByteArray[ToCharacterCode[r]], "UTF-8"], $Failed];
-  If[StringQ[d] && StringFreeQ[d, "\:fffd"] && StringLength[d] < StringLength[r], d, r]];
+  If[StringQ[d] && StringFreeQ[d, "\[UnknownGlyph]"] && StringLength[d] < StringLength[r], d, r]];
 
 iKGFixMojibake[s_String] := If[
   StringFreeQ[s, RegularExpression["[\\x{C2}-\\x{F4}][\\x{80}-\\x{BF}]"]], s,
   StringReplace[s, run : RegularExpression["[\\x{C2}-\\x{F4}][\\x{80}-\\x{BF}]+"] :> iKGFixMojibakeRun[run]]];
 iKGFixMojibake[x_] := x;
 
-(* 値だけをたどる (ReplaceAll だと連想のキーにも当たり、キーが未評価の iKGFixMojibake[..] のまま残る) *)
+(* \:5024\:3060\:3051\:3092\:305f\:3069\:308b (ReplaceAll \:3060\:3068\:9023\:60f3\:306e\:30ad\:30fc\:306b\:3082\:5f53\:305f\:308a\:3001\:30ad\:30fc\:304c\:672a\:8a55\:4fa1\:306e iKGFixMojibake[..] \:306e\:307e\:307e\:6b8b\:308b) *)
 iKGFixMojibakeDeep[s_String] := iKGFixMojibake[s];
 iKGFixMojibakeDeep[a_Association] := iKGFixMojibakeDeep /@ a;
 iKGFixMojibakeDeep[l_List] := iKGFixMojibakeDeep /@ l;
 iKGFixMojibakeDeep[x_] := x;
 
-(* 保存済みの KG (graphs/*.json) と周辺知識の書庫 (background/*.json) を直す。直したファイルの数を返す *)
+(* \:4fdd\:5b58\:6e08\:307f\:306e KG (graphs/*.json) \:3068\:5468\:8fba\:77e5\:8b58\:306e\:66f8\:5eab (background/*.json) \:3092\:76f4\:3059\:3002\:76f4\:3057\:305f\:30d5\:30a1\:30a4\:30eb\:306e\:6570\:3092\:8fd4\:3059 *)
 SourceVaultKGRepairMojibake[] := Module[{files, fixed = {}},
   files = Join[
     FileNames["*.json", iKGGraphDir[]],
@@ -249,7 +258,7 @@ SourceVaultKGRepairMojibake[] := Module[{files, fixed = {}},
     {f, files}];
   <|"Checked" -> Length[files], "Fixed" -> Length[fixed], "Files" -> FileNameTake /@ fixed|>];
 
-(* ---------------- 小さな道具 ---------------- *)
+(* ---------------- \:5c0f\:3055\:306a\:9053\:5177 ---------------- *)
 
 iKGStr[v_] := Which[StringQ[v], v, v === Null || MissingQ[v] || v === None, "", True, ToString[v]];
 iKGNum[v_, default_] := If[NumericQ[v], N[v], default];
@@ -275,7 +284,7 @@ iKGBigramSimilarity[a_String, b_String] := Module[{x = iKGBigrams[a], y = iKGBig
 iKGSlug[label_String] := With[{k = iKGNormalizeKey[label]},
   If[k === "", "node", StringTake[k, UpTo[48]]]];
 
-(* 言語別テキスト: String | <|lang -> String|> *)
+(* \:8a00\:8a9e\:5225\:30c6\:30ad\:30b9\:30c8: String | <|lang -> String|> *)
 iKGTextValue[v_String, ___] := v;
 iKGTextValue[v_Association, lang_String, primary_String] := Module[{r},
   r = Lookup[v, lang, Lookup[v, primary, None]];
@@ -298,7 +307,7 @@ iKGHasLanguageQ[v_Association, lang_, _] := StringQ[Lookup[v, lang, None]] || Li
 iKGHasLanguageQ[v_List, lang_, primary_] := lang === primary;
 iKGHasLanguageQ[___] := True;
 
-(* テキスト連想の正規化: String はそのまま、連想は言語キーの String だけ残す *)
+(* \:30c6\:30ad\:30b9\:30c8\:9023\:60f3\:306e\:6b63\:898f\:5316: String \:306f\:305d\:306e\:307e\:307e\:3001\:9023\:60f3\:306f\:8a00\:8a9e\:30ad\:30fc\:306e String \:3060\:3051\:6b8b\:3059 *)
 iKGNormText[v_String] := StringTrim[v];
 iKGNormText[v_?iKGAssocQ] := Module[{a = iKGAssoc[v]},
   a = KeySelect[Select[a, StringQ], StringQ];
@@ -320,7 +329,7 @@ SourceVaultKGText[node_Association, key_String, lang_String : "ja"] := Module[
     With[{r = iKGTextValue[v, lang, primary]}, If[StringQ[r], r, ""]]]];
 SourceVaultKGText[_, _, ___] := "";
 
-(* ---------------- 正規化と検証 ---------------- *)
+(* ---------------- \:6b63\:898f\:5316\:3068\:691c\:8a3c ---------------- *)
 
 iKGNormalizeNode[n_?iKGAssocQ, primary_String] := Module[{e = iKGAssoc[n], id, kind, layer},
   id = StringTrim @ iKGStr[Lookup[e, "Id", Lookup[e, "id", ""]]];
@@ -349,10 +358,20 @@ iKGNormalizeNode[n_?iKGAssocQ, primary_String] := Module[{e = iKGAssoc[n], id, k
   e["PrimaryLanguage"] = primary;
   e["Source"] = With[{s = Lookup[e, "Source", <||>]}, If[iKGAssocQ[s], iKGAssoc[s], <||>]];
   e["BackgroundRef"] = With[{b = Lookup[e, "BackgroundRef", None]}, If[StringQ[b] && b =!= "", b, None]];
+  (* v1.42: \:300c\:5fc5\:305a\:51fa\:3059\:300d\:5370 (\:8a08\:753b\:306f\:70b9\:6570\:306b\:3088\:3089\:305a\:67a0\:3092\:53d6\:308b) \:3068\:56f3\:306e\:4e26\:3079\:65b9 ("Row" = \:6a2a\:4e26\:3073) *)
+  If[KeyExistsQ[e, "Pinned"], e["Pinned"] = TrueQ[e["Pinned"]]];
+  If[KeyExistsQ[e, "FigureLayout"],
+    e["FigureLayout"] = If[StringContainsQ[ToLowerCase[iKGStr[e["FigureLayout"]]], "row" | "\:6a2a"], "Row", "Column"]];
+  (* v1.44: \:968e\:5c64\:5316\:3067\:8db3\:3057\:305f\:300c\:307e\:3068\:307e\:308a\:300d\:306e\:30ce\:30fc\:30c9 *)
+  If[KeyExistsQ[e, "Cluster"], e["Cluster"] = TrueQ[e["Cluster"]]];
+  (* v1.46: \:76ee\:6b21\:306e\:7bc0\:3068\:3001\:8074\:304d\:624b\:306b\:5411\:3051\:305f\:8981\:5426 (Must = \:5fc5\:305a / Optional = \:679a\:6570\:3057\:3060\:3044 / Omit = \:51fa\:3055\:306a\:3044) *)
+  If[KeyExistsQ[e, "Toc"], e["Toc"] = TrueQ[e["Toc"]]];
+  If[KeyExistsQ[e, "Include"], e["Include"] = With[{s = ToLowerCase[iKGStr[e["Include"]]]},
+    Which[StringContainsQ[s, "must" | "\:5fc5"], "Must", StringContainsQ[s, "omit" | "\:7701" | "\:51fa\:3055"], "Omit", True, "Optional"]]];
   e];
 iKGNormalizeNode[___] := $Failed;
 
-(* 検証中の警告は動的スコープの $kgWarn に集める (引数の参照渡しは WL では評価済みの値になる) *)
+(* \:691c\:8a3c\:4e2d\:306e\:8b66\:544a\:306f\:52d5\:7684\:30b9\:30b3\:30fc\:30d7\:306e $kgWarn \:306b\:96c6\:3081\:308b (\:5f15\:6570\:306e\:53c2\:7167\:6e21\:3057\:306f WL \:3067\:306f\:8a55\:4fa1\:6e08\:307f\:306e\:5024\:306b\:306a\:308b) *)
 $kgWarn = {};
 
 iKGNormalizeEdge[ed_?iKGAssocQ] := Module[{e = iKGAssoc[ed], kind, spec},
@@ -406,11 +425,11 @@ iKGValidate[kgIn_] := Module[
     If[g === "", "kg-" <> StringTake[CreateUUID[], 8], g]];
   kg["Title"] = iKGStr[Lookup[kg, "Title", ""]];
   kg["Kind"] = With[{k = iKGStr[Lookup[kg, "Kind", "Paper"]]},
-    If[MemberQ[{"Paper", "Survey", "Background", "Scenario"}, k], k, "Paper"]];
+    If[MemberQ[{"Paper", "Survey", "Background", "Scenario", "Notebook"}, k], k, "Paper"]];
   kg["PrivacyLevel"] = iKGClip[Lookup[kg, "PrivacyLevel", 0.], 0.];
   kg["Sources"] = Select[iKGAssoc /@ Select[iKGList[Lookup[kg, "Sources", {}]], iKGAssocQ], AssociationQ];
   nodes = DeleteCases[iKGNormalizeNode[#, primary] & /@ iKGList[Lookup[kg, "Nodes", {}]], $Failed];
-  (* 同じ Id は先勝ち *)
+  (* \:540c\:3058 Id \:306f\:5148\:52dd\:3061 *)
   seen = <||>;
   nodes = Select[nodes, Function[n,
     If[KeyExistsQ[seen, n["Id"]],
@@ -454,7 +473,7 @@ SourceVaultKGNode[kg_Association, id_String] :=
 iKGNodeIndex[kg_Association] := AssociationMap[SourceVaultKGNode[kg, #] &, Lookup[Lookup[kg, "Nodes", {}], "Id", {}]];
 iKGNodeIndex[kg_Association] := Association[(#["Id"] -> #) & /@ Lookup[kg, "Nodes", {}]];
 
-(* ---------------- 差分取り込み ---------------- *)
+(* ---------------- \:5dee\:5206\:53d6\:308a\:8fbc\:307f ---------------- *)
 
 iKGMergeText[old_, new_String, lang_String, primary_String] := Which[
   new === "", old,
@@ -505,20 +524,20 @@ SourceVaultKGMerge[kg_Association, deltaIn_, OptionsPattern[]] := Module[
         If[KeyExistsQ[m, "Aliases"], old["Aliases"] = Union[iKGStrList[Lookup[old, "Aliases", {}]], iKGStrList[m["Aliases"]]]];
         If[KeyExistsQ[m, "Domains"], old["Domains"] = Union[iKGStrList[Lookup[old, "Domains", {}]], iKGStrList[m["Domains"]]]];
         index[id] = old,
-        (* 新規ノード: 主言語でない訳だけを持たせない (ラベルは必要) *)
+        (* \:65b0\:898f\:30ce\:30fc\:30c9: \:4e3b\:8a00\:8a9e\:3067\:306a\:3044\:8a33\:3060\:3051\:3092\:6301\:305f\:305b\:306a\:3044 (\:30e9\:30d9\:30eb\:306f\:5fc5\:8981) *)
         If[lang =!= primary,
           Do[If[KeyExistsQ[m, k] && StringQ[m[k]], m[k] = <|lang -> m[k]|>], {k, $kgTextKeys}];
           Do[If[KeyExistsQ[m, k] && ListQ[m[k]], m[k] = <|lang -> m[k]|>], {k, $kgListTextKeys}]];
         m["Id"] = id;
         index[id] = m]],
     {n, newNodes}];
-  (* "Remove": ノードを落とし、そのノードに触れる辺も落とす (推敲で段落を統合するとき) *)
+  (* "Remove": \:30ce\:30fc\:30c9\:3092\:843d\:3068\:3057\:3001\:305d\:306e\:30ce\:30fc\:30c9\:306b\:89e6\:308c\:308b\:8fba\:3082\:843d\:3068\:3059 (\:63a8\:6572\:3067\:6bb5\:843d\:3092\:7d71\:5408\:3059\:308b\:3068\:304d) *)
   Do[KeyDropFrom[index, r], {r, iKGStrList[Lookup[delta, "Remove", {}]]}];
   nodes = Values[index];
   e2 = Select[iKGAssoc /@ Select[iKGList[Lookup[delta, "Edges", {}]], iKGAssocQ], AssociationQ];
   edges = Select[Join[Lookup[kg, "Edges", {}], e2],
     KeyExistsQ[index, iKGStr[Lookup[#, "From", ""]]] && KeyExistsQ[index, iKGStr[Lookup[#, "To", ""]]] &];
-  (* 推敲や周辺知識を回すたびに同じ辺が積み重なる (実測: 同じ向きの辺が 2 本ずつ)。種類ごとに 1 本、後のものを残す *)
+  (* \:63a8\:6572\:3084\:5468\:8fba\:77e5\:8b58\:3092\:56de\:3059\:305f\:3073\:306b\:540c\:3058\:8fba\:304c\:7a4d\:307f\:91cd\:306a\:308b (\:5b9f\:6e2c: \:540c\:3058\:5411\:304d\:306e\:8fba\:304c 2 \:672c\:305a\:3064)\:3002\:7a2e\:985e\:3054\:3068\:306b 1 \:672c\:3001\:5f8c\:306e\:3082\:306e\:3092\:6b8b\:3059 *)
   edges = Reverse[DeleteDuplicatesBy[Reverse[edges],
     {iKGStr[Lookup[#, "From", ""]], iKGStr[Lookup[#, "To", ""]], iKGStr[Lookup[#, "EdgeKind", ""]]} &]];
   res = SourceVaultKGValidate[Join[kg, <|"Nodes" -> nodes, "Edges" -> edges,
@@ -527,12 +546,12 @@ SourceVaultKGMerge[kg_Association, deltaIn_, OptionsPattern[]] := Module[
     res["Warnings"] = Join[Lookup[kg, "Warnings", {}], Lookup[res, "Warnings", {}]] // DeleteDuplicates];
   res];
 
-(* ---------------- 保存 / 読込 ---------------- *)
+(* ---------------- \:4fdd\:5b58 / \:8aad\:8fbc ---------------- *)
 
 iKGGraphFile[graphId_String] := FileNameJoin[{iKGGraphDir[], iKGSlug[graphId] <> ".json"}];
 
 SourceVaultKGSave[kgIn_Association] := Module[{kg = iKGFixMojibakeDeep[kgIn], path, prev, hist},
-  (* 化けたまま覚えている KG を書き戻さない (修復より前に読み込んだカーネルから保存されても直る) *)
+  (* \:5316\:3051\:305f\:307e\:307e\:899a\:3048\:3066\:3044\:308b KG \:3092\:66f8\:304d\:623b\:3055\:306a\:3044 (\:4fee\:5fa9\:3088\:308a\:524d\:306b\:8aad\:307f\:8fbc\:3093\:3060\:30ab\:30fc\:30cd\:30eb\:304b\:3089\:4fdd\:5b58\:3055\:308c\:3066\:3082\:76f4\:308b) *)
   If[! StringQ[Lookup[kg, "GraphId", None]], Return[$Failed]];
   path = iKGGraphFile[kg["GraphId"]];
   If[FileExistsQ[path],
@@ -561,53 +580,53 @@ SourceVaultKGList[] := Module[{files},
 SourceVaultKGDelete[graphId_String] := With[{p = iKGGraphFile[graphId]},
   If[FileExistsQ[p], Quiet @ Check[DeleteFile[p]; True, False], False]];
 
-(* ---------------- 聴き手モデル ---------------- *)
+(* ---------------- \:8074\:304d\:624b\:30e2\:30c7\:30eb ---------------- *)
 
 SourceVault`$SourceVaultKGDomainAliases = <|
-  "electrochemistry" -> "電気化学", "hydrogel" -> "ハイドロゲル", "hydrogels" -> "ハイドロゲル",
-  "polymer" -> "高分子", "polymers" -> "高分子", "materials" -> "材料科学", "materials science" -> "材料科学",
-  "machine learning" -> "機械学習", "reinforcement learning" -> "強化学習", "deep learning" -> "深層学習",
-  "neural network" -> "ニューラルネット", "neural networks" -> "ニューラルネット",
-  "calculus" -> "微積分", "linear algebra" -> "線形代数", "differential equations" -> "微分方程式",
-  "statistics" -> "統計", "probability" -> "確率", "mathematics" -> "数学", "math" -> "数学",
-  "physics" -> "物理", "chemistry" -> "化学", "biology" -> "生物学", "neuroscience" -> "神経科学",
-  "thermodynamics" -> "熱力学", "electromagnetism" -> "電磁気学", "general relativity" -> "一般相対論",
-  "computer science" -> "計算機科学", "programming" -> "プログラミング", "network" -> "ネットワーク",
-  "networking" -> "ネットワーク", "control theory" -> "制御", "control" -> "制御",
-  "cellular automata" -> "セルオートマトン", "cellular automaton" -> "セルオートマトン",
-  "complex systems" -> "複雑系", "emergence" -> "創発", "unconventional computing" -> "非従来型計算",
-  "reservoir computing" -> "リザバー計算", "game theory" -> "ゲーム理論", "optics" -> "光学",
-  "high school math" -> "高校数学", "high school physics" -> "高校物理", "high school chemistry" -> "高校化学"|>;
+  "electrochemistry" -> "\:96fb\:6c17\:5316\:5b66", "hydrogel" -> "\:30cf\:30a4\:30c9\:30ed\:30b2\:30eb", "hydrogels" -> "\:30cf\:30a4\:30c9\:30ed\:30b2\:30eb",
+  "polymer" -> "\:9ad8\:5206\:5b50", "polymers" -> "\:9ad8\:5206\:5b50", "materials" -> "\:6750\:6599\:79d1\:5b66", "materials science" -> "\:6750\:6599\:79d1\:5b66",
+  "machine learning" -> "\:6a5f\:68b0\:5b66\:7fd2", "reinforcement learning" -> "\:5f37\:5316\:5b66\:7fd2", "deep learning" -> "\:6df1\:5c64\:5b66\:7fd2",
+  "neural network" -> "\:30cb\:30e5\:30fc\:30e9\:30eb\:30cd\:30c3\:30c8", "neural networks" -> "\:30cb\:30e5\:30fc\:30e9\:30eb\:30cd\:30c3\:30c8",
+  "calculus" -> "\:5fae\:7a4d\:5206", "linear algebra" -> "\:7dda\:5f62\:4ee3\:6570", "differential equations" -> "\:5fae\:5206\:65b9\:7a0b\:5f0f",
+  "statistics" -> "\:7d71\:8a08", "probability" -> "\:78ba\:7387", "mathematics" -> "\:6570\:5b66", "math" -> "\:6570\:5b66",
+  "physics" -> "\:7269\:7406", "chemistry" -> "\:5316\:5b66", "biology" -> "\:751f\:7269\:5b66", "neuroscience" -> "\:795e\:7d4c\:79d1\:5b66",
+  "thermodynamics" -> "\:71b1\:529b\:5b66", "electromagnetism" -> "\:96fb\:78c1\:6c17\:5b66", "general relativity" -> "\:4e00\:822c\:76f8\:5bfe\:8ad6",
+  "computer science" -> "\:8a08\:7b97\:6a5f\:79d1\:5b66", "programming" -> "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0", "network" -> "\:30cd\:30c3\:30c8\:30ef\:30fc\:30af",
+  "networking" -> "\:30cd\:30c3\:30c8\:30ef\:30fc\:30af", "control theory" -> "\:5236\:5fa1", "control" -> "\:5236\:5fa1",
+  "cellular automata" -> "\:30bb\:30eb\:30aa\:30fc\:30c8\:30de\:30c8\:30f3", "cellular automaton" -> "\:30bb\:30eb\:30aa\:30fc\:30c8\:30de\:30c8\:30f3",
+  "complex systems" -> "\:8907\:96d1\:7cfb", "emergence" -> "\:5275\:767a", "unconventional computing" -> "\:975e\:5f93\:6765\:578b\:8a08\:7b97",
+  "reservoir computing" -> "\:30ea\:30b6\:30d0\:30fc\:8a08\:7b97", "game theory" -> "\:30b2\:30fc\:30e0\:7406\:8ad6", "optics" -> "\:5149\:5b66",
+  "high school math" -> "\:9ad8\:6821\:6570\:5b66", "high school physics" -> "\:9ad8\:6821\:7269\:7406", "high school chemistry" -> "\:9ad8\:6821\:5316\:5b66"|>;
 
 SourceVault`$SourceVaultKGAudiencePresets = <|
-  "一般" -> <|"Level" -> 0.2, "Knowledge" -> <||>|>,
-  "小学生" -> <|"Level" -> 0.05, "Knowledge" -> <|"算数" -> 0.3|>|>,
-  "中学生" -> <|"Level" -> 0.15, "Knowledge" -> <|"数学" -> 0.2, "理科" -> 0.2|>|>,
-  "高校生" -> <|"Level" -> 0.3, "Knowledge" -> <|"高校数学" -> 0.5, "高校物理" -> 0.4, "高校化学" -> 0.4, "数学" -> 0.35, "物理" -> 0.3, "化学" -> 0.3|>|>,
-  "大学理系学部卒" -> <|"Level" -> 0.5, "Knowledge" -> <|"数学" -> 0.6, "微積分" -> 0.7, "線形代数" -> 0.6, "物理" -> 0.6, "化学" -> 0.55, "プログラミング" -> 0.5, "統計" -> 0.5|>|>,
-  "大学文系学部卒" -> <|"Level" -> 0.35, "Knowledge" -> <|"数学" -> 0.3, "統計" -> 0.3|>|>,
-  "大学院生" -> <|"Level" -> 0.65, "Knowledge" -> <|"数学" -> 0.7, "物理" -> 0.65, "プログラミング" -> 0.6|>|>,
-  "研究者" -> <|"Level" -> 0.85, "Knowledge" -> <|"数学" -> 0.8, "物理" -> 0.75|>|>,
-  "同分野の研究者" -> <|"Level" -> 0.95, "Knowledge" -> <||>|>,
-  "ITエンジニア" -> <|"Level" -> 0.45, "Knowledge" -> <|"プログラミング" -> 0.9, "計算機科学" -> 0.7, "ネットワーク" -> 0.7, "機械学習" -> 0.5, "数学" -> 0.5|>|>,
-  "ネットワークエンジニア" -> <|"Level" -> 0.45, "Knowledge" -> <|"ネットワーク" -> 0.95, "プログラミング" -> 0.6, "計算機科学" -> 0.6|>|>,
-  "基本情報技術者" -> <|"Level" -> 0.4, "Knowledge" -> <|"計算機科学" -> 0.6, "プログラミング" -> 0.6, "ネットワーク" -> 0.5, "数学" -> 0.4|>|>,
-  "高校数学III" -> <|"Level" -> 0., "Knowledge" -> <|"高校数学" -> 0.9, "微積分" -> 0.75, "数学" -> 0.6|>|>,
-  "一般相対論" -> <|"Level" -> 0., "Knowledge" -> <|"一般相対論" -> 0.8, "微分幾何" -> 0.6, "物理" -> 0.75, "数学" -> 0.7|>|>,
-  "電気化学" -> <|"Level" -> 0., "Knowledge" -> <|"電気化学" -> 0.8, "化学" -> 0.7|>|>,
-  "機械学習" -> <|"Level" -> 0., "Knowledge" -> <|"機械学習" -> 0.8, "統計" -> 0.6, "プログラミング" -> 0.7|>|>,
+  "\:4e00\:822c" -> <|"Level" -> 0.2, "Knowledge" -> <||>|>,
+  "\:5c0f\:5b66\:751f" -> <|"Level" -> 0.05, "Knowledge" -> <|"\:7b97\:6570" -> 0.3|>|>,
+  "\:4e2d\:5b66\:751f" -> <|"Level" -> 0.15, "Knowledge" -> <|"\:6570\:5b66" -> 0.2, "\:7406\:79d1" -> 0.2|>|>,
+  "\:9ad8\:6821\:751f" -> <|"Level" -> 0.3, "Knowledge" -> <|"\:9ad8\:6821\:6570\:5b66" -> 0.5, "\:9ad8\:6821\:7269\:7406" -> 0.4, "\:9ad8\:6821\:5316\:5b66" -> 0.4, "\:6570\:5b66" -> 0.35, "\:7269\:7406" -> 0.3, "\:5316\:5b66" -> 0.3|>|>,
+  "\:5927\:5b66\:7406\:7cfb\:5b66\:90e8\:5352" -> <|"Level" -> 0.5, "Knowledge" -> <|"\:6570\:5b66" -> 0.6, "\:5fae\:7a4d\:5206" -> 0.7, "\:7dda\:5f62\:4ee3\:6570" -> 0.6, "\:7269\:7406" -> 0.6, "\:5316\:5b66" -> 0.55, "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.5, "\:7d71\:8a08" -> 0.5|>|>,
+  "\:5927\:5b66\:6587\:7cfb\:5b66\:90e8\:5352" -> <|"Level" -> 0.35, "Knowledge" -> <|"\:6570\:5b66" -> 0.3, "\:7d71\:8a08" -> 0.3|>|>,
+  "\:5927\:5b66\:9662\:751f" -> <|"Level" -> 0.65, "Knowledge" -> <|"\:6570\:5b66" -> 0.7, "\:7269\:7406" -> 0.65, "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.6|>|>,
+  "\:7814\:7a76\:8005" -> <|"Level" -> 0.85, "Knowledge" -> <|"\:6570\:5b66" -> 0.8, "\:7269\:7406" -> 0.75|>|>,
+  "\:540c\:5206\:91ce\:306e\:7814\:7a76\:8005" -> <|"Level" -> 0.95, "Knowledge" -> <||>|>,
+  "IT\:30a8\:30f3\:30b8\:30cb\:30a2" -> <|"Level" -> 0.45, "Knowledge" -> <|"\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.9, "\:8a08\:7b97\:6a5f\:79d1\:5b66" -> 0.7, "\:30cd\:30c3\:30c8\:30ef\:30fc\:30af" -> 0.7, "\:6a5f\:68b0\:5b66\:7fd2" -> 0.5, "\:6570\:5b66" -> 0.5|>|>,
+  "\:30cd\:30c3\:30c8\:30ef\:30fc\:30af\:30a8\:30f3\:30b8\:30cb\:30a2" -> <|"Level" -> 0.45, "Knowledge" -> <|"\:30cd\:30c3\:30c8\:30ef\:30fc\:30af" -> 0.95, "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.6, "\:8a08\:7b97\:6a5f\:79d1\:5b66" -> 0.6|>|>,
+  "\:57fa\:672c\:60c5\:5831\:6280\:8853\:8005" -> <|"Level" -> 0.4, "Knowledge" -> <|"\:8a08\:7b97\:6a5f\:79d1\:5b66" -> 0.6, "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.6, "\:30cd\:30c3\:30c8\:30ef\:30fc\:30af" -> 0.5, "\:6570\:5b66" -> 0.4|>|>,
+  "\:9ad8\:6821\:6570\:5b66III" -> <|"Level" -> 0., "Knowledge" -> <|"\:9ad8\:6821\:6570\:5b66" -> 0.9, "\:5fae\:7a4d\:5206" -> 0.75, "\:6570\:5b66" -> 0.6|>|>,
+  "\:4e00\:822c\:76f8\:5bfe\:8ad6" -> <|"Level" -> 0., "Knowledge" -> <|"\:4e00\:822c\:76f8\:5bfe\:8ad6" -> 0.8, "\:5fae\:5206\:5e7e\:4f55" -> 0.6, "\:7269\:7406" -> 0.75, "\:6570\:5b66" -> 0.7|>|>,
+  "\:96fb\:6c17\:5316\:5b66" -> <|"Level" -> 0., "Knowledge" -> <|"\:96fb\:6c17\:5316\:5b66" -> 0.8, "\:5316\:5b66" -> 0.7|>|>,
+  "\:6a5f\:68b0\:5b66\:7fd2" -> <|"Level" -> 0., "Knowledge" -> <|"\:6a5f\:68b0\:5b66\:7fd2" -> 0.8, "\:7d71\:8a08" -> 0.6, "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.7|>|>,
   (* English aliases of the presets above *)
   "general public" -> <|"Level" -> 0.2, "Knowledge" -> <||>|>,
-  "high school" -> <|"Level" -> 0.3, "Knowledge" -> <|"高校数学" -> 0.5, "高校物理" -> 0.4, "高校化学" -> 0.4, "数学" -> 0.35, "物理" -> 0.3, "化学" -> 0.3|>|>,
-  "undergraduate" -> <|"Level" -> 0.5, "Knowledge" -> <|"数学" -> 0.6, "微積分" -> 0.7, "線形代数" -> 0.6, "物理" -> 0.6, "化学" -> 0.55, "プログラミング" -> 0.5, "統計" -> 0.5|>|>,
-  "graduate" -> <|"Level" -> 0.65, "Knowledge" -> <|"数学" -> 0.7, "物理" -> 0.65, "プログラミング" -> 0.6|>|>,
-  "researcher" -> <|"Level" -> 0.85, "Knowledge" -> <|"数学" -> 0.8, "物理" -> 0.75|>|>,
-  "software engineer" -> <|"Level" -> 0.45, "Knowledge" -> <|"プログラミング" -> 0.9, "計算機科学" -> 0.7, "ネットワーク" -> 0.7, "機械学習" -> 0.5, "数学" -> 0.5|>|>,
-  "network engineer" -> <|"Level" -> 0.45, "Knowledge" -> <|"ネットワーク" -> 0.95, "プログラミング" -> 0.6, "計算機科学" -> 0.6|>|>|>;
+  "high school" -> <|"Level" -> 0.3, "Knowledge" -> <|"\:9ad8\:6821\:6570\:5b66" -> 0.5, "\:9ad8\:6821\:7269\:7406" -> 0.4, "\:9ad8\:6821\:5316\:5b66" -> 0.4, "\:6570\:5b66" -> 0.35, "\:7269\:7406" -> 0.3, "\:5316\:5b66" -> 0.3|>|>,
+  "undergraduate" -> <|"Level" -> 0.5, "Knowledge" -> <|"\:6570\:5b66" -> 0.6, "\:5fae\:7a4d\:5206" -> 0.7, "\:7dda\:5f62\:4ee3\:6570" -> 0.6, "\:7269\:7406" -> 0.6, "\:5316\:5b66" -> 0.55, "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.5, "\:7d71\:8a08" -> 0.5|>|>,
+  "graduate" -> <|"Level" -> 0.65, "Knowledge" -> <|"\:6570\:5b66" -> 0.7, "\:7269\:7406" -> 0.65, "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.6|>|>,
+  "researcher" -> <|"Level" -> 0.85, "Knowledge" -> <|"\:6570\:5b66" -> 0.8, "\:7269\:7406" -> 0.75|>|>,
+  "software engineer" -> <|"Level" -> 0.45, "Knowledge" -> <|"\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.9, "\:8a08\:7b97\:6a5f\:79d1\:5b66" -> 0.7, "\:30cd\:30c3\:30c8\:30ef\:30fc\:30af" -> 0.7, "\:6a5f\:68b0\:5b66\:7fd2" -> 0.5, "\:6570\:5b66" -> 0.5|>|>,
+  "network engineer" -> <|"Level" -> 0.45, "Knowledge" -> <|"\:30cd\:30c3\:30c8\:30ef\:30fc\:30af" -> 0.95, "\:30d7\:30ed\:30b0\:30e9\:30df\:30f3\:30b0" -> 0.6, "\:8a08\:7b97\:6a5f\:79d1\:5b66" -> 0.6|>|>|>;
 
-(* 領域名の正規化は結果を覚えておく。聴き手の必要度 (SourceVaultKGScores) はノード × 領域 × 聴き手の知識の
-   組ごとに別名辞書の全キーを正規化し直しており、166 ノードの KG で計画 1 回に約 6 秒かかっていた
-   (「生成」を押してから十数秒なにも出ない主因)。別名辞書は中身のハッシュで索引を作り直す *)
+(* \:9818\:57df\:540d\:306e\:6b63\:898f\:5316\:306f\:7d50\:679c\:3092\:899a\:3048\:3066\:304a\:304f\:3002\:8074\:304d\:624b\:306e\:5fc5\:8981\:5ea6 (SourceVaultKGScores) \:306f\:30ce\:30fc\:30c9 \[Times] \:9818\:57df \[Times] \:8074\:304d\:624b\:306e\:77e5\:8b58\:306e
+   \:7d44\:3054\:3068\:306b\:5225\:540d\:8f9e\:66f8\:306e\:5168\:30ad\:30fc\:3092\:6b63\:898f\:5316\:3057\:76f4\:3057\:3066\:304a\:308a\:3001166 \:30ce\:30fc\:30c9\:306e KG \:3067\:8a08\:753b 1 \:56de\:306b\:7d04 6 \:79d2\:304b\:304b\:3063\:3066\:3044\:305f
+   (\:300c\:751f\:6210\:300d\:3092\:62bc\:3057\:3066\:304b\:3089\:5341\:6570\:79d2\:306a\:306b\:3082\:51fa\:306a\:3044\:4e3b\:56e0)\:3002\:5225\:540d\:8f9e\:66f8\:306f\:4e2d\:8eab\:306e\:30cf\:30c3\:30b7\:30e5\:3067\:7d22\:5f15\:3092\:4f5c\:308a\:76f4\:3059 *)
 $kgNormKeyCache = <||>;
 iKGNormKeyCached[s_String] := If[KeyExistsQ[$kgNormKeyCache, s], $kgNormKeyCache[s],
   If[Length[$kgNormKeyCache] > 20000, $kgNormKeyCache = <||>];
@@ -616,7 +635,7 @@ $kgAliasIndex = <|"Hash" -> None, "Index" -> <||>|>;
 iKGAliasIndex[] := With[{al = SourceVault`$SourceVaultKGDomainAliases},
   With[{h = Hash[al]},
     If[$kgAliasIndex["Hash"] =!= h,
-      (* 同じ正規形のキーが複数あれば先に書かれたものが勝つ (旧実装の SelectFirst と同じ) *)
+      (* \:540c\:3058\:6b63\:898f\:5f62\:306e\:30ad\:30fc\:304c\:8907\:6570\:3042\:308c\:3070\:5148\:306b\:66f8\:304b\:308c\:305f\:3082\:306e\:304c\:52dd\:3064 (\:65e7\:5b9f\:88c5\:306e SelectFirst \:3068\:540c\:3058) *)
       $kgAliasIndex = <|"Hash" -> h, "Index" -> If[AssociationQ[al],
         Association[Map[iKGNormKeyCached[#] -> al[#] &, Reverse[Select[Keys[al], StringQ]]]], <||>]|>];
     $kgAliasIndex["Index"]]];
@@ -626,13 +645,13 @@ iKGDomainMatchQ[nodeDomain_String, audienceDomain_String] := Module[
   {a = iKGNormKeyCached[iKGCanonicalDomain[nodeDomain]], b = iKGNormKeyCached[iKGCanonicalDomain[audienceDomain]]},
   a =!= "" && b =!= "" && (a === b || StringContainsQ[a, b] || StringContainsQ[b, a])];
 
-(* 関数型: 更新した聴き手連想を返す (引数の書き換えは WL では効かない) *)
+(* \:95a2\:6570\:578b: \:66f4\:65b0\:3057\:305f\:8074\:304d\:624b\:9023\:60f3\:3092\:8fd4\:3059 (\:5f15\:6570\:306e\:66f8\:304d\:63db\:3048\:306f WL \:3067\:306f\:52b9\:304b\:306a\:3044) *)
 iKGAudienceKnow[aud_Association, domain_String, level_] :=
   Module[{a = aud}, a["Knowledge"][domain] = Max[Lookup[a["Knowledge"], domain, 0.], level]; a];
 
 iKGAudienceToken[aud_Association, tok_String] := Module[{t = StringTrim[tok], m, preset, a = aud},
   If[t === "", Return[a]];
-  m = StringCases[t, StartOfString ~~ name__ ~~ ("=" | ":" | "＝") ~~ v__ ~~ EndOfString :>
+  m = StringCases[t, StartOfString ~~ name__ ~~ ("=" | ":" | "\:ff1d") ~~ v__ ~~ EndOfString :>
     {StringTrim[name], Quiet @ Check[ToExpression[StringTrim[v]], $Failed]}, 1];
   If[m =!= {} && NumericQ[m[[1, 2]]],
     a["Knowledge"][iKGCanonicalDomain[m[[1, 1]]]] = Clip[N[m[[1, 2]]], {0., 1.}];
@@ -644,7 +663,7 @@ iKGAudienceToken[aud_Association, tok_String] := Module[{t = StringTrim[tok], m,
       a["Level"] = Max[a["Level"], p["Level"]];
       Do[a = iKGAudienceKnow[a, k, p["Knowledge"][k]], {k, Keys[p["Knowledge"]]}]];
     Return[a]];
-  (* 未知の語は「その領域は知っている (0.7)」として扱い、Unknown にも記録する *)
+  (* \:672a\:77e5\:306e\:8a9e\:306f\:300c\:305d\:306e\:9818\:57df\:306f\:77e5\:3063\:3066\:3044\:308b (0.7)\:300d\:3068\:3057\:3066\:6271\:3044\:3001Unknown \:306b\:3082\:8a18\:9332\:3059\:308b *)
   a = iKGAudienceKnow[a, iKGCanonicalDomain[t], 0.7];
   a["Unknown"] = Append[a["Unknown"], t];
   a];
@@ -655,9 +674,9 @@ SourceVaultKGAudience[spec_] := Module[{aud, tokens, a, k},
   aud = <|"Level" -> 0., "Knowledge" -> <||>, "Presets" -> {}, "Language" -> "ja",
     "Description" -> "", "Unknown" -> {}|>;
   Which[
-    spec === Automatic || spec === None || spec === Null, aud = iKGAudienceToken[aud, "一般"],
-    StringQ[spec], tokens = StringSplit[spec, {",", "、", ";", "\n"}];
-      aud = If[tokens === {}, iKGAudienceToken[aud, "一般"], iKGAudienceTokens[aud, tokens]],
+    spec === Automatic || spec === None || spec === Null, aud = iKGAudienceToken[aud, "\:4e00\:822c"],
+    StringQ[spec], tokens = StringSplit[spec, {",", "\:3001", ";", "\n"}];
+      aud = If[tokens === {}, iKGAudienceToken[aud, "\:4e00\:822c"], iKGAudienceTokens[aud, tokens]],
     ListQ[spec], Do[Which[StringQ[x], aud = iKGAudienceToken[aud, x],
         MatchQ[x, _Rule], aud["Knowledge"][iKGCanonicalDomain[iKGStr[First[x]]]] = iKGClip[Last[x], 0.7],
         True, Null], {x, spec}],
@@ -669,9 +688,9 @@ SourceVaultKGAudience[spec_] := Module[{aud, tokens, a, k},
       If[ListQ[k], aud = iKGAudienceTokens[aud, k]];
       If[StringQ[Lookup[a, "Language", None]], aud["Language"] = a["Language"]];
       If[StringQ[Lookup[a, "Description", None]], aud["Description"] = a["Description"]];
-      If[StringQ[Lookup[a, "Audience", None]], aud = iKGAudienceTokens[aud, StringSplit[a["Audience"], {",", "、"}]]],
-    True, aud = iKGAudienceToken[aud, "一般"]];
-  If[aud["Presets"] === {} && aud["Knowledge"] === <||>, aud = iKGAudienceToken[aud, "一般"]];
+      If[StringQ[Lookup[a, "Audience", None]], aud = iKGAudienceTokens[aud, StringSplit[a["Audience"], {",", "\:3001"}]]],
+    True, aud = iKGAudienceToken[aud, "\:4e00\:822c"]];
+  If[aud["Presets"] === {} && aud["Knowledge"] === <||>, aud = iKGAudienceToken[aud, "\:4e00\:822c"]];
   aud];
 
 iKGKnown[node_Association, aud_Association] := Module[{doms = Lookup[node, "Domains", {}], hits},
@@ -694,12 +713,12 @@ SourceVaultKGScores[kg_Association, audSpec_] := Module[{aud = SourceVaultKGAudi
       n["Id"] -> <|"Need" -> need, "Known" -> known, "Score" -> score, "Flags" -> flags|>]],
     Lookup[kg, "Nodes", {}]]]];
 
-(* ---------------- 順序グラフと線形拡張 ---------------- *)
+(* ---------------- \:9806\:5e8f\:30b0\:30e9\:30d5\:3068\:7dda\:5f62\:62e1\:5f35 ---------------- *)
 
 iKGEdgeStrength[e_Association] := e["Weight"] * e["Confidence"];
 
-(* 閉路を 1 つ見つける (FindCycle が使えないときの代わり): 強連結成分の中を辺に沿って歩けば
-   必ず同じ頂点に戻る。自己ループはそれ自体が閉路 *)
+(* \:9589\:8def\:3092 1 \:3064\:898b\:3064\:3051\:308b (FindCycle \:304c\:4f7f\:3048\:306a\:3044\:3068\:304d\:306e\:4ee3\:308f\:308a): \:5f37\:9023\:7d50\:6210\:5206\:306e\:4e2d\:3092\:8fba\:306b\:6cbf\:3063\:3066\:6b69\:3051\:3070
+   \:5fc5\:305a\:540c\:3058\:9802\:70b9\:306b\:623b\:308b\:3002\:81ea\:5df1\:30eb\:30fc\:30d7\:306f\:305d\:308c\:81ea\:4f53\:304c\:9589\:8def *)
 iKGCycleBySCC[g_Graph] := Module[{loops, sccs, scc, adj, path, nx, p},
   loops = Select[EdgeList[g], #[[1]] === #[[2]] &];
   If[loops =!= {}, Return[{{First[loops]}}]];
@@ -721,10 +740,10 @@ iKGCycleBySCC[g_Graph] := Module[{loops, sccs, scc, adj, path, nx, p},
 SourceVaultKGOrderGraph[kg_Association] := Module[
   {ids = Lookup[Lookup[kg, "Nodes", {}], "Id", {}], oedges, g, dropped = {}, cyc, worst, k = 0, pw, build},
   oedges = Select[Lookup[kg, "Edges", {}], TrueQ[#["Order"]] &];
-  (* 同じ向きの辺が複数ある (Contains と LeadsTo が並ぶ等) と重みつき多重グラフになり、FindCycle が
-     評価されずに返る (15.0 実測)。すると閉路が切れないまま線形拡張が止まり、論文本体が丸ごと
-     順序木から落ちた (計算と自然33: 166 ノード中 89 が孤立し、45 枚の指定で 23 枚しか出なかった)。
-     グラフは (From, To) ごとに 1 本、重みはその最大で組む *)
+  (* \:540c\:3058\:5411\:304d\:306e\:8fba\:304c\:8907\:6570\:3042\:308b (Contains \:3068 LeadsTo \:304c\:4e26\:3076\:7b49) \:3068\:91cd\:307f\:3064\:304d\:591a\:91cd\:30b0\:30e9\:30d5\:306b\:306a\:308a\:3001FindCycle \:304c
+     \:8a55\:4fa1\:3055\:308c\:305a\:306b\:8fd4\:308b (15.0 \:5b9f\:6e2c)\:3002\:3059\:308b\:3068\:9589\:8def\:304c\:5207\:308c\:306a\:3044\:307e\:307e\:7dda\:5f62\:62e1\:5f35\:304c\:6b62\:307e\:308a\:3001\:8ad6\:6587\:672c\:4f53\:304c\:4e38\:3054\:3068
+     \:9806\:5e8f\:6728\:304b\:3089\:843d\:3061\:305f (\:8a08\:7b97\:3068\:81ea\:713633: 166 \:30ce\:30fc\:30c9\:4e2d 89 \:304c\:5b64\:7acb\:3057\:300145 \:679a\:306e\:6307\:5b9a\:3067 23 \:679a\:3057\:304b\:51fa\:306a\:304b\:3063\:305f)\:3002
+     \:30b0\:30e9\:30d5\:306f (From, To) \:3054\:3068\:306b 1 \:672c\:3001\:91cd\:307f\:306f\:305d\:306e\:6700\:5927\:3067\:7d44\:3080 *)
   pw[es_] := GroupBy[es, {#["From"], #["To"]} &, Max[iKGEdgeStrength /@ #] &];
   build[es_] := With[{w = pw[es]}, Graph[ids, DirectedEdge @@@ Keys[w], EdgeWeight -> Values[w]]];
   g = build[oedges];
@@ -741,7 +760,7 @@ SourceVaultKGOrderGraph[kg_Association] := Module[
     g = build[oedges]];
   <|"Graph" -> g, "Dropped" -> dropped, "OrderEdges" -> oedges|>];
 
-(* 関連度行列 (無向): 任意の辺の Weight を両向きに *)
+(* \:95a2\:9023\:5ea6\:884c\:5217 (\:7121\:5411): \:4efb\:610f\:306e\:8fba\:306e Weight \:3092\:4e21\:5411\:304d\:306b *)
 iKGRelatedness[kg_Association] := Module[{r = <||>},
   Do[r[{e["From"], e["To"]}] = Max[Lookup[r, Key[{e["From"], e["To"]}], 0.], e["Weight"]];
      r[{e["To"], e["From"]}] = Max[Lookup[r, Key[{e["To"], e["From"]}], 0.], e["Weight"]],
@@ -772,7 +791,7 @@ iKGLinearOrder[kg_Association, og_Association, strategy_String] := Module[
   {index = iKGNodeIndex[kg], root = Lookup[kg, "Root", None], oedges = og["OrderEdges"],
    indeg, succ, ready, order = {}, placed = {}, last = None, rel, pick, dropped = og["Dropped"], ids},
   ids = Keys[index];
-  (* Root が最初に来るように Root への順序辺は落とす (診断に記録) *)
+  (* Root \:304c\:6700\:521d\:306b\:6765\:308b\:3088\:3046\:306b Root \:3078\:306e\:9806\:5e8f\:8fba\:306f\:843d\:3068\:3059 (\:8a3a\:65ad\:306b\:8a18\:9332) *)
   If[StringQ[root],
     With[{into = Select[oedges, #["To"] === root &]},
       If[into =!= {},
@@ -781,8 +800,8 @@ iKGLinearOrder[kg_Association, og_Association, strategy_String] := Module[
   indeg = AssociationMap[0 &, ids];
   succ = AssociationMap[{} &, ids];
   Do[indeg[e["To"]] += 1; succ[e["From"]] = Append[succ[e["From"]], e["To"]], {e, oedges}];
-  (* 出現順 (Order) の無いノード (LLM が後から足した前提知識など) は「最初に必要とされる
-     ノードの直前」に置く (just-in-time)。末尾に沈めると依存ノードまで引きずられる *)
+  (* \:51fa\:73fe\:9806 (Order) \:306e\:7121\:3044\:30ce\:30fc\:30c9 (LLM \:304c\:5f8c\:304b\:3089\:8db3\:3057\:305f\:524d\:63d0\:77e5\:8b58\:306a\:3069) \:306f\:300c\:6700\:521d\:306b\:5fc5\:8981\:3068\:3055\:308c\:308b
+     \:30ce\:30fc\:30c9\:306e\:76f4\:524d\:300d\:306b\:7f6e\:304f (just-in-time)\:3002\:672b\:5c3e\:306b\:6c88\:3081\:308b\:3068\:4f9d\:5b58\:30ce\:30fc\:30c9\:307e\:3067\:5f15\:304d\:305a\:3089\:308c\:308b *)
   index = iKGEffectiveOrders[index, succ];
   rel = If[strategy === "Coherent", iKGRelatedness[kg], <||>];
   ready = Select[ids, indeg[#] === 0 &];
@@ -794,8 +813,8 @@ iKGLinearOrder[kg_Association, og_Association, strategy_String] := Module[
     Do[indeg[s] -= 1; If[indeg[s] === 0, AppendTo[ready, s]], {s, succ[pick]}]];
   <|"Order" -> order, "Dropped" -> dropped, "Unplaced" -> Complement[ids, order]|>];
 
-(* ---------------- 最小全域順序木 (右背骨貪欲 = 線形拡張の階層分割) ----------------
-   子は親より後に、部分木は連続区間に置かれる。前順走査 = 線形拡張そのもの。 *)
+(* ---------------- \:6700\:5c0f\:5168\:57df\:9806\:5e8f\:6728 (\:53f3\:80cc\:9aa8\:8caa\:6b32 = \:7dda\:5f62\:62e1\:5f35\:306e\:968e\:5c64\:5206\:5272) ----------------
+   \:5b50\:306f\:89aa\:3088\:308a\:5f8c\:306b\:3001\:90e8\:5206\:6728\:306f\:9023\:7d9a\:533a\:9593\:306b\:7f6e\:304b\:308c\:308b\:3002\:524d\:9806\:8d70\:67fb = \:7dda\:5f62\:62e1\:5f35\:305d\:306e\:3082\:306e\:3002 *)
 
 iKGAffinityTable[kg_Association] := Module[{t = <||>, spec},
   Do[
@@ -809,18 +828,21 @@ iKGAffinityTable[kg_Association] := Module[{t = <||>, spec},
     {e, Lookup[kg, "Edges", {}]}];
   t];
 
-Options[SourceVaultKGOrderedTree] = {"Strategy" -> "Source", "MaxDepth" -> 3, "DepthPenalty" -> 0.02};
+Options[SourceVaultKGOrderedTree] = {"Strategy" -> "Source", "MaxDepth" -> Automatic, "DepthPenalty" -> 0.02, "UseToc" -> True};
 SourceVaultKGOrderedTree[kg_Association, OptionsPattern[]] := Module[
   {og, lin, order, root, aff, succ, stack, parent = <||>, children = <||>, depth = <||>, score = 0.,
-   maxDepth = OptionValue["MaxDepth"], pen = OptionValue["DepthPenalty"], strategy = OptionValue["Strategy"], best, cand},
+   maxDepth = Replace[OptionValue["MaxDepth"], Except[_Integer] :> 3 + iKGClusterLevels[kg]],
+   pen = OptionValue["DepthPenalty"], strategy = OptionValue["Strategy"], best, cand},
+  (* v1.46: \:76ee\:6b21\:304c\:3042\:308c\:3070\:3001\:305d\:308c\:304c\:9806\:5e8f\:6728 (\:76ee\:6b21\:306f LLM \:304c\:30dc\:30c8\:30e0\:30a2\:30c3\:30d7\:306b\:4f5c\:308a\:3001\:4f9d\:5b58\:3067\:4e26\:3079\:66ff\:3048\:6e08\:307f) *)
+  If[TrueQ[OptionValue["UseToc"]] && SourceVaultKGTocQ[kg], Return[SourceVaultKGTocTree[kg]]];
   og = SourceVaultKGOrderGraph[kg];
   lin = iKGLinearOrder[kg, og, strategy];
   order = lin["Order"];
   If[order === {}, Return[Failure["EmptyGraph", <|"MessageTemplate" -> "no nodes to order"|>]]];
   root = First[order];
   aff = iKGAffinityTable[kg];
-  (* 前提ノードは、それを必要とするノードの節の中に置く: x -> w の順序辺があれば
-     w に対する親和度を (0.8 倍で) x にも継承する *)
+  (* \:524d\:63d0\:30ce\:30fc\:30c9\:306f\:3001\:305d\:308c\:3092\:5fc5\:8981\:3068\:3059\:308b\:30ce\:30fc\:30c9\:306e\:7bc0\:306e\:4e2d\:306b\:7f6e\:304f: x -> w \:306e\:9806\:5e8f\:8fba\:304c\:3042\:308c\:3070
+     w \:306b\:5bfe\:3059\:308b\:89aa\:548c\:5ea6\:3092 (0.8 \:500d\:3067) x \:306b\:3082\:7d99\:627f\:3059\:308b *)
   succ = <||>;
   Do[succ[e["From"]] = Append[Lookup[succ, e["From"], {}], e["To"]], {e, og["OrderEdges"]}];
   stack = {root}; children[root] = {}; depth[root] = 0;
@@ -828,10 +850,10 @@ SourceVaultKGOrderedTree[kg_Association, OptionsPattern[]] := Module[
     cand = Map[Function[y, {y,
       Max[Prepend[0.8 * Lookup[aff, Key[{y, #}], 0.] & /@ Lookup[succ, x, {}], Lookup[aff, Key[{y, x}], 0.]]] -
         pen * depth[y]}], stack];
-    (* 親候補は右背骨上のノード。深さ上限を超える親は許さない *)
+    (* \:89aa\:5019\:88dc\:306f\:53f3\:80cc\:9aa8\:4e0a\:306e\:30ce\:30fc\:30c9\:3002\:6df1\:3055\:4e0a\:9650\:3092\:8d85\:3048\:308b\:89aa\:306f\:8a31\:3055\:306a\:3044 *)
     cand = Select[cand, depth[#[[1]]] + 1 <= maxDepth &];
     best = If[cand === {}, {root, 0.}, First[MaximalBy[cand, Last]]];
-    (* 親和度が無い (0) ときは最上位 (root) に付けて新しい部を始める *)
+    (* \:89aa\:548c\:5ea6\:304c\:7121\:3044 (0) \:3068\:304d\:306f\:6700\:4e0a\:4f4d (root) \:306b\:4ed8\:3051\:3066\:65b0\:3057\:3044\:90e8\:3092\:59cb\:3081\:308b *)
     If[Last[best] <= 0., best = {root, 0.}];
     parent[x] = First[best];
     children[First[best]] = Append[Lookup[children, First[best], {}], x];
@@ -847,11 +869,414 @@ SourceVaultKGOrderedTree[kg_Association, OptionsPattern[]] := Module[
       "RootMismatch" -> If[StringQ[Lookup[kg, "Root", None]] && root =!= kg["Root"], kg["Root"], None]|>|>];
 
 Options[SourceVaultKGOrderedTrees] = {"Strategies" -> {"Source", "Coherent", "Importance", "Difficulty"},
-  "MaxDepth" -> 3, "DepthPenalty" -> 0.02};
+  "MaxDepth" -> Automatic, "DepthPenalty" -> 0.02};
 SourceVaultKGOrderedTrees[kg_Association, OptionsPattern[]] := ReverseSortBy[
   Select[Map[SourceVaultKGOrderedTree[kg, "Strategy" -> #, "MaxDepth" -> OptionValue["MaxDepth"],
       "DepthPenalty" -> OptionValue["DepthPenalty"]] &, OptionValue["Strategies"]], AssociationQ],
   #["Score"] &];
+
+(* ---------------- v1.44: \:6b21\:6570\:306e\:4e0a\:9650 (\:968e\:5c64\:5316) ----------------
+   \:30b9\:30e9\:30a4\:30c9\:306f\:9806\:5e8f\:6728\:3092\:524d\:304b\:3089\:305f\:3069\:3063\:3066\:4f5c\:308b\:3002\:3069\:306e\:30ce\:30fc\:30c9\:3082\:5b50 (\:9806\:5e8f\:6728\:3067\:76f4\:4e0b\:3001\:96a0\:3059\:30fb\:975e\:516c\:958b\:3092\:9664\:304f) \:304c "MaxDegree" (\:65e2\:5b9a 5)
+   \:4ee5\:4e0b\:3067\:306a\:3044\:3068\:3001\:76ee\:6b21\:3084\:7bc0\:306e\:9053\:6a19\:306e\:679a\:304c 1 \:679a\:3067\:898b\:6e21\:305b\:306a\:3044 (\:8a08\:7b97\:3068\:81ea\:713634: \:6839\:306e\:5b50 17 \:2192 \:5168\:4f53\:306e\:6d41\:308c\:304c\:300c\:2026\:300d\:3067\:5207\:308c\:305f)\:3002
+   \:8d85\:3048\:308b\:30ce\:30fc\:30c9\:306e\:5b50\:3092\:3001\:6728\:306e\:9806\:306e\:307e\:307e\:9023\:7d9a\:3057\:305f\:300c\:307e\:3068\:307e\:308a\:300d(Section\:3001"Cluster" -> True) \:306b\:5206\:3051\:3066\:6bb5\:3092\:8db3\:3059\:3002\:6df1\:3044\:65b9\:304b\:3089\:3001
+   \:5168\:90e8\:304c\:4e0a\:9650\:4ee5\:4e0b\:306b\:306a\:308b\:307e\:3067\:7e70\:308a\:8fd4\:3059 (\:5b50\:304c\:4e0a\:9650\:306e 2 \:4e57\:3092\:8d85\:3048\:308b\:3068\:304d\:306f 2 \:6bb5\:4ee5\:4e0a)\:3002\:5206\:3051\:65b9 ("Groups") \:3068\:984c\:76ee\:30fb\:8981\:7d04 ("Info") \:306f
+   LLM \:306e\:63d0\:6848\:3092\:4f7f\:3048\:308b\:304c\:3001\:6728\:306e\:9806\:3067\:9023\:7d9a\:30fb\:6f0f\:308c\:306a\:304f\:30fb\:5404\:307e\:3068\:307e\:308a\:304c\:4e0a\:9650\:4ee5\:4e0b\:3067\:306a\:3051\:308c\:3070\:6368\:3066\:3066\:7b49\:5206\:3059\:308b ("Rejected")\:3002 *)
+iKGVisibleQ[index_Association, id_] := With[{n = Lookup[index, id, <||>]},
+  ! TrueQ[Lookup[n, "Hidden", False]] && Replace[Lookup[n, "PrivacyLevel", 0.], Except[_?NumericQ] -> 0.] <= 0.5];
+
+(* \:307e\:3068\:307e\:308a\:306e\:6bb5\:306e\:6570 (Contains \:306e\:89aa\:3092\:305f\:3069\:3063\:3066\:6570\:3048\:308b)\:3002\:9806\:5e8f\:6728\:306e\:6df1\:3055\:306e\:4e0a\:9650\:306f\:3053\:306e\:5206\:3060\:3051\:6df1\:304f\:3059\:308b *)
+iKGClusterLevels[kg_Association] := Module[{index = iKGNodeIndex[kg], par = <||>, lv},
+  If[! AnyTrue[Lookup[kg, "Nodes", {}], TrueQ[Lookup[#, "Cluster", False]] &], Return[0]];
+  Do[If[e["EdgeKind"] === "Contains" && ! KeyExistsQ[par, e["To"]], par[e["To"]] = e["From"]], {e, Lookup[kg, "Edges", {}]}];
+  lv[id_] := Module[{x = id, c = 0, k = 0},
+    While[KeyExistsQ[par, x] && k < 60, x = par[x]; k++;
+      If[TrueQ[Lookup[Lookup[index, x, <||>], "Cluster", False]], c++]];
+    c];
+  Max[Prepend[lv /@ Keys[par], 0]]];
+
+Options[SourceVaultKGOverDegree] = {"Tree" -> Automatic, "Strategy" -> "Source"};
+SourceVaultKGOverDegree[kg_Association, d_Integer, OptionsPattern[]] := Module[{tree = OptionValue["Tree"], index = iKGNodeIndex[kg]},
+  If[tree === Automatic, tree = SourceVaultKGOrderedTree[kg, "Strategy" -> OptionValue["Strategy"]]];
+  If[! AssociationQ[tree], Return[{}]];
+  Select[Map[Function[x, With[{kids = Select[Lookup[tree["Children"], x, {}], iKGVisibleQ[index, #] &]},
+      <|"Node" -> x, "Children" -> kids, "Degree" -> Length[kids], "Depth" -> Lookup[tree["Depth"], x, 0]|>]],
+    tree["Order"]], #["Degree"] > d &]];
+
+iKGEqualGroups[kids_List, d_Integer] := Module[{k = Length[kids], m, base, extra},
+  m = Ceiling[k / d]; base = Quotient[k, m]; extra = Mod[k, m];
+  TakeList[kids, Join[ConstantArray[base + 1, extra], ConstantArray[base, m - extra]]]];
+iKGValidGroupingQ[g_, kids_List, d_Integer] := ListQ[g] && Length[g] >= 2 &&
+  AllTrue[g, ListQ[#] && # =!= {} && Length[#] <= d && AllTrue[#, StringQ] &] && Flatten[g] === kids;
+
+iKGShort[s_String, k_Integer] := If[StringLength[s] > k, StringTake[s, k] <> "\[Ellipsis]", s];
+iKGClusterLabel[index_Association, grp_List, lang_String] := With[
+  {a = iKGShort[SourceVaultKGText[index[First[grp]], "Label", lang], 18], b = iKGShort[SourceVaultKGText[index[Last[grp]], "Label", lang], 18]},
+  a <> If[lang === "ja", " \:301c ", " - "] <> b];
+
+iKGApplyGroups[g_Association, p_String, groups_List, infos_List, lang_String] := Module[
+  {index = iKGNodeIndex[g], nodes = Lookup[g, "Nodes", {}], edges = Lookup[g, "Edges", {}], ids, newIds = {},
+   rootQ = (p === Lookup[g, "Root", None])},
+  ids = Lookup[nodes, "Id", {}];
+  Do[With[{grp = groups[[i]], inf = If[i <= Length[infos] && AssociationQ[infos[[i]]], infos[[i]], <||>]},
+      If[Length[grp] >= 2,
+        Module[{cid, n = 1, ords, imp, lab},
+          While[MemberQ[ids, "grp_" <> p <> "_" <> ToString[n]], n++];
+          cid = "grp_" <> p <> "_" <> ToString[n]; AppendTo[ids, cid];
+          ords = Select[Lookup[Lookup[index, #, <||>], "Order", None] & /@ grp, NumericQ];
+          imp = Max[Prepend[Select[Lookup[Lookup[index, #, <||>], "Importance", 0.5] & /@ grp, NumericQ], 0.]];
+          lab = With[{l = Lookup[inf, "Label", ""]}, If[StringQ[l] && StringTrim[l] =!= "", StringTrim[l], iKGClusterLabel[index, grp, lang]]];
+          AppendTo[nodes, Join[<|"Id" -> cid, "Kind" -> "Section", "Label" -> lab,
+            "Summary" -> With[{s = Lookup[inf, "Summary", ""]}, If[StringQ[s], StringTrim[s], ""]],
+            "Gist" -> With[{s = Lookup[inf, "Gist", ""]}, If[StringQ[s], StringTrim[s], ""]], "Points" -> {},
+            "Importance" -> If[rootQ, Max[0.5, imp], 0.8 * imp], "Difficulty" -> 0.4, "Layer" -> "Paper", "Cluster" -> True,
+            "Source" -> <|"Kind" -> "Cluster", "Parent" -> p|>|>,
+            If[ords =!= {}, <|"Order" -> Min[ords] - 0.001|>, <||>]]];
+          edges = Select[edges, ! (#["EdgeKind"] === "Contains" && #["From"] === p && MemberQ[grp, #["To"]]) &];
+          edges = Join[edges, {<|"From" -> p, "To" -> cid, "EdgeKind" -> "Contains", "Weight" -> 1.|>},
+            Map[<|"From" -> cid, "To" -> #, "EdgeKind" -> "Contains", "Weight" -> 1.|> &, grp]];
+          AppendTo[newIds, cid]]]],
+    {i, Length[groups]}];
+  {SourceVaultKGValidate[Join[g, <|"Nodes" -> nodes, "Edges" -> edges|>]], newIds}];
+
+Options[SourceVaultKGBalance] = {"MaxDegree" -> 5, "Strategy" -> "Source", "Groups" -> <||>, "Info" -> <||>,
+  "MaxRounds" -> 6, "Language" -> Automatic};
+SourceVaultKGBalance[kg_Association, OptionsPattern[]] := Module[
+  {d = OptionValue["MaxDegree"], g = kg, tree, over, added = {}, rejected = {}, used = {}, rounds = 0, prev = None,
+   proposals = Replace[OptionValue["Groups"], Except[_Association] -> <||>],
+   info = Replace[OptionValue["Info"], Except[_Association] -> <||>], lang, final},
+  If[! (IntegerQ[d] && d >= 2), Return[Failure["BadMaxDegree", <|"MessageTemplate" -> "MaxDegree must be an integer >= 2"|>]]];
+  lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]];
+  While[rounds < OptionValue["MaxRounds"],
+    tree = SourceVaultKGOrderedTree[g, "Strategy" -> OptionValue["Strategy"]];
+    If[! AssociationQ[tree], Break[]];
+    over = SourceVaultKGOverDegree[g, d, "Tree" -> tree];
+    (* \:307e\:3068\:307e\:308a\:3092\:8db3\:3057\:3066\:3082\:6728\:304c\:5909\:308f\:3089\:306a\:3044 (\:89aa\:548c\:5ea6\:3084\:9806\:5e8f\:306e\:90fd\:5408) \:306a\:3089\:6253\:3061\:5207\:308b *)
+    If[over === {} || over === prev, Break[]];
+    prev = over; rounds++;
+    Do[Module[{p = o["Node"], kids = o["Children"], prop, groups, res},
+        prop = If[MemberQ[used, p], None, Lookup[proposals, p, None]];
+        groups = If[iKGValidGroupingQ[prop, kids, d], prop,
+          If[prop =!= None, AppendTo[rejected, p]]; iKGEqualGroups[kids, d]];
+        AppendTo[used, p];
+        res = iKGApplyGroups[g, p, groups, If[groups === prop, Replace[Lookup[info, p, {}], Except[_List] -> {}], {}], lang];
+        If[AssociationQ[res[[1]]], g = res[[1]]; added = Join[added, res[[2]]]]],
+      {o, SortBy[over, -#["Depth"] &]}]];
+  final = SourceVaultKGOverDegree[g, d, "Strategy" -> OptionValue["Strategy"]];
+  <|"KG" -> g, "Added" -> added, "Rejected" -> DeleteDuplicates[rejected], "Unresolved" -> Lookup[final, "Node", {}],
+    "Rounds" -> rounds, "MaxDegree" -> d|>];
+
+(* \:76ee\:6b21\:306e\:884c: \:90e8\:306e\:4e00\:884c\:8981\:7d04 (Gist\:3002\:305d\:306e\:8a00\:8a9e\:306e\:3082\:306e\:304c\:3042\:308b\:3068\:304d)\:3001\:7121\:3051\:308c\:3070\:984c\:76ee *)
+iKGHasGistQ[n_Association, lang_, primary_] := SourceVaultKGText[n, "Gist", lang] =!= "" && iKGHasLanguageQ[Lookup[n, "Gist", ""], lang, primary];
+iKGHasGistQ[___] := False;
+iKGPartGist[n_, label_, lang_, primary_] := If[iKGHasGistQ[n, lang, primary], SourceVaultKGText[n, "Gist", lang], label];
+
+(* ---------------- v1.46: \:76ee\:6b21 (Toc) ----------------
+   \:30b9\:30e9\:30a4\:30c9\:306f\:300c\:76ee\:6b21\:306e\:6728\:300d\:3092\:524d\:304b\:3089\:305f\:3069\:3063\:3066\:4f5c\:308b\:3002\:76ee\:6b21\:306f\:30dc\:30c8\:30e0\:30a2\:30c3\:30d7\:306b\:4f5c\:308b: \:5185\:5bb9\:306e\:30ce\:30fc\:30c9 (\:8449) \:3092\:66f8\:7c4d\:306e\:7bc0\:306e\:3088\:3046\:306b\:307e\:3068\:3081\:3001
+   \:7bc0\:3092\:7ae0\:306b\:307e\:3068\:3081\:308b (\:5404\:6bb5\:306e\:5144\:5f1f\:306f\:7b87\:6761\:66f8\:304d\:306b\:4e26\:3079\:305f\:3068\:304d\:540c\:3058\:30ec\:30d9\:30eb\:306e\:8a71\:3068\:3057\:3066\:4e26\:7acb\:3059\:308b\:3002SlideWorkflow \:306e LLM \:304c\:4f5c\:308b)\:3002
+   \:305d\:306e\:3042\:3068\:3067\:5144\:5f1f\:306e\:9806\:3092\:3001\:7528\:8a9e\:306e\:5b9a\:7fa9\:3084\:524d\:63d0 (Prerequisite / Derives) \:304c\:5148\:306b\:6765\:308b\:3088\:3046\:5165\:308c\:66ff\:3048\:308b\:3002
+   kg["Toc"] = <|"Root", "Children" -> <|\:89aa -> {\:5b50..}|>, "MaxDegree", "Omitted", "Known" (\:4f5c\:3063\:305f\:3068\:304d\:306b\:3042\:3063\:305f\:30ce\:30fc\:30c9),
+   "Method", "BuiltAtUTC", "Violations"|>\:3002\:76ee\:6b21\:306e\:7bc0\:306f "Toc" -> True \:306e Section \:30ce\:30fc\:30c9 (Label / Gist / Summary / Importance /
+   Include = Must | Optional)\:3002\:8cc7\:6599\:306e Contains (\:6587\:66f8\:306e\:69cb\:9020) \:306f\:305d\:306e\:307e\:307e\:6b8b\:3059\:3002 *)
+SourceVaultKGTocQ[kg_Association] := AssociationQ[Lookup[kg, "Toc", None]] && AssociationQ[Lookup[kg["Toc"], "Children", None]];
+SourceVaultKGTocQ[_] := False;
+
+iKGTocChildren[kg_Association] := Association[KeyValueMap[ToString[#1] -> Select[iKGList[#2], StringQ] &, kg["Toc"]["Children"]]];
+
+(* \:76ee\:6b21\:306e\:6728 (\:9806\:5e8f\:6728\:3068\:540c\:3058\:5f62)\:3002\:76ee\:6b21\:3092\:4f5c\:3063\:305f\:3042\:3068\:306b\:8db3\:3055\:308c\:305f\:30ce\:30fc\:30c9 (\:8abf\:6574\:306e\:679a\:3001\:5468\:8fba\:77e5\:8b58) \:306f\:3001\:524d\:306e\:679a (Precedes \:306e\:5143) \:306e\:5f8c\:308d \:2192
+   Contains \:306e\:89aa\:306e\:672b\:5c3e \:2192 \:524d\:63d0\:5148 (Prerequisite \:306e\:5148) \:306e\:524d \:2192 \:6839\:306e\:672b\:5c3e\:3001\:306e\:9806\:3067\:7f6e\:304d\:5834\:6240\:3092\:63a2\:3059 *)
+SourceVaultKGTocTree[kg_Association] := Module[
+  {index = iKGNodeIndex[kg], toc = kg["Toc"], root, ch, seen = <||>, children = <||>, parentOf = <||>, parent = <||>,
+   depth = <||>, order = {}, known, omitted, newIds, edges = Lookup[kg, "Edges", {}], visit, pre, cparent},
+  root = With[{r = Lookup[toc, "Root", Lookup[kg, "Root", None]]}, If[StringQ[r] && KeyExistsQ[index, r], r, Lookup[kg, "Root", None]]];
+  ch = iKGTocChildren[kg];
+  known = Select[iKGList[Lookup[toc, "Known", {}]], StringQ];
+  omitted = Select[iKGList[Lookup[toc, "Omitted", {}]], StringQ];
+  visit[x_] := (seen[x] = True;
+    children[x] = Select[Lookup[ch, x, {}], KeyExistsQ[index, #] && ! KeyExistsQ[seen, #] && (seen[#] = True; True) &];
+    Do[parentOf[c] = x, {c, children[x]}];
+    Scan[visit, children[x]]);
+  visit[root];
+  newIds = Select[SortBy[Lookup[Lookup[kg, "Nodes", {}], "Id", {}],
+      {Replace[Lookup[index[#], "Order", None], Except[_?NumericQ] -> 10.^6] &, # &}],
+    ! KeyExistsQ[seen, #] && ! MemberQ[known, #] && ! MemberQ[omitted, #] && ! TrueQ[Lookup[index[#], "Hidden", False]] &];
+  cparent = Association[Map[#["To"] -> #["From"] &, Reverse[Select[edges, #["EdgeKind"] === "Contains" &]]]];
+  Do[Module[{x = nid, a, w, p, k},
+      a = SelectFirst[edges, #["To"] === x && #["EdgeKind"] === "Precedes" && KeyExistsQ[seen, #["From"]] && #["From"] =!= root &, None];
+      w = SelectFirst[edges, #["From"] === x && MemberQ[{"Prerequisite", "Derives"}, #["EdgeKind"]] && KeyExistsQ[seen, #["To"]] && #["To"] =!= root &, None];
+      Which[
+        a =!= None,
+          p = parentOf[a["From"]]; k = FirstPosition[children[p], a["From"]][[1]]; children[p] = Insert[children[p], x, k + 1],
+        KeyExistsQ[cparent, x] && KeyExistsQ[seen, cparent[x]],
+          p = cparent[x]; children[p] = Append[children[p], x],
+        w =!= None,
+          p = parentOf[w["To"]]; k = FirstPosition[children[p], w["To"]][[1]]; children[p] = Insert[children[p], x, k],
+        True,
+          p = root; children[p] = Append[children[p], x]];
+      seen[x] = True; parentOf[x] = p; children[x] = {}],
+    {nid, newIds}];
+  pre[x_, d_] := (AppendTo[order, x]; depth[x] = d; Do[parent[c] = x; pre[c, d + 1], {c, Lookup[children, x, {}]}]);
+  pre[root, 0];
+  <|"ObjectClass" -> "SourceVaultKGOrderedTree", "GraphId" -> Lookup[kg, "GraphId", ""], "Strategy" -> "Toc", "Root" -> root,
+    "Order" -> order, "Parent" -> parent, "Children" -> Association[Map[# -> Lookup[children, #, {}] &, order]], "Depth" -> depth,
+    "Score" -> 0., "Diagnostics" -> <|"Dropped" -> {}, "Unplaced" -> {}, "Inserted" -> newIds, "RootMismatch" -> None|>|>];
+
+(* \:5144\:5f1f\:306e\:4e26\:3079\:66ff\:3048: \:5b50 a \:306e\:90e8\:5206\:6728\:306e\:30ce\:30fc\:30c9\:304c\:5b50 b \:306e\:90e8\:5206\:6728\:306e\:30ce\:30fc\:30c9\:306e\:524d\:63d0 (Prerequisite / Derives) \:306a\:3089 a \:3092 b \:3088\:308a\:524d\:306b\:3002
+   \:5143\:306e\:9806 (\:8a71\:3059\:9806) \:3092\:3067\:304d\:308b\:3060\:3051\:4fdd\:3064\:5b89\:5b9a\:306a\:4f4d\:76f8\:6574\:5217\:3002\:9589\:8def\:306f\:5143\:306e\:9806\:306e\:307e\:307e\:6b8b\:3057\:3066\:8a18\:9332\:3059\:308b *)
+iKGTocReorder[kg_Association, ch_Association] := Module[{hard, desc, out = ch, viol = {}},
+  hard = Select[Lookup[kg, "Edges", {}], MemberQ[{"Prerequisite", "Derives"}, #["EdgeKind"]] &];
+  desc[x_] := desc[x] = Prepend[Flatten[desc /@ Lookup[ch, x, {}]], x];
+  Do[With[{ks = Lookup[ch, p, {}]},
+      If[Length[ks] >= 2,
+        Module[{subOf, rel = <||>, remaining, res = {}},
+          subOf = Association[Flatten[MapIndexed[Function[{c, i}, Thread[desc[c] -> First[i]]], ks]]];
+          Do[With[{a = Lookup[subOf, e["From"], 0], b = Lookup[subOf, e["To"], 0]},
+              If[a > 0 && b > 0 && a =!= b, rel[{a, b}] = True]], {e, hard}];
+          remaining = Range[Length[ks]];
+          While[remaining =!= {},
+            With[{free = Select[remaining, Function[j, ! AnyTrue[remaining, # =!= j && KeyExistsQ[rel, {#, j}] &]]]},
+              If[free === {},
+                AppendTo[viol, <|"Parent" -> p, "Cycle" -> ks[[remaining]]|>];
+                AppendTo[res, First[remaining]]; remaining = Rest[remaining],
+                AppendTo[res, First[free]]; remaining = DeleteCases[remaining, First[free]]]]];
+          out[p] = ks[[res]]]]],
+    {p, Keys[ch]}];
+  {out, viol}];
+
+(* \:76ee\:6b21\:3092 KG \:306b\:66f8\:304f\:3002children = <|\:89aa -> {\:5b50..}|> (\:6839\:304b\:3089)\:3002"Groups" = \:76ee\:6b21\:306e\:7bc0\:30ce\:30fc\:30c9 (\:65b0\:3057\:3044 Id \:306a\:3089\:8db3\:3059\:3001\:65e2\:5b58\:306a\:3089 Gist \:306a\:3069\:3092\:66f4\:65b0)\:3002
+   d \:3092\:8d85\:3048\:308b\:5b50\:306e\:5217\:306f\:9023\:7d9a\:3057\:305f\:584a\:306b\:5206\:3051\:308b (\:984c\:76ee\:306f\:300c\:5148\:982d \:301c \:672b\:5c3e\:300d)\:3002\:305d\:306e\:3042\:3068\:4f9d\:5b58\:3067\:5144\:5f1f\:3092\:4e26\:3079\:66ff\:3048\:308b *)
+Options[SourceVaultKGSetToc] = {"MaxDegree" -> 5, "Omitted" -> {}, "Method" -> "LLM", "Groups" -> {}, "Language" -> Automatic,
+  "DropClusters" -> True};
+SourceVaultKGSetToc[kg_Association, children_Association, OptionsPattern[]] := Module[
+  {d = OptionValue["MaxDegree"], lang, g = kg, root = Lookup[kg, "Root", "root"], nodes, edges, index, ch, added = {}, split = {},
+   viol, n = 0, over, newId, clusters, gs},
+  If[! (IntegerQ[d] && d >= 2), d = 5];
+  lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]];
+  nodes = Lookup[g, "Nodes", {}]; edges = Lookup[g, "Edges", {}];
+  (* \:524d\:306e\:76ee\:6b21\:306e\:7bc0\:3092\:5916\:3059\:3002\:6a5f\:68b0\:7684\:306a\:307e\:3068\:307e\:308a (v1.44 \:306e Cluster) \:3082\:5916\:3057\:3066\:3001\:5b50\:3092\:5143\:306e\:89aa\:306e Contains \:306b\:623b\:3059 *)
+  If[TrueQ[OptionValue["DropClusters"]],
+    clusters = Select[nodes, TrueQ[Lookup[#, "Cluster", False]] &];
+    Do[With[{c = cl["Id"], p = Lookup[Lookup[cl, "Source", <||>], "Parent", None]},
+        If[StringQ[p], edges = Join[edges, Map[<|"From" -> p, "To" -> #, "EdgeKind" -> "Contains", "Weight" -> 1.|> &,
+          Lookup[Select[edges, #["From"] === c && #["EdgeKind"] === "Contains" &], "To", {}]]]];
+        edges = Select[edges, #["From"] =!= c && #["To"] =!= c &]],
+      {cl, clusters}];
+    nodes = Select[nodes, ! TrueQ[Lookup[#, "Cluster", False]] &]];
+  nodes = Select[nodes, ! TrueQ[Lookup[#, "Toc", False]] &];
+  index = Association[(#["Id"] -> #) & /@ nodes];
+  gs = Select[iKGList[OptionValue["Groups"]], AssociationQ[#] && StringQ[Lookup[#, "Id", None]] &];
+  Do[With[{id = gr["Id"], upd = Select[KeyTake[gr, {"Gist", "Summary", "Importance", "Include", "Label"}], # =!= None &]},
+      If[KeyExistsQ[index, id],
+        (* \:65e2\:5b58\:306e\:7bc0\:3092\:76ee\:6b21\:306b\:4f7f\:3046: \:984c\:76ee\:3068\:8981\:7d04\:306f\:65e2\:5b58\:3092\:512a\:5148\:3057\:3001\:4e00\:884c\:8981\:7d04\:30fb\:91cd\:8981\:5ea6\:30fb\:8981\:5426\:3092\:66f8\:304f *)
+        index[id] = Join[index[id], KeyDrop[upd, Join[{"Label"}, If[SourceVaultKGText[index[id], "Summary"] =!= "", {"Summary"}, {}]]]],
+        index[id] = Join[<|"Id" -> id, "Kind" -> "Section", "Layer" -> "Paper", "Toc" -> True, "Label" -> Lookup[gr, "Label", id],
+          "Summary" -> "", "Gist" -> "", "Points" -> {}, "Importance" -> 0.6, "Difficulty" -> 0.4, "Include" -> "Optional"|>, upd];
+        AppendTo[added, id]]],
+    {gr, gs}];
+  ch = Association[KeyValueMap[#1 -> Select[iKGList[#2], StringQ] &, children]];
+  (* \:6b21\:6570: d \:3092\:8d85\:3048\:308b\:5b50\:306e\:5217\:3092\:9023\:7d9a\:3057\:305f\:584a\:306b\:307e\:3068\:3081\:308b (\:6bb5\:3092\:8db3\:3059) *)
+  While[(over = Select[Keys[ch], Length[ch[#]] > d &]) =!= {} && n < 200,
+    Do[With[{grps = iKGEqualGroups[ch[p], d]},
+        ch[p] = Map[Function[grp, If[Length[grp] === 1, First[grp],
+          n++; newId = "toc_" <> p <> "_" <> ToString[n];
+          While[KeyExistsQ[index, newId], n++; newId = "toc_" <> p <> "_" <> ToString[n]];
+          index[newId] = <|"Id" -> newId, "Kind" -> "Section", "Layer" -> "Paper", "Toc" -> True,
+            "Label" -> iKGClusterLabel[index, grp, lang], "Summary" -> "", "Gist" -> "", "Points" -> {},
+            "Importance" -> Max[Prepend[Select[Lookup[Lookup[index, #, <||>], "Importance", 0.5] & /@ grp, NumericQ], 0.5]],
+            "Difficulty" -> 0.4, "Include" -> "Optional"|>;
+          ch[newId] = grp; AppendTo[added, newId]; AppendTo[split, p]; newId]], grps]],
+      {p, over}]];
+  {ch, viol} = iKGTocReorder[<|"Edges" -> edges|>, ch];
+  (* \:76ee\:6b21\:306e\:7bc0\:306e Order = \:5b50\:306e\:6700\:5c0f - 0.001 (KG \:56f3\:306e\:4e26\:3073\:3068\:56f3\:306e\:7d99\:627f\:306e\:8ddd\:96e2\:306b\:4f7f\:3046) *)
+  Do[With[{os = Select[Lookup[Lookup[index, #, <||>], "Order", None] & /@ Lookup[ch, id, {}], NumericQ]},
+      If[os =!= {}, index[id] = Append[index[id], "Order" -> Min[os] - 0.001]]],
+    {id, Select[Keys[index], TrueQ[Lookup[index[#], "Toc", False]] &]}];
+  g["Nodes"] = Values[index]; g["Edges"] = edges;
+  g["Toc"] = <|"Version" -> 1, "Root" -> root, "Children" -> ch, "MaxDegree" -> d,
+    "Omitted" -> Select[iKGList[OptionValue["Omitted"]], StringQ], "Known" -> Keys[index],
+    "Method" -> ToString[OptionValue["Method"]], "BuiltAtUTC" -> iKGUTCNow[], "Violations" -> viol|>;
+  <|"KG" -> SourceVaultKGValidate[g], "Added" -> added, "Split" -> DeleteDuplicates[split], "Violations" -> viol|>];
+
+(* \:76ee\:6b21\:306e\:4e2d\:3067 id \:3092 after \:306e\:76f4\:5f8c\:3078\:52d5\:304b\:3059 (\:8abf\:6574\:306e After)\:3002after \:306e\:90e8\:5206\:6728\:306b\:5165\:308c\:308b\:3053\:3068\:306b\:306a\:308b\:52d5\:304d\:3068\:3001after \:304c\:76ee\:6b21\:306b\:7121\:3044\:3068\:304d\:306f\:4f55\:3082\:3057\:306a\:3044 *)
+SourceVaultKGTocMove[kg_Association, id_String, after_String] := Module[{ch, p, k, desc, t},
+  If[! SourceVaultKGTocQ[kg] || id === after, Return[kg]];
+  ch = iKGTocChildren[kg];
+  desc[x_, dep_] := If[dep > 64, {x}, Prepend[Flatten[desc[#, dep + 1] & /@ Lookup[ch, x, {}]], x]];
+  If[MemberQ[desc[id, 0], after], Return[kg]];
+  p = SelectFirst[Keys[ch], MemberQ[ch[#], after] &, None];
+  If[p === None, Return[kg]];
+  ch = Map[DeleteCases[#, id] &, ch];
+  k = First[FirstPosition[ch[p], after]];
+  ch[p] = Insert[ch[p], id, k + 1];
+  t = kg["Toc"];
+  t["Children"] = ch;
+  t["Omitted"] = DeleteCases[Select[iKGList[Lookup[t, "Omitted", {}]], StringQ], id];
+  t["Known"] = DeleteDuplicates[Append[Select[iKGList[Lookup[t, "Known", {}]], StringQ], id]];
+  Append[kg, "Toc" -> t]];
+
+(* LLM \:304c\:7121\:3044\:3068\:304d\:306e\:76ee\:6b21: \:8cc7\:6599\:306e\:69cb\:9020 (\:9806\:5e8f\:6728) \:3092\:305d\:306e\:307e\:307e\:76ee\:6b21\:306b\:3057\:3001\:6b21\:6570\:306e\:4e0a\:9650\:306f\:6a5f\:68b0\:7684\:306a\:307e\:3068\:307e\:308a\:3067\:5b88\:308b *)
+Options[SourceVaultKGMechanicalToc] = {"MaxDegree" -> 5, "Strategy" -> "Source"};
+SourceVaultKGMechanicalToc[kg_Association, OptionsPattern[]] := Module[{k0 = KeyDrop[kg, "Toc"], b, tree, ch, res},
+  b = SourceVaultKGBalance[k0, "MaxDegree" -> OptionValue["MaxDegree"], "Strategy" -> OptionValue["Strategy"]];
+  If[! AssociationQ[b], Return[b]];
+  tree = SourceVaultKGOrderedTree[b["KG"], "Strategy" -> OptionValue["Strategy"]];
+  If[! AssociationQ[tree], Return[tree]];
+  ch = Select[tree["Children"], # =!= {} &];
+  (* \:9806\:5e8f\:6728\:304c\:4e2d\:8eab\:3092\:5225\:306e\:89aa\:306b\:4ed8\:3051\:305f\:307e\:3068\:307e\:308a (\:5b50\:306e\:7121\:3044 Cluster) \:306f\:76ee\:6b21\:306b\:5165\:308c\:306a\:3044 *)
+  With[{empty = Select[Keys[tree["Children"]], tree["Children"][#] === {} && TrueQ[Lookup[Lookup[iKGNodeIndex[b["KG"]], #, <||>], "Cluster", False]] &]},
+    ch = Map[DeleteCases[#, Alternatives @@ empty] &, ch]];
+  res = SourceVaultKGSetToc[b["KG"], ch, "MaxDegree" -> OptionValue["MaxDegree"], "Method" -> "Mechanical", "DropClusters" -> False];
+  Append[res, "Preview" -> b["Added"]]];
+
+(* \:76ee\:6b21\:304b\:3089\:306e\:8a08\:753b: \:76ee\:6b21\:306e\:6728\:3092\:4e0a\:304b\:3089\:958b\:304f\:3002\:3069\:306e\:7bc0\:3082\:300c\:6982\:8981\:306e 1 \:679a\:300d\:304b\:300c\:958b\:304f (\:5b50\:3092\:305d\:308c\:305e\:308c\:679a\:306b\:3059\:308b)\:300d\:306e\:3069\:3061\:3089\:304b\:3002
+   \:958b\:304f\:306e\:306f\:6d45\:3044\:7bc0\:304b\:3089\:3001\:540c\:3058\:6df1\:3055\:306a\:3089\:91cd\:8981\:5ea6 (Include Must \:306f +1) \:306e\:9ad8\:3044\:9806\:306b\:3001\:679a\:6570\:306b\:53ce\:307e\:308b\:3068\:3053\:308d\:307e\:3067\:3002
+   \:958b\:3044\:305f\:7bc0\:306e\:898b\:51fa\:3057\:306e\:679a (\:9053\:6a19) \:306f\:3001\:6839 (\:5168\:4f53\:306e\:6d41\:308c) \:3068\:6df1\:3055 "RoadmapDepth" (\:65e2\:5b9a 1 = \:90e8) \:307e\:3067\:3060\:3051\:3002\:305d\:308c\:3088\:308a\:6df1\:3044\:7bc0\:306f\:958b\:304f\:3068\:81ea\:5206\:306e\:679a\:3092\:5b50\:306b\:8b72\:308b
+   (\:4f4d\:7f6e\:306f\:30d1\:30f3\:304f\:305a\:3067\:5206\:304b\:308b)\:3002\:53ce\:307e\:3089\:306a\:3044\:7bc0\:306f\:6982\:8981\:306e 1 \:679a\:3092\:6b8b\:3057\:3001\:305d\:306e\:5f8c\:308d\:306b\:5927\:4e8b\:306a\:5b50\:3060\:3051\:679a\:306b\:3059\:308b (Partial)\:30021 \:679a\:306a\:3089\:6839 (\:90e8\:306e\:4e00\:884c\:8981\:7d04) \:3060\:3051\:3002
+   \:5fc5\:305a\:51fa\:3059 (Pinned) \:306f\:7956\:5148\:3092\:958b\:304b\:306a\:304f\:3066\:3082\:524d\:9806\:306e\:4f4d\:7f6e\:306b\:679a\:3068\:3057\:3066\:5165\:308b (\:679a\:6570\:3092\:8d85\:3048\:3066\:3082) *)
+Options[SourceVaultKGTocPlan] = {"Slides" -> Automatic, "Seconds" -> Automatic, "SecondsPerSlide" -> 25., "Audience" -> Automatic,
+  "ReleaseCeiling" -> 0.5, "RoadmapDepth" -> 1};
+SourceVaultKGTocPlan[kg_Association, tree_Association, OptionsPattern[]] := Module[
+  {index = iKGNodeIndex[kg], scores, root = tree["Root"], ceiling = OptionValue["ReleaseCeiling"], withheld, hidden, omitted,
+   pinned, assumed, drop, alive, kids, order, pos, nSlides, seconds, sps = N[OptionValue["SecondsPerSlide"]], imp, anc, must,
+   mode = <||>, shown = <||>, count, displayedQ, slideQ, internalQ, depth, h, c, new, delta, cands, remaining, forced, slides = {},
+   internal, figOf, weights, total, secs, diag = {}, partial = {}, prio, figNode, figSub, folded},
+  scores = SourceVaultKGScores[kg, OptionValue["Audience"]];
+  withheld = Select[tree["Order"], Replace[Lookup[index[#], "PrivacyLevel", 0.], Except[_?NumericQ] -> 0.] > ceiling && # =!= root &];
+  hidden = Select[tree["Order"], TrueQ[Lookup[index[#], "Hidden", False]] && # =!= root &];
+  omitted = Select[tree["Order"], Lookup[index[#], "Include", ""] === "Omit" && # =!= root &];
+  pinned = Select[tree["Order"], TrueQ[Lookup[index[#], "Pinned", False]] && # =!= root &];
+  assumed = Select[tree["Order"], # =!= root && Lookup[tree["Children"], #, {}] === {} &&
+    MemberQ[Lookup[Lookup[scores, #, <||>], "Flags", {}], "Assumed"] && ! MemberQ[pinned, #] &];
+  drop = Association[Thread[Join[withheld, hidden, omitted, assumed] -> True]];
+  alive[x_] := alive[x] = x === root || (! KeyExistsQ[drop, x] &&
+    (Lookup[tree["Children"], x, {}] === {} || AnyTrue[tree["Children"][x], alive]));
+  kids[x_] := kids[x] = Select[Lookup[tree["Children"], x, {}], alive];
+  order = Select[tree["Order"], alive];
+  pos = AssociationThread[order -> Range[Length[order]]];
+  seconds = OptionValue["Seconds"]; nSlides = OptionValue["Slides"];
+  If[! IntegerQ[nSlides] || nSlides < 1,
+    nSlides = If[NumericQ[seconds] && seconds > 0, Max[1, Round[seconds / sps]], Length[order]]];
+  h = Replace[OptionValue["RoadmapDepth"], Except[_Integer?NonNegative] -> 1];
+  imp[x_] := Replace[Lookup[index[x], "Importance", 0.5], Except[_?NumericQ] -> 0.5];
+  must = Select[order, Lookup[index[#], "Include", ""] === "Must" &];
+  (* v1.49: \:56f3\:306e\:3042\:308b\:679a\:3092\:512a\:5148\:3059\:308b\:3002\:679a\:6570\:304c\:8db3\:308a\:306a\:3044\:3068\:304d\:3001\:5b50\:306b\:56f3\:3084\:8868\:304c\:3042\:308b\:7bc0\:304b\:3089\:958b\:304d\:3001\:4e00\:90e8\:3060\:3051\:958b\:304f\:7bc0\:3067\:3082\:56f3\:306e\:3042\:308b\:5b50\:3092\:6b8b\:3059
+     (\:8a08\:7b97\:3068\:81ea\:713634: \:5fc5\:305a\:51fa\:3059\:679a\:3092 4 \:679a\:8db3\:3057\:305f\:3089\:3001\:56f3\:306e\:3042\:308b\:679a\:304c 5 \:679a\:3001\:9ed9\:3063\:3066\:6982\:8981\:306b\:7573\:307e\:308c\:305f) *)
+  figNode[x_] := figNode[x] = AnyTrue[Replace[Lookup[index[x], "Assets", {}], Except[_List] -> {}],
+    AssociationQ[#] && MemberQ[{"NotebookFigure", "PDFFigure", "PDFImage", "DeckSlide", "Image"}, Lookup[#, "Type", ""]] &];
+  figSub[x_] := figSub[x] = figNode[x] || AnyTrue[kids[x], figSub];
+  prio[x_] := imp[x] + If[MemberQ[must, x], 1., 0.] +
+    If[kids[x] === {}, If[figNode[x], 0.3, 0.], 0.5 * N[Count[kids[x], _?figSub] / Length[kids[x]]]];
+  depth[x_] := Lookup[tree["Depth"], x, 0];
+  anc[x_] := Module[{p = Lookup[tree["Parent"], x, None], out = {}}, While[p =!= None, AppendTo[out, p]; p = Lookup[tree["Parent"], p, None]]; out];
+  internalQ[x_] := kids[x] =!= {};
+  forced = Association[Thread[Select[pinned, KeyExistsQ[pos, #] &] -> True]];
+  displayedQ[x_] := x === root || KeyExistsQ[forced, x] ||
+    With[{p = Lookup[tree["Parent"], x, None]}, KeyExistsQ[mode, p] && MemberQ[Lookup[shown, p, {}], x]];
+  (* \:679a\:306b\:306a\:308b\:306e\:306f: \:6839\:3001\:8449\:3001\:958b\:3044\:3066\:3044\:306a\:3044 (\:307e\:305f\:306f\:4e00\:90e8\:3060\:3051\:958b\:3044\:305f) \:7bc0\:3001\:6d45\:3044 (\:9053\:6a19\:306e) \:958b\:3044\:305f\:7bc0 *)
+  slideQ[x_] := displayedQ[x] && (x === root || ! internalQ[x] || Lookup[mode, x, None] =!= "Expanded" || depth[x] <= h);
+  count[] := Count[order, _?slideQ];
+  While[True,
+    remaining = nSlides - count[];
+    cands = Select[order, internalQ[#] && displayedQ[#] && ! KeyExistsQ[mode, #] &];
+    If[cands === {}, Break[]];
+    c = First[SortBy[cands, {depth, -prio[#] &, pos[#] &}]];
+    new = Select[kids[c], ! displayedQ[#] &];
+    delta = Length[new] - If[c =!= root && depth[c] > h, 1, 0];
+    Which[
+      delta <= remaining, mode[c] = "Expanded"; shown[c] = kids[c],
+      remaining >= 1,
+        mode[c] = "Partial";
+        shown[c] = With[{add = Take[SortBy[new, {-prio[#] &, pos[#] &}], UpTo[remaining]]}, Select[kids[c], MemberQ[add, #] || displayedQ[#] &]];
+        Break[],
+      True, Break[]]];
+  partial = Select[Keys[mode], mode[#] === "Partial" &];
+  slides = Select[order, slideQ];
+  internal = Select[order, internalQ];
+  figOf[x_] := Module[{cand},
+    cand = Select[Select[order, MemberQ[anc[#], x] &],
+      AnyTrue[Replace[Lookup[index[#], "Assets", {}], Except[_List] -> {}],
+        AssociationQ[#] && MemberQ[{"NotebookFigure", "PDFFigure", "PDFImage", "DeckSlide", "Image", "WLFigure"}, Lookup[#, "Type", ""]] &] &];
+    If[cand === {}, None, First[MaximalBy[cand, imp]]]];
+  folded = Select[order, figNode[#] && ! displayedQ[#] && ! KeyExistsQ[drop, #] &];
+  weights = Map[1. + If[Replace[Lookup[index[#], "Assets", {}], Except[_List] -> {}] =!= {}, 0.4, 0.] &, slides];
+  total = If[NumericQ[seconds] && seconds > 0, N[seconds], sps * Length[slides]];
+  secs = If[Total[weights] > 0, Round[total * weights / Total[weights]], ConstantArray[Round[sps], Length[slides]]];
+  If[secs =!= {}, secs[[-1]] += Round[total] - Total[secs]];
+  If[withheld =!= {}, AppendTo[diag, "Withheld (privacy): " <> StringRiffle[withheld, ", "]]];
+  If[partial =!= {}, AppendTo[diag, "Partial: " <> StringRiffle[partial, ", "]]];
+  <|"ObjectClass" -> "SourceVaultKGPlan", "GraphId" -> Lookup[kg, "GraphId", ""], "Mode" -> "Toc",
+    "Slides" -> MapThread[Function[{x, sec}, With[{sumQ = internalQ[x] && Lookup[mode, x, None] =!= "Expanded"},
+      <|"NodeId" -> x, "Packed" -> {}, "Seconds" -> sec, "Depth" -> depth[x],
+        "Flags" -> Join[Lookup[Lookup[scores, x, <||>], "Flags", {}], If[MemberQ[pinned, x], {"Pinned"}, {}],
+          If[sumQ, {"Summary"}, {}], If[MemberQ[partial, x], {"Partial"}, {}]],
+        "Children" -> Select[kids[x], displayedQ], "AllChildren" -> kids[x], "Expanded" -> Lookup[mode, x, None] === "Expanded",
+        "Figure" -> If[sumQ && x =!= root, figOf[x], None]|>]], {slides, secs}],
+    "Pruned" -> Select[order, ! displayedQ[#] &], "Assumed" -> assumed, "Withheld" -> withheld, "Hidden" -> hidden,
+    "Omitted" -> omitted, "Pinned" -> pinned, "Promoted" -> {}, "Expanded" -> Select[Keys[mode], mode[#] === "Expanded" &],
+    "Headings" -> Select[order, displayedQ[#] && internalQ[#] && ! slideQ[#] &], "FoldedFigures" -> folded, "Threshold" -> None,
+    "Scores" -> scores, "SlideCount" -> Length[slides], "TotalSeconds" -> Total[secs],
+    "Audience" -> SourceVaultKGAudience[OptionValue["Audience"]], "Diagnostics" -> diag,
+    "TreeParent" -> tree["Parent"], "TreeInternal" -> internal|>];
+
+(* \:5b50\:306e\:4e00\:884c: \:4e00\:884c\:8981\:7d04 (Gist) \:304c\:3042\:308c\:3070\:305d\:308c\:3001\:7121\:3051\:308c\:3070\:984c\:76ee *)
+iKGOneLiner[n_Association, lang_, primary_] := If[iKGHasGistQ[n, lang, primary], SourceVaultKGText[n, "Gist", lang], SourceVaultKGText[n, "Label", lang]];
+iKGOneLiner[___] := "";
+iKGAgendaTalk[lines_List, lang_] := If[lang === "ja",
+  "\:672c\:65e5\:306f " <> ToString[Length[lines]] <> " \:90e8\:306b\:5206\:3051\:3066\:304a\:8a71\:3057\:3057\:307e\:3059\:3002" <>
+    StringJoin[MapIndexed["\:7b2c" <> ToString[First[#2]] <> "\:90e8\:3067\:306f\:3001" <> StringTrim[#1, "\:3002"] <> "\:3092\:6271\:3044\:307e\:3059\:3002" &, lines]],
+  "The talk has " <> ToString[Length[lines]] <> " parts. " <>
+    StringJoin[MapIndexed["Part " <> ToString[First[#2]] <> " covers " <> StringTrim[#1, "."] <> ". " &, lines]]];
+
+(* ---------------- v1.47: \:4ed6\:306e KG \:306e\:30ce\:30fc\:30c9\:3092\:53d6\:308a\:8fbc\:3080 (\:8a08\:7b97\:30ce\:30fc\:30c8\:306e\:5358\:4f4d\:306e\:518d\:5229\:7528\:306a\:3069) ----------------
+   from \:306e ids (\:3068\:305d\:306e Contains \:306e\:5b50\:5b6b) \:3092\:65b0\:3057\:3044 Id (Prefix + \:5143\:306e Id) \:3067 kg \:306b\:5199\:3059\:3002\:4e2d\:306e\:8fba\:3082\:5199\:3057\:3001\:3044\:3061\:3070\:3093\:4e0a\:306e\:30ce\:30fc\:30c9\:306f "Parent" \:306e
+   Contains \:306e\:5b50\:306b ("After" \:304c\:3042\:308c\:3070\:305d\:306e\:5f8c\:308d)\:3002\:5143\:306f "Origin" -> <|Graph, Id|> \:306b\:6b8b\:3059\:3002\:56f3\:306a\:3069\:306e\:8cc7\:7523\:306e\:53c2\:7167 (Ref) \:306f\:305d\:306e\:307e\:307e
+   (\:8a08\:7b97\:30ce\:30fc\:30c8\:306e Ref \:306f sv://computenb/<Id> \:306a\:306e\:3067\:3069\:306e KG \:304b\:3089\:3082\:89e3\:3051\:308b)\:3002\:30ce\:30fc\:30c9\:306e "Links" ("<GraphId>#<Id>") \:304c kg \:306e
+   \:30ce\:30fc\:30c9\:3092\:6307\:3057\:3066\:3044\:308c\:3070 Supports \:306e\:8fba\:306b\:3059\:308b\:3002\:76ee\:6b21\:304c\:3042\:308b kg \:3067\:306f\:3001\:65b0\:3057\:3044\:30ce\:30fc\:30c9\:306f\:76ee\:6b21\:306e\:6728\:304c After / Parent \:306e\:6240\:306b\:7f6e\:304f *)
+Options[SourceVaultKGImportNodes] = {"Prefix" -> Automatic, "Parent" -> Automatic, "After" -> None, "Subtree" -> True,
+  "Pin" -> False, "Link" -> True};
+SourceVaultKGImportNodes[kg_Association, from_Association, ids_, OptionsPattern[]] := Module[
+  {fi = iKGNodeIndex[from], ti = iKGNodeIndex[kg], froot = Lookup[from, "Root", None], troot = Lookup[kg, "Root", "root"],
+   fgid = ToString[Lookup[from, "GraphId", ""]], tgid = ToString[Lookup[kg, "GraphId", ""]], sel, kids, base, prefix, k = 0,
+   map, cpar, tops, parent, after, o0, newNodes, newEdges = {}, linked = 0, srcs},
+  sel = Select[If[ids === All, Keys[fi], iKGList[ids]], StringQ[#] && KeyExistsQ[fi, #] && # =!= froot &];
+  kids = GroupBy[Select[Lookup[from, "Edges", {}], #["EdgeKind"] === "Contains" &], (#["From"] &) -> (#["To"] &)];
+  If[TrueQ[OptionValue["Subtree"]],
+    sel = FixedPoint[DeleteDuplicates[Join[#, Flatten[Lookup[kids, #, {}]]]] &, sel, 50];
+    sel = Select[sel, # =!= froot &]];
+  sel = SortBy[sel, {Replace[Lookup[fi[#], "Order", None], Except[_?NumericQ] -> 10.^6] &, # &}];
+  If[sel === {}, Return[<|"KG" -> kg, "Added" -> {}, "Map" -> <||>, "Linked" -> 0|>]];
+  base = Replace[OptionValue["Prefix"], Automatic :> StringTake[StringReplace[ToLowerCase[fgid], Except[LetterCharacter | DigitCharacter] -> ""], UpTo[12]] <> "_"];
+  If[! StringQ[base] || base === "_", base = "imp_"];
+  prefix = base;
+  While[AnyTrue[sel, KeyExistsQ[ti, prefix <> #] &] && k < 100, k++; prefix = StringDrop[base, -1] <> ToString[k] <> "_"];
+  map = AssociationThread[sel -> Map[prefix <> # &, sel]];
+  cpar = Association[Map[#["To"] -> #["From"] &, Reverse[Select[Lookup[from, "Edges", {}], #["EdgeKind"] === "Contains" &]]]];
+  tops = Select[sel, ! KeyExistsQ[map, Lookup[cpar, #, None]] &];
+  parent = Replace[OptionValue["Parent"], Automatic -> troot];
+  If[! KeyExistsQ[ti, parent], parent = troot];
+  after = OptionValue["After"];
+  If[! (StringQ[after] && KeyExistsQ[ti, after]), after = None];
+  o0 = Which[
+    after =!= None && NumericQ[Lookup[ti[after], "Order", None]], ti[after]["Order"],
+    True, Max[Prepend[Select[Lookup[Lookup[kg, "Nodes", {}], "Order", None], NumericQ], 0]] + 1];
+  newNodes = MapIndexed[Function[{id, i}, Join[fi[id],
+      <|"Id" -> map[id], "Order" -> o0 + 0.001 First[i], "Origin" -> <|"Graph" -> fgid, "Id" -> id|>|>,
+      If[TrueQ[OptionValue["Pin"]] && MemberQ[tops, id], <|"Pinned" -> True|>, <||>]]], sel];
+  newEdges = Map[Join[#, <|"From" -> map[#["From"]], "To" -> map[#["To"]]|>] &,
+    Select[Lookup[from, "Edges", {}], KeyExistsQ[map, #["From"]] && KeyExistsQ[map, #["To"]] &]];
+  newEdges = Join[newEdges, Map[<|"From" -> parent, "To" -> map[#], "EdgeKind" -> "Contains", "Weight" -> 1.|> &, tops]];
+  If[after =!= None, AppendTo[newEdges, <|"From" -> after, "To" -> map[First[tops]], "EdgeKind" -> "Precedes", "Weight" -> 0.9|>]];
+  If[TrueQ[OptionValue["Link"]],
+    Do[Do[With[{p = StringSplit[l, "#", 2]},
+          If[Length[p] === 2 && (p[[1]] === tgid || p[[1]] === "") && KeyExistsQ[ti, p[[2]]],
+            linked++; AppendTo[newEdges, <|"From" -> map[id], "To" -> p[[2]], "EdgeKind" -> "Supports", "Weight" -> 0.6|>]]],
+        {l, Select[iKGList[Lookup[fi[id], "Links", {}]], StringQ]}],
+      {id, sel}]];
+  srcs = Lookup[kg, "Sources", {}];
+  Do[If[AssociationQ[s] && ! MemberQ[Lookup[Select[srcs, AssociationQ], "Key", {}], Lookup[s, "Key", None]], AppendTo[srcs, s]],
+    {s, Select[iKGList[Lookup[from, "Sources", {}]], AssociationQ]}];
+  <|"KG" -> SourceVaultKGValidate[Join[kg, <|"Nodes" -> Join[Lookup[kg, "Nodes", {}], newNodes],
+      "Edges" -> Join[Lookup[kg, "Edges", {}], newEdges], "Sources" -> srcs|>]],
+    "Added" -> Lookup[map, sel], "Map" -> map, "Linked" -> linked|>];
 
 iKGSubtree[tree_Association, id_String] := Module[{out = {id}, q = {id}, c},
   While[q =!= {},
@@ -879,8 +1304,10 @@ iKGOrderViolations[kg_Association, pos_Association] := Select[Map[Function[e,
 SourceVaultKGVerify[kg_Association, tree_Association] := Module[{pos, viol, orphans, dropped, status},
   pos = AssociationThread[tree["Order"] -> Range[Length[tree["Order"]]]];
   orphans = Complement[Lookup[Lookup[kg, "Nodes", {}], "Id", {}], tree["Order"]];
+  (* \:76ee\:6b21\:306e\:6728\:306b\:5165\:3089\:306a\:3044\:30ce\:30fc\:30c9 (\:4f7f\:308f\:306a\:3044\:3068\:6c7a\:3081\:305f\:8449\:30fb\:8cc7\:6599\:306e\:7bc0) \:306f\:843d\:3061\:305f\:306e\:3067\:306f\:306a\:3044 *)
+  If[Lookup[tree, "Strategy", ""] === "Toc", orphans = {}];
   dropped = Lookup[tree["Diagnostics"], "Dropped", {}];
-  (* 閉路を切るために落とした辺は違反ではない (Cycles に出る) *)
+  (* \:9589\:8def\:3092\:5207\:308b\:305f\:3081\:306b\:843d\:3068\:3057\:305f\:8fba\:306f\:9055\:53cd\:3067\:306f\:306a\:3044 (Cycles \:306b\:51fa\:308b) *)
   viol = Select[iKGOrderViolations[kg, pos],
     Function[v, ! AnyTrue[dropped, #["From"] === v["From"] && #["To"] === v["To"] &]]];
   status = Which[viol =!= {} || orphans =!= {}, "Broken",
@@ -890,9 +1317,9 @@ SourceVaultKGVerify[kg_Association, tree_Association] := Module[{pos, viol, orph
     "Orphans" -> orphans, "RootMismatch" -> Lookup[tree["Diagnostics"], "RootMismatch", None],
     "MissingPrerequisites" -> {}|>];
 
-(* ---------------- 詰め込みと枝刈り ---------------- *)
+(* ---------------- \:8a70\:3081\:8fbc\:307f\:3068\:679d\:5208\:308a ---------------- *)
 
-(* s の子孫のうち、スライドとして提示される最も近いもの (子がスライドならその子、でなければその子の下を探す) *)
+(* s \:306e\:5b50\:5b6b\:306e\:3046\:3061\:3001\:30b9\:30e9\:30a4\:30c9\:3068\:3057\:3066\:63d0\:793a\:3055\:308c\:308b\:6700\:3082\:8fd1\:3044\:3082\:306e (\:5b50\:304c\:30b9\:30e9\:30a4\:30c9\:306a\:3089\:305d\:306e\:5b50\:3001\:3067\:306a\:3051\:308c\:3070\:305d\:306e\:5b50\:306e\:4e0b\:3092\:63a2\:3059) *)
 iKGSlideChildren[tree_Association, slides_List, s_String] := Flatten[Map[Function[c,
   If[MemberQ[slides, c], {c}, iKGSlideChildren[tree, slides, c]]], Lookup[tree["Children"], s, {}]]];
 
@@ -905,14 +1332,18 @@ SourceVaultKGPlan[kg_Association, tree_Association, OptionsPattern[]] := Module[
    packed = <||>, host = <||>, pruned, promoted = {}, cap = OptionValue["MaxPackedPerSlide"],
    ratio = OptionValue["PackRatio"], ceiling = OptionValue["ReleaseCeiling"], remaining, pos, diag = {},
    weights, total, secs, presented, packSet, posOf, oedges, predsOf, succOf, slideAncestor, subtreeSlides,
-   presentedPos, hostFor, hidden},
+   presentedPos, hostFor, hidden, pinned},
   scores = SourceVaultKGScores[kg, OptionValue["Audience"]];
   (* privacy: fail-closed *)
   withheld = Select[order, index[#]["PrivacyLevel"] > ceiling &];
-  (* 調整で「隠す」にしたノード (Hidden) はスライドにも詰め込みにも前提の修復にも使わない *)
+  (* \:8abf\:6574\:3067\:300c\:96a0\:3059\:300d\:306b\:3057\:305f\:30ce\:30fc\:30c9 (Hidden) \:306f\:30b9\:30e9\:30a4\:30c9\:306b\:3082\:8a70\:3081\:8fbc\:307f\:306b\:3082\:524d\:63d0\:306e\:4fee\:5fa9\:306b\:3082\:4f7f\:308f\:306a\:3044 *)
   hidden = Select[order, TrueQ[Lookup[index[#], "Hidden", False]] && # =!= root &];
   order = Complement[order, withheld, hidden] // SortBy[FirstPosition[tree["Order"], #] &];
   assumed = Select[order, MemberQ[scores[#]["Flags"], "Assumed"] && # =!= root &];
+  (* v1.42: \:300c\:5fc5\:305a\:51fa\:3059\:300d\:30ce\:30fc\:30c9 (Pinned\:3002\:8abf\:6574\:3067\:8db3\:3057\:305f\:679a\:3084\:300c\:5fc5\:305a\:542b\:3081\:308b\:300d\:3068\:8a00\:308f\:308c\:305f\:679a) \:306f\:524d\:63d0\:77e5\:8b58\:6271\:3044\:306b\:3082
+     \:70b9\:6570\:306e\:7af6\:4e89\:306b\:3082\:305b\:305a\:3001\:90e8\:3068\:540c\:3058\:304f\:5148\:306b\:67a0\:3092\:53d6\:308b\:3002\:67a0\:3088\:308a\:591a\:3051\:308c\:3070\:67a0\:3092\:8d85\:3048\:3066\:3082\:51fa\:3059\:3002\:96a0\:3059\:30fb\:975e\:516c\:958b\:306f\:9664\:3044\:305f\:5f8c *)
+  pinned = Select[order, TrueQ[Lookup[index[#], "Pinned", False]] && # =!= root &];
+  assumed = Select[assumed, ! MemberQ[pinned, #] &];
   seconds = OptionValue["Seconds"];
   nSlides = OptionValue["Slides"];
   If[! IntegerQ[nSlides] || nSlides < 1,
@@ -920,23 +1351,23 @@ SourceVaultKGPlan[kg_Association, tree_Association, OptionsPattern[]] := Module[
       True, Length[order] - Length[assumed]]];
   nSlides = Max[nSlides, Min[OptionValue["MinSlides"], Length[order]]];
   cands = Select[order, # =!= root && ! MemberQ[assumed, #] &];
-  (* 部 (root 直下) は必ず 1 枚にする。ただし Importance が "ForceParts" (既定 0.5) 未満の部 (付録など) は
-     強制せず、他のノードと同じ順位づけに任せる (None で全部を強制) *)
+  (* \:90e8 (root \:76f4\:4e0b) \:306f\:5fc5\:305a 1 \:679a\:306b\:3059\:308b\:3002\:305f\:3060\:3057 Importance \:304c "ForceParts" (\:65e2\:5b9a 0.5) \:672a\:6e80\:306e\:90e8 (\:4ed8\:9332\:306a\:3069) \:306f
+     \:5f37\:5236\:305b\:305a\:3001\:4ed6\:306e\:30ce\:30fc\:30c9\:3068\:540c\:3058\:9806\:4f4d\:3065\:3051\:306b\:4efb\:305b\:308b (None \:3067\:5168\:90e8\:3092\:5f37\:5236) *)
   parts = Select[Lookup[tree["Children"], root, {}], MemberQ[cands, #] &&
     (! NumericQ[floor] || Lookup[index[#], "Importance", 0.5] >= floor) &];
-  forced = If[nSlides >= 1 + Length[parts], parts, {}];
+  forced = DeleteDuplicates[Join[If[nSlides >= 1 + Length[Union[parts, pinned]], parts, {}], pinned]];
   remaining = Select[cands, ! MemberQ[forced, #] &];
   take = Max[0, nSlides - 1 - Length[forced]];
   remaining = SortBy[remaining, {-scores[#]["Score"], FirstPosition[order, #]} &];
   slides = Join[{root}, forced, Take[remaining, UpTo[take]]];
   theta = If[take > 0 && Length[remaining] > 0, scores[remaining[[Min[take, Length[remaining]]]]]["Score"], 1.];
   slides = SortBy[slides, FirstPosition[order, #] &];
-  (* 詰め込み先の規則 (順序を壊さない):
-       x の最寄りのスライド先祖 A の部分木にあるスライドのうち、位置が x 以前で、かつ
-       x の提示済み先行ノードの位置以上・後続ノードの位置以下のものの中から最も後ろのものを選ぶ。
-     先祖スライドへ詰めると、先祖と x の間にある先行ノードより前に出てしまう (実測: 図が機構の説明より
-     前に出る / 結論が結果より前に出る)。部分木は L の連続区間なので、この規則なら節をまたがず、
-     どの順で詰めても提示順が順序辺と矛盾しない *)
+  (* \:8a70\:3081\:8fbc\:307f\:5148\:306e\:898f\:5247 (\:9806\:5e8f\:3092\:58ca\:3055\:306a\:3044):
+       x \:306e\:6700\:5bc4\:308a\:306e\:30b9\:30e9\:30a4\:30c9\:5148\:7956 A \:306e\:90e8\:5206\:6728\:306b\:3042\:308b\:30b9\:30e9\:30a4\:30c9\:306e\:3046\:3061\:3001\:4f4d\:7f6e\:304c x \:4ee5\:524d\:3067\:3001\:304b\:3064
+       x \:306e\:63d0\:793a\:6e08\:307f\:5148\:884c\:30ce\:30fc\:30c9\:306e\:4f4d\:7f6e\:4ee5\:4e0a\:30fb\:5f8c\:7d9a\:30ce\:30fc\:30c9\:306e\:4f4d\:7f6e\:4ee5\:4e0b\:306e\:3082\:306e\:306e\:4e2d\:304b\:3089\:6700\:3082\:5f8c\:308d\:306e\:3082\:306e\:3092\:9078\:3076\:3002
+     \:5148\:7956\:30b9\:30e9\:30a4\:30c9\:3078\:8a70\:3081\:308b\:3068\:3001\:5148\:7956\:3068 x \:306e\:9593\:306b\:3042\:308b\:5148\:884c\:30ce\:30fc\:30c9\:3088\:308a\:524d\:306b\:51fa\:3066\:3057\:307e\:3046 (\:5b9f\:6e2c: \:56f3\:304c\:6a5f\:69cb\:306e\:8aac\:660e\:3088\:308a
+     \:524d\:306b\:51fa\:308b / \:7d50\:8ad6\:304c\:7d50\:679c\:3088\:308a\:524d\:306b\:51fa\:308b)\:3002\:90e8\:5206\:6728\:306f L \:306e\:9023\:7d9a\:533a\:9593\:306a\:306e\:3067\:3001\:3053\:306e\:898f\:5247\:306a\:3089\:7bc0\:3092\:307e\:305f\:304c\:305a\:3001
+     \:3069\:306e\:9806\:3067\:8a70\:3081\:3066\:3082\:63d0\:793a\:9806\:304c\:9806\:5e8f\:8fba\:3068\:77db\:76fe\:3057\:306a\:3044 *)
   posOf = AssociationThread[order -> Range[Length[order]]];
   oedges = Select[Lookup[kg, "Edges", {}], TrueQ[#["Order"]] &];
   predsOf = <||>; succOf = <||>;
@@ -952,20 +1383,20 @@ SourceVaultKGPlan[kg_Association, tree_Association, OptionsPattern[]] := Module[
     lb = Max[Prepend[Select[presentedPos /@ Lookup[predsOf, x, {}], IntegerQ], 0]];
     ub = Min[Prepend[Select[presentedPos /@ Lookup[succOf, x, {}], IntegerQ], Infinity]];
     cands = Select[cands, lb <= posOf[#] <= ub &];
-    (* 図のある枚は行数が少ないので詰め込みは半分まで (続きスライドが増えすぎない) *)
+    (* \:56f3\:306e\:3042\:308b\:679a\:306f\:884c\:6570\:304c\:5c11\:306a\:3044\:306e\:3067\:8a70\:3081\:8fbc\:307f\:306f\:534a\:5206\:307e\:3067 (\:7d9a\:304d\:30b9\:30e9\:30a4\:30c9\:304c\:5897\:3048\:3059\:304e\:306a\:3044) *)
     ok = SelectFirst[cands, Length[Lookup[packed, #, {}]] < If[Lookup[index[#], "Assets", {}] =!= {}, 1, cap] &, None];
     Which[ok =!= None, ok, allowOverflow && cands =!= {}, First[cands], True, None]];
-  (* 閾値未満でも PackRatio 以上なら箇条書きとして詰め込む (容量のある先が無ければ落とす) *)
+  (* \:95be\:5024\:672a\:6e80\:3067\:3082 PackRatio \:4ee5\:4e0a\:306a\:3089\:7b87\:6761\:66f8\:304d\:3068\:3057\:3066\:8a70\:3081\:8fbc\:3080 (\:5bb9\:91cf\:306e\:3042\:308b\:5148\:304c\:7121\:3051\:308c\:3070\:843d\:3068\:3059) *)
   Do[If[! MemberQ[slides, x] && ! MemberQ[assumed, x] && scores[x]["Score"] >= theta * ratio,
       With[{h = hostFor[x, False]},
         If[h =!= None, packed[h] = Append[Lookup[packed, h, {}], x]; host[x] = h]]],
     {x, order}];
-  (* 前提の修復: 提示されるノードの Prerequisite / Derives / Motivates 元が落ちていれば詰め込む
-     (容量超過を許す。置き場が無ければ Unplaceable に記録) *)
+  (* \:524d\:63d0\:306e\:4fee\:5fa9: \:63d0\:793a\:3055\:308c\:308b\:30ce\:30fc\:30c9\:306e Prerequisite / Derives / Motivates \:5143\:304c\:843d\:3061\:3066\:3044\:308c\:3070\:8a70\:3081\:8fbc\:3080
+     (\:5bb9\:91cf\:8d85\:904e\:3092\:8a31\:3059\:3002\:7f6e\:304d\:5834\:304c\:7121\:3051\:308c\:3070 Unplaceable \:306b\:8a18\:9332) *)
   Do[
     presented = Join[slides, Keys[host]];
-    (* 同じ前提ノードが複数の依存先から昇格されて何度も詰め込まれないよう、host は即時に見る
-       (実測: bg ノードが 4 枚に重複して現れた) *)
+    (* \:540c\:3058\:524d\:63d0\:30ce\:30fc\:30c9\:304c\:8907\:6570\:306e\:4f9d\:5b58\:5148\:304b\:3089\:6607\:683c\:3055\:308c\:3066\:4f55\:5ea6\:3082\:8a70\:3081\:8fbc\:307e\:308c\:306a\:3044\:3088\:3046\:3001host \:306f\:5373\:6642\:306b\:898b\:308b
+       (\:5b9f\:6e2c: bg \:30ce\:30fc\:30c9\:304c 4 \:679a\:306b\:91cd\:8907\:3057\:3066\:73fe\:308c\:305f) *)
     Do[If[MemberQ[{"Prerequisite", "Derives", "Motivates"}, e["EdgeKind"]] && MemberQ[presented, e["To"]] &&
         ! MemberQ[presented, e["From"]] && ! KeyExistsQ[host, e["From"]] && ! MemberQ[slides, e["From"]] &&
         ! MemberQ[assumed, e["From"]] && MemberQ[order, e["From"]],
@@ -978,21 +1409,23 @@ SourceVaultKGPlan[kg_Association, tree_Association, OptionsPattern[]] := Module[
     {3}];
   packSet = Keys[host];
   pruned = Select[order, ! MemberQ[slides, #] && ! MemberQ[packSet, #] && ! MemberQ[assumed, #] &];
-  (* 秒配分 *)
+  (* \:79d2\:914d\:5206 *)
   weights = Map[Function[s, 1. + 0.25 * Length[Lookup[packed, s, {}]] +
     If[Lookup[index[s], "Assets", {}] =!= {}, 0.4, 0.]], slides];
   total = If[NumericQ[seconds] && seconds > 0, N[seconds], sps * Length[slides]];
   secs = If[Total[weights] > 0, Round[total * weights / Total[weights]], ConstantArray[Round[sps], Length[slides]]];
-  (* 丸めの誤差は最後の 1 枚で吸収し、合計を総秒数に一致させる *)
+  (* \:4e38\:3081\:306e\:8aa4\:5dee\:306f\:6700\:5f8c\:306e 1 \:679a\:3067\:5438\:53ce\:3057\:3001\:5408\:8a08\:3092\:7dcf\:79d2\:6570\:306b\:4e00\:81f4\:3055\:305b\:308b *)
   If[secs =!= {}, secs[[-1]] += Round[total] - Total[secs]];
   If[withheld =!= {}, AppendTo[diag, "Withheld (privacy): " <> StringRiffle[withheld, ", "]]];
   <|"ObjectClass" -> "SourceVaultKGPlan", "GraphId" -> Lookup[kg, "GraphId", ""],
     "Slides" -> MapThread[Function[{s, sec},
       <|"NodeId" -> s, "Packed" -> SortBy[Lookup[packed, s, {}], FirstPosition[order, #] &],
-        "Seconds" -> sec, "Depth" -> tree["Depth"][s], "Flags" -> scores[s]["Flags"],
-        (* 節スライドの目次用: 部分木の中でスライドになった直近の子孫 (子がスライドでなければその下を辿る) *)
+        "Seconds" -> sec, "Depth" -> tree["Depth"][s],
+        "Flags" -> If[MemberQ[pinned, s], Append[scores[s]["Flags"], "Pinned"], scores[s]["Flags"]],
+        (* \:7bc0\:30b9\:30e9\:30a4\:30c9\:306e\:76ee\:6b21\:7528: \:90e8\:5206\:6728\:306e\:4e2d\:3067\:30b9\:30e9\:30a4\:30c9\:306b\:306a\:3063\:305f\:76f4\:8fd1\:306e\:5b50\:5b6b (\:5b50\:304c\:30b9\:30e9\:30a4\:30c9\:3067\:306a\:3051\:308c\:3070\:305d\:306e\:4e0b\:3092\:8fbf\:308b) *)
         "Children" -> Select[iKGSlideChildren[tree, slides, s], # =!= s &]|>], {slides, secs}],
-    "Pruned" -> pruned, "Assumed" -> assumed, "Withheld" -> withheld, "Hidden" -> hidden, "Promoted" -> DeleteDuplicates[promoted],
+    "Pruned" -> pruned, "Assumed" -> assumed, "Withheld" -> withheld, "Hidden" -> hidden, "Pinned" -> pinned,
+    "Promoted" -> DeleteDuplicates[promoted],
     "Threshold" -> theta, "Scores" -> scores, "SlideCount" -> Length[slides],
     "TotalSeconds" -> Total[secs], "Audience" -> SourceVaultKGAudience[OptionValue["Audience"]],
     "Diagnostics" -> diag|>];
@@ -1007,17 +1440,17 @@ SourceVaultKGVerifyPlan[kg_Association, plan_Association] := Module[{pos = <||>,
     Lookup[kg, "Edges", {}]], AssociationQ];
   <|"Status" -> If[viol === {}, "OK", "Broken"], "Violations" -> viol|>];
 
-(* ---------------- アウトライン (言語別) ---------------- *)
+(* ---------------- \:30a2\:30a6\:30c8\:30e9\:30a4\:30f3 (\:8a00\:8a9e\:5225) ---------------- *)
 
 Options[SourceVaultKGOutline] = {"Language" -> Automatic, "MaxAssetsPerSlide" -> 2, "MaxPointsPerSlide" -> 6,
   "MaxLinesPerSlide" -> 9, "CharsPerLine" -> 40, "FigureLines" -> 4, "Agenda" -> Automatic, "Roadmap" -> True,
   "Crumbs" -> True, "CharsPerSecond" -> Automatic, "ReShowFigures" -> True,
   "InheritFigures" -> True, "FigureReuse" -> 2, "Glossary" -> Automatic, "GlossaryRows" -> 6};
 
-(* 1 行の表示コスト: 長い行は折り返して 2 行以上を占める (16:9 で 1 行 ≈ 40 全角字) *)
+(* 1 \:884c\:306e\:8868\:793a\:30b3\:30b9\:30c8: \:9577\:3044\:884c\:306f\:6298\:308a\:8fd4\:3057\:3066 2 \:884c\:4ee5\:4e0a\:3092\:5360\:3081\:308b (16:9 \:3067 1 \:884c \[TildeTilde] 40 \:5168\:89d2\:5b57) *)
 iKGLineCost[s_String, cpl_Integer] := Max[1, Ceiling[StringLength[s] / Max[10, cpl]]];
 iKGLineCost[_, _] := 1;
-(* 1 枚の行数: 導入文 + 要点 (+ 補足) + 詰め込んだ子 (ラベル + 行) *)
+(* 1 \:679a\:306e\:884c\:6570: \:5c0e\:5165\:6587 + \:8981\:70b9 (+ \:88dc\:8db3) + \:8a70\:3081\:8fbc\:3093\:3060\:5b50 (\:30e9\:30d9\:30eb + \:884c) *)
 iKGSlideLines[lead_String, points_List, details_List, sub_List, cpl_Integer] :=
   If[lead === "", 0, iKGLineCost[lead, cpl]] +
   Total[iKGLineCost[#, cpl] & /@ points] +
@@ -1025,9 +1458,9 @@ iKGSlideLines[lead_String, points_List, details_List, sub_List, cpl_Integer] :=
   Total[Map[iKGLineCost[#["Label"], cpl] + Total[iKGLineCost[#, cpl] & /@ #["Points"]] &, sub]];
 iKGSlideLines[points_List, sub_List, cpl_Integer] := iKGSlideLines["", points, {}, sub, cpl];
 
-(* 1 枚の行数を予算に収める。1. 末尾の子の行 → 2. 補足を末尾から → 3. 自身の要点を minOwn 行まで →
-   4. それでも超える子は「続き」スライドへ (行は元に戻して渡す)。
-   旧実装は Total[.., 0] の誤りで一度も削れなかった (実測: 1 枚 29 行)。 *)
+(* 1 \:679a\:306e\:884c\:6570\:3092\:4e88\:7b97\:306b\:53ce\:3081\:308b\:30021. \:672b\:5c3e\:306e\:5b50\:306e\:884c \[RightArrow] 2. \:88dc\:8db3\:3092\:672b\:5c3e\:304b\:3089 \[RightArrow] 3. \:81ea\:8eab\:306e\:8981\:70b9\:3092 minOwn \:884c\:307e\:3067 \[RightArrow]
+   4. \:305d\:308c\:3067\:3082\:8d85\:3048\:308b\:5b50\:306f\:300c\:7d9a\:304d\:300d\:30b9\:30e9\:30a4\:30c9\:3078 (\:884c\:306f\:5143\:306b\:623b\:3057\:3066\:6e21\:3059)\:3002
+   \:65e7\:5b9f\:88c5\:306f Total[.., 0] \:306e\:8aa4\:308a\:3067\:4e00\:5ea6\:3082\:524a\:308c\:306a\:304b\:3063\:305f (\:5b9f\:6e2c: 1 \:679a 29 \:884c)\:3002 *)
 iKGFitLines[lead_String, points_List, detailsIn_List, subIn_List, budget_Integer, cpl_Integer, minOwn_: 2] :=
   Module[{pts = points, det = PadRight[Take[detailsIn, UpTo[Length[points]]], Length[points], ""], sub = subIn, k, overflow = {}, orig, lines},
   orig = Association[Map[#["NodeId"] -> # &, subIn]];
@@ -1044,44 +1477,44 @@ iKGFitLines[lead_String, points_List, detailsIn_List, subIn_List, budget_Integer
 iKGFitLines[points_List, subIn_List, budget_Integer, cpl_Integer, minOwn_: 2] :=
   With[{r = iKGFitLines["", points, {}, subIn, budget, cpl, minOwn]}, {r[[1]], r[[3]], r[[4]]}];
 
-iKGSentences[t_String, lang_String] := Select[StringTrim /@ StringSplit[t, If[lang === "ja", "。", ". "]], # =!= "" &];
-(* ノードの原稿: Talk (要点順の文) を表示した要点数 + 1 文に切り詰める。無ければ要点をそのまま文に (Summary は要点と
-   対応しないことがある)。要点も無ければ Summary *)
+iKGSentences[t_String, lang_String] := Select[StringTrim /@ StringSplit[t, If[lang === "ja", "\:3002", ". "]], # =!= "" &];
+(* \:30ce\:30fc\:30c9\:306e\:539f\:7a3f: Talk (\:8981\:70b9\:9806\:306e\:6587) \:3092\:8868\:793a\:3057\:305f\:8981\:70b9\:6570 + 1 \:6587\:306b\:5207\:308a\:8a70\:3081\:308b\:3002\:7121\:3051\:308c\:3070\:8981\:70b9\:3092\:305d\:306e\:307e\:307e\:6587\:306b (Summary \:306f\:8981\:70b9\:3068
+   \:5bfe\:5fdc\:3057\:306a\:3044\:3053\:3068\:304c\:3042\:308b)\:3002\:8981\:70b9\:3082\:7121\:3051\:308c\:3070 Summary *)
 iKGNodeTalk[n_Association, nShown_Integer, lang_String] := Module[{t = SourceVaultKGText[n, "Talk", lang], ss},
   If[t === "", Return[With[{ps = SourceVaultKGText[n, "Points", lang]},
     If[ListQ[ps] && Select[ps, StringQ] =!= {}, iKGTalkFallback[Take[Select[ps, StringQ], UpTo[Max[1, nShown]]], "", lang],
       SourceVaultKGText[n, "Summary", lang]]]]];
   ss = iKGSentences[t, lang];
   If[nShown >= 1 && Length[ss] > nShown + 1, ss = Take[ss, nShown + 1]];
-  If[ss === {}, "", StringRiffle[ss, If[lang === "ja", "。", ". "]] <> If[lang === "ja", "。", "."]]];
-(* 原稿の長さ上限: 秒数 × 話速 (ja 7 字/秒、en 14 字/秒) と、表示行数 + 2 文。文の切れ目で切る *)
+  If[ss === {}, "", StringRiffle[ss, If[lang === "ja", "\:3002", ". "]] <> If[lang === "ja", "\:3002", "."]]];
+(* \:539f\:7a3f\:306e\:9577\:3055\:4e0a\:9650: \:79d2\:6570 \[Times] \:8a71\:901f (ja 7 \:5b57/\:79d2\:3001en 14 \:5b57/\:79d2) \:3068\:3001\:8868\:793a\:884c\:6570 + 2 \:6587\:3002\:6587\:306e\:5207\:308c\:76ee\:3067\:5207\:308b *)
 iKGCapTalk[talk_String, seconds_, lang_String, maxSentences_Integer, cpsIn_] := Module[
-  {ss = iKGSentences[talk, lang], cps, maxChars, out = {}, len = 0, sep = If[lang === "ja", "。", ". "]},
+  {ss = iKGSentences[talk, lang], cps, maxChars, out = {}, len = 0, sep = If[lang === "ja", "\:3002", ". "]},
   cps = If[NumericQ[cpsIn] && cpsIn > 0, cpsIn, If[lang === "ja", 7., 14.]];
   maxChars = Max[80, Round[If[NumericQ[seconds] && seconds > 0, seconds, 25] * cps]];
   Do[If[out === {} || (len + StringLength[s] <= maxChars && Length[out] < Max[1, maxSentences]),
       AppendTo[out, s]; len += StringLength[s]], {s, ss}];
   If[out === {}, "", StringRiffle[out, sep] <> StringTrim[sep]]];
 iKGFirstSentence[t_String, lang_String] := With[{ss = iKGSentences[t, lang]},
-  If[ss === {}, "", First[ss] <> If[lang === "ja", "。", "."]]];
+  If[ss === {}, "", First[ss] <> If[lang === "ja", "\:3002", "."]]];
 
-(* 本文中の図表番号の言及: 図2 / 図 2 / Figure 2 / Fig. 2 *)
+(* \:672c\:6587\:4e2d\:306e\:56f3\:8868\:756a\:53f7\:306e\:8a00\:53ca: \:56f32 / \:56f3 2 / Figure 2 / Fig. 2 *)
 iKGFigureRefs[t_String] := DeleteDuplicates[StringCases[t,
-  ("図" | "Figure" | "Fig." | "Fig") ~~ WhitespaceCharacter ... ~~ d : DigitCharacter .. :> ToExpression[d]]];
-(* 図表番号の言及 1 つ分 (図2 / 図 7A / Figure 3 / 表1 / Table 2-1) *)
-$iKGRefToken = RegularExpression["(?:図|表|Figure|Fig\\.|Fig|Table|Tab\\.)[ 　]*[0-9]+(?:[A-Za-z]\\b|[-–][0-9]+)?"];
-(* keep に無い図と、スライドに載らない表の言及を落とす *)
+  ("\:56f3" | "Figure" | "Fig." | "Fig") ~~ WhitespaceCharacter ... ~~ d : DigitCharacter .. :> ToExpression[d]]];
+(* \:56f3\:8868\:756a\:53f7\:306e\:8a00\:53ca 1 \:3064\:5206 (\:56f32 / \:56f3 7A / Figure 3 / \:88681 / Table 2-1) *)
+$iKGRefToken = RegularExpression["(?:\:56f3|\:8868|Figure|Fig\\.|Fig|Table|Tab\\.)[ \:3000]*[0-9]+(?:[A-Za-z]\\b|[-\[Dash]][0-9]+)?"];
+(* keep \:306b\:7121\:3044\:56f3\:3068\:3001\:30b9\:30e9\:30a4\:30c9\:306b\:8f09\:3089\:306a\:3044\:8868\:306e\:8a00\:53ca\:3092\:843d\:3068\:3059 *)
 iKGStripRefTokens[t_String, keep_List] := StringReplace[t, tok : $iKGRefToken :>
-  If[StringStartsQ[tok, "表" | "Table" | "Tab."] || ! AnyTrue[iKGFigureRefs[tok], MemberQ[keep, #] &], "", tok]];
-(* スライドに無い図表への言及を消す。括弧の中は区切りごとに見て、図表番号だけの項目を落とす:
-   (図2) / （図2, 表1） は丸ごと、"(図7A, 1,450 s)" は "(1,450 s)" になる。
-   項目が地の文のときは文が壊れるので残す ("(図2 の A 区間)")。
-   括弧の外は、行頭の "Figure 9A: …" のような前置きだけ落とす *)
+  If[StringStartsQ[tok, "\:8868" | "Table" | "Tab."] || ! AnyTrue[iKGFigureRefs[tok], MemberQ[keep, #] &], "", tok]];
+(* \:30b9\:30e9\:30a4\:30c9\:306b\:7121\:3044\:56f3\:8868\:3078\:306e\:8a00\:53ca\:3092\:6d88\:3059\:3002\:62ec\:5f27\:306e\:4e2d\:306f\:533a\:5207\:308a\:3054\:3068\:306b\:898b\:3066\:3001\:56f3\:8868\:756a\:53f7\:3060\:3051\:306e\:9805\:76ee\:3092\:843d\:3068\:3059:
+   (\:56f32) / \:ff08\:56f32, \:88681\:ff09 \:306f\:4e38\:3054\:3068\:3001"(\:56f37A, 1,450 s)" \:306f "(1,450 s)" \:306b\:306a\:308b\:3002
+   \:9805\:76ee\:304c\:5730\:306e\:6587\:306e\:3068\:304d\:306f\:6587\:304c\:58ca\:308c\:308b\:306e\:3067\:6b8b\:3059 ("(\:56f32 \:306e A \:533a\:9593)")\:3002
+   \:62ec\:5f27\:306e\:5916\:306f\:3001\:884c\:982d\:306e "Figure 9A: \[Ellipsis]" \:306e\:3088\:3046\:306a\:524d\:7f6e\:304d\:3060\:3051\:843d\:3068\:3059 *)
 iKGStripFigureRefs[t_String, keep_List] := Module[{s, trim, dropQ},
-  trim[x_String] := StringTrim[x, (WhitespaceCharacter | "," | "、" | "・" | ";" | "；" | "/" | "-" | "–") ..];
+  trim[x_String] := StringTrim[x, (WhitespaceCharacter | "," | "\:3001" | "\:30fb" | ";" | "\:ff1b" | "/" | "-" | "\[Dash]") ..];
   dropQ[item_String] := With[{r = iKGStripRefTokens[item, keep]}, r =!= item && trim[r] === ""];
-  s = StringReplace[t, whole : (("(" | "（") ~~ inner : Shortest[Except[")" | "）"] ..] ~~ (")" | "）")) :>
-    Module[{parts = StringSplit[inner, x : ("," | "、" | ";" | "；") :> x], items, seps, keepIdx, res},
+  s = StringReplace[t, whole : (("(" | "\:ff08") ~~ inner : Shortest[Except[")" | "\:ff09"] ..] ~~ (")" | "\:ff09")) :>
+    Module[{parts = StringSplit[inner, x : ("," | "\:3001" | ";" | "\:ff1b") :> x], items, seps, keepIdx, res},
       items = parts[[1 ;; ;; 2]]; seps = If[Length[parts] >= 2, parts[[2 ;; ;; 2]], {}];
       keepIdx = Select[Range[Length[items]], ! dropQ[items[[#]]] &];
       Which[
@@ -1090,18 +1523,18 @@ iKGStripFigureRefs[t_String, keep_List] := Module[{s, trim, dropQ},
         True,
           res = trim[StringJoin[MapIndexed[If[First[#2] === 1, items[[#1]], seps[[#1 - 1]] <> items[[#1]]] &, keepIdx]]];
           If[res === "", "", StringTake[whole, 1] <> res <> StringTake[whole, -1]]]]];
-  s = StringReplace[s, StartOfString ~~ tok : $iKGRefToken ~~ sep : (WhitespaceCharacter ... ~~ (":" | "：") ~~ WhitespaceCharacter ...) :>
+  s = StringReplace[s, StartOfString ~~ tok : $iKGRefToken ~~ sep : (WhitespaceCharacter ... ~~ (":" | "\:ff1a") ~~ WhitespaceCharacter ...) :>
     If[iKGStripRefTokens[tok, keep] === tok, tok <> sep, ""]];
-  StringTrim[StringReplace[s, {"  " -> " ", " 。" -> "。", " 、" -> "、", " ." -> ".", " ," -> ","}]]];
+  StringTrim[StringReplace[s, {"  " -> " ", " \:3002" -> "\:3002", " \:3001" -> "\:3001", " ." -> ".", " ," -> ","}]]];
 iKGStripFigureRefs[x_, _] := x;
-(* KG の図ノード → 論文中の番号 (キャプションの番号 > 出現順) と資産 *)
+(* KG \:306e\:56f3\:30ce\:30fc\:30c9 \[RightArrow] \:8ad6\:6587\:4e2d\:306e\:756a\:53f7 (\:30ad\:30e3\:30d7\:30b7\:30e7\:30f3\:306e\:756a\:53f7 > \:51fa\:73fe\:9806) \:3068\:8cc7\:7523 *)
 iKGFigureNumberOf[n_Association] := With[{src = Lookup[n, "Source", <||>]},
   With[{c = Lookup[If[AssociationQ[src], src, <||>], "Caption", None]},
     If[IntegerQ[c], c, With[{f = Lookup[If[AssociationQ[src], src, <||>], "Figure", None]}, If[IntegerQ[f], f, None]]]]];
-(* 資産の同一性: 種類・参照・番号・ページ・切り出し (PDF の埋め込み画像はページと番号の組で決まる) *)
+(* \:8cc7\:7523\:306e\:540c\:4e00\:6027: \:7a2e\:985e\:30fb\:53c2\:7167\:30fb\:756a\:53f7\:30fb\:30da\:30fc\:30b8\:30fb\:5207\:308a\:51fa\:3057 (PDF \:306e\:57cb\:3081\:8fbc\:307f\:753b\:50cf\:306f\:30da\:30fc\:30b8\:3068\:756a\:53f7\:306e\:7d44\:3067\:6c7a\:307e\:308b) *)
 iKGAssetKey[a_Association] := {Lookup[a, "Type", ""], Lookup[a, "Ref", ""], Lookup[a, "N", None], Lookup[a, "Page", None], Lookup[a, "Crop", None]};
-(* スライドの図の解決: 言及された図がこの枚に無ければ再掲 (枠があれば)。
-   戻りは {この枚の資産, この枚にある図の番号} *)
+(* \:30b9\:30e9\:30a4\:30c9\:306e\:56f3\:306e\:89e3\:6c7a: \:8a00\:53ca\:3055\:308c\:305f\:56f3\:304c\:3053\:306e\:679a\:306b\:7121\:3051\:308c\:3070\:518d\:63b2 (\:67a0\:304c\:3042\:308c\:3070)\:3002
+   \:623b\:308a\:306f {\:3053\:306e\:679a\:306e\:8cc7\:7523, \:3053\:306e\:679a\:306b\:3042\:308b\:56f3\:306e\:756a\:53f7} *)
 iKGResolveFigs[texts_List, assetsIn_List, figNodes_List, figNumOf_Association, figByNum_Association, maxA_, reshowQ_] :=
   Module[{assets = assetsIn, refs, on},
     on[] := Select[Map[Function[fn, If[MemberQ[iKGAssetKey /@ assets, iKGAssetKey[First[fn["Assets"]]]], figNumOf[fn["Id"]], None]], figNodes], IntegerQ];
@@ -1111,27 +1544,27 @@ iKGResolveFigs[texts_List, assetsIn_List, figNodes_List, figNumOf_Association, f
     {assets, on[]}];
 
 iKGWord[lang_String, key_String] := Lookup[If[lang === "ja",
-  <|"Cont" -> " (続き)", "Agenda" -> "全体の流れ", "Part" -> "第", "PartSuffix" -> "部", "Sep" -> " › "|>,
-  <|"Cont" -> " (cont.)", "Agenda" -> "Outline", "Part" -> "Part ", "PartSuffix" -> "", "Sep" -> " › "|>], key, ""];
+  <|"Cont" -> " (\:7d9a\:304d)", "Agenda" -> "\:5168\:4f53\:306e\:6d41\:308c", "Part" -> "\:7b2c", "PartSuffix" -> "\:90e8", "Sep" -> " \:203a "|>,
+  <|"Cont" -> " (cont.)", "Agenda" -> "Outline", "Part" -> "Part ", "PartSuffix" -> "", "Sep" -> " \:203a "|>], key, ""];
 iKGPartLabel[lang_String, k_Integer, title_String] :=
   iKGWord[lang, "Part"] <> ToString[k] <> iKGWord[lang, "PartSuffix"] <> " " <> title;
 
-(* 資産が占める行数: 図 (何枚でも縮めて並べる) は figLines、表は行数 + 見出し *)
+(* \:8cc7\:7523\:304c\:5360\:3081\:308b\:884c\:6570: \:56f3 (\:4f55\:679a\:3067\:3082\:7e2e\:3081\:3066\:4e26\:3079\:308b) \:306f figLines\:3001\:8868\:306f\:884c\:6570 + \:898b\:51fa\:3057 *)
 iKGTableAssetQ[a_] := AssociationQ[a] && Lookup[a, "Type", ""] === "Table";
 iKGAssetLines[assets_List, figLines_Integer] :=
   If[AnyTrue[assets, ! iKGTableAssetQ[#] &], figLines, 0] +
   Total[(Length[iKGList[Lookup[#, "Rows", {}]]] + 1) & /@ Select[assets, iKGTableAssetQ]];
-(* 表のセルや読み上げに使う平文: **強調** と $…$ の印を外す *)
+(* \:8868\:306e\:30bb\:30eb\:3084\:8aad\:307f\:4e0a\:3052\:306b\:4f7f\:3046\:5e73\:6587: **\:5f37\:8abf** \:3068 $\[Ellipsis]$ \:306e\:5370\:3092\:5916\:3059 *)
 iKGPlain[s_String] := StringTrim[StringReplace[s, {"**" -> "", "$" -> "", "\\mathrm" -> "", "\\" -> ""}]];
 iKGPlain[_] := "";
-(* 用語ミニ辞書の 1 行: 題目 | 意味 (Lead > 最初の要点 > 要約の 1 文) *)
+(* \:7528\:8a9e\:30df\:30cb\:8f9e\:66f8\:306e 1 \:884c: \:984c\:76ee | \:610f\:5473 (Lead > \:6700\:521d\:306e\:8981\:70b9 > \:8981\:7d04\:306e 1 \:6587) *)
 iKGGlossRow[n_Association, lang_String] := Module[{m},
   m = SourceVaultKGText[n, "Lead", lang];
   If[m === "", m = First[Replace[SourceVaultKGText[n, "Points", lang], Except[{__String}] -> {""}]]];
   If[m === "", m = iKGFirstSentence[SourceVaultKGText[n, "Summary", lang], lang]];
   m = iKGPlain[m];
-  If[StringLength[m] > 46, m = StringTake[m, 45] <> "…"];
-  {iKGPlain[StringReplace[SourceVaultKGText[n, "Label", lang], RegularExpression["\\s+[—–-]\\s+.*$"] -> ""]], m}];
+  If[StringLength[m] > 46, m = StringTake[m, 45] <> "\[Ellipsis]"];
+  {iKGPlain[StringReplace[SourceVaultKGText[n, "Label", lang], RegularExpression["\\s+[\[LongDash]\[Dash]-]\\s+.*$"] -> ""]], m}];
 
 SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Module[
   {lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]], index = iKGNodeIndex[kg],
@@ -1140,37 +1573,42 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
    maxL = OptionValue["MaxLinesPerSlide"], cps = OptionValue["CharsPerSecond"], reshowQ = TrueQ[OptionValue["ReShowFigures"]],
    slides, labelOf, agendaQ, partTitles, crumbs, contSuffix, containsParent, secIds, rootId = Lookup[kg, "Root", "root"],
    slideIds, pslides, collapsed = <||>, figNodes, figNumOf, figByNum, topOf, partNodes, partOf, slideParentOf, entryIdx,
-   figUse = <||>, adjAll, inheritFor, figOfAsset, glossary, reuse = Max[0, Replace[OptionValue["FigureReuse"], Except[_Integer] -> 2]]},
+   figUse = <||>, adjAll, inheritFor, figOfAsset, glossary, reuse = Max[0, Replace[OptionValue["FigureReuse"], Except[_Integer] -> 2]], tocQ},
   If[! IntegerQ[cpl] || cpl < 10, cpl = 40];
   contSuffix = iKGWord[lang, "Cont"];
   labelOf[id_] := If[KeyExistsQ[index, id], SourceVaultKGText[index[id], "Label", lang], ""];
-  (* 章構造は KG の Contains で見る (順序木は連続性のために付け替えるので Depth は章の深さではない) *)
+  (* \:7ae0\:69cb\:9020\:306f KG \:306e Contains \:3067\:898b\:308b (\:9806\:5e8f\:6728\:306f\:9023\:7d9a\:6027\:306e\:305f\:3081\:306b\:4ed8\:3051\:66ff\:3048\:308b\:306e\:3067 Depth \:306f\:7ae0\:306e\:6df1\:3055\:3067\:306f\:306a\:3044) *)
   containsParent = Association[Map[#["To"] -> #["From"] &, Reverse[Select[Lookup[kg, "Edges", {}], #["EdgeKind"] === "Contains" &]]]];
   secIds = DeleteDuplicates[Lookup[Select[Lookup[kg, "Edges", {}], #["EdgeKind"] === "Contains" &], "From", {}]];
-  (* 図ノードの番号表 (図表番号の言及の照合と再掲に使う) *)
-  (* 図ノード = 図の資産を持つノード (推敲で Kind が Result 等に変わっていることがある) *)
+  (* v1.46: \:76ee\:6b21\:304b\:3089\:306e\:8a08\:753b\:306a\:3089\:3001\:7ae0\:7acb\:3066\:306f\:76ee\:6b21\:306e\:6728 (\:8a08\:753b\:304c\:89aa\:3068\:7bc0\:3092\:6e21\:3059) *)
+  tocQ = Lookup[plan, "Mode", None] === "Toc";
+  If[tocQ,
+    containsParent = Replace[Lookup[plan, "TreeParent", <||>], Except[_Association] -> <||>];
+    secIds = Replace[Lookup[plan, "TreeInternal", {}], Except[_List] -> {}]];
+  (* \:56f3\:30ce\:30fc\:30c9\:306e\:756a\:53f7\:8868 (\:56f3\:8868\:756a\:53f7\:306e\:8a00\:53ca\:306e\:7167\:5408\:3068\:518d\:63b2\:306b\:4f7f\:3046) *)
+  (* \:56f3\:30ce\:30fc\:30c9 = \:56f3\:306e\:8cc7\:7523\:3092\:6301\:3064\:30ce\:30fc\:30c9 (\:63a8\:6572\:3067 Kind \:304c Result \:7b49\:306b\:5909\:308f\:3063\:3066\:3044\:308b\:3053\:3068\:304c\:3042\:308b) *)
   figNodes = Select[Lookup[kg, "Nodes", {}], AnyTrue[Replace[Lookup[#, "Assets", {}], Except[_List] -> {}],
     AssociationQ[#] && MemberQ[{"NotebookFigure", "PDFFigure", "PDFImage", "DeckSlide", "Image"}, Lookup[#, "Type", ""]] &] &];
   figNumOf = Association[Map[#["Id"] -> iKGFigureNumberOf[#] &, figNodes]];
   figByNum = Association[Map[Function[f, With[{m = figNumOf[f["Id"]]}, If[IntegerQ[m], m -> f, Nothing]]], Reverse[figNodes]]];
-  (* 図の継承: 図の無い枚に、辺で結ばれた図 (無ければ同じ節の図) を再掲する。論文の図は枚数が少ないので、
-     1 つの図を何枚かで見せ直す (32 回のように図が主役の枚にする)。継承で見せ直すのは図ごとに "FigureReuse" 回まで
-     (図自身の枚は数えない)。figUse = 継承した回数 *)
+  (* \:56f3\:306e\:7d99\:627f: \:56f3\:306e\:7121\:3044\:679a\:306b\:3001\:8fba\:3067\:7d50\:3070\:308c\:305f\:56f3 (\:7121\:3051\:308c\:3070\:540c\:3058\:7bc0\:306e\:56f3) \:3092\:518d\:63b2\:3059\:308b\:3002\:8ad6\:6587\:306e\:56f3\:306f\:679a\:6570\:304c\:5c11\:306a\:3044\:306e\:3067\:3001
+     1 \:3064\:306e\:56f3\:3092\:4f55\:679a\:304b\:3067\:898b\:305b\:76f4\:3059 (32 \:56de\:306e\:3088\:3046\:306b\:56f3\:304c\:4e3b\:5f79\:306e\:679a\:306b\:3059\:308b)\:3002\:7d99\:627f\:3067\:898b\:305b\:76f4\:3059\:306e\:306f\:56f3\:3054\:3068\:306b "FigureReuse" \:56de\:307e\:3067
+     (\:56f3\:81ea\:8eab\:306e\:679a\:306f\:6570\:3048\:306a\:3044)\:3002figUse = \:7d99\:627f\:3057\:305f\:56de\:6570 *)
   adjAll = Merge[Join[Map[#["From"] -> #["To"] &, Lookup[kg, "Edges", {}]], Map[#["To"] -> #["From"] &, Lookup[kg, "Edges", {}]]],
     DeleteDuplicates];
   figOfAsset[a_] := SelectFirst[figNodes, iKGAssetKey[First[#["Assets"]]] === iKGAssetKey[a] &, None];
-  (* 子スライドが 1 つだけの節は道標にならない (1 行だけの枚になる) ので枚を畳み、秒は次の枚 (その子) へ *)
+  (* \:5b50\:30b9\:30e9\:30a4\:30c9\:304c 1 \:3064\:3060\:3051\:306e\:7bc0\:306f\:9053\:6a19\:306b\:306a\:3089\:306a\:3044 (1 \:884c\:3060\:3051\:306e\:679a\:306b\:306a\:308b) \:306e\:3067\:679a\:3092\:7573\:307f\:3001\:79d2\:306f\:6b21\:306e\:679a (\:305d\:306e\:5b50) \:3078 *)
   slideIds = Lookup[plan["Slides"], "NodeId", {}];
   pslides = Module[{out = {}, carry = 0}, Do[
     Module[{s = ps, kids = Select[Lookup[ps, "Children", {}], MemberQ[slideIds, #] &]},
-      If[TrueQ[OptionValue["Roadmap"]] && MemberQ[secIds, s["NodeId"]] && s["NodeId"] =!= rootId &&
+      If[! tocQ && TrueQ[OptionValue["Roadmap"]] && MemberQ[secIds, s["NodeId"]] && s["NodeId"] =!= rootId &&
           Lookup[s, "Packed", {}] === {} && Length[kids] === 1 && Lookup[index[s["NodeId"]], "Assets", {}] === {},
         collapsed[s["NodeId"]] = First[kids]; carry += Lookup[s, "Seconds", 0],
         If[carry > 0, s["Seconds"] = Lookup[s, "Seconds", 0] + carry; carry = 0]; AppendTo[out, s]]],
     {ps, plan["Slides"]}]; out];
   slideIds = Lookup[pslides, "NodeId", {}];
-  (* 図の継承の割り当て: 1 段目 = 辺で結ばれた図、2 段目 = 同じ節の図 (出現順の近い順)。
-     図の無い本文の枚だけが対象 (節の枚・根・詰め込んだ子に図がある枚は除く) *)
+  (* \:56f3\:306e\:7d99\:627f\:306e\:5272\:308a\:5f53\:3066: 1 \:6bb5\:76ee = \:8fba\:3067\:7d50\:3070\:308c\:305f\:56f3\:30012 \:6bb5\:76ee = \:540c\:3058\:7bc0\:306e\:56f3 (\:51fa\:73fe\:9806\:306e\:8fd1\:3044\:9806)\:3002
+     \:56f3\:306e\:7121\:3044\:672c\:6587\:306e\:679a\:3060\:3051\:304c\:5bfe\:8c61 (\:7bc0\:306e\:679a\:30fb\:6839\:30fb\:8a70\:3081\:8fbc\:3093\:3060\:5b50\:306b\:56f3\:304c\:3042\:308b\:679a\:306f\:9664\:304f) *)
   inheritFor = <||>;
   If[TrueQ[OptionValue["InheritFigures"]] && figNodes =!= {},
     Module[{elig, pick},
@@ -1193,23 +1631,31 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
         {ps, elig}]]];
   slides = Flatten[Map[Function[s,
     Module[{n = index[s["NodeId"]], points, own, details, lead, sub, assets, cite, talk, title, budget, overflow, out, k = 0,
-            secs, contSlides, children, roadmapQ, refs, onSlide, keepNums, shown, cap},
+            secs, contSlides, children, roadmapQ, refs, onSlide, keepNums, shown, cap, rowQ, maxA1},
       If[! iKGHasLanguageQ[Lookup[n, "Label", ""], lang, primary] || ! iKGHasLanguageQ[Lookup[n, "Points", {}], lang, primary],
         AppendTo[missing, s["NodeId"]]];
       title = SourceVaultKGText[n, "Label", lang];
       own = Take[SourceVaultKGText[n, "Points", lang], UpTo[maxP]];
       details = Replace[SourceVaultKGText[n, "Details", lang], Except[_List] -> {}];
       children = Select[labelOf /@ Select[Lookup[s, "Children", {}], MemberQ[slideIds, #] &], # =!= "" &];
-      (* 節スライド = 道標: その節でスライドになる子の題目 (2 つ以上) を要点にして、部の中の位置づけを見せる。
-         LLM が節に付けた要点は原稿へ。節 = KG で Contains の子を持つノード (推敲で Kind が変わっていてもよい) *)
+      (* \:7bc0\:30b9\:30e9\:30a4\:30c9 = \:9053\:6a19: \:305d\:306e\:7bc0\:3067\:30b9\:30e9\:30a4\:30c9\:306b\:306a\:308b\:5b50\:306e\:984c\:76ee (2 \:3064\:4ee5\:4e0a) \:3092\:8981\:70b9\:306b\:3057\:3066\:3001\:90e8\:306e\:4e2d\:306e\:4f4d\:7f6e\:3065\:3051\:3092\:898b\:305b\:308b\:3002
+         LLM \:304c\:7bc0\:306b\:4ed8\:3051\:305f\:8981\:70b9\:306f\:539f\:7a3f\:3078\:3002\:7bc0 = KG \:3067 Contains \:306e\:5b50\:3092\:6301\:3064\:30ce\:30fc\:30c9 (\:63a8\:6572\:3067 Kind \:304c\:5909\:308f\:3063\:3066\:3044\:3066\:3082\:3088\:3044) *)
       roadmapQ = TrueQ[OptionValue["Roadmap"]] && MemberQ[secIds, s["NodeId"]] && s["NodeId"] =!= rootId && Length[children] >= 2;
+      (* v1.46: \:76ee\:6b21\:306e\:7bc0 (\:6839\:3092\:542b\:3080) \:306f\:5b50\:306e\:4e00\:884c\:8981\:7d04\:3092\:4e26\:3079\:308b: \:958b\:3044\:305f\:7bc0\:306f\:9053\:6a19\:3001\:958b\:304b\:306a\:3044\:7bc0\:306f\:6982\:8981\:306e 1 \:679a\:3001\:6839\:306f\:5168\:4f53\:306e\:6d41\:308c *)
+      If[tocQ && MemberQ[secIds, s["NodeId"]] && Lookup[s, "AllChildren", {}] =!= {},
+        roadmapQ = True;
+        children = Select[Map[iKGOneLiner[Lookup[index, #, <||>], lang, primary] &, s["AllChildren"]], # =!= "" &]];
       points = If[roadmapQ, Take[children, UpTo[maxP]], own];
       If[roadmapQ, details = {}];
-      (* 導入文: ノードの Lead、無ければ Summary の最初の 1 文 (スライドだけ見ても何の話か分かるように) *)
+      (* \:5c0e\:5165\:6587: \:30ce\:30fc\:30c9\:306e Lead\:3001\:7121\:3051\:308c\:3070 Summary \:306e\:6700\:521d\:306e 1 \:6587 (\:30b9\:30e9\:30a4\:30c9\:3060\:3051\:898b\:3066\:3082\:4f55\:306e\:8a71\:304b\:5206\:304b\:308b\:3088\:3046\:306b) *)
       lead = SourceVaultKGText[n, "Lead", lang];
       If[lead === "" && s["NodeId"] =!= rootId, lead = iKGFirstSentence[SourceVaultKGText[n, "Summary", lang], lang]];
-      If[lead =!= "" && points =!= {} && StringTrim[lead, "。" | "."] === StringTrim[First[points], "。" | "."], lead = ""];
-      (* 詰め込んだ子: ラベル + 1 行 (Lead があればそれ、無ければ要点 2 つまで) *)
+      If[tocQ && lead === "" && s["NodeId"] === rootId,
+        lead = With[{gi = SourceVaultKGText[n, "Gist", lang]}, If[gi =!= "", gi, iKGFirstSentence[SourceVaultKGText[n, "Summary", lang], lang]]]];
+      (* v1.48: \:610f\:5473\:4ed8\:3051\:306e\:5f79\:5272 (Role = \:3053\:306e\:679a\:304c\:306a\:305c\:3053\:3053\:306b\:3042\:308b\:304b) \:304c\:3042\:308c\:3070\:5c0e\:5165\:6587\:306b\:3059\:308b *)
+      With[{ro = SourceVaultKGText[n, "Role", lang]}, If[ro =!= "", lead = ro]];
+      If[lead =!= "" && points =!= {} && StringTrim[lead, "\:3002" | "."] === StringTrim[First[points], "\:3002" | "."], lead = ""];
+      (* \:8a70\:3081\:8fbc\:3093\:3060\:5b50: \:30e9\:30d9\:30eb + 1 \:884c (Lead \:304c\:3042\:308c\:3070\:305d\:308c\:3001\:7121\:3051\:308c\:3070\:8981\:70b9 2 \:3064\:307e\:3067) *)
       sub = Map[Function[p, With[{m = index[p]},
         <|"NodeId" -> p, "Label" -> SourceVaultKGText[m, "Label", lang],
           "Points" -> With[{ld = SourceVaultKGText[m, "Lead", lang]},
@@ -1217,36 +1663,55 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
       If[points === {} && MemberQ[secIds, s["NodeId"]] && s["NodeId"] =!= rootId, points = Take[children, UpTo[maxP]]];
       If[points === {} && sub === {} && lead === "" && SourceVaultKGText[n, "Summary", lang] =!= "",
         points = {SourceVaultKGText[n, "Summary", lang]}];
-      assets = Take[Join[Lookup[n, "Assets", {}], Flatten[Lookup[index[#], "Assets", {}] & /@ Lookup[s, "Packed", {}], 1]], UpTo[maxA]];
+      (* v1.42: \:56f3\:3092\:6a2a\:306b\:4e26\:3079\:308b\:679a (FigureLayout "Row") \:306f\:56f3\:3092 4 \:3064\:307e\:3067\:8f09\:305b\:308b *)
+      rowQ = Lookup[n, "FigureLayout", None] === "Row";
+      maxA1 = If[rowQ, Max[maxA, 4], maxA];
+      (* \:6a2a\:4e26\:3073\:306e\:679a\:306f\:5229\:7528\:8005\:304c\:9078\:3093\:3060\:56f3\:3060\:3051\:3092\:4e26\:3079\:308b (\:8a70\:3081\:8fbc\:3093\:3060\:5b50\:306e\:56f3\:3092\:8db3\:3059\:3068\:540c\:3058\:5199\:771f\:304c\:91cd\:306a\:3063\:305f)\:3002\:540c\:3058\:56f3\:306f 1 \:56de *)
+      assets = Take[DeleteDuplicatesBy[If[rowQ, Lookup[n, "Assets", {}],
+        Join[Lookup[n, "Assets", {}], Flatten[Lookup[index[#], "Assets", {}] & /@ Lookup[s, "Packed", {}], 1]]],
+        If[StringQ[Lookup[#, "Ref", None]] && #["Ref"] =!= "", iKGAssetKey[#], #] &], UpTo[maxA1]];
       If[assets === {} && TrueQ[OptionValue["InheritFigures"]] && ! roadmapQ && s["NodeId"] =!= rootId,
         With[{fn = Lookup[inheritFor, s["NodeId"], None]}, If[AssociationQ[fn], assets = {First[fn["Assets"]]}]]];
-      (* スライドはその枚にある図表しか指せない: 言及された図がこの枚に無ければ再掲 (枠があれば)、
-         無理なら括弧つきの言及を消す。表は資産にならないので言及を消す *)
+      (* v1.46: \:958b\:304b\:306a\:3044\:7bc0 (\:6982\:8981\:306e 1 \:679a) \:306b\:306f\:90e8\:5206\:6728\:3067\:3044\:3061\:3070\:3093\:5927\:4e8b\:306a\:56f3\:3092 1 \:3064 *)
+      If[tocQ && assets === {} && StringQ[Lookup[s, "Figure", None]] && KeyExistsQ[index, s["Figure"]] && s["NodeId"] =!= rootId,
+        assets = Take[Select[Replace[Lookup[index[s["Figure"]], "Assets", {}], Except[_List] -> {}], AssociationQ], UpTo[1]]];
+      (* \:30b9\:30e9\:30a4\:30c9\:306f\:305d\:306e\:679a\:306b\:3042\:308b\:56f3\:8868\:3057\:304b\:6307\:305b\:306a\:3044: \:8a00\:53ca\:3055\:308c\:305f\:56f3\:304c\:3053\:306e\:679a\:306b\:7121\:3051\:308c\:3070\:518d\:63b2 (\:67a0\:304c\:3042\:308c\:3070)\:3001
+         \:7121\:7406\:306a\:3089\:62ec\:5f27\:3064\:304d\:306e\:8a00\:53ca\:3092\:6d88\:3059\:3002\:8868\:306f\:8cc7\:7523\:306b\:306a\:3089\:306a\:3044\:306e\:3067\:8a00\:53ca\:3092\:6d88\:3059 *)
       {assets, keepNums} = iKGResolveFigs[Join[{lead}, points, details, Flatten[Lookup[sub, "Points", {}]]],
-        assets, figNodes, figNumOf, figByNum, maxA, reshowQ];
+        assets, figNodes, figNumOf, figByNum, maxA1, reshowQ];
       lead = iKGStripFigureRefs[lead, keepNums];
       points = iKGStripFigureRefs[#, keepNums] & /@ points;
       details = iKGStripFigureRefs[#, keepNums] & /@ details;
       sub = Map[Append[#, "Points" -> (iKGStripFigureRefs[#, keepNums] & /@ #["Points"])] &, sub];
       budget = Max[3, maxL - iKGAssetLines[assets, figLines]];
-      (* 図のある枚は自身の要点を 1 行まで削ってよい (図が主役) *)
+      (* \:56f3\:306e\:3042\:308b\:679a\:306f\:81ea\:8eab\:306e\:8981\:70b9\:3092 1 \:884c\:307e\:3067\:524a\:3063\:3066\:3088\:3044 (\:56f3\:304c\:4e3b\:5f79) *)
       {points, details, sub, overflow} = iKGFitLines[lead, points, details, sub, budget, cpl, If[assets =!= {}, 1, 2]];
       cite = SourceVaultKGText[n, "Cite", lang];
       If[cite === "", cite = FirstCase[Join[SourceVaultKGText[index[#], "Cite", lang] & /@ Lookup[sub, "NodeId", {}],
         Map[Function[a, With[{f = SelectFirst[figNodes, iKGAssetKey[First[#["Assets"]]] === iKGAssetKey[a] &, None]},
           If[AssociationQ[f], SourceVaultKGText[f, "Cite", lang], ""]]], assets]], c_String /; c =!= "", ""]];
-      (* 原稿は箇条書きと同じ順に対応させる (冒頭の概要説明が箇条書きと食い違うと、聴き手はトークと
-         スライドのどちらを追えばよいか迷う): 自身の要点 → 詰め込んだ子の順。長さは秒数と行数で抑える *)
+      (* \:539f\:7a3f\:306f\:7b87\:6761\:66f8\:304d\:3068\:540c\:3058\:9806\:306b\:5bfe\:5fdc\:3055\:305b\:308b (\:5192\:982d\:306e\:6982\:8981\:8aac\:660e\:304c\:7b87\:6761\:66f8\:304d\:3068\:98df\:3044\:9055\:3046\:3068\:3001\:8074\:304d\:624b\:306f\:30c8\:30fc\:30af\:3068
+         \:30b9\:30e9\:30a4\:30c9\:306e\:3069\:3061\:3089\:3092\:8ffd\:3048\:3070\:3088\:3044\:304b\:8ff7\:3046): \:81ea\:8eab\:306e\:8981\:70b9 \[RightArrow] \:8a70\:3081\:8fbc\:3093\:3060\:5b50\:306e\:9806\:3002\:9577\:3055\:306f\:79d2\:6570\:3068\:884c\:6570\:3067\:6291\:3048\:308b *)
       talk = If[roadmapQ,
-        If[lang === "ja", "この部では、" <> StringRiffle[points, "、"] <> " の順に見ていきます。",
+        If[lang === "ja", "\:3053\:306e\:90e8\:3067\:306f\:3001" <> StringRiffle[points, "\:3001"] <> " \:306e\:9806\:306b\:898b\:3066\:3044\:304d\:307e\:3059\:3002",
           "In this part we look at " <> StringRiffle[points, ", "] <> "."] <>
           With[{s0 = SourceVaultKGText[n, "Summary", lang]}, If[s0 === "", "", " " <> s0]],
         iKGNodeTalk[n, Length[points], lang]];
+      If[tocQ && roadmapQ,
+        talk = Which[
+          s["NodeId"] === rootId, iKGAgendaTalk[points, lang],
+          (* v1.48: \:6982\:8981\:306e\:679a\:306f\:5b50\:306e\:984c\:76ee\:3092\:8aad\:307f\:4e0a\:3052\:305a\:3001\:5f79\:5272\:3068\:8981\:7d04\:3067\:8a71\:3059 (\:984c\:76ee\:306e\:8aad\:307f\:4e0a\:3052\:306f\:5217\:6319\:306b\:306a\:308a\:3001\:5f0f\:306e\:984c\:76ee\:306f\:300c\:3053\:306e\:5f0f\:300d\:306b\:306a\:308b) *)
+          ! TrueQ[Lookup[s, "Expanded", False]],
+            With[{ro = SourceVaultKGText[n, "Role", lang], s0 = SourceVaultKGText[n, "Summary", lang]},
+              Which[ro =!= "" || s0 =!= "", StringRiffle[Select[{ro, s0}, # =!= "" &], " "],
+                lang === "ja", title <> "\:306e\:8981\:70b9\:3092\:4e00\:679a\:306b\:307e\:3068\:3081\:307e\:3057\:305f\:3002",
+                True, "This slide sums up " <> title <> ". "]],
+          True, talk]];
       talk = StringRiffle[Select[Prepend[Map[iKGNodeTalk[index[#["NodeId"]], Length[#["Points"]], lang] &, sub], talk], # =!= "" &], " "];
       If[talk === "", talk = iKGTalkFallback[Join[points, Flatten[Lookup[sub, "Points", {}]]], title, lang]];
       talk = iKGStripFigureRefs[talk, keepNums];
-      (* 続きスライド: 収まらなかった子を同じ題目 + (続き) で後ろに並べる。秒は均等に分ける。
-         あふれたのが子 1 つだけなら (続き) にせず、その子自身のスライドに昇格する (項目 1 つだけの枚を作らない) *)
+      (* \:7d9a\:304d\:30b9\:30e9\:30a4\:30c9: \:53ce\:307e\:3089\:306a\:304b\:3063\:305f\:5b50\:3092\:540c\:3058\:984c\:76ee + (\:7d9a\:304d) \:3067\:5f8c\:308d\:306b\:4e26\:3079\:308b\:3002\:79d2\:306f\:5747\:7b49\:306b\:5206\:3051\:308b\:3002
+         \:3042\:3075\:308c\:305f\:306e\:304c\:5b50 1 \:3064\:3060\:3051\:306a\:3089 (\:7d9a\:304d) \:306b\:305b\:305a\:3001\:305d\:306e\:5b50\:81ea\:8eab\:306e\:30b9\:30e9\:30a4\:30c9\:306b\:6607\:683c\:3059\:308b (\:9805\:76ee 1 \:3064\:3060\:3051\:306e\:679a\:3092\:4f5c\:3089\:306a\:3044) *)
       contSlides = {};
       While[overflow =!= {} && k < 8,
         k++;
@@ -1256,7 +1721,7 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
           If[contQ,
             title2 = title <> contSuffix; node2 = s["NodeId"];
             cite2 = FirstCase[SourceVaultKGText[index[#], "Cite", lang] & /@ Lookup[s2, "NodeId", {}], c_String /; c =!= "", ""],
-            (* 昇格: 詰め込みを解いて子ノードのスライドにする *)
+            (* \:6607\:683c: \:8a70\:3081\:8fbc\:307f\:3092\:89e3\:3044\:3066\:5b50\:30ce\:30fc\:30c9\:306e\:30b9\:30e9\:30a4\:30c9\:306b\:3059\:308b *)
             m2 = index[First[s2]["NodeId"]]; node2 = Lookup[m2, "Id", First[s2]["NodeId"]];
             title2 = SourceVaultKGText[m2, "Label", lang];
             lead2 = SourceVaultKGText[m2, "Lead", lang];
@@ -1264,7 +1729,7 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
             p2 = Take[Replace[SourceVaultKGText[m2, "Points", lang], Except[_List] -> {}], UpTo[maxP]];
             If[p2 === {}, p2 = First[s2]["Points"]];
             d2 = Replace[SourceVaultKGText[m2, "Details", lang], Except[_List] -> {}];
-            If[lead2 =!= "" && p2 =!= {} && StringTrim[lead2, "。" | "."] === StringTrim[First[p2], "。" | "."], lead2 = ""];
+            If[lead2 =!= "" && p2 =!= {} && StringTrim[lead2, "\:3002" | "."] === StringTrim[First[p2], "\:3002" | "."], lead2 = ""];
             a2 = Take[Replace[Lookup[m2, "Assets", {}], Except[_List] -> {}], UpTo[maxA]];
             cite2 = SourceVaultKGText[m2, "Cite", lang]; s2 = {}];
           {a2, keep2} = iKGResolveFigs[Join[{lead2}, p2, d2, Flatten[Lookup[s2, "Points", {}]]], a2, figNodes, figNumOf, figByNum, maxA, reshowQ];
@@ -1284,18 +1749,18 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
           overflow = o2]];
       out = Prepend[contSlides, <|"NodeId" -> s["NodeId"], "Title" -> title, "Lead" -> lead, "Points" -> points, "Details" -> details,
         "Sub" -> sub, "Assets" -> assets, "Cite" -> cite, "Talk" -> talk, "Seconds" -> Lookup[s, "Seconds", 25], "Flags" -> s["Flags"],
-        "Depth" -> s["Depth"], "Kind" -> n["Kind"], "Continuation" -> False|>];
+        "Depth" -> s["Depth"], "Kind" -> n["Kind"], "Continuation" -> False, "FigureLayout" -> If[rowQ, "Row", None]|>];
       If[Length[out] > 1,
         secs = Quotient[Lookup[s, "Seconds", 25], Length[out]];
         out = MapIndexed[Append[#1, "Seconds" -> secs + If[First[#2] === 1, Lookup[s, "Seconds", 25] - secs * Length[out], 0]] &, out]];
-      (* 原稿の長さは、続きに分けたあとの 1 枚あたりの秒数と行数で抑える
-         (v1.26 は分ける前の秒数で上限を取っていたので、一度も切り詰められなかった) *)
+      (* \:539f\:7a3f\:306e\:9577\:3055\:306f\:3001\:7d9a\:304d\:306b\:5206\:3051\:305f\:3042\:3068\:306e 1 \:679a\:3042\:305f\:308a\:306e\:79d2\:6570\:3068\:884c\:6570\:3067\:6291\:3048\:308b
+         (v1.26 \:306f\:5206\:3051\:308b\:524d\:306e\:79d2\:6570\:3067\:4e0a\:9650\:3092\:53d6\:3063\:3066\:3044\:305f\:306e\:3067\:3001\:4e00\:5ea6\:3082\:5207\:308a\:8a70\:3081\:3089\:308c\:306a\:304b\:3063\:305f) *)
       out = Map[Function[sl, Append[sl, "Talk" -> iKGCapTalk[sl["Talk"], sl["Seconds"], lang,
         iKGSlideLines[sl["Lead"], sl["Points"], sl["Details"], sl["Sub"], cpl] + 2, cps]]], out];
       out]], pslides], 1];
-  (* 用語ミニ辞書: 図も子も無い周辺知識の枚が続くところは、1 枚ずつ概念スライドにせず表にまとめる
-     (計算と自然33: 周辺知識の文字だけの枚が 16 枚続き、論文の図が出る前に枚数を使い切った)。
-     重要度 0.8 以上の周辺知識は 1 枚のまま。表は "GlossaryRows" 行ずつ *)
+  (* \:7528\:8a9e\:30df\:30cb\:8f9e\:66f8: \:56f3\:3082\:5b50\:3082\:7121\:3044\:5468\:8fba\:77e5\:8b58\:306e\:679a\:304c\:7d9a\:304f\:3068\:3053\:308d\:306f\:30011 \:679a\:305a\:3064\:6982\:5ff5\:30b9\:30e9\:30a4\:30c9\:306b\:305b\:305a\:8868\:306b\:307e\:3068\:3081\:308b
+     (\:8a08\:7b97\:3068\:81ea\:713633: \:5468\:8fba\:77e5\:8b58\:306e\:6587\:5b57\:3060\:3051\:306e\:679a\:304c 16 \:679a\:7d9a\:304d\:3001\:8ad6\:6587\:306e\:56f3\:304c\:51fa\:308b\:524d\:306b\:679a\:6570\:3092\:4f7f\:3044\:5207\:3063\:305f)\:3002
+     \:91cd\:8981\:5ea6 0.8 \:4ee5\:4e0a\:306e\:5468\:8fba\:77e5\:8b58\:306f 1 \:679a\:306e\:307e\:307e\:3002\:8868\:306f "GlossaryRows" \:884c\:305a\:3064 *)
   glossary = Replace[OptionValue["Glossary"], Automatic -> True];
   If[TrueQ[glossary],
     Module[{eligible, runs, out = {}, rowsMax = Max[2, OptionValue["GlossaryRows"]]},
@@ -1308,23 +1773,23 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
           MapIndexed[Function[{chunk, ci},
             Module[{rows = iKGGlossRow[index[#["NodeId"]], lang] & /@ chunk, secs = Total[Lookup[chunk, "Seconds", 0]], talk},
               talk = If[lang === "ja",
-                "ここで、この先に出てくる言葉をまとめておきます。" <> StringJoin[Map[#[[1]] <> "は、" <> StringTrim[#[[2]], "。" | "…"] <> "。" &, rows]],
-                "Here are the terms we will need. " <> StringRiffle[Map[#[[1]] <> ": " <> StringTrim[#[[2]], "." | "…"] <> "." &, rows], " "]];
+                "\:3053\:3053\:3067\:3001\:3053\:306e\:5148\:306b\:51fa\:3066\:304f\:308b\:8a00\:8449\:3092\:307e\:3068\:3081\:3066\:304a\:304d\:307e\:3059\:3002" <> StringJoin[Map[#[[1]] <> "\:306f\:3001" <> StringTrim[#[[2]], "\:3002" | "\[Ellipsis]"] <> "\:3002" &, rows]],
+                "Here are the terms we will need. " <> StringRiffle[Map[#[[1]] <> ": " <> StringTrim[#[[2]], "." | "\[Ellipsis]"] <> "." &, rows], " "]];
               AppendTo[out, <|"NodeId" -> First[chunk]["NodeId"],
-                "Title" -> If[lang === "ja", "用語ミニ辞書", "Glossary"] <> If[First[ci] > 1, contSuffix, ""],
+                "Title" -> If[lang === "ja", "\:7528\:8a9e\:30df\:30cb\:8f9e\:66f8", "Glossary"] <> If[First[ci] > 1, contSuffix, ""],
                 "Lead" -> "", "Points" -> {}, "Details" -> {}, "Sub" -> {},
-                "Assets" -> {<|"Type" -> "Table", "Rows" -> Prepend[rows, If[lang === "ja", {"用語", "意味"}, {"Term", "Meaning"}]]|>},
+                "Assets" -> {<|"Type" -> "Table", "Rows" -> Prepend[rows, If[lang === "ja", {"\:7528\:8a9e", "\:610f\:5473"}, {"Term", "Meaning"}]]|>},
                 "Cite" -> "", "Talk" -> iKGCapTalk[talk, secs, lang, Length[rows] + 2, cps], "Seconds" -> secs,
                 "Flags" -> First[chunk]["Flags"], "Depth" -> First[chunk]["Depth"], "Kind" -> "Glossary",
                 "Continuation" -> False, "Merged" -> Lookup[chunk, "NodeId"]|>]]],
             With[{ch = Partition[run, UpTo[rowsMax]]},
-              (* 最後の 1 行だけの表は作らず前の表に足す *)
+              (* \:6700\:5f8c\:306e 1 \:884c\:3060\:3051\:306e\:8868\:306f\:4f5c\:3089\:305a\:524d\:306e\:8868\:306b\:8db3\:3059 *)
               If[Length[ch] >= 2 && Length[Last[ch]] === 1, Append[Drop[ch, -2], Join[ch[[-2]], ch[[-1]]]], ch]]],
           out = Join[out, run]],
         {run, runs}];
       slides = out]];
-  (* 部 = 根の直下 (Contains) の節のうち、その部分木にスライドがあるもの (節自身が畳まれていてもよい)。
-     各スライドの部は Contains の親を根の直下まで辿って決め、親スライドはスライドに当たるまで辿る *)
+  (* \:90e8 = \:6839\:306e\:76f4\:4e0b (Contains) \:306e\:7bc0\:306e\:3046\:3061\:3001\:305d\:306e\:90e8\:5206\:6728\:306b\:30b9\:30e9\:30a4\:30c9\:304c\:3042\:308b\:3082\:306e (\:7bc0\:81ea\:8eab\:304c\:7573\:307e\:308c\:3066\:3044\:3066\:3082\:3088\:3044)\:3002
+     \:5404\:30b9\:30e9\:30a4\:30c9\:306e\:90e8\:306f Contains \:306e\:89aa\:3092\:6839\:306e\:76f4\:4e0b\:307e\:3067\:8fbf\:3063\:3066\:6c7a\:3081\:3001\:89aa\:30b9\:30e9\:30a4\:30c9\:306f\:30b9\:30e9\:30a4\:30c9\:306b\:5f53\:305f\:308b\:307e\:3067\:8fbf\:308b *)
   topOf[id_] := Module[{x = id, k = 0}, If[! KeyExistsQ[containsParent, x] || x === rootId, Return[None]];
     While[k < 50 && KeyExistsQ[containsParent, x] && containsParent[x] =!= rootId, x = containsParent[x]; k++];
     If[KeyExistsQ[containsParent, x] && containsParent[x] === rootId, x, None]];
@@ -1339,6 +1804,12 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
     part = partOf[id];
     Which[
       ! TrueQ[OptionValue["Crumbs"]] || part === None, "",
+      (* v1.46 \:76ee\:6b21: \:958b\:3044\:305f\:7ae0\:30fb\:7bc0\:306f\:81ea\:5206\:306e\:679a\:3092\:6301\:305f\:306a\:3044\:306e\:3067\:3001\:90e8\:304b\:3089\:76f4\:8fd1 2 \:6bb5\:306e\:898b\:51fa\:3057\:3092\:30d1\:30f3\:304f\:305a\:306b\:51fa\:3059 *)
+      tocQ && id =!= part,
+        k = FirstPosition[partNodes, part][[1]];
+        Module[{x = Lookup[containsParent, id, None], chain = {}, n = 0},
+          While[n < 50 && x =!= None && x =!= part && x =!= rootId, PrependTo[chain, x]; x = Lookup[containsParent, x, None]; n++];
+          iKGPartLabel[lang, k, labelOf[part]] <> StringJoin[Map[iKGWord[lang, "Sep"] <> labelOf[#] &, Take[chain, -Min[2, Length[chain]]]]]],
       True,
         k = FirstPosition[partNodes, part][[1]];
         parent = slideParentOf[id];
@@ -1346,30 +1817,40 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
           iKGPartLabel[lang, k, labelOf[part]],
           iKGPartLabel[lang, k, labelOf[part]] <> iKGWord[lang, "Sep"] <> labelOf[parent]]]]], slides];
   slides = MapThread[Append[#1, "Crumb" -> #2] &, {slides, crumbs}];
-  (* 部の入口 (その部の最初の枚) には原稿に橋渡しを足す。続きスライドにも一言 *)
+  (* \:90e8\:306e\:5165\:53e3 (\:305d\:306e\:90e8\:306e\:6700\:521d\:306e\:679a) \:306b\:306f\:539f\:7a3f\:306b\:6a4b\:6e21\:3057\:3092\:8db3\:3059\:3002\:7d9a\:304d\:30b9\:30e9\:30a4\:30c9\:306b\:3082\:4e00\:8a00 *)
   entryIdx = Map[Function[p, FirstPosition[slides, sl_ /; partOf[sl["NodeId"]] === p && ! TrueQ[sl["Continuation"]], {0}, {1}][[1]]], partNodes];
   slides = MapIndexed[Function[{sl, ii}, With[{i = First[ii]},
     Which[
       MemberQ[entryIdx, i],
         Append[sl, "Talk" -> With[{k = FirstPosition[entryIdx, i][[1]]}, If[lang === "ja",
-          "ここから第" <> ToString[k] <> "部「" <> labelOf[partNodes[[k]]] <> "」に入ります。",
+          "\:3053\:3053\:304b\:3089\:7b2c" <> ToString[k] <> "\:90e8\:300c" <> labelOf[partNodes[[k]]] <> "\:300d\:306b\:5165\:308a\:307e\:3059\:3002",
           "We now turn to Part " <> ToString[k] <> ", " <> labelOf[partNodes[[k]]] <> ". "]] <> sl["Talk"]],
       TrueQ[sl["Continuation"]],
-        Append[sl, "Talk" -> If[lang === "ja", "続きです。", "Continued. "] <> sl["Talk"]],
+        Append[sl, "Talk" -> If[lang === "ja", "\:7d9a\:304d\:3067\:3059\:3002", "Continued. "] <> sl["Talk"]],
       True, sl]]], slides];
-  (* 目次スライド: 部が 3 つ以上なら根の直後に全体の流れを 1 枚 (重要度 0.5 以上の部だけ、最大 MaxPointsPerSlide 行) *)
-  agendaQ = Replace[OptionValue["Agenda"], Automatic :> Length[partNodes] >= 3];
+  (* v1.48: \:679a\:3068\:679a\:306e\:3064\:306a\:304e\:30fb\:610f\:5473\:4ed8\:3051\:30fb\:521d\:51fa\:306e\:7528\:8a9e (iKGLinkSlides) *)
+  slides = iKGLinkSlides[slides, index, containsParent, rootId, entryIdx, lang, tocQ];
+  (* \:76ee\:6b21\:30b9\:30e9\:30a4\:30c9: \:90e8\:304c 3 \:3064\:4ee5\:4e0a\:306a\:3089\:6839\:306e\:76f4\:5f8c\:306b\:5168\:4f53\:306e\:6d41\:308c\:3092 1 \:679a (\:91cd\:8981\:5ea6 0.5 \:4ee5\:4e0a\:306e\:90e8\:3060\:3051\:3001\:6700\:5927 MaxPointsPerSlide \:884c) *)
+  agendaQ = Replace[OptionValue["Agenda"], Automatic :> ! tocQ && Length[partNodes] >= 3];
   If[TrueQ[agendaQ] && partNodes =!= {} && Length[slides] >= 1,
-    With[{titles = partTitles, rows = Module[{lab = MapIndexed[{First[#2], #1} &, partTitles], keep},
+    (* v1.44: \:5404\:90e8\:306e\:4e00\:884c\:8981\:7d04 (Gist\:3002\:968e\:5c64\:5316\:304c\:90e8\:5206\:6728\:5168\:4f53\:3092\:4e00\:884c\:3067\:66f8\:3044\:305f\:3082\:306e) \:3092\:4e26\:3079\:308b\:3002\:7121\:3044\:90e8\:306f\:984c\:76ee *)
+    With[{titles = partTitles, gists = Map[iKGPartGist[index[#], labelOf[#], lang, primary] &, partNodes],
+        allGist = AllTrue[partNodes, iKGHasGistQ[index[#], lang, primary] &]},
+    With[{rows = Module[{lab = MapIndexed[{First[#2], #1} &, gists], keep},
         keep = Select[lab, Lookup[index[partNodes[[#[[1]]]]], "Importance", 0.5] >= 0.5 &];
         If[keep === {}, keep = lab];
-        If[Length[keep] > maxP, Append[Take[keep, maxP - 1], {0, "…"}], keep]]},
+        If[Length[keep] > maxP, Append[Take[keep, maxP - 1], {0, "\[Ellipsis]"}], keep]]},
       slides = Insert[slides, <|"NodeId" -> "agenda", "Title" -> iKGWord[lang, "Agenda"], "Lead" -> "",
         "Points" -> Map[If[#[[1]] === 0, #[[2]], iKGPartLabel[lang, #[[1]], #[[2]]]] &, rows], "Details" -> {}, "Sub" -> {}, "Assets" -> {}, "Cite" -> "",
-        "Talk" -> If[lang === "ja",
-          "本日は " <> ToString[Length[titles]] <> " 部構成です。" <> StringRiffle[titles, "、"] <> " の順に進めます。",
-          "The talk has " <> ToString[Length[titles]] <> " parts: " <> StringRiffle[titles, ", "] <> "."],
-        "Seconds" -> 20, "Flags" -> {}, "Depth" -> 1, "Kind" -> "Agenda", "Continuation" -> False, "Crumb" -> ""|>, 2]]];
+        "Talk" -> If[allGist,
+          If[lang === "ja", "\:672c\:65e5\:306f " <> ToString[Length[gists]] <> " \:90e8\:306b\:5206\:3051\:3066\:304a\:8a71\:3057\:3057\:307e\:3059\:3002" <>
+              StringJoin[MapIndexed["\:7b2c" <> ToString[First[#2]] <> "\:90e8\:3067\:306f\:3001" <> StringTrim[#1, "\:3002"] <> "\:3092\:6271\:3044\:307e\:3059\:3002" &, gists]],
+            "The talk has " <> ToString[Length[gists]] <> " parts. " <>
+              StringJoin[MapIndexed["Part " <> ToString[First[#2]] <> " covers " <> StringTrim[#1, "."] <> ". " &, gists]]],
+        If[lang === "ja",
+          "\:672c\:65e5\:306f " <> ToString[Length[titles]] <> " \:90e8\:69cb\:6210\:3067\:3059\:3002" <> StringRiffle[titles, "\:3001"] <> " \:306e\:9806\:306b\:9032\:3081\:307e\:3059\:3002",
+          "The talk has " <> ToString[Length[titles]] <> " parts: " <> StringRiffle[titles, ", "] <> "."]],
+        "Seconds" -> 20, "Flags" -> {}, "Depth" -> 1, "Kind" -> "Agenda", "Continuation" -> False, "Crumb" -> ""|>, 2]]]];
   <|"ObjectClass" -> "SourceVaultKGOutline", "GraphId" -> Lookup[kg, "GraphId", ""],
     "Title" -> SourceVaultKGText[<|"Label" -> Lookup[kg, "Title", ""], "PrimaryLanguage" -> primary|>, "Label", lang],
     "Language" -> lang, "Slides" -> slides, "MissingLanguage" -> DeleteDuplicates[missing],
@@ -1378,14 +1859,71 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
     "FigureUse" -> figUse,
     "TotalSeconds" -> Lookup[plan, "TotalSeconds", 0]|>];
 
+(* ---- v1.48: \:679a\:3068\:679a\:306e\:3064\:306a\:304e\:3068\:610f\:5473\:4ed8\:3051 ----
+   \:540c\:3058\:89aa\:306e\:7d9a\:304d\:306e\:679a (Continue) \:306f\:539f\:7a3f\:3092\:8a71\:984c\:8ee2\:63db\:306e\:8a9e (\:3053\:3053\:3067\:306f\:30fb\:3055\:3066) \:3067\:59cb\:3081\:306a\:3044\:3002\:89aa\:304c\:5207\:308a\:66ff\:308f\:308a\:3001\:81ea\:5206\:306e\:679a\:3092\:6301\:305f\:306a\:3044\:65b0\:3057\:3044
+   \:898b\:51fa\:3057 (\:7ae0\:30fb\:7bc0) \:306b\:5165\:308b\:679a (Shift) \:306f\:305d\:306e\:898b\:51fa\:3057\:3092\:544a\:3052\:308b\:3002\:4e0a\:306e\:6bb5\:306e\:6b21\:306e\:8a71\:3078\:623b\:308b\:679a (Return) \:306f\:8ee2\:63db\:306e\:8a9e\:3060\:3051\:5916\:3059\:3002\:90e8\:306e\:5165\:53e3 (Part)
+   \:3068\:7d9a\:304d (None) \:306f\:305d\:306e\:307e\:307e\:3002\:610f\:5473\:4ed8\:3051 (SlideGraphNarrate) \:306e\:3064\:306a\:304e (Bridge) \:306f\:3001\:8a18\:9332\:3057\:305f\:524d\:306e\:679a (BridgeAfter) \:304c\:4eca\:306e\:524d\:306e\:679a\:3068
+   \:540c\:3058\:3068\:304d\:3060\:3051\:539f\:7a3f\:306e\:5192\:982d\:306b\:4f7f\:3046\:3002\:521d\:3081\:3066\:51fa\:308b\:7528\:8a9e (Terms) \:306f\:679a\:306e\:4e0b\:306b\:4e00\:884c (Notes) \:3068\:539f\:7a3f\:306e\:6700\:5f8c\:306b\:4e00\:8a00\:3002\:540c\:3058\:7528\:8a9e\:306f\:6700\:521d\:306e 1 \:56de\:3060\:3051 *)
+$kgSwitchWordsJa = {"\:3053\:3053\:3067\:306f\:3001", "\:3053\:3053\:3067\:306f", "\:3055\:3066\:3001", "\:305d\:308c\:3067\:306f\:3001", "\:3067\:306f\:3001"};
+iKGStripSwitch[t_String, lang_] := Module[{u = StringTrim[t]},
+  If[lang === "ja",
+    Do[If[StringStartsQ[u, w], u = StringTrim[StringDrop[u, StringLength[w]]]; Break[]], {w, $kgSwitchWordsJa}],
+    u = StringReplace[u, StartOfString ~~ ("Here we " | "Here, we ") -> "We ", 1]];
+  u];
+iKGStripSwitch[t_, _] := t;
+iKGHeadIntro[h_Association, lang_] := With[{l = SourceVaultKGText[h, "Label", lang], g = SourceVaultKGText[h, "Gist", lang]},
+  If[lang === "ja",
+    "\:6b21\:306f\:300c" <> l <> "\:300d\:3067\:3059\:3002" <> If[g =!= "", StringTrim[g, "\:3002"] <> "\:3092\:898b\:3066\:3044\:304d\:307e\:3059\:3002", ""],
+    "Next: " <> l <> ". " <> If[g =!= "", StringTrim[g, "."] <> ". ", ""]]];
+iKGHeadIntro[_, _] := "";
+iKGLinkSlides[slides_List, index_Association, cpar_Association, rootId_, entryIdx_List, lang_, tocQ_] := Module[
+  {out = {}, prev = None, explained = <||>, anc, shown},
+  shown = Association[Thread[Select[Lookup[slides, "NodeId", {}], StringQ] -> True]];
+  anc[x_] := Module[{p = Lookup[cpar, x, None], o = {}, k = 0},
+    While[p =!= None && p =!= rootId && k < 50, AppendTo[o, p]; p = Lookup[cpar, p, None]; k++]; o];
+  Do[Module[{sl = slides[[i]], x, n, talk, tr, heads = {}, br, after, terms, notes = {}, glosses = {}, skipQ},
+      x = Lookup[sl, "NodeId", None]; n = Replace[Lookup[index, x, <||>], Except[_Association] -> <||>];
+      talk = Replace[Lookup[sl, "Talk", ""], Except[_String] -> ""];
+      skipQ = MemberQ[{"Agenda", "Glossary"}, Lookup[sl, "Kind", ""]];
+      tr = Which[
+        TrueQ[Lookup[sl, "Continuation", False]] || skipQ || x === rootId || prev === None, "None",
+        MemberQ[entryIdx, i], "Part",
+        Lookup[cpar, x, None] === prev || Lookup[cpar, x, None] === Lookup[cpar, prev, None], "Continue",
+        True,
+          heads = Select[Reverse[anc[x]], ! MemberQ[Append[anc[prev], prev], #] && ! KeyExistsQ[shown, #] &];
+          If[TrueQ[tocQ] && heads =!= {}, "Shift", "Return"]];
+      br = SourceVaultKGText[n, "Bridge", lang]; after = Lookup[n, "BridgeAfter", None];
+      If[StringQ[after] && after =!= prev, br = ""];
+      talk = Which[
+        MemberQ[{"None", "Part"}, tr], talk,
+        br =!= "", br <> " " <> iKGStripSwitch[talk, lang],
+        tr === "Shift", iKGHeadIntro[Replace[Lookup[index, First[heads], <||>], Except[_Association] -> <||>], lang] <> iKGStripSwitch[talk, lang],
+        True, iKGStripSwitch[talk, lang]];
+      If[! TrueQ[Lookup[sl, "Continuation", False]] && ! skipQ,
+        terms = Select[iKGList[Lookup[n, "Terms", {}]],
+          AssociationQ[#] && StringQ[Lookup[#, "Term", None]] && StringQ[Lookup[#, "Def", None]] &];
+        Do[With[{tm = StringTrim[t["Term"]], df = StringTrim[t["Def"]]},
+            If[tm =!= "" && df =!= "" && ! KeyExistsQ[explained, ToLowerCase[tm]] && Length[notes] < 2,
+              explained[ToLowerCase[tm]] = True;
+              AppendTo[notes, tm <> ": " <> df];
+              AppendTo[glosses, If[lang === "ja", "\:306a\:304a\:3001" <> tm <> " \:306f\:3001" <> StringTrim[df, "\:3002" | "."] <> "\:3002",
+                "Note: " <> tm <> " is " <> StringTrim[df, "."] <> "."]]]],
+          {t, terms}]];
+      If[glosses =!= {}, talk = StringTrim[talk] <> " " <> StringRiffle[glosses, " "]];
+      AppendTo[out, Join[sl, <|"Talk" -> StringTrim[talk], "Transition" -> tr, "Notes" -> notes,
+        "Role" -> SourceVaultKGText[n, "Role", lang], "NewHead" -> If[heads === {}, None, First[heads]]|>]];
+      If[! TrueQ[Lookup[sl, "Continuation", False]] && ! skipQ && StringQ[x], prev = x]],
+    {i, Length[slides]}];
+  out];
+
 iKGMdLine[s_String] := StringReplace[StringTrim[s], {"\r\n" -> " ", "\n" -> " "}];
 
-(* 枚の出どころ: ノードの枚はノード Id、用語ミニ辞書は glossary、目次は agenda (空白や括弧を含む Id は付けない) *)
+(* \:679a\:306e\:51fa\:3069\:3053\:308d: \:30ce\:30fc\:30c9\:306e\:679a\:306f\:30ce\:30fc\:30c9 Id\:3001\:7528\:8a9e\:30df\:30cb\:8f9e\:66f8\:306f glossary\:3001\:76ee\:6b21\:306f agenda (\:7a7a\:767d\:3084\:62ec\:5f27\:3092\:542b\:3080 Id \:306f\:4ed8\:3051\:306a\:3044) *)
 iKGSlideNodeTag[s_Association] := With[{id = If[Lookup[s, "Kind", ""] === "Glossary", "glossary", Lookup[s, "NodeId", None]]},
   If[StringQ[id] && id =!= "" && StringFreeQ[id, WhitespaceCharacter | "{" | "}"], id, None]];
 
 iKGTalkFallback[points_List, title_String, lang_String] := Module[{ps = Select[points, StringQ[#] && # =!= "" &], sep},
-  sep = If[lang === "ja", "。", ". "];
+  sep = If[lang === "ja", "\:3002", ". "];
   Which[
     ps =!= {}, StringRiffle[StringTrim[#, sep] & /@ ps, sep] <> StringTrim[sep],
     title =!= "", title <> StringTrim[sep],
@@ -1395,21 +1933,23 @@ SourceVaultKGOutlineToMarkdown[outline_Association] := Module[{lines = {}, asset
   title = iKGStr[Lookup[outline, "Title", ""]];
   If[title =!= "", lines = Join[lines, {"---", "Title: " <> title, "---", ""}]];
   Do[
-    (* node= は枚の出どころ (題目セルの CellTags "KGNode:<id>")。生成し直すときに前回の枚を見分け、質疑応答を引き継ぐ *)
+    (* node= \:306f\:679a\:306e\:51fa\:3069\:3053\:308d (\:984c\:76ee\:30bb\:30eb\:306e CellTags "KGNode:<id>")\:3002\:751f\:6210\:3057\:76f4\:3059\:3068\:304d\:306b\:524d\:56de\:306e\:679a\:3092\:898b\:5206\:3051\:3001\:8cea\:7591\:5fdc\:7b54\:3092\:5f15\:304d\:7d99\:3050 *)
     AppendTo[lines, "## " <> iKGMdLine[s["Title"]] <> " {expected=" <> ToString[Round[s["Seconds"]]] <>
       With[{nid = iKGSlideNodeTag[s]}, If[StringQ[nid], " node=" <> nid, ""]] <> "}"];
     If[StringQ[Lookup[s, "Crumb", ""]] && s["Crumb"] =!= "", AppendTo[lines, "crumb: " <> iKGMdLine[s["Crumb"]]]];
-    (* 導入文は箇条書きの前に地の文で *)
+    (* \:5c0e\:5165\:6587\:306f\:7b87\:6761\:66f8\:304d\:306e\:524d\:306b\:5730\:306e\:6587\:3067 *)
     If[StringQ[Lookup[s, "Lead", ""]] && s["Lead"] =!= "", AppendTo[lines, iKGMdLine[s["Lead"]]]];
     det = PadRight[Replace[Lookup[s, "Details", {}], Except[_List] -> {}], Length[s["Points"]], ""];
-    (* 図が 2 枚以上で箇条 (要点と詰め込んだ子) も 2 つ以上なら、箇条の間に図を挟む
-       (箇条 → 図 → 箇条 → 図)。表は最後 *)
+    (* \:56f3\:304c 2 \:679a\:4ee5\:4e0a\:3067\:7b87\:6761 (\:8981\:70b9\:3068\:8a70\:3081\:8fbc\:3093\:3060\:5b50) \:3082 2 \:3064\:4ee5\:4e0a\:306a\:3089\:3001\:7b87\:6761\:306e\:9593\:306b\:56f3\:3092\:631f\:3080
+       (\:7b87\:6761 \[RightArrow] \:56f3 \[RightArrow] \:7b87\:6761 \[RightArrow] \:56f3)\:3002\:8868\:306f\:6700\:5f8c *)
     Module[{figs = Select[s["Assets"], ! MemberQ[{"Table", "Image"}, Lookup[#, "Type", ""]] &],
-            blocks, nbk, breaks, fi = 0, emitFig},
+            blocks, nbk, breaks, fi = 0, emitFig, rowQ},
       emitFig[] := (fi++; k++; AppendTo[assets, figs[[fi]]]; AppendTo[lines, "<<FIG" <> ToString[k] <> ">>"]);
       blocks = Join[Table[{"P", i}, {i, Length[s["Points"]]}], Table[{"S", j}, {j, Length[s["Sub"]]}]];
       nbk = Length[blocks];
-      breaks = If[Length[figs] >= 2 && nbk >= 2, Table[Ceiling[i * nbk / Length[figs]], {i, Length[figs] - 1}], {}];
+      (* v1.42: \:6a2a\:4e26\:3073\:306e\:679a\:306f\:7b87\:6761\:3092\:3059\:3079\:3066\:5148\:306b\:51fa\:3057\:3001\:56f3\:306f 1 \:884c\:306b <<FIG1>> <<FIG2>> \:3068\:4e26\:3079\:308b *)
+      rowQ = Lookup[s, "FigureLayout", None] === "Row" && Length[figs] >= 2;
+      breaks = If[! rowQ && Length[figs] >= 2 && nbk >= 2, Table[Ceiling[i * nbk / Length[figs]], {i, Length[figs] - 1}], {}];
       Do[
         With[{blk = blocks[[b]]},
           If[First[blk] === "P",
@@ -1420,7 +1960,9 @@ SourceVaultKGOutlineToMarkdown[outline_Association] := Module[{lines = {}, asset
               Do[AppendTo[lines, "  - " <> iKGMdLine[p]], {p, sub["Points"]}]]]];
         Do[If[fi < Length[figs], emitFig[]], {Count[breaks, b]}],
         {b, nbk}];
-      While[fi < Length[figs], emitFig[]]];
+      If[rowQ,
+        AppendTo[lines, StringRiffle[Table[(fi++; k++; AppendTo[assets, figs[[fi]]]; "<<FIG" <> ToString[k] <> ">>"), {Length[figs] - fi}], " "]],
+        While[fi < Length[figs], emitFig[]]]];
     Do[Switch[Lookup[a, "Type", ""],
         "Table", With[{rows = iKGList[Lookup[a, "Rows", {}]]},
           AppendTo[lines, ""];
@@ -1431,15 +1973,16 @@ SourceVaultKGOutlineToMarkdown[outline_Association] := Module[{lines = {}, asset
         _, Null],
       {a, s["Assets"]}];
     If[s["Cite"] =!= "", AppendTo[lines, "cite: " <> iKGMdLine[s["Cite"]]]];
+    Do[If[StringQ[nt] && StringTrim[nt] =!= "", AppendTo[lines, "note: " <> iKGMdLine[nt]]], {nt, Replace[Lookup[s, "Notes", {}], Except[_List] -> {}]}];
     If[s["Talk"] =!= "", AppendTo[lines, "talk: " <> iKGMdLine[s["Talk"]]]];
-    (* 想定問答 (KG のノードに保存したもの。質疑応答セルの本文をそのまま) *)
+    (* \:60f3\:5b9a\:554f\:7b54 (KG \:306e\:30ce\:30fc\:30c9\:306b\:4fdd\:5b58\:3057\:305f\:3082\:306e\:3002\:8cea\:7591\:5fdc\:7b54\:30bb\:30eb\:306e\:672c\:6587\:3092\:305d\:306e\:307e\:307e) *)
     If[StringQ[Lookup[s, "QA", None]] && StringTrim[s["QA"]] =!= "",
       Do[AppendTo[lines, "qa: " <> q], {q, StringSplit[StringReplace[s["QA"], "\r\n" -> "\n"], "\n"]}]];
     AppendTo[lines, ""],
     {s, Lookup[outline, "Slides", {}]}];
   <|"Markdown" -> StringRiffle[lines, "\n"], "Assets" -> assets, "SlideCount" -> Length[Lookup[outline, "Slides", {}]]|>];
 
-(* ---------------- 複数 KG の合成 (サーベイ) ---------------- *)
+(* ---------------- \:8907\:6570 KG \:306e\:5408\:6210 (\:30b5\:30fc\:30d9\:30a4) ---------------- *)
 
 iKGPrefixId[gid_String, id_String] := If[StringStartsQ[id, "bg:"] || StringContainsQ[id, "/"], id, gid <> "/" <> id];
 
@@ -1453,13 +1996,13 @@ SourceVaultKGCompose[kgs_List, OptionsPattern[]] := Module[
   lang = Replace[OptionValue["Language"], Automatic -> First[valid]["Language"]];
   Do[
     Module[{g = valid[[gi]]["GraphId"], kg = valid[[gi]], map},
-      (* 共有 background 層に連結済みの周辺知識ノードは bg: の共有 Id に付け替える (論文間で 1 つに統合される) *)
+      (* \:5171\:6709 background \:5c64\:306b\:9023\:7d50\:6e08\:307f\:306e\:5468\:8fba\:77e5\:8b58\:30ce\:30fc\:30c9\:306f bg: \:306e\:5171\:6709 Id \:306b\:4ed8\:3051\:66ff\:3048\:308b (\:8ad6\:6587\:9593\:3067 1 \:3064\:306b\:7d71\:5408\:3055\:308c\:308b) *)
       map = Association[Map[Function[n, n["Id"] ->
         If[n["Layer"] =!= "Paper" && StringQ[n["BackgroundRef"]], n["BackgroundRef"], iKGPrefixId[g, n["Id"]]]], kg["Nodes"]]];
       Do[Module[{id = map[n["Id"]], m = n},
           m["Id"] = id;
-          (* 論文ごとに出現順をずらし、Source 戦略で論文の部分木が連続するようにする
-             (Order の無いノードは just-in-time 規則に任せる) *)
+          (* \:8ad6\:6587\:3054\:3068\:306b\:51fa\:73fe\:9806\:3092\:305a\:3089\:3057\:3001Source \:6226\:7565\:3067\:8ad6\:6587\:306e\:90e8\:5206\:6728\:304c\:9023\:7d9a\:3059\:308b\:3088\:3046\:306b\:3059\:308b
+             (Order \:306e\:7121\:3044\:30ce\:30fc\:30c9\:306f just-in-time \:898f\:5247\:306b\:4efb\:305b\:308b) *)
           m["Order"] = If[NumericQ[n["Order"]], gi * 10000 + n["Order"], None];
           If[StringStartsQ[id, "bg:"],
             If[KeyExistsQ[nodes, id],
@@ -1470,7 +2013,7 @@ SourceVaultKGCompose[kgs_List, OptionsPattern[]] := Module[
             m["Graph"] = g; nodes[id] = m];
           bgOwners[id] = Append[Lookup[bgOwners, id, {}], g]],
         {n, kg["Nodes"]}];
-      (* 論文ノードの BackgroundRef は bg ノードへの Prerequisite として辺に落とす *)
+      (* \:8ad6\:6587\:30ce\:30fc\:30c9\:306e BackgroundRef \:306f bg \:30ce\:30fc\:30c9\:3078\:306e Prerequisite \:3068\:3057\:3066\:8fba\:306b\:843d\:3068\:3059 *)
       Do[If[StringQ[n["BackgroundRef"]] && KeyExistsQ[nodes, n["BackgroundRef"]],
           AppendTo[edges, <|"From" -> n["BackgroundRef"], "To" -> map[n["Id"]], "EdgeKind" -> "Prerequisite", "Weight" -> 0.6|>]],
         {n, kg["Nodes"]}];
@@ -1478,12 +2021,12 @@ SourceVaultKGCompose[kgs_List, OptionsPattern[]] := Module[
       If[StringQ[kg["Root"]], AppendTo[roots, <|"Id" -> map[kg["Root"]], "Graph" -> g,
         "Year" -> With[{y = SourceVaultKGNode[kg, kg["Root"]]["Year"]}, If[IntegerQ[y], y, None]]|>]]],
     {gi, Length[valid]}];
-  (* 共有 bg ノードへの Contains は最初の論文のものだけ残す。両方の節が含むと、後の論文の節が
-     置かれるまで共有ノードが提示できず、先の論文の依存ノードが後の論文の区間へ押し出される *)
+  (* \:5171\:6709 bg \:30ce\:30fc\:30c9\:3078\:306e Contains \:306f\:6700\:521d\:306e\:8ad6\:6587\:306e\:3082\:306e\:3060\:3051\:6b8b\:3059\:3002\:4e21\:65b9\:306e\:7bc0\:304c\:542b\:3080\:3068\:3001\:5f8c\:306e\:8ad6\:6587\:306e\:7bc0\:304c
+     \:7f6e\:304b\:308c\:308b\:307e\:3067\:5171\:6709\:30ce\:30fc\:30c9\:304c\:63d0\:793a\:3067\:304d\:305a\:3001\:5148\:306e\:8ad6\:6587\:306e\:4f9d\:5b58\:30ce\:30fc\:30c9\:304c\:5f8c\:306e\:8ad6\:6587\:306e\:533a\:9593\:3078\:62bc\:3057\:51fa\:3055\:308c\:308b *)
   edges = Join[
     Select[edges, ! (#["EdgeKind"] === "Contains" && StringStartsQ[#["To"], "bg:"]) &],
     DeleteDuplicatesBy[Select[edges, #["EdgeKind"] === "Contains" && StringStartsQ[#["To"], "bg:"] &], #["To"] &]];
-  (* サーベイ根 *)
+  (* \:30b5\:30fc\:30d9\:30a4\:6839 *)
   nodes[rootId] = <|"Id" -> rootId, "Kind" -> "Survey", "Label" -> OptionValue["Title"],
     "Summary" -> "", "Points" -> (SourceVaultKGText[nodes[#["Id"]], "Label", lang] & /@ roots),
     "Importance" -> 1., "Difficulty" -> 0.2, "Layer" -> "Paper", "Domains" -> {}, "Order" -> -1|>;
@@ -1494,7 +2037,7 @@ SourceVaultKGCompose[kgs_List, OptionsPattern[]] := Module[
         {i, Length[sorted] - 1}]],
     Do[AppendTo[edges, <|"From" -> roots[[i, "Id"]], "To" -> roots[[i + 1, "Id"]], "EdgeKind" -> "Precedes", "Weight" -> 0.4|>],
       {i, Length[roots] - 1}]];
-  (* 共有 bg ノードを介した論文間の関連 *)
+  (* \:5171\:6709 bg \:30ce\:30fc\:30c9\:3092\:4ecb\:3057\:305f\:8ad6\:6587\:9593\:306e\:95a2\:9023 *)
   Do[
     Module[{users = Select[edges, #["From"] === bg && #["EdgeKind"] === "Prerequisite" &]},
       pairs = Subsets[DeleteDuplicates[Lookup[users, "To"]], {2}];
@@ -1510,7 +2053,7 @@ SourceVaultKGCompose[kgs_List, OptionsPattern[]] := Module[
   If[AssociationQ[res], res["Members"] = Lookup[valid, "GraphId"]];
   res];
 
-(* ---------------- 共有 background 層 ---------------- *)
+(* ---------------- \:5171\:6709 background \:5c64 ---------------- *)
 
 iKGBackgroundFile[bgId_String] := FileNameJoin[{iKGBackgroundDir[],
   StringReplace[bgId, StartOfString ~~ "bg:" -> "bg-"] <> ".json"}];
@@ -1557,7 +2100,7 @@ SourceVaultKGBackgroundLink[kgIn_Association, OptionsPattern[]] := Module[
   kg["Nodes"] = nodes;
   <|"Graph" -> kg, "Linked" -> linked, "Created" -> created|>];
 
-(* 過去デッキの再利用候補 (SourceVault_kb がロード済みのときだけ) *)
+(* \:904e\:53bb\:30c7\:30c3\:30ad\:306e\:518d\:5229\:7528\:5019\:88dc (SourceVault_kb \:304c\:30ed\:30fc\:30c9\:6e08\:307f\:306e\:3068\:304d\:3060\:3051) *)
 Options[SourceVaultKGSuggestPastSlides] = {"Limit" -> 2, "MinScore" -> 1.5};
 SourceVaultKGSuggestPastSlides[kg_Association, kbId_String, OptionsPattern[]] := Module[{srcs, pathOf, out = {}},
   If[Length[DownValues[SourceVault`SourceVaultKBSearch]] === 0 ||
@@ -1575,54 +2118,54 @@ SourceVaultKGSuggestPastSlides[kg_Association, kbId_String, OptionsPattern[]] :=
     {n, Select[Lookup[kg, "Nodes", {}], #["Layer"] =!= "Paper" &]}];
   out];
 
-(* ---------------- プロンプト (純関数) ---------------- *)
+(* ---------------- \:30d7\:30ed\:30f3\:30d7\:30c8 (\:7d14\:95a2\:6570) ---------------- *)
 
 iKGEdgeKindDoc[] := StringRiffle[Map[Function[k,
   "  - " <> k <> ": " <> Switch[k,
-    "Prerequisite", "From は To を理解するための前提 (From を先に説明する。難易度順序)",
-    "Precedes", "From は To より先に起きた / 先に行われた (年代・実験の順序)",
-    "Derives", "To は From から導かれる (導出順序)",
-    "Motivates", "From (問い・課題) が To (手法・実験) を動機づける",
-    "LeadsTo", "From (結果) が To (結論・含意) につながる (因果)",
-    "Contains", "From (節・まとまり) が To を含む (階層)",
-    "Supports", "From (証拠・図・データ) が To (主張) を支える (順序制約なし)",
-    "Explains", "From が To を解説する (順序制約なし)",
-    "Contrasts", "From と To は対比される (順序制約なし)",
-    "RelatedTo", "関連がある (順序制約なし)",
-    "Cites", "From が To を引用する (順序制約なし)",
+    "Prerequisite", "From \:306f To \:3092\:7406\:89e3\:3059\:308b\:305f\:3081\:306e\:524d\:63d0 (From \:3092\:5148\:306b\:8aac\:660e\:3059\:308b\:3002\:96e3\:6613\:5ea6\:9806\:5e8f)",
+    "Precedes", "From \:306f To \:3088\:308a\:5148\:306b\:8d77\:304d\:305f / \:5148\:306b\:884c\:308f\:308c\:305f (\:5e74\:4ee3\:30fb\:5b9f\:9a13\:306e\:9806\:5e8f)",
+    "Derives", "To \:306f From \:304b\:3089\:5c0e\:304b\:308c\:308b (\:5c0e\:51fa\:9806\:5e8f)",
+    "Motivates", "From (\:554f\:3044\:30fb\:8ab2\:984c) \:304c To (\:624b\:6cd5\:30fb\:5b9f\:9a13) \:3092\:52d5\:6a5f\:3065\:3051\:308b",
+    "LeadsTo", "From (\:7d50\:679c) \:304c To (\:7d50\:8ad6\:30fb\:542b\:610f) \:306b\:3064\:306a\:304c\:308b (\:56e0\:679c)",
+    "Contains", "From (\:7bc0\:30fb\:307e\:3068\:307e\:308a) \:304c To \:3092\:542b\:3080 (\:968e\:5c64)",
+    "Supports", "From (\:8a3c\:62e0\:30fb\:56f3\:30fb\:30c7\:30fc\:30bf) \:304c To (\:4e3b\:5f35) \:3092\:652f\:3048\:308b (\:9806\:5e8f\:5236\:7d04\:306a\:3057)",
+    "Explains", "From \:304c To \:3092\:89e3\:8aac\:3059\:308b (\:9806\:5e8f\:5236\:7d04\:306a\:3057)",
+    "Contrasts", "From \:3068 To \:306f\:5bfe\:6bd4\:3055\:308c\:308b (\:9806\:5e8f\:5236\:7d04\:306a\:3057)",
+    "RelatedTo", "\:95a2\:9023\:304c\:3042\:308b (\:9806\:5e8f\:5236\:7d04\:306a\:3057)",
+    "Cites", "From \:304c To \:3092\:5f15\:7528\:3059\:308b (\:9806\:5e8f\:5236\:7d04\:306a\:3057)",
     _, ""]], Keys[SourceVault`$SourceVaultKGEdgeKinds]], "\n"];
 
-iKGSchemaDoc[] := "{\n  \"GraphId\": \"<id>\", \"Title\": \"<論文題目>\", \"Language\": \"ja\", \"Kind\": \"Paper\",\n" <>
-  "  \"Root\": \"<主張ノードの Id>\",\n" <>
+iKGSchemaDoc[] := "{\n  \"GraphId\": \"<id>\", \"Title\": \"<\:8ad6\:6587\:984c\:76ee>\", \"Language\": \"ja\", \"Kind\": \"Paper\",\n" <>
+  "  \"Root\": \"<\:4e3b\:5f35\:30ce\:30fc\:30c9\:306e Id>\",\n" <>
   "  \"Nodes\": [{\"Id\": \"claim\", \"Kind\": \"Claim|Concept|Definition|Method|Experiment|Result|Equation|Figure|Question|Conclusion|Background|Section\",\n" <>
-  "    \"Label\": \"短い名詞句 (スライドタイトルになる)\", \"Summary\": \"1-2 文の要約 (talk の骨子)\",\n" <>
-  "    \"Points\": [\"体言止めの箇条書き 2-5 行\"], \"Difficulty\": 0.0-1.0, \"Importance\": 0.0-1.0,\n" <>
-  "    \"Domains\": [\"電気化学\", \"高分子\"], \"Year\": 2024 (背景事実の年代。無ければ省略), \"Order\": 出現順の整数,\n" <>
-  "    \"Layer\": \"Paper|Background\", \"Cite\": \"(著者 年) Fig. n\",\n" <>
+  "    \"Label\": \"\:77ed\:3044\:540d\:8a5e\:53e5 (\:30b9\:30e9\:30a4\:30c9\:30bf\:30a4\:30c8\:30eb\:306b\:306a\:308b)\", \"Summary\": \"1-2 \:6587\:306e\:8981\:7d04 (talk \:306e\:9aa8\:5b50)\",\n" <>
+  "    \"Points\": [\"\:4f53\:8a00\:6b62\:3081\:306e\:7b87\:6761\:66f8\:304d 2-5 \:884c\"], \"Difficulty\": 0.0-1.0, \"Importance\": 0.0-1.0,\n" <>
+  "    \"Domains\": [\"\:96fb\:6c17\:5316\:5b66\", \"\:9ad8\:5206\:5b50\"], \"Year\": 2024 (\:80cc\:666f\:4e8b\:5b9f\:306e\:5e74\:4ee3\:3002\:7121\:3051\:308c\:3070\:7701\:7565), \"Order\": \:51fa\:73fe\:9806\:306e\:6574\:6570,\n" <>
+  "    \"Layer\": \"Paper|Background\", \"Cite\": \"(\:8457\:8005 \:5e74) Fig. n\",\n" <>
   "    \"Assets\": [{\"Type\": \"NotebookFigure\", \"Ref\": \"<key>\", \"N\": 3}, {\"Type\": \"Formula\", \"Ref\": \"<key>\", \"N\": 1},\n" <>
-  "               {\"Type\": \"PDFFigure\", \"Ref\": \"<pdfkey>\", \"Page\": 4, \"Crop\": [[0.1,0.9],[0.2,0.6]]}, {\"Type\": \"Table\", \"Rows\": [[\"項目\",\"値\"],[\"a\",\"1\"]]}]}],\n" <>
+  "               {\"Type\": \"PDFFigure\", \"Ref\": \"<pdfkey>\", \"Page\": 4, \"Crop\": [[0.1,0.9],[0.2,0.6]]}, {\"Type\": \"Table\", \"Rows\": [[\"\:9805\:76ee\",\"\:5024\"],[\"a\",\"1\"]]}]}],\n" <>
   "  \"Edges\": [{\"From\": \"q1\", \"To\": \"method\", \"EdgeKind\": \"Motivates\", \"Weight\": 0.0-1.0, \"Confidence\": 0.0-1.0, \"EvidenceRefs\": [\"[FIG2]\"]}]\n}";
 
 Options[SourceVaultKGExtractionPrompt] = {"GraphId" -> "paper", "Title" -> "", "Language" -> "ja",
   "SourceKey" -> "", "PDFKey" -> "", "MaxNodes" -> 60, "MinNodes" -> 25};
 SourceVaultKGExtractionPrompt[sourceText_String, OptionsPattern[]] :=
-  "あなたは論文の内容を「発表用の知識グラフ」に構造化する専門家です。以下の本文から、スライドや解説を動的に生成するための知識グラフを JSON だけで出力してください。\n\n" <>
-  "対象: " <> If[OptionValue["Title"] =!= "", OptionValue["Title"], "(題目は本文から取る)"] <>
-  "  GraphId: " <> OptionValue["GraphId"] <> "  言語: " <> OptionValue["Language"] <> "\n" <>
-  If[OptionValue["SourceKey"] =!= "", "本文ノートブックの key: " <> OptionValue["SourceKey"] <> " (Assets の NotebookFigure / Formula の Ref に使う。[FIGn] / [EQn] は本文中の番号)\n", ""] <>
-  If[OptionValue["PDFKey"] =!= "", "原論文 PDF の key: " <> OptionValue["PDFKey"] <> " (Assets の PDFFigure の Ref に使う)\n", ""] <>
-  "\n出力 JSON のスキーマ:\n" <> iKGSchemaDoc[] <> "\n\n" <>
-  "辺 (Edges) の種別。順序制約のある種別はすべて「From を To より先に提示する」向きで書く:\n" <> iKGEdgeKindDoc[] <> "\n\n" <>
-  "作り方の規則:\n" <>
-  "1. ノードは " <> ToString[OptionValue["MinNodes"]] <> "〜" <> ToString[OptionValue["MaxNodes"]] <> " 個。1 ノード = 1 枚のスライドになりうる粒度 (1 つの問い・手法・実験・結果・式・図・概念)。Root は論文の主張 (Claim) 1 つ。\n" <>
-  "2. 論文の節 (背景 / 手法 / 結果 / 議論 / 結論) は Kind=Section のノードにして Contains 辺で下位ノードをまとめる。Order は本文の出現順。\n" <>
-  "3. 論文本文に無いが理解に必要な前提知識 (定義・古典的な式・先行研究の事実) は Layer=Background のノードとして追加し、それを前提とする論文ノードへ Prerequisite 辺を張る。Domains (領域名) と Difficulty (その領域の学部レベルを 0.5 とする) を必ず付ける。\n" <>
-  "4. 実験・定理・先行研究の年代順は Precedes、式や量の導出順は Derives、問い→手法は Motivates、結果→結論は LeadsTo、図やデータ→主張は Supports で表す。難しい概念の前に易しい概念が来るよう Prerequisite を張る (例: Lagrangian の後に F=ma の説明が来てはいけない)。\n" <>
-  "5. Importance は「その論文の主張を伝えるのに欠かせない度合い」。Difficulty は聴き手の前提知識なしで理解するのに要する水準 (0=常識, 0.3=高校, 0.5=学部, 0.7=大学院, 0.9=専門家)。\n" <>
-  "6. 図・式・写真は本文の [FIGn] / [EQn] を Assets で参照し、Cite に出典を書く。式は文字列で書き直さない (Formula 資産で原式を引用する)。\n" <>
-  "7. Points は体言止めで短く、Summary は です・ます調 1-2 文。すべて " <> OptionValue["Language"] <> " で書く。\n" <>
-  "8. 出力は JSON オブジェクトのみ (前置き・説明・コードフェンス以外の文章を付けない)。\n\n" <>
-  "=== 本文 ===\n" <> sourceText <> "\n=== 本文ここまで ===";
+  "\:3042\:306a\:305f\:306f\:8ad6\:6587\:306e\:5185\:5bb9\:3092\:300c\:767a\:8868\:7528\:306e\:77e5\:8b58\:30b0\:30e9\:30d5\:300d\:306b\:69cb\:9020\:5316\:3059\:308b\:5c02\:9580\:5bb6\:3067\:3059\:3002\:4ee5\:4e0b\:306e\:672c\:6587\:304b\:3089\:3001\:30b9\:30e9\:30a4\:30c9\:3084\:89e3\:8aac\:3092\:52d5\:7684\:306b\:751f\:6210\:3059\:308b\:305f\:3081\:306e\:77e5\:8b58\:30b0\:30e9\:30d5\:3092 JSON \:3060\:3051\:3067\:51fa\:529b\:3057\:3066\:304f\:3060\:3055\:3044\:3002\n\n" <>
+  "\:5bfe\:8c61: " <> If[OptionValue["Title"] =!= "", OptionValue["Title"], "(\:984c\:76ee\:306f\:672c\:6587\:304b\:3089\:53d6\:308b)"] <>
+  "  GraphId: " <> OptionValue["GraphId"] <> "  \:8a00\:8a9e: " <> OptionValue["Language"] <> "\n" <>
+  If[OptionValue["SourceKey"] =!= "", "\:672c\:6587\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e key: " <> OptionValue["SourceKey"] <> " (Assets \:306e NotebookFigure / Formula \:306e Ref \:306b\:4f7f\:3046\:3002[FIGn] / [EQn] \:306f\:672c\:6587\:4e2d\:306e\:756a\:53f7)\n", ""] <>
+  If[OptionValue["PDFKey"] =!= "", "\:539f\:8ad6\:6587 PDF \:306e key: " <> OptionValue["PDFKey"] <> " (Assets \:306e PDFFigure \:306e Ref \:306b\:4f7f\:3046)\n", ""] <>
+  "\n\:51fa\:529b JSON \:306e\:30b9\:30ad\:30fc\:30de:\n" <> iKGSchemaDoc[] <> "\n\n" <>
+  "\:8fba (Edges) \:306e\:7a2e\:5225\:3002\:9806\:5e8f\:5236\:7d04\:306e\:3042\:308b\:7a2e\:5225\:306f\:3059\:3079\:3066\:300cFrom \:3092 To \:3088\:308a\:5148\:306b\:63d0\:793a\:3059\:308b\:300d\:5411\:304d\:3067\:66f8\:304f:\n" <> iKGEdgeKindDoc[] <> "\n\n" <>
+  "\:4f5c\:308a\:65b9\:306e\:898f\:5247:\n" <>
+  "1. \:30ce\:30fc\:30c9\:306f " <> ToString[OptionValue["MinNodes"]] <> "\:301c" <> ToString[OptionValue["MaxNodes"]] <> " \:500b\:30021 \:30ce\:30fc\:30c9 = 1 \:679a\:306e\:30b9\:30e9\:30a4\:30c9\:306b\:306a\:308a\:3046\:308b\:7c92\:5ea6 (1 \:3064\:306e\:554f\:3044\:30fb\:624b\:6cd5\:30fb\:5b9f\:9a13\:30fb\:7d50\:679c\:30fb\:5f0f\:30fb\:56f3\:30fb\:6982\:5ff5)\:3002Root \:306f\:8ad6\:6587\:306e\:4e3b\:5f35 (Claim) 1 \:3064\:3002\n" <>
+  "2. \:8ad6\:6587\:306e\:7bc0 (\:80cc\:666f / \:624b\:6cd5 / \:7d50\:679c / \:8b70\:8ad6 / \:7d50\:8ad6) \:306f Kind=Section \:306e\:30ce\:30fc\:30c9\:306b\:3057\:3066 Contains \:8fba\:3067\:4e0b\:4f4d\:30ce\:30fc\:30c9\:3092\:307e\:3068\:3081\:308b\:3002Order \:306f\:672c\:6587\:306e\:51fa\:73fe\:9806\:3002\n" <>
+  "3. \:8ad6\:6587\:672c\:6587\:306b\:7121\:3044\:304c\:7406\:89e3\:306b\:5fc5\:8981\:306a\:524d\:63d0\:77e5\:8b58 (\:5b9a\:7fa9\:30fb\:53e4\:5178\:7684\:306a\:5f0f\:30fb\:5148\:884c\:7814\:7a76\:306e\:4e8b\:5b9f) \:306f Layer=Background \:306e\:30ce\:30fc\:30c9\:3068\:3057\:3066\:8ffd\:52a0\:3057\:3001\:305d\:308c\:3092\:524d\:63d0\:3068\:3059\:308b\:8ad6\:6587\:30ce\:30fc\:30c9\:3078 Prerequisite \:8fba\:3092\:5f35\:308b\:3002Domains (\:9818\:57df\:540d) \:3068 Difficulty (\:305d\:306e\:9818\:57df\:306e\:5b66\:90e8\:30ec\:30d9\:30eb\:3092 0.5 \:3068\:3059\:308b) \:3092\:5fc5\:305a\:4ed8\:3051\:308b\:3002\n" <>
+  "4. \:5b9f\:9a13\:30fb\:5b9a\:7406\:30fb\:5148\:884c\:7814\:7a76\:306e\:5e74\:4ee3\:9806\:306f Precedes\:3001\:5f0f\:3084\:91cf\:306e\:5c0e\:51fa\:9806\:306f Derives\:3001\:554f\:3044\[RightArrow]\:624b\:6cd5\:306f Motivates\:3001\:7d50\:679c\[RightArrow]\:7d50\:8ad6\:306f LeadsTo\:3001\:56f3\:3084\:30c7\:30fc\:30bf\[RightArrow]\:4e3b\:5f35\:306f Supports \:3067\:8868\:3059\:3002\:96e3\:3057\:3044\:6982\:5ff5\:306e\:524d\:306b\:6613\:3057\:3044\:6982\:5ff5\:304c\:6765\:308b\:3088\:3046 Prerequisite \:3092\:5f35\:308b (\:4f8b: Lagrangian \:306e\:5f8c\:306b F=ma \:306e\:8aac\:660e\:304c\:6765\:3066\:306f\:3044\:3051\:306a\:3044)\:3002\n" <>
+  "5. Importance \:306f\:300c\:305d\:306e\:8ad6\:6587\:306e\:4e3b\:5f35\:3092\:4f1d\:3048\:308b\:306e\:306b\:6b20\:304b\:305b\:306a\:3044\:5ea6\:5408\:3044\:300d\:3002Difficulty \:306f\:8074\:304d\:624b\:306e\:524d\:63d0\:77e5\:8b58\:306a\:3057\:3067\:7406\:89e3\:3059\:308b\:306e\:306b\:8981\:3059\:308b\:6c34\:6e96 (0=\:5e38\:8b58, 0.3=\:9ad8\:6821, 0.5=\:5b66\:90e8, 0.7=\:5927\:5b66\:9662, 0.9=\:5c02\:9580\:5bb6)\:3002\n" <>
+  "6. \:56f3\:30fb\:5f0f\:30fb\:5199\:771f\:306f\:672c\:6587\:306e [FIGn] / [EQn] \:3092 Assets \:3067\:53c2\:7167\:3057\:3001Cite \:306b\:51fa\:5178\:3092\:66f8\:304f\:3002\:5f0f\:306f\:6587\:5b57\:5217\:3067\:66f8\:304d\:76f4\:3055\:306a\:3044 (Formula \:8cc7\:7523\:3067\:539f\:5f0f\:3092\:5f15\:7528\:3059\:308b)\:3002\n" <>
+  "7. Points \:306f\:4f53\:8a00\:6b62\:3081\:3067\:77ed\:304f\:3001Summary \:306f \:3067\:3059\:30fb\:307e\:3059\:8abf 1-2 \:6587\:3002\:3059\:3079\:3066 " <> OptionValue["Language"] <> " \:3067\:66f8\:304f\:3002\n" <>
+  "8. \:51fa\:529b\:306f JSON \:30aa\:30d6\:30b8\:30a7\:30af\:30c8\:306e\:307f (\:524d\:7f6e\:304d\:30fb\:8aac\:660e\:30fb\:30b3\:30fc\:30c9\:30d5\:30a7\:30f3\:30b9\:4ee5\:5916\:306e\:6587\:7ae0\:3092\:4ed8\:3051\:306a\:3044)\:3002\n\n" <>
+  "=== \:672c\:6587 ===\n" <> sourceText <> "\n=== \:672c\:6587\:3053\:3053\:307e\:3067 ===";
 
 Options[SourceVaultKGBackgroundPrompt] = {"MaxNodes" -> 12};
 SourceVaultKGBackgroundPrompt[kg_Association, audSpec_, OptionsPattern[]] := Module[
@@ -1630,36 +2173,47 @@ SourceVaultKGBackgroundPrompt[kg_Association, audSpec_, OptionsPattern[]] := Mod
   listing = StringRiffle[Map[Function[n,
     "- " <> n["Id"] <> " [" <> n["Kind"] <> ", D=" <> ToString[n["Difficulty"]] <> ", " <> StringRiffle[n["Domains"], "/"] <> "] " <>
       SourceVaultKGText[n, "Label", lang]], Lookup[kg, "Nodes", {}]], "\n"];
-  "以下は論文「" <> Lookup[kg, "Title", ""] <> "」の知識グラフのノード一覧です。聴き手は次の通り:\n" <>
-  "  主題の理解度: " <> ToString[aud["Level"]] <> "  前提にできる領域と理解度: " <>
+  "\:4ee5\:4e0b\:306f\:8ad6\:6587\:300c" <> Lookup[kg, "Title", ""] <> "\:300d\:306e\:77e5\:8b58\:30b0\:30e9\:30d5\:306e\:30ce\:30fc\:30c9\:4e00\:89a7\:3067\:3059\:3002\:8074\:304d\:624b\:306f\:6b21\:306e\:901a\:308a:\n" <>
+  "  \:4e3b\:984c\:306e\:7406\:89e3\:5ea6: " <> ToString[aud["Level"]] <> "  \:524d\:63d0\:306b\:3067\:304d\:308b\:9818\:57df\:3068\:7406\:89e3\:5ea6: " <>
     StringRiffle[KeyValueMap[#1 <> "=" <> ToString[#2] &, aud["Knowledge"]], ", "] <>
-  If[aud["Description"] =!= "", "  補足: " <> aud["Description"], ""] <> "\n\n" <>
+  If[aud["Description"] =!= "", "  \:88dc\:8db3: " <> aud["Description"], ""] <> "\n\n" <>
   listing <> "\n\n" <>
-  "この聴き手がノードを理解するのに足りない前提知識 (定義・基礎概念・古典的な結果・用語) を、最大 " <> ToString[OptionValue["MaxNodes"]] <>
-  " 個の Layer=Background ノードとして追加し、各ノードから、それを前提とする既存ノードへ Prerequisite 辺 (From=新ノード, To=既存ノード) を張ってください。" <>
-  "聴き手が既に知っている領域 (理解度が Difficulty 以上) のものは追加しないでください。各ノードには Label / Summary (1-2 文) / Points (2-4 行) / Difficulty / Domains / Year (古典的結果なら) を付けます。\n" <>
-  "出力は差分 JSON {\"Nodes\": [...], \"Edges\": [...]} のみ。すべて " <> lang <> " で書く。"];
+  "\:3053\:306e\:8074\:304d\:624b\:304c\:30ce\:30fc\:30c9\:3092\:7406\:89e3\:3059\:308b\:306e\:306b\:8db3\:308a\:306a\:3044\:524d\:63d0\:77e5\:8b58 (\:5b9a\:7fa9\:30fb\:57fa\:790e\:6982\:5ff5\:30fb\:53e4\:5178\:7684\:306a\:7d50\:679c\:30fb\:7528\:8a9e) \:3092\:3001\:6700\:5927 " <> ToString[OptionValue["MaxNodes"]] <>
+  " \:500b\:306e Layer=Background \:30ce\:30fc\:30c9\:3068\:3057\:3066\:8ffd\:52a0\:3057\:3001\:5404\:30ce\:30fc\:30c9\:304b\:3089\:3001\:305d\:308c\:3092\:524d\:63d0\:3068\:3059\:308b\:65e2\:5b58\:30ce\:30fc\:30c9\:3078 Prerequisite \:8fba (From=\:65b0\:30ce\:30fc\:30c9, To=\:65e2\:5b58\:30ce\:30fc\:30c9) \:3092\:5f35\:3063\:3066\:304f\:3060\:3055\:3044\:3002" <>
+  "\:8074\:304d\:624b\:304c\:65e2\:306b\:77e5\:3063\:3066\:3044\:308b\:9818\:57df (\:7406\:89e3\:5ea6\:304c Difficulty \:4ee5\:4e0a) \:306e\:3082\:306e\:306f\:8ffd\:52a0\:3057\:306a\:3044\:3067\:304f\:3060\:3055\:3044\:3002\:5404\:30ce\:30fc\:30c9\:306b\:306f Label / Summary (1-2 \:6587) / Points (2-4 \:884c) / Difficulty / Domains / Year (\:53e4\:5178\:7684\:7d50\:679c\:306a\:3089) \:3092\:4ed8\:3051\:307e\:3059\:3002\n" <>
+  "\:51fa\:529b\:306f\:5dee\:5206 JSON {\"Nodes\": [...], \"Edges\": [...]} \:306e\:307f\:3002\:3059\:3079\:3066 " <> lang <> " \:3067\:66f8\:304f\:3002"];
 
 Options[SourceVaultKGSummaryPrompt] = {"Language" -> Automatic};
 SourceVaultKGSummaryPrompt[kg_Association, tree_Association, OptionsPattern[]] := Module[
   {lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]], index = iKGNodeIndex[kg], lines},
   lines = Map[Function[id, StringRepeat["  ", tree["Depth"][id]] <> "- " <> id <> ": " <>
     SourceVaultKGText[index[id], "Label", lang]], tree["Order"]];
-  "以下は発表の順序木 (字下げが階層、上から順に話す) です。\n" <> StringRiffle[lines, "\n"] <> "\n\n" <>
-  "各内部ノード (子を持つノード) について、その部分木全体を 1-2 文で要約した Summary を書いてください。" <>
-  "また、この順序で説明したとき破綻する箇所 (前提が後に出る / 飛躍 / 重複 / 抜け) があれば Issues に列挙してください。\n" <>
-  "出力は JSON {\"Nodes\": [{\"Id\": \"...\", \"Summary\": \"...\"}], \"Issues\": [{\"NodeId\": \"...\", \"Issue\": \"...\", \"Fix\": \"...\"}]} のみ。言語は " <> lang <> "。"];
+  "\:4ee5\:4e0b\:306f\:767a\:8868\:306e\:9806\:5e8f\:6728 (\:5b57\:4e0b\:3052\:304c\:968e\:5c64\:3001\:4e0a\:304b\:3089\:9806\:306b\:8a71\:3059) \:3067\:3059\:3002\n" <> StringRiffle[lines, "\n"] <> "\n\n" <>
+  "\:5404\:5185\:90e8\:30ce\:30fc\:30c9 (\:5b50\:3092\:6301\:3064\:30ce\:30fc\:30c9) \:306b\:3064\:3044\:3066\:3001\:305d\:306e\:90e8\:5206\:6728\:5168\:4f53\:3092 1-2 \:6587\:3067\:8981\:7d04\:3057\:305f Summary \:3092\:66f8\:3044\:3066\:304f\:3060\:3055\:3044\:3002" <>
+  "\:307e\:305f\:3001\:3053\:306e\:9806\:5e8f\:3067\:8aac\:660e\:3057\:305f\:3068\:304d\:7834\:7dbb\:3059\:308b\:7b87\:6240 (\:524d\:63d0\:304c\:5f8c\:306b\:51fa\:308b / \:98db\:8e8d / \:91cd\:8907 / \:629c\:3051) \:304c\:3042\:308c\:3070 Issues \:306b\:5217\:6319\:3057\:3066\:304f\:3060\:3055\:3044\:3002\n" <>
+  "\:51fa\:529b\:306f JSON {\"Nodes\": [{\"Id\": \"...\", \"Summary\": \"...\"}], \"Issues\": [{\"NodeId\": \"...\", \"Issue\": \"...\", \"Fix\": \"...\"}]} \:306e\:307f\:3002\:8a00\:8a9e\:306f " <> lang <> "\:3002"];
 
-Options[SourceVaultKGTalkPrompt] = {"Style" -> "です・ます調、1 枚 2-6 文、冒頭に前のスライドからの接続を一言"};
-SourceVaultKGTalkPrompt[outline_Association, OptionsPattern[]] := Module[{lines},
+Options[SourceVaultKGTalkPrompt] = {"Style" -> "\:3067\:3059\:30fb\:307e\:3059\:8abf\:30011 \:679a 2-6 \:6587"};
+(* v1.48: \:7b87\:6761\:66f8\:304d\:306e\:8aad\:307f\:4e0a\:3052\:306b\:3057\:306a\:3044\:3002\:5404\:679a\:306e\:5f79\:5272 (role) \:3068\:524d\:5f8c\:306e\:3064\:306a\:304c\:308a (transition) \:3092\:6e21\:3057\:3001\:610f\:5473\:30fb\:7406\:7531\:3092\:88dc\:3063\:3066\:8a71\:3055\:305b\:308b *)
+SourceVaultKGTalkPrompt[outline_Association, OptionsPattern[]] := Module[{lines, trName},
+  trName[t_] := Switch[t,
+    "Continue", "\:7d9a\:304d (\:524d\:306e\:679a\:3068\:540c\:3058\:89aa\:3002\:8a71\:984c\:8ee2\:63db\:306e\:8a9e\:306f\:4f7f\:308f\:306a\:3044)",
+    "Shift", "\:8a71\:984c\:8ee2\:63db (\:65b0\:3057\:3044\:898b\:51fa\:3057\:306b\:5165\:308b)",
+    "Return", "\:8a71\:984c\:8ee2\:63db (\:4e00\:3064\:4e0a\:306e\:6bb5\:306e\:6b21\:306e\:8a71\:3078)",
+    "Part", "\:90e8\:306e\:5165\:53e3",
+    _, "-"];
   lines = MapIndexed[Function[{s, i},
-    ToString[First[i]] <> ". " <> s["Title"] <> "\n   points: " <> StringRiffle[s["Points"], " / "] <>
+    ToString[First[i]] <> ". " <> s["Title"] <> "\n   transition: " <> trName[Lookup[s, "Transition", None]] <>
+      With[{r = Lookup[s, "Role", ""]}, If[StringQ[r] && r =!= "", "\n   role: " <> r, ""]] <>
+      "\n   points: " <> StringRiffle[s["Points"], " / "] <>
       If[s["Sub"] =!= {}, "\n   sub: " <> StringRiffle[Lookup[s["Sub"], "Label"], " / "], ""] <>
       "\n   talk(draft): " <> s["Talk"]], Lookup[outline, "Slides", {}]];
-  "以下はスライドの構成 (順序・タイトル・箇条書きは確定。変更しない) と talk の下書きです。\n" <> StringRiffle[lines, "\n"] <> "\n\n" <>
-  "各枚の talk を発表原稿として磨いてください (" <> OptionValue["Style"] <> ")。スライドに無い事実・数値を作らない。" <>
-  "原稿は箇条書きと同じ順序で 1 項目につき 1〜2 文ずつ対応させ、箇条書きに無い話題から始めない (冒頭の概要説明が箇条書きと食い違うと聴き手が迷う)。部の入口の橋渡しの一文は残す。" <>
-  "出力は JSON {\"Talks\": [{\"Slide\": 1, \"Talk\": \"...\"}]} のみ。言語は " <> Lookup[outline, "Language", "ja"] <> "。"];
+  "\:4ee5\:4e0b\:306f\:30b9\:30e9\:30a4\:30c9\:306e\:69cb\:6210 (\:9806\:5e8f\:30fb\:30bf\:30a4\:30c8\:30eb\:30fb\:7b87\:6761\:66f8\:304d\:306f\:78ba\:5b9a\:3002\:5909\:66f4\:3057\:306a\:3044) \:3068 talk \:306e\:4e0b\:66f8\:304d\:3067\:3059\:3002\n" <> StringRiffle[lines, "\n"] <> "\n\n" <>
+  "\:5404\:679a\:306e talk \:3092\:767a\:8868\:539f\:7a3f\:3068\:3057\:3066\:78e8\:3044\:3066\:304f\:3060\:3055\:3044 (" <> OptionValue["Style"] <> ")\:3002\:30b9\:30e9\:30a4\:30c9\:306b\:7121\:3044\:4e8b\:5b9f\:30fb\:6570\:5024\:3092\:4f5c\:3089\:306a\:3044\:3002" <>
+  "\:7b87\:6761\:66f8\:304d\:306f\:753b\:9762\:3067\:898b\:3048\:308b\:306e\:3067\:8aad\:307f\:4e0a\:3052\:306a\:3044\:3002\:305d\:306e\:679a\:306e\:5f79\:5272 (role: \:306a\:305c\:3053\:306e\:679a\:304c\:3053\:3053\:306b\:3042\:308a\:3001\:8a71\:5168\:4f53\:306e\:4e2d\:3067\:4f55\:3092\:6e96\:5099\:3057\:4f55\:3092\:793a\:3059\:304b) \:304c\:8074\:304d\:624b\:306b\:4f1d\:308f\:308b\:3088\:3046\:3001" <>
+  "\:610f\:5473\:30fb\:7406\:7531\:30fb\:524d\:5f8c\:3068\:306e\:3064\:306a\:304c\:308a\:3092\:88dc\:3063\:3066\:8a71\:3059\:3002transition \:304c\:300c\:7d9a\:304d\:300d\:306e\:679a\:306f\:524d\:306e\:679a\:306e\:7d9a\:304d\:3068\:3057\:3066\:8a71\:3057\:3001\:300c\:3053\:3053\:3067\:306f\:300d\:300c\:3055\:3066\:300d\:306a\:3069\:306e\:8a71\:984c\:8ee2\:63db\:306e\:8a9e\:3067\:59cb\:3081\:306a\:3044\:3002" <>
+  "\:300c\:8a71\:984c\:8ee2\:63db\:300d\:306e\:679a\:3060\:3051\:3001\:4f55\:306b\:79fb\:308b\:304b\:3068\:306a\:305c\:4eca\:305d\:308c\:3092\:6271\:3046\:304b\:3092\:4e00\:8a00\:3067\:544a\:3052\:308b\:3002\:90e8\:306e\:5165\:53e3\:306e\:6a4b\:6e21\:3057\:306e\:4e00\:6587\:3068\:3001\:4e0b\:66f8\:304d\:306e\:7528\:8a9e\:306e\:4e00\:884c\:8aac\:660e (\:300c\:306a\:304a\:3001\:301c\:306f\:3001\:2026\:300d) \:306f\:6b8b\:3059\:3002" <>
+  "\:51fa\:529b\:306f JSON {\"Talks\": [{\"Slide\": 1, \"Talk\": \"...\"}]} \:306e\:307f\:3002\:8a00\:8a9e\:306f " <> Lookup[outline, "Language", "ja"] <> "\:3002"];
 
 Options[SourceVaultKGTranslatePrompt] = {};
 SourceVaultKGTranslatePrompt[kg_Association, lang_String, OptionsPattern[]] := Module[
@@ -1667,12 +2221,12 @@ SourceVaultKGTranslatePrompt[kg_Association, lang_String, OptionsPattern[]] := M
   items = Map[Function[n, <|"Id" -> n["Id"], "Label" -> SourceVaultKGText[n, "Label", primary],
     "Summary" -> SourceVaultKGText[n, "Summary", primary], "Points" -> SourceVaultKGText[n, "Points", primary],
     "Talk" -> SourceVaultKGText[n, "Talk", primary]|>], Lookup[kg, "Nodes", {}]];
-  "以下の知識グラフのノードのテキスト (Label / Summary / Points / Talk) を " <> lang <> " に翻訳してください。" <>
-  "Id はそのまま、構造も変えず、専門用語は分野の標準訳を使います。空の項目は空のまま。\n" <>
-  "出力は JSON {\"Nodes\": [{\"Id\": \"...\", \"Label\": \"...\", \"Summary\": \"...\", \"Points\": [...], \"Talk\": \"...\"}]} のみ。\n\n" <>
+  "\:4ee5\:4e0b\:306e\:77e5\:8b58\:30b0\:30e9\:30d5\:306e\:30ce\:30fc\:30c9\:306e\:30c6\:30ad\:30b9\:30c8 (Label / Summary / Points / Talk) \:3092 " <> lang <> " \:306b\:7ffb\:8a33\:3057\:3066\:304f\:3060\:3055\:3044\:3002" <>
+  "Id \:306f\:305d\:306e\:307e\:307e\:3001\:69cb\:9020\:3082\:5909\:3048\:305a\:3001\:5c02\:9580\:7528\:8a9e\:306f\:5206\:91ce\:306e\:6a19\:6e96\:8a33\:3092\:4f7f\:3044\:307e\:3059\:3002\:7a7a\:306e\:9805\:76ee\:306f\:7a7a\:306e\:307e\:307e\:3002\n" <>
+  "\:51fa\:529b\:306f JSON {\"Nodes\": [{\"Id\": \"...\", \"Label\": \"...\", \"Summary\": \"...\", \"Points\": [...], \"Talk\": \"...\"}]} \:306e\:307f\:3002\n\n" <>
   iKGJSONString[<|"Nodes" -> items|>]];
 
-(* ---------------- Graph 投影と View ---------------- *)
+(* ---------------- Graph \:6295\:5f71\:3068 View ---------------- *)
 
 $kgKindColors = <|"Claim" -> RGBColor[0.88, 0.49, 0.08], "Conclusion" -> RGBColor[0.88, 0.49, 0.08],
   "Survey" -> RGBColor[0.88, 0.49, 0.08], "Section" -> RGBColor[0.55, 0.55, 0.55],
@@ -1725,13 +2279,13 @@ SourceVaultKGPlanView[kg_Association, plan_Association] := Module[{index = iKGNo
       "Seconds" -> s["Seconds"], "Assets" -> Length[index[s["NodeId"]]["Assets"]],
       "Flags" -> StringRiffle[s["Flags"], ","]|>], plan["Slides"]]]]];
 
-(* ---------------- 可視化 (v1.30) ----------------
-   話の流れ (Story): 節を話の順に横へ、節の中身を縦に並べ、周辺知識は下の帯。
-   節 (Sections): 節を横一列に並べ、節をまたぐ辺を弧で描く (太さ = 本数)。
-   周辺 (Focus): 選んだノードの近傍をばねモデルで。全体 (Graph): 全ノードをばねモデルで。
-   色 = 種類、大きさ = 重要度、形 = 層 (本文 丸・周辺知識 四角・関連研究 菱形)、枠 = 状態 (赤 = 未推敲、黒の太枠 = 選択中、
-   点線 = 計画で他の枚に詰め込み)、右上の点 = 図・表あり、左上の点 = 質疑応答あり、薄い = 隠す・枝刈り。
-   計画を重ねると枚番号 (#n) が付く *)
+(* ---------------- \:53ef\:8996\:5316 (v1.30) ----------------
+   \:8a71\:306e\:6d41\:308c (Story): \:7bc0\:3092\:8a71\:306e\:9806\:306b\:6a2a\:3078\:3001\:7bc0\:306e\:4e2d\:8eab\:3092\:7e26\:306b\:4e26\:3079\:3001\:5468\:8fba\:77e5\:8b58\:306f\:4e0b\:306e\:5e2f\:3002
+   \:7bc0 (Sections): \:7bc0\:3092\:6a2a\:4e00\:5217\:306b\:4e26\:3079\:3001\:7bc0\:3092\:307e\:305f\:3050\:8fba\:3092\:5f27\:3067\:63cf\:304f (\:592a\:3055 = \:672c\:6570)\:3002
+   \:5468\:8fba (Focus): \:9078\:3093\:3060\:30ce\:30fc\:30c9\:306e\:8fd1\:508d\:3092\:3070\:306d\:30e2\:30c7\:30eb\:3067\:3002\:5168\:4f53 (Graph): \:5168\:30ce\:30fc\:30c9\:3092\:3070\:306d\:30e2\:30c7\:30eb\:3067\:3002
+   \:8272 = \:7a2e\:985e\:3001\:5927\:304d\:3055 = \:91cd\:8981\:5ea6\:3001\:5f62 = \:5c64 (\:672c\:6587 \:4e38\:30fb\:5468\:8fba\:77e5\:8b58 \:56db\:89d2\:30fb\:95a2\:9023\:7814\:7a76 \:83f1\:5f62)\:3001\:67a0 = \:72b6\:614b (\:8d64 = \:672a\:63a8\:6572\:3001\:9ed2\:306e\:592a\:67a0 = \:9078\:629e\:4e2d\:3001
+   \:70b9\:7dda = \:8a08\:753b\:3067\:4ed6\:306e\:679a\:306b\:8a70\:3081\:8fbc\:307f)\:3001\:53f3\:4e0a\:306e\:70b9 = \:56f3\:30fb\:8868\:3042\:308a\:3001\:5de6\:4e0a\:306e\:70b9 = \:8cea\:7591\:5fdc\:7b54\:3042\:308a\:3001\:8584\:3044 = \:96a0\:3059\:30fb\:679d\:5208\:308a\:3002
+   \:8a08\:753b\:3092\:91cd\:306d\:308b\:3068\:679a\:756a\:53f7 (#n) \:304c\:4ed8\:304f *)
 
 $kgVizEdgeGroups = <|
   "Order" -> {"Precedes", "LeadsTo", "Derives", "Motivates"},
@@ -1751,7 +2305,7 @@ iKGVizEdgeStyle[g_String] := Directive @@ Join[
   If[Lookup[$kgVizEdgeDash, g, {}] === {}, {}, {AbsoluteDashing[$kgVizEdgeDash[g]]}],
   If[MemberQ[{"Prerequisite", "Related"}, g], {Opacity[0.55]}, {}]];
 
-(* EdgeKinds: 群の名前 (Order / Prerequisite / Support / Related / Contains) か辺の種類の名前のリスト *)
+(* EdgeKinds: \:7fa4\:306e\:540d\:524d (Order / Prerequisite / Support / Related / Contains) \:304b\:8fba\:306e\:7a2e\:985e\:306e\:540d\:524d\:306e\:30ea\:30b9\:30c8 *)
 iKGVizGroups[spec_, default_List] := Which[
   spec === Automatic, default,
   spec === All, Keys[$kgVizEdgeGroups],
@@ -1769,7 +2323,7 @@ $kgVizKindColors = <|
   "Assumed" -> GrayLevel[0.78]|>;
 
 iKGVizT[lang_, ja_String, en_String] := If[lang === "ja", ja, en];
-iKGVizShort[s_String, k_Integer] := If[StringLength[s] > k, StringTake[s, k - 1] <> "…", s];
+iKGVizShort[s_String, k_Integer] := If[StringLength[s] > k, StringTake[s, k - 1] <> "\[Ellipsis]", s];
 iKGVizShort[_, _] := "";
 
 iKGVizSectionIds[kg_Association] := With[{root = Lookup[kg, "Root", "root"]},
@@ -1786,9 +2340,12 @@ iKGVizPlanInfo[plan_] := If[! AssociationQ[plan], <||>,
     <|"Head" -> head, "Packed" -> packed,
       "Pruned" -> Replace[Lookup[plan, "Pruned", {}], Except[_List] -> {}],
       "Assumed" -> Replace[Lookup[plan, "Assumed", {}], Except[_List] -> {}],
-      "Hidden" -> Replace[Lookup[plan, "Hidden", {}], Except[_List] -> {}]|>]];
+      "Hidden" -> Replace[Lookup[plan, "Hidden", {}], Except[_List] -> {}],
+      "Summary" -> Lookup[Select[slides, MemberQ[Replace[Lookup[#, "Flags", {}], Except[_List] -> {}], "Summary"] &], "NodeId", {}],
+      "Partial" -> Lookup[Select[slides, MemberQ[Replace[Lookup[#, "Flags", {}], Except[_List] -> {}], "Partial"] &], "NodeId", {}],
+      "Headings" -> Replace[Lookup[plan, "Headings", {}], Except[_List] -> {}]|>]];
 
-(* ノードごとの表示情報 *)
+(* \:30ce\:30fc\:30c9\:3054\:3068\:306e\:8868\:793a\:60c5\:5831 *)
 iKGVizInfo[kg_Association, lang_String, planInfo_Association, selected_] := Module[
   {root = Lookup[kg, "Root", "root"], secs = iKGVizSectionIds[kg]},
   Association[Map[Function[n, Module[{id = n["Id"], layer = Lookup[n, "Layer", "Paper"], kind = Lookup[n, "Kind", "Concept"],
@@ -1815,34 +2372,35 @@ iKGVizInfo[kg_Association, lang_String, planInfo_Association, selected_] := Modu
       "PackedInto" -> Lookup[Lookup[planInfo, "Packed", <||>], id, None],
       "Pruned" -> pruned, "Assumed" -> assumed,
       "Faded" -> TrueQ[Lookup[n, "Hidden", False]] || pruned,
-      "Selected" -> id === selected,
+      "Selected" -> id === selected, "SummarySlide" -> MemberQ[Lookup[planInfo, "Summary", {}], id],
+      "PartialSlide" -> MemberQ[Lookup[planInfo, "Partial", {}], id], "Heading" -> MemberQ[Lookup[planInfo, "Headings", {}], id],
       "Order" -> Replace[Lookup[n, "Order", None], Except[_?NumericQ] -> 10.^6]|>]],
     kg["Nodes"]]]];
 
 iKGVizTip[n_Association, i_Association, lang_String] := Module[
   {pts = SourceVaultKGText[n, "Points", lang], lead = SourceVaultKGText[n, "Lead", lang],
    cite = SourceVaultKGText[n, "Cite", lang], text = Replace[Lookup[n, "Text", ""], Except[_String] -> ""], flags = {}},
-  If[TrueQ[i["Unrefined"]], AppendTo[flags, iKGVizT[lang, "未推敲 (要点なし)", "not refined"]]];
-  If[TrueQ[i["Hidden"]], AppendTo[flags, iKGVizT[lang, "隠す (スライドにしない)", "hidden"]]];
-  If[IntegerQ[i["Slide"]], AppendTo[flags, iKGVizT[lang, "計画の " <> ToString[i["Slide"]] <> " 枚目", "slide " <> ToString[i["Slide"]]]]];
+  If[TrueQ[i["Unrefined"]], AppendTo[flags, iKGVizT[lang, "\:672a\:63a8\:6572 (\:8981\:70b9\:306a\:3057)", "not refined"]]];
+  If[TrueQ[i["Hidden"]], AppendTo[flags, iKGVizT[lang, "\:96a0\:3059 (\:30b9\:30e9\:30a4\:30c9\:306b\:3057\:306a\:3044)", "hidden"]]];
+  If[IntegerQ[i["Slide"]], AppendTo[flags, iKGVizT[lang, "\:8a08\:753b\:306e " <> ToString[i["Slide"]] <> " \:679a\:76ee", "slide " <> ToString[i["Slide"]]]]];
   If[IntegerQ[i["PackedInto"]] && ! IntegerQ[i["Slide"]],
-    AppendTo[flags, iKGVizT[lang, ToString[i["PackedInto"]] <> " 枚目に詰め込み", "packed into slide " <> ToString[i["PackedInto"]]]]];
-  If[TrueQ[i["Pruned"]], AppendTo[flags, iKGVizT[lang, "枝刈り (時間に入らない)", "pruned"]]];
-  If[TrueQ[i["Assumed"]], AppendTo[flags, iKGVizT[lang, "聴き手は知っている (省く)", "assumed known"]]];
-  If[i["AssetTypes"] =!= {}, AppendTo[flags, iKGVizT[lang, "図: ", "assets: "] <> StringRiffle[i["AssetTypes"], ", "]]];
-  If[TrueQ[i["QA"]], AppendTo[flags, iKGVizT[lang, "質疑応答あり", "has Q&A"]]];
+    AppendTo[flags, iKGVizT[lang, ToString[i["PackedInto"]] <> " \:679a\:76ee\:306b\:8a70\:3081\:8fbc\:307f", "packed into slide " <> ToString[i["PackedInto"]]]]];
+  If[TrueQ[i["Pruned"]], AppendTo[flags, iKGVizT[lang, "\:679d\:5208\:308a (\:6642\:9593\:306b\:5165\:3089\:306a\:3044)", "pruned"]]];
+  If[TrueQ[i["Assumed"]], AppendTo[flags, iKGVizT[lang, "\:8074\:304d\:624b\:306f\:77e5\:3063\:3066\:3044\:308b (\:7701\:304f)", "assumed known"]]];
+  If[i["AssetTypes"] =!= {}, AppendTo[flags, iKGVizT[lang, "\:56f3: ", "assets: "] <> StringRiffle[i["AssetTypes"], ", "]]];
+  If[TrueQ[i["QA"]], AppendTo[flags, iKGVizT[lang, "\:8cea\:7591\:5fdc\:7b54\:3042\:308a", "has Q&A"]]];
   Framed[Pane[Column[Join[
       {Style[i["Label"], Bold, 12],
-       Style[i["Id"] <> " · " <> i["Kind"] <> " · " <> i["Layer"] <> " · " <> iKGVizT[lang, "重要度 ", "importance "] <>
+       Style[i["Id"] <> " \[CenterDot] " <> i["Kind"] <> " \[CenterDot] " <> i["Layer"] <> " \[CenterDot] " <> iKGVizT[lang, "\:91cd\:8981\:5ea6 ", "importance "] <>
          ToString[Round[i["Importance"], 0.01]], 9, GrayLevel[0.4]]},
       If[lead =!= "", {Style[lead, 10]}, {}],
-      If[MatchQ[pts, {__String}], {Column[Style["• " <> #, 10] & /@ Take[pts, UpTo[6]], Spacings -> 0.1]}, {}],
+      If[MatchQ[pts, {__String}], {Column[Style["\[Bullet] " <> #, 10] & /@ Take[pts, UpTo[6]], Spacings -> 0.1]}, {}],
       If[flags =!= {}, {Style[StringRiffle[flags, " / "], 9, RGBColor[0.55, 0.3, 0.1]]}, {}],
-      If[cite =!= "", {Style[iKGVizT[lang, "出典: ", "source: "] <> iKGVizShort[cite, 160], 9, GrayLevel[0.35]]}, {}],
+      If[cite =!= "", {Style[iKGVizT[lang, "\:51fa\:5178: ", "source: "] <> iKGVizShort[cite, 160], 9, GrayLevel[0.35]]}, {}],
       If[StringTrim[text] =!= "" && ! MatchQ[pts, {__String}], {Style[iKGVizShort[StringReplace[text, "\n" -> " "], 240], 9, GrayLevel[0.3]]}, {}]],
     Spacings -> 0.35], 380], Background -> White, FrameStyle -> GrayLevel[0.8], FrameMargins -> 6]];
 
-(* ノードの図形 (位置 p、半径 r) *)
+(* \:30ce\:30fc\:30c9\:306e\:56f3\:5f62 (\:4f4d\:7f6e p\:3001\:534a\:5f84 r) *)
 iKGVizPrim[p : {x_, y_}, r_, i_Association] := Module[{col, shape, outline, marks = {}},
   col = Lookup[$kgVizKindColors, i["ColorKey"], GrayLevel[0.5]];
   shape = Switch[i["Shape"],
@@ -1867,7 +2425,7 @@ iKGVizLabelQ[i_Association, mode_] := Which[
   mode === None, TrueQ[i["Section"]],
   True, TrueQ[i["Section"]] || i["Importance"] >= 0.75 || IntegerQ[i["Slide"]] || TrueQ[i["Selected"]]];
 
-(* クリックとツールチップを付けたノード *)
+(* \:30af\:30ea\:30c3\:30af\:3068\:30c4\:30fc\:30eb\:30c1\:30c3\:30d7\:3092\:4ed8\:3051\:305f\:30ce\:30fc\:30c9 *)
 iKGVizNode[p_, r_, i_Association, n_Association, lang_, onClick_] := With[{prim = Tooltip[iKGVizPrim[p, r, i], iKGVizTip[n, i, lang]]},
   If[onClick === None, prim,
     With[{f = onClick, id = i["Id"]}, EventHandler[prim, {"MouseClicked" :> f[id]}]]]];
@@ -1882,13 +2440,13 @@ iKGVizEdgePrims[edges_List, coords_Association, info_Association, groups_List, r
         curve = BezierCurve[{p1, c, p2}];
         AppendTo[out, Tooltip[
           {iKGVizEdgeStyle[g], Arrowheads[{{arrow, 1}}], If[MemberQ[$kgVizDirectedGroups, g], Arrow[curve, {radius[a], radius[b]}], curve]},
-          e["EdgeKind"] <> ": " <> iKGVizShort[info[a]["Label"], 30] <> " → " <> iKGVizShort[info[b]["Label"], 30]]]]],
+          e["EdgeKind"] <> ": " <> iKGVizShort[info[a]["Label"], 30] <> " \[RightArrow] " <> iKGVizShort[info[b]["Label"], 30]]]]],
     {e, edges}];
   out];
 
 iKGVizRadius[i_Association] := If[TrueQ[i["Section"]], 0.2, 0.09 + 0.14 * Clip[i["Importance"], {0, 1}]];
 
-(* ---- 話の流れ ---- *)
+(* ---- \:8a71\:306e\:6d41\:308c ---- *)
 iKGVizStory[kg_, info_, index_, lang_, groups_, labels_, onClick_, keepQ_] := Module[
   {root = Lookup[kg, "Root", "root"], secs, parent, secOf, cols, colW = 2.6, rowH = 0.62, coords = <||>, maxRows = 0,
    bg, bandY, buckets = <||>, nodes, prims, edges, radius, xmax, ymin, colIndex, width},
@@ -1897,7 +2455,7 @@ iKGVizStory[kg_, info_, index_, lang_, groups_, labels_, onClick_, keepQ_] := Mo
   secOf[id_] := Module[{c = id, k = 0}, While[k < 30, c = Lookup[parent, c, None]; k++;
     Which[c === None, Return[None, Module], MemberQ[secs, c], Return[c, Module], c === root, Return[root, Module]]]; None];
   colIndex = Association[Join[{root -> 0}, MapIndexed[#1 -> First[#2] &, secs]]];
-  (* 列: 0 = 根の直下、1.. = 節の順 *)
+  (* \:5217: 0 = \:6839\:306e\:76f4\:4e0b\:30011.. = \:7bc0\:306e\:9806 *)
   cols = GroupBy[Select[Values[info], ! TrueQ[#["Section"]] && keepQ[#] &], With[{s = secOf[#["Id"]]}, If[s === None, None, s]] &];
   Do[coords[id] = {colW * colIndex[id], 0.}, {id, Keys[colIndex]}];
   KeyValueMap[Function[{s, members},
@@ -1906,7 +2464,7 @@ iKGVizStory[kg_, info_, index_, lang_, groups_, labels_, onClick_, keepQ_] := Mo
           maxRows = Max[maxRows, Length[sorted]];
           Do[coords[sorted[[j, "Id"]]] = {colW * colIndex[s], -rowH * j}, {j, Length[sorted]}]]]],
     cols];
-  (* 周辺知識 (どの節にも入らないノード): 下の帯。つながるノードの列の平均の位置に *)
+  (* \:5468\:8fba\:77e5\:8b58 (\:3069\:306e\:7bc0\:306b\:3082\:5165\:3089\:306a\:3044\:30ce\:30fc\:30c9): \:4e0b\:306e\:5e2f\:3002\:3064\:306a\:304c\:308b\:30ce\:30fc\:30c9\:306e\:5217\:306e\:5e73\:5747\:306e\:4f4d\:7f6e\:306b *)
   bg = Lookup[cols, Key[None], {}];
   bandY = -rowH * (maxRows + 1.6);
   Do[Module[{nbrs, xs, k},
@@ -1925,19 +2483,19 @@ iKGVizStory[kg_, info_, index_, lang_, groups_, labels_, onClick_, keepQ_] := Mo
         iKGVizNode[p, radius[id], i, index[id], lang, onClick],
         If[iKGVizLabelQ[i, labels],
           If[TrueQ[i["Section"]],
-            Text[Style[iKGVizShort[If[TrueQ[i["Root"]], iKGVizT[lang, "(全体) ", "(top) "], ""] <> i["Label"], 12], 8, Bold, GrayLevel[0.2]],
+            Text[Style[iKGVizShort[If[TrueQ[i["Root"]], iKGVizT[lang, "(\:5168\:4f53) ", "(top) "], ""] <> i["Label"], 12], 8, Bold, GrayLevel[0.2]],
               p + {0, If[OddQ[Round[p[[1]]/colW]], 0.62, 0.3]}, {0, -1}],
             Text[Style[iKGVizLabelText[i, 12], 7, GrayLevel[0.15]], p + {radius[id] + 0.06, 0}, {-1, 0}]],
           Nothing]}]],
     coords];
   ymin = Min[Append[Values[coords][[All, 2]], 0.]] - rowH;
   prims = {edges, nodes,
-    If[buckets =!= <||>, Text[Style[iKGVizT[lang, "周辺知識 (どの節にも入らない前提)", "background (outside the sections)"], 9, Italic, GrayLevel[0.4]],
+    If[buckets =!= <||>, Text[Style[iKGVizT[lang, "\:5468\:8fba\:77e5\:8b58 (\:3069\:306e\:7bc0\:306b\:3082\:5165\:3089\:306a\:3044\:524d\:63d0)", "background (outside the sections)"], 9, Italic, GrayLevel[0.4]],
       {-0.3, bandY + 0.45}, {-1, 0}], Nothing]};
   Graphics[prims, PlotRange -> {{-0.8, xmax}, {ymin, 1.05}}, ImageSize -> width,
     ImagePadding -> 6, Background -> White]];
 
-(* ---- 節の概観 (弧の図) ---- *)
+(* ---- \:7bc0\:306e\:6982\:89b3 (\:5f27\:306e\:56f3) ---- *)
 iKGVizSections[kg_, info_, index_, lang_, groups_, onClick_] := Module[
   {root = Lookup[kg, "Root", "root"], secs, parent, secOf, members = <||>, x = <||>, gap = 1.7, cross = <||>, bgCount = <||>,
    prims = {}, bgX, maxC, up, down},
@@ -1964,12 +2522,12 @@ iKGVizSections[kg_, info_, index_, lang_, groups_, onClick_] := Module[
           AbsoluteThickness[0.8 + 4 * Length[gs]/maxC],
           Arrowheads[{{0.008, 1}}],
           Arrow[BezierCurve[{{xa, 0.25}, {(xa + xb)/2, (up = Max[up, 0.3 + 0.2 * Abs[xb - xa]]; 0.3 + 0.2 * Abs[xb - xa])}, {xb, 0.25}}]]},
-        info[pair[[1]]]["Label"] <> " → " <> info[pair[[2]]]["Label"] <> ": " <> ToString[Length[gs]] <> iKGVizT[lang, " 本 (", " edges ("] <>
+        info[pair[[1]]]["Label"] <> " \[RightArrow] " <> info[pair[[2]]]["Label"] <> ": " <> ToString[Length[gs]] <> iKGVizT[lang, " \:672c (", " edges ("] <>
           StringRiffle[KeyValueMap[#1 <> " " <> ToString[#2] &, Counts[gs]], ", "] <> ")"]]]],
     cross];
   KeyValueMap[Function[{s, c}, AppendTo[prims, Tooltip[{RGBColor[0.3, 0.64, 0.64], Opacity[0.6], AbsoluteThickness[0.8 + Min[c, 12]/2.],
         BezierCurve[{{bgX, -0.25}, {(bgX + x[s])/2, (down = Max[down, 0.3 + 0.12 * Abs[bgX - x[s]]]; -0.3 - 0.12 * Abs[bgX - x[s]])}, {x[s], -0.25}}]},
-      iKGVizT[lang, "周辺知識 との辺 ", "background edges "] <> ToString[c]]]],
+      iKGVizT[lang, "\:5468\:8fba\:77e5\:8b58 \:3068\:306e\:8fba ", "background edges "] <> ToString[c]]]],
     Select[bgCount, # > 0 &]];
   Do[Module[{ids = DeleteCases[Lookup[members, Key[s], {}], s], i = info[s], nUn, nFig, nQA, r},
       nUn = Count[info /@ ids, j_ /; TrueQ[j["Unrefined"]]];
@@ -1982,8 +2540,8 @@ iKGVizSections[kg_, info_, index_, lang_, groups_, onClick_] := Module[
             FaceForm[If[TrueQ[i["Root"]], $kgVizKindColors["Claim"], GrayLevel[0.55]]], Disk[{x[s], 0}, Min[r, 0.7]]},
           Column[{Style[i["Label"], Bold, 12],
             Style[SourceVaultKGText[index[s], "Summary", lang], 10],
-            Style[iKGVizT[lang, "ノード ", "nodes "] <> ToString[Length[ids]] <> iKGVizT[lang, " / 図 ", " / figures "] <> ToString[nFig] <>
-              iKGVizT[lang, " / 質疑応答 ", " / Q&A "] <> ToString[nQA] <> iKGVizT[lang, " / 未推敲 ", " / unrefined "] <> ToString[nUn], 9, GrayLevel[0.35]]},
+            Style[iKGVizT[lang, "\:30ce\:30fc\:30c9 ", "nodes "] <> ToString[Length[ids]] <> iKGVizT[lang, " / \:56f3 ", " / figures "] <> ToString[nFig] <>
+              iKGVizT[lang, " / \:8cea\:7591\:5fdc\:7b54 ", " / Q&A "] <> ToString[nQA] <> iKGVizT[lang, " / \:672a\:63a8\:6572 ", " / unrefined "] <> ToString[nUn], 9, GrayLevel[0.35]]},
             Spacings -> 0.3]]},
           If[onClick === None, prim, With[{f = onClick, id = s}, EventHandler[prim, {"MouseClicked" :> f[id]}]]]],
         Text[Style[iKGVizShort[i["Label"], 14] <> " (" <> ToString[Length[ids]] <> ")", 8, GrayLevel[0.15]], {x[s], -0.05 - Min[r, 0.7]}, {-1, 0}, {0, -1}]}]],
@@ -1991,12 +2549,12 @@ iKGVizSections[kg_, info_, index_, lang_, groups_, onClick_] := Module[
   With[{nbg = Length[Lookup[members, Key[None], {}]]},
     If[nbg > 0,
       AppendTo[prims, {Tooltip[{FaceForm[$kgVizKindColors["Background"]], EdgeForm[White],
-          Rectangle[{bgX - 0.25, -0.25}, {bgX + 0.25, 0.25}]}, iKGVizT[lang, "周辺知識 ", "background "] <> ToString[nbg]],
-        Text[Style[iKGVizT[lang, "周辺知識 (", "background ("] <> ToString[nbg] <> ")", 8, GrayLevel[0.15]], {bgX, -0.35}, {-1, 0}, {0, -1}]}]]];
+          Rectangle[{bgX - 0.25, -0.25}, {bgX + 0.25, 0.25}]}, iKGVizT[lang, "\:5468\:8fba\:77e5\:8b58 ", "background "] <> ToString[nbg]],
+        Text[Style[iKGVizT[lang, "\:5468\:8fba\:77e5\:8b58 (", "background ("] <> ToString[nbg] <> ")", 8, GrayLevel[0.15]], {bgX, -0.35}, {-1, 0}, {0, -1}]}]]];
   Graphics[prims, PlotRange -> {{-0.9, bgX + 0.9}, {-Max[down / 2 + 0.2, 2.4], up / 2 + 0.4}},
     ImageSize -> Round[44 * (bgX + 1.8)], ImagePadding -> 6, Background -> White]];
 
-(* ---- 周辺 / 全体 (ばねモデル) ---- *)
+(* ---- \:5468\:8fba / \:5168\:4f53 (\:3070\:306d\:30e2\:30c7\:30eb) ---- *)
 iKGVizSpring[kg_, info_, index_, lang_, groups_, labels_, onClick_, ids_List, focus_] := Module[{es, radius, g},
   es = Select[kg["Edges"], MemberQ[ids, #["From"]] && MemberQ[ids, #["To"]] && #["From"] =!= #["To"] &&
     MemberQ[groups, iKGVizEdgeGroup[#["EdgeKind"]]] &];
@@ -2013,9 +2571,65 @@ iKGVizSpring[kg_, info_, index_, lang_, groups_, labels_, onClick_, ids_List, fo
         coords]},
       ImageSize -> If[Length[ids] <= 40, 700, 1100], ImagePadding -> 10, Background -> White]]];
 
+(* ---- v1.44: \:968e\:5c64 (\:9806\:5e8f\:6728\:3092 1 \:30ce\:30fc\:30c9 1 \:884c\:3067\:3001\:6df1\:3055\:3067\:5b57\:4e0b\:3052) ----
+   \:30b9\:30e9\:30a4\:30c9\:306f\:9806\:5e8f\:6728\:3092\:524d\:304b\:3089\:305f\:3069\:3063\:3066\:4f5c\:308b\:306e\:3067\:3001\:305d\:306e\:6728\:305d\:306e\:3082\:306e\:3092\:898b\:305b\:308b\:3002\:5404\:884c = \:984c\:76ee \:2014 \:4e00\:884c\:8981\:7d04 [\:898b\:3048\:308b\:5b50\:306e\:6570, \:7573\:3093\:3060\:8449\:306e\:6570]\:3002
+   \:5b50\:304c "MaxDegree" \:3092\:8d85\:3048\:308b\:30ce\:30fc\:30c9\:306f\:8d64\:3002\:307e\:3068\:307e\:308a (Cluster) \:306f\:5b9f\:7dda\:3001\:4fdd\:5b58\:524d\:306e\:4e0b\:898b (\:6a5f\:68b0\:7684\:306a\:307e\:3068\:3081) \:306f\:70b9\:7dda\:306e\:67a0\:3002
+   \:8449 (\:5b50\:306e\:7121\:3044\:30ce\:30fc\:30c9) \:306f\:7573\:3080 ("Labels" -> All \:3067\:51fa\:3059)\:3002\:8a08\:753b\:3092\:91cd\:306d\:308b\:3068\:884c\:982d\:306b #n *)
+iKGVizHierarchy[kg_, info_, index_, lang_, onClick_, d_Integer, treeIn_, leavesQ_, previewIds_List] := Module[
+  {tree, root, vis, kids, degOf, place, row = 0, xs = <||>, ys = <||>, shown = {}, prims = {}, viol = {}, maxDeg = 0, maxX = 0,
+   w = 860, header, rows},
+  tree = treeIn;
+  If[! AssociationQ[tree], Return[Style[iKGVizT[lang, "\:9806\:5e8f\:6728\:3092\:4f5c\:308c\:307e\:305b\:3093", "Cannot build the ordered tree"], RGBColor[0.7, 0.1, 0.1]]]];
+  root = tree["Root"];
+  vis[id_] := iKGVisibleQ[index, id];
+  degOf[id_] := Length[Select[Lookup[tree["Children"], id, {}], vis]];
+  kids[id_] := With[{c = Lookup[tree["Children"], id, {}]}, If[TrueQ[leavesQ], c, Select[c, Lookup[tree["Children"], #, {}] =!= {} &]]];
+  place[id_, dep_] := (xs[id] = 1.2 * dep; ys[id] = -row; row++; AppendTo[shown, id]; maxX = Max[maxX, 1.2 * dep];
+    Scan[place[#, dep + 1] &, kids[id]]);
+  place[root, 0];
+  rows = Max[row, 1];
+  Do[With[{ks = kids[id]}, If[ks =!= {}, With[{xp = xs[id], yp = ys[id]},
+      AppendTo[prims, {GrayLevel[0.72], AbsoluteThickness[0.8],
+        Line[{{xp, yp - 0.4}, {xp, ys[Last[ks]]}}],
+        Map[Line[{{xp, ys[#]}, {xs[#] - 0.36, ys[#]}}] &, ks]}]]]], {id, shown}];
+  Do[Module[{i = info[id], k = degOf[id], leaves, lab, over, prev = MemberQ[previewIds, id], gist, p = {xs[id], ys[id]}},
+      maxDeg = Max[maxDeg, k];
+      over = k > d;
+      If[over, AppendTo[viol, id]];
+      leaves = Length[Select[Lookup[tree["Children"], id, {}], vis[#] && Lookup[tree["Children"], #, {}] === {} &]];
+      gist = SourceVaultKGText[index[id], "Gist", lang];
+      lab = iKGVizLabelText[i, 30] <> If[gist =!= "", " \[LongDash] " <> iKGVizShort[gist, 32], ""] <>
+        If[k > 0, "  [" <> iKGVizT[lang, "\:5b50 " <> ToString[k], ToString[k] <> " children"] <>
+          If[! TrueQ[leavesQ] && leaves > 0, iKGVizT[lang, ", \:3046\:3061\:8449 ", ", leaves "] <> ToString[leaves], ""] <> "]", ""] <>
+        If[over, iKGVizT[lang, "  \:4e0a\:9650 " <> ToString[d] <> " \:3092\:8d85\:3048\:308b", "  over the bound " <> ToString[d]], ""] <>
+        Which[TrueQ[i["PartialSlide"]], iKGVizT[lang, "  (\:6982\:8981 1 \:679a + \:4e00\:90e8\:3092\:8a73\:3057\:304f)", "  (summary + some detail)"],
+          TrueQ[i["SummarySlide"]], iKGVizT[lang, "  (\:6982\:8981 1 \:679a)", "  (summary slide)"],
+          TrueQ[i["Heading"]], iKGVizT[lang, "  (\:898b\:51fa\:3057\:306e\:307f: \:5b50\:3092\:679a\:306b)", "  (heading only)"], True, ""];
+      AppendTo[prims, {
+        If[TrueQ[Lookup[Lookup[index, id, <||>], "Cluster", False]] || prev,
+          {EdgeForm[Directive[RGBColor[0.45, 0.52, 0.3], AbsoluteThickness[1.6], AbsoluteDashing[If[prev, {3, 2}, {}]]]], FaceForm[None],
+            Rectangle[p - {0.55, 0.42}, p + {0.55, 0.42}, RoundingRadius -> 0.12]}, {}],
+        iKGVizNode[p, 0.3, i, index[id], lang, onClick],
+        Text[Style[lab, 9, If[over, RGBColor[0.8, 0.1, 0.1], GrayLevel[0.15]], If[over || TrueQ[i["Section"]], Bold, Plain]],
+          p + {0.7, 0}, {-1, 0}]}]],
+    {id, shown}];
+  header = Style[Row[{
+      If[SourceVaultKGTocQ[kg], Switch[Lookup[kg["Toc"], "Method", ""],
+        "LLM", iKGVizT[lang, "\:76ee\:6b21 (\:30dc\:30c8\:30e0\:30a2\:30c3\:30d7\:306b\:69cb\:7bc9) / ", "table of contents (built bottom-up) / "],
+        "Preview", iKGVizT[lang, "\:76ee\:6b21\:306e\:4e0b\:898b (\:8cc7\:6599\:306e\:69cb\:9020\:304b\:3089\:6a5f\:68b0\:7684\:306b\:3002\:4fdd\:5b58\:524d) / ", "contents preview (mechanical, unsaved) / "],
+        _, iKGVizT[lang, "\:76ee\:6b21 (\:8cc7\:6599\:306e\:69cb\:9020\:304b\:3089\:6a5f\:68b0\:7684\:306b) / ", "table of contents (mechanical) / "]], ""],
+      iKGVizT[lang, "\:5b50\:306e\:6570\:306e\:4e0a\:9650 ", "max children "], d, iKGVizT[lang, " / \:3044\:307e\:306e\:6700\:5927 ", " / largest now "], maxDeg,
+      If[viol =!= {}, iKGVizT[lang, " / \:8d85\:3048\:3066\:3044\:308b\:30ce\:30fc\:30c9 ", " / over the bound: "] <> ToString[Length[viol]], ""],
+      If[previewIds =!= {}, iKGVizT[lang, " / \:70b9\:7dda = \:4fdd\:5b58\:524d\:306e\:6a5f\:68b0\:7684\:306a\:307e\:3068\:3081 (\:300c\:968e\:5c64\:5316\:300d\:3067 LLM \:306e\:5206\:3051\:65b9\:3068\:4e00\:884c\:8981\:7d04\:306b\:3057\:3066\:4fdd\:5b58)",
+        " / dashed = unsaved mechanical grouping (Hierarchy saves it with the LLM's grouping and summaries)"], ""],
+      If[! TrueQ[leavesQ], iKGVizT[lang, " / \:8449\:306f\:7573\:3093\:3067\:3044\:308b (\:540d\:524d: \:3059\:3079\:3066 \:3067\:8868\:793a)", " / leaves folded (labels: all to show)"], ""]}], 10, GrayLevel[0.3]];
+  Labeled[Graphics[prims, PlotRange -> {{-0.8, Max[maxX + 14, (w - 20) / 20.]}, {-rows + 0.4, 0.8}},
+      ImageSize -> {w, Max[120, Round[22 * (rows + 1)]]}, AspectRatio -> Full, ImagePadding -> 6, Background -> White],
+    header, Top]];
+
 Options[SourceVaultKGVisualize] = {"View" -> "Story", "Focus" -> None, "Radius" -> 1, "EdgeKinds" -> Automatic,
   "Layers" -> All, "Labels" -> Automatic, "Plan" -> None, "Selected" -> None, "OnClick" -> None,
-  "Language" -> Automatic, "Legend" -> True, "Hidden" -> True};
+  "Language" -> Automatic, "Legend" -> True, "Hidden" -> True, "MaxDegree" -> 5, "Strategy" -> "Source", "Balance" -> Automatic};
 SourceVaultKGVisualize[kg_Association, OptionsPattern[]] := Module[
   {lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]], view = OptionValue["View"],
    info, index, groups, layers, keepQ, g, planInfo, focus = OptionValue["Focus"], ids},
@@ -2028,6 +2642,16 @@ SourceVaultKGVisualize[kg_Association, OptionsPattern[]] := Module[
   keepQ = Function[i, (TrueQ[i["Section"]] || MemberQ[layers, i["Group"]]) &&
     (TrueQ[OptionValue["Hidden"]] || ! TrueQ[i["Hidden"]])];
   g = Switch[view,
+    "Hierarchy",
+      (* \:76ee\:6b21\:304c\:3042\:308c\:3070\:305d\:306e\:6728\:3002\:7121\:3051\:308c\:3070\:8cc7\:6599\:306e\:69cb\:9020\:304b\:3089\:6a5f\:68b0\:7684\:306b\:4f5c\:3063\:305f\:76ee\:6b21\:3092\:4fdd\:5b58\:305b\:305a\:306b\:4e0b\:898b\:3068\:3057\:3066\:63cf\:304f ("Balance" -> False \:3067\:8cc7\:6599\:306e\:6728\:306e\:307e\:307e) *)
+      Module[{d = Replace[OptionValue["MaxDegree"], Except[_Integer?(# >= 2 &)] -> 5], st = OptionValue["Strategy"], kgShow = kg, prevIds = {}, m},
+        If[! StringQ[st], st = "Source"];
+        If[! SourceVaultKGTocQ[kg] && OptionValue["Balance"] =!= False,
+          m = Quiet @ Check[SourceVaultKGMechanicalToc[kg, "MaxDegree" -> d, "Strategy" -> st], $Failed];
+          If[AssociationQ[m], kgShow = m["KG"]; kgShow["Toc"] = Append[kgShow["Toc"], "Method" -> "Preview"];
+            prevIds = Join[m["Preview"], m["Added"]]]];
+        iKGVizHierarchy[kgShow, iKGVizInfo[kgShow, lang, planInfo, OptionValue["Selected"]], iKGNodeIndex[kgShow], lang,
+          OptionValue["OnClick"], d, SourceVaultKGOrderedTree[kgShow, "Strategy" -> st], OptionValue["Labels"] === All, prevIds]],
     "Sections",
       iKGVizSections[kg, info, index, lang, iKGVizGroups[OptionValue["EdgeKinds"], {"Order", "Prerequisite", "Support", "Related"}],
         OptionValue["OnClick"]],
@@ -2056,29 +2680,29 @@ SourceVaultKGLegend[lang_String : "ja", perRow_Integer : 0] := Module[{sw, kinds
       "Square", Rectangle[{-0.8, -0.8}, {0.8, 0.8}], "Diamond", Polygon[{{0, 1}, {1, 0}, {0, -1}, {-1, 0}}],
       "Header", Rectangle[{-1.3, -0.6}, {1.3, 0.6}, RoundingRadius -> 0.3], _, Disk[]]}, ImageSize -> 12];
   kinds = {
-    {sw[$kgVizKindColors["Claim"], "Disk"], iKGVizT[lang, "主張・結論", "claim"]},
-    {sw[$kgVizKindColors["Section"], "Header"], iKGVizT[lang, "節", "section"]},
-    {sw[$kgVizKindColors["Concept"], "Disk"], iKGVizT[lang, "概念・定義", "concept"]},
-    {sw[$kgVizKindColors["Method"], "Disk"], iKGVizT[lang, "方法・実験", "method"]},
-    {sw[$kgVizKindColors["Result"], "Disk"], iKGVizT[lang, "結果", "result"]},
-    {sw[$kgVizKindColors["Figure"], "Disk"], iKGVizT[lang, "式・図", "equation/figure"]},
-    {sw[$kgVizKindColors["Question"], "Disk"], iKGVizT[lang, "問い", "question"]},
-    {sw[$kgVizKindColors["Background"], "Square"], iKGVizT[lang, "周辺知識", "background"]},
-    {sw[$kgVizKindColors["RelatedWork"], "Diamond"], iKGVizT[lang, "関連研究", "related work"]}};
+    {sw[$kgVizKindColors["Claim"], "Disk"], iKGVizT[lang, "\:4e3b\:5f35\:30fb\:7d50\:8ad6", "claim"]},
+    {sw[$kgVizKindColors["Section"], "Header"], iKGVizT[lang, "\:7bc0", "section"]},
+    {sw[$kgVizKindColors["Concept"], "Disk"], iKGVizT[lang, "\:6982\:5ff5\:30fb\:5b9a\:7fa9", "concept"]},
+    {sw[$kgVizKindColors["Method"], "Disk"], iKGVizT[lang, "\:65b9\:6cd5\:30fb\:5b9f\:9a13", "method"]},
+    {sw[$kgVizKindColors["Result"], "Disk"], iKGVizT[lang, "\:7d50\:679c", "result"]},
+    {sw[$kgVizKindColors["Figure"], "Disk"], iKGVizT[lang, "\:5f0f\:30fb\:56f3", "equation/figure"]},
+    {sw[$kgVizKindColors["Question"], "Disk"], iKGVizT[lang, "\:554f\:3044", "question"]},
+    {sw[$kgVizKindColors["Background"], "Square"], iKGVizT[lang, "\:5468\:8fba\:77e5\:8b58", "background"]},
+    {sw[$kgVizKindColors["RelatedWork"], "Diamond"], iKGVizT[lang, "\:95a2\:9023\:7814\:7a76", "related work"]}};
   edges = Map[{Graphics[{iKGVizEdgeStyle[#[[1]]], AbsoluteThickness[1.8], Arrowheads[0.3],
         If[MemberQ[$kgVizDirectedGroups, #[[1]]], Arrow[{{0, 0}, {1, 0}}], Line[{{0, 0}, {1, 0}}]]},
       ImageSize -> {28, 10}, PlotRange -> {{-0.05, 1.05}, {-0.2, 0.2}}, AspectRatio -> Full], #[[2]]} &,
-    {{"Order", iKGVizT[lang, "順序", "order"]}, {"Prerequisite", iKGVizT[lang, "前提", "prerequisite"]},
-     {"Support", iKGVizT[lang, "支え", "support"]}, {"Related", iKGVizT[lang, "対比・関連", "related"]},
-     {"Contains", iKGVizT[lang, "包含", "contains"]}}];
+    {{"Order", iKGVizT[lang, "\:9806\:5e8f", "order"]}, {"Prerequisite", iKGVizT[lang, "\:524d\:63d0", "prerequisite"]},
+     {"Support", iKGVizT[lang, "\:652f\:3048", "support"]}, {"Related", iKGVizT[lang, "\:5bfe\:6bd4\:30fb\:95a2\:9023", "related"]},
+     {"Contains", iKGVizT[lang, "\:5305\:542b", "contains"]}}];
   marks = {
-    {Graphics[{FaceForm[GrayLevel[0.85]], EdgeForm[Directive[RGBColor[0.85, 0.1, 0.1], AbsoluteThickness[1.8]]], Disk[]}, ImageSize -> 12], iKGVizT[lang, "未推敲", "unrefined"]},
-    {Graphics[{FaceForm[GrayLevel[0.85]], EdgeForm[Directive[Black, AbsoluteThickness[2.4]]], Disk[]}, ImageSize -> 12], iKGVizT[lang, "選択中", "selected"]},
-    {Graphics[{FaceForm[GrayLevel[0.85]], EdgeForm[Directive[GrayLevel[0.25], AbsoluteDashing[{2, 2}]]], Disk[]}, ImageSize -> 12], iKGVizT[lang, "詰め込み", "packed"]},
-    {Graphics[{FaceForm[GrayLevel[0.85]], Disk[], RGBColor[0.45, 0.4, 0.72], Disk[{0.9, 0.9}, 0.4]}, ImageSize -> 12], iKGVizT[lang, "図・表あり", "has figure"]},
-    {Graphics[{FaceForm[GrayLevel[0.85]], Disk[], RGBColor[0.82, 0.44, 0.12], Disk[{-0.9, 0.9}, 0.4]}, ImageSize -> 12], iKGVizT[lang, "質疑応答あり", "has Q&A"]},
-    {Graphics[{Opacity[0.25], GrayLevel[0.3], Disk[]}, ImageSize -> 12], iKGVizT[lang, "隠す・枝刈り", "hidden/pruned"]},
-    {Style["#n", 8], iKGVizT[lang, "計画の枚番号", "slide no. in the plan"]}};
+    {Graphics[{FaceForm[GrayLevel[0.85]], EdgeForm[Directive[RGBColor[0.85, 0.1, 0.1], AbsoluteThickness[1.8]]], Disk[]}, ImageSize -> 12], iKGVizT[lang, "\:672a\:63a8\:6572", "unrefined"]},
+    {Graphics[{FaceForm[GrayLevel[0.85]], EdgeForm[Directive[Black, AbsoluteThickness[2.4]]], Disk[]}, ImageSize -> 12], iKGVizT[lang, "\:9078\:629e\:4e2d", "selected"]},
+    {Graphics[{FaceForm[GrayLevel[0.85]], EdgeForm[Directive[GrayLevel[0.25], AbsoluteDashing[{2, 2}]]], Disk[]}, ImageSize -> 12], iKGVizT[lang, "\:8a70\:3081\:8fbc\:307f", "packed"]},
+    {Graphics[{FaceForm[GrayLevel[0.85]], Disk[], RGBColor[0.45, 0.4, 0.72], Disk[{0.9, 0.9}, 0.4]}, ImageSize -> 12], iKGVizT[lang, "\:56f3\:30fb\:8868\:3042\:308a", "has figure"]},
+    {Graphics[{FaceForm[GrayLevel[0.85]], Disk[], RGBColor[0.82, 0.44, 0.12], Disk[{-0.9, 0.9}, 0.4]}, ImageSize -> 12], iKGVizT[lang, "\:8cea\:7591\:5fdc\:7b54\:3042\:308a", "has Q&A"]},
+    {Graphics[{Opacity[0.25], GrayLevel[0.3], Disk[]}, ImageSize -> 12], iKGVizT[lang, "\:96a0\:3059\:30fb\:679d\:5208\:308a", "hidden/pruned"]},
+    {Style["#n", 8], iKGVizT[lang, "\:8a08\:753b\:306e\:679a\:756a\:53f7", "slide no. in the plan"]}};
   rows = If[perRow > 0, Flatten[Map[Partition[#, UpTo[perRow]] &, {kinds, edges, marks}], 1], {kinds, edges, marks}];
   Column[Map[Row[Riffle[Map[Row[{#[[1]], " ", Style[#[[2]], 8]}] &, #], Spacer[10]]] &, rows], Spacings -> 0.4]];
 
@@ -2086,14 +2710,14 @@ End[]
 
 EndPackage[]
 
-Print[Style["SourceVault_knowledgegraph.wl がロードされました。", Bold]];
+(*Print[Style["SourceVault_knowledgegraph.wl \:304c\:30ed\:30fc\:30c9\:3055\:308c\:307e\:3057\:305f\:3002", Bold]];
 Print["
-  SourceVaultKGFromJSON[json] / SourceVaultKGMerge[kg, delta]      → LLM 応答の取り込み (検証つき)
-  SourceVaultKGSave / Load / List[]                                  → <root>/knowledgegraph/graphs/
-  SourceVaultKGAudience[spec] / SourceVaultKGScores[kg, aud]         → 聴き手モデルと必要度
-  SourceVaultKGOrderedTree[kg] / OrderedTrees / Verify               → 最小全域順序木と破綻検証
-  SourceVaultKGPlan[kg, tree, \"Slides\"->n, \"Audience\"->..]        → 詰め込み・枝刈り計画
-  SourceVaultKGOutline[kg, plan] / OutlineToMarkdown                 → 言語別アウトライン → シナリオ md
+  SourceVaultKGFromJSON[json] / SourceVaultKGMerge[kg, delta]      \[RightArrow] LLM \:5fdc\:7b54\:306e\:53d6\:308a\:8fbc\:307f (\:691c\:8a3c\:3064\:304d)
+  SourceVaultKGSave / Load / List[]                                  \[RightArrow] <root>/knowledgegraph/graphs/
+  SourceVaultKGAudience[spec] / SourceVaultKGScores[kg, aud]         \[RightArrow] \:8074\:304d\:624b\:30e2\:30c7\:30eb\:3068\:5fc5\:8981\:5ea6
+  SourceVaultKGOrderedTree[kg] / OrderedTrees / Verify               \[RightArrow] \:6700\:5c0f\:5168\:57df\:9806\:5e8f\:6728\:3068\:7834\:7dbb\:691c\:8a3c
+  SourceVaultKGPlan[kg, tree, \"Slides\"->n, \"Audience\"->..]        \[RightArrow] \:8a70\:3081\:8fbc\:307f\:30fb\:679d\:5208\:308a\:8a08\:753b
+  SourceVaultKGOutline[kg, plan] / OutlineToMarkdown                 \[RightArrow] \:8a00\:8a9e\:5225\:30a2\:30a6\:30c8\:30e9\:30a4\:30f3 \[RightArrow] \:30b7\:30ca\:30ea\:30aa md
   SourceVaultKGCompose[{kg1, kg2}] / BackgroundLink / SuggestPastSlides
   SourceVaultKGGraph / View / TreeView / PlanView / ToTopicItemGraph
-"];
+"];*)

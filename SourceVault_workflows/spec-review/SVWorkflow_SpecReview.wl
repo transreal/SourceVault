@@ -244,28 +244,24 @@ iModelTuple[m_] := Which[
 If[! ValueQ[$iOrchCallTimeLimit], $iOrchCallTimeLimit = 900];
 
 (* codex text query: codex exec, final message captured via -o (UTF-8 file) *)
-iOrchCodex[tup_, prompt_] := Module[{ws, answerFile, model, modelArgs, res, ans},
-  ws = FileNameJoin[{$TemporaryDirectory, "orchq_codex_" <> StringReplace[CreateUUID[], "-" -> ""]}];
-  Quiet @ CreateDirectory[ws, CreateIntermediateDirectories -> True];
-  answerFile = FileNameJoin[{ws, "answer.txt"}];
+iOrchCodex[tup_, prompt_] := Module[{model, res, ans},
   model = If[Length[tup] >= 2 && StringQ[tup[[2]]] && tup[[2]] =!= "" && tup[[2]] =!= "Automatic",
     tup[[2]], ""];
-  modelArgs = If[model =!= "", {"-m", model}, {}];
-  (* TimeConstrained bounds a stuck call; RunProcess has no usable timeout option
-     here (ProcessTimeLimit is rejected). On timeout returns the marker "TimedOut". *)
-  res = TimeConstrained[
+  (* 2026-10-02: spec-impl と同じく ClaudeCodexSandboxedExec 経由にした
+     (PC ごとのサンドボックス確認+許可リスト型プロファイル+利用者の ~/.codex 設定を
+     読まない実行ごとの CODEX_HOME)。関数が無い古い claudecode では起動しない。 *)
+  res = If[Length[DownValues[ClaudeCode`ClaudeCodexSandboxedExec]] > 0,
     Quiet @ Check[
-      RunProcess[Join[iCmdPrefix[],
-          {"codex", "exec", "-C", ws, "-s", "workspace-write", "--skip-git-repo-check",
-           "-c", "approval_policy=never"}, modelArgs, {"-o", answerFile, "-"}],
-        All, StringToByteArray[prompt, "UTF-8"]],
-      <|"ExitCode" -> "Error", "StandardOutput" -> ""|>],
-    $iOrchCallTimeLimit, "TimedOut"];
-  ans = Which[
-    FileExistsQ[answerFile], iReadUTF8[answerFile],
-    AssociationQ[res], Lookup[res, "StandardOutput", ""],
-    True, ""];
-  Quiet @ If[DirectoryQ[ws], DeleteDirectory[ws, DeleteContents -> True]];
+      ClaudeCode`ClaudeCodexSandboxedExec[prompt, "Model" -> model,
+        "TimeConstraint" -> $iOrchCallTimeLimit],
+      $Failed],
+    Failure["CodexSandboxedExecMissing", <|"MessageTemplate" ->
+      "claudecode.wl does not provide ClaudeCodexSandboxedExec (update and reload it)."|>]];
+  If[FailureQ[res],
+    Return["[codex was not started: " <>
+      ToString[Quiet @ Check[res["Message"], "the sandboxed Codex call failed"]] <> "]",
+      Module]];
+  ans = If[AssociationQ[res], Lookup[res, "Output", ""], ""];
   If[StringQ[ans] && StringTrim[ans] =!= "",
     ans,
     "[codex produced no output: timed out after " <> ToString[$iOrchCallTimeLimit] <>

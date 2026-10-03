@@ -51,6 +51,7 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultDiagnosticsSinkAvailableQ",
   "SourceVault`SourceVaultDiagnosticsRegisterProbe",
   "SourceVault`SourceVaultDiagnosticsListProbes",
+  "SourceVault`SourceVaultDiagnosticsLogCoverageProbe",
   "SourceVault`SourceVaultShadowedSystemSymbols",
   "SourceVault`SourceVaultRepairShadowedSystemSymbols",
   "SourceVault`SourceVaultShadowWatchStart",
@@ -257,6 +258,19 @@ must return either a health string, an Association with a \"Health\" key, or an 
 Association of component-name -> <|\"Health\"->...|>. Re-registering an id \
 replaces it. The registry survives a repeated Get[] of this file (producers \
 register at their own load time, weakly). Returns the id.";
+
+SourceVaultDiagnosticsLogCoverageProbe::usage =
+  "SourceVaultDiagnosticsLogCoverageProbe[opts] is the SystemDoctor probe \
+\"LogCoverage\": it compares independent evidence of LLM activity on this PC \
+(Claude Code project folders claude-project-<unixtime>-*, Codex codex_project_* \
+folders) with the LLMCall records in the canonical diagnostics log plus the local \
+spool, per provider and local day over the last WindowDays (7). A day with \
+activity >= MinActivity (3) but records < MinCoverage (0.25) of it is a gap \
+(Degraded, ReasonCode \"LLMLogGap\"). Also Degraded for spool data left \
+un-ingested for IngestStallHours (6) (\"LogIngestStalled\") and for corrupt \
+lines reported by the ingest (\"LogCorruptLines\"). NotApplicable on a PC whose \
+canonical log has nothing for 30 days (no SourceVault service there). Read-only, \
+cached 10 minutes.";
 
 SourceVaultDiagnosticsListProbes::usage =
   "SourceVaultDiagnosticsListProbes[] returns the list of registered diagnostics \
@@ -636,6 +650,200 @@ SourceVaultDiagnosticsRegisterProbe["system-symbol-shadow",
         <|"Health" -> "Degraded", "ReasonCode" -> "SystemSymbolShadowed",
           "Count" -> Length[sh],
           "Symbols" -> Map[#Context <> #Name &, sh]|>]]]];
+
+(* ------------------------------------------------------------
+   Log coverage probe (2026-10-02).
+   The doctor used to aggregate live probes only and never looked at the
+   logs, so a producer that stopped logging (Codex never emitted LLMCall,
+   failed calls were dropped) or a stalled ingest went unnoticed for weeks.
+   This probe compares independent evidence of LLM activity on this PC
+   with the LLMCall records in the canonical log (+ the local spool, so an
+   ingest lag is not a gap):
+     claudecode   : Claude Code project folders  claude-project-<unixtime>-*
+                    (one per CLI run) under ~/.claude/projects
+     chatgptcodex : codex_project_* folders in the Codex working directory
+   A (provider, local day) is a gap when activity >= MinActivity (3) and
+   records < MinCoverage (25%) of it. Also Degraded when spool data stays
+   un-ingested for IngestStallHours, or the ingest reported corrupt lines.
+   PCs whose canonical log has nothing for 30 days (no SourceVault service
+   here) are NotApplicable: owner decision 2026-10-02, no warning for them.
+   Read-only; cached 10 min (it runs inside the doctor / tick).
+   ------------------------------------------------------------ *)
+If[!AssociationQ[$iSVDiagLogCoverageCache], $iSVDiagLogCoverageCache = <||>];
+
+(* tail of a (possibly large) file as text *)
+iSVDiagReadTail[path_String, maxBytes_Integer] :=
+  Quiet @ Check[
+    Module[{size = FileByteCount[path], s, ba},
+      s = OpenRead[path, BinaryFormat -> True];
+      SetStreamPosition[s, Max[0, size - maxBytes]];
+      ba = ReadByteArray[s];
+      Close[s];
+      If[ByteArrayQ[ba], ByteArrayToString[ba, "UTF-8"], ""]],
+    ""];
+
+(* "2026-10-01T08:47:00Z" (UTC) -> absolute time; $Failed if unparsable *)
+iSVDiagUTCStringToAbs[s_String] :=
+  Module[{m = StringCases[s,
+      RegularExpression["^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})"] :>
+        ToExpression[{"$1", "$2", "$3", "$4", "$5", "$6"}], 1]},
+    (* AbsoluteTime[dateList, TimeZone -> 0] ignores the option (the list is read
+       as local time, 9 h off here); a DateObject carries the zone correctly. *)
+    If[m === {}, $Failed,
+      Quiet @ Check[AbsoluteTime[DateObject[First[m], TimeZone -> 0]], $Failed]]];
+iSVDiagUTCStringToAbs[_] := $Failed;
+
+iSVDiagLocalDay[abs_?NumericQ] := DateString[abs, "ISODate"];
+
+(* LLMCall records in a JSONL text: {<|"EventId","Abs","Provider"|>, ...} *)
+iSVDiagExtractLLMCalls[text_String, minAbs_?NumericQ] :=
+  Module[{lines, recs},
+    lines = Select[StringSplit[text, "\n"],
+      StringContainsQ[#, "\"LLMCall\""] &];
+    recs = Map[
+      Function[l, Module[{at, pr, id},
+        at = StringCases[l, "\"AtUTC\":\"" ~~ x : Except["\""] .. ~~ "\"" :> x, 1];
+        pr = StringCases[l, "\"Provider\":\"" ~~ x : Except["\""] .. ~~ "\"" :> x, 1];
+        id = StringCases[l, "\"EventId\":\"" ~~ x : Except["\""] .. ~~ "\"" :> x, 1];
+        If[at === {}, Nothing,
+          With[{a = iSVDiagUTCStringToAbs[First[at]]},
+            If[!NumericQ[a] || a < minAbs, Nothing,
+              <|"EventId" -> If[id === {}, CreateUUID[], First[id]], "Abs" -> a,
+                "Provider" -> If[pr === {}, "?", ToLowerCase[First[pr]]]|>]]]]],
+      lines];
+    recs];
+
+iSVDiagCodexWorkingDir[] :=
+  Module[{v},
+    v = If[Names["ClaudeCode`$ChatgptWorkingDirectory"] =!= {},
+      Symbol["ClaudeCode`$ChatgptWorkingDirectory"], None];
+    If[StringQ[v] && v =!= "", Return[v]];
+    v = If[Names["ClaudeCode`$OpenaiWorkingDirectory"] =!= {},
+      Symbol["ClaudeCode`$OpenaiWorkingDirectory"], None];
+    If[StringQ[v] && v =!= "", v, FileNameJoin[{$HomeDirectory, "OpenAI Working"}]]];
+
+Options[SourceVaultDiagnosticsLogCoverageProbe] = {
+  "WindowDays" -> 7, "MinActivity" -> 3, "MinCoverage" -> 0.25,
+  "IngestStallHours" -> 6, "UseCache" -> True,
+  "LogPath" -> Automatic, "SpoolDir" -> Automatic,
+  "ClaudeProjectsDir" -> Automatic, "CodexWorkingDir" -> Automatic,
+  "Now" -> Automatic};
+
+SourceVaultDiagnosticsLogCoverageProbe[opts : OptionsPattern[]] :=
+  Module[{overrides, now, days, minAct, minCov, logPath, spoolDir, cpDir, cwDir,
+          windowDays, since, logText, lastAts, calls, spoolFiles, act, rec,
+          gaps, stalled, corrupt, reasons, msgs, res},
+    overrides = AnyTrue[{"LogPath", "SpoolDir", "ClaudeProjectsDir",
+      "CodexWorkingDir", "Now"}, OptionValue[#] =!= Automatic &];
+    now = Replace[OptionValue["Now"], Automatic :> AbsoluteTime[]];
+    If[TrueQ[OptionValue["UseCache"]] && !overrides &&
+       NumericQ[Lookup[$iSVDiagLogCoverageCache, "At", None]] &&
+       now - $iSVDiagLogCoverageCache["At"] < 600,
+      Return[$iSVDiagLogCoverageCache["Result"]]];
+    days = OptionValue["WindowDays"];
+    minAct = OptionValue["MinActivity"];
+    minCov = OptionValue["MinCoverage"];
+    logPath = Replace[OptionValue["LogPath"], Automatic :> iSVDiagLogPath[]];
+    spoolDir = Replace[OptionValue["SpoolDir"], Automatic :> iSVDiagSpoolDir[]];
+    cpDir = Replace[OptionValue["ClaudeProjectsDir"],
+      Automatic :> FileNameJoin[{$HomeDirectory, ".claude", "projects"}]];
+    cwDir = Replace[OptionValue["CodexWorkingDir"], Automatic :> iSVDiagCodexWorkingDir[]];
+    windowDays = Table[iSVDiagLocalDay[now - k*86400], {k, days - 1, 0, -1}];
+    since = AbsoluteTime[First[windowDays]];
+    res = Catch[
+      If[!StringQ[logPath] || !FileExistsQ[logPath],
+        Throw[<|"Health" -> "OK", "ReasonCode" -> "NotApplicable",
+          "Note" -> "No canonical diagnostics log on this PC (no SourceVault service here)."|>]];
+      logText = iSVDiagReadTail[logPath, 16*2^20];
+      lastAts = StringCases[StringTake[logText, -Min[200000, StringLength[logText]]],
+        "\"AtUTC\":\"" ~~ x : Except["\""] .. ~~ "\"" :> x];
+      If[lastAts === {} ||
+         With[{a = Max[Select[iSVDiagUTCStringToAbs /@ lastAts, NumericQ], 0]},
+           now - a > 30*86400],
+        Throw[<|"Health" -> "OK", "ReasonCode" -> "NotApplicable",
+          "Note" -> "The canonical log has nothing for 30 days (no SourceVault service here)."|>]];
+      spoolFiles = If[StringQ[spoolDir] && DirectoryQ[spoolDir],
+        Quiet @ Check[FileNames["*.jsonl", spoolDir], {}], {}];
+      calls = DeleteDuplicatesBy[
+        Join[iSVDiagExtractLLMCalls[logText, since],
+          Flatten[iSVDiagExtractLLMCalls[
+            Quiet @ Check[ByteArrayToString[ReadByteArray[#], "UTF-8"], ""], since] & /@
+              spoolFiles]],
+        #EventId &];
+      rec = Counts[{#Provider, iSVDiagLocalDay[#Abs]} & /@ calls];
+      (* independent evidence of activity *)
+      act = Join[
+        Counts[{"claudecode", #} & /@ Select[
+          Map[
+            Function[n, With[{t = StringCases[n,
+                "claude-project-" ~~ u : (DigitCharacter ..) ~~ "-" :> ToExpression[u], 1]},
+              If[t === {}, Nothing, iSVDiagLocalDay[First[t] + 2208988800 +
+                60*60*Replace[$TimeZone, Except[_?NumericQ] -> 0]]]]],
+            If[DirectoryQ[cpDir], FileNameTake /@ Quiet @ Check[
+              FileNames["*claude-project-*", cpDir], {}], {}]],
+          MemberQ[windowDays, #] &]],
+        Counts[{"chatgptcodex", #} & /@ Select[
+          Map[iSVDiagLocalDay[Quiet @ Check[AbsoluteTime[FileDate[#, "Creation"]], 0]] &,
+            If[DirectoryQ[cwDir], Quiet @ Check[FileNames["codex_project_*", cwDir], {}], {}]],
+          MemberQ[windowDays, #] &]]];
+      gaps = SortBy[KeyValueMap[
+          Function[{k, a}, With[{r = Lookup[rec, Key[k], 0]},
+            If[a >= minAct && r < minCov*a,
+              <|"Provider" -> k[[1]], "Day" -> k[[2]], "Activity" -> a, "Recorded" -> r|>,
+              Nothing]]],
+          act], {#Day, #Provider} &];
+      stalled = Select[spoolFiles,
+        Function[f, Module[{off, size = Quiet @ Check[FileByteCount[f], 0], mt},
+          off = Quiet @ Check[Lookup[ImportString[
+              ByteArrayToString[ReadByteArray[f <> ".ingest.json"], "UTF-8"], "RawJSON"],
+              "Offset", 0], 0];
+          If[!IntegerQ[off], off = 0];
+          mt = Quiet @ Check[AbsoluteTime[FileDate[f, "Modification"]], now];
+          size > off && now - mt > 3600*OptionValue["IngestStallHours"]]]];
+      corrupt = Total[Map[
+        Function[l, With[{c = StringCases[l, "\"Count\":" ~~ n : (DigitCharacter ..) :> ToExpression[n], 1],
+            at = StringCases[l, "\"AtUTC\":\"" ~~ x : Except["\""] .. ~~ "\"" :> x, 1]},
+          If[at =!= {} && With[{a = iSVDiagUTCStringToAbs[First[at]]}, NumericQ[a] && a >= since],
+            If[c === {}, 1, First[c]], 0]]],
+        Select[StringSplit[logText, "\n"], StringContainsQ[#, "SpoolLineCorrupt"] &]]];
+      reasons = {}; msgs = {};
+      If[gaps =!= {},
+        AppendTo[reasons, "LLMLogGap"];
+        AppendTo[msgs, "LLM \:306e\:547c\:3073\:51fa\:3057\:306e\:8a18\:9332\:304c\:53d6\:308c\:3066\:3044\:307e\:305b\:3093: " <>
+          StringRiffle[(#Provider <> " " <> #Day <> " (\:5b9f\:884c " <> ToString[#Activity] <>
+            " / \:8a18\:9332 " <> ToString[#Recorded] <> ")") & /@ gaps, ", "]]];
+      If[stalled =!= {},
+        AppendTo[reasons, "LogIngestStalled"];
+        AppendTo[msgs, "\:8a3a\:65ad\:30ed\:30b0\:306e\:53d6\:308a\:8fbc\:307f\:304c " <> ToString[OptionValue["IngestStallHours"]] <>
+          " \:6642\:9593\:4ee5\:4e0a\:6b62\:307e\:3063\:3066\:3044\:307e\:3059 (\:672a\:53d6\:308a\:8fbc\:307f " <> ToString[Length[stalled]] <>
+          " \:30d5\:30a1\:30a4\:30eb\:3002SourceVault \:30b5\:30fc\:30d3\:30b9\:3092\:78ba\:8a8d)"]];
+      If[corrupt > 0,
+        AppendTo[reasons, "LogCorruptLines"];
+        AppendTo[msgs, "\:8a3a\:65ad\:30ed\:30b0\:306e\:53d6\:308a\:8fbc\:307f\:3067\:58ca\:308c\:305f\:884c\:304c\:898b\:3064\:304b\:308a\:307e\:3057\:305f (\:76f4\:8fd1 " <> ToString[days] <>
+          " \:65e5\:3067 " <> ToString[corrupt] <> " \:884c)"]];
+      If[reasons === {},
+        <|"Health" -> "OK", "ReasonCode" -> "LogCoverageOK",
+          "Recorded" -> Length[calls], "WindowDays" -> days|>,
+        <|"Health" -> "Degraded", "ReasonCode" -> First[reasons],
+          "ReasonCodes" -> reasons, "Gaps" -> gaps,
+          "StalledSpoolFiles" -> Length[stalled], "CorruptLines" -> corrupt,
+          "Message" -> StringRiffle[msgs, "\:3002"] <> "\:3002"|>]];
+    If[!overrides, $iSVDiagLogCoverageCache = <|"At" -> now, "Result" -> res|>];
+    res];
+
+SourceVaultDiagnosticsRegisterProbe["LogCoverage",
+  Function[SourceVaultDiagnosticsLogCoverageProbe[]]];
+
+(* Codex health (2026-10-02). The probe body is owned by claudecode
+   (ClaudeCode`ClaudeCodexHealthProbe, local files only); it is reached by
+   public-symbol name weakly, so the load order of claudecode / SourceVault
+   does not matter and nothing happens when claudecode is absent. *)
+SourceVaultDiagnosticsRegisterProbe["Codex",
+  Function[
+    If[Names["ClaudeCode`ClaudeCodexHealthProbe"] =!= {} &&
+       With[{s = Symbol["ClaudeCode`ClaudeCodexHealthProbe"]}, Length[DownValues[s]] > 0],
+      Symbol["ClaudeCode`ClaudeCodexHealthProbe"][],
+      <|"Health" -> "OK", "ReasonCode" -> "NotApplicable"|>]]];
 
 (* ------------------------------------------------------------
    Shadow repair (2026-08-26): Remove[] the accidental empty
@@ -1755,6 +1963,55 @@ iSVDiagComprehensiveStaleQ[] :=
     If[!NumberQ[last], True,
       (AbsoluteTime[] - last) > $iSVDiagComprehensiveStaleSeconds]];
 
+(* ------------------------------------------------------------
+   Warnings from the doctor (2026-10-02). The tick runs the doctor (via
+   the heartbeat); when a watched component turns Degraded / Failing it is
+   escalated once per (component, reason) per 24 h: issue DB signal
+   (IssueRequested), the FE status band / headless mail through
+   SourceVaultDiagnosticsEscalate, and a printed notice in the front end
+   (the same channel as the [LLMGraph] progress lines). When the component
+   recovers the key is forgotten, so a recurrence warns again.
+   ------------------------------------------------------------ *)
+If[!ListQ[$iSVDiagWatchedComponents],
+  $iSVDiagWatchedComponents = {"LogCoverage", "Codex"}];
+If[!AssociationQ[$iSVDiagWarnState], $iSVDiagWarnState = <||>];
+
+iSVDiagFENotice[comp_String, health_String, msg_String] :=
+  If[TrueQ[$Notebooks],
+    Print[Style["\[WarningSign] SystemDoctor (" <> comp <> ", " <> health <> "): " <> msg,
+      Bold, FontSize -> 11,
+      If[health === "Failing", RGBColor[0.8, 0.1, 0.1], RGBColor[0.75, 0.35, 0.]]]]];
+
+iSVDiagWarnFromDoctor[doctor_Association] :=
+  Module[{comps = Lookup[doctor, "ComponentHealth", <||>], now = AbsoluteTime[], out = {}},
+    If[!AssociationQ[comps], Return[{}]];
+    Scan[
+      Function[c,
+        Module[{v = Lookup[comps, c, <||>], h, d, rc, key, msg, prior},
+          If[!AssociationQ[v], v = <||>];
+          h = ToString @ Lookup[v, "Health", "OK"];
+          d = Lookup[v, "Detail", <||>];
+          If[!AssociationQ[d], d = <||>];
+          rc = ToString @ Lookup[d, "ReasonCode", Lookup[v, "ReasonCode", "?"]];
+          If[MemberQ[{"Degraded", "Failing"}, h],
+            key = c <> "|" <> rc;
+            prior = Lookup[$iSVDiagWarnState, key, None];
+            If[!NumericQ[prior] || now - prior > 86400,
+              $iSVDiagWarnState[key] = now;
+              msg = ToString @ Lookup[d, "Message", c <> ": " <> rc];
+              Quiet @ Check[
+                SourceVaultDiagnosticsEscalate[<|
+                  "Component" -> c, "ReasonCode" -> rc, "Health" -> h,
+                  "Severity" -> "High", "IssueRequested" -> True,
+                  "Producer" -> "diagnostics", "Summary" -> msg|>],
+                Null];
+              Quiet @ Check[iSVDiagFENotice[c, h, msg], Null];
+              AppendTo[out, key]],
+            $iSVDiagWarnState = KeySelect[$iSVDiagWarnState,
+              !StringStartsQ[#, c <> "|"] &]]]],
+      $iSVDiagWatchedComponents];
+    out];
+
 Options[SourceVaultDiagnosticsTick] = {"IntervalSeconds" -> 60, "Force" -> False};
 SourceVaultDiagnosticsTick[opts : OptionsPattern[]] :=
   Module[{now = AbsoluteTime[], interval, last, stale, hb, status},
@@ -1767,6 +2024,8 @@ SourceVaultDiagnosticsTick[opts : OptionsPattern[]] :=
     $iSVDiagLastTickTime = now;
     hb = Quiet @ Check[
       SourceVaultDiagnosticsMachineHeartbeat["IncludeTopology" -> False], $Failed];
+    (* 2026-10-02: escalate watched components (log coverage, Codex) *)
+    If[AssociationQ[hb], Quiet @ Check[iSVDiagWarnFromDoctor[hb], Null]];
     (* stray stream release (weak coupling: core 不在なら no-op)。Abort/打ち切りで
        Open〜Close の間に取り残された vault 配下 stream はカーネル終了まで残り、
        開いた write ハンドルが Dropbox 同期を止め conflicted copy を作る。
@@ -1784,7 +2043,10 @@ SourceVaultDiagnosticsTick[opts : OptionsPattern[]] :=
               "Files" -> Lookup[swR, "Files", {}]|>],
             Null]]]];
     stale = iSVDiagComprehensiveStaleQ[];
-    If[stale,
+    (* 2026-10-02: once a day, not on every tick (a never-run comprehensive
+       doctor would otherwise append an event every interval) *)
+    If[stale && (!NumericQ[$iSVDiagStaleLoggedAt] || now - $iSVDiagStaleLoggedAt > 86400),
+      $iSVDiagStaleLoggedAt = now;
       Quiet @ Check[
         SourceVaultDiagnosticsLog[<|
           "Type" -> "DiagnosticsEvent",
@@ -2289,3 +2551,13 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
 End[];
 
 EndPackage[];
+
+(* 2026-10-02: start the diagnostics tick automatically in a front-end kernel.
+   SourceVaultDiagnosticsStartTick was never called by anything, so the
+   doctor / heartbeat did not run periodically (heartbeat.json frozen since
+   2026-06-29) and no warning could ever fire. It rides claudecode's shared
+   polling base (rule 95: no own ScheduledTask); without claudecode it is a
+   no-op. Service / script kernels ($Notebooks False) are left alone.
+   Opt out: Global`$SourceVaultDiagnosticsDisableAutoTick = True before load. *)
+If[TrueQ[$Notebooks] && !TrueQ[Global`$SourceVaultDiagnosticsDisableAutoTick],
+  Quiet @ Check[SourceVault`SourceVaultDiagnosticsStartTick["IntervalSeconds" -> 300], Null]];

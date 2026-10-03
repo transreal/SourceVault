@@ -347,32 +347,28 @@ iModelTuple[m_] := Which[
   StringQ[m] && m =!= "", {"claudecode", m},
   True, {"claudecode", ""}];
 
-iOrchCodex[tup_, prompt_] := Module[{ws, answerFile, model, modelArgs, res, ans},
-  ws = FileNameJoin[{$TemporaryDirectory, "implq_codex_" <> StringReplace[CreateUUID[], "-" -> ""]}];
-  Quiet @ CreateDirectory[ws, CreateIntermediateDirectories -> True];
-  answerFile = FileNameJoin[{ws, "answer.txt"}];
+iOrchCodex[tup_, prompt_] := Module[{model, res, ans},
   model = If[Length[tup] >= 2 && StringQ[tup[[2]]] && tup[[2]] =!= "" && tup[[2]] =!= "Automatic",
     tup[[2]], ""];
-  modelArgs = If[model =!= "", {"-m", model}, {}];
-  (* TimeConstrained bounds a stuck "codex exec" to $iOrchCallTimeLimit s so a
-     hung/very-slow provider can never block the driver indefinitely. (RunProcess
-     has no usable timeout option here -- ProcessTimeLimit is rejected -- so the
-     synchronous call is wrapped.) On timeout it returns the marker "TimedOut";
-     otherwise res is the All-form result association. *)
-  res = TimeConstrained[
+  (* 2026-10-02: 以前は利用者の ~/.codex のまま `codex exec -s workspace-write` で
+     起動していた。これはディスク全体を読めるうえ、~/.codex/config.toml の MCP
+     サーバー・プラグイン (サンドボックスの外で動く) まで Codex に渡していた。
+     ClaudeCodexSandboxedExec は PC ごとのサンドボックス確認 (未確認なら起動せず
+     アラート) を通ったうえで、nbaccess-codex の許可リスト型プロファイルだけを置いた
+     実行ごとの CODEX_HOME で動かし、終了後に消す。claudecode が古く関数が無ければ
+     起動しない (fail-closed)。時間制限は従来どおり $iOrchCallTimeLimit 秒。 *)
+  res = If[Length[DownValues[ClaudeCode`ClaudeCodexSandboxedExec]] > 0,
     Quiet @ Check[
-      RunProcess[Join[iCmdPrefix[],
-          {"codex", "exec", "-C", ws, "-s", "workspace-write", "--skip-git-repo-check",
-           "-c", "approval_policy=never"}, modelArgs, {"-o", answerFile, "-"}],
-        All, StringToByteArray[prompt, "UTF-8"]],
-      <|"ExitCode" -> "Error", "StandardOutput" -> ""|>],
-    $iOrchCallTimeLimit,
-    "TimedOut"];
-  ans = Which[
-    FileExistsQ[answerFile], iReadUTF8[answerFile],
-    AssociationQ[res], Lookup[res, "StandardOutput", ""],
-    True, ""];
-  Quiet @ If[DirectoryQ[ws], DeleteDirectory[ws, DeleteContents -> True]];
+      ClaudeCode`ClaudeCodexSandboxedExec[prompt, "Model" -> model,
+        "TimeConstraint" -> $iOrchCallTimeLimit],
+      $Failed],
+    Failure["CodexSandboxedExecMissing", <|"MessageTemplate" ->
+      "claudecode.wl does not provide ClaudeCodexSandboxedExec (update and reload it)."|>]];
+  If[FailureQ[res],
+    Return["[codex was not started: " <>
+      ToString[Quiet @ Check[res["Message"], "the sandboxed Codex call failed"]] <> "]",
+      Module]];
+  ans = If[AssociationQ[res], Lookup[res, "Output", ""], ""];
   If[StringQ[ans] && StringTrim[ans] =!= "",
     ans,
     (* no output: timed out (after $iOrchCallTimeLimit s) or the call failed.
