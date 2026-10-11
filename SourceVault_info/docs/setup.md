@@ -24,9 +24,9 @@ GitHubInstallPackage["SourceVault",
 
 - `SourceVault_core.wl` — コア基盤(排他制御・不変 snapshot・event log・blob・pointer)
 - `SourceVault_voice.wl` — ローカル音声資産(音声合成・音声認識)の解決層。この機械の中だけで完結し、テキストも音声も外部へ出ない
-- `SourceVault_realtime.wl` — クラウド経路の音声会話(OpenAI Realtime または GPT-Live、既定のマイク/スピーカーを使用)の解決層。GPT-Live は全二重(聞きながら話す)でスライド操作・SourceVault 問い合わせ等をクライアント側へ委譲する。質問に答えるときの背景(発表全体の要約など)は `SourceVaultRealtimeAddContext[text]` で音声会話へ渡せる(ワーカー 1.9 以降。現行ワーカーは 1.10)。ローカル音声資産の解決層である voice と対になるが、依存関係は起動時にだけ効くため独立してロードされる
+- `SourceVault_realtime.wl` — クラウド経路の音声会話(OpenAI Realtime または GPT-Live、既定のマイク/スピーカーを使用)の解決層。GPT-Live は全二重(聞きながら話す)でスライド操作・SourceVault 問い合わせ等をクライアント側へ委譲する。質問に答えるときの背景(発表全体の要約など)は `SourceVaultRealtimeAddContext[text]` で音声会話へ渡せる(ワーカー 1.9 以降。現行ワーカーは 1.12)。話していない間もスピーカーへ聞こえない小さなノイズを流し、Bluetooth スピーカー等が休んで話し始めが欠けるのを防ぐ(ワーカー 1.12。`$SourceVaultRealtimeKeepAliveLevel`)。ローカル音声資産の解決層である voice と対になるが、依存関係は起動時にだけ効くため独立してロードされる
 - `SourceVault_vision.wl` — ローカル視覚資産(人物検出・姿勢推定 ONNX モデル)の解決層
-- `SourceVault_slidedeck.wl` — 発表(スライド + 発表シナリオ)登録簿
+- `SourceVault_slidedeck.wl` — 発表(スライド + 発表シナリオ)登録簿。発表の登録には動画の `SlideURL`(mp4)か、ポスター PDF の `PosterURL` のどちらか(少なくとも一方が http(s) の絶対 URL)が必要で、ポスターだけの発表も同じ登録簿・同じ QA を使える
 - `SourceVault_knowledgegraph.wl` — 発表用知識グラフ(KG)層。論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手(理解度)と時間(枚数・分)を与えて最小全域順序木・階層概要・詰め込み(packing)・言語別アウトラインを決定的に計算する(LLM は呼ばない)。kb(過去デッキ検索)・oopsseed(グラフ描画)に弱結合。取り込み・保存の入口で文字化け(UTF-8 のバイトを 1 文字ずつ読んだ形)を自動修復し、保存済みの KG・周辺知識の書庫は `SourceVaultKGRepairMojibake[]` で一括修復できる。スライド計画では 1 枚あたりの行数予算(長い行の折り返しも考慮)、図表の継承・再掲(図ごとに `"FigureReuse"` 回まで)、周辺知識の用語ミニ辞書(表への集約。`"GlossaryRows"`)、部の入口の橋渡し文、枚数の少ない節の畳み込みなどが決定的に処理される。計算ノートブック(下記 `SourceVault_papernb.wl`)も 1 つのストーリーとして KG(Kind = Notebook)に入れられる
 - `SourceVault_contracts.wl` — サブシステム間のコントラクト(型・不変条件)定義
 - `SourceVault_wiring.wl` — サブシステム間の配線・初期化
@@ -813,7 +813,7 @@ SourceVault`SourceVaultMCPRegisterTools["resoloop", <|
 
 ### 質問に答えるときの背景の受け渡し(SourceVaultRealtimeAddContext)
 
-GPT-Live では、質問に答えるときの背景(発表全体の要約など)を音声会話へ渡せます(ワーカー 1.9 以降。現行ワーカーは `SourceVault`$SourceVaultRealtimeWorkerVersion` = `"1.10"`)。
+GPT-Live では、質問に答えるときの背景(発表全体の要約など)を音声会話へ渡せます(ワーカー 1.9 以降。現行ワーカーは `SourceVault`$SourceVaultRealtimeWorkerVersion` = `"1.12"`)。
 
 ```wolfram
 SourceVaultRealtimeAddContext["この発表は … を扱う。要点は …"]
@@ -823,6 +823,29 @@ SourceVaultRealtimeAddContext["この発表は … を扱う。要点は …"]
 - 読み上げ中に送ると読み上げが遅れるので、読み上げの無いときに使ってください。
 - `SourceVault`$SourceVaultRealtimeHoldFE` が `True` の間は、呼び出し側(SlideWorkflow のボタン等)が FE とやり取りしている最中とみなして、ワーカーからの受信処理(pump)の回を飛ばします。割り込みから FE を呼ぶと互いの返事を待ち合って止まるための保護です。
 - 診断が必要なときは `SourceVault`$SourceVaultRealtimeTrace = True` を設定すると、Start / Pump / StatusBar の各段階が `$TemporaryDirectory/slideworkflow-trace.log`(SlideWorkflow の `$SlideTrace` と同じファイル)に時刻つきで記録されます(既定は無効。トレースは FE を使いません)。
+
+### 話し始めの欠け対策(KeepAliveLevel / LeadInMilliseconds、ワーカー 1.12)
+
+Bluetooth スピーカーなどは、無音が続くと休止してしまい、次に話し始めたときに最初の部分が欠けることがあります。ワーカー 1.12 では、話していない間もスピーカーへ**聞こえないほど小さなノイズ**を流し続けて休止を防ぎ、さらにしばらく鳴っていなかったあとの話し始めの前に短い助走を置きます。
+
+```wolfram
+(* 流す大きさを変える(dBFS。既定 -70)。それでも欠けるときは -60 くらいまで上げる *)
+SourceVault`$SourceVaultRealtimeKeepAliveLevel = -60.;
+
+(* 以前の動き(無音のまま)に戻す *)
+SourceVault`$SourceVaultRealtimeKeepAliveLevel = None;
+
+(* 1 回の起動だけ変える *)
+SourceVaultRealtimeStart["KeepAliveLevel" -> -60, "LeadInMilliseconds" -> 150]
+```
+
+| 変数 / オプション | 既定値 | 説明 |
+|-----------|--------|------|
+| `$SourceVaultRealtimeKeepAliveLevel` | `-70.` | 話していない間にスピーカーへ流す聞こえないノイズの大きさ(dBFS)。`None` で流さない |
+| `"KeepAliveLevel"`(`SourceVaultRealtimeStart`) | `Automatic` | `Automatic` は `$SourceVaultRealtimeKeepAliveLevel` を使う。数値を渡すとその 1 回だけ変える。`None` で流さない |
+| `"LeadInMilliseconds"`(`SourceVaultRealtimeStart`) | `100` | しばらく鳴っていなかったあとの話し始めの前に置く助走(ミリ秒)。数値でない値は 0 として扱われる |
+
+どちらも話し始めが欠けるのを防ぐためのものです。
 
 どちらも**何も導入しなくてもロードは通り**、必要とする機能だけが静かに落ちます。
 状態は次で確認できます。
@@ -1152,6 +1175,15 @@ SourceVault`SourceVaultSourcePrivacy["src-..."]       (* 取り込み済みソ�
 - セルの単位(CellTags `"CNU:<unit>"`)は KG のノードになり、セルの並びはその 1 つのストーリーとして KG(GraphId = Id、Kind = Notebook)に入ります(SlideWorkflow の SlideComputeGraph)。
 - 素材の PL は、`sv://` / `src-` / Eagle は解決した PL(解決できなければ 1.0 = fail-closed)、計算ノートはその登録の PL、それ以外(URL・arXiv・ローカルファイル・KG のノード)は 0 として扱われ、ノートブック全体の PL は素材の最大値で決まります(PL >= 0.5 は `$ClaudePrivateModel` のみ。無ければ fail-closed)。
 
+### 発表(スライド)登録簿の動作確認(SourceVault_slidedeck.wl)
+
+`SourceVault_slidedeck.wl`(本体ロード時に自動ロード)は、発表(スライド + 発表シナリオ)の登録簿です。登録する発表には、次のどちらかの URL が必要です。
+
+- `SlideURL` — 動画(mp4)の URL
+- `PosterURL` — ポスター PDF の URL(SlideWorkflow の `PosterURL:`。v1.56)
+
+どちらか一方が `http://` または `https://` の絶対 URL であれば登録できます。ポスターだけの発表(動画なし)も、同じ登録簿・同じ QA で扱われます。両方とも絶対 URL でないと、「SlideURL か PosterURL のどちらかが http(s) の絶対 URL である必要があります。」という趣旨のエラーになります。
+
 ### 知識グラフ(KG)の文字化け修復(SourceVaultKGRepairMojibake)
 
 `SourceVault_knowledgegraph.wl`(本体ロード時に自動ロード)で扱う知識グラフでは、周辺知識をエージェントに作らせたノードなどが、UTF-8 のバイトを 1 文字ずつ読んだ形に化けて保存されることがありました(例: ジャワ語の「gawé」→「gawÃ©」。JSON 上では `\u00c3\u00a9`)。取り込み側は UTF-8 で読むため、渡された文字列が既にこの形だった場合は入口で直す必要があります。現在は次のように扱われます。
@@ -1280,7 +1312,7 @@ SourceVaultNotebookSummary[nbPath]
 | 一覧の「和訳NB」ボタンを押しても既に開いているノートが前面に来ない／反応しない | `SourceVaultOpenPaperNotebook` は開いている窓を探して前面へ出し、無ければ開いて前面へ出します。登録簿 (`SourceVaultPaperNotebookEntry[ref]`) の `File` が現在の PC で存在するか確認してください(root 内なら相対パスで持つので、`$SourceVaultPaperNBRoot` が正しく解決されているかも確認) |
 | `SourceVaultSystemDoctor[]` / 診断が `LLMLogGap` / `LogIngestStalled` / `LogCorruptLines` で Degraded | ログ網羅性プローブ(`SourceVaultDiagnosticsLogCoverageProbe[]`)が、LLM 呼び出しの記録が活動量に対し足りない、取り込みが `IngestStallHours` 以上停止、または診断ログに壊れた行を検出しています。メッセージ中の日付・プロバイダ・未取り込み件数と、SourceVault サービス(取り込み側)が稼働しているかを確認してください。SourceVault サービスの無い PC では `NotApplicable` となり警告は出ません |
 | 診断 tick / 包括診断・heartbeat が定期的に動いていない | 対話 FE カーネルでは SourceVault の (再)ロードで診断 tick が自動起動します(claudecode が無いと何もしません)。headless カーネルでは起動しません。包括診断は 1 日 1 回です |
-| `SourceVaultNotePrivacy` でマークした入力セルが赤くならない(出力セルは正しく機密表示される) | 2026-09-11 実機で判明した、環境によっては出力セル確定前に評価完了扱いとなり ScheduledTask 経由の遅延 flush が走らないケースがあった問題。`$SourceVaultPrivacyCellEpilog`(既定 True)により、評価完了後(出力セルが存在する時点)の CellEpilog で確実に flush するよう修正済み。SourceVault を最新版に更新すれば自動的に有効になります |
+| `SourceVaultNotePrivacy` でマークした入力セルが赤くならない(出力セルは正しく機密表示される)／評価が「実行中」のまま終わらない | 環境によっては出力セル確定前に評価完了扱いとなり、遅延 flush が走らないケースがありました(2026-09-11 実機で判明)。現在は `$SourceVaultPrivacyCellEpilog`(既定 True)により、評価完了後(出力セルが存在する時点)の CellEpilog で確実に flush します。前の評価で出力セルが取れなかった要求は、次の評価のついでに流されます(他セルの未処理があるときだけ、かつ 2 秒に 1 回まで)。以前は 0.4 秒ごとにポーリングする ScheduledTask が本評価と取り合い、長い評価(初期化で 10 秒超)中に「実行中のまま終わらない」症状を起こしていた(2026-10-06 実機報告)ため、epilog を張れた環境ではこのポーリングを動かしません。CellEpilog を張れない環境だけ従来の遅延タスクにフォールバックします。SourceVault を最新版に更新すれば自動的に有効になります |
 | 大きい notebook(`SkipReason` -> `"FileTooLarge"`)の Header/Todo が再 index しても復元されない | skip 済み (too-large) snapshot は Header/Todos を保持しない仕様(再生成不可)。旧形式 (`SourceSize` フィールド無しの `snap-toolarge-*`) は最新形式へ自動アップグレードされ、以後は毎回ではなく 1 度だけ ForceReindex すれば済みます |
 | `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |
 | `SourceVaultMailAgendaItems[]` が要対応メールを返さない・見逃す | Category/Priority/Deadline は `SourceVaultInferMailDerivedBatch[]` の事前計算に依存(未計算メールは除外せず `PendingCount` に計上されるだけ)。まず `SourceVaultMailAddSummaries[mbox]` で派生を計算する。オーナー宛て判定は `$SourceVaultMailAgendaDirectionThreshold`(既定 0.7)未満だと候補から外れるため、`PrivateVault/config/mailagenda.json` の OwnerAddresses/OrgAddresses/AddresseePatterns を確認 |
@@ -1295,6 +1327,7 @@ SourceVaultNotebookSummary[nbPath]
 | web / local ソースの Summary が空・英語のまま | `SourceVaultBackfillSourceSummaries[]` を `$Language = "Japanese"` のセッションで実行。機密ソース(PrivacyLevel >= 0.5)はローカル LLM (`$ClaudePrivateModel`) が必要(未設定なら fail-closed で失敗)。本文が prescan で危険と判定されると `"Quarantined"` として要約されない(意図した挙動) |
 | 公開 arXiv / Web ソースが機密扱い(PrivacyLevel 0.5 以上)になっている、または旧既定 `PublicWeb = 0.4` のまま残っている | `SourceVaultReclassifyPublicPrivacy[]` で公開既定値(すべて 0.0)に一括是正(冪等)。旧既定 0.4 の移行だけを対象から外したい場合は `"LegacyPublicWeb" -> False` |
 | KB に取り込んだスライドデッキの PrivacyLevel が、公開宣言(CloudPublishable)を後から付けた・外した後も追従しない | `SourceVaultKBRefreshDeckPrivacy[kbId]` を実行する(冪等。既定で変更があれば索引も自動再構築)。明示指定した PrivacyLevel(`PrivacySource` `"Explicit"`)は対象外。書き換え内容だけ確認したい場合は `"DryRun" -> True` |
+| ポスターだけの発表(動画なし)を slidedeck 登録簿に登録できない | `SlideURL` / `PosterURL` のどちらかが `http://` または `https://` で始まる絶対 URL である必要があります(`PosterURL` はワーカー・登録簿 v1.56 以降で対応。SlideWorkflow の `PosterURL:`)。SourceVault を最新版に更新し、URL が絶対 URL になっているか確認してください |
 | モデルのバージョン比較が誤る(新メジャー版に旧マイナー付き版が負ける) | `iSVParseModelVersion` の数値キーを固定幅パディング方式(base-100000・width 6)に修正済み。旧実装は指数に桁数 `Length` を使っていたため、桁数の異なるバージョン間(例: `claude-sonnet-4-6` の `{4,6}` と `claude-sonnet-5` の `{5}`)で、桁数の多い `{4,6}`(`4*1000+6=4006`)が桁数の少ない `{5}`(`5`)を誤って上回っていました。SourceVault を最新版に更新すれば、固定幅パディングにより `{5}`(新メジャー版)が `{4,6}` を正しく上回ります。日付らしき数値は `iSVParseModelVersion` で事前に除外されるため(10000 未満のみ通す)、固定幅パディング(base-100000・width 6)と衝突して桁上がりすることはありません。2026-07-06 に、この不具合で LM Studio モデルが誤ルートした実例が確認され対処済みです。 |
 | `SourceVaultShowSourceSummary` がいつも自動生成版を開く(追記が反映されない) | ノート内の「このノートを保存する」ボタンを押して `<PrivateVault>/sources/summary-notes/` に保存したか確認。保存版が正本として優先されます。逆に保存版を無視して record から作り直したい場合は `"Fresh" -> True` |
 | `SourceVaultWebSearch` / `SourceVaultSearXNGAvailableQ` が失敗・空を返す | SearXNG が `127.0.0.1:8888`(`$SourceVaultSearXNGEndpoint`)で稼働しているか、`settings.yml` の `search.formats` に `json` が含まれるか、`limiter`/`botdetection` がローカルアクセスをブロックしていないか確認 |
@@ -1317,7 +1350,8 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultVoiceSpeak` が `SourceVaultVoiceSynthesisFailed` / `"Response" -> EndOfFile` を返す | piper が要求を読めずに即終了している。まず `"StandardError"` を見る。 2026-08-21 以前は要求を `WriteLine` で書いており、`$CharacterEncoding` が UTF-8 でないカーネル(日本語 Windows の FE メインカーネルは既定 ShiftJIS)で JSON 内の日本語が化けて必ずこうなった。現在は生の UTF-8 バイトで書き込む。 回帰テストは `test codes/sourcevault_voice_test.wls` |
 | 別の声に替えたら合成が失敗する・無音になる | 単言語の声に多言語用の `language` を送っている可能性。`SourceVaultVoices[]` の `"Multilingual"` を確認する(`False` の声には `language` を送らない)。声ごとの 言語・サンプリング周波数は config から読むので、config が欠けている声は `SourceVaultVoices[]` の `"Config"` が `None` になる |
 | GPT-Live の発表中割り込み(許可ワード)を使いたいのに反応しない | `SourceVaultRealtimeInstall["Vosk" -> True]` で vosk を導入したか確認(既定では入りません)。導入後は `SourceVaultRealtimeStart["Interrupt" -> "Words"]` のように明示するか、`SourceVaultRealtimeNarrate` 呼び出し側で意図した割り込みモードになっているかを確認してください |
-| `SourceVaultRealtimeAddContext` で渡した背景が効かない・読み上げが遅れる | ワーカーが 1.9 未満だと使えません(`SourceVault`$SourceVaultRealtimeWorkerVersion` が現行 `"1.10"` か確認し、古ければ `SourceVaultRealtimeInstall[...]` でワーカーを更新)。読み上げ中に送ると読み上げが遅れるため、読み上げの無いときに渡す。GPT-Live では 1 回の量に上限があり、長い背景はワーカーが分けて順に渡します。呼び出し側が FE とやり取りしている間(`$SourceVaultRealtimeHoldFE` が `True`)は受信処理の回が飛ばされます |
+| `SourceVaultRealtimeAddContext` で渡した背景が効かない・読み上げが遅れる | ワーカーが 1.9 未満だと使えません(`SourceVault`$SourceVaultRealtimeWorkerVersion` が現行 `"1.12"` か確認し、古ければ `SourceVaultRealtimeInstall[...]` でワーカーを更新)。読み上げ中に送ると読み上げが遅れるため、読み上げの無いときに渡す。GPT-Live では 1 回の量に上限があり、長い背景はワーカーが分けて順に渡します。呼び出し側が FE とやり取りしている間(`$SourceVaultRealtimeHoldFE` が `True`)は受信処理の回が飛ばされます |
+| クラウド音声会話で、話し始めの最初の部分が欠ける(Bluetooth スピーカー等) | スピーカーが無音の間に休止して、起き上がる前に話し始めてしまっています。ワーカー 1.12 以降では、話していない間も聞こえない小さなノイズ(既定 -70 dBFS)を流して休止を防ぎ、話し始めの前に助走(`"LeadInMilliseconds"`、既定 100)を置きます。`SourceVault`$SourceVaultRealtimeWorkerVersion` が `"1.12"` 以上か確認し、それでも欠けるときは `SourceVault`$SourceVaultRealtimeKeepAliveLevel = -60.` くらいまで上げてください(`SourceVaultRealtimeStart["KeepAliveLevel" -> -60]` で 1 回だけ変えることも可)。ノイズを流したくない場合は `None` を指定します(以前の動き) |
 | クラウド音声会話の起動・受信処理が止まる/遅い原因を調べたい | `SourceVault`$SourceVaultRealtimeTrace = True` にして再現し、`$TemporaryDirectory/slideworkflow-trace.log` の `SV:` 行(`Start ...` / `Pump ...` / `StatusBar ...` の `<` `>` の対)を見る。対の片方しか無い箇所が止まっている段階です(トレースは FE を使わず、既定は無効) |
 | 手元の声モデルが公開リポジトリに入りそうになる | `upload_manifest.json` の `excludePatterns` から `SourceVault_voice/tts/models/` 等の 行が消えていないか確認する。`GitHubValidateManifest["SourceVault"]` の `"ExcludePatterns"` で実効値を見られる |
 | `SourceVaultSetModelIntent["$ClaudeAdvisaryModel", ...]` を設定したのに再起動後に反映されていない・codex に戻ってしまう | 2026-08-20 以前は `$ClaudeAdvisaryModel` が `$iSVModelIntentMap` の既定キーに含まれておらず、カーネル起動のたびにパッケージ既定 `{"chatgptcodex", "Automatic"}` へ戻っていた(手で設定しても再起動後の仕様生成が黙って codex を呼ぶ不具合)。修正版では既定キーに追加済み。`SourceVaultModelIntentMap[]` で `"$ClaudeAdvisaryModel"` キーの値を確認し、期待と違う場合は `SourceVaultSetModelIntent["$ClaudeAdvisaryModel", {provider, intent}]` で設定し直す |

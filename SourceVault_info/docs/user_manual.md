@@ -102,7 +102,7 @@ SourceVault をロードすると、以下が自動的に有効になります�
 | Header parser MakeExpression 第一選択 | InitializationCell の副作用を回避 |
 | Header フィルタ | TodoItem cell の TaggingRules を Header と誤認しない |
 
-> **KB 層 / 対話 QA 層 / 音声会話層について:** `SourceVault_kb.wl` は Graph-RAG による低遅延応答層で、`SourceVault_lexical.wl` / `SourceVault_searchindex.wl` に依存するためそれらのロード後に読み込まれます。`SourceVault_talkqa.wl` はこの KB 層の上に構築された対話型 QA 層で、`SourceVault_kb.wl` の直後にロードされます。`SourceVault_realtime.wl` は OpenAI Realtime API / GPT-Live を経由した**クラウド経路の音声会話**を提供し、既定ではこのマシンのマイク/スピーカーをそのまま使います。ローカル資産解決層の `SourceVault_voice.wl` と役割上は対になる層ですが、`SourceVault_realtime.wl` の依存は関数が実際に呼び出されたときにだけ効くため (ロード時点では重い初期化を行わない)、`SourceVault_voice.wl` の直後ではなく `SourceVault_oopsseed.wl` の後というこの位置での自動ロードでも問題ありません。これら 4 層の詳細な API は後述の「発表インフラ: スライド登録簿・低遅延 QA・クラウド音声会話」節を参照してください。
+> **KB 層 / 対話 QA 層 / 音声会話層について:** `SourceVault_kb.wl` は Graph-RAG による低遅延応答層で、`SourceVault_lexical.wl` / `SourceVault_searchindex.wl` に依存するためそれらのロード後に読み込まれます。`SourceVault_talkqa.wl` はこの KB 層の上に構築された対話型 QA 層で、`SourceVault_kb.wl` の直後にロードされます。`SourceVault_realtime.wl` は OpenAI Realtime API / GPT-Live を経由した**クラウド経路の音声会話**を提供し、既定ではこのマシンのマイク/スピーカーをそのまま使います。ローカル資産解決層の `SourceVault_voice.wl` と役割上は対になる層ですが、`SourceVault_realtime.wl` の依存は関数が実際に呼び出されたときにだけ効く (ロード時点では重い初期化を行わない) ため、`SourceVault_voice.wl` の直後ではなく `SourceVault_oopsseed.wl` の後というこの位置での自動ロードでも問題ありません。これら 4 層の詳細な API は後述の「発表インフラ: スライド登録簿・低遅延 QA・クラウド音声会話」節を参照してください。
 
 > **自動トリガスケジューラの自動起動:** SourceVault をロードすると、実行環境が Front End のメインカーネル (`$FrontEnd =!= Null`) の場合に限り `SourceVaultAutoTriggerStartScheduler[]` が自動的に呼ばれます。これは「他 PC から『このマシンでこのワークフローを実行して』と依頼されたジョブを、このマシンが常に拾えるようにする」ためのものです。SourceVault.wl はサブカーネル・wolframscript の外部ジョブ・SourceVault サービスカーネル・MCP ゲートウェイカーネルなど、多くのプロセスからロードされますが、スケジューラは **1 マシンにつき 1 箇所 (対話的 FE) だけ**で起動するようガードされています。すべてのカーネルで無条件に起動すると、Wolfram ライセンスの同時カーネル席を浪費し、ジョブが多重ディスパッチされてしまいます。起動は冪等 (`StartScheduler` は同じ tick 登録を再登録するだけ) で、結果は `SourceVault\`Private\`$iSVAutoTriggerSchedulerAutoStartResult` に記録されます (同一カーネルセッション内では 1 回のみ実行)。FE-less の計算ノード (例: rapterlake4t) はこのガードの対象外で、代わりにサービス側の HEADLESS DISPATCH モード (`SourceVaultEnableHeadlessDispatch` によるマシン単位オプトイン) を使います。なお、スケジューラの起動箇所そのものを 1 台 1 箇所に絞るこのガードとは別に、ワークフローカタログの実際の起動 (dispatch) は複数プロセスから並行して呼ばれ得るため、内部の `SourceVaultAutoTriggerDispatchCatalogRuns` が per-slot の atomic dispatch claim によって同一ジョブの二重実行を防いでいます。
 >
@@ -1573,7 +1573,13 @@ SourceVault の暗号・メール機能は、本体 `SourceVault.wl` のロー�
 | `SourceVault_privacy.wl` | `SourceVault\`` | privacy 判定の正準 exit (View/Core)。`SourceVault_maildb.wl` はこれに弱結合 |
 | `SourceVault_maildb.wl` | `SourceVault\`` | maildb + imap + mailui |
 
-> **SourceVault_privacy.wl (新規サブファイル):** メール本文や各種ノートの秘匿度 (PrivacyLevel) 判定を、View/Core 層に対する **正準な exit point** として切り出したモジュールです。公開関数は主に `SourceVaultPrivateView`（指定 record / note のプライバシー状態のビュー取得）と `SourceVaultNotePrivacyOf`（個別ノート・レコード単位の秘匿度判定コア）です。ロード順は `SourceVault_identity.wl` の後・`SourceVault_maildb.wl` の前で、`SourceVault_maildb.wl` はこれに **弱結合** しています — `SourceVault_privacy.wl` が (旧バージョンとの混在などで) 未ロードでも maildb 自体は動作を継続しますが、その場合の秘匿度判定は旧来のテキスト走査 (キーワードパターンによる簡易判定) にフォールバックし、`SourceVaultPrivateView` 経由の正準判定は使われません。評価セルの privacy マークは `$SourceVaultPrivacyCellEpilog` (既定 `True`) が制御します。有効なときは `SourceVaultNotePrivacy` が評価中の入力セルに `CellEpilog :> SourceVaultMarkEvaluationPrivacyCells[]` を付与し、評価完了後 (出力セルが実際に挿入された時点) にマークを確実に flush します。これは、環境によっては従来の `ScheduledTask` ベースの遅延 flush だけでは走らず「入力セルだけ赤くなり出力セルが決してマークされない」ケースへの保険で、同一セルへの `SetOptions` は 1 回だけに抑えられます。
+> **SourceVault_privacy.wl (新規サブファイル):** メール本文や各種ノートの秘匿度 (PrivacyLevel) 判定を、View/Core 層に対する **正準な exit point** として切り出したモジュールです。公開関数は主に `SourceVaultPrivateView`（指定 record / note のプライバシー状態のビュー取得）と `SourceVaultNotePrivacyOf`（個別ノート・レコード単位の秘匿度判定コア）です。ロード順は `SourceVault_identity.wl` の後・`SourceVault_maildb.wl` の前で、`SourceVault_maildb.wl` はこれに **弱結合** しています — `SourceVault_privacy.wl` が (旧バージョンとの混在などで) 未ロードでも maildb 自体は動作を継続しますが、その場合の秘匿度判定は旧来のテキスト走査 (キーワードパターンによる簡易判定) にフォールバックし、`SourceVaultPrivateView` 経由の正準判定は使われません。
+>
+> **評価セルの privacy マーク (`$SourceVaultPrivacyCellEpilog`):** 評価セルの privacy マークは `$SourceVaultPrivacyCellEpilog` (既定 `True`) が制御します。有効なときは `SourceVaultNotePrivacy` が評価中の入力セルに `CellEpilog :> SourceVaultMarkEvaluationPrivacyCells[]` を付与し、**評価完了後 (出力セルが実際に挿入された時点) にマークを flush します。これが正規の経路です**。同一セルへの `SetOptions` は 1 回だけに抑えられます (既に武装済みのセルには再度設定しません)。
+>
+> - **epilog を張れたとき**は、0.4 秒ごとにポーリングする `ScheduledTask` を動かしません。かつてはこのポーリングが長い評価 (初期化で 10 秒超など) の最中に走って本評価と取り合い、tick ごとに `Cells[nb]` / `CurrentValue` の FE 往復が発生して「評価が実行中のまま終わらない」症状を起こしていました (2026-10-06 に実機で報告)。
+> - **epilog を張れない環境**でだけ、従来の遅延 `ScheduledTask` による flush に戻ります (出力セルが取れなかった入力セルだけが赤くなる症状への保険という位置づけは変わりません)。
+> - **前の評価で出力セルが取れなかった要求**は、次の評価のついでに流されます。そのときには前の出力セルは既に存在するので、タイマーに頼る必要がありません。この「取り残し分の flush」は、他のセルの未処理が溜まっているときだけ、かつ **2 秒に 1 回まで**に絞られます。`SourceVaultNotePrivacy` は 1 回の初期化で何十回も呼ばれるため、FE 往復が増えないようにするためです。
 
 ```
 $packageDirectory\
@@ -2250,11 +2256,11 @@ tree["Depth"]
 
 ## 発表インフラ: スライド登録簿・低遅延 QA・クラウド音声会話
 
-発表 (プレゼンテーション) を回すためのサブシステムは 4 層に分かれています。上から順に、**スライド登録簿** (どのタイトルにどの mp4 / 原稿があるか) → **KB** (原稿・スライドを Graph-RAG で索引化) → **対話型 QA 層** (質疑応答をあらかじめ準備しておく) → **音声会話層** (実際にマイク/スピーカーで会話する) という積み重ねです。いずれも [SlideWorkflow](https://github.com/transreal/SlideWorkflow) がスライド・原稿そのものを作る層で、SourceVault 側は「置き場所と公開ポリシー」だけを持ちます。
+発表 (プレゼンテーション) を回すためのサブシステムは 4 層に分かれています。上から順に、**スライド登録簿** (どのタイトルにどの mp4 / ポスター PDF / 原稿があるか) → **KB** (原稿・スライドを Graph-RAG で索引化) → **対話型 QA 層** (質疑応答をあらかじめ準備しておく) → **音声会話層** (実際にマイク/スピーカーで会話する) という積み重ねです。いずれも [SlideWorkflow](https://github.com/transreal/SlideWorkflow) がスライド・原稿そのものを作る層で、SourceVault 側は「置き場所と公開ポリシー」だけを持ちます。
 
 ### スライドデッキ登録簿 (SourceVault_slidedeck)
 
-`SourceVault_slidedeck.wl` は、発表タイトル (例:「計算と自然集会31の発表」) を Sliden 用 mp4 の URL とコンパイル済み発表シナリオ (原稿) に対応付けるレジストリです。スライド/原稿そのものは作らず、置き場所と公開ポリシーだけを保持します。
+`SourceVault_slidedeck.wl` は、発表タイトル (例:「計算と自然集会31の発表」) を Sliden 用 mp4 の URL (または、ポスター発表ならポスター PDF の URL) とコンパイル済み発表シナリオ (原稿) に対応付けるレジストリです。スライド/原稿そのものは作らず、置き場所と公開ポリシーだけを保持します。
 
 ```mathematica
 (* 登録 (再登録は同じ Id/DeckFile/SlideURL に対してマージされ、新規に分岐しない) *)
@@ -2264,6 +2270,13 @@ SourceVaultSlideDeckRegister[<|
   "PrivacyLevel" -> 0.|>,
   <|"Opening" -> "...", "Closing" -> "...",
     "Slides" -> {<|"Slide" -> 1, "Text" -> "..."|>}|>]
+
+(* ポスターだけの発表: SlideURL の代わりに PosterURL (ポスター PDF の URL) で登録できる *)
+SourceVaultSlideDeckRegister[<|
+  "Title" -> "計算と自然ポスター発表",
+  "PosterURL" -> "https://example.com/poster.pdf",
+  "PrivacyLevel" -> 0.|>,
+  <|"Opening" -> "...", "Closing" -> "..."|>]
 
 (* タイトル・エイリアス・Id から曖昧一致で解決 *)
 SourceVaultSlideDeckLookup["計算と自然三十一"]   (* "31" と同一視される *)
@@ -2276,6 +2289,8 @@ SourceVaultSlideDeckList[]              (* 公開エントリ (PrivacyLevel < ce
 SourceVaultSlideDeckUnregister[idOrTitle]
 SourceVaultSlideDeckRegistry[]          (* 全エントリ (非公開含む、内部キーのまま) *)
 ```
+
+**SlideURL と PosterURL (v1.56):** 登録エントリには `"SlideURL"` (Sliden 用 mp4) と `"PosterURL"` (ポスター PDF。SlideWorkflow の `PosterURL:` に対応) の 2 種類の URL を持たせられます。**どちらか一方が `http://` または `https://` で始まる絶対 URL であれば登録できます** (両方でも構いません)。どちらも絶対 URL でない場合は、「SlideURL か PosterURL のどちらかが http(s) の絶対 URL である必要があります。」という趣旨のエラーになります (以前は `SlideURL` だけが必須でした)。ポスターだけの発表も、スライドの発表と同じ登録簿・同じ QA を使えます。`PosterURL` は前後の空白が除去されて保存され、`SourceVaultSlideDeckPresentationSpec` の結果には `posterUrl` として含まれます。再登録時の既存エントリとの照合 (同じデッキのマージ) も、`SlideURL` だけでなく `PosterURL` を使って行われます。
 
 **タイトル照合の規則:** 正規化 (NFKC・小文字化・英数字以外除去) の後、**末尾の漢数字は数字に変換**されます (「三十一」→「31」。ただし「一つ」「一度」のような用法のほうが多いため、先頭が単独の「一」の場合はそのまま残す)。末尾の「回」は番号の飾りとして除去されます (「31回」→「31」)。スコアリングはバイグラム Jaccard / 部分一致 (`SourceVaultSlideDeckMatchScore`、0.0-1.0) で行われますが、**末尾の数字が食い違う場合は絶対に一致しません** (「31」と「30」は別物)。しきい値 0.34 以上で最高スコアの候補が採用されますが、**2 件以上が同点で並んだ場合は `Missing["Ambiguous", query]` を返し、どちらかを勝手に選びません**。これは、番号違いの複数回の発表が漢数字表記のせいで同点になり、誤って別回の発表が選ばれる事故 (2026-09-19 に確認) を防ぐためです。
 
@@ -2372,6 +2387,27 @@ SourceVaultRealtimeStart["Model" -> "gpt-live-1"]   (* API は Automatic でモ�
 
 `$SourceVaultRealtimeModels` (既定 `<||>`) でユーザー独自のモデルを登録簿に追加/上書きできます。`SourceVaultRealtimeInstall` に `"Vosk" -> True` を渡すと、後述の許可ワード割り込みに使う `vosk` パッケージも併せてインストールされます (既定ではインストールされません)。
 
+#### 話し始めが欠けるのを防ぐ: キープアライブと助走 (ワーカー 1.12)
+
+Bluetooth スピーカーなどは、無音が続くと省電力のために休んでしまい、次に音を出すときに最初の部分が欠けることがあります。これを防ぐため、`SourceVaultRealtimeStart` は次の 2 つのオプションを受け付けます。
+
+```mathematica
+SourceVaultRealtimeStart["KeepAliveLevel" -> -60]        (* 欠けるときは大きめに *)
+SourceVaultRealtimeStart["KeepAliveLevel" -> None]       (* 流さない (以前の動き) *)
+SourceVaultRealtimeStart["LeadInMilliseconds" -> 200]    (* 助走を長めに *)
+```
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `"KeepAliveLevel"` | `Automatic` | 話していない間もスピーカーへ流し続ける、聞こえない小さなノイズの大きさ (dBFS)。`Automatic` は `$SourceVaultRealtimeKeepAliveLevel` を使う。数値を渡すと 1 回だけその値にする。`None` で流さない。ワーカーには `--keepalive-db <値>` (`None` のときは `--no-keepalive`) として渡される |
+| `"LeadInMilliseconds"` | `100` | しばらく鳴っていなかったあとの話し始めの前に置く助走 (ミリ秒)。数値でない値は 0 として扱われ、負の値は 0 に丸められる。ワーカーには `--lead-in-ms` として渡される |
+
+| 変数 | 既定 | 説明 |
+|---|---|---|
+| `$SourceVaultRealtimeKeepAliveLevel` | `-70.` | `"KeepAliveLevel"` が `Automatic` のときに使われる、キープアライブ・ノイズの大きさ (dBFS)。それでも話し始めが欠けるときは `-60` くらいまで上げる。`None` で流さない。ロード時に既に値が設定されていればそれを保持する |
+
+どちらも、話し始めが欠ける問題を防ぐための対策です。キープアライブは話していない間もスピーカーを休ませず、助走は、しばらく鳴っていなかったあとの話し始めの前に置かれます。
+
 #### 発表原稿の読み上げと割り込み (Interrupt、GPT-Live のみ)
 
 ```mathematica
@@ -2416,7 +2452,7 @@ SourceVaultRealtimeAddContext[
 
 > **ワーカーの標準エラー出力の読み方 (内部メモ):** ワーカーは音声デバイス・WebSocket の間は生きているため、標準エラーを素の `ReadString` で読むと終わり (EOF = ワーカー終了) を待ってカーネルがそこで止まります。現在は `ReadString[..., EndOfBuffer]` で「溜まっている分だけ」を読むので、ワーカーが動いたままでも止まりません。`status` が `error` のときの後片付けでは、ワーカーが終了済みの場合に限り残りを読み、読み終えたら接続を閉じます (閉じた後の接続は読めない)。
 
-> **ワーカー契約バージョン:** `$SourceVaultRealtimeWorkerVersion` (現在 `"1.10"`) は、この Wolfram パッケージが期待する Python worker のプロトコル版です。1.5 で GPT-Live (`--api live`) 対応、1.6 で発表中の割り込み (narrate の `interrupt`/`slide`)、1.7 で二段階スクリプト配信とモデルによる回答組み立てが追加されました。1.8 で資料を引いた答えや定型の一言 (非公開のため答えられない等) が質問者の言語に合わせるようになりました。1.9 で質問に答えるときの背景を渡せるようになりました (`SourceVaultRealtimeAddContext`)。1.10 で英語・ジャワ語などラテン文字の原稿を「. 」で文に分け、トークン数で分割するようになりました (以前は 260 文字で単語の途中から切れ、同じ枚を読み直し続けた)。`SourceVaultRealtimeStatus[]["WorkerVersion"]` と突き合わせて worker の再インストールが必要かを判断できます。
+> **ワーカー契約バージョン:** `$SourceVaultRealtimeWorkerVersion` (現在 `"1.12"`) は、この Wolfram パッケージが期待する Python worker のプロトコル版です。1.5 で GPT-Live (`--api live`) 対応、1.6 で発表中の割り込み (narrate の `interrupt`/`slide`)、1.7 で原稿を先に文脈として渡してから読ませる二段階スクリプト配信と、答えをモデルが資料から組み立てる動作が追加されました。1.8 で資料を引いた答えや定型の一言 (非公開のため答えられない等) が質問者の言語に合わせるようになりました。1.9 で質問に答えるときの背景を渡せるようになりました (`SourceVaultRealtimeAddContext`)。1.10 で英語・ジャワ語などラテン文字の原稿を「. 」で文に分け、トークン数で分割するようになりました (以前は 260 文字で単語の途中から切れ、同じ枚を読み直し続けた)。1.11 で、GPT-Live が原稿の代わりに「はい」と答えてしまった場合に、読み直しを頼むようになりました。1.12 で、話していない間も小さなノイズをスピーカーへ流して休ませず、しばらく鳴っていなかったあとの話し始めの前に助走を置くようになりました (話し始めが欠ける対策。前述の `"KeepAliveLevel"` / `"LeadInMilliseconds"`)。`SourceVaultRealtimeStatus[]["WorkerVersion"]` と突き合わせて worker の再インストールが必要かを判断できます。
 
 質問ハンドラ (`$SourceVaultRealtimeAskHandler`) が非同期 (LLM など) で答える場合は、ハンドラが先に受け取りだけ返し、後から `SourceVaultRealtimeAskResult` で答えを渡します。
 

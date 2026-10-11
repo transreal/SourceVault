@@ -294,9 +294,14 @@ SourceVault`SourceVaultNotePrivacy[pl_] :=
         Quiet @ Check[iPMarkCellObject[nb, cell, lv], Null];
         (* 出力セルは CellObject 同一性ベースの遅延マーカーへ登録 *)
         Quiet @ Check[iPRegisterPending[nb, cell, lv], Null];
-        (* 評価完了後に確実に flush する保険 (CellEpilog) + 従来の遅延タスク *)
-        Quiet @ Check[iPArmEpilog[nb, cell], Null];
-        Quiet @ Check[iPScheduleFlush[], Null]]];
+        iPFlushStale[cell];
+        (* 評価完了後に flush する正規路は CellEpilog。これが張れたときは
+           0.4 秒ポーリングの ScheduledTask を動かさない。長い評価 (初期化 で
+           10 秒超) の最中、tick ごとに Cells[nb]/CurrentValue の FE 往復が
+           走って本評価と取り合い、「実行中のまま終わらない」症状になっていた
+           (2026-10-06 実機報告)。epilog を張れない環境だけ従来の遅延タスクに戻す。 *)
+        If[! TrueQ[Quiet @ Check[iPArmEpilog[nb, cell], False]],
+          Quiet @ Check[iPScheduleFlush[], Null]]]];
     lv];
 SourceVault`SourceVaultNotePrivacy[___] :=
   SourceVault`SourceVaultNotePrivacy[SourceVault`$SourceVaultPrivacyDefaultLevel];
@@ -435,14 +440,29 @@ If[! BooleanQ[SourceVault`$SourceVaultPrivacyCellEpilog],
 If[! MatchQ[$svPEpilogArmed, _CellObject], $svPEpilogArmed = Null];
 
 iPArmEpilog[nb_NotebookObject, cell_CellObject] :=
-  If[TrueQ[SourceVault`$SourceVaultPrivacyCellEpilog] && cell =!= $svPEpilogArmed,
-    $svPEpilogArmed = cell;
-    Quiet @ Check[
-      SetOptions[cell, CellEpilog :> SourceVault`SourceVaultMarkEvaluationPrivacyCells[]],
-      Null];
+  Which[
+    ! TrueQ[SourceVault`$SourceVaultPrivacyCellEpilog], False,
+    cell === $svPEpilogArmed, True,   (* 既に武装済み: 同じセルへ SetOptions しない *)
     True,
-    False];
+      TrueQ @ Quiet @ Check[
+        SetOptions[cell, CellEpilog :> SourceVault`SourceVaultMarkEvaluationPrivacyCells[]];
+        $svPEpilogArmed = cell; True,
+        False]];
 iPArmEpilog[___] := False;
+
+(* 前の評価で出力セルが取れなかった要求を、次の評価のついでに流す。
+   そのときには前の出力セルは既に存在するので、タイマーに頼らずに済む。
+   NotePrivacy は 1 回の 初期化 で何十回も呼ばれるため、FE 往復が増えないよう
+   「他セルの未処理がある」ときだけ、かつ 2 秒に 1 回までに絞る。 *)
+If[! NumberQ[$svPLastStaleFlush], $svPLastStaleFlush = 0.];
+
+iPFlushStale[cell_] :=
+  Module[{now = AbsoluteTime[]},
+    If[$svPPending === {} || now - $svPLastStaleFlush < 2., Return[Null]];
+    If[AnyTrue[$svPPending,
+        MatchQ[Lookup[#, "Cell", Null], _CellObject] && Lookup[#, "Cell", Null] =!= cell &],
+      $svPLastStaleFlush = now;
+      Quiet @ Check[iPFlushPending[], Null]]];
 
 (* 未処理要求を流す。期限切れの要求は破棄する。 *)
 iPFlushPending[] :=

@@ -267,6 +267,7 @@ iSDNumberOr[value_, default_] := If[NumericQ[value], N[value], default];
 iSDNormalizeEntry[entryIn_Association] := Module[{e = entryIn, id},
   e["Title"] = StringTrim @ ToString @ Lookup[e, "Title", ""];
   e["SlideURL"] = StringTrim @ ToString @ Lookup[e, "SlideURL", ""];
+  e["PosterURL"] = StringTrim @ ToString @ Lookup[e, "PosterURL", ""];   (* v1.56: ポスター PDF の URL (SlideWorkflow の PosterURL:) *)
   id = Lookup[e, "Id", Automatic];
   e["Id"] = If[StringQ[id] && StringTrim[id] =!= "", StringTrim[id], iSDDefaultId[e]];
   e["Aliases"] = Select[Flatten[{Lookup[e, "Aliases", {}]}],
@@ -312,6 +313,11 @@ iSDFindPrior[entries_List, incoming_Association, id_String] := Module[{f, deck, 
     f = SelectFirst[entries,
       StringTrim[ToString[Lookup[#, "SlideURL", ""]]] === url &, None];
     If[AssociationQ[f], Return[f]]];
+  url = StringTrim[ToString[Lookup[incoming, "PosterURL", ""]]];
+  If[url =!= "",
+    f = SelectFirst[entries,
+      StringTrim[ToString[Lookup[#, "PosterURL", ""]]] === url &, None];
+    If[AssociationQ[f], Return[f]]];
   None];
 
 (* 空文字列・空リスト・ Null は「今回は指定していない」= 前回の値を残す *)
@@ -352,9 +358,11 @@ SourceVaultSlideDeckRegister[entryIn_Association,
   If[entry["Title"] === "",
     Return[Failure["SlideDeckTitleRequired",
       <|"MessageTemplate" -> "発表タイトル (Title) は必須です。"|>]]];
-  If[! StringMatchQ[entry["SlideURL"], ("http://" | "https://") ~~ __],
+  (* SlideURL (mp4) か PosterURL (ポスター PDF) のどちらかが要る。ポスターだけの発表も同じ登録簿・同じ QA を使う *)
+  If[! StringMatchQ[entry["SlideURL"], ("http://" | "https://") ~~ __] &&
+      ! StringMatchQ[ToString @ Lookup[entry, "PosterURL", ""], ("http://" | "https://") ~~ __],
     Return[Failure["SlideDeckURLRequired",
-      <|"MessageTemplate" -> "SlideURL は http(s) の絶対 URL である必要があります。",
+      <|"MessageTemplate" -> "SlideURL か PosterURL のどちらかが http(s) の絶対 URL である必要があります。",
         "SlideURL" -> entry["SlideURL"]|>]]];
   id = entry["Id"];
   iSDTalkDirectory[];
@@ -477,6 +485,7 @@ iSDEntryPayload[entry_Association] := <|
   "title" -> ToString @ Lookup[entry, "Title", ""],
   "aliases" -> Select[Flatten[{Lookup[entry, "Aliases", {}]}], StringQ],
   "url" -> ToString @ Lookup[entry, "SlideURL", ""],
+  "posterUrl" -> ToString @ Lookup[entry, "PosterURL", ""],
   "event" -> ToString @ Lookup[entry, "Event", ""],
   "author" -> ToString @ Lookup[entry, "Author", ""],
   "date" -> ToString @ Lookup[entry, "Date", ""],

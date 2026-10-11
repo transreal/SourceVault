@@ -179,11 +179,11 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ W
 
 ### 発表登録簿とローカル音声・視覚資産・リアルタイム音声対話 (SourceVault_slidedeck / SourceVault_voice / SourceVault_vision / SourceVault_realtime)
 
-`SourceVault_slidedeck.wl` は、発表タイトル（例:「計算と自然集会31の発表」）と、その Sliden mp4 の URL・コンパイル済み発表シナリオ（ナレーション原稿）を対応付ける登録簿です。スライド・原稿そのものの生成は [SlideWorkflow](https://github.com/transreal/SlideWorkflow) が担い、本モジュールは所在と公開ポリシーだけを保持します。PrivacyLevel が閾値 (`$SourceVaultSlideDeckReleaseCeiling`、既定 0.5) 以上の登録はナレーションが外部提供先（MCP・音声ブリッジ）へ渡されません。同じ発表の再登録は、タイトルの表記揺れ（末尾の漢数字・「回」など）を吸収した上で既存エントリへマージされます。
+`SourceVault_slidedeck.wl` は、発表タイトル（例:「計算と自然集会31の発表」）と、その Sliden mp4 の URL（またはポスター PDF の URL。どちらか一方が http(s) の絶対 URL であれば登録でき、ポスターだけの発表も同じ登録簿・同じ QA を使えます）・コンパイル済み発表シナリオ（ナレーション原稿）を対応付ける登録簿です。スライド・原稿そのものの生成は [SlideWorkflow](https://github.com/transreal/SlideWorkflow) が担い、本モジュールは所在と公開ポリシーだけを保持します。PrivacyLevel が閾値 (`$SourceVaultSlideDeckReleaseCeiling`、既定 0.5) 以上の登録はナレーションが外部提供先（MCP・音声ブリッジ）へ渡されません。同じ発表の再登録は、タイトルの表記揺れ（末尾の漢数字・「回」など）を吸収した上で既存エントリへマージされます。
 
 `SourceVault_voice.wl` / `SourceVault_vision.wl` は、外部認証情報を必要としないローカル完結の音声合成 (Piper Plus TTS、および VOICEVOX 互換のローカル HTTP TTS である AivisSpeech Engine の 2 エンジン)・音声認識 (Vosk ASR)・人物検出 / 姿勢推定 (MediaPipe ONNX モデル) の資産解決層です。PrivacyLevel が 0.5 以上のデータを外部サービスへ送らないという SourceVault の契約を音声・映像入出力の面で実装するもので、[VRCRealtime](https://github.com/transreal/VRCRealtime) のようなリアルタイム音声対話統合が起動時に問い合わせます。
 
-`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI とライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。モデル名で使用 API を自動選択し、`gpt-realtime-*` は 1 つのモデルが聞く・考える・話すを担う Realtime API、`gpt-live-*`（GPT-Live）は全二重（聞きながら話せる）で動作し、client delegation によりスライド操作・SourceVault 問い合わせをクライアント側ハンドラ（`$SourceVaultRealtimeSlideHandler` / `$SourceVaultRealtimeAskHandler`、両 API 共通）へ委譲します。質問応答の背景（発表全体の要約など）は `SourceVaultRealtimeAddContext` で会話へ渡せます。GPT-Live はナレーション中の聴衆発話への割り込み（キーワード検知＋エコー除去付き部分認識 `"Words"`、または単純な発話検知 `"Detect"` の 2 方式）にも対応し、Q&A 終了後は元の説明へ自動的に戻ります。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。
+`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI とライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。モデル名で使用 API を自動選択し、`gpt-realtime-*` は 1 つのモデルが聞く・考える・話すを担う Realtime API、`gpt-live-*`（GPT-Live）は全二重（聞きながら話せる）で動作し、client delegation によりスライド操作・SourceVault 問い合わせをクライアント側ハンドラ（`$SourceVaultRealtimeSlideHandler` / `$SourceVaultRealtimeAskHandler`、両 API 共通）へ委譲します。質問応答の背景（発表全体の要約など）は `SourceVaultRealtimeAddContext` で会話へ渡せます。GPT-Live はナレーション中の聴衆発話への割り込み（キーワード検知＋エコー除去付き部分認識 `"Words"`、または単純な発話検知 `"Detect"` の 2 方式）にも対応し、Q&A 終了後は元の説明へ自動的に戻ります。また、話していない間もスピーカーへ聞こえない小さなノイズを流し続け（`$SourceVaultRealtimeKeepAliveLevel`）、Bluetooth スピーカー等がスリープして話し始めが欠けるのを防ぎます。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。
 
 ### 発表用知識グラフ (SourceVault_knowledgegraph)
 
@@ -284,7 +284,7 @@ SourceVault_wiring.wl                   型付き配線・関数選定 (aux、co
 SourceVault_voice.wl                    ローカル音声資産解決層 (aux、$packageDirectory/LOCALAPPDATA のみ参照)
 SourceVault_realtime.wl                 クラウド音声対話 (OpenAI Realtime / GPT-Live、既定マイク/スピーカー使用。voice と対になるが依存は呼び出し時のみ)
 SourceVault_vision.wl                   ローカル視覚資産解決層 (aux、同上)
-SourceVault_slidedeck.wl                発表(スライド)登録簿 (aux、core の root 解決のみに依存)
+SourceVault_slidedeck.wl                発表(スライド/ポスター)登録簿 (aux、core の root 解決のみに依存)
 SourceVault_knowledgegraph.wl           発表用知識グラフ (KG。slidedeck の後、kb / oopsseed に弱結合、LLM 不使用)
 SourceVault_mining.wl                   マイニング (タグ/著者/実体リンク抽出・pre-scan・検索 boost・記憶代謝)
 SourceVault_lexical.wl                  日本語 lexical 層 (正規化・n-gram・BM25・entity OR-match)
@@ -344,7 +344,7 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 - メール本文の PrivacyLevel は fail-safe 既定 0.85 で暗号化され、送信者由来の feature loosening は認証済み (DMARC/DKIM Pass) 送信者にのみ適用されます。
 - Cane 認知支援・安全基盤 (Knowledge Home / Cognition / Adjudication / Capability Broker / Taint / Anomaly / Routine) は既定で observe-only / shadow であり、明示的な owner 操作なしに送信のブロック・通知・isolation 変更などの enforcement を行いません。認知系の生データは PrivateVault の外 (`<LocalState>/sensitive/...` 等、同期対象外) に保存され、crypto-shredding で消去できます。
 - `SourceVault_mailagenda` はメールアジェンダ経路で **索引のみ**を読み、LLM 再解析・IMAP 取得・シャード全体ロードを行いません。個人アドレス（オーナー/組織アドレス等）はコードに焼き込まず identity 層のオーナー実体 / `PrivateVault/config/mailagenda.json` の環境設定で解決します。
-- `SourceVault_privacy` の **評価スコープ透かし**により、私的データを扱う関数の出力は別名呼び出し・`Map`・`ClaudeEval` 越しでも Max 伝搬・非降下で機密マークされ、テキストパターン照合には依存しません。宣言レジストリと呼び出しグラフ監査 (`SourceVaultPrivacyAudit`) が未宣言の漏洩を fail-closed で検出します。NBAccess と合流することで、LLM が提案したコードの実行結果を LLM 自身へ返してよいか（スキーマのみに留めるか）も同じ透かしで判定されます。
+- `SourceVault_privacy` の **評価スコープ透かし**により、私的データを扱う関数の出力は別名呼び出し・`Map`・`ClaudeEval` 越しでも Max 伝搬・非降下で機密マークされ、テキストパターン照合には依存しません。出力セルのマークは評価セルの `CellEpilog` により評価完了直後に行われます。宣言レジストリと呼び出しグラフ監査 (`SourceVaultPrivacyAudit`) が未宣言の漏洩を fail-closed で検出します。NBAccess と合流することで、LLM が提案したコードの実行結果を LLM 自身へ返してよいか（スキーマのみに留めるか）も同じ透かしで判定されます。
 - `SourceVault_anonymize` の実行系 (`SourceVaultAnonymize`) は、owner が検証済みの `DeclassificationGrant` を持たない限り本文を一切読まず `NeedsOwnerApproval` で fail-closed します。未確定な入力は推測せず必ず `$Failed` / `Failure` を返します。
 - KB (`SourceVault_kb`) の低遅延検索も既存の release context gate を通過した chunk のみを返し、gate を迂回する経路はありません。`SourceVault_talkqa` の回答経路も同じ PrivacyLevel/`Route` 判定をビルド時に焼き込み、本番中に緩めることはありません。
 - `SourceVault_realtime` はマイク音声・会話テキストを OpenAI へ送るクラウド経路であり、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上を拒否) と Paid API 承認を通過しない限り起動しません。
@@ -420,7 +420,7 @@ SourceVault には、source 管理に加えて、**at-rest 暗号化基盤・可
 
 私的データ（メール本文・identity・notebook 内部・Eagle・oops 等）を扱う関数の出力が、**別名呼び出しや `Map`、`ClaudeEval` 経由でも確実に機密マークされる**ようにする基盤です。従来は「評価セルのポーリング」「入力セルのテキスト正規表現照合」「NBAccess の機密生成ヘッド登録」という 3 層の仕組みで機密マークを付けていましたが、いずれも間接が 1 枚入ると容易に破れます（例: `SourceVaultMailSearchIndexView` を別名のユーザー定義シンボルから呼ぶと、入力セルだけが赤くなり出力セルは機密マークされない）。
 
-本層はこれをテキストに依存しない **評価スコープの透かし (watermark)** に置き換えます。私的データを読む関数は必ず `SourceVaultNotePrivacy[pl]` / `SourceVaultNotePrivacyOf[data]` を通り、PrivacyLevel を Max 伝搬・非降下（判定不能は fail-closed 既定 0.85）で記録します。閾値 (`$SourceVaultPrivacyMarkThreshold`、既定 0.5) 以上なら評価セルを同期マークし、出力セルは **CellObject 同一性ベース**の遅延マーカー（評価セルの `CellEpilog` による評価完了直後の flush を保険に併用）で機密表示されます（テキストを見ないため別名・変数・Map 越しでも必ず伝わる）。NBAccess がロードされていれば同じ PrivacyLevel が `NBAccess`NBNoteEvaluationPrivacy` にも合流し、LLM が提案したコードの実行結果を LLM に返すか（スキーマのみに留めるか）も、この透かしで一元的に決まります。
+本層はこれをテキストに依存しない **評価スコープの透かし (watermark)** に置き換えます。私的データを読む関数は必ず `SourceVaultNotePrivacy[pl]` / `SourceVaultNotePrivacyOf[data]` を通り、PrivacyLevel を Max 伝搬・非降下（判定不能は fail-closed 既定 0.85）で記録します。閾値 (`$SourceVaultPrivacyMarkThreshold`、既定 0.5) 以上なら評価セルを同期マークし、出力セルは **CellObject 同一性ベース**の遅延マーカーで機密表示されます（テキストを見ないため別名・変数・Map 越しでも必ず伝わる）。出力セルのマークは、評価セルに張った `CellEpilog` により評価完了直後に一度だけ実行され（`$SourceVaultPrivacyCellEpilog`、既定 True）、epilog を張れない環境のときだけ従来の遅延ポーリングにフォールバックします（長い評価中の FrontEnd 往復による「実行中のまま終わらない」症状の回避）。NBAccess がロードされていれば同じ PrivacyLevel が `NBAccess`NBNoteEvaluationPrivacy` にも合流し、LLM が提案したコードの実行結果を LLM に返すか（スキーマのみに留めるか）も、この透かしで一元的に決まります。
 
 正準 exit は 2 種類です。**Core 系**（生データを返す関数）は `SourceVaultPrivateResult[expr, pl]` を通し、値の形を変えずに PL を記録します。**View 系**（UI オブジェクトを返す関数）は `SourceVaultPrivateView[expr, pl]` を通し、閾値以上なら `SourceVaultPrivate[expr, pl]` で赤枠 + PrivacyLevel バッジのラッパに包みます（`SourceVaultPrivacyUnwrap` / `SourceVaultPrivacyLevelOf` で構造的に剥がせます）。`SourceVaultDeclarePrivacySource[name, spec]` で私的データの一次ストア（mail / notebook / eagle / oops / llmlog を既定宣言済み）を、`SourceVaultRegisterPrivacyContract[symbolName, spec]` で各関数の privacy 契約（Private / Public / Internal・Exit 種別）を宣言し、`SourceVaultPrivacyAudit[opts]` が呼び出しグラフを辿って未宣言の漏洩 (`UndeclaredLeak`) やレビュー未登録シンボル (`Unreviewed`) を fail-closed で検出します。`SourceVaultRegisterPrivacyProbe` で動的適合テスト用の probe を登録し、実運用に近い形で伝達経路を検証できます。ロードは crypto/identity/maildb より前に行われ、NBAccess/claudecode 未ロードでも透かしと監査自体は動作します（セルマークだけ no-op になります）。
 
@@ -634,7 +634,7 @@ $packageDirectory\
   SourceVault_voice.wl           ← ローカル音声資産解決層 (本体ロード時に自動ロード)
   SourceVault_realtime.wl        ← クラウド音声対話 (OpenAI Realtime / GPT-Live) の解決層 (本体ロード時に自動ロード)
   SourceVault_vision.wl          ← ローカル視覚資産解決層 (本体ロード時に自動ロード)
-  SourceVault_slidedeck.wl       ← 発表(スライド)登録簿 (本体ロード時に自動ロード)
+  SourceVault_slidedeck.wl       ← 発表(スライド/ポスター)登録簿 (本体ロード時に自動ロード)
   SourceVault_knowledgegraph.wl  ← 発表用知識グラフ(KG)層 (本体ロード時に自動ロード)
   SourceVault_simrun.wl          ← シミュレーション実行基盤 (本体ロード時に自動ロード)
   SourceVault_searchindex.wl     ← 検索基盤 (本体ロード時に自動ロード)
@@ -889,7 +889,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultPointerReplay[name, opts]` | pointer event を replay し最大 Sequence の検証済み値を返す。 |
 | `SourceVaultFileStreams[path]` / `SourceVaultReleaseFileStreams[path]` | vault 配下の開きっぱなしファイル stream を列挙 / 一括解放（Dropbox 同期停止・conflicted copy の原因を除去）。 |
 | **プライバシー伝達 (SourceVault_privacy)** | |
-| `SourceVaultNotePrivacy[pl]` / `SourceVaultNotePrivacyOf[data]` | 現在の評価スコープに PrivacyLevel を記録（Max 伝搬・非降下）。閾値以上でセル出力を CellObject 同一性ベースで遅延機密マーク。NBAccess ロード時は `NBNoteEvaluationPrivacy` にも合流し、LLM への実行結果返却可否を左右する。 |
+| `SourceVaultNotePrivacy[pl]` / `SourceVaultNotePrivacyOf[data]` | 現在の評価スコープに PrivacyLevel を記録（Max 伝搬・非降下）。閾値以上でセル出力を CellObject 同一性ベースで機密マーク（評価セルの `CellEpilog` で評価完了直後に flush）。NBAccess ロード時は `NBNoteEvaluationPrivacy` にも合流し、LLM への実行結果返却可否を左右する。 |
 | `SourceVaultPrivateResult[expr, pl]` / `SourceVaultPrivateView[expr, pl]` | 私的データを扱う関数の正準 exit。Core 系は値の形を変えず、View 系は閾値以上を赤枠 + PL バッジでラップ。 |
 | `SourceVaultPrivacyUnwrap[x]` / `SourceVaultPrivacyLevelOf[x]` | View ラッパを剥がして中身を返す / ラッパの PrivacyLevel を返す。 |
 | `SourceVaultDeclarePrivacySource[name, spec]` | 私的データの一次ストア（読み出し口）を宣言（mail/notebook/eagle/oops/llmlog 既定宣言済み）。 |
@@ -948,7 +948,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultExerciseRegisterSubject[code, spec]` | 演習ストアに科目（シラバス・単元対応）を登録する。 |
 | `SourceVaultCourseSummaryGrade[...]` | Web レポートの要約 PDF を匿名化経由で vision 採点する。 |
 | **発表登録簿・ローカル音声/視覚資産・リアルタイム音声対話 (SourceVault_slidedeck / _voice / _vision / _realtime)** | |
-| `SourceVaultSlideDeckRegister[entry, talk]` | 発表タイトルと Sliden mp4 URL・発表シナリオを登録簿に upsert する（再登録は既存エントリへマージ）。 |
+| `SourceVaultSlideDeckRegister[entry, talk]` | 発表タイトルと Sliden mp4 URL（またはポスター PDF URL）・発表シナリオを登録簿に upsert する（再登録は既存エントリへマージ）。 |
 | `SourceVaultVoiceSpeak[text, opts]` | ローカル Piper Plus TTS / AivisSpeech Engine でテキストを音声合成する。 |
 | `SourceVaultVisionModel[name]` | 人物検出/姿勢推定 ONNX モデルの絶対パスを解決する。 |
 | `SourceVaultRealtimeStart[opts]` | 既定マイク/スピーカーで OpenAI Realtime または GPT-Live とのクラウド音声会話セッションを開始する（モデル名で API 自動選択、Paid API 承認・provider access 判定必須）。 |
@@ -1130,11 +1130,11 @@ SourceVaultNotebookSummary[nbPath]
 | `api_comfyui.md` | ComfyUI 統合 API（thin HTTP クライアント・workflow レジストリ・非ブロック job・artifact deposit） |
 | `api_course.md` | 授業支援 API（演習ストア・試験構成・答案採点・履修者名簿・成績簿・Web レポート採点） |
 | `api_course_private.md` | 授業支援 非公開拡張 API（配点シミュレーション、非公開・CodePrivacyLevel 0.1） |
-| `api_slidedeck.md` | 発表登録簿 API（発表タイトル→Sliden mp4 URL・発表シナリオ対応表） |
+| `api_slidedeck.md` | 発表登録簿 API（発表タイトル→Sliden mp4 / ポスター PDF URL・発表シナリオ対応表） |
 | `api_papernb.md` | 論文和訳ノートブック登録簿 + 計算ノートブック登録簿 API（DocImportPaper 委譲・元ソース/素材の PrivacyLevel 継承・一覧の「和訳NB」列・SlideWorkflow 文献解決） |
 | `api_voice.md` | ローカル音声資産 API（Piper Plus TTS・AivisSpeech Engine・Vosk ASR の解決・合成） |
 | `api_vision.md` | ローカル視覚資産 API（人物検出・姿勢推定 ONNX モデルの解決・導入） |
-| `api_realtime.md` | クラウド音声対話 API（OpenAI Realtime / GPT-Live・Python worker 連携・スライド制御/QA ツール接続・GPT-Live の割り込み処理・背景コンテキスト注入） |
+| `api_realtime.md` | クラウド音声対話 API（OpenAI Realtime / GPT-Live・Python worker 連携・スライド制御/QA ツール接続・GPT-Live の割り込み処理・背景コンテキスト注入・無音キープアライブ） |
 | `api_packageapi.md` | パッケージ API 索引 API（関数粒度 chunk 索引・決定的検索・契約 view・関連候補） |
 | `api_issues.md` | 汎用Issue管理 API（データモデル v2・取り込み・分割・Risk/Importance 採点・解決ワークフロー） |
 | `api_diagnostics.md` | クロスパッケージ診断 API（ライセンス/トポロジプローブ・SystemDoctor・spool 取り込み・issue fan-out・heartbeat・マルチ PC rollup） |

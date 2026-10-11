@@ -72,6 +72,9 @@ SourceVaultRealtimeModelAPI::usage =
 $SourceVaultRealtimeVoice::usage =
   "$SourceVaultRealtimeVoice は Realtime の声 (既定 \"marin\")。";
 
+$SourceVaultRealtimeKeepAliveLevel::usage =
+  "$SourceVaultRealtimeKeepAliveLevel は、話していない間もスピーカーへ流し続ける聞こえない小さなノイズの大きさ (dBFS、既定 -70)。Bluetooth スピーカーなどが無音で休み、話し始めが欠けるのを防ぐ (ワーカー 1.12)。それでも欠けるときは -60 くらいまで上げる。None で流さない (以前の動き)。SourceVaultRealtimeStart の \"KeepAliveLevel\" で 1 回だけ変えることもできる。";
+
 $SourceVaultRealtimeInstructions::usage =
   "$SourceVaultRealtimeInstructions は Realtime セッションへ渡す既定の instructions。";
 
@@ -136,7 +139,14 @@ SourceVaultRealtimeNarrate::usage =
   "読み終えて実際に音が鳴り終わると SourceVaultRealtimeStatus[][\"NarrationDone\"] が id になる。\n" <>
   "オプション: \"Heading\" (「スライド 3」など見出し), \"Instructions\" (この原稿だけへの追加指示), \"Slide\" (スライド番号。質疑でスライドが動いたら再開時に戻す),\n" <>
   "\"Interrupt\" (GPT-Live のみ。None = 割り込みなし (質問タイム)、\"Words\" = 許可ワード (\"InterruptWords\"、既定 $SourceVaultRealtimeInterruptWords) を含む発話でだけ中断して質疑、\"Detect\" = 別の声を検知したら中断し質問かどうかはモデルが判断)。\n" <>
-  "中断中も NarrationDone は出ない (質疑が静かになったら中断した文から再開し、読み終えて出る)。";
+  "中断中も NarrationDone は出ない (質疑が静かになったら中断した文から再開し、読み終えて出る)。\n" <>
+  "\"RecordFile\" -> \"x.wav\" (ワーカー 1.13): その読み上げでスピーカーに流した音を 24 kHz の wav に書く。NarrationDone より先に書くので、NarrationDone を見たときにはファイルがある (GPT-Live のように実時間でしか話せないモデルで、動画用の音声を録るため)。";
+
+SourceVaultRealtimeRender::usage =
+  "SourceVaultRealtimeRender[jobs, opts] は原稿を Realtime API (gpt-realtime-*) の声で wav に書く。スピーカーには出さず、届いた音声をそのままファイルへ書くので実時間より速く、\"Parallel\" 本のセッションを並べて進める (1 原稿 1 セッション)。\n" <>
+  "jobs は <|\"Id\" -> \"s3\", \"Text\" -> 原稿, \"File\" -> 出力 wav, \"Heading\" -> \"スライド 3\"|> のリスト。読ませ方の指示 (原稿だけを読む・前置きをしない) は SourceVaultRealtimeNarrate と同じ文面 (ワーカーから読み込む)。\n" <>
+  "オプション: \"Model\" (既定 $SourceVaultRealtimeModel。GPT-Live のモデルは不可 = 実時間でしか話さないので SourceVaultRealtimeNarrate の \"RecordFile\" を使う), \"Voice\", \"Instructions\" (セッションの指示), \"NarrationInstructions\" (話し方の指示、声に出さない), \"Parallel\" (既定 3), \"Notebook\" / \"RequirePaidAPIApproval\" (SourceVaultRealtimeStart と同じ確認), \"Progress\" (関数。<|\"Done\", \"Failed\", \"Total\", \"Elapsed\"|> で呼ばれる), \"TimeConstraint\"。\n" <>
+  "戻り値 <|\"Status\" -> \"OK\"|\"Partial\"|\"Failed\", \"Files\" -> <|id -> wav|>, \"Seconds\" -> <|id -> 長さ|>, \"Failed\" -> <|id -> 理由|>, \"Elapsed\"|>。";
 
 $SourceVaultRealtimeInterruptWords::usage =
   "$SourceVaultRealtimeInterruptWords は発表中の割り込み (\"Interrupt\" -> \"Words\") を許す語 (既定 {\"質問\", \"スライド\"})。ローカルの Vosk (文法制限) で聞き取る。";
@@ -189,6 +199,8 @@ If[! ValueQ[SourceVault`$SourceVaultRealtimeModel],
   SourceVault`$SourceVaultRealtimeModel = "gpt-realtime-2.1"];
 If[! ValueQ[SourceVault`$SourceVaultRealtimeVoice],
   SourceVault`$SourceVaultRealtimeVoice = "marin"];
+If[! ValueQ[SourceVault`$SourceVaultRealtimeKeepAliveLevel],
+  SourceVault`$SourceVaultRealtimeKeepAliveLevel = -70.];
 If[! ValueQ[SourceVault`$SourceVaultRealtimeInstructions],
   SourceVault`$SourceVaultRealtimeInstructions =
     "日本語で自然かつ簡潔に会話してください。聞き取れなかったときは聞き返してください。"];
@@ -212,8 +224,11 @@ $iSVRTPackageDirectory = Quiet @ Check[DirectoryName[$InputFileName], ""];
 (* 走っているワーカーが古い契約のままなら、黙って知らないコマンドを捨てるより
    入れ直したい。利用側 (SlideWorkflow) はこの値と Status の "WorkerVersion" を比べる。
    1.5 = GPT-Live (--api live)、1.6 = 発表中の割り込み (narrate の interrupt / slide)、
-   1.7 = 原稿は先に文脈として渡してから読ませる / 答えはモデルが資料から組み立てる *)
-SourceVault`$SourceVaultRealtimeWorkerVersion = "1.10";
+   1.7 = 原稿は先に文脈として渡してから読ませる / 答えはモデルが資料から組み立てる、
+   1.11 = GPT-Live で原稿の代わりに「はい」と答えたら読み直しを頼む、
+   1.12 = 話していない間も小さなノイズを流してスピーカーを休ませない (話し始めが欠ける対策)、
+   1.13 = narrate の "record" (読み上げの音を wav に書く。GPT-Live で動画の音声を録る) *)
+SourceVault`$SourceVaultRealtimeWorkerVersion = "1.13";
 
 (* ---- 音声会話モデルの登録簿 ----
    組み込みは毎回ここで作り直す (再ロードで新しいモデルが見えるように)。
@@ -648,6 +663,10 @@ Options[SourceVaultRealtimeStart] = {
   "InterruptMilliseconds" -> 350,
   "InterruptFloor" -> 0.03,
   "ResumeQuietSeconds" -> 4,
+  (* 1.12: 話していない間もスピーカーへ流す聞こえないノイズ (dBFS。Automatic = $SourceVaultRealtimeKeepAliveLevel、
+     None = 流さない) と、しばらく鳴っていなかったあとの話し始めの前に置く助走。どちらも話し始めが欠けるのを防ぐ *)
+  "KeepAliveLevel" -> Automatic,
+  "LeadInMilliseconds" -> 100,
   "Python" -> Automatic};
 
 SourceVaultRealtimeStart[OptionsPattern[]] := Module[
@@ -743,7 +762,10 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
      "--bargein-ms", ToString[Round[OptionValue["InterruptMilliseconds"]]],
      "--bargein-floor", iSVRTNumberString[OptionValue["InterruptFloor"]],
      "--resume-quiet-ms", ToString[Round[1000 OptionValue["ResumeQuietSeconds"]]],
+     "--lead-in-ms", ToString[Max[0, Round[Replace[OptionValue["LeadInMilliseconds"], Except[_?NumericQ] -> 0]]]],
      "--instructions-file", instructionsFile, "--api-key-stdin"},
+    With[{level = Replace[OptionValue["KeepAliveLevel"], Automatic :> SourceVault`$SourceVaultRealtimeKeepAliveLevel]},
+      If[NumericQ[level], {"--keepalive-db", iSVRTNumberString[N[level]]}, {"--no-keepalive"}]],
     If[StringQ[inputDevice] && inputDevice =!= "", {"--input-device", inputDevice}, {}],
     If[StringQ[outputDevice] && outputDevice =!= "", {"--output-device", outputDevice}, {}],
     If[TrueQ[OptionValue["AllowBargeIn"]], {"--allow-barge-in"}, {}],
@@ -856,6 +878,7 @@ SourceVaultRealtimeStatus[] := Module[{state = iSVRTReadState[]},
     "Speaking" -> TrueQ[Lookup[state, "speaking", False]],
     "NarrationActive" -> Lookup[state, "narrationActive", None],
     "NarrationDone" -> Lookup[state, "narrationDone", None],
+    "LastRecording" -> Lookup[state, "lastRecording", None],
     "LastUserText" -> Lookup[state, "lastUserText", ""],
     "LastAssistantText" -> Lookup[state, "lastAssistantText", ""],
     "LastError" -> Lookup[state, "lastError", None],
@@ -914,7 +937,7 @@ SourceVaultRealtimeLine[text_String] :=
 
 Options[SourceVaultRealtimeNarrate] = {"Heading" -> "", "Instructions" -> "",
   "Slide" -> None, "Interrupt" -> None, "InterruptWords" -> Automatic,
-  "SpeechModel" -> Automatic};
+  "SpeechModel" -> Automatic, "RecordFile" -> None};
 
 (* 許可ワードの聞き取りに使う Vosk モデルのディレクトリ (SourceVault_voice の資産)。
    見つからなければ "" = ワーカーは別の声の検知だけで判断する *)
@@ -945,6 +968,9 @@ SourceVaultRealtimeNarrate[id_, text_String, OptionsPattern[]] := Module[
       "instructions" -> ToString[OptionValue["Instructions"]],
       "interrupt" -> mode|>,
     If[IntegerQ[slide] && slide > 0, <|"slide" -> slide|>, <||>],
+    (* 1.13: この読み上げの音を wav に残す (NarrationDone より先に書かれる) *)
+    With[{rec = OptionValue["RecordFile"]},
+      If[StringQ[rec] && StringTrim[rec] =!= "", <|"record" -> ExpandFileName[rec]|>, <||>]],
     If[mode === "words",
       <|"interruptWords" -> words,
         "speechModel" -> iSVRTSpeechModelDirectory[OptionValue["SpeechModel"]]|>,
@@ -957,6 +983,138 @@ Options[SourceVaultRealtimeEndTalk] = {"QuietSeconds" -> 4.};
 SourceVaultRealtimeEndTalk[OptionsPattern[]] :=
   iSVRTSend[<|"command" -> "endtalk",
     "quietSeconds" -> N[OptionValue["QuietSeconds"]]|>];
+
+(* ---- 原稿を wav に書く (再生しない。動画用) ----
+   会話のワーカーは原稿をスピーカーで鳴らすので、発表の長さだけ時間がかかる。動画を作るのに
+   スピーカーは要らない: 届いた音声をそのままファイルへ書けば実時間より速い (Realtime API は
+   生成した分から送ってくる)。1 原稿 1 セッション (前の枚の音声を会話に持ち越すと、以後の枚で
+   毎回入力として課金される) を "Parallel" 本並べる。読ませ方の文面はワーカーから読み込む
+   (SourceVault_realtime_render.py)。GPT-Live はセッションの時間が入力フレームで進むので
+   速くならない: そちらは SourceVaultRealtimeNarrate の "RecordFile" で再生しながら録る。 *)
+
+iSVRTRenderScriptPath[] := FileNameJoin[{$iSVRTPackageDirectory, "SourceVault_info", "resources",
+  "python", "SourceVault_realtime_render.py"}];
+
+(* 結果ファイルはスクリプトが原子的に置き換える。読む瞬間に無ければ <||> *)
+iSVRTReadJSONFile[path_String] := Module[{bytes, value},
+  If[! FileExistsQ[path], Return[<||>]];
+  bytes = Quiet @ Check[ReadByteArray[path], $Failed];
+  If[! ByteArrayQ[bytes], Return[<||>]];
+  value = Quiet @ Check[ImportByteArray[bytes, "RawJSON"], <||>];
+  If[AssociationQ[value], value, <||>]];
+
+iSVRTWriteJSONFile[path_String, value_] := Module[{bytes, strm},
+  bytes = Quiet @ Check[ExportByteArray[value, "RawJSON", "Compact" -> True], $Failed];
+  If[! ByteArrayQ[bytes], Return[$Failed]];
+  strm = Quiet @ OpenWrite[path, BinaryFormat -> True];
+  If[Head[strm] =!= OutputStream, Return[$Failed]];
+  WithCleanup[BinaryWrite[strm, bytes], Quiet @ Close[strm]];
+  path];
+
+Options[SourceVaultRealtimeRender] = {
+  "Model" -> Automatic, "Voice" -> Automatic, "Instructions" -> Automatic,
+  "NarrationInstructions" -> "", "Parallel" -> 3,
+  "Notebook" -> Automatic, "RequirePaidAPIApproval" -> True,
+  "Python" -> Automatic, "Progress" -> None, "TimeConstraint" -> Automatic,
+  "PollSeconds" -> 0.5};
+
+SourceVaultRealtimeRender[jobsIn_List, OptionsPattern[]] := Module[
+  {jobs, model, api, voice, instructions, python, script, nb, apiKey, tag, jobsFile, resultFile,
+   config, process, started, limit, poll, progress, last = None, result, done, failed, total,
+   files, seconds, errors, stderr},
+  jobs = Select[jobsIn, AssociationQ[#] && StringQ[Lookup[#, "Text", None]] &&
+      StringTrim[#["Text"]] =!= "" && StringQ[Lookup[#, "File", None]] &];
+  If[jobs === {},
+    Return[<|"Status" -> "OK", "Files" -> <||>, "Seconds" -> <||>, "Failed" -> <||>, "Elapsed" -> 0.|>]];
+  model = Replace[OptionValue["Model"], Automatic :> SourceVault`$SourceVaultRealtimeModel];
+  If[! StringQ[model] || StringTrim[model] === "", model = "gpt-realtime-2.1"];
+  api = SourceVaultRealtimeModelAPI[model];
+  If[api =!= "Realtime",
+    Return[iSVRTFailure["SourceVaultRealtimeRenderLive",
+      "GPT-Live (" <> model <> ") は実時間でしか話さないので wav へ速く書けません。SourceVaultRealtimeNarrate の \"RecordFile\" で再生しながら録ってください。",
+      <|"Model" -> model|>]]];
+  voice = Replace[OptionValue["Voice"], Automatic :> SourceVault`$SourceVaultRealtimeVoice];
+  instructions = Replace[OptionValue["Instructions"], Automatic :> SourceVault`$SourceVaultRealtimeInstructions];
+  python = iSVRTResolvePython[OptionValue["Python"]];
+  script = iSVRTRenderScriptPath[];
+  If[! StringQ[python] || ! FileExistsQ[script],
+    Return[iSVRTFailure["SourceVaultRealtimeUnavailable",
+      "音声を書く Python 環境かスクリプトがありません。",
+      <|"Hint" -> If[StringQ[python], "見つかりません: " <> script, iSVRTInstallHint[]]|>]]];
+  If[! TrueQ[iSVRTEnsureNBAccess[]],
+    Return[iSVRTFailure["SourceVaultRealtimeNBAccessUnavailable",
+      "NBAccess.wl を読み込めません (API キーの取得に必要)。"]]];
+  (* 確認は SourceVaultRealtimeStart と同じ: ノートブックの有料 API 許可・プロバイダ方針・キー *)
+  nb = iSVRTResolveNotebook[OptionValue["Notebook"]];
+  If[TrueQ[OptionValue["RequirePaidAPIApproval"]],
+    If[! MatchQ[nb, _NotebookObject],
+      Return[iSVRTFailure["SourceVaultRealtimeNotebookRequired",
+        "Paid API の承認確認にはノートブックが要ります (\"Notebook\" を指定するか \"RequirePaidAPIApproval\" -> False)。"]]];
+    If[! TrueQ @ Quiet @ NBAccess`NBGetNotebookPaidAPIAllowed[nb],
+      Return[iSVRTFailure["SourceVaultRealtimePaidAPINotAllowed",
+        "このノートブックは有料 API を許可していません。NBAccess`NBSetNotebookPaidAPIAllowed[nb, True] で許可してください。"]]]];
+  If[! TrueQ @ Quiet @ NBAccess`NBProviderCanAccess["openai", 0.5],
+    Return[iSVRTFailure["SourceVaultRealtimeOpenAIDisabled",
+      "NBAccess のプロバイダ方針が現在 OpenAI へのアクセスを認めていません。"]]];
+
+  tag = StringReplace[CreateUUID[], "-" -> ""];
+  jobsFile = FileNameJoin[{$TemporaryDirectory, "sourcevault-render-jobs-" <> tag <> ".json"}];
+  resultFile = FileNameJoin[{$TemporaryDirectory, "sourcevault-render-result-" <> tag <> ".json"}];
+  config = <|"model" -> model, "voice" -> ToString[voice], "instructions" -> ToString[instructions],
+    "narrationInstructions" -> ToString[OptionValue["NarrationInstructions"]],
+    "parallel" -> Replace[OptionValue["Parallel"], Except[_Integer?Positive] -> 3],
+    "jobs" -> Map[<|"id" -> ToString[Lookup[#, "Id", ""]], "heading" -> ToString[Lookup[#, "Heading", ""]],
+        "text" -> #["Text"], "out" -> ExpandFileName[#["File"]]|> &, jobs]|>;
+  If[iSVRTWriteJSONFile[jobsFile, config] === $Failed,
+    Return[iSVRTFailure["SourceVaultRealtimeRenderIO", "原稿の受け渡しファイルを書けませんでした。"]]];
+
+  apiKey = Quiet @ NBAccess`NBGetAPIKey["openai", NBAccess`PrivacySpec -> <|"AccessLevel" -> 1.0|>];
+  If[! StringQ[apiKey] || StringLength[apiKey] === 0,
+    apiKey =.;
+    Quiet[DeleteFile[jobsFile]];
+    Return[iSVRTFailure["SourceVaultRealtimeAPIKeyMissing",
+      "OPENAI_API_KEY を NBAccess / SystemCredential から取得できませんでした。"]]];
+  (* 環境は渡さない ($Language が Japanese だと落ちる)。キーは標準入力から 1 行だけ *)
+  process = Quiet @ Check[StartProcess[{python, "-X", "utf8", script,
+      "--jobs", jobsFile, "--result", resultFile, "--api-key-stdin"}], $Failed];
+  If[MatchQ[process, _ProcessObject], Quiet @ Check[WriteLine[process, apiKey], Null]];
+  apiKey =.;
+  If[! MatchQ[process, _ProcessObject],
+    Quiet[DeleteFile[jobsFile]];
+    Return[iSVRTFailure["SourceVaultRealtimeStartFailed", "音声を書くプロセスを起動できませんでした。"]]];
+
+  total = Length[jobs];
+  started = AbsoluteTime[];
+  limit = Replace[OptionValue["TimeConstraint"], Automatic :>
+    120. + Total[StringLength[#["Text"]] & /@ jobs]/2.];
+  poll = Replace[OptionValue["PollSeconds"], Except[_?NumericQ] -> 0.5];
+  progress = OptionValue["Progress"];
+  While[ProcessStatus[process] === "Running" && AbsoluteTime[] - started < limit,
+    Pause[poll];
+    result = iSVRTReadJSONFile[resultFile];
+    If[progress =!= None && AssociationQ[result] && KeyExistsQ[result, "done"],
+      With[{p = <|"Done" -> result["done"], "Failed" -> Lookup[result, "failed", 0], "Total" -> total,
+          "Elapsed" -> Round[AbsoluteTime[] - started, 0.1]|>},
+        If[KeyDrop[p, "Elapsed"] =!= last, last = KeyDrop[p, "Elapsed"]; Quiet[progress[p]]]]]];
+  If[ProcessStatus[process] === "Running", Quiet[KillProcess[process]]];
+  stderr = Quiet @ Check[ReadString[ProcessConnection[process, "StandardError"], EndOfBuffer], ""];
+  result = iSVRTReadJSONFile[resultFile];
+  Quiet[DeleteFile[jobsFile]];
+  Quiet[DeleteFile[resultFile]];
+  If[! AssociationQ[result] || ! AssociationQ[Lookup[result, "jobs", None]],
+    Return[iSVRTFailure["SourceVaultRealtimeRenderFailed", "音声を書くプロセスが結果を残しませんでした。",
+      <|"StandardError" -> If[StringQ[stderr], StringTake[stderr, UpTo[2000]], ""]|>]]];
+  files = Association @ KeyValueMap[If[Lookup[#2, "status", ""] === "done" && StringQ[Lookup[#2, "file", None]] &&
+      FileExistsQ[#2["file"]], #1 -> #2["file"], Nothing] &, result["jobs"]];
+  seconds = Association @ KeyValueMap[If[KeyExistsQ[files, #1], #1 -> N[Lookup[#2, "seconds", 0]], Nothing] &, result["jobs"]];
+  errors = Association @ KeyValueMap[If[KeyExistsQ[files, #1], Nothing,
+      #1 -> ToString[Lookup[#2, "error", Lookup[#2, "status", "unfinished"]]]] &, result["jobs"]];
+  done = Length[files]; failed = Length[errors];
+  <|"Status" -> Which[failed === 0, "OK", done > 0, "Partial", True, "Failed"],
+    "Files" -> files, "Seconds" -> seconds, "Failed" -> errors,
+    "Fatal" -> Lookup[result, "fatal", None], "Model" -> model, "Voice" -> voice,
+    "Elapsed" -> Round[AbsoluteTime[] - started, 0.1],
+    "TimedOut" -> (AbsoluteTime[] - started >= limit)|>];
 
 End[];
 

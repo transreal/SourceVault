@@ -41,6 +41,7 @@ import base64
 import json
 import os
 import queue
+import random
 import re
 import sys
 import threading
@@ -64,9 +65,33 @@ import websocket
 #:      answers are composed by the model from the lookup (matchedQuestion).
 #: 1.8: answers and fixed lookup lines follow the asker's language (not always Japanese).
 #: 1.10: Latin-script scripts (English, Javanese) split at ". " and chunked by tokens, not 260 chars.
-WORKER_VERSION = "1.10"
+#: 1.11: GPT-Live narration: a reply that is not the script ("はい。") is asked again instead of
+#:       counting as the slide; no additions; presenter delivery; kana-weighted coverage.
+#: 1.12: the speaker is never left silent (an inaudible keep-alive noise between utterances,
+#:       a short lead-in after a quiet spell): Bluetooth speakers dropped the first syllables.
+#:       GPT-Live keeps the soft onset that came before the first voiced chunk.
+#: 1.13: narrate may carry "record" (a .wav path): what the speaker played for that
+#:       narration is written there before narrationDone (SlideWorkflow's narrated
+#:       video with GPT-Live, which can only speak in real time).
+WORKER_VERSION = "1.13"
 
 RATE = 24_000  # OpenAI Realtime PCM rate, used for both directions.
+
+#: 1.12: a lead-in goes before speech that follows this much quiet.
+LEAD_IN_AFTER_QUIET_SECONDS = 1.0
+
+
+def keepalive_pcm(args: Any) -> bytes:
+    """One second of the inaudible keep-alive noise (16-bit mono PCM), or b""
+    when it is switched off.  Uniform noise at ``--keepalive-db`` dBFS (peak)."""
+    if getattr(args, "no_keepalive", False):
+        return b""
+    level = float(getattr(args, "keepalive_db", -70.0))
+    amplitude = int(round(32767 * 10 ** (level / 20.0))) if level > -120 else 0
+    amplitude = max(0, min(amplitude, 3000))
+    rng = random.Random(12345)
+    samples = array.array("h", (rng.randint(-amplitude, amplitude) for _ in range(RATE)))
+    return samples.tobytes()
 
 #: How much the model says when it answers.  The Realtime API has no verbosity
 #: parameter, so this is carried in the session instructions -- plus a hard
@@ -260,6 +285,10 @@ class RealtimeBridge:
 
         self.input_events: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=64)
         self.play_queue: queue.Queue[bytes] = queue.Queue()
+        #: 1.12: what the speaker hears between utterances (see _feed_idle).
+        self._keepalive_pcm = keepalive_pcm(args)
+        self._keepalive_pos = 0
+        self._last_audio_at = 0.0
 
         self._assistant_text = ""
         self._assistant_flush = 0.0
@@ -299,8 +328,70 @@ class RealtimeBridge:
         #: one JSON line per command: a single-slot file loses a command when
         #: two are sent inside one poll interval.
         self._control_offset = 0
+        #: 1.13: a narration may ask for its audio to be kept ("record": a .wav
+        #: path) -- SlideWorkflow's narrated video for GPT-Live, which cannot
+        #: speak faster than real time.  What is kept is what the speaker
+        #: played for that narration, written when the narration is done.
+        self.record_lock = threading.Lock()
+        self.record_id: str | None = None
+        self.record_path: str | None = None
+        self.record_buf = bytearray()
 
         self._write_state()
+
+    # ------------------------------------------------------------- recording
+
+    def _record_begin(self, command: dict[str, Any]) -> None:
+        path = str(command.get("record", "") or "").strip()
+        with self.record_lock:
+            self.record_path = path or None
+            self.record_id = str(command.get("id", "")).strip() if path else None
+            self.record_buf = bytearray()
+
+    def _record_audio(self, chunk: bytes) -> None:
+        """Keep a chunk the speaker just played, if it belongs to the
+        narration being recorded."""
+        if self.record_path is None or not chunk:
+            return
+        with self.purpose_lock:
+            narration = self.pending_narration
+        with self.record_lock:
+            if self.record_path is not None and narration is not None and narration == self.record_id:
+                self.record_buf += chunk
+
+    def _record_reset(self) -> None:
+        """Drop what was kept so far (a reply that was not the script)."""
+        with self.record_lock:
+            self.record_buf = bytearray()
+
+    def _record_flush(self, narration: str | None) -> None:
+        """Write the narration's audio before the notebook is told it is done,
+        so the file is there when NarrationDone is seen."""
+        with self.record_lock:
+            if self.record_path is None or narration is None or narration != self.record_id:
+                return
+            path, pcm = self.record_path, bytes(self.record_buf)
+            self.record_path = None
+            self.record_id = None
+            self.record_buf = bytearray()
+        if not pcm:
+            self._write_state(lastError=f"record: no audio for {narration}")
+            return
+        try:
+            import wave
+
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            partial = target.with_name(target.name + ".part")
+            with wave.open(str(partial), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(RATE)
+                handle.writeframes(pcm)
+            os.replace(partial, target)
+            self._write_state(lastRecording=str(target))
+        except OSError as exc:
+            self._write_state(lastError=f"record: {type(exc).__name__}: {exc}")
 
     # ------------------------------------------------------------------ state
 
@@ -512,18 +603,59 @@ class RealtimeBridge:
                 played = 0
                 while not self.stop_event.is_set():
                     try:
-                        chunk = self.play_queue.get(timeout=0.1)
+                        chunk = self.play_queue.get(timeout=self._play_wait(0.1))
                     except queue.Empty:
                         if self.output_active.is_set() and self.output_done.is_set():
                             self._finish_output()
+                        self._feed_idle(stream.write, frames)
                         continue
                     if chunk:
+                        self._lead_in(stream.write)
                         stream.write(chunk)
+                        self._record_audio(chunk)
+                        self._last_audio_at = time.monotonic()
                         played += 1
                         if played % 25 == 0:
                             self._write_state(outputChunks=played)
         except Exception as exc:
             self._fatal(f"speaker: {type(exc).__name__}: {exc}")
+
+    # 1.12 -- the speaker is never left silent.  Bluetooth speakers (and some
+    # USB / HDMI paths) power their audio down when nothing is written or only
+    # digital zeros arrive, and need a few hundred milliseconds to wake up: the
+    # first syllables of an utterance were lost (2026-10-04, BOOM 3, with
+    # gpt-realtime and gpt-live alike).  Between utterances an inaudible noise
+    # (default -70 dBFS) keeps the stream fed and the device awake; after a
+    # quiet spell a short lead-in goes before the speech as well.
+
+    def _play_wait(self, default: float) -> float:
+        """How long the playback loop waits for audio before feeding the
+        keep-alive (no wait: the blocking write paces the loop)."""
+        return 0.0 if self._keepalive_pcm else default
+
+    def _feed_idle(self, write: Any, frames: int) -> None:
+        if not self._keepalive_pcm:
+            return
+        write(self._keepalive_slice(frames * 2))
+
+    def _keepalive_slice(self, size: int) -> bytes:
+        pcm = self._keepalive_pcm
+        out = bytearray()
+        while len(out) < size:
+            take = min(size - len(out), len(pcm) - self._keepalive_pos)
+            out += pcm[self._keepalive_pos:self._keepalive_pos + take]
+            self._keepalive_pos = (self._keepalive_pos + take) % len(pcm)
+        return bytes(out)
+
+    def _lead_in(self, write: Any) -> None:
+        """A short run of keep-alive (or silence) before speech that follows a
+        quiet spell, so whatever the device still needs to wake up eats the
+        lead-in, not the first syllable."""
+        ms = int(getattr(self.args, "lead_in_ms", 0) or 0)
+        if ms <= 0 or time.monotonic() - self._last_audio_at < LEAD_IN_AFTER_QUIET_SECONDS:
+            return
+        size = int(RATE * ms / 1000) * 2
+        write(self._keepalive_slice(size) if self._keepalive_pcm else bytes(size))
 
     def _finish_output(self) -> None:
         self.output_active.clear()
@@ -542,6 +674,7 @@ class RealtimeBridge:
         if narration is not None:
             # The notebook waits for exactly this: the narration was not just
             # generated, it was heard.
+            self._record_flush(narration)
             self._write_state(narrationActive=None, narrationDone=narration)
         if time.monotonic() >= self.suppress_until:
             self.narration_label = ""
@@ -1032,6 +1165,9 @@ class RealtimeBridge:
         if self.output_active.is_set() or self.state.get("speaking"):
             self._cancel_speech()
             time.sleep(0.2)
+            # 1.12: _cancel_speech opens a 1.5 s quiet window that kills any
+            # response created inside it -- including this narration's own.
+            self.suppress_until = 0.0
         text = str(command.get("text", "")).strip()
         identifier = str(command.get("id", "")).strip()
         if not text or not identifier:
@@ -1048,6 +1184,7 @@ class RealtimeBridge:
             return
         with self.purpose_lock:
             self.pending_narration = identifier
+        self._record_begin(command)
         self._write_state(narrationActive=identifier, narrationDone=None)
         prompt = (heading + "の原稿です。\n---\n" + text + "\n---") if heading else (
             "原稿です。\n---\n" + text + "\n---"
@@ -1516,6 +1653,20 @@ LIVE_APPEND_MAX_TOKENS = 460
 LIVE_NARRATION_CHUNK_CHARS = 260
 #: Output chunks whose peak is below this count as silence, not speech.
 LIVE_VOICED_PEAK = 0.01
+#: 1.11: a piece counts as *not read* when less than this share of it is in
+#: the output transcript and the voiced audio is shorter than this share of
+#: the time reading it takes; it is then asked for again, at most
+#: LIVE_NARRATION_RETRIES times (2026-10-04: "はい。" instead of a slide).
+LIVE_NARRATION_UNREAD_COVERAGE = 0.4
+LIVE_NARRATION_UNREAD_VOICED = 0.35
+LIVE_NARRATION_RETRIES = 2
+LIVE_JA_CHARS_PER_SECOND = 7.0
+LIVE_LATIN_CHARS_PER_SECOND = 14.0
+#: Replies that only acknowledge (asked again without waiting for the stall).
+LIVE_ACK = re.compile(
+    r"^(はい|ええ|うん|了解|承知|わかりました|分かりました|かしこまりました|ok|okay|オーケー)",
+    re.IGNORECASE,
+)
 #: A needWeb answer waits this long for the room's yes/no.
 LIVE_WEB_PERMISSION_SECONDS = 45.0
 #: What a delegation is about: the last run of transcript fragments, cut at a
@@ -1876,6 +2027,12 @@ class LiveBridge(RealtimeBridge):
         self.narration_current = ""
         self.narration_resent = False
         self.narration_started_speaking = False
+        #: 1.11: how often the current piece was asked for again because the
+        #: model answered ("はい") instead of reading it, and how much voiced
+        #: audio it has produced for the piece (evidence that it was read even
+        #: when the output transcript lags or is missing).
+        self.narration_retries = 0
+        self.narration_voiced_ms = 0.0
         #: Delegations being served, and serialization of notebook requests
         #: (the state file has one slot for each kind of request).
         self.delegation_lock = threading.Lock()
@@ -2227,11 +2384,14 @@ class LiveBridge(RealtimeBridge):
                 )
                 while not self.stop_event.is_set():
                     try:
-                        item = self.play_queue.get(timeout=0.05)
+                        item = self.play_queue.get(timeout=self._play_wait(0.05))
                     except queue.Empty:
                         self._maybe_finish_live_output()
+                        self._feed_idle(stream.write, frames)
                         continue
+                    self._lead_in(stream.write)
                     self._consume_play_item(item, stream.write)
+                    self._last_audio_at = time.monotonic()
         except Exception as exc:
             self._fatal(f"speaker: {type(exc).__name__}: {exc}")
 
@@ -2243,6 +2403,7 @@ class LiveBridge(RealtimeBridge):
             # own echo in the microphone from a person speaking.
             self.far_peaks.append((time.monotonic(), self._peak_of(chunk)))
             write(chunk)
+            self._record_audio(chunk)
             self._played_chunks = getattr(self, "_played_chunks", 0) + 1
             if self._played_chunks % 25 == 0:
                 self._write_state(outputChunks=self._played_chunks)
@@ -2255,6 +2416,27 @@ class LiveBridge(RealtimeBridge):
         super()._drop_playback()
         with self.voiced_lock:
             self.voiced_pending = 0
+        self._take_preroll()
+
+    def _remember_preroll(self, raw: bytes) -> None:
+        limit = int(RATE * int(getattr(self.args, "live_preroll_ms", 0) or 0) / 1000) * 2
+        if limit <= 0:
+            return
+        buf = getattr(self, "_preroll", None)
+        if buf is None:
+            buf = self._preroll = deque()
+        buf.append(raw)
+        total = sum(len(b) for b in buf)
+        while buf and total - len(buf[0]) >= limit:
+            total -= len(buf.popleft())
+
+    def _take_preroll(self) -> list[bytes]:
+        buf = getattr(self, "_preroll", None)
+        if not buf:
+            return []
+        out = list(buf)
+        buf.clear()
+        return out
 
     def _idle_seconds(self) -> float:
         idle = self.args.live_idle_ms / 1000.0
@@ -2273,28 +2455,96 @@ class LiveBridge(RealtimeBridge):
         quiet = time.monotonic() - self.last_voiced_output_at
         if quiet < self._idle_seconds():
             return
-        if (
-            self.pending_narration is not None
-            and self.narration_started_speaking
-            and self._narration_coverage() < 0.8
-            and quiet < self.args.live_narration_stall_ms / 1000.0
-        ):
-            # A pause inside the script (measured 2026-09-19: "配信" … 1.5 s …
-            # "されているのは…") is not its end; the deck must not move on.
-            return
+        stalled = quiet >= self.args.live_narration_stall_ms / 1000.0
+        if self.pending_narration is not None and self.narration_started_speaking:
+            # 1.11: the model answered instead of reading ("はい。", "はい、指示が
+            # あるまで" -- 2026-10-04, VR deck): ask for the piece again rather
+            # than report it heard.  Before, any voiced reply followed by the
+            # stall counted as the whole slide and the deck skipped it.
+            if self._narration_unread() and (
+                stalled or self._ack_only(self._assistant_text, self.narration_current)
+            ):
+                if self.narration_retries < LIVE_NARRATION_RETRIES:
+                    self._retry_narration()
+                    return
+                # Asked twice already: give the deck its turn back.
+            elif self._narration_coverage() < 0.8 and not stalled:
+                # A pause inside the script (measured 2026-09-19: "配信" … 1.5 s …
+                # "されているのは…") is not its end; the deck must not move on.
+                return
         self._finish_output()
 
     @staticmethod
     def _plain_length(text: str) -> int:
         return len(re.sub(r"[\s、。，．,.！？!?「」『』（）()・…ー-]", "", str(text)))
 
+    @staticmethod
+    def _spoken_size(text: str) -> float:
+        """Plain length with kana weighted 0.6: a script whose words were
+        replaced by their readings (SlideWorkflow's reading dictionary, e.g.
+        音場 -> おんば) is longer in characters than the transcript of the
+        same speech written with kanji."""
+        plain = re.sub(r"[\s、。，．,.！？!?「」『』（）()・…ー-]", "", str(text))
+        return sum(0.6 if "぀" <= ch <= "ヿ" else 1.0 for ch in plain)
+
     def _narration_coverage(self) -> float:
         """How much of the current piece the model has said (transcript)."""
-        piece = self._plain_length(self.narration_current)
+        piece = self._spoken_size(self.narration_current)
         if piece <= 0:
             return 1.0
-        spoken = self._plain_length(self.narration_spoken.replace("それでは、説明に戻ります", ""))
+        spoken = self._spoken_size(self.narration_spoken.replace("それでは、説明に戻ります", ""))
         return spoken / piece
+
+    def _narration_unread(self) -> bool:
+        """The current piece was not read: little of it in the transcript and
+        far less voiced audio than reading it takes (the transcript alone is
+        not trusted -- it can lag behind or be missing)."""
+        piece = self.narration_current
+        if not piece:
+            return False
+        latin = sum(1 for ch in piece if ord(ch) < 0x80) > len(piece) / 2
+        expected = self._plain_length(piece) / (LIVE_LATIN_CHARS_PER_SECOND if latin
+                                                else LIVE_JA_CHARS_PER_SECOND)
+        voiced = self.narration_voiced_ms / 1000.0
+        return (self._narration_coverage() < LIVE_NARRATION_UNREAD_COVERAGE
+                and voiced < LIVE_NARRATION_UNREAD_VOICED * expected)
+
+    @staticmethod
+    def _ack_only(text: str, piece: str = "") -> bool:
+        """A bare acknowledgement ("はい。", "はい、わかりました", "OK") -- unless
+        the script itself opens with those words."""
+        plain = re.sub(r"[\s、。，．,.！？!?…]", "", str(text))
+        if not (0 < len(plain) <= 16):
+            return False
+        match = LIVE_ACK.match(plain)
+        if not match:
+            return False
+        head = re.sub(r"[\s、。，．,.！？!?…「」『』]", "", str(piece))
+        return not head.lower().startswith(match.group(0).lower())
+
+    def _retry_narration(self) -> None:
+        """Close the reply and ask for the same piece again, once more."""
+        self.output_active.clear()
+        self.output_done.clear()
+        self.input_blocked_until = time.monotonic() + self.args.output_cooldown_ms / 1000.0
+        text = self._assistant_text.strip()
+        self._assistant_text = ""
+        if text:
+            self._write_state(lastAssistantText=text[-4000:])
+            self._record("assistant", text)
+        with self.purpose_lock:
+            self.narration_retries += 1
+            self.narration_started_speaking = False
+            self.narration_spoken = ""
+            self.narration_voiced_ms = 0.0
+            # The housekeeping re-request is spent; it gives up 25 s on.
+            self.narration_resent = True
+            self.narration_sent_at = time.monotonic()
+        self._write_state(speaking=False)
+        # 1.13: a recorded narration keeps only the reading, not the "はい。".
+        self._record_reset()
+        self._append("instructions", None, self._narration_direction(retry=True))
+        self._record("status", "原稿が読まれなかったので読み直しを頼みました")
 
     def _begin_output(self) -> None:
         self.output_active.set()
@@ -2331,12 +2581,21 @@ class LiveBridge(RealtimeBridge):
                 return
         if not self.output_active.is_set():
             if not voiced:
+                # 1.12: keep the quiet audio just before speech (a breathy
+                # onset -- the "h" of はい -- sits under the voiced threshold);
+                # it goes out ahead of the first voiced chunk.
+                self._remember_preroll(raw)
                 return
             self._begin_output()
+            for quiet in self._take_preroll():
+                self.play_queue.put((quiet, False))
         if voiced:
             self.last_voiced_output_at = now
             with self.voiced_lock:
                 self.voiced_pending += 1
+            if self.pending_narration is not None:
+                # 24 kHz 16-bit mono: 48 bytes a millisecond.
+                self.narration_voiced_ms += len(raw) / 48.0
         self.play_queue.put((raw, voiced))
 
     def _finish_output(self) -> None:
@@ -2363,6 +2622,7 @@ class LiveBridge(RealtimeBridge):
             self._send_narration_piece(follow, first=False)
             return
         if narration is not None and heard:
+            self._record_flush(narration)
             with self.purpose_lock:
                 self.pending_narration = None
                 self.narration_rest = []
@@ -3134,6 +3394,7 @@ class LiveBridge(RealtimeBridge):
                 self._mode(self._ready_mode())
                 return
             if not pieces:
+                self._record_flush(suspended["id"])
                 self._write_state(narrationActive=None, narrationDone=suspended["id"])
                 self._mode(self._ready_mode())
                 return
@@ -3223,16 +3484,23 @@ class LiveBridge(RealtimeBridge):
                 pass
 
     def _narration_direction(self, *, first: bool = True, resume: bool = False,
-                             urgent: bool = False) -> str:
+                             urgent: bool = False, retry: bool = False) -> str:
         """The short spoken-now instruction; the script itself is already in
         the model's context (_deliver_piece).
 
         A new script says outright that no reply is awaited: right after the
         model had asked the room to repeat ("すみません、もう一度お願いします"),
         it kept waiting for that reply and never read slide 1, nor after the
-        re-request (2026-09-28 rehearsal).  ``urgent`` is the re-request."""
+        re-request (2026-09-28 rehearsal).  ``urgent`` is the re-request.
+        ``retry`` (1.11) follows a reply that was not the script ("はい。").
+
+        1.11 also says not to add anything (a one-line slide-1 script became a
+        paragraph about "1950年代の実験的な装置", 2026-10-04) and asks for a
+        presenter's delivery: the Realtime path always had 「自然な発表口調で
+        話す。棒読みにしない。」, the Live path read flatly without it."""
         head = (
-            "質疑はここまでです。「それでは、説明に戻ります」と言ってから、" if resume
+            "「はい」などの返事や相槌はせずに、いますぐ、" if retry
+            else "質疑はここまでです。「それでは、説明に戻ります」と言ってから、" if resume
             else "続けて、" if not first
             else "会話や聞き返しはここで終わりです。返事は待たずに、いますぐ、" if urgent
             else "会話や聞き返しの返事は待たずに、"
@@ -3240,7 +3508,9 @@ class LiveBridge(RealtimeBridge):
         direction = (
             head + "直前に「次に読み上げる原稿」として渡した原稿だけを、書かれたとおりに最後まで声に出して読んでください。"
             "発表の背景に書かれた他のスライドの内容は読まないでください。"
-            "前置き・言い換え・翻訳・感想は付けず、読み終えたら黙って待ってください。"
+            "前置き・言い換え・翻訳・感想は付けず、原稿に書かれていない説明や補足は一言も足さないでください"
+            "(原稿が一文だけなら、その一文だけを言う)。読み終えたら黙って待ってください。"
+            "聴衆に語りかける発表の口調で、抑揚と強弱をつけて話してください (棒読みにしない)。"
         )
         if self.narration_extra:
             direction += "話し方 (声に出さない): " + self.narration_extra
@@ -3269,6 +3539,8 @@ class LiveBridge(RealtimeBridge):
             self.narration_resent = False
             self.narration_started_speaking = False
             self.narration_spoken = ""
+            self.narration_retries = 0
+            self.narration_voiced_ms = 0.0
         self._mode("narrating", self.narration_label)
         threading.Thread(
             target=self._deliver_piece,
@@ -3283,8 +3555,10 @@ class LiveBridge(RealtimeBridge):
         with self.purpose_lock:
             if generation != self.narration_gen or self.pending_narration is None:
                 return
+        # 1.11: a label, not a request -- "指示があるまで声に出さないでください"
+        # drew "はい。" and once "はい、指示があるまで" out loud (2026-10-04).
         context = self._append(
-            "thinking", None, f"{label}です。指示があるまで声に出さないでください。\n{piece}"
+            "thinking", None, f"{label} (読む合図はこのあと別に出します):\n{piece}"
         )
         self._wait_ack(context, self.args.live_ack_timeout_ms / 1000.0)
         with self.purpose_lock:
@@ -3326,13 +3600,15 @@ class LiveBridge(RealtimeBridge):
             return
         pieces = narration_chunks(text) or [text]
         extra = " ".join(str(command.get("instructions", "")).split())
-        self.narration_extra = extra[:80]
+        # 1.11: 80 -> 160 characters (the deck's delivery notes were cut off).
+        self.narration_extra = extra[:160]
         self.narration_label = str(command.get("heading", "")).strip()
         self._configure_interrupts(command)
         with self.purpose_lock:
             self.suspended = None
             self.pending_narration = identifier
             self.narration_rest = pieces[1:]
+        self._record_begin(command)
         self.qa_open = False
         self._write_state(narrationActive=identifier, narrationDone=None,
                           qaOpen=False, interrupted=False)
@@ -3442,6 +3718,7 @@ class LiveBridge(RealtimeBridge):
                 self._append("instructions", None, self._narration_direction(first=True, urgent=True))
                 self._record("status", "読み上げを再依頼しました")
             elif waited > 25.0:
+                self._record_flush(narration)
                 with self.purpose_lock:
                     self.pending_narration = None
                     self.narration_rest = []
@@ -3563,6 +3840,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--input-device", default="")
     parser.add_argument("--output-device", default="")
     parser.add_argument("--chunk-ms", type=int, default=20)
+    # 1.12: inaudible noise between utterances (dBFS peak) / switch it off /
+    # lead-in before speech after a quiet spell / GPT-Live soft-onset pre-roll.
+    parser.add_argument("--keepalive-db", type=float, default=-70.0)
+    parser.add_argument("--no-keepalive", action="store_true")
+    parser.add_argument("--lead-in-ms", type=int, default=100)
+    parser.add_argument("--live-preroll-ms", type=int, default=200)
     parser.add_argument("--vad-threshold", type=float, default=0.5)
     # 350 ms は日本語の自然な間で切れる: 言い終える前に答えられてしまう。
     parser.add_argument("--prefix-padding-ms", type=int, default=300)
