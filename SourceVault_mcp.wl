@@ -4050,10 +4050,14 @@ iMCPWebDocBlock[doc_Association, args_Association] := Module[{g, uri},
   ToString @ Lookup[doc, "CleanTextLength", 0] <> " chars]\n" <>
   "  url: " <> ToString @ Lookup[doc, "Url", "?"] <> "\n" <>
   If[StringQ[uri], "  ref: " <> uri <> "\n", ""] <>
-  If[Lookup[Lookup[g, "Gate", <||>], "Decision", "Deny"] === "Permit",
-    "  text: " <> iMCPWebCleanText[doc, $iMCPWebPreviewChars],
-    "  released=false (" <>
-      StringRiffle[ToString /@ Lookup[Lookup[g, "Gate", <||>], "Why", {}], ", "] <> ")"]];
+  Which[
+    MemberQ[{"Denied", "Pending"}, ToString @ Lookup[doc, "ExtractionStatus", ""]],
+      "  guard: " <> ToString @ Lookup[doc, "Message", Lookup[doc, "Reason", "denied by the SourceVault web guard"]],
+    Lookup[Lookup[g, "Gate", <||>], "Decision", "Deny"] === "Permit",
+      "  text: " <> iMCPWebCleanText[doc, $iMCPWebPreviewChars],
+    True,
+      "  released=false (" <>
+        StringRiffle[ToString /@ Lookup[Lookup[g, "Gate", <||>], "Why", {}], ", "] <> ")"]];
 
 (* web 本文解放の監査記録 (gate を通って実際に本文を出した URI だけ載せる) *)
 iMCPRecordWebRelease[tool_String, args_Association, gated_List] :=
@@ -4100,25 +4104,41 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
         "RequestChannel" -> "MCP", "InitiationType" -> "MCPIngest",
         (* SearchRun の監査記録に MCP クライアント識別を残す (Actor=MCPClient) *)
         "Actor" -> Lookup[prov, "Actor", Automatic]];
-      If[FailureQ[r], iMCPError["Search failed: " <> ToString[r]],
+      If[FailureQ[r],
+        If[r[[1]] === "WebAccessGuard",
+          (* 関所 (SourceVault_webguard) の Pending / Deny はモデルへの次の行動指示としてそのまま返す *)
+          iMCPError[ToString @ Lookup[r[[2]], "MessageTemplate", "Denied by the SourceVault web guard."]],
+          iMCPError["Search failed: " <> ToString[r]]],
         iMCPText["Found " <> ToString @ Lookup[r, "ResultCount", 0] <> " results for \"" <>
           Lookup[args, "query", ""] <> "\":\n\n" <> iMCPFormatResults[Lookup[r, "Results", {}]]]],
     "sourcevault_submit_web_search",
-      r = SourceVault`SourceVaultWebSearchSubmit[<|
-        "Query" -> Lookup[args, "query", ""],
-        "MaxResults" -> Lookup[args, "maxResults", 10],
-        "FetchPages" -> TrueQ[Lookup[args, "fetchPages", False]],
-        "MaxFetch" -> Lookup[args, "maxFetch", 3],
-        "RequestChannel" -> "MCP", "InitiationType" -> "MCPIngest",
+      (* 関所 (SourceVault_webguard): query は job (サブカーネル, FE 無し) に入る前に service 側で通し、
+         job 内の SourceVaultWebSearch には GuardChecked で二重問い合わせさせない。関所未ロード時は
+         GuardChecked を立てず、job 側の iWebGuardGate が fail-closed で LLM 主体を止める。 *)
+      Module[{gq = Length[DownValues[SourceVault`SourceVaultWebGuardCheck]] > 0, g},
+        g = If[gq,
+          Quiet @ Check[SourceVault`SourceVaultWebGuardCheck[<|"Kind" -> "Search",
+            "Query" -> Lookup[args, "query", ""], "Actor" -> Lookup[prov, "Actor", <||>], "Channel" -> "MCP"|>],
+            <|"Decision" -> "Deny", "Message" -> "SourceVault web guard failed; access denied (fail-closed)."|>],
+          <|"Decision" -> "Allow"|>];
+        If[Lookup[g, "Decision", "Deny"] =!= "Allow",
+          Return[iMCPError[ToString @ Lookup[g, "Message", "Denied by the SourceVault web guard."]], Module]];
+        r = SourceVault`SourceVaultWebSearchSubmit[<|
+          "Query" -> Lookup[args, "query", ""],
+          "MaxResults" -> Lookup[args, "maxResults", 10],
+          "FetchPages" -> TrueQ[Lookup[args, "fetchPages", False]],
+          "MaxFetch" -> Lookup[args, "maxFetch", 3],
+          "GuardChecked" -> gq,
+          "RequestChannel" -> "MCP", "InitiationType" -> "MCPIngest",
         (* SearchRun にも MCP Actor を通す ("Actor" は SourceVaultWebSearch のオプションなので
            iWebRunSearchJob の FilterRules で SearchRun の provenance に乗る)。
            "Provenance" は文書 fetch (WebDocument) 側の provenance。 *)
         "Actor" -> Lookup[prov, "Actor", Automatic],
         "Provenance" -> prov|>];
-      If[! AssociationQ[r], iMCPError["Submit failed: " <> ToString[r]],
-        iMCPText["Submitted job " <> ToString @ Lookup[r, "JobId", "?"] <>
-          " (status: " <> ToString @ Lookup[r, "Status", "?"] <>
-          "). Use sourcevault_job_result with this jobId to get results."]],
+        If[! AssociationQ[r], iMCPError["Submit failed: " <> ToString[r]],
+          iMCPText["Submitted job " <> ToString @ Lookup[r, "JobId", "?"] <>
+            " (status: " <> ToString @ Lookup[r, "Status", "?"] <>
+            "). Use sourcevault_job_result with this jobId to get results."]]],
     "sourcevault_job_status",
       r = SourceVault`SourceVaultWebJobStatus[Lookup[args, "jobId", ""]];
       iMCPText["Job " <> ToString @ Lookup[r, "JobId", "?"] <> ": " <> ToString @ Lookup[r, "Status", "?"]],
@@ -4163,6 +4183,10 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
             iMCPError["Document not found: " <> ref <>
               " -- pass a snapshot ref printed by sourcevault_job_result, or an " <>
               "http(s) URL to fetch the page live."],
+          MemberQ[{"Denied", "Pending"}, es],
+            (* 関所 (SourceVault_webguard) の判定。文面はモデルへの次の行動指示を含む *)
+            iMCPError[ToString @ Lookup[r, "Message",
+              "Web access denied by the SourceVault web guard (" <> ToString @ Lookup[r, "Reason", "?"] <> ")."]],
           MemberQ[{"FetchFailed", "Failed", "Skipped"}, es],
             (* 本文が無い文書を「成功」で返すとモデルは空本文を延々読み直す。
                明示エラー + 再試行抑止の文言で次の行動 (別 URL) に誘導する。 *)

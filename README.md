@@ -2,7 +2,7 @@
 
 Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter**、release context に基づく公開ポリシー基盤と Web 検索サービス管理 (**SourceVault_searchindex** / **SourceVault_servicemanager**)、[Eagle](https://eagle.cool) デジタルアセットライブラリ統合 (**SourceVault_eagle**)、排他制御・immutable snapshot・append-only event log を提供するコア基盤 (**SourceVault_core**) を備えます。加えて、関数契約と型付き配線による API コンパイラ層 (**SourceVault_contracts** / **SourceVault_wiring**)、シミュレーション実行基盤 (**SourceVault_simrun**)、検索結果を「たどれる作業面」として扱う検索ビュー層 (**SourceVault_searchview**)、一般メールの構造化・スレッド提案 (**SourceVault_mailstructure** / **SourceVault_mailsuggest**)、オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層 (**SourceVault_mailagenda**)、Claude Code セッションログ統合 (**SourceVault_llmlog**)、コード化ワークフローのレジストリ・カタログ管理 (**SourceVault_workflowregistry** / **SourceVault_workflowcatalog**)、自動トリガスケジューラ (**SourceVault_autotrigger**)、クロスパッケージ診断層 (**SourceVault_diagnostics**)、関数粒度のパッケージ API 索引 (**SourceVault_packageapi**)、[ComfyUI](https://github.com/comfyanonymous/ComfyUI) 画像・動画生成統合 (**SourceVault_comfyui**) も備えます。さらに、oops メーリングリストのアーカイブを「ベース基準座標」とする認知支援・安全基盤 (Cane: **SourceVault_knowledgehome** / **SourceVault_cognition** / **SourceVault_adjudication** / **SourceVault_capbroker** / **SourceVault_taint** / **SourceVault_anomaly** / **SourceVault_routine** / **SourceVault_routineplan**) も統合しており、いずれも既定では判定を記録するだけの observe-only / shadow モードで動作します。私的データを扱う全関数の出力が別名呼び出しや `Map`・`ClaudeEval` 越しでも確実に機密マークされるようにする、プライバシー伝達の正準層 (**SourceVault_privacy**) も統合されています。
 
-加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、論文内容を「関連度 + 順序制約（因果・年代・導出・難易度）」つきの知識グラフとして保持し聴き手の理解度と時間から発表スライド構成を決定的に計算する発表用知識グラフ基盤 (**SourceVault_knowledgegraph**)、取り込み済み論文・Eagle 上の PDF の和訳ノートブックと、素材から作った計算ノートブックを登録する層 (**SourceVault_papernb**)、notebook 由来 Todo とスタンドアロン Todo を横断的に統合管理する Todo キャッシュ DB (**SourceVault_todo**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
+加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、論文内容を「関連度 + 順序制約（因果・年代・導出・難易度）」つきの知識グラフとして保持し聴き手の理解度と時間から発表スライド構成を決定的に計算する発表用知識グラフ基盤 (**SourceVault_knowledgegraph**)、取り込み済み論文・Eagle 上の PDF・Web ページの翻訳ノートブックと、素材から作った計算ノートブックを登録する層 (**SourceVault_papernb**)、論文ページのオープンアクセス PDF を探して取り込みページと結ぶ層 (**SourceVault_oapdf**)、LLM による Web アクセスの関所となる egress guard (**SourceVault_webguard**)、notebook 由来 Todo とスタンドアロン Todo を横断的に統合管理する Todo キャッシュ DB (**SourceVault_todo**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
 
 ## 設計思想と実装の概要
 
@@ -19,6 +19,8 @@ SourceVault の中核は **Source-First ingest パイプライン**です。各 
 3. **Parse** — `parsed/by-snap/<snapshotId>/pages/NNNN.txt` にページ単位のテキストを抽出します (PDF は 3 種類の OCR backend で fallback)。
 4. **Index** — `meta/sources/<sourceId>.json` と `meta/snapshots/<snapshotId>.json` に deterministic な JSON で記録します。
 5. **Hook** — NBAccess hook (P1〜P4) を経由して ClaudeAttach や ClaudeOrchestrator に通知し、必要なら ClaudeAttachments への登録や worker prompt への注入を行います。
+
+論文ページ (Nature / Elsevier / PNAS / Frontiers など) を ingest した場合は、直後に **オープンアクセス PDF** を探して別の web ソースとして取り込み、ページのソースと相互に結びます (後述「論文ページとオープンアクセス PDF」)。
 
 ### claim 抽出と Evidence Bundle
 
@@ -39,6 +41,12 @@ deterministic な index (sources/snapshots/todos/review/lint)
    ↓ mtime ベース cache (透過的)
 2 回目以降は高速 hit
 ```
+
+### 論文ページとオープンアクセス PDF (SourceVault_oapdf)
+
+`SourceVault_oapdf.wl` は、論文ページ (Nature / Elsevier / PNAS / Frontiers などの web ソース) にオープンアクセスの PDF があれば、その PDF を別の web ソースとして ingest し、ページのソースと相互に結ぶ層です。`SourceVaultIngest[url]` は論文ページを取り込んだ直後に自動でこれを呼び (`$SourceVaultAutoOpenAccessPDF`、または `"OpenAccessPDF" -> False` で停止)、ページが 401 / 403 / 429 で取れない場合も URL から DOI が分かれば PDF だけ取り込みます。
+
+オープンアクセスの判定は、Creative Commons ライセンスへのリンク・schema.org の `isAccessibleForFree`・Crossref のライセンス・Europe PMC の `isOpenAccess`・Unpaywall (メール設定時のみ) のいずれかによります。根拠が無ければ出版社の PDF は取りに行かず (購読誌は取り込まない)、出版社の 401 / 403 は回避せず次の候補 (arXiv・`citation_pdf_url`・Europe PMC・Elsevier API など) へ進みます。外部へ送るのは DOI (と設定したメール) だけです。`SourceVaultFindOpenAccessPDF` (探すだけ)・`SourceVaultIngestOpenAccessPDF` (取り込み + 結合)・`SourceVaultBackfillOpenAccessPDFs` (既存 web ソースの一括補完) があり、ソース一覧には「▶ PDF」ボタンが付きます。取り込んだ PDF は翻訳ノートブック生成 (`SourceVaultMakePaperNotebook`) でも優先して使われます。
 
 ### PromptRouter — ClaudeEval の式提案契約
 
@@ -137,7 +145,7 @@ SourceVaultSearch["Bruce Sterling", "ReleaseContext" -> "public", "Index" -> "pu
 
 `SourceVault_servicemanager.wl` は release gate 付き Web 検索・質問応答サービスを headless で公開する機能を提供します。
 
-**PDFGroupSearchProfile** に表題・assistant prompt・対象 index・gate 設定・LLM モデルをまとめ、コードに焼かずに profile 差し替えでアプリを切り替えられます。**detached service** は `SourceVaultStartService[serviceId]` で WolframScript プロセスとして起動し、メインカーネルを終了しても heartbeat を更新し続けます。service kernel の起動スクリプトは標準の SourceVault 群に加え、`$SourceVaultServiceExtraPackages` に他パッケージが自己登録した追加パッケージもロードします。`SourceVaultStartHTTPProxy` が Python reverse proxy をエッジに立て、WL サービスへ file ベースの command/response queue で中継します。生ファイルパスは外に出ず、**gate は必ず WL 側**で保持されます。
+**PDFGroupSearchProfile** に表題・assistant prompt・対象 index・gate 設定・LLM モデルをまとめ、コードに焼かずに profile 差し替えでアプリを切り替えられます。**detached service** は `SourceVaultStartService[serviceId]` で WolframScript プロセスとして起動し、メインカーネルを終了しても heartbeat を更新し続けます。service kernel の起動スクリプトは標準の SourceVault 群 (webingest の直後に webguard を含む) に加え、`$SourceVaultServiceExtraPackages` に他パッケージが自己登録した追加パッケージもロードします。`SourceVaultStartHTTPProxy` が Python reverse proxy をエッジに立て、WL サービスへ file ベースの command/response queue で中継します。生ファイルパスは外に出ず、**gate は必ず WL 側**で保持されます。
 
 ```
 PDF / Web ページ → ingest → コレクション
@@ -160,12 +168,22 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ W
    監査: WebSearchRun snapshot + 参照イベント + WebDocument snapshot
 ```
 
-- `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得・clean-text・job 二層（実行体は永続サブカーネル / SessionSubmit / Inline から選択でき、既定の Subkernel は service カーネルをブロックしません）・参照イベント・**importance / 構造 Priority**（mail の `Derived.Priority` に対応）・参照イベントの**クロスマシン rollup**・取り込み後フック (`SourceVaultRegisterWebIngestHook`)・LLM 要約と **DerivedArtifact** 保存。
+- `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得・clean-text・job 二層（実行体は永続サブカーネル / SessionSubmit / Inline から選択でき、既定の Subkernel は service カーネルをブロックしません）・参照イベント・**importance / 構造 Priority**（mail の `Derived.Priority` に対応）・参照イベントの**クロスマシン rollup**・取り込み後フック (`SourceVaultRegisterWebIngestHook`)・LLM 要約と **DerivedArtifact** 保存。検索・URL 取得の入口で Web egress guard (`SourceVault_webguard`) を通します。
 - `SourceVault_mcp.wl` — MCP tool schema・dispatch（組み込み 26 tool: `sourcevault_web_search` ほか。protocol endpoint は Python proxy 側）。パッケージコミット履歴の取得 (`sourcevault_commit_log` / `SourceVaultPackageCommitLog`)、OOPS メールスレッド検索 (`sourcevault_oops_status` / `_search_threads` / `_thread`)、allow-list root 配下の読み取り専用ファイル/directive 参照 (`sourcevault_fs_list` / `sourcevault_fs_read` / `sourcevault_directives`) もこの層から露出します。SourceVault 自身が存在を知らない外部パッケージ（例: [ResoLoop_mcp](https://github.com/transreal/ResoLoop_mcp)）が自前の MCP tool をこのゲートウェイへ足せる、package-neutral な拡張点 `SourceVaultMCPRegisterTools`（登録簿 `$SourceVaultMCPExternalTools`）も提供します。
 - `SourceVaultStartMCP[]` で WL service + `/sv/mcp` proxy を一括起動。`ShowClaudePalette[]` のプライバシー直下に起動/停止トグルが出ます（claudecode は package-neutral レジストリ経由で SourceVault に非依存）。
 - SearXNG が無い環境では `SourceVaultWebSearchIntegration[]` で **exa に後方互換フォールバック**（claudecode 無変更）。
 
 セットアップ（SearXNG インストール・MCP 起動・LM Studio `mcp.json`・外部パッケージによる MCP tool 拡張）は setup.md、使い方は user_manual.md の「Web 検索 / SearXNG / MCP ゲートウェイ」を参照してください。
+
+### Web egress guard (SourceVault_webguard)
+
+`SourceVault_webguard.wl` は、ローカル LLM や MCP クライアントが Web 検索・URL 取得を行う入口 (`SourceVaultWebSearch` / `SourceVaultWebFetch`) に置かれる **関所**です。URL やクエリ文字列にデータを符号化して外へ出す経路を塞ぐため、次の 3 要素を照合して Allow / Ask / Deny を決めます。
+
+1. **URL・クエリの不審度** — 決定的 (LLM 不使用) な解析 (`SourceVaultWebGuardAnalyzeURL` / `AnalyzeQuery`)。opaque なトークンや exfil 形状を検出します。
+2. **文脈 PrivacyLevel** — その LLM 呼び出しに渡るデータの PL。claudecode が `SourceVaultWebGuardDeclareContext` で申告し、不明な場合は私的データありの側 (0.5) に倒します。
+3. **ホストの identity と AccessLevel** — ドメインごとの profile (`SourceVaultWebHostProfile` / `SourceVaultWebHostSetAccess`)。使用実績から推定され、オーナー決定で更新されます。
+
+Ask はオーナーに問い合わせ (FE があれば ダイアログ、service kernel なら承認 queue)、すべての判定は id 付きでアクセスログに記録されます。オーナー自身のアクセスは常に Allow です。guard 未ロード時は webingest が LLM 主体のアクセスを fail-closed で拒否します。状態確認は `SourceVaultWebGuardStatus[]`、ホスト一覧は `SourceVaultWebHostProfilesView[]` です。
 
 ### 関数契約・型付き配線 (SourceVault_contracts / SourceVault_wiring)
 
@@ -183,15 +201,17 @@ LM Studio ──(remote MCP, /sv/mcp)──▶ Python HTTP/MCP proxy ──▶ W
 
 `SourceVault_voice.wl` / `SourceVault_vision.wl` は、外部認証情報を必要としないローカル完結の音声合成 (Piper Plus TTS、および VOICEVOX 互換のローカル HTTP TTS である AivisSpeech Engine の 2 エンジン)・音声認識 (Vosk ASR)・人物検出 / 姿勢推定 (MediaPipe ONNX モデル) の資産解決層です。PrivacyLevel が 0.5 以上のデータを外部サービスへ送らないという SourceVault の契約を音声・映像入出力の面で実装するもので、[VRCRealtime](https://github.com/transreal/VRCRealtime) のようなリアルタイム音声対話統合が起動時に問い合わせます。
 
-`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI とライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。モデル名で使用 API を自動選択し、`gpt-realtime-*` は 1 つのモデルが聞く・考える・話すを担う Realtime API、`gpt-live-*`（GPT-Live）は全二重（聞きながら話せる）で動作し、client delegation によりスライド操作・SourceVault 問い合わせをクライアント側ハンドラ（`$SourceVaultRealtimeSlideHandler` / `$SourceVaultRealtimeAskHandler`、両 API 共通）へ委譲します。質問応答の背景（発表全体の要約など）は `SourceVaultRealtimeAddContext` で会話へ渡せます。GPT-Live はナレーション中の聴衆発話への割り込み（キーワード検知＋エコー除去付き部分認識 `"Words"`、または単純な発話検知 `"Detect"` の 2 方式）にも対応し、Q&A 終了後は元の説明へ自動的に戻ります。また、話していない間もスピーカーへ聞こえない小さなノイズを流し続け（`$SourceVaultRealtimeKeepAliveLevel`）、Bluetooth スピーカー等がスリープして話し始めが欠けるのを防ぎます。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。
+`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI とライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。モデル名で使用 API を自動選択し、`gpt-realtime-*` は 1 つのモデルが聞く・考える・話すを担う Realtime API、`gpt-live-*`（GPT-Live）は全二重（聞きながら話せる）で動作し、client delegation によりスライド操作・SourceVault 問い合わせをクライアント側ハンドラ（`$SourceVaultRealtimeSlideHandler` / `$SourceVaultRealtimeAskHandler`、両 API 共通）へ委譲します。質問応答の背景（発表全体の要約など）は `SourceVaultRealtimeAddContext` で会話へ渡せます。GPT-Live はナレーション中の聴衆発話への割り込み（キーワード検知＋エコー除去付き部分認識 `"Words"`、または単純な発話検知 `"Detect"` の 2 方式）にも対応し、Q&A 終了後は元の説明へ自動的に戻ります。台本は短い単位に分けて「聞こえた」ことを確認しながら配信され、台本と無関係な短い応答（「はい」等）は再要求されるため、スライドが読み飛ばされません。また、話していない間もスピーカーへ聞こえない小さなノイズを流し続け（`$SourceVaultRealtimeKeepAliveLevel`）、Bluetooth スピーカー等がスリープして話し始めが欠けるのを防ぎます。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。
 
 ### 発表用知識グラフ (SourceVault_knowledgegraph)
 
-`SourceVault_knowledgegraph.wl` は、論文の内容と周辺知識を「関連度 + 順序制約（因果・年代・導出・難易度）」つきのグラフとして保持する発表用知識グラフ（KG）層です。`SourceVaultKGNew` で作成した KG（Kind は Paper / Survey / Background / Scenario。Scenario は文書の無い発表の筋書きから作る KG、計算ノートブックは Notebook Kind として入ります）に、聴き手の理解度プロファイル（`SourceVaultKGAudience`）と時間（枚数・分）を与えると、`SourceVaultKGOrderedTree` が最小全域順序木を、`SourceVaultKGPlan` が詰め込み（packing）・枝刈りを経たスライド構成を決定的に計算し、`SourceVaultKGOutline` が言語別のスライドアウトライン（題目・導入文・要点・補足・原稿）を生成します。順序木のどのノードも子が上限（既定 5）以下になるよう段を足す `SourceVaultKGBalance` と、目次（`kg["Toc"]`、節ごとの一行要約つき）を優先して順序木に使う仕組みも備えます。LLM も FrontEnd も呼ばない純関数層で、過去デッキ検索（SourceVault_kb）や OOPS のグラフ描画とは弱結合です。取り込み・保存の入口で UTF-8 文字化けを自動修復し、保存済みデータは `SourceVaultKGRepairMojibake[]` で一括修復できます。
+`SourceVault_knowledgegraph.wl` は、論文の内容と周辺知識を「関連度 + 順序制約（因果・年代・導出・難易度）」つきのグラフとして保持する発表用知識グラフ（KG）層です。`SourceVaultKGNew` で作成した KG（Kind は Paper / Survey / Background / Scenario / Subgraph。Scenario は文書の無い発表の筋書きから作る KG、計算ノートブックは Notebook Kind として入ります）に、聴き手の理解度プロファイル（`SourceVaultKGAudience`）と時間（枚数・分）を与えると、`SourceVaultKGOrderedTree` が最小全域順序木を、`SourceVaultKGPlan` が詰め込み（packing）・枝刈りを経たスライド構成を決定的に計算し、`SourceVaultKGOutline` が言語別のスライドアウトライン（題目・導入文・要点・補足・原稿）を生成します。順序木のどのノードも子が上限（既定 5）以下になるよう段を足す `SourceVaultKGBalance` と、目次（`kg["Toc"]`、節ごとの一行要約つき）を優先して順序木に使う仕組みも備えます。
 
-### 論文和訳ノートブック・計算ノートブック登録簿 (SourceVault_papernb)
+母体となる大きな KG から 1 つの発表ぶんを切り出す **部分知識グラフ**（Kind `"Subgraph"`、`SourceVaultKGSubgraphNew` / `SourceVaultKGSubgraphs` / `SourceVaultKGSubgraphPrompt`）も扱えます。部分 KG は選んだノードの Id と発表固有の上書き・目次・題目だけを持ち、読み込み時に母体と合成されるため、どの発表でノードを磨いても母体が良くなります。LLM も FrontEnd も呼ばない純関数層で、過去デッキ検索（SourceVault_kb）や OOPS のグラフ描画とは弱結合です。取り込み・保存の入口で UTF-8 文字化けを自動修復し、保存済みデータは `SourceVaultKGRepairMojibake[]` で一括修復できます。
 
-`SourceVault_papernb.wl` は、取り込み済みソース（`src-…` / arXiv / URL）や Eagle 上の PDF と、[documentation_paper2nb](https://github.com/transreal/documentation_paper2nb) の `DocImportPaper` が生成する和訳ノートブックを対応づける登録簿です（Eagle 一覧・ソース一覧の「訳」/「和訳NB」ボタンから利用）。生成ノートブックは元ソースの PrivacyLevel を継承し、`CloudPublishable` 宣言と翻訳に使う LLM 経路（クラウド／ローカル）を PrivacyLevel に応じて自動選択します。[SlideWorkflow](https://github.com/transreal/SlideWorkflow) の文献解決もこの登録簿を参照します。
+### 翻訳ノートブック・計算ノートブック登録簿 (SourceVault_papernb)
+
+`SourceVault_papernb.wl` は、取り込み済みソース（`src-…` / arXiv / URL。論文 PDF と種別 web のページ）や Eagle 上の PDF と、[documentation_paper2nb](https://github.com/transreal/documentation_paper2nb) が生成する翻訳ノートブックを対応づける登録簿です（PDF は `DocImportPaper`、HTML / テキスト / Markdown は `DocImportWebPage`。Eagle 一覧・ソース一覧の「訳」/「翻訳NB」ボタンから利用）。訳先は `$Language`（`"TargetLanguage"` で変更可）で、登録は (ソース, 訳先言語) ごとに 1 件なので、多言語の利用者がそれぞれの言語の翻訳ノートを同じソースに持てます。原文がすでに訳先言語なら翻訳せず構造化のみ行います。生成ノートブックは元ソースの PrivacyLevel を継承し、`CloudPublishable` 宣言と翻訳に使う LLM 経路（クラウド／ローカル）を PrivacyLevel に応じて自動選択します。論文ページにオープンアクセス PDF が結ばれていれば、数式・図表・段組みが崩れないよう PDF から作ります（`"PreferPDF"`）。[SlideWorkflow](https://github.com/transreal/SlideWorkflow) の文献解決もこの登録簿を参照します。
 
 同ファイルは **計算ノートブック**（論文・SourceVault の文書・KG のノード・過去のスライドなど複数素材から作った、Mathematica の計算と結果のノートブック）の登録簿も持ちます（`SourceVaultRegisterComputeNotebook` / `SourceVaultComputeNotebook` / `SourceVaultComputeNotebooks[View]`、URI は `sv://computenb/<Id>`）。素材の最大 PrivacyLevel を継承し、セルの単位は KG のノードとして 1 つのストーリーにまとめられます。各 Mail 関数と同様、初回呼び出し時にオンデマンドでロードされます。
 
@@ -213,7 +233,7 @@ VRCRealtime のような音声対話では、既存の MCP 検索（Web / メー
 
 ### 一般メールブラウザ・分類フィードバック学習・Microsoft Graph 取得 (SourceVault_mailbrowse / SourceVault_mailfeedback / SourceVault_mailgraph)
 
-`SourceVault_mailbrowse.wl` は `SourceVault_mailstructure` の構造化結果（引用グラフ・session・段落 topic・topic graph）から逆引き索引を作り、汎用メールボックス（univ 等）を OOPS アーカイブブラウザと同等の「引用・被引用」「topic item での前後移動」「DB 横断（`SourceVault_crosslink`）」付きハイパーテキストとして閲覧できるようにします。構築結果は封印してマシンローカルに永続キャッシュされ、shard が変わっていなければ 2 回目以降は数秒で復元されます（暗号鍵が無い環境では平文で書きません）。
+`SourceVault_mailbrowse.wl` は `SourceVault_mailstructure` の構造化結果（引用グラフ・session・段落 topic・topic graph）から逆引き索引を作り、汎用メールボックス（univ 等）を OOPS アーカイブブラウザと同等の「引用・被引用」「topic item での前後移動」「DB 横断（`SourceVault_crosslink`）」付きハイパーテキストとして閲覧できるようにします。構築結果は封印してマシンローカルに永続キャッシュされ、shard が変わっていなければ 2 回目以降は数秒で復元されます（暗号鍵が無い環境では平文で書きません）。`"Period"` は厳密に効き、要求した期間の shard のメールだけが構造化されます。
 
 `SourceVault_mailfeedback.wl` は Priority / PrivacyLevel / Category / WorkRequest といった派生フィールドへのユーザー訂正を追記専用の台帳に記録し、即座に該当メールへの override として適用しつつ、決定的な住所/宛先/件名語ルール (L1) と階層ベイズ (L2、送信者→ドメイン→全体で縮小推定) の 2 層で以後の分類に汎化します。LLM の推定は事前分布として扱われ、L2 が上書きするのは事後確率の差が閾値を超えたときだけです。
 
@@ -221,7 +241,7 @@ VRCRealtime のような音声対話では、既存の MCP 検索（Web / メー
 
 ### メールアジェンダ (SourceVault_mailagenda)
 
-`SourceVault_mailagenda.wl` は routine attention の一部 (R9) として、**オーナー宛ての要対応メール**（返信/出席/確認・作業依頼など）を routine アジェンダへ供給する薄い層です。`SourceVault_maildb` が事前計算済みの派生（Summary / Category / Priority / Deadline）を **索引だけで読み**、アジェンダ経路で LLM 呼び出し・IMAP 取得・シャード本体のロードを行いません。`SourceVaultMailAgendaItems` がカテゴリゲート → SPAM/無関係ゲート → オーナー宛て判定（To/Cc・宛名パターン）→ 解決済み除外の順に候補を絞り、同一スレッドは 1 項目に集約されます。解決は Pending → Done（Replied / NotebookCreated / TodoCreated / Dismissed）の状態機械で管理され、`SourceVaultMailAgendaResolve` / `SourceVaultMailAgendaReopen` で記録・取り消しができます。`SourceVaultMailAgendaOpen` が返信・ノートブック継承・確認済みマークの対応 UI を開き、`SourceVaultMailAgendaInherit` はメールを継承した作業ノートブックを作成します（`SourceVaultMailForNotebook` で逆参照可能、`SourceVaultRoutinePlacePlan` の日別カレンダーの「✉ 要対応メール」バンドに統合）。ノートブックを作るほどではない小タスクには `SourceVaultMailAgendaInheritTodo` があり、`SourceVault_todo` 層へスタンドアロン TODO としてメールを継承します（`SourceVault_todo` 未ロード時は弱結合で失敗を返します）。個人アドレス（オーナー/組織アドレス等）はコードに焼き込まず identity 層のオーナー実体を第一権威とし、フォールバックとして `PrivateVault/config/mailagenda.json` で環境設定します。
+`SourceVault_mailagenda.wl` は routine attention の一部 (R9) として、**オーナー宛ての要対応メール**（返信/出席/確認・作業依頼など）を routine アジェンダへ供給する薄い層です。`SourceVault_maildb` が事前計算済みの派生（Summary / Category / Priority / Deadline）を **索引だけで読み**、アジェンダ経路で LLM 呼び出し・IMAP 取得・シャード本体のロードを行いません。`SourceVaultMailAgendaItems` がカテゴリゲート → SPAM/無関係ゲート → オーナー宛て判定（To/Cc・宛名パターン）→ 解決済み除外の順に候補を絞り、同一スレッドは 1 項目に集約されます。解決は Pending → Done（Replied / NotebookCreated / TodoCreated / Dismissed）の状態機械で管理され、`SourceVaultMailAgendaResolve` / `SourceVaultMailAgendaReopen` で記録・取り消しができます。`SourceVaultMailAgendaOpen` が本文ウィンドウ（返信・ノートブック継承・確認済みマーク・スレッド全体表示を集約）を開き、`SourceVaultMailAgendaInherit` はメールを継承した作業ノートブックを作成します（`SourceVaultMailForNotebook` で逆参照可能、`SourceVaultRoutinePlacePlan` の日別カレンダーの「✉ 要対応メール」バンドに統合）。ノートブックを作るほどではない小タスクには `SourceVaultMailAgendaInheritTodo` があり、`SourceVault_todo` 層へスタンドアロン TODO としてメールを継承します（`SourceVault_todo` 未ロード時は弱結合で失敗を返します）。個人アドレス（オーナー/組織アドレス等）はコードに焼き込まず identity 層のオーナー実体を第一権威とし、フォールバックとして `PrivateVault/config/mailagenda.json` で環境設定します。
 
 ### Todo 管理 (SourceVault_todo)
 
@@ -309,10 +329,13 @@ SourceVault_mailbrowse.wl               一般メールブラウザ (mailstructu
 SourceVault_crosslink.wl                DB 横断ハイパーリンク層 (mail/OOPS/Eagle/ingest ソースを横断)
 SourceVault_servicemanager.wl           サービス管理 (Web サービス・detached service・MCP proxy)
 SourceVault_webingest.wl                Web 検索 (SearXNG・本文取得・importance・rollup・要約)
+SourceVault_webguard.wl                 LLM Web egress guard (関所・ホスト identity・アクセスログ。webingest の直後、core のみに依存)
 SourceVault_mcp.wl                      MCP tool schema / dispatch + sv:// オブジェクト解決 + 外部パッケージ向け MCP tool 拡張点
 SourceVault_llmlog.wl                   Claude Code セッションログの取り込み・共有・検索 (mcp の後)
 SourceVault_simrun.wl                   シミュレーション実行基盤 (マシンプロファイル・SimulationRun・CUDA)
 SourceVault_packageapi.wl               パッケージ API 索引 (aux、wiring の後)
+SourceVault_papernb.wl                  翻訳ノートブック・計算ノートブック登録簿 (初回呼び出し時にオンデマンドロード)
+SourceVault_oapdf.wl                    オープンアクセス PDF の探索・取り込み (papernb の次、ingest が自動呼び出し)
 SourceVault_workflowregistry.wl         コード化ワークフローのオンデマンドローダ (SourceVault_workflows/ 配下を解決)
 SourceVault_autotrigger.wl              自動トリガスケジューラ (対話 FE カーネルでのみ自動起動)
 SourceVault_promptrouter.wl             同ディレクトリにあれば自動ロード
@@ -349,15 +372,17 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 - KB (`SourceVault_kb`) の低遅延検索も既存の release context gate を通過した chunk のみを返し、gate を迂回する経路はありません。`SourceVault_talkqa` の回答経路も同じ PrivacyLevel/`Route` 判定をビルド時に焼き込み、本番中に緩めることはありません。
 - `SourceVault_realtime` はマイク音声・会話テキストを OpenAI へ送るクラウド経路であり、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上を拒否) と Paid API 承認を通過しない限り起動しません。
 - `SourceVault_mcp` の外部 MCP tool 拡張点 (`SourceVaultMCPRegisterTools`) は組み込み tool と名前が衝突した場合は組み込みを優先し、外部登録 tool は `SourceVaultMCPTools[]` / `SourceVaultMCPCallTool` を通じて組み込み tool と同じ dispatch・監査経路に載ります。ファイル参照系 MCP tool は allow-list root 配下に限られ、`.env` / 鍵 / credential 類は拒否されます。
+- `SourceVault_webguard` は LLM 主体の Web アクセスを URL/クエリの不審度・文脈 PrivacyLevel・ホストの AccessLevel で照合し、guard 未ロード時は fail-closed で拒否します。文脈 PL が不明な場合は私的データありの側に倒し、Ask の判定はオーナーの決定として id 付きで記録されます。
+- `SourceVault_oapdf` は、オープンアクセスの根拠 (CC ライセンス・Crossref・Europe PMC・Unpaywall 等) が確認できない出版社 PDF を取り込まず、出版社の 401 / 403 は回避しません。外部へ送るのは DOI (と任意設定のメール) のみで、Elsevier の API キーはヘッダでのみ送られ URL・メタ・ログには残りません。
 
 ### 永続化レイアウト
 
-すべての永続化は `<PrivateVault>` 配下に集約されます（Cane 認知系の一部データと、KB (SourceVault_kb) / 発表登録簿 (SourceVault_slidedeck) / 音声・視覚資産 (SourceVault_voice / SourceVault_vision) は意図的にこの外側の `<LocalState>` や `$packageDirectory` 配下に保存されます。上記「安全設計の不変条件」を参照。論文和訳・計算ノートブック・知識グラフの登録簿は core root 配下の `papernb/` `computenb/` `knowledgegraph/` に置かれます）。
+すべての永続化は `<PrivateVault>` 配下に集約されます（Cane 認知系の一部データと、KB (SourceVault_kb) / 発表登録簿 (SourceVault_slidedeck) / 音声・視覚資産 (SourceVault_voice / SourceVault_vision) / Web guard の hot ログ・承認 queue は意図的にこの外側の `<LocalState>` や `$packageDirectory` 配下に保存されます。上記「安全設計の不変条件」を参照。翻訳・計算ノートブック・知識グラフの登録簿は core root 配下の `papernb/` `computenb/` `knowledgegraph/` に置かれます）。
 
 ```
 <PrivateVault>/
   raw/by-hash/sha256-<hash>            (raw bytes、deduplicated)
-  meta/sources/<sourceId>.json         (source レコード)
+  meta/sources/<sourceId>.json         (source レコード。論文ページには OpenAccessPDF 結合情報)
   meta/snapshots/<snapshotId>.json     (snapshot レコード)
   parsed/by-snap/<snapshotId>/pages/<NNNN>.txt
   parsed/by-snap/<snapshotId>/page-hashes.json   (snapshot diff 基盤)
@@ -385,9 +410,9 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
   todo/items/<id>.json                 (スタンドアロン Todo レコード)
   todo/overlays/<id>.json              (notebook Todo へのオーバレイ状態)
   todo/notes/<id>.nb                   (Todo 要約ノートの canonical 保存先)
-  papernb/registry.json                (論文和訳ノートブック登録簿 + 生成 .nb)
+  papernb/registry.json                (翻訳ノートブック登録簿 + 生成 .nb)
   computenb/registry.json              (計算ノートブック登録簿 + .nb)
-  knowledgegraph/graphs/<graphId>.json (発表用知識グラフ。前版は graphs/history/)
+  knowledgegraph/graphs/<graphId>.json (発表用知識グラフ・部分グラフ。前版は graphs/history/)
   promptrouter/runs/prompt-runs.jsonl  (PromptRun ストア、append-only)
   promptrouter/artifacts/wf-code/      (WorkflowRoute コード artifact)
   promptrouter/routes/                 (コンパイル済み PromptRoute レジストリ)
@@ -405,6 +430,8 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
   config/anonymize-key-fingerprints.json (匿名化鍵の fingerprint pin)
   identity/identifiers.jsonl           (識別子 JSONL)
   identity/entities.jsonl              (実体 JSONL)
+  identity/webhosts.jsonl              (Web ホスト profile、Web egress guard)
+  identity/webaccess_review.json       (Web アクセスレビュー状態)
   mail/snapshots/<mbox>/<yyyymm>.svmail  (月次メールシャード)
   curated/                             (CuratedKnowledge 補足知識)
   runtime/services/<serviceId>/        (detached service runtime)
@@ -517,7 +544,7 @@ SourceVaultEagleShowFolder["論文"]
 
 ### プライバシーとクラウド LLM
 
-`$SourceVaultEaglePrivacyLevel` で出力セルの PrivacyLevel を設定します（数値で全ライブラリ共通、または `<|ライブラリ名 -> PL, "Default" -> PL|>` でライブラリ別設定）。`$SourceVaultEagleCloudPublishableTag`（既定 `"Cloud-Publishable"`）タグが付いた item は `"Method" -> Automatic` の要約でクラウド LLM 経路を使い、summary record に PrivacyLevel 0.0 が記録されます。また、このタグ付き item の実効 PrivacyLevel には `$SourceVaultEagleCloudPublishablePL`（既定 0.45）の上限が適用され、MCP の release gate でもクラウド開示可になります（タグの無い item には一切影響しません）。取り込み済み論文・Eagle 上の PDF の和訳ノートブックを生成・登録する機能（Eagle View の「訳」ボタン）を使う場合は `SourceVault_papernb.wl`（前述、初回呼び出し時にオンデマンドロード）も追加で配置します。
+`$SourceVaultEaglePrivacyLevel` で出力セルの PrivacyLevel を設定します（数値で全ライブラリ共通、または `<|ライブラリ名 -> PL, "Default" -> PL|>` でライブラリ別設定）。`$SourceVaultEagleCloudPublishableTag`（既定 `"Cloud-Publishable"`）タグが付いた item は `"Method" -> Automatic` の要約でクラウド LLM 経路を使い、summary record に PrivacyLevel 0.0 が記録されます。また、このタグ付き item の実効 PrivacyLevel には `$SourceVaultEagleCloudPublishablePL`（既定 0.45）の上限が適用され、MCP の release gate でもクラウド開示可になります（タグの無い item には一切影響しません）。取り込み済み論文・Eagle 上の PDF の翻訳ノートブックを生成・登録する機能（Eagle View の「訳」ボタン）を使う場合は `SourceVault_papernb.wl`（前述、初回呼び出し時にオンデマンドロード）も追加で配置します。
 
 ---
 
@@ -613,7 +640,7 @@ compiled wiki / projection が保持すべき情報を `SourceVaultMakeDiagnosti
 - [WebServer](https://github.com/transreal/WebServer) — `SourceVaultStartHTTPProxy` が公開する Web UI 資産のサーバ側で利用します。
 - [github](https://github.com/transreal/github) — パッケージのインストール・更新を簡略化します（`setup.md` 参照）。
 - [SlideWorkflow](https://github.com/transreal/SlideWorkflow) — `SourceVault_slidedeck` が登録簿として参照する、スライド・発表シナリオの生成側パッケージ。`SourceVault_papernb` の文献解決からも参照されます。
-- [documentation_paper2nb](https://github.com/transreal/documentation_paper2nb) — `SourceVault_papernb` が和訳ノートブック生成に委譲する `DocImportPaper` の実体パッケージ。
+- [documentation_paper2nb](https://github.com/transreal/documentation_paper2nb) — `SourceVault_papernb` が翻訳ノートブック生成に委譲する `DocImportPaper` / `DocImportWebPage` の実体パッケージ。
 - [Cerezo](https://github.com/transreal/Cerezo) — `SourceVault_course` の Web レポート採点が使う匿名化・成績集計連携先。
 - [ResoLoop_mcp](https://github.com/transreal/ResoLoop_mcp) — `SourceVaultMCPRegisterTools` の package-neutral な拡張点を使って独自の MCP tool を SourceVault ゲートウェイへ登録する、外部パッケージの実例。
 
@@ -655,17 +682,19 @@ $packageDirectory\
   SourceVault_crosslink.wl       ← DB 横断ハイパーリンク層 (本体ロード時に自動ロード)
   SourceVault_servicemanager.wl  ← サービス管理 (本体ロード時に自動ロード)
   SourceVault_webingest.wl       ← Web 検索 (本体ロード時に自動ロード)
+  SourceVault_webguard.wl        ← LLM Web egress guard (本体ロード時に自動ロード、webingest の直後)
   SourceVault_mcp.wl             ← MCP + sv:// オブジェクト解決 + 外部 MCP tool 拡張点 (本体ロード時に自動ロード)
   SourceVault_llmlog.wl          ← Claude Code セッションログ (本体ロード時に自動ロード)
   SourceVault_workflowregistry.wl ← ワークフローレジストリ (本体ロード時に自動ロード)
   SourceVault_autotrigger.wl     ← 自動トリガスケジューラ (本体ロード時に自動ロード)
   SourceVault_promptrouter.wl    ← PromptRouter 拡張 (本体ロード時に自動ロード)
   SourceVault_packageapi.wl      ← パッケージ API 索引 (本体ロード時に自動ロード)
+  SourceVault_papernb.wl         ← 翻訳・計算ノートブック登録簿 (本体ロード時に自動ロード / Eagle 統合等の初回呼び出し時にもオンデマンドロード)
+  SourceVault_oapdf.wl           ← オープンアクセス PDF の探索・取り込み (本体ロード時に自動ロード、papernb の次)
   SourceVault_workflowcatalog.wl ← ワークフローカタログ (任意、workflowregistry 依存)
   SourceVault_diagnostics.wl     ← クロスパッケージ診断 (任意)
   SourceVault_issues.wl          ← 汎用Issue管理 (任意)
   SourceVault_eagle.wl           ← Eagle 統合 (任意、手動ロード)
-  SourceVault_papernb.wl         ← 論文和訳・計算ノートブック登録簿 (任意、Eagle 統合等の初回呼び出し時にオンデマンドロード)
   SourceVault_comfyui.wl         ← ComfyUI 統合 (任意、手動ロード)
   SourceVault_course.wl          ← 授業支援 (任意、手動ロード)
   SourceVault_course_private.wl  ← 授業支援 非公開拡張 (任意、course.wl が自動検出)
@@ -710,7 +739,7 @@ Block[{$CharacterEncoding = "UTF-8"},
 ]
 ```
 
-`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_contracts.wl`・`SourceVault_wiring.wl`・`SourceVault_voice.wl`・`SourceVault_realtime.wl`・`SourceVault_vision.wl`・`SourceVault_slidedeck.wl`・`SourceVault_knowledgegraph.wl`・`SourceVault_searchindex.wl`・`SourceVault_kb.wl`・`SourceVault_talkqa.wl`・`SourceVault_searchview.wl`・`SourceVault_knowledgehome.wl`・`SourceVault_cognition.wl`・`SourceVault_adjudication.wl`・`SourceVault_capbroker.wl`・`SourceVault_taint.wl`・`SourceVault_anomaly.wl`・`SourceVault_routine.wl`・`SourceVault_routineplan.wl`・`SourceVault_mailagenda.wl`・`SourceVault_todo.wl`・`SourceVault_mailbrowse.wl`・`SourceVault_crosslink.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl`・`SourceVault_mcp.wl`・`SourceVault_llmlog.wl`・`SourceVault_simrun.wl`・`SourceVault_packageapi.wl`・`SourceVault_workflowregistry.wl`・`SourceVault_autotrigger.wl`・`SourceVault_promptrouter.wl` などが順に自動的にロードされます。Cane 認知支援・安全基盤の各サブファイルは既定で observe-only / shadow のため、通常利用ではロードされていることを意識する必要はありません。
+`SourceVault.wl` のロード時に、同ディレクトリの `SourceVault_core.wl`・`SourceVault_contracts.wl`・`SourceVault_wiring.wl`・`SourceVault_voice.wl`・`SourceVault_realtime.wl`・`SourceVault_vision.wl`・`SourceVault_slidedeck.wl`・`SourceVault_knowledgegraph.wl`・`SourceVault_searchindex.wl`・`SourceVault_kb.wl`・`SourceVault_talkqa.wl`・`SourceVault_searchview.wl`・`SourceVault_knowledgehome.wl`・`SourceVault_cognition.wl`・`SourceVault_adjudication.wl`・`SourceVault_capbroker.wl`・`SourceVault_taint.wl`・`SourceVault_anomaly.wl`・`SourceVault_routine.wl`・`SourceVault_routineplan.wl`・`SourceVault_mailagenda.wl`・`SourceVault_todo.wl`・`SourceVault_mailbrowse.wl`・`SourceVault_crosslink.wl`・`SourceVault_servicemanager.wl`・`SourceVault_webingest.wl`・`SourceVault_webguard.wl`・`SourceVault_mcp.wl`・`SourceVault_llmlog.wl`・`SourceVault_simrun.wl`・`SourceVault_packageapi.wl`・`SourceVault_papernb.wl`・`SourceVault_oapdf.wl`・`SourceVault_workflowregistry.wl`・`SourceVault_autotrigger.wl`・`SourceVault_promptrouter.wl` などが順に自動的にロードされます。Cane 認知支援・安全基盤の各サブファイルは既定で observe-only / shadow のため、通常利用ではロードされていることを意識する必要はありません。
 
 LLM 要約・claim 抽出機能を使用する場合は、ClaudeRuntime もロードします。
 
@@ -830,6 +859,18 @@ SourceVaultSearch["履修登録の手順",
   "ReleaseContext" -> "handbook-web", "Limit" -> 5]
 ```
 
+**論文ページのオープンアクセス PDF 取り込み:**
+
+```mathematica
+(* 論文ページを ingest すると、OA PDF があれば自動で取り込まれページと結ばれる *)
+r = SourceVaultIngest["https://www.nature.com/articles/..."];
+r["OpenAccessPDF"]
+
+(* 手動で探索・取り込み *)
+SourceVaultFindOpenAccessPDF["src-url-..."]
+SourceVaultIngestOpenAccessPDF["src-url-...", "Verbose" -> True]
+```
+
 **LLM 要約（ClaudeRuntime 必須）:**
 
 ```mathematica
@@ -842,7 +883,7 @@ SourceVaultNotebookSummary[nbPath]
 
 | 関数 / 変数 | 説明 |
 |------------|------|
-| `SourceVaultIngest[path, opts]` | テキスト / PDF / URL / arXiv ID を ingest し、source レコード + snapshot を生成。重複検知あり。 |
+| `SourceVaultIngest[path, opts]` | テキスト / PDF / URL / arXiv ID を ingest し、source レコード + snapshot を生成。重複検知あり。論文ページはオープンアクセス PDF も自動取り込み（`"OpenAccessPDF" -> False` で停止）。 |
 | `SourceVaultStatus[snapshotId]` | snapshot のメタ情報（hash / lifecycle / page count 等）を返す。 |
 | `SourceVaultSpan[snapshotId, range]` | snapshot 内の span を構築。後続の context 抽出の単位。 |
 | `SourceVaultContext[snapshotId, range]` | snapshot から抜粋テキストを取得。 |
@@ -888,6 +929,20 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultAtomicUpdatePointer[name, value, opts]` | pointer を排他更新（Sequence 単調増加）。 |
 | `SourceVaultPointerReplay[name, opts]` | pointer event を replay し最大 Sequence の検証済み値を返す。 |
 | `SourceVaultFileStreams[path]` / `SourceVaultReleaseFileStreams[path]` | vault 配下の開きっぱなしファイル stream を列挙 / 一括解放（Dropbox 同期停止・conflicted copy の原因を除去）。 |
+| **オープンアクセス PDF (SourceVault_oapdf)** | |
+| `SourceVaultFindOpenAccessPDF[ref, opts]` | 論文ページ / DOI / arXiv URL からオープンアクセス PDF の候補を探す（ダウンロード・書き込みなし）。`"RequireOpenAccess"` / `"FetchPage"` オプション。 |
+| `SourceVaultIngestOpenAccessPDF[ref, opts]` | OA PDF を探して別 web ソースとして取り込み、ページのソースと相互に結ぶ。`"Force"` / `"RequireOpenAccess"` / `"Verbose"` オプション。 |
+| `SourceVaultOpenAccessPDFSource[ref]` | ページに結ばれた PDF のソース情報を返す。結ばれていなければ `Missing`。 |
+| `SourceVaultBackfillOpenAccessPDFs[opts]` | ingest 済み web ソースのうち論文ページを走査して OA PDF を一括補完。`"DryRun"` 対応。 |
+| `$SourceVaultAutoOpenAccessPDF` / `$SourceVaultUnpaywallEmail` / `$SourceVaultOARecheckDays` | 自動取り込みの有効/無効、Unpaywall 照会用メール、未発見結果の再試行間隔（既定 30 日）。 |
+| **Web egress guard (SourceVault_webguard)** | |
+| `SourceVaultWebGuardCheck[request]` | Web アクセス 1 件の関所。文脈 PL・URL/クエリ不審度・ホスト profile から Allow / Ask / Deny を決めて記録。 |
+| `SourceVaultWebGuardAnalyzeURL[url]` / `SourceVaultWebGuardAnalyzeQuery[query]` | URL / 検索クエリの不審度を決定的（LLM 不使用）に解析。 |
+| `SourceVaultWebGuardDecide[spec]` | 判定表を純関数で評価。 |
+| `SourceVaultWebGuardDeclareContext[assoc]` / `SourceVaultWebGuardContext[]` | LLM 呼び出し直前の文脈 PrivacyLevel の申告 / 現在の実効文脈 PL の取得。 |
+| `SourceVaultWebGuardStatus[]` | 関所の状態（有効/無効・ポリシー・承認待ち件数・既知ホスト数）を返す。 |
+| `SourceVaultWebHostProfile[host]` / `SourceVaultWebHostProfiles[]` / `SourceVaultWebHostProfilesView[]` | ホスト（ドメイン）の identity と AccessLevel の参照・一覧。 |
+| `SourceVaultWebHostSetAccess[host, level, opts]` | ホストの AccessLevel をオーナーが明示設定。 |
 | **プライバシー伝達 (SourceVault_privacy)** | |
 | `SourceVaultNotePrivacy[pl]` / `SourceVaultNotePrivacyOf[data]` | 現在の評価スコープに PrivacyLevel を記録（Max 伝搬・非降下）。閾値以上でセル出力を CellObject 同一性ベースで機密マーク（評価セルの `CellEpilog` で評価完了直後に flush）。NBAccess ロード時は `NBNoteEvaluationPrivacy` にも合流し、LLM への実行結果返却可否を左右する。 |
 | `SourceVaultPrivateResult[expr, pl]` / `SourceVaultPrivateView[expr, pl]` | 私的データを扱う関数の正準 exit。Core 系は値の形を変えず、View 系は閾値以上を赤枠 + PL バッジでラップ。 |
@@ -918,16 +973,22 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultTalkQAAsk[question, opts]` | ライブ質問に QA パック→KB→Web 検索提案の順で低遅延に回答する。PrivacyLevel/`Route` に応じて公開/拒否を判定。 |
 | `SourceVaultTalkQANeighbors[opts]` | 現在開いているスライドを起点に k-hop 近傍の関連トピックを返す。 |
 | **発表用知識グラフ (SourceVault_knowledgegraph)** | |
-| `SourceVaultKGNew[graphId, opts]` | 空の知識グラフ (KG) を作成する（Kind: Paper / Survey / Background / Scenario）。 |
+| `SourceVaultKGNew[graphId, opts]` | 空の知識グラフ (KG) を作成する（Kind: Paper / Survey / Background / Scenario / Subgraph）。 |
 | `SourceVaultKGAudience[spec]` | 聴き手の理解度プロファイル（領域→理解度）を解析する。 |
 | `SourceVaultKGOrderedTree[kg, opts]` | 順序制約から最小全域順序木（階層概要）を計算する。目次があれば既定で目次の木を返す（`"UseToc"`）。 |
 | `SourceVaultKGBalance[kg, opts]` | 順序木のどのノードも子が `"MaxDegree"`（既定 5）以下になるよう「まとまり」の段を足す。 |
 | `SourceVaultKGPlan[kg, tree, opts]` | 聴き手・スライド枚数/時間から詰め込み（packing）・枝刈り済みのスライド構成を決定的に計算する。 |
 | `SourceVaultKGOutline[kg, plan, opts]` | 計画から言語別スライドアウトライン（題目・導入文・要点・補足・原稿）を生成する。 |
+| `SourceVaultKGSubgraphNew[parentId, subId, opts]` | 母体 KG から 1 つの発表ぶんの部分知識グラフを切り出して保存する（`"Members"` / `"Parts"` / `"Exclude"` / `"Keep"` 等）。 |
+| `SourceVaultKGSubgraphs[parentId]` / `SourceVaultKGSubgraphQ[kg]` / `SourceVaultKGSubgraphSpec[kg]` | 母体から切り出した部分 KG の一覧 / 判定 / 切り出し仕様の取得。 |
+| `SourceVaultKGSubgraphPrompt[motherKG, description, opts]` | 切り出し記述から発表の部（Parts）と除外 Id を JSON で返させる LLM プロンプトを構築する（純関数）。 |
 | `SourceVaultKGRepairMojibake[]` | 保存済み KG・周辺知識の UTF-8 文字化けを一括修復する。 |
-| **論文和訳・計算ノートブック登録簿 (SourceVault_papernb)** | |
-| `SourceVaultMakePaperNotebook[ref, opts]` | 取り込み済みソース / Eagle PDF から `DocImportPaper` 経由で和訳ノートブックを生成・登録する（元ソースの PrivacyLevel を継承）。 |
-| `SourceVaultPaperNotebook[ref]` | 登録済み和訳ノートブックの絶対パスを返す。 |
+| **翻訳・計算ノートブック登録簿 (SourceVault_papernb)** | |
+| `SourceVaultMakePaperNotebook[ref, opts]` | 取り込み済みソース / Eagle PDF / Web ページから翻訳ノートブックを生成・登録する（`"TargetLanguage"` / `"PreferPDF"` / `"Force"` / `"Interactive"`、元ソースの PrivacyLevel を継承）。 |
+| `SourceVaultPaperNotebook[ref, opts]` / `SourceVaultPaperNotebookEntry[ref, opts]` | 登録済み翻訳ノートブックの絶対パス / 登録エントリ（訳先言語 `"Language"` を指定可）。 |
+| `SourceVaultOpenPaperNotebook[ref]` | `$Language` の翻訳ノートブックを開く。未登録なら生成する。 |
+| `SourceVaultRegisterPaperNotebook[ref, nbPath, opts]` / `SourceVaultUnregisterPaperNotebook[ref, opts]` | 既存ノートブックの登録 / 登録解除（言語単位または `All`）。 |
+| `SourceVaultPaperNotebooks[]` / `SourceVaultPaperNotebooksView[]` | 登録一覧（Language / From / Translated / Format 列つき）。 |
 | `SourceVaultRegisterComputeNotebook[nbPath, opts]` | 複数素材から作った計算ノートブックを登録する（素材の最大 PrivacyLevel を継承、URI は `sv://computenb/<Id>`）。 |
 | `SourceVaultComputeNotebook[ref]` / `SourceVaultComputeNotebooks[]` | 登録済み計算ノートブックの絶対パス取得 / 登録一覧。 |
 | **DB横断ハイパーリンク (SourceVault_crosslink)** | |
@@ -975,7 +1036,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultListRuntimeMachines[opts]` | vault を共有する PC 一覧（`runtime/` ツリー由来、共有/レガシー予約名を除く）。AutoTrigger の `SpecificMachine` 配置や Workflow パネルの実行先選択が使う権威一覧。 |
 | **Web 検索 / MCP ゲートウェイ (SourceVault_webingest / SourceVault_mcp)** | |
 | `SourceVaultSearXNGSearch[query, opts]` | SearXNG JSON API を叩き候補 URL を正規化（記録しない生クライアント）。 |
-| `SourceVaultWebSearch[query, opts]` | provenance + 監査記録つき検索。`"FetchPages"` で本文取得、`"StoreSearchRun"`（既定 True）で WebSearchRun snapshot + Searched イベント。 |
+| `SourceVaultWebSearch[query, opts]` | provenance + 監査記録つき検索。`"FetchPages"` で本文取得、`"StoreSearchRun"`（既定 True）で WebSearchRun snapshot + Searched イベント。Web egress guard を通過。 |
 | `SourceVaultWebSearchSubmit[query, opts]` / `SourceVaultWebJobStatus` / `SourceVaultWebJobResult` | 非同期検索 job（実行体は `$SourceVaultWebJobExecutor` で選択、既定はサブカーネルで service をブロックしない）。 |
 | `SourceVaultWebFetch[url, opts]` | URL 本文取得 + HTML clean-text → WebDocument 不変 snapshot（非 2xx は FetchFailed）。取り込み後フックは `SourceVaultRegisterWebIngestHook` で登録。 |
 | `SourceVaultWebComputePriority` / `SourceVaultWebPriority` / `SourceVaultWebImportance` / `SourceVaultWebRecomputePriorities` | 構造 Priority（mail 整合）と使用 importance の計算・合成・再計算。 |
@@ -1044,7 +1105,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultMailAgendaItems[opts]` | maildb の既存派生（Summary/Category/Priority/Deadline）を索引だけで読み、オーナー宛ての要対応メール候補を返す（スレッド集約・解決済み除外・`"MaxPrivacyLevel"` フィルタ付き）。 |
 | `SourceVaultMailAgendaResolve[recordId, status, opts]` | 要対応メールの解決状態（`"Dismissed"` / `"NotebookCreated"` / `"TodoCreated"`）を記録する。 |
 | `SourceVaultMailAgendaReopen[recordId]` / `…Resolutions[]` | 解決の取り消し、および解決一覧の取得。 |
-| `SourceVaultMailAgendaOpen[recordId \| item]` | 返信・ノートブック継承・確認済みマークの対応ウィンドウを開く。 |
+| `SourceVaultMailAgendaOpen[recordId \| item]` | 本文ウィンドウ（返信・ノートブック継承・確認済みマーク・スレッド全体表示）を開く。 |
 | `SourceVaultMailAgendaInherit[recordId, opts]` | メールを継承した作業ノートブックを `$onWork` に作成し、routine アジェンダから除外する。 |
 | `SourceVaultMailAgendaInheritTodo[recordId, opts]` | メールを継承したスタンドアロン TODO を `SourceVault_todo` 層に作成し、routine アジェンダから除外する（軽量版）。 |
 | `SourceVaultMailForNotebook[nbPath]` | 継承ノートブックのメタデータから元メールの RecordId を非評価で読む（逆参照）。 |
@@ -1092,7 +1153,7 @@ SourceVaultNotebookSummary[nbPath]
 | ファイル | 内容 |
 |---------|------|
 | `setup.md` | インストール手順・トラブルシューティング |
-| `user_manual.md` | カテゴリ別ユーザーマニュアル（Notebook Management・PromptRouter・暗号化基盤・鍵バンドル・identity・メール管理・Eagle 統合・Cane 認知支援基盤・外部パッケージからの MCP tool 拡張を含む） |
+| `user_manual.md` | カテゴリ別ユーザーマニュアル（Notebook Management・PromptRouter・暗号化基盤・鍵バンドル・identity・メール管理・Eagle 統合・Cane 認知支援基盤・Web egress guard・オープンアクセス PDF・外部パッケージからの MCP tool 拡張を含む） |
 | `examples/example.md` | 代表的な使用パターン集（基本機能・ClaudeOrchestrator 統合・暗号化・identity・メールの例を含む） |
 | `api.md` | ブートストラップ・ソース一覧・横断検索・Compiled Registry などの基本 API |
 | `api_core.md` | コア基盤 API（排他制御・immutable snapshot・append-only event log・blob store・pointer・file handle 診断） |
@@ -1118,10 +1179,12 @@ SourceVaultNotebookSummary[nbPath]
 | `api_searchindex.md` | 検索基盤 API（release context・profiles・revocation・versioned snapshot） |
 | `api_searchview.md` | 検索ビュー API（live hypertext view・interaction meta-layer・retrieval episode） |
 | `api_kb.md` | Graph-RAG 低遅延ナレッジベース API（slide/figure 索引・caption・BM25+グラフ伝播検索・デッキ PrivacyLevel の公開宣言追従） |
-| `api_knowledgegraph.md` | 発表用知識グラフ API（順序制約つき KG・聴き手モデル・最小全域順序木・目次・子数バランス・詰め込み/枝刈り・言語別アウトライン・サーベイ合成） |
+| `api_knowledgegraph.md` | 発表用知識グラフ API（順序制約つき KG・部分知識グラフ・聴き手モデル・最小全域順序木・目次・子数バランス・詰め込み/枝刈り・言語別アウトライン・サーベイ合成） |
 | `api_talkqa.md` | 発表ライブ Q&A API（QA パック構築・ライブ質問応答・近傍探索） |
 | `api_servicemanager.md` | サービス管理 API（Web サービス・HTTP proxy・detached service・PDF グループ検索 profile・headless CLI MCP 再登録） |
 | `api_webingest.md` | Web 検索 API（SearXNG・本文取得・importance・参照イベント rollup・要約・job 実行体） |
+| `api_webguard.md` | Web egress guard API（URL/クエリ不審度解析・判定表・文脈 PL 申告・ホスト identity/AccessLevel・アクセスログ） |
+| `api_oapdf.md` | オープンアクセス PDF API（OA 判定・PDF 候補探索・取り込み/結合・既存ソースの一括補完） |
 | `api_mcp.md` | MCP tool schema / dispatch API（sv:// オブジェクト解決・外部パッケージ向け MCP tool 拡張点・組み込み tool 一覧を含む） |
 | `api_objectview.md` | sv:// オブジェクト解決 API（実データ取得・全プロパティ取得・privacy 継承付きセル出力） |
 | `api_llmlog.md` | Claude Code セッションログ統合 API（ingest/rollup・検索・生 transcript ミラー） |
@@ -1131,10 +1194,10 @@ SourceVaultNotebookSummary[nbPath]
 | `api_course.md` | 授業支援 API（演習ストア・試験構成・答案採点・履修者名簿・成績簿・Web レポート採点） |
 | `api_course_private.md` | 授業支援 非公開拡張 API（配点シミュレーション、非公開・CodePrivacyLevel 0.1） |
 | `api_slidedeck.md` | 発表登録簿 API（発表タイトル→Sliden mp4 / ポスター PDF URL・発表シナリオ対応表） |
-| `api_papernb.md` | 論文和訳ノートブック登録簿 + 計算ノートブック登録簿 API（DocImportPaper 委譲・元ソース/素材の PrivacyLevel 継承・一覧の「和訳NB」列・SlideWorkflow 文献解決） |
+| `api_papernb.md` | 翻訳ノートブック登録簿 + 計算ノートブック登録簿 API（`DocImportPaper` / `DocImportWebPage` 委譲・訳先言語ごとの登録・元ソース/素材の PrivacyLevel 継承・OA PDF 優先・SlideWorkflow 文献解決） |
 | `api_voice.md` | ローカル音声資産 API（Piper Plus TTS・AivisSpeech Engine・Vosk ASR の解決・合成） |
 | `api_vision.md` | ローカル視覚資産 API（人物検出・姿勢推定 ONNX モデルの解決・導入） |
-| `api_realtime.md` | クラウド音声対話 API（OpenAI Realtime / GPT-Live・Python worker 連携・スライド制御/QA ツール接続・GPT-Live の割り込み処理・背景コンテキスト注入・無音キープアライブ） |
+| `api_realtime.md` | クラウド音声対話 API（OpenAI Realtime / GPT-Live・Python worker 連携・スライド制御/QA ツール接続・GPT-Live の割り込み処理・台本の確認付き配信・背景コンテキスト注入・無音キープアライブ） |
 | `api_packageapi.md` | パッケージ API 索引 API（関数粒度 chunk 索引・決定的検索・契約 view・関連候補） |
 | `api_issues.md` | 汎用Issue管理 API（データモデル v2・取り込み・分割・Risk/Importance 採点・解決ワークフロー） |
 | `api_diagnostics.md` | クロスパッケージ診断 API（ライセンス/トポロジプローブ・SystemDoctor・spool 取り込み・issue fan-out・heartbeat・マルチ PC rollup） |
@@ -1211,6 +1274,21 @@ spans = {
   SourceVaultSpan[sid2, {200, 800}]
 };
 SourceVaultContextAssemble[spans]
+```
+
+#### 例 3b — 論文ページのオープンアクセス PDF
+
+```mathematica
+(* 論文ページを ingest。OA PDF があれば別ソースとして取り込まれ、ページと結ばれる *)
+r = SourceVaultIngest["https://www.nature.com/articles/..."];
+r["OpenAccessPDF"]
+(* <|"Status" -> "Linked", "SourceId" -> "src-...", "Via" -> ..., "DOI" -> ...|> *)
+
+(* ページに結ばれた PDF のソースを取得 *)
+SourceVaultOpenAccessPDFSource["src-url-..."]
+
+(* 既存の web ソースを一括補完 (まず DryRun で確認) *)
+SourceVaultBackfillOpenAccessPDFs["DryRun" -> True]
 ```
 
 ### Notebook Management
@@ -1359,6 +1437,23 @@ SourceVaultStartHTTPProxy["handbook-svc",
 
 登録はサービスカーネルに届く必要があります（サービスの prelude に含めるか、`SourceVaultLocalInit.wl` を両カーネルで読み込む）。詳細は [`examples/servicemanager_example.md`](SourceVault_info/docs/examples/servicemanager_example.md) を参照してください。
 
+### Web egress guard の確認
+
+```mathematica
+(* 関所の状態 (有効/無効・ポリシー・承認待ち件数・既知ホスト数) *)
+SourceVaultWebGuardStatus[]
+
+(* URL・クエリの不審度を決定的に解析 *)
+SourceVaultWebGuardAnalyzeURL["https://example.com/page?q=abc"]["Class"]
+(* "Plain" | "Opaque" | "Exfil" *)
+
+(* 既知ホストの identity と AccessLevel を一覧 *)
+SourceVaultWebHostProfilesView[]
+
+(* オーナーがホストの AccessLevel を明示設定 *)
+SourceVaultWebHostSetAccess["example.com", 0.6]
+```
+
 ### メールアジェンダ — 要対応メールの発見と処理
 
 `SourceVault_mailagenda` は maildb の既存派生（Category/Priority/Deadline）だけを索引で読み、「オーナー宛てで返信/確認が必要そうなメール」を候補化します。LLM の再解析やシャード全体のロードは行われません。
@@ -1394,6 +1489,20 @@ SourceVaultNewTodo[<|"Title" -> "学生便覧の改訂箇所を確認", "Deadlin
 
 (* 完了マーク（notebook Todo はオーバレイのみに記録、.nb 本体は不変） *)
 SourceVaultTodoDone[todoId]
+```
+
+### 翻訳ノートブックの生成
+
+```mathematica
+(* 取り込み済みソースから、$Language への翻訳ノートブックを生成・登録 *)
+SourceVaultMakePaperNotebook["src-url-..."]
+
+(* 別の言語の翻訳ノートを同じソースに追加 *)
+SourceVaultMakePaperNotebook["src-url-...", "TargetLanguage" -> "English"]
+
+(* 登録済みの翻訳ノートを言語指定で開く / パスを取得 *)
+SourceVaultOpenPaperNotebook["src-url-..."]
+SourceVaultPaperNotebook["src-url-...", "Language" -> "English"]
 ```
 
 ### Eagle ライブラリの検索と表示
@@ -1517,6 +1626,8 @@ SourceVaultFindNotebooks["Keywords" -> "オンライン語り交流会"]
 - [SourceVault_crosslink](https://github.com/transreal/SourceVault_crosslink)
 - [SourceVault_servicemanager](https://github.com/transreal/SourceVault_servicemanager)
 - [SourceVault_webingest](https://github.com/transreal/SourceVault_webingest)
+- [SourceVault_webguard](https://github.com/transreal/SourceVault_webguard)
+- [SourceVault_oapdf](https://github.com/transreal/SourceVault_oapdf)
 - [SourceVault_mcp](https://github.com/transreal/SourceVault_mcp)
 - [SourceVault_llmlog](https://github.com/transreal/SourceVault_llmlog)
 - [SourceVault_promptrouter](https://github.com/transreal/SourceVault_promptrouter)

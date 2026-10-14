@@ -14,6 +14,8 @@ Safety pipeline: code verification always runs a 4-point deterministic guard (co
 
 Service-loadable constraint (spec v6 §3.4) is satisfied except for View/Notebook functions: root resolution goes through core's `SourceVaultRoot`; other module references are runtime fail-soft (guarded via `DownValues`/`Names` checks).
 
+Privacy: the module self-registers a privacy source `"issues"` (Level 0.5) and privacy contracts for its public functions (fail-soft when the privacy module is unloaded). Result/View exits: `SourceVaultIssues`/`Get`/`Top`/`SafetyAssess`/`VerifyCode`/`NotifyGitHub`/`NotifyGitHubAll`/`ProposeVerification` = Result, `SourceVaultIssuesView`/`Panel`/`ArchivePanel` = View, notebook-launch functions = Head, the rest Internal.
+
 ## Data Model (spec v0.4)
 Record schema version 2. Read normalizes v1 records into a v2 view without touching disk (`Revision -> 0`, nested containers defaulted, unknown legacy fields preserved); the first mutation materializes it.
 Container defaults added on normalize: `Relations -> <|"ParentIssueId" -> "", "SubIssueIds" -> {}|>`, `ResolutionHistory -> {}`, `Archive -> <||>`, `ArchiveHistory -> {}`, `Remediations -> {}`, `ReopenCount -> 0`, `SchemaVersion -> 2`, `Revision -> Integer`.
@@ -21,6 +23,7 @@ Reserved (internal-only) fields — rejected by `SourceVaultIssueUpdate` / `Sour
 Commit path (single serialized writer): journal `Prepared` → index dirty marker → atomic record write (`Revision`+1, `Writer -> <|MachineTag, Epoch|>`, `UpdatedAt`) → `RecordCommitted` → index row update → `IndexCommitted` → marker clear → journal `Completed` (failure → `Failed` with `FailureClass`/`LastError`). All writes are tmp→rename atomic. Index write failure still leaves the record commit valid; the dirty marker forces a later rebuild. Index file is `index.wxf` v2 (`IndexSchemaVersion = 3`, `<|"IndexSchemaVersion", "BuiltAtUTC", "AppliedOperationId", "Rows"|>`); legacy flat indexes are rebuilt on first commit.
 Index row fields (projection used by list/panel/view): `IssueId`, `SourceKey`, `Title`, `Status`, `Class`, `RecordRevision`, `ResolutionSummary` (≤90 chars), `MachineTag`, `Component`, `ReasonCode`, `IncidentKey`, `EpisodeId`, `OccurrenceCount`, `LastSeenAt`, `LastObservedHealth`, `ParentIssueId`, `SubIssueCount`, `ArchiveAt`, `Risk`, `Importance`, `RegisteredAt`, `UpdatedAt`, `OriginKind`, `OriginURL`, `Package`, `PartLabel`, `AuthorLogin`, `NotebookPath`, `NotebookFileName` (可搬キー。絶対パスは PC ごとに違うため、ノート実体解決はこちらを基準にする), `FixAppliedAt`, `FixDiagnose`, `NotifiedAt`, `NotifiedSHA`, `ImplTestGate`, `ImplCommitReady`, `GroupNotifiedAt`, `CommitCheckFound`, `PrivacyLevel`.
 Reducer field domains (each reducer may only touch its own fields): `Event -> {Evidence, DoctorState, Importance, UpdatedAt}`, `Observation -> {DoctorState, UpdatedAt}`, `Transition -> {Status, Resolution, ResolutionHistory, Archive, ArchiveHistory, ReopenCount, LastTransition, UpdatedAt}`, `Relation -> {Relations, UpdatedAt}`, `Remediation -> {Remediations, UpdatedAt}`, `Analysis -> {AnalysisJobRef, UpdatedAt}`. Violations return `Failure["InvariantViolation"]`.
+Writer-side internal helpers (not public): `iSVISWriterGate[]` returns `Failure["NotWriter", <|"Writer", "SelfMachineTag"|>]` on a non-writer machine (also publishes a once-per-kernel `WriterFenced` diagnostics event, Component `IssueDB`); canonical JSON (sorted keys, Missing removed, `None -> Null`, UTF-8) is used for digests/signatures.
 
 ## Configuration
 ### $SourceVaultIssueRoot
@@ -31,7 +34,7 @@ Override for the issue-DB record root. When Automatic, resolves via `SourceVault
 Override for the issue notebook folder (default `<udb>/issues`, where `udb` is the parent of `PrivateVault`).
 ### $SourceVaultIssuesViewLimit
 型: Integer, 初期値: 50
-Row cap for `SourceVaultIssuesView`.
+Row cap for `SourceVaultIssuesView` and the Panels.
 ### $SourceVaultIssueGitHubFetcher
 型: Automatic | Function[], 初期値: Automatic
 Test seam replacing the GitHub fetch layer used by `SourceVaultIssueIngestGitHub`. Default resolves to `GitHubREST`GitHubAllOpenIssues`.
@@ -79,10 +82,10 @@ Override for the machine-local issue-outbox (default `$UserBaseDirectory/Applica
 Maps producer → `<|"AllowedClasses" -> {..}, "PLFloor" -> x, "ProducerCapability" -> ..|>`. Producer self-declared `IssueClass`/`PrivacyLevel` is never trusted; this registry forces them (v0.4 §4.3). Defaults: `"diagnostics" -> <|{"doctor"}, 1.0, "DoctorObserver"|>`, `"watchdog" -> <|{"doctor"}, 1.0|>`, `"workflowcatalog" -> <|{"workflow"}, 0.85|>`, `"specimpl" -> <|{"workflow"}, 0.85|>`, `"privacy" -> <|{"security"}, 1.0|>`, `"nbaccess" -> <|{"security"}, 1.0|>`.
 ### $SourceVaultIssueWriterMachineTag
 型: Automatic | String, 初期値: Automatic
-Override for the writer designation. Automatic treats `<IssueRoot>/writer.json` as authoritative; a string takes effect only when `writer.json` is absent.
+Override for the writer designation. Automatic treats `<IssueRoot>/writer.json` as authoritative; a string takes effect only when `writer.json` is absent (Epoch 0).
 ### $SourceVaultIssueApprovalKey
 型: Automatic | String, 初期値: Automatic
-Override for the approval-capability signing key (test seam). Default order: `SystemCredential["SourceVaultIssueApprovalKey"]` → machine-local secret.
+Override for the approval-capability signing key (test seam). Default order: `NBAccess`NBGetCredential["SourceVaultIssueApprovalKey"]` → machine-local secret (`$UserBaseDirectory/ApplicationData/SourceVault/issue-approval.key`, auto-generated on first use).
 ### $SourceVaultIssueSyncMinIntervalSeconds
 型: Integer, 初期値: 60
 Debounce interval (seconds) for `SourceVaultIssueSyncNow`.
@@ -121,25 +124,26 @@ meta keys: `"Resolution" -> <|"Summary" -> .., ..|>` (required, with `Summary`, 
 ### SourceVaultIssueClass[record | issueId] → String
 Derives the origin class from `Origin.Kind`: `"github"` | `"manual"` (`manual`/`url`) | `"doctor"` | `"security"` | `"workflow"` | `"unknown"`. `unknown` is never folded into `manual`.
 ### SourceVaultIssueNew[assoc, opts] → Association
-Sugar for manual issue creation: `Register` + issue-notebook creation + (when `"ParentIssueId"` is given) parent/child linking in one operation. Notebook-creation failure does not invalidate the registration (re-evaluation stays duplicate-free). Internal-only fields cannot be injected via `assoc`. On a non-writer machine the Register command is enqueued and `Queued` is returned.
-→ `<|"Status" -> "Created"|"AlreadyExists"|"RegisteredNotebookFailed"|"Queued", "IssueId", ..|>`
+Sugar for manual issue creation: `Register` + issue-notebook creation + (when `"ParentIssueId"` is given) parent/child linking in one operation. Notebook-creation failure does not invalidate the registration (re-evaluation stays duplicate-free). Allowed `assoc` keys only: `SourceKey`, `Title`, `Body`, `ContextText`, `Origin`, `Author`, `Labels`, `PrivacyLevel`, `RegisteredBy`, `ParentIssueId`, `Notebook`, `Open`; any other (internal-only) key returns `Failure["ReservedIssueField", ...]`. On a non-writer machine a `Register` command is enqueued and `Queued` is returned (with `OperationId`, `SourceKey`, `IssueId`, `ResultQuery`).
+→ `<|"Status" -> "Created"|"AlreadyExists"|"RegisteredNotebookFailed"|"Queued", "IssueId", "Register", "Notebook", "Relation"|>`
 Options: `"Notebook" -> Automatic` (`False` skips notebook creation)
 Use the `SourceKey` baked into the generated template cell so re-evaluation is idempotent.
 ### SourceVaultIssueLinkChild[parentId, childId] → Association | Failure
-Canonical bidirectional parent/child link (idempotent). Self-link, cycles, and an existing different parent are rejected.
+Canonical bidirectional parent/child link (idempotent). Rejects self-link (`Failure["SelfLink"]`), cycles (`"CycleDetected"`, ancestors traced to depth 10), and an existing different parent (`"HasParent"`); partial failure returns `Failure["LinkFailed", <|"Side"|>]` (re-run repairs).
+→ `<|"Status" -> "Linked"|"NoChange", "ParentIssueId", "ChildIssueId"|>`
 ### SourceVaultIssueUnlinkChild[parentId, childId] → Association | Failure
-Removes the parent/child link from both sides (idempotent).
+Removes the parent/child link from both sides (idempotent). → `<|"Status" -> "Unlinked", ...|>`
 ### SourceVaultIssues[opts] → {Association...}
 Filtered/sorted issue index (core; lightweight index rows, not full records). Sort tie-breaks deterministically: primary sort key desc → `RegisteredAt` desc → `IssueId`. Wrapped via `SourceVaultPrivateResult` when privacy module is loaded.
-Options: `"Status" -> All` (or a status string e.g. `"Open"`), `"Query" -> ""` (substring match against Title/origin), `"SortBy" -> "Importance"` (`"Importance"|"Risk"|"RegisteredAt"`), `"Limit" -> 200`.
+Options: `"Status" -> All` (or a status string e.g. `"Open"`/`"Archived"`), `"Query" -> ""` (substring match against Title/origin), `"SortBy" -> "Importance"` (`"Importance"|"Risk"|"RegisteredAt"`), `"Limit" -> 200`; the Panels additionally pass `"Class"` (origin-class filter) and `"Machine"` (MachineTag filter).
 ### SourceVaultIssueTop[opts] → Association | Missing["NoIssues"]
 Returns the single top-sorted issue as a full record (via `SourceVaultIssueGet`). Same options as `SourceVaultIssues`.
 
 ## Signals (Producer → Transport → Reconcile)
-Producers never write the shared DB directly. Flow: `SignalNormalize` (trusted adapter forces class/privacy) → `SignalEnqueue` (machine-local outbox, immutable 1-file-per-EventId, temp→rename) → `ForwardOutbox` (publish into the shared inbox) → `SignalReconcile` (writer-side dedup by global EventId receipt, aggregate into episodes, apply to issue records).
+Producers never write the shared DB directly. Flow: `SignalNormalize` (trusted adapter forces class/privacy) → `SignalEnqueue` (machine-local outbox, immutable 1-file-per-EventId, temp→rename) → `ForwardOutbox` (publish into the shared inbox) → `SignalReconcile` (writer-side dedup by global EventId receipt, aggregate into episodes, apply to issue records). `SignalKind` ∈ `OpenIncident|Occurrence|Recovery`. Severity enum: `Critical|High|Medium|Low|Info|Unknown` (`error→High`, `warn/warning→Medium`); Health enum: `OK|Degraded|Failing|Unknown`. Signal digest = `sha256:` of canonical JSON.
 ### SourceVaultIssueSignalNormalize[event] → Association | Failure
-Normalizes a producer event into the canonical `SourceVaultIssueSignal/1` (v0.4 §4.2). `IssueClass` is forced into the adapter's `AllowedClasses`, `PrivacyLevel` gets the adapter floor applied, `Severity`/`Health` are canonicalized to their enums, and `IncidentKey` is the canonical-JSON hash of (class, machine, component, reason, subject).
-→ normalized signal Association; `Failure["UnroutableIssueSignal", ...]` for an unknown adapter/producer.
+Normalizes a producer event into the canonical `SourceVaultIssueSignal/1` (v0.4 §4.2). Required: `Producer` (registered adapter), `Component`, `ReasonCode`. `IssueClass` is forced into the adapter's `AllowedClasses`, `PrivacyLevel` gets the adapter floor applied, `Severity`/`Health` are canonicalized to their enums, `SubjectRef` defaults to `<|"Kind" -> "Component", "Key" -> component|>`, a missing `EventId` is auto-generated (`evt-...`, retry idempotence not guaranteed), and `IncidentKey` (`inc:...`) is the canonical-JSON hash of (class, machine, component, reason, subject).
+→ normalized signal Association; `Failure["UnroutableIssueSignal", ...]` for an unknown adapter/producer or missing Component/ReasonCode.
 ### SourceVaultIssueSignalEnqueue[event] → Association
 Normalizes and appends the signal to the machine-local issue-outbox as an immutable envelope (producer-side entry point, short-lived). Below the firing threshold (Severity < High AND Health =!= Failing AND not `IssueRequested`) nothing is written.
 → `<|"Queued" -> True, "EventId", ..|>` or `<|"Queued" -> False, "Reason" -> "BelowThreshold"|>`. Re-running with the same EventId + same digest is treated as success.
@@ -159,13 +163,14 @@ Single-writer model (v0.4 §5): only the designated machine may write shared rec
 Returns the writer configuration (`<IssueRoot>/writer.json`) and this machine's relation to it.
 → `<|"Configured" -> Bool, "MachineTag", "Epoch", "SelfMachineTag", "IsWriter" -> Bool, "CompatMode" -> Bool|>`. Unconfigured = compatibility mode (single-machine operation: any machine may commit, Epoch 0). When configured, only the designated machine can write; other machines' mutations return `Failure["NotWriter", ...]` (→ command queue).
 ### SourceVaultIssueWriterClaim[] → Association
-Registers this machine as the writer when unconfigured (Epoch 1). If already configured, returns `AlreadyConfigured` (use `SourceVaultIssueWriterHandoff` to change).
+Registers this machine as the writer when unconfigured (Epoch 1) → `<|"Status" -> "Claimed", "MachineTag", "Epoch" -> 1|>`. If already configured, returns `<|"Status" -> "AlreadyConfigured", "Writer" -> ..|>` (use `SourceVaultIssueWriterHandoff` to change). `Failure["WriterConfigWrite"]` on write failure.
 ### SourceVaultIssueWriterHandoff[toTag, opts] → Association | Failure
-Explicit writer handoff (`WriterEpoch`++). No auto-failover: the owner must confirm the old writer service is stopped and Dropbox sync has completed, then pass `"Confirm" -> True`. The old writer is fenced with `NotWriter` on its next commit and reports to diagnostics.
+Explicit writer handoff (`WriterEpoch`++). No auto-failover: the owner must confirm the old writer service is stopped and Dropbox sync has completed, then pass `"Confirm" -> True` (otherwise `Failure["ConfirmationRequired"]`). The old writer is fenced with `NotWriter` on its next commit and reports to diagnostics.
+→ `<|"Status" -> "HandedOff", "MachineTag", "Epoch"|>`
 Options: `"Confirm" -> False`
 ### SourceVaultIssueCommandEnqueue[cmd] → Association
 Registers a mutation command into the shared command queue (`<IssueRoot>/commands/pending/`) — the FE entry point on non-writer machines.
-cmd: `<|"Command" -> "Update"|"Transition"|"AttachResolution"|"Register"|"ExternalAction", "TargetIssueId", "Args" -> <|..|>` (JSON-safe values only)`, "ExpectedRevision"` (optional)`, "ApprovalRef"` (approval-required commands only)`|>`
+cmd: `<|"Command" -> "Update"|"Transition"|"AttachResolution"|"Register"|"ExternalAction"|"Archive"|"Unarchive"|"Sync", "TargetIssueId", "Args" -> <|..|>` (JSON-safe values only)`, "ExpectedRevision"` (optional)`, "ApprovalRef"` (approval-required commands only)`|>` (`Archive`/`Unarchive`/`Sync` are issued by the Panel buttons.)
 → Association including `"OperationId"` and `"ResultQuery"`.
 ### SourceVaultIssueCommandResult[operationId] → Association
 Current state of a command: `Queued` | `Applied` | `Conflict` | `Failed` | `ApprovalInvalid` | `Missing`.
@@ -173,33 +178,35 @@ Current state of a command: `Queued` | `Applied` | `Conflict` | `Failed` | `Appr
 Writer-side validation and execution of pending commands, writing outcomes to `done/`. On a non-writer machine returns `NotWriter`. Approval-required commands execute only after the capability's target/digest/expiry/signature all verify — `RequestedBy`/`Confirmed` flags are audit metadata and are never treated as authentication (v0.4 §5.2).
 Options: `"Limit" -> 100`
 ### SourceVaultIssueApprovalCreate[actionId, targetIssueId, payloadDigest, opts] → Association
-Creates an owner-approval capability (target / payload digest / expiry binding + keyed-hash signature). Key resolution order: `$SourceVaultIssueApprovalKey` (seam) → `SystemCredential` → machine-local secret.
+Creates an owner-approval capability (`Type -> "SourceVaultIssueApproval"`, `ApprovalId -> "apr-..."`, target / payload digest / expiry binding + keyed-hash `"sig:..."` signature). Key resolution order: `$SourceVaultIssueApprovalKey` (seam) → `NBAccess`NBGetCredential` → machine-local secret.
 Options: `"ExpiresSeconds" -> 3600`, `"ApprovedBy" -> Automatic`
 
 ## Archive
 ### SourceVaultIssueArchiveEligibility[issueId] → Association
-Evaluates the class × Disposition retention conditions (spec v0.4 §8.2).
-→ `<|"Eligible" -> Bool, "Reasons" -> {..}, "Class", "AutoArchive" -> Bool|>`
-Conditions: github = Resolved ∧ fix applied ∧ notified; doctor(`Fixed`|`Recovered`) = stability window (`StableCandidate`) ∧ children complete; doctor(`FalsePositive`) = `TuningProposal` recorded; (`AcceptedRisk`) = `ReviewBy` required; manual = `Summary`; workflow = `Summary` + fix reference; security = `Disposition`; `unknown` and `Quarantined` are never eligible.
-### SourceVaultIssueArchive[issueId, reason] → Association | Failure
-Logical archive (`Status -> "Archived"`). When eligibility does not hold, nothing is executed and `Failure["NotEligible", ...]` reports the missing conditions (confirmation cannot override it; use `SourceVaultIssueForceArchive`). Notebooks are not moved (v0.4 §8.1).
+Evaluates the class × Disposition retention conditions (spec v0.4 §8.2). Common: `Status` must be `Resolved` and no incomplete sub-issues (children not Resolved/Archived).
+→ `<|"Eligible" -> Bool, "Reasons" -> {..}, "Class", "AutoArchive" -> Bool|>` (`Missing["NotFound", id]` when absent)
+Conditions: github = Resolved ∧ fix applied (`Fix.AppliedAt`) ∧ notified (`GitHubNotified.At`); doctor(`Fixed`|`Recovered`|unspecified) = stability window (`DoctorState.Phase = StableCandidate`) ∧ children complete; doctor(`FalsePositive`) = `TuningProposals` recorded; doctor(`AcceptedRisk`) = `Resolution.ReviewBy` required; manual = `Resolution.Summary`; workflow = `Summary` + fix reference (`SpecRef`/`TestResult`/`Fix.AppliedAt`); security = `Resolution.Disposition`; `unknown` and `Quarantined` are never eligible. `AutoArchive` is True only for eligible github, or doctor with Disposition ∈ {"", Fixed, Recovered}.
+### SourceVaultIssueArchive[issueId, reason:"Manual"] → Association | Failure
+Logical archive (`Status -> "Archived"`). When eligibility does not hold, nothing is executed and `Failure["NotEligible", <|"Reasons","Class","IssueId"|>]` reports the missing conditions (confirmation cannot override it; use `SourceVaultIssueForceArchive`). Notebooks are not moved (v0.4 §8.1).
+→ `<|"Status" -> "Archived", "IssueId", "Reason"|>`
 ### SourceVaultIssueUnarchive[issueId, opts] → Association | Failure
-Restores `Archive.PreviousStatus` and pushes `Archive` onto `ArchiveHistory`. When `PreviousStatus` is `Quarantined`, `"OwnerReview" -> True` is required.
+Restores `Archive.PreviousStatus` (default `Resolved`) and pushes `Archive` onto `ArchiveHistory`. When `PreviousStatus` is `Quarantined`, `"OwnerReview" -> True` is required. `Failure["NotArchived"]` if the issue is not Archived.
+→ `<|"Status" -> "Unarchived", "IssueId", "RestoredStatus", "NotebookRelocation" -> "NotNeeded"|>`
 Options: `"OwnerReview" -> False`
 ### SourceVaultIssueForceArchive[issueId, opts] → Association | Failure
-Owner-only forced archive, bypassing the transition matrix while still saving `PreviousStatus`. `Quarantined` cannot be archived even by force.
-Options: `"AuditReason" -> None` (required; a string must be supplied)
+Owner-only forced archive, bypassing the transition matrix while still saving `PreviousStatus`. `Quarantined` cannot be archived even by force (`Failure["TransitionDenied"]`); already Archived returns `<|"Status" -> "NoChange"|>`.
+Options: `"AuditReason" -> ""` (required non-empty string, otherwise `Failure["AuditReasonRequired"]`)
 ### SourceVaultIssueAutoArchiveSweep[opts] → Association
 Archives Resolved issues matching the auto-archive rules (github = notification complete / doctor = stability established), and generates exactly one re-review issue when an `AcceptedRisk` `ReviewBy` date comes due (lead time `$SourceVaultIssueRiskReviewLeadDays`). Writer-only; never call it from Panel rendering.
 Options: `"DryRun" -> False`, `"Limit" -> 100`
 
 ## Sync
 ### SourceVaultIssueSyncNow[] → Association | Failure
-"Sync latest issues" (v0.4 §5.4): idempotent GitHub open-issue ingest + immediate reconcile of pending signals + recording `SourceOpenMissingAt` for github issues that vanished from the open list, all in one operation, returning a summary. Debounced — a call within `$SourceVaultIssueSyncMinIntervalSeconds` returns the previous result with `Status -> "Debounced"`. Non-writer machines get `Failure["NotWriter", ...]` (the Panel enqueues a Sync command instead).
+"Sync latest issues" (v0.4 §5.4): idempotent GitHub open-issue ingest + immediate reconcile of pending signals + recording `SourceOpenMissingAt` for github issues that vanished from the open list, all in one operation, returning a summary. Debounced — a call within `$SourceVaultIssueSyncMinIntervalSeconds` returns the previous result with `Status -> "Debounced"`. Non-writer machines get `Failure["NotWriter", ...]` (the Panel enqueues a Sync command instead). Last-sync state is persisted (`LastSyncUnix`) and shown in the Panel as 「最終同期」.
 
 ## Panel / View
 ### SourceVaultIssuePanel[] → Panel expression
-Displays the issue list in the same style as the workflow list: status/class badges, search, class and PC filters, sync, archive-in-separate-window, new issue, archive candidates, manual refresh (avoids FE freezes). Rows are built read-only from the index projection alone. Mutation buttons execute directly on the writer machine and enqueue commands elsewhere.
+Displays the issue list in the same style as the workflow list: status/class badges, search, class and PC filters, sync, archive-in-separate-window, new issue, archive candidates (dry-run sweep, writer only), manual refresh (avoids FE freezes). Rows are built read-only from the index projection alone (TimeConstrained 60s, fail-soft to empty). Row cells: name (button opens notebook; https-only hyperlink), progress (修正適用済✓ / GitHub state / doctor 現況), counts (再発 n / 子 n / 親↑). Mutation buttons execute directly on the writer machine and enqueue commands elsewhere.
 ### SourceVaultIssueArchivePanel[] → Panel expression
 Lists only archived issues in the same layout; the action column is 「戻す」 (Unarchive).
 ### SourceVaultIssuesView[opts] → Dataset

@@ -61,6 +61,11 @@ SourceVaultKGSave::usage = "SourceVaultKGSave[kg] \:306f KG \:3092 <root>/graphs
 SourceVaultKGLoad::usage = "SourceVaultKGLoad[graphId] \:306f\:4fdd\:5b58\:6e08\:307f KG \:3092\:8aad\:3080 (\:7121\:3051\:308c\:3070 Missing)\:3002";
 SourceVaultKGRepairMojibake::usage = "SourceVaultKGRepairMojibake[] \:306f\:4fdd\:5b58\:6e08\:307f\:306e KG (graphs/) \:3068\:5468\:8fba\:77e5\:8b58\:306e\:66f8\:5eab (background/) \:306e\:6587\:5b57\:5316\:3051 (UTF-8 \:306e\:30d0\:30a4\:30c8\:3092 1 \:6587\:5b57\:305a\:3064\:8aad\:3093\:3060\:5f62\:3002gaw\[EAcute] \[RightArrow] gaw\[CapitalATilde]\[Copyright] \:306a\:3069) \:3092\:76f4\:3057\:3066\:66f8\:304d\:623b\:3059\:3002<|\"Checked\", \"Fixed\", \"Files\"|> \:3092\:8fd4\:3059\:3002\:53d6\:308a\:8fbc\:307f (SourceVaultKGFromJSON / SourceVaultKGMerge) \:306f\:5165\:53e3\:3067\:540c\:3058\:4fee\:5fa9\:3092\:3059\:308b\:3002";
 SourceVaultKGList::usage = "SourceVaultKGList[] \:306f\:4fdd\:5b58\:6e08\:307f KG \:306e\:4e00\:89a7 ({<|\"GraphId\",\"Title\",\"Kind\",\"NodeCount\",\"EdgeCount\",\"UpdatedAtUTC\"|>..})\:3002";
+SourceVaultKGSubgraphNew::usage = "SourceVaultKGSubgraphNew[parentId, subId, opts] \:306F\:6BCD\:4F53 KG \:304B\:3089 1 \:3064\:306E\:767A\:8868\:3076\:3093\:306E\:90E8\:5206\:77E5\:8B58\:30B0\:30E9\:30D5 (Kind \"Subgraph\") \:3092\:5207\:308A\:51FA\:3057\:3066 graphs/<subId>.json \:306B\:4FDD\:5B58\:3059\:308B (v1.60)\:3002\:6BCD\:4F53\:306F\:5206\:5272\:3082\:8907\:5199\:3082\:3057\:306A\:3044: \:90E8\:5206 KG \:304C\:6301\:3064\:306E\:306F\:9078\:3093\:3060\:30CE\:30FC\:30C9\:306E Id (Selection)\:3001\:81EA\:5206\:306E\:30CE\:30FC\:30C9 (root / \:76EE\:6B21\:306E\:90E8 / adj_* / \:5468\:8FBA\:77E5\:8B58)\:3001\:305D\:308C\:306B\:89E6\:308C\:308B\:8FBA\:3001\:6BCD\:4F53\:30CE\:30FC\:30C9\:306E\:767A\:8868\:7528\:306E\:4E0A\:66F8\:304D (Overlay: Pinned / Hidden / Include / Role / Bridge / Terms / FigureLayout / Order / Importance)\:3001\:76EE\:6B21\:3001\:610F\:5473\:4ED8\:3051\:3001\:984C\:76EE\:3001\:8AAC\:660E\:3002opts: \"Title\" / \"Description\" (\:5207\:308A\:51FA\:3057\:306E\:8A18\:8FF0) / \"Members\" -> {\:6BCD\:4F53\:306E Id..} (\:7BC0\:306E Id \:306F\:90E8\:5206\:6728\:3054\:3068) / \"Parts\" -> {<|\"Label\", \"Gist\", \"Role\" (Main|Intro|Context|Closing), \"Members\"|>..} (\:90E8 = \:76EE\:6B21\:306E\:6839\:306E\:5B50\:3001\:8A71\:3059\:9806) / \"Exclude\" -> {Id..} / \"Language\" / \"MaxDegree\" (\:76EE\:6B21\:306E\:5B50\:306E\:4E0A\:9650\:3001\:65E2\:5B9A 6) / \"Keep\" (\:65E2\:5B9A True: \:524D\:306E\:7248\:306E\:4E0A\:66F8\:304D\:30FBadj_*\:30FB\:5468\:8FBA\:77E5\:8B58\:3092\:6B8B\:3059) / \"Save\"\:3002\:623B\:308A\:5024 <|\"KG\" (\:5B9F\:4F53\:5316\:3057\:305F\:90E8\:5206 KG), \"GraphId\", \"Parent\", \"Selection\", \"Parts\", \"Kept\", \"Split\"|>\:3002SourceVaultKGLoad[subId] \:306F\:6BCD\:4F53\:3092\:8AAD\:3093\:3067\:5B9F\:4F53\:5316\:3057 (\:9078\:3093\:3060\:30CE\:30FC\:30C9 + \:4E0A\:66F8\:304D\:3001\:6BCD\:4F53\:306E\:8FBA\:306E\:3046\:3061\:4E21\:7AEF\:304C\:9078\:3070\:308C\:305F\:3082\:306E\:3001\:6839\:304B\:3089\:6700\:4E0A\:4F4D\:30CE\:30FC\:30C9\:3078\:306E Contains)\:3001SourceVaultKGSave \:306F\:66F8\:304D\:623B\:3057\:3092\:5206\:3051\:308B (\:672C\:6587\:30FB\:8CC7\:7523\:30FB\:6BCD\:4F53\:30CE\:30FC\:30C9\:9593\:306E\:8FBA \:2192 \:6BCD\:4F53\:3001\:767A\:8868\:7528\:306E\:72B6\:614B \:2192 \:90E8\:5206 KG)\:3002";
+SourceVaultKGSubgraphQ::usage = "SourceVaultKGSubgraphQ[kg] \:306F kg \:304C\:90E8\:5206\:77E5\:8B58\:30B0\:30E9\:30D5 (Kind \"Subgraph\"\:3001\"Parent\" \:3042\:308A) \:306A\:3089 True (v1.60)\:3002";
+SourceVaultKGSubgraphs::usage = "SourceVaultKGSubgraphs[parentId] \:306F\:6BCD\:4F53 parentId \:304B\:3089\:5207\:308A\:51FA\:3057\:305F\:90E8\:5206\:77E5\:8B58\:30B0\:30E9\:30D5\:306E\:4E00\:89A7 (SourceVaultKGList \:306E\:884C\:3001\"Parent\" \:4ED8\:304D) (v1.60)\:3002";
+SourceVaultKGSubgraphSpec::usage = "SourceVaultKGSubgraphSpec[kg] \:306F\:90E8\:5206\:77E5\:8B58\:30B0\:30E9\:30D5\:306E\:5207\:308A\:51FA\:3057\:4ED5\:69D8 <|\"Parent\", \"Selection\", \"Parts\", \"Description\", \"Title\"|> (v1.60)\:3002";
+SourceVaultKGSubgraphPrompt::usage = "SourceVaultKGSubgraphPrompt[motherKG, description, opts] \:306F\:3001\:6BCD\:4F53 KG \:306E\:7BC0\:3068\:9805\:76EE\:306E\:4E00\:89A7\:306B\:5207\:308A\:51FA\:3057\:306E\:8A18\:8FF0\:3092\:6DFB\:3048\:3066\:3001\:767A\:8868\:306E\:90E8 (Parts: Label / Gist / Role / Members) \:3068\:9664\:304F Id \:3092 JSON \:3067\:8FD4\:3055\:305B\:308B LLM \:30D7\:30ED\:30F3\:30D7\:30C8 (\:7D14\:95A2\:6570\:3001v1.60)\:3002opts: \"Language\" / \"Leaves\" (\:65E2\:5B9A True: \:7BC0\:306E\:4E0B\:306E\:9805\:76EE\:3082\:4E00\:89A7\:306B) / \"MaxLabel\" / \"Title\"\:3002\:7D50\:679C\:306F SourceVaultKGSubgraphNew \:306E \"Parts\" / \"Exclude\" \:306B\:305D\:306E\:307E\:307E\:6E21\:305B\:308B\:3002";
 SourceVaultKGDelete::usage = "SourceVaultKGDelete[graphId] \:306f\:4fdd\:5b58\:6e08\:307f KG \:3092\:524a\:9664\:3059\:308b (history \:306f\:6b8b\:3059)\:3002";
 
 SourceVaultKGAudience::usage = "SourceVaultKGAudience[spec] \:306f\:8074\:304d\:624b\:6307\:5b9a\:3092\:6b63\:898f\:5316\:3059\:308b\:3002spec: \:30d7\:30ea\:30bb\:30c3\:30c8\:540d (\"\:5927\:5b66\:7406\:7cfb\:5b66\:90e8\:5352\") / \:30ab\:30f3\:30de\:533a\:5207\:308a (\"\:9ad8\:6821\:751f, \:96fb\:6c17\:5316\:5b66=0.3, \:9ad8\:6821\:6570\:5b66III\") / \:30ea\:30b9\:30c8 / <|\"Level\", \"Knowledge\", \"Presets\", \"Language\", \"Description\"|>\:3002\:7d50\:679c\:306f <|\"Level\" (\:4e3b\:984c\:306e\:7406\:89e3\:5ea6 0-1), \"Knowledge\" -> <|\:9818\:57df -> \:7406\:89e3\:5ea6|>, \"Presets\", \"Language\", \"Description\", \"Unknown\" (\:89e3\:91c8\:3067\:304d\:306a\:304b\:3063\:305f\:8a9e)|>\:3002";
@@ -425,7 +430,7 @@ iKGValidate[kgIn_] := Module[
     If[g === "", "kg-" <> StringTake[CreateUUID[], 8], g]];
   kg["Title"] = iKGStr[Lookup[kg, "Title", ""]];
   kg["Kind"] = With[{k = iKGStr[Lookup[kg, "Kind", "Paper"]]},
-    If[MemberQ[{"Paper", "Survey", "Background", "Scenario", "Notebook"}, k], k, "Paper"]];
+    If[MemberQ[{"Paper", "Survey", "Background", "Scenario", "Notebook", "Subgraph"}, k], k, "Paper"]];
   kg["PrivacyLevel"] = iKGClip[Lookup[kg, "PrivacyLevel", 0.], 0.];
   kg["Sources"] = Select[iKGAssoc /@ Select[iKGList[Lookup[kg, "Sources", {}]], iKGAssocQ], AssociationQ];
   nodes = DeleteCases[iKGNormalizeNode[#, primary] & /@ iKGList[Lookup[kg, "Nodes", {}]], $Failed];
@@ -550,35 +555,288 @@ SourceVaultKGMerge[kg_Association, deltaIn_, OptionsPattern[]] := Module[
 
 iKGGraphFile[graphId_String] := FileNameJoin[{iKGGraphDir[], iKGSlug[graphId] <> ".json"}];
 
-SourceVaultKGSave[kgIn_Association] := Module[{kg = iKGFixMojibakeDeep[kgIn], path, prev, hist},
-  (* \:5316\:3051\:305f\:307e\:307e\:899a\:3048\:3066\:3044\:308b KG \:3092\:66f8\:304d\:623b\:3055\:306a\:3044 (\:4fee\:5fa9\:3088\:308a\:524d\:306b\:8aad\:307f\:8fbc\:3093\:3060\:30ab\:30fc\:30cd\:30eb\:304b\:3089\:4fdd\:5b58\:3055\:308c\:3066\:3082\:76f4\:308b) *)
+(* v1.60: a Subgraph (Kind "Subgraph", "Parent" -> motherId) is saved by splitting it (iKGSubgraphSave); anything else is written as is *)
+SourceVaultKGSave[kgIn_Association] := Module[{kg = iKGFixMojibakeDeep[kgIn]},
+  (* do not write back a KG that still carries mojibake (a kernel that loaded it before the repair would otherwise undo the fix) *)
   If[! StringQ[Lookup[kg, "GraphId", None]], Return[$Failed]];
-  path = iKGGraphFile[kg["GraphId"]];
+  If[SourceVaultKGSubgraphQ[kg], Return[iKGSubgraphSave[kg]]];
+  iKGSaveRawFile[kg["GraphId"], kg]];
+
+(* write graphs/<gid>.json, moving the previous file to graphs/history/ *)
+iKGSaveRawFile[gid_String, kg_Association] := Module[{path = iKGGraphFile[gid], prev, hist},
   If[FileExistsQ[path],
     prev = Quiet @ Check[ReadByteArray[path], $Failed];
     If[ByteArrayQ[prev],
       hist = FileNameJoin[{iKGHistoryDir[],
-        iKGSlug[kg["GraphId"]] <> "-" <> StringReplace[iKGUTCNow[], {":" -> "", "-" -> ""}] <> ".json"}];
+        iKGSlug[gid] <> "-" <> StringReplace[iKGUTCNow[], {":" -> "", "-" -> ""}] <> ".json"}];
       Quiet @ Check[
         Module[{strm = OpenWrite[hist, BinaryFormat -> True]},
           WithCleanup[BinaryWrite[strm, prev], Quiet @ Close[strm]]], Null]]];
   iKGWriteJSON[path, Append[kg, "UpdatedAtUTC" -> iKGUTCNow[]]]];
 
+(* v1.60: a saved Subgraph record is materialized from its mother (see the Subgraph section below) *)
 SourceVaultKGLoad[graphId_String] := Module[{d = iKGReadJSON[iKGGraphFile[graphId]]},
-  If[MissingQ[d], d, SourceVaultKGValidate[iKGFixMojibakeDeep[d]]]];
+  Which[
+    MissingQ[d], d,
+    iKGSubgraphFileQ[d], iKGMaterializeSubgraph[iKGFixMojibakeDeep[d]],
+    True, SourceVaultKGValidate[iKGFixMojibakeDeep[d]]]];
 
 SourceVaultKGList[] := Module[{files},
   files = Quiet @ Check[FileNames["*.json", iKGGraphDir[]], {}];
   Select[Map[Function[f, With[{d = iKGReadJSON[f]},
     If[! AssociationQ[d], Nothing,
       <|"GraphId" -> iKGStr[Lookup[d, "GraphId", ""]], "Title" -> iKGStr[Lookup[d, "Title", ""]],
-        "Kind" -> iKGStr[Lookup[d, "Kind", ""]],
-        "NodeCount" -> Length[iKGList[Lookup[d, "Nodes", {}]]],
+        "Kind" -> iKGStr[Lookup[d, "Kind", ""]], "Parent" -> iKGStr[Lookup[d, "Parent", ""]],
+        "NodeCount" -> Length[iKGList[Lookup[d, "Nodes", {}]]] + Length[iKGList[Lookup[d, "Selection", {}]]],
         "EdgeCount" -> Length[iKGList[Lookup[d, "Edges", {}]]],
         "UpdatedAtUTC" -> iKGStr[Lookup[d, "UpdatedAtUTC", ""]], "File" -> f|>]]], files], AssociationQ]];
 
 SourceVaultKGDelete[graphId_String] := With[{p = iKGGraphFile[graphId]},
   If[FileExistsQ[p], Quiet @ Check[DeleteFile[p]; True, False], False]];
+
+(* ---------------- v1.60: Subgraph = one talk's projection of a larger mother KG ----------------
+   graphs/<subId>.json with Kind "Subgraph" and "Parent" -> motherId stores only what is the talk's own:
+   Selection (mother node ids), local nodes (root / Toc parts / adj_* / background), local edges (those touching a
+   local node), Overlay (per mother node: presentation keys that differ from the mother), Toc, Narrative, Title,
+   Description. SourceVaultKGLoad materializes it (selected mother nodes + overlay, mother edges with both ends
+   selected, Contains root -> top nodes); SourceVaultKGSave splits it back: knowledge (text, assets, edges between
+   mother nodes) goes to the mother, presentation state stays here. The mother is never split or copied, so several
+   talks can be cut from one large graph and refining a node in any of them improves the mother. *)
+$kgSubgraphLocalKeys = {"Pinned", "Hidden", "Include", "Role", "Bridge", "BridgeAfter", "Terms", "FigureLayout",
+  "Order", "Importance", "Toc", "Cluster", "PartRole"};
+$kgSubgraphIgnoreKeys = {"Id", "PrimaryLanguage"};
+$kgSubgraphDepth = 0;
+
+SourceVaultKGSubgraphQ[kg_Association] := iKGStr[Lookup[kg, "Kind", ""]] === "Subgraph" && iKGStr[Lookup[kg, "Parent", ""]] =!= "";
+SourceVaultKGSubgraphQ[_] := False;
+iKGSubgraphFileQ[d_] := iKGAssocQ[d] && With[{a = KeyMap[ToString, iKGAssoc[d]]},
+  iKGStr[Lookup[a, "Kind", ""]] === "Subgraph" && iKGStr[Lookup[a, "Parent", ""]] =!= ""];
+
+iKGContainsKids[kg_Association] := GroupBy[Select[Lookup[kg, "Edges", {}], iKGStr[Lookup[#, "EdgeKind", ""]] === "Contains" &],
+  (iKGStr[Lookup[#, "From", ""]] &) -> (iKGStr[Lookup[#, "To", ""]] &)];
+iKGContainsParentOf[kg_Association] := Association[Map[iKGStr[Lookup[#, "To", ""]] -> iKGStr[Lookup[#, "From", ""]] &,
+  Reverse[Select[Lookup[kg, "Edges", {}], iKGStr[Lookup[#, "EdgeKind", ""]] === "Contains" &]]]];
+iKGSubtreeIds[kids_Association, ids_List] := FixedPoint[DeleteDuplicates[Join[#, Flatten[Lookup[kids, #, {}]]]] &, ids, 200];
+iKGByOrder[index_Association, ids_List] := SortBy[ids,
+  {Replace[Lookup[Lookup[index, #, <||>], "Order", None], Except[_?NumericQ] -> 10.^6] &, # &}];
+iKGAssocList[v_] := Map[KeyMap[ToString, #] &, Select[iKGAssoc /@ Select[iKGList[v], iKGAssocQ], AssociationQ]];
+
+(* raw subgraph record -> full KG *)
+iKGMaterializeSubgraph[dIn_] := Module[
+  {d = KeyMap[ToString, iKGAssoc[dIn]], gid, pid, parent, pindex, proot, overlay, local, localIds, sel, nodes, edges, cpar, tops, lang, kg},
+  gid = iKGStr[Lookup[d, "GraphId", ""]]; pid = iKGStr[Lookup[d, "Parent", ""]];
+  If[$kgSubgraphDepth > 8,
+    Return[Failure["SubgraphCycle", <|"MessageTemplate" -> "subgraph `1`: the parent chain is too deep", "MessageParameters" -> {gid}|>]]];
+  parent = Block[{$kgSubgraphDepth = $kgSubgraphDepth + 1}, SourceVaultKGLoad[pid]];
+  If[! AssociationQ[parent],
+    Return[Failure["NoParentGraph", <|"MessageTemplate" -> "the mother graph `1` of subgraph `2` is not saved",
+      "MessageParameters" -> {pid, gid}|>]]];
+  pindex = iKGNodeIndex[parent]; proot = Lookup[parent, "Root", None];
+  overlay = KeyMap[ToString, Select[Replace[Lookup[d, "Overlay", <||>], Except[_Association] -> <||>], iKGAssocQ]];
+  local = iKGAssocList[Lookup[d, "Nodes", {}]];
+  localIds = iKGStr[Lookup[#, "Id", ""]] & /@ local;
+  sel = Select[DeleteDuplicates[iKGStrList[Lookup[d, "Selection", {}]]],
+    KeyExistsQ[pindex, #] && # =!= proot && ! MemberQ[localIds, #] &];
+  nodes = Join[local, Map[Function[id, Join[pindex[id], KeyMap[ToString, iKGAssoc[Lookup[overlay, id, <||>]]]]], sel]];
+  edges = Join[iKGAssocList[Lookup[d, "Edges", {}]],
+    Select[Lookup[parent, "Edges", {}], MemberQ[sel, iKGStr[Lookup[#, "From", ""]]] && MemberQ[sel, iKGStr[Lookup[#, "To", ""]]] &]];
+  cpar = Association[Map[iKGStr[Lookup[#, "To", ""]] -> iKGStr[Lookup[#, "From", ""]] &,
+    Reverse[Select[edges, iKGStr[Lookup[#, "EdgeKind", ""]] === "Contains" &]]]];
+  tops = Select[sel, ! KeyExistsQ[cpar, #] &];
+  edges = Join[edges, Map[<|"From" -> iKGStr[Lookup[d, "Root", "root"]], "To" -> #, "EdgeKind" -> "Contains", "Weight" -> 1.|> &, tops]];
+  lang = iKGStr[Lookup[d, "Language", ""]]; If[lang === "", lang = iKGStr[Lookup[parent, "Language", "ja"]]];
+  kg = <|"ObjectClass" -> "SourceVaultKnowledgeGraph", "SchemaVersion" -> $kgSchemaVersion, "GraphId" -> gid, "Kind" -> "Subgraph",
+    "Parent" -> pid, "Title" -> iKGStr[Lookup[d, "Title", ""]], "Description" -> iKGStr[Lookup[d, "Description", ""]],
+    "Language" -> lang, "Sources" -> Lookup[parent, "Sources", {}],
+    "PrivacyLevel" -> Max[iKGClip[Lookup[d, "PrivacyLevel", 0.], 0.], iKGClip[Lookup[parent, "PrivacyLevel", 0.], 0.]],
+    "Root" -> iKGStr[Lookup[d, "Root", "root"]], "Nodes" -> nodes, "Edges" -> edges, "Selection" -> sel,
+    "Warnings" -> iKGStrList[Lookup[d, "Warnings", {}]], "ParentUpdatedAtUTC" -> iKGStr[Lookup[parent, "UpdatedAtUTC", ""]]|>;
+  Do[If[AssociationQ[Lookup[d, k, None]], kg[k] = KeyMap[ToString, d[k]]], {k, {"Toc", "Narrative"}}];
+  If[ListQ[Lookup[d, "Parts", None]], kg["Parts"] = iKGAssocList[d["Parts"]]];
+  SourceVaultKGValidate[kg]];
+
+(* full subgraph KG -> mother (knowledge) + subgraph file (presentation) *)
+iKGSubgraphSave[kgIn_Association] := Module[
+  {kg = kgIn, gid, pid, parent, pindex, proot, root, sel = {}, local = {}, localIds, overlay = <||>, localEdges = {}, newPEdges = {},
+   pchanged = False, pedges, sub, res},
+  gid = iKGStr[Lookup[kg, "GraphId", ""]]; pid = iKGStr[Lookup[kg, "Parent", ""]];
+  If[$kgSubgraphDepth > 8, Return[$Failed]];
+  parent = Block[{$kgSubgraphDepth = $kgSubgraphDepth + 1}, SourceVaultKGLoad[pid]];
+  If[! AssociationQ[parent], Return[$Failed]];
+  pindex = iKGNodeIndex[parent]; proot = Lookup[parent, "Root", None];
+  root = iKGStr[Lookup[kg, "Root", "root"]];
+  Do[Module[{id = iKGStr[Lookup[n, "Id", ""]], m, ov = <||>},
+      If[id =!= "" && KeyExistsQ[pindex, id] && id =!= proot,
+        m = pindex[id];
+        AppendTo[sel, id];
+        Do[With[{v = Lookup[n, k, Missing["NoKey"]]},
+            If[! MissingQ[v] && v =!= Lookup[m, k, Missing["NoKey"]], ov[k] = v]],
+          {k, $kgSubgraphLocalKeys}];
+        If[ov =!= <||>, overlay[id] = ov];
+        Do[If[! MemberQ[$kgSubgraphLocalKeys, k] && ! MemberQ[$kgSubgraphIgnoreKeys, k] &&
+              Lookup[n, k, Missing["NoKey"]] =!= Lookup[m, k, Missing["NoKey"]],
+            m[k] = n[k]; pchanged = True],
+          {k, Keys[n]}];
+        pindex[id] = m,
+        If[id =!= "", AppendTo[local, n]]]],
+    {n, Lookup[kg, "Nodes", {}]}];
+  localIds = iKGStr[Lookup[#, "Id", ""]] & /@ local;
+  pedges = Lookup[parent, "Edges", {}];
+  Do[Module[{f = iKGStr[Lookup[e, "From", ""]], t = iKGStr[Lookup[e, "To", ""]], k = iKGStr[Lookup[e, "EdgeKind", ""]]},
+      Which[
+        MemberQ[sel, f] && MemberQ[sel, t],
+          If[! AnyTrue[pedges, iKGStr[Lookup[#, "From", ""]] === f && iKGStr[Lookup[#, "To", ""]] === t && iKGStr[Lookup[#, "EdgeKind", ""]] === k &],
+            AppendTo[newPEdges, e]],
+        (* Contains root -> top node is synthetic (recomputed when loading) *)
+        f === root && k === "Contains" && MemberQ[sel, t], Null,
+        MemberQ[localIds, f] || MemberQ[localIds, t], AppendTo[localEdges, e],
+        True, Null]],
+    {e, Lookup[kg, "Edges", {}]}];
+  If[pchanged || newPEdges =!= {},
+    parent["Nodes"] = Values[pindex];
+    parent["Edges"] = Join[pedges, newPEdges];
+    res = Block[{$kgSubgraphDepth = $kgSubgraphDepth + 1}, SourceVaultKGSave[parent]];
+    If[! StringQ[res], Return[$Failed]]];
+  sub = <|"ObjectClass" -> "SourceVaultKnowledgeGraph", "SchemaVersion" -> $kgSchemaVersion, "GraphId" -> gid, "Kind" -> "Subgraph",
+    "Parent" -> pid, "Title" -> iKGStr[Lookup[kg, "Title", ""]], "Description" -> iKGStr[Lookup[kg, "Description", ""]],
+    "Language" -> iKGStr[Lookup[kg, "Language", ""]], "Root" -> root, "Selection" -> sel, "Nodes" -> local, "Edges" -> localEdges,
+    "Overlay" -> overlay, "PrivacyLevel" -> iKGClip[Lookup[kg, "PrivacyLevel", 0.], 0.],
+    "Warnings" -> iKGStrList[Lookup[kg, "Warnings", {}]]|>;
+  Do[If[KeyExistsQ[kg, k] && kg[k] =!= None, sub[k] = kg[k]], {k, {"Toc", "Narrative", "Parts"}}];
+  iKGSaveRawFile[gid, sub]];
+
+SourceVaultKGSubgraphs[parentId_String] := Select[SourceVaultKGList[], Lookup[#, "Parent", ""] === parentId &];
+SourceVaultKGSubgraphSpec[kg_Association] := <|"Parent" -> iKGStr[Lookup[kg, "Parent", ""]], "Selection" -> iKGStrList[Lookup[kg, "Selection", {}]],
+  "Parts" -> iKGAssocList[Lookup[kg, "Parts", {}]], "Description" -> iKGStr[Lookup[kg, "Description", ""]], "Title" -> iKGStr[Lookup[kg, "Title", ""]]|>;
+
+(* cut a subgraph: members (ids; a section id takes its subtree) grouped into parts (the Toc's first level) *)
+(* "Subtree" -> False: a member takes only itself (a section without its paragraphs becomes one slide); "MemberOrder" -> "Given" keeps the
+   order in which the members were listed (the talk's order) instead of the mother's order *)
+Options[SourceVaultKGSubgraphNew] = {"Title" -> Automatic, "Description" -> "", "Members" -> {}, "Parts" -> {}, "Exclude" -> {},
+  "Language" -> Automatic, "MaxDegree" -> 6, "Keep" -> True, "Save" -> True, "PrivacyLevel" -> Automatic, "Subtree" -> True, "MemberOrder" -> "Source"};
+SourceVaultKGSubgraphNew[parentId_String, subId_String, OptionsPattern[]] := Module[
+  {parent, pindex, kids, cpar, proot, lang, parts, members, excl, sel, resolve, title, prev, keepOverlay = <||>, keepNodes = {}, keepEdges = {},
+   root, partNodes = {}, partEdges = {}, partTops = {}, partIds = {}, claimed = {}, children = <||>, d, kg, toc, kg2, res, maxd, partRows,
+   subtreeQ = True, givenQ = False},
+  If[subId === parentId, Return[Failure["SameId", <|"MessageTemplate" -> "a subgraph needs an id different from its mother"|>]]];
+  parent = SourceVaultKGLoad[parentId];
+  If[! AssociationQ[parent],
+    Return[Failure["NoGraph", <|"MessageTemplate" -> "mother graph `1` is not saved", "MessageParameters" -> {parentId}|>]]];
+  pindex = iKGNodeIndex[parent]; kids = iKGContainsKids[parent]; cpar = iKGContainsParentOf[parent];
+  proot = Lookup[parent, "Root", None];
+  lang = Replace[OptionValue["Language"], Automatic -> Lookup[parent, "Language", "ja"]];
+  maxd = Replace[OptionValue["MaxDegree"], Except[_Integer?(# >= 2 &)] -> 6];
+  resolve[ids_] := Select[DeleteDuplicates[iKGStrList[ids]], KeyExistsQ[pindex, #] && # =!= proot &];
+  parts = Map[Append[#, "Members" -> resolve[Lookup[#, "Members", {}]]] &, iKGAssocList[OptionValue["Parts"]]];
+  parts = Select[parts, #["Members"] =!= {} &];
+  members = DeleteDuplicates[Join[resolve[OptionValue["Members"]], Flatten[Lookup[parts, "Members", {}]]]];
+  excl = iKGSubtreeIds[kids, resolve[OptionValue["Exclude"]]];
+  subtreeQ = TrueQ[OptionValue["Subtree"]];
+  givenQ = ToString[OptionValue["MemberOrder"]] === "Given";
+  sel = Select[If[subtreeQ, iKGSubtreeIds[kids, members], members], ! MemberQ[excl, #] && # =!= proot &];
+  sel = If[givenQ, sel, iKGByOrder[pindex, sel]];
+  If[sel === {}, Return[Failure["EmptySelection", <|"MessageTemplate" -> "no mother node was selected (Members / Parts)"|>]]];
+  title = Replace[OptionValue["Title"], Except[_String] :> iKGStr[Lookup[parent, "Title", subId]]];
+  (* keep from the previous version of this subgraph: overlay of nodes still selected, adj_* and non-paper local nodes with their edges *)
+  prev = iKGReadJSON[iKGGraphFile[subId]];
+  If[TrueQ[OptionValue["Keep"]] && iKGSubgraphFileQ[prev],
+    prev = KeyMap[ToString, iKGAssoc[prev]];
+    keepOverlay = KeySelect[KeyMap[ToString, Replace[Lookup[prev, "Overlay", <||>], Except[_Association] -> <||>]], MemberQ[sel, #] &];
+    keepNodes = Select[iKGAssocList[Lookup[prev, "Nodes", {}]],
+      With[{id = iKGStr[Lookup[#, "Id", ""]]}, id =!= "" && id =!= "root" && ! StringStartsQ[id, "part_" | "toc_" | "grp_"] &&
+        ! KeyExistsQ[pindex, id] && (iKGStr[Lookup[#, "Layer", "Paper"]] =!= "Paper" || StringStartsQ[id, "adj_"])] &];
+    With[{kn = iKGStr[Lookup[#, "Id", ""]] & /@ keepNodes},
+      keepEdges = Select[iKGAssocList[Lookup[prev, "Edges", {}]],
+        With[{f = iKGStr[Lookup[#, "From", ""]], t = iKGStr[Lookup[#, "To", ""]]},
+          (MemberQ[kn, f] || MemberQ[kn, t]) && (MemberQ[kn, f] || MemberQ[sel, f] || f === "root") && (MemberQ[kn, t] || MemberQ[sel, t])] &]]];
+  root = <|"Id" -> "root", "Kind" -> "Claim", "Label" -> title, "Summary" -> iKGStr[OptionValue["Description"]], "Points" -> {},
+    "Importance" -> 1., "Difficulty" -> 0.3, "Order" -> -1, "Layer" -> "Paper"|>;
+  (* parts: Toc sections under the root; a part's top members = members whose Contains parent is not inside the part *)
+  Do[Module[{pid = "part_" <> ToString[i], p = parts[[i]], mem, sub, tops, role},
+      mem = Select[p["Members"], ! MemberQ[claimed, #] &];
+      sub = Select[If[subtreeQ, iKGSubtreeIds[kids, mem], mem], ! MemberQ[excl, #] && # =!= proot && ! MemberQ[claimed, #] &];
+      tops = Select[mem, MemberQ[sel, #] && ! MemberQ[sub, Lookup[cpar, #, None]] &];
+      If[! givenQ, tops = iKGByOrder[pindex, tops]];
+      claimed = Join[claimed, sub];
+      If[tops =!= {},
+        role = iKGStr[Lookup[p, "Role", ""]];
+        AppendTo[partIds, pid]; AppendTo[partTops, tops];
+        AppendTo[partNodes, <|"Id" -> pid, "Kind" -> "Section", "Toc" -> True, "Layer" -> "Paper",
+          "Label" -> With[{l = iKGStr[Lookup[p, "Label", ""]]}, If[l === "", "Part " <> ToString[i], l]],
+          "Gist" -> iKGStr[Lookup[p, "Gist", ""]], "Summary" -> iKGStr[Lookup[p, "Summary", ""]], "Points" -> {},
+          "Importance" -> With[{imp = Lookup[p, "Importance", None], r = ToLowerCase[role]},
+            Which[NumericQ[imp], iKGClip[imp, 0.8], StringContainsQ[r, "main"], 0.95, StringContainsQ[r, "intro"], 0.75, True, 0.8]],
+          "Difficulty" -> 0.4, "Include" -> If[StringContainsQ[ToLowerCase[iKGStr[Lookup[p, "Include", ""]]], "must"], "Must", "Optional"],
+          "PartRole" -> role|>];
+        AppendTo[partEdges, <|"From" -> "root", "To" -> pid, "EdgeKind" -> "Contains", "Weight" -> 1.|>];
+        Do[AppendTo[partEdges, <|"From" -> pid, "To" -> t, "EdgeKind" -> "Contains", "Weight" -> 1.|>], {t, tops}]]],
+    {i, Length[parts]}];
+  partRows = MapThread[<|"Id" -> #1, "Label" -> #2["Label"], "Gist" -> #2["Gist"], "Role" -> #2["PartRole"], "Members" -> #3|> &,
+    {partIds, partNodes, partTops}];
+  d = <|"GraphId" -> subId, "Kind" -> "Subgraph", "Parent" -> parentId, "Title" -> title, "Description" -> iKGStr[OptionValue["Description"]],
+    "Language" -> lang, "Root" -> "root", "Selection" -> sel, "Nodes" -> Join[{root}, partNodes, keepNodes],
+    "Edges" -> Join[partEdges, keepEdges], "Overlay" -> keepOverlay, "Parts" -> partRows,
+    "PrivacyLevel" -> Replace[OptionValue["PrivacyLevel"], Except[_?NumericQ] -> 0.]|>;
+  kg = iKGMaterializeSubgraph[d];
+  If[! AssociationQ[kg], Return[kg]];
+  (* Toc: root -> parts -> members -> the mother's Contains structure below (every selected node is in the map) *)
+  Do[With[{ch = iKGByOrder[pindex, Select[Lookup[kids, s, {}], MemberQ[sel, #] &]]}, If[ch =!= {}, children[s] = ch]], {s, sel}];
+  If[partIds =!= {},
+    children["root"] = partIds;
+    Do[children[partIds[[i]]] = partTops[[i]], {i, Length[partIds]}],
+    children["root"] = iKGByOrder[pindex, Select[sel, ! MemberQ[sel, Lookup[cpar, #, None]] &]]];
+  toc = SourceVaultKGSetToc[kg, children, "MaxDegree" -> maxd, "Method" -> "Subgraph", "Language" -> lang, "DropClusters" -> False,
+    "Groups" -> Map[KeyTake[#, {"Id", "Label", "Gist", "Summary", "Importance", "Include"}] &, partNodes]];
+  If[! AssociationQ[toc] || ! AssociationQ[Lookup[toc, "KG", None]], Return[toc]];
+  kg2 = toc["KG"];
+  kg2["Nodes"] = Map[Function[n, With[{pr = SelectFirst[partNodes, #["Id"] === n["Id"] &, None]},
+    If[AssociationQ[pr], Append[n, "PartRole" -> pr["PartRole"]], n]]], kg2["Nodes"]];
+  kg2["Parts"] = partRows;
+  If[TrueQ[OptionValue["Save"]],
+    res = SourceVaultKGSave[kg2];
+    If[! StringQ[res], Return[Failure["SaveFailed", <|"MessageTemplate" -> "could not save subgraph `1`", "MessageParameters" -> {subId}|>]]];
+    kg2 = SourceVaultKGLoad[subId]];
+  <|"KG" -> kg2, "GraphId" -> subId, "Parent" -> parentId, "Selection" -> sel, "Parts" -> partRows,
+    "Kept" -> Length[keepNodes], "Split" -> Lookup[toc, "Split", {}], "Violations" -> Lookup[toc, "Violations", {}]|>];
+
+(* prompt: the mother's sections and items, plus the description of the talk -> Parts / Exclude JSON *)
+Options[SourceVaultKGSubgraphPrompt] = {"Language" -> Automatic, "Leaves" -> True, "MaxLabel" -> 40, "Title" -> ""};
+SourceVaultKGSubgraphPrompt[kg_Association, description_String, OptionsPattern[]] := Module[
+  {lang, index = iKGNodeIndex[kg], kids = iKGContainsKids[kg], root = Lookup[kg, "Root", "root"], lines = {}, cut, visit, secQ, maxl},
+  lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]];
+  maxl = Replace[OptionValue["MaxLabel"], Except[_Integer?Positive] -> 40];
+  cut[s_String, k_Integer] := With[{t = StringReplace[StringTrim[s], {"\r\n" -> " ", "\n" -> " ", "|" -> "/"}]},
+    If[StringLength[t] > k, StringTake[t, k] <> "..", t]];
+  cut[_, _] := "";
+  secQ[id_] := KeyExistsQ[kids, id];
+  visit[id_, depth_] := Module[{n = Lookup[index, id, <||>], src},
+    If[n === <||> || depth > 12, Return[Null]];
+    src = iKGStr[Lookup[Replace[Lookup[n, "Source", <||>], Except[_Association] -> <||>], "Ref", ""]];
+    AppendTo[lines, StringJoin[ConstantArray["  ", depth], "[", iKGStr[Lookup[n, "Kind", ""]], "] ", id, " | ", cut[SourceVaultKGText[n, "Label", lang], 60],
+      With[{g = SourceVaultKGText[n, "Gist", lang], s = SourceVaultKGText[n, "Summary", lang]},
+        Which[g =!= "", " | " <> cut[g, 80], s =!= "", " | " <> cut[s, 80], True, ""]],
+      If[secQ[id], " | " <> ToString[Length[iKGSubtreeIds[kids, {id}]] - 1] <> " nodes", ""], If[src =!= "", " | src: " <> src, ""]]];
+    Do[If[secQ[c], visit[c, depth + 1],
+        If[TrueQ[OptionValue["Leaves"]],
+          AppendTo[lines, StringJoin[ConstantArray["  ", depth + 1], "- ", c, " [", iKGStr[Lookup[Lookup[index, c, <||>], "Kind", ""]], "] ",
+            cut[SourceVaultKGText[Lookup[index, c, <||>], "Label", lang], maxl]]]]],
+      {c, iKGByOrder[index, Lookup[kids, id, {}]]}]];
+  Do[visit[c, 0], {c, iKGByOrder[index, Lookup[kids, root, {}]]}];
+  StringJoin[
+    "Task: cut out the content of ONE talk from a larger knowledge graph (the mother graph; it stays whole and is not edited).\n",
+    If[OptionValue["Title"] =!= "", "Talk: " <> OptionValue["Title"] <> "\n", ""],
+    "What the talk should cover (follow this strictly):\n", description, "\n\n",
+    "Mother graph \"", iKGStr[Lookup[kg, "GraphId", ""]], "\": ", iKGStr[Lookup[kg, "Title", ""]],
+    ". One node per line: [Kind] id | label | gist or summary | size | source key. Indented '- id' lines are the items of the section above.\n",
+    "=== Nodes ===\n", StringRiffle[lines, "\n"], "\n=== End ===\n\n",
+    "Return exactly one JSON object and nothing else:\n",
+    "{\"Title\": \"talk title (", lang, ")\", \"Parts\": [{\"Label\": \"part title (", lang, ")\", \"Gist\": \"one-line summary of the part (", lang,
+    ", a noun phrase)\", \"Role\": \"Main|Intro|Context|Closing\", \"Members\": [\"id\", ...]}, ...], \"Exclude\": [\"id\", ...]}\n",
+    "Rules: Parts are listed in the order of the talk (2 to 6 parts). Members are node ids from the list above: a section id takes its whole subtree, ",
+    "an item id takes just that item. Do not invent ids. The main topic goes into a part with Role Main; introductory material ",
+    "(definitions, earlier results needed to follow the main part) goes into parts with Role Intro placed before it. ",
+    "Exclude lists ids inside the chosen sections that the talk should skip (appendices, reproduction steps, acknowledgements, unrelated details). ",
+    "Keep every section the description asks for, even when it is long; the slide count is decided later."]];
 
 (* ---------------- \:8074\:304d\:624b\:30e2\:30c7\:30eb ---------------- *)
 
@@ -1445,7 +1703,12 @@ SourceVaultKGVerifyPlan[kg_Association, plan_Association] := Module[{pos = <||>,
 Options[SourceVaultKGOutline] = {"Language" -> Automatic, "MaxAssetsPerSlide" -> 2, "MaxPointsPerSlide" -> 6,
   "MaxLinesPerSlide" -> 9, "CharsPerLine" -> 40, "FigureLines" -> 4, "Agenda" -> Automatic, "Roadmap" -> True,
   "Crumbs" -> True, "CharsPerSecond" -> Automatic, "ReShowFigures" -> True,
-  "InheritFigures" -> True, "FigureReuse" -> 2, "Glossary" -> Automatic, "GlossaryRows" -> 6};
+  "InheritFigures" -> True, "FigureReuse" -> 2, "Glossary" -> Automatic, "GlossaryRows" -> 6, "TalkCap" -> True};
+(* v1.60: "TalkCap" -> False keeps every node's Talk as written (no cut to the number of points + 1 sentences, no seconds x speech-rate cap):
+   for hand-written talks of a fixed-length presentation *)
+$kgTalkCapQ = True;
+SourceVaultKGOutline[kg_Association, plan_Association, opts : OptionsPattern[]] :=
+  Block[{$kgTalkCapQ = TrueQ[OptionValue["TalkCap"]]}, iKGOutlineCore[kg, plan, opts]];
 
 (* 1 \:884c\:306e\:8868\:793a\:30b3\:30b9\:30c8: \:9577\:3044\:884c\:306f\:6298\:308a\:8fd4\:3057\:3066 2 \:884c\:4ee5\:4e0a\:3092\:5360\:3081\:308b (16:9 \:3067 1 \:884c \[TildeTilde] 40 \:5168\:89d2\:5b57) *)
 iKGLineCost[s_String, cpl_Integer] := Max[1, Ceiling[StringLength[s] / Max[10, cpl]]];
@@ -1477,7 +1740,9 @@ iKGFitLines[lead_String, points_List, detailsIn_List, subIn_List, budget_Integer
 iKGFitLines[points_List, subIn_List, budget_Integer, cpl_Integer, minOwn_: 2] :=
   With[{r = iKGFitLines["", points, {}, subIn, budget, cpl, minOwn]}, {r[[1]], r[[3]], r[[4]]}];
 
-iKGSentences[t_String, lang_String] := Select[StringTrim /@ StringSplit[t, If[lang === "ja", "\:3002", ". "]], # =!= "" &];
+(* v1.60: the last English sentence kept its full stop (the split is on ". "), so every re-join appended a second one ("...space..") *)
+iKGSentences[t_String, lang_String] := Select[If[lang === "ja", StringTrim /@ StringSplit[t, "\:3002"],
+  Map[StringTrim[StringReplace[StringTrim[#], RegularExpression["\\.+$"] -> ""]] &, StringSplit[t, ". "]]], # =!= "" &];
 (* \:30ce\:30fc\:30c9\:306e\:539f\:7a3f: Talk (\:8981\:70b9\:9806\:306e\:6587) \:3092\:8868\:793a\:3057\:305f\:8981\:70b9\:6570 + 1 \:6587\:306b\:5207\:308a\:8a70\:3081\:308b\:3002\:7121\:3051\:308c\:3070\:8981\:70b9\:3092\:305d\:306e\:307e\:307e\:6587\:306b (Summary \:306f\:8981\:70b9\:3068
    \:5bfe\:5fdc\:3057\:306a\:3044\:3053\:3068\:304c\:3042\:308b)\:3002\:8981\:70b9\:3082\:7121\:3051\:308c\:3070 Summary *)
 iKGNodeTalk[n_Association, nShown_Integer, lang_String] := Module[{t = SourceVaultKGText[n, "Talk", lang], ss},
@@ -1485,9 +1750,10 @@ iKGNodeTalk[n_Association, nShown_Integer, lang_String] := Module[{t = SourceVau
     If[ListQ[ps] && Select[ps, StringQ] =!= {}, iKGTalkFallback[Take[Select[ps, StringQ], UpTo[Max[1, nShown]]], "", lang],
       SourceVaultKGText[n, "Summary", lang]]]]];
   ss = iKGSentences[t, lang];
-  If[nShown >= 1 && Length[ss] > nShown + 1, ss = Take[ss, nShown + 1]];
+  If[TrueQ[$kgTalkCapQ] && nShown >= 1 && Length[ss] > nShown + 1, ss = Take[ss, nShown + 1]];
   If[ss === {}, "", StringRiffle[ss, If[lang === "ja", "\:3002", ". "]] <> If[lang === "ja", "\:3002", "."]]];
 (* \:539f\:7a3f\:306e\:9577\:3055\:4e0a\:9650: \:79d2\:6570 \[Times] \:8a71\:901f (ja 7 \:5b57/\:79d2\:3001en 14 \:5b57/\:79d2) \:3068\:3001\:8868\:793a\:884c\:6570 + 2 \:6587\:3002\:6587\:306e\:5207\:308c\:76ee\:3067\:5207\:308b *)
+iKGCapTalk[talk_String, seconds_, lang_String, maxSentences_Integer, cpsIn_] /; ! TrueQ[$kgTalkCapQ] := StringTrim[talk];
 iKGCapTalk[talk_String, seconds_, lang_String, maxSentences_Integer, cpsIn_] := Module[
   {ss = iKGSentences[talk, lang], cps, maxChars, out = {}, len = 0, sep = If[lang === "ja", "\:3002", ". "]},
   cps = If[NumericQ[cpsIn] && cpsIn > 0, cpsIn, If[lang === "ja", 7., 14.]];
@@ -1496,7 +1762,9 @@ iKGCapTalk[talk_String, seconds_, lang_String, maxSentences_Integer, cpsIn_] := 
       AppendTo[out, s]; len += StringLength[s]], {s, ss}];
   If[out === {}, "", StringRiffle[out, sep] <> StringTrim[sep]]];
 iKGFirstSentence[t_String, lang_String] := With[{ss = iKGSentences[t, lang]},
-  If[ss === {}, "", First[ss] <> If[lang === "ja", "\:3002", "."]]];
+  If[ss === {}, "", With[{s1 = StringTrim[First[ss]]},
+    (* v1.60: no doubled full stop when the sentence already ends with one *)
+    If[StringEndsQ[s1, "." | "\:3002" | "?" | "!" | "\:ff1f" | "\:ff01"], s1, s1 <> If[lang === "ja", "\:3002", "."]]]]];
 
 (* \:672c\:6587\:4e2d\:306e\:56f3\:8868\:756a\:53f7\:306e\:8a00\:53ca: \:56f32 / \:56f3 2 / Figure 2 / Fig. 2 *)
 iKGFigureRefs[t_String] := DeleteDuplicates[StringCases[t,
@@ -1566,7 +1834,7 @@ iKGGlossRow[n_Association, lang_String] := Module[{m},
   If[StringLength[m] > 46, m = StringTake[m, 45] <> "\[Ellipsis]"];
   {iKGPlain[StringReplace[SourceVaultKGText[n, "Label", lang], RegularExpression["\\s+[\[LongDash]\[Dash]-]\\s+.*$"] -> ""]], m}];
 
-SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Module[
+iKGOutlineCore[kg_Association, plan_Association, OptionsPattern[SourceVaultKGOutline]] := Module[
   {lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]], index = iKGNodeIndex[kg],
    primary = Lookup[kg, "Language", "ja"], missing = {}, maxA = OptionValue["MaxAssetsPerSlide"],
    maxP = OptionValue["MaxPointsPerSlide"], cpl = OptionValue["CharsPerLine"], figLines = OptionValue["FigureLines"],
@@ -1692,12 +1960,13 @@ SourceVaultKGOutline[kg_Association, plan_Association, OptionsPattern[]] := Modu
           If[AssociationQ[f], SourceVaultKGText[f, "Cite", lang], ""]]], assets]], c_String /; c =!= "", ""]];
       (* \:539f\:7a3f\:306f\:7b87\:6761\:66f8\:304d\:3068\:540c\:3058\:9806\:306b\:5bfe\:5fdc\:3055\:305b\:308b (\:5192\:982d\:306e\:6982\:8981\:8aac\:660e\:304c\:7b87\:6761\:66f8\:304d\:3068\:98df\:3044\:9055\:3046\:3068\:3001\:8074\:304d\:624b\:306f\:30c8\:30fc\:30af\:3068
          \:30b9\:30e9\:30a4\:30c9\:306e\:3069\:3061\:3089\:3092\:8ffd\:3048\:3070\:3088\:3044\:304b\:8ff7\:3046): \:81ea\:8eab\:306e\:8981\:70b9 \[RightArrow] \:8a70\:3081\:8fbc\:3093\:3060\:5b50\:306e\:9806\:3002\:9577\:3055\:306f\:79d2\:6570\:3068\:884c\:6570\:3067\:6291\:3048\:308b *)
-      talk = If[roadmapQ,
+      (* v1.60: a Talk written on the section / root node itself (hand-written or ingested) wins over the generated roadmap sentence *)
+      talk = If[roadmapQ && SourceVaultKGText[n, "Talk", lang] === "",
         If[lang === "ja", "\:3053\:306e\:90e8\:3067\:306f\:3001" <> StringRiffle[points, "\:3001"] <> " \:306e\:9806\:306b\:898b\:3066\:3044\:304d\:307e\:3059\:3002",
           "In this part we look at " <> StringRiffle[points, ", "] <> "."] <>
           With[{s0 = SourceVaultKGText[n, "Summary", lang]}, If[s0 === "", "", " " <> s0]],
         iKGNodeTalk[n, Length[points], lang]];
-      If[tocQ && roadmapQ,
+      If[tocQ && roadmapQ && SourceVaultKGText[n, "Talk", lang] === "",
         talk = Which[
           s["NodeId"] === rootId, iKGAgendaTalk[points, lang],
           (* v1.48: \:6982\:8981\:306e\:679a\:306f\:5b50\:306e\:984c\:76ee\:3092\:8aad\:307f\:4e0a\:3052\:305a\:3001\:5f79\:5272\:3068\:8981\:7d04\:3067\:8a71\:3059 (\:984c\:76ee\:306e\:8aad\:307f\:4e0a\:3052\:306f\:5217\:6319\:306b\:306a\:308a\:3001\:5f0f\:306e\:984c\:76ee\:306f\:300c\:3053\:306e\:5f0f\:300d\:306b\:306a\:308b) *)
@@ -1975,6 +2244,10 @@ SourceVaultKGOutlineToMarkdown[outline_Association] := Module[{lines = {}, asset
     If[s["Cite"] =!= "", AppendTo[lines, "cite: " <> iKGMdLine[s["Cite"]]]];
     Do[If[StringQ[nt] && StringTrim[nt] =!= "", AppendTo[lines, "note: " <> iKGMdLine[nt]]], {nt, Replace[Lookup[s, "Notes", {}], Except[_List] -> {}]}];
     If[s["Talk"] =!= "", AppendTo[lines, "talk: " <> iKGMdLine[s["Talk"]]]];
+    (* v1.60: talks in other languages (subtitles) -> talk[lang]: lines -> translation talk cells (TaggingRules SWTalkLang) *)
+    KeyValueMap[Function[{tl, tt}, If[StringQ[tt] && StringTrim[tt] =!= "" && StringQ[tl] && tl =!= "",
+        AppendTo[lines, "talk[" <> tl <> "]: " <> iKGMdLine[tt]]]],
+      Replace[Lookup[s, "Talks", <||>], Except[_Association] -> <||>]];
     (* \:60f3\:5b9a\:554f\:7b54 (KG \:306e\:30ce\:30fc\:30c9\:306b\:4fdd\:5b58\:3057\:305f\:3082\:306e\:3002\:8cea\:7591\:5fdc\:7b54\:30bb\:30eb\:306e\:672c\:6587\:3092\:305d\:306e\:307e\:307e) *)
     If[StringQ[Lookup[s, "QA", None]] && StringTrim[s["QA"]] =!= "",
       Do[AppendTo[lines, "qa: " <> q], {q, StringSplit[StringReplace[s["QA"], "\r\n" -> "\n"], "\n"]}]];

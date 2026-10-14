@@ -36,7 +36,7 @@ Phase 0 スコープ: シンク可用性の弱検出 / 構造化 append-only 診
 診断 event の bus 入口（issues spec v0.4 §4.2）。canonical diagnostics-log へ記録し、issue DB へ弱結合 fan-out（machine-local outbox への enqueue のみ・登録/分析は writer 側 reconciler が担当）する。mail/FE escalation は行わない（それは SourceVaultDiagnosticsEscalate = Publish + mail policy）。返り値は "IssueSignalQueued" を含む。issues 層自身の障害 event は再投入しない（reentrancy guard）。
 
 ### SourceVaultDiagnosticsIngestSpool[] → Association
-producer per-process spool（`$UserBaseDirectory/ApplicationData/ClaudeRuntime/diag-spool/*.jsonl`）の DiagnosticsEvent を正準 diagnostics-log へ転記する（hardening 05 Inc2）。service kernel の低頻度 hook からのみ呼ぶ（単一書き手原則）。offset sidecar（`<file>.ingest.json`）で差分読み・EventId dedup により冪等。消化済みの過去日 shard は削除。hardening 05 Inc4 で watchdog.log.jsonl（PS watchdog が書く DiagnosticsEvent schema 行）も取り込み対象、issue-outbox への fan-out も同時に行う（sink 別 receipt により二重転記を防止）。件数集計を返す。
+producer per-process spool（`$UserBaseDirectory/ApplicationData/ClaudeRuntime/diag-spool/*.jsonl`）の DiagnosticsEvent を正準 diagnostics-log へ転記する（hardening 05 Inc2）。service kernel の低頻度 hook からのみ呼ぶ（単一書き手原則）。offset sidecar（`<file>.ingest.json`）で差分読み・EventId dedup により冪等。消化済みの過去日 shard は削除。hardening 05 Inc4 で watchdog.log.jsonl（PS watchdog が書く DiagnosticsEvent schema 行）も取り込み対象、issue-outbox への fan-out も同時に行う（sink 別 receipt により二重転記を防止。全 sink 完了行のみ offset を進める）。件数集計を返す。
 
 ### $SourceVaultDiagIngestIntervalSeconds
 型: Integer, 初期値: 60
@@ -49,7 +49,7 @@ producer spool directory の上書き（既定 Automatic = `$UserBaseDirectory/A
 ## ライセンス / トポロジ / 容量プローブ
 
 ### SourceVaultDiagnosticsLicenseProbe[] → Association
-Wolfram ライセンス容量を実測（$LicenseProcesses / $MaxLicenseProcesses / $MaxLicenseSubprocesses / $LicenseType）。宣言値を信頼しない。ProcessSlotsFree と SubprocessSlotsFree を含む Association を返す。
+Wolfram ライセンス容量を実測（$LicenseProcesses / $MaxLicenseProcesses / $MaxLicenseSubprocesses / $LicenseType）。宣言値を信頼しない。ProcessSlotsFree と SubprocessSlotsFree を含む Association（LicenseType, MaxLicenseProcesses, LicenseProcesses, ProcessSlotsFree, MaxLicenseSubprocesses, Subprocesses, SubprocessSlotsFree, MeasuredAtUTC, MachineTag）を返す。取得不能値は Missing["Unavailable"]。
 
 ### SourceVaultDiagnosticsKernelProcessTopology[] → Association
 稼働中の Wolfram kernel プロセスを列挙し各々を分類（Service / MCPServer / FEKernel / Subkernel / PlayerSandbox / FrontEndUI / Other）。Windows は CIM 経由の best-effort、他環境では name-only count に degrade。

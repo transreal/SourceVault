@@ -2218,7 +2218,11 @@ SourceVaultIngest[source_String, opts:OptionsPattern[]] :=
     iSVIngestAttachURI @ Switch[tp,
       "LocalFile", iIngestLocalFile[parsed["Identifier"], opts],
       "ArXiv",     iIngestArXiv[parsed["Identifier"], opts],
-      "URL",       iIngestURL[parsed["Identifier"], opts],
+      (* 論文ページなら OA PDF も取り込んで結ぶ (SourceVault_oapdf.wl。ロード済みのときだけ。
+         ingest の結果は変えず "OpenAccessPDF" を足すだけ) *)
+      "URL",       With[{r = iIngestURL[parsed["Identifier"], opts]},
+        If[Length[DownValues[iSVOpenAccessAfterIngest]] > 0,
+          Quiet @ Check[iSVOpenAccessAfterIngest[r, parsed["Identifier"], {opts}], r], r]],
       _,
         <|"Status" -> "Failed",
           "Reason" -> "UnsupportedSourceType: " <> tp,
@@ -2731,8 +2735,11 @@ iIngestURL[url_String, opts:OptionsPattern[]] :=
             "Decision" -> decision
           |>]]]];
     
-    (* 6. HTTP GET *)
-    fetchResult = iFetchURL[canonicalUrl];
+    (* 6. HTTP GET。OA PDF の取り込み (SourceVault_oapdf.wl) は先頭が %PDF- と確かめたダウンロードを
+       "PrefetchedFetch" (iFetchURL と同じ形) で渡すので、同じものを 2 度取りに行かない *)
+    fetchResult = With[{pre = Lookup[Association[{opts}], "PrefetchedFetch", None]},
+      If[AssociationQ[pre] && Lookup[pre, "Status", ""] === "OK" && FileExistsQ[Lookup[pre, "TmpFile", ""]],
+        pre, iFetchURL[canonicalUrl]]];
     If[!AssociationQ[fetchResult] || fetchResult["Status"] =!= "OK",
       Return[<|"Status" -> "Failed",
         "Reason" -> Lookup[fetchResult, "Reason", "FetchFailed"],
@@ -3662,7 +3669,7 @@ SourceVaultResolveReference[ref_String] :=
       "Published" -> ToString @ Lookup[hit, "Published", ""],
       "Kind" -> ToString @ Lookup[hit, "Kind", ""],
       "PrivacyLevel" -> Lookup[hit, "PrivacyLevel", 1.0],
-      (* 和訳ノートブックが登録されていればそのパス (SourceVault_papernb.wl) *)
+      (* 翻訳ノートブックが登録されていればそのパス ($Language の訳を優先。SourceVault_papernb.wl) *)
       "Notebook" -> If[Length[DownValues[SourceVault`SourceVaultPaperNotebook]] > 0,
         Replace[Quiet @ Check[SourceVault`SourceVaultPaperNotebook[Lookup[hit, "Id", ""]], Missing["NotRegistered"]],
           Except[_String] -> Missing["NotRegistered"]],
@@ -3810,13 +3817,23 @@ SourceVaultOpenSourceFile[sourceId_String] :=
 If[!AssociationQ[$iSVRowTitleActions], $iSVRowTitleActions = <||>];
 If[!AssociationQ[$iSVRowOpenActions], $iSVRowOpenActions = <||>];
 
+(* 論文ページ (web) に結ばれたオープンアクセス PDF の SourceId (SourceVault_oapdf.wl がページのメタの
+   "OpenAccessPDF" に記録する)。無ければ "" *)
+iSVLinkedOpenAccessPDF[kind_String, id_String] :=
+  If[kind =!= "web" || id === "", "",
+    With[{m = Quiet @ Check[iSourceMetaLoad[id], $Failed]},
+      With[{rec = If[AssociationQ[m], Lookup[m, "OpenAccessPDF", None], None]},
+        If[AssociationQ[rec] && Lookup[rec, "Status", ""] === "Linked" && StringQ[Lookup[rec, "SourceId", None]],
+          rec["SourceId"], ""]]]];
+iSVLinkedOpenAccessPDF[___] := "";
+
 (* 共通行リスト -> notebook list 風 Grid (SourceVaultEagleSummaries と同系の見た目) *)
 iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
   Module[{ff = iSVUIFont[], header, body, grid, capLine},
     If[rows === {},
       Return[Style["該当するデータはありません。", "Text", FontFamily -> ff]]];
     header = (Style[#, Bold, FontFamily -> ff] &) /@
-      {"種別", "タイトル", "著者", "出版", "サマリー", "PL", "URL", "ファイル", "和訳NB", "登録"};
+      {"種別", "タイトル", "著者", "出版", "サマリー", "PL", "URL", "ファイル", "翻訳NB", "登録"};
     body = Function[row,
       Module[{kind, id, title, authors, published, summary, pl, url, file,
               date, titleAct, openAct, act, clickHint},
@@ -3868,32 +3885,46 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
                  act[theId], Appearance -> "Frameless", Method -> "Queued",
                  BaseStyle -> "Hyperlink"]],
            file =!= "",
-             With[{theId = id, f = file},
-               Tooltip[
-                 Button[Style["▶ 開く", "Hyperlink", FontFamily -> ff],
-                   SourceVaultOpenSourceFile[theId],
-                   Appearance -> "Frameless", Method -> "Queued",
-                   BaseStyle -> "Hyperlink"], f]],
+             With[{theId = id, f = file, pdfId = iSVLinkedOpenAccessPDF[kind, id]},
+               If[pdfId === "",
+                 Tooltip[
+                   Button[Style["▶ 開く", "Hyperlink", FontFamily -> ff],
+                     SourceVaultOpenSourceFile[theId],
+                     Appearance -> "Frameless", Method -> "Queued",
+                     BaseStyle -> "Hyperlink"], f],
+                 (* 論文ページに結ばれたオープンアクセス PDF (SourceVault_oapdf.wl) *)
+                 Row[{
+                   Tooltip[
+                     Button[Style["▶ 開く", "Hyperlink", FontFamily -> ff],
+                       SourceVaultOpenSourceFile[theId],
+                       Appearance -> "Frameless", Method -> "Queued",
+                       BaseStyle -> "Hyperlink"], f],
+                   "  ",
+                   Tooltip[
+                     Button[Style["▶ PDF", "Hyperlink", FontFamily -> ff],
+                       SourceVaultOpenSourceFile[pdfId],
+                       Appearance -> "Frameless", Method -> "Queued",
+                       BaseStyle -> "Hyperlink"], "オープンアクセス PDF: " <> pdfId]}]]],
            True, ""],
-         (* 和訳ノートブック (SourceVault_papernb.wl): 登録済みなら開く、無ければ生成 (PL 継承)。
-            ボタンには sourceId だけを焼く *)
+         (* 翻訳ノートブック (SourceVault_papernb.wl): $Language の訳が登録済みなら開く、無ければ生成 (PL 継承)。
+            PDF は DocImportPaper、web (HTML 等) は DocImportWebPage。ボタンには sourceId だけを焼く *)
          Which[
            ! MemberQ[{"arxiv", "web", "local"}, kind] || id === "", "",
            Length[DownValues[SourceVault`SourceVaultPaperNotebook]] === 0, "",
-           StringQ[Quiet @ Check[SourceVault`SourceVaultPaperNotebook[id], $Failed]],
-             With[{theId = id, p = SourceVault`SourceVaultPaperNotebook[id]},
+           StringQ[Quiet @ Check[SourceVault`SourceVaultPaperNotebook[id, "Language" -> $Language], $Failed]],
+             With[{theId = id, p = SourceVault`SourceVaultPaperNotebook[id, "Language" -> $Language]},
                Tooltip[
-                 Button[Style["▶ 和訳NB", "Hyperlink", FontFamily -> ff],
+                 Button[Style["▶ 翻訳NB", "Hyperlink", FontFamily -> ff],
                    SourceVault`SourceVaultOpenPaperNotebook[theId],
                    Appearance -> "Frameless", Method -> "Queued", BaseStyle -> "Hyperlink"],
                  p]],
            file =!= "",
              With[{theId = id},
                Tooltip[
-                 Button[Style["＋ 和訳NB", "Hyperlink", FontFamily -> ff],
+                 Button[Style["＋ 翻訳NB", "Hyperlink", FontFamily -> ff],
                    SourceVault`SourceVaultMakePaperNotebook[theId, "Interactive" -> True],
                    Appearance -> "Frameless", Method -> "Queued", BaseStyle -> "Hyperlink"],
-                 "DocImportPaper で和訳ノートブックを生成して登録 (元ソースの PL " <>
+                 "翻訳ノートブック (" <> ToString[$Language] <> " へ。原文が同じ言語なら翻訳せず構造化だけ) を生成して登録 (元ソースの PL " <>
                    If[NumericQ[pl], ToString[N[pl]], "?"] <> " を継承)"]],
            True, ""],
          If[date === "", "",
@@ -16153,8 +16184,10 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        (* 発表 (スライド + 発表シナリオ) 登録簿。core の root 解決だけに依存する
           ので早い段階でよい。MCP tool / service command は呼び出し時解決。 *)
        "SourceVault_slidedeck.wl",
-       (* 取り込み済み論文 → 和訳ノートブックの登録簿 (PL 継承)。root 解決だけに依存 *)
+       (* 取り込み済みソース (論文 PDF・Web ページ) → 翻訳ノートブックの登録簿 (PL 継承)。root 解決だけに依存 *)
        "SourceVault_papernb.wl",
+       (* 論文ページ → オープンアクセス PDF の取り込み (Crossref / Europe PMC)。core の ingest に依存 *)
+       "SourceVault_oapdf.wl",
        "SourceVault_contracts.wl", "SourceVault_wiring.wl",
        "SourceVault_packageapi.wl", "SourceVault_mining.wl",
        "SourceVault_lexical.wl", "SourceVault_searchindex.wl",
@@ -16172,7 +16205,7 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        (* todo \:30ad\:30e3\:30c3\:30b7\:30e5 DB\:3002routineplan/mailagenda \:304b\:3089\:306f\:5f31\:7d50\:5408
           (\:5b9f\:884c\:6642 Symbol \:89e3\:6c7a) \:3067\:53c2\:7167\:3055\:308c\:308b\:306e\:3067\:3053\:306e\:9806\:3067\:3088\:3044\:3002 *)
        "SourceVault_todo.wl", "SourceVault_anonymize.wl",
-       "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
+       "SourceVault_servicemanager.wl", "SourceVault_webingest.wl", "SourceVault_webguard.wl",
        "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",
        "SourceVault_workflowcatalog.wl", "SourceVault_course.wl",
        "SourceVault_issues.wl"}]]];

@@ -147,7 +147,7 @@ Capabilities key: Search / ReadMetadata / ReadSummary / ReadContext / ReadBody /
 ## Access model 正規化 (spec §2.1 / §2.2 / §2.4)
 
 ### SourceVaultNormalizePrincipal[input, opts]
-MCP request 主体を Principal 連想に正規化する。ClientName は自己申告可 (provenance 扱い)。authoritative ProviderClass は opts "Trusted" からのみ採用し、無ければ "Unknown" (release 判定に client 自己申告は使わない)。有効 ProviderClass は {CloudLLM, LocalLLM, PrivateLLM}。
+MCP request 主体を Principal 連想に正規化する。ClientName は自己申告可 (provenance 扱い)。authoritative ProviderClass は opts "Trusted" からのみ採用し、無ければ "Unknown" (release 判定に client 自己申告は使わない)。有効 ProviderClass は {CloudLLM, LocalLLM, PrivateLLM}。非 Association の input は `<||>` 扱い。
 → Association
 Options: "Trusted" -> <||> (transport/grant/main-kernel で確立した authoritative 情報)
 返値 key: Kind / ClientName / ProviderClass / ProviderClassTrusted / AssertedProviderClass / SessionId / UserPresent
@@ -247,7 +247,7 @@ Options: "BatchId" -> All, "SessionId" -> All, "Limit" -> Automatic
 ## 検索契約層 (spec §5 / §6 / §8 / §11)
 
 ### SourceVaultNormalizeSearchSpec[spec] → Association
-MCP の SearchSpec (spec §5.1) を既定補完して正規化する。kinds に "all" があれば個別指定を無視 (既定 {"all"})。filters の accessLevelMax を正準、privacyMax を alias とする。scope 既定: releaseContext->None, topicTags->{}, objectRefs->{}, requireAccessTags->{}, denyAccessTags->{}, untagged->"MetadataOnly"。return 既定: format->"compactText", includeSnippets->True, includeMetadata->True, maxCharsPerResult->800。top level 既定: limit->20, offset->0, sortBy->"score"。`methods` 既定は `{"keyword", "metadata"}`（後方互換）。`"bm25"` を含めると search adapter が日本語 BM25 + entity OR-match の `KeywordBM25V1` index を選ぶ（§8.2）。principal は正規化しない (呼び出し側 `SourceVaultNormalizePrincipal` が別途担当)。
+MCP の SearchSpec (spec §5.1) を既定補完して正規化する。kinds に "all" があれば個別指定を無視 (既定 {"all"})。filters の accessLevelMax を正準、privacyMax を alias とする。scope 既定: releaseContext->None, topicTags->{}, objectRefs->{}, requireAccessTags->{}, denyAccessTags->{}, untagged->"MetadataOnly" (index 指定 pdfIndexProfile/index/collection 等の追加 key は保持)。return 既定: format->"compactText", includeSnippets->True, includeMetadata->True, maxCharsPerResult->800。top level 既定: targetFields->{"title","metadata","summary"}, limit->20, offset->0, sortBy->"score"。`methods` 既定は `{"keyword", "metadata"}`（後方互換）。`"bm25"` を含めると search adapter が日本語 BM25 + entity OR-match の `KeywordBM25V1` index を選ぶ（§8.2）。principal は正規化しない (呼び出し側 `SourceVaultNormalizePrincipal` が別途担当)。
 → Association `<|query, kinds, scope, targetFields, methods, filters, limit, offset, sortBy, return, purpose, sessionGrant|>`
 
 ### SourceVaultNormalizeSearchResult[row, opts] → Association
@@ -261,7 +261,7 @@ format: "compactText" (既定 fallback。番号付きブロックで title/ref/s
 
 ### SourceVaultMCPSearch[searchSpec, opts]
 SearchSpec を正規化し kinds に適合する available な search adapter を選び、各 adapter search → SearchResult 正規化 → per-result release gate (SourceVaultMCPReleaseGate) → limit/offset → render する横断検索 orchestration (spec §11.1)。`sourcevault_search` tool の実体。
-**method=bm25 (§8.2)**: `methods` に `"bm25"` があり明示 `scope.index` が無ければ、search adapter は `scope.bm25Index` → 慣習 `"<releaseContext>-bm25"` の順で `KeywordBM25V1` index を選ぶ。実際の BM25/bigram は index の `IndexKind` で `iNativeSearch` が dispatch する（method は advisory）。結果 Metadata に `RetrievalKind`（"KeywordBM25"/"KeywordBigram"）を載せる。query が英語・doc が日本語でも entity term で一致する（表記非一致/OOV 回復）。
+**method=bm25 (§8.2)**: `methods` に `"bm25"` があり明示 `scope.index` が無ければ、search adapter は `scope.bm25Index` → 慣習 `"<releaseContext>-bm25"` の順で `KeywordBM25V1` index を選ぶ。実際の BM25/bigram は index の `IndexKind` で `iNativeSearch` が dispatch する（method は advisory）。結果 Metadata に `RetrievalKind`（"KeywordBM25"/"KeywordBigram"）を載せる。query が英語・doc が日本語でも entity term で一致する（表記非一致/OOV 回復）。`scope.group` に登録済み search group (SourceVaultRegisterSearchGroup) を指定可。
 → Association
 Options: "Principal" -> Automatic, "Trusted" -> <||>, "AccessProfile" -> Automatic (登録済み AccessProfile の ScopePolicy を §2.6 合成、`iSVResolveScopeForRequest` 経由)
 返値 key: Results / Count / TotalBeforeLimit / Warnings(adapter 別の非致命的警告、例: UnknownPackage) / ReleaseGated(Deny で除外された件数) / Screened(Screen 降格で summary/snippet を落とされ最終ページに残った件数) / EffectiveAccessLevel / Adapters / Format / Rendered / AccessRequest
@@ -285,7 +285,7 @@ View="body"|"raw"|"context" は `iSVMCPGetBody` に委譲し AccessGrant によ�
 例外 (F6): (1) adapter が "BodyGrantRequired"->False を宣言する PublicDoc 系 (packageapi) は view=body を Grant なしで解放。(2) "BodyGrantRequired" 判定関数が公開と判定した URI (pdfindex で privacy 0.0 / storageType public と宣言済みドキュメントの sv://chunk/) も同様に解放。いずれも `Access.Why -> {"GrantFreePublicDoc"}` で release gate は通す。adapter の "ExtraViews" に登録された view (packageapi: contract=機械可読契約+AuditStatus / scaffolded / guided=粒度 tier 描画) はその projection を返す。
 → Association (View/判定枝で形が可変)
 Options: "Principal" -> Automatic, "Trusted" -> <||>, "AccessLevel" -> Automatic (この呼び出し限定の access ceiling)、"ReleaseContext" -> None (`SourceVaultReleaseContextSpec` で MaxPrivacyLevel を解決し実効上限に反映)、"Grant" -> None (body/raw/context view のみ検証される AccessGrant)、"View" -> Automatic ("summary"(既定)|"body"|"raw"|"context"|adapter ExtraViews)、"AccessProfile" -> Automatic (Search と同じ §2.6 scope 合成)
-返値 key (共通): URI / Found / Released。summary 系はさらに Adapter / Result(Permit時) / Access / RequiresGrantFor / Why / EffectiveAccessLevel / AccessRequest。body/raw/context/ExtraViews はさらに Adapter / View / Result / Access / GrantId / Why(失敗時) / HowToProceed(Grant不足時)。
+返値 key (共通): URI / Found / Released。無効 URI は `Why->{"InvalidURI"}` + Reason。summary 系はさらに Adapter / Result(Permit時) / Access / RequiresGrantFor / Why / EffectiveAccessLevel / AccessRequest。body/raw/context/ExtraViews はさらに Adapter / View / Result / Access / GrantId / Why(失敗時) / HowToProceed(Grant不足時)。
 
 ### SourceVaultMCPReleaseGate[result, accessRequest] → Association
 正規化済み SearchResult を返却してよいか判定する (spec §11, §2.4)。Decision は "Permit" | "Screen" | "Deny" の3種。

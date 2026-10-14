@@ -787,9 +787,16 @@ SourceVaultTodoRebuildIndex[OptionsPattern[]] :=
 
 (* base notebook row + overlay -> effective record *)
 iSVTDEffectiveNb[row_Association, nowAbs_] :=
+  iSVTDEffectiveNb[row, nowAbs, iSVTDOverlayCacheEnsure[]];
+(* overlays = the whole overlay store (id -> overlay). The caller lists the
+   store ONCE and hands it down: iSVTDOverlayOf per row re-listed the
+   overlay DIRECTORY (FileNames on Dropbox, ~2 ms) for every one of ~2000
+   rows -- measured 4.6 s of a 6 s SourceVaultTodoGet (2026-10-13). *)
+iSVTDEffectiveNb[row_Association, nowAbs_, overlays_Association] :=
   Module[{id = Lookup[row, "TodoId", ""], ov, status, statusSrc, deadline,
       dlSrc, rec, parsed, doneAt, passAt, noDl, prio},
-    ov = With[{o = iSVTDOverlayOf[id]}, If[AssociationQ[o], o, <||>]];
+    ov = With[{o = Lookup[overlays, id, Missing[]]},
+      If[AssociationQ[o], o, <||>]];
     status = With[{s = Lookup[ov, "Status", Missing[]]},
       If[StringQ[s], s,
         With[{cs = Lookup[row, "CellStatus", "Open"]},
@@ -897,12 +904,13 @@ iSVTDEffectiveItem[item_Association, nowAbs_] :=
     iSVTDApplyRecur[rec, nowAbs]];
 
 iSVTDAllEffective[] :=
-  Module[{nowAbs = iSVTDNow[], nbRows, items},
-    iSVTDOverlayCacheEnsure[];
+  Module[{nowAbs = iSVTDNow[], nbRows, items, overlays},
+    overlays = iSVTDOverlayCacheEnsure[];
     nbRows = iSVTDNbRowsEnsure[];
     items = Values[iSVTDItemCacheEnsure[]];
     Join[
-      Map[iSVTDEffectiveNb[#, nowAbs] &, Select[nbRows, AssociationQ]],
+      Map[iSVTDEffectiveNb[#, nowAbs, overlays] &,
+        Select[nbRows, AssociationQ]],
       Map[iSVTDEffectiveItem[#, nowAbs] &, Select[items, AssociationQ]]]];
 
 (* ============================================================
@@ -982,9 +990,28 @@ iSVTDPrivateView[expr_, rows_] :=
   If[Length[DownValues[iSVCatalogPrivateView]] > 0,
     Quiet@Check[iSVCatalogPrivateView[expr, rows], expr], expr];
 
+(* one record, assembled alone. The former SelectFirst over
+   iSVTDAllEffective[] built every effective record (~2000) for a single
+   lookup; the note window called it twice per open (once before
+   NotebookOpen, once inside the panel's Dynamic) -- ~6 s each on the real
+   vault (2026-10-13). Same inputs, same assembly, so the result is identical
+   to the full-assembly hit. *)
 SourceVaultTodoGet[id_String] :=
-  With[{hit = SelectFirst[iSVTDAllEffective[],
-      Lookup[#, "TodoId", ""] === id &]},
+  Module[{nowAbs = iSVTDNow[], hit},
+    hit = If[StringStartsQ[id, "svtodo-nb-"],
+      (* notebook todo: its base row out of the flat (cached) index *)
+      With[{row = SelectFirst[iSVTDNbRowsEnsure[],
+          AssociationQ[#] && Lookup[#, "TodoId", ""] === id &]},
+        If[AssociationQ[row], iSVTDEffectiveNb[row, nowAbs], Missing[]]],
+      (* standalone: the item store is keyed by id (= file name); a record
+         carrying another id is still found by a scan of the small set *)
+      With[{items = iSVTDItemCacheEnsure[]},
+        With[{item = With[{k = Lookup[items, id, Missing[]]},
+            If[AssociationQ[k] && Lookup[k, "TodoId", ""] === id, k,
+              SelectFirst[Values[items],
+                AssociationQ[#] && Lookup[#, "TodoId", ""] === id &]]]},
+          If[AssociationQ[item], iSVTDEffectiveItem[item, nowAbs],
+            Missing[]]]]];
     If[AssociationQ[hit], hit, Missing["NotFound", id]]];
 SourceVaultTodoGet[___] := Missing["BadArgs"];
 
@@ -1232,12 +1259,73 @@ SourceVaultNewTodoTemplate[] :=
    Summary notebook window (Eagle-style; save button = System` only)
    ============================================================ *)
 
+(* ---- the settings-panel cell of a note, and migration of saved notes ----
+   The panel is HELD in a Dynamic so the saved .nb never bakes a stale
+   snapshot: it is rebuilt from the store every time the note is opened.
+   A bare Dynamic, however, tracks EVERY global it reads (row/overlay/item
+   caches, the TTL stamp), so the front end rebuilt the panel on every todo
+   query anywhere (dropping half-edited panel values) and evaluated it
+   synchronously, freezing the front end while the kernel worked. The cell
+   now tracks only the panel function itself (a package (re)load still
+   refreshes it) and evaluates through the main link
+   (SynchronousUpdating -> False): the window appears at once and the panel
+   fills in right after. Notes saved with the old bare Dynamic are rewritten
+   on open (iSVTDNoteMigrate): only that one cell changes. *)
+iSVTDNotePanelCell[id_String] :=
+  With[{theId = id},
+    ExpressionCell[
+      Dynamic[
+        If[Length[DownValues[SourceVault`SourceVaultTodoEditPanel]] > 0,
+          SourceVault`SourceVaultTodoEditPanel[theId,
+            "ShowNoteButton" -> False],
+          Style["\:8a2d\:5b9a UI \:306f SourceVault \:30ed\:30fc\:30c9\:5f8c\:306b\:6709\:52b9\:306b\:306a\:308a\:307e\:3059",
+            GrayLevel[0.5]]],
+        TrackedSymbols :> {SourceVault`SourceVaultTodoEditPanel},
+        SynchronousUpdating -> False],
+      "Output", CellMargins -> {{20, 20}, {6, 10}}]];
+
+(* True when the front end already shows this file: rewriting it under an
+   open window would only produce a save conflict *)
+iSVTDNoteOpenQ[file_String] :=
+  If[Head[$FrontEnd] =!= FrontEndObject, False,
+    With[{nbs = Quiet[Notebooks[]]},
+      ListQ[nbs] && AnyTrue[nbs, Quiet[NotebookFileName[#]] === file &]]];
+
+(* old-form panel cell (bare DynamicBox, no TrackedSymbols) -> new form.
+   "Migrated" | "NoChange" | "Skipped" | $Failed. Every other cell (the
+   owner's own notes) is kept verbatim; atomic temp + rename; the file is
+   left alone on any doubt. The DynamicBox body stays held throughout
+   (DynamicBox is HoldAll; the condition inspects Hold[body]). *)
+iSVTDNoteMigrate[file_String] :=
+  Module[{nb, newNb, tmp, r},
+    If[! FileExistsQ[file], Return[$Failed]];
+    If[iSVTDNoteOpenQ[file], Return["Skipped"]];
+    nb = Quiet[Get[file]];
+    If[Head[nb] =!= Notebook, Return[$Failed]];
+    newNb = nb /. (
+      Cell[BoxData[DynamicBox[body_, dopts___]], "Output", copts___] /;
+        (! FreeQ[Hold[body], SourceVault`SourceVaultTodoEditPanel] &&
+         FreeQ[{dopts}, TrackedSymbols]) :>
+      Cell[BoxData[DynamicBox[body,
+          TrackedSymbols :> {SourceVault`SourceVaultTodoEditPanel},
+          SynchronousUpdating -> False]], "Output", copts]);
+    If[newNb === nb, Return["NoChange"]];
+    tmp = file <> ".svtmp";
+    r = Quiet[Export[tmp, newNb, "NB"]];
+    If[! StringQ[r] || ! FileExistsQ[tmp],
+      Quiet[DeleteFile[tmp]]; Return[$Failed]];
+    r = Quiet[RenameFile[tmp, file, OverwriteTarget -> True]];
+    If[! StringQ[r], Quiet[DeleteFile[tmp]]; Return[$Failed]];
+    "Migrated"];
+iSVTDNoteMigrate[___] := $Failed;
+
 Options[SourceVaultTodoShowSummary] = {"Fresh" -> False};
 SourceVaultTodoShowSummary[id_String, OptionsPattern[]] :=
   Module[{rec, noteFile, notesDir, savePath, title, metaLine, cells},
     rec = SourceVaultTodoGet[id];
     noteFile = iSVTDNoteFile[id];
     If[! TrueQ[OptionValue["Fresh"]] && StringQ[noteFile],
+      iSVTDNoteMigrate[noteFile];
       Quiet@Check[NotebookOpen[noteFile], $Failed];
       Return[rec]];
     If[! AssociationQ[rec], Return[rec]];
@@ -1264,20 +1352,12 @@ SourceVaultTodoShowSummary[id_String, OptionsPattern[]] :=
     cells = Join[
       {Cell[title, "Subtitle"],
        Cell[metaLine, "Text"],
-       (* live settings control. Held inside Dynamic so the SAVED note never
-          carries a stale snapshot of the panel: it is rebuilt from the store
-          every time the note is opened. The guard uses System` symbols only,
-          so reopening the note without SourceVault loaded degrades to a note
-          instead of an error (same rule as the save button below). *)
-       With[{theId = id},
-         ExpressionCell[
-           Dynamic[
-             If[Length[DownValues[SourceVault`SourceVaultTodoEditPanel]] > 0,
-               SourceVault`SourceVaultTodoEditPanel[theId,
-                 "ShowNoteButton" -> False],
-               Style["\:8a2d\:5b9a UI \:306f SourceVault \:30ed\:30fc\:30c9\:5f8c\:306b\:6709\:52b9\:306b\:306a\:308a\:307e\:3059",
-                 GrayLevel[0.5]]]],
-           "Output", CellMargins -> {{20, 20}, {6, 10}}]]},
+       (* live settings control, held inside a Dynamic (iSVTDNotePanelCell)
+          so the SAVED note never carries a stale snapshot of the panel. The
+          guard uses System` symbols only, so reopening the note without
+          SourceVault loaded degrades to a note instead of an error (same
+          rule as the save button below). *)
+       iSVTDNotePanelCell[id]},
       With[{p = Lookup[rec, "NotebookPath", Missing[]]},
         If[StringQ[p],
           {Cell["\:30ce\:30fc\:30c8\:30d6\:30c3\:30af: " <> p <>

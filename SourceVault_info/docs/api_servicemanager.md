@@ -97,7 +97,7 @@ Options: "MailAllowlist" -> {} (許可するメールアドレスリスト), "Ex
 detached WolframScript service を起動する。メイン Mathematica 終了後も service process は heartbeat を更新し続ける。
 → `<|"Status", "ServiceId", "PID", "RuntimeDir"|>`
 Options: "Kind" -> "heartbeat" (サービス種別), "HeartbeatIntervalSeconds" -> 1, "PackageRoot" -> Automatic
-生成される `run.wls` は起動時に以下を順にロードする: SourceVault_core, _crypto, _lexical, _searchindex, _kb, _diagnostics, _issues, _slidedeck, _servicemanager, _webingest, _contracts, _packageapi, _mcp, _llmlog, _autotrigger, _mining, ClaudeOrchestrator_turnwiki(欠落時 fail-soft)。この標準リストの後、`$SourceVaultServiceExtraPackages` に列挙された追加パッケージも順にロードされる。よって service kernel 内では WLMCP・autotrigger・mining 等の機能も利用可能。main kernel の current roots は snapshot として run.wls に注入される(`InjectedRootHash` で検証可能)。
+生成される `run.wls` は起動時に以下を順にロードする: SourceVault_core, _crypto, _lexical, _searchindex, _kb, _diagnostics, _issues, _slidedeck, _servicemanager, _webingest, _webguard, _contracts, _packageapi, _mcp, _llmlog, _autotrigger, _mining, ClaudeOrchestrator_turnwiki(欠落時 fail-soft)。この標準リストの後、`$SourceVaultServiceExtraPackages` に列挙された追加パッケージも順にロードされる。よって service kernel 内では WLMCP・autotrigger・mining 等の機能も利用可能。main kernel の current roots は snapshot として run.wls に注入される(`InjectedRootHash` で検証可能)。
 
 ### $SourceVaultServiceExtraPackages
 型: List, 初期値: (未設定時は実質 `{}`)
@@ -303,7 +303,7 @@ proxy は `/sv/mcp` に加えて **`/wl/mcp`**(+`/wl/health`)を公開する。`
 ### SourceVaultMakeQuestionEnvelope[channel, inputText, opts] → Association
 統一入力 QuestionEnvelope を作る(§9.8)。
 channel: `"Web"` / `"Mail"` / `"Discord"` / `"Voice"` / `"VRSNS"`
-Options: "ReleaseContext" -> None (必須。None なら `Failure["ReleaseContextRequired", ...]`), "Audience" -> `Missing["Anonymous"]`, "LatencyProfile" -> Automatic (channel から自動決定: Web→"RealtimeWeb", Mail→"MailReplyDraft", Discord→"ChatReply", Voice→"VoiceUltraLowLatency", VRSNS→"VRSNSRealtime"), "AllowedIndexes" -> {}, "PDFIndexProfile" -> None, "Requester" -> `Missing["Anonymous"]`
+Options: "ReleaseContext" -> None (必須。文字列以外なら `Failure["ReleaseContextRequired", ...]`), "Audience" -> `Missing["Anonymous"]`, "LatencyProfile" -> Automatic (channel から自動決定: Web→"RealtimeWeb", Mail→"MailReplyDraft", Discord→"ChatReply", Voice→"VoiceUltraLowLatency", VRSNS→"VRSNSRealtime"), "AllowedIndexes" -> {}, "PDFIndexProfile" -> None, "Requester" -> `Missing["Anonymous"]`
 
 ### SourceVaultAnswerChannelQuery[envelope, opts] → Association
 envelope を検索 → evidence draft 化する。gate 済み `SourceVaultSearch` を使用。Mail は `NeedsHumanReview`(draft のみ)、Discord は低 risk のみ `Answered`。LLM を呼ばない(evidence ベース)。

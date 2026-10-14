@@ -13,18 +13,18 @@ Search integration: `SourceVaultTodos` (core, `List[Association]`) / `SourceVaul
 Weak coupling: loads and degrades gracefully when sibling packages (SourceVault core, NBAccess, notebook-extensions font helper) are absent.
 
 ## Record schema (SourceVaultTodos rows)
-Keys: `TodoId`, `Origin` (`"notebook"`|`"standalone"`), `Source` (`"notebook"`|`"manual"`|`"cloud"`|`"mail"`|`"summary"`), `Text`, `Title`, `Status` (`"Open"`|`"Done"`|`"Pass"`|`"Keep"`), `StatusSource`, `Deadline` (DateObject or `Missing["None"]`), `DeadlineSource` (`"Explicit"`|`"TextParse"`|`"Overlay"`|`"Cleared"`|`""`), `Recur` (Association `<|"Cycle"->...|>` or `Missing["None"]`), `DoneAt`, `PassAt`, `Priority` (0..1 importance, 0.5 neutral default), `Summary`, `SummaryAt`, `Description`, `HasNote`, `NotebookPath`, `NotebookRef`, `NotebookTitle`, `NotebookStatus`, `CellStatus`, `LastChanged`, `PrivacyLevel`, `AddedAt`, `LinkKind`, `LinkId`, `MailRecordId`, `URI`. Effective `Status`/`Deadline`/`Recur`/`Priority` already have the overlay and recurrence logic applied — callers should not re-merge overlays manually.
+Keys: `TodoId`, `Origin` (`"notebook"`|`"standalone"`), `Source` (`"notebook"`|`"manual"`|`"cloud"`|`"mail"`|`"summary"`), `Text`, `Title`, `Status` (`"Open"`|`"Done"`|`"Pass"`|`"Keep"`), `StatusSource`, `Deadline` (DateObject or `Missing["None"]`), `DeadlineSource` (`"Explicit"`|`"TextParse"`|`"Overlay"`|`"Cleared"`|`""`), `Recur` (Association `<|"Cycle"->...|>` or `Missing["None"]`), `Recurred`, `DoneAt`, `PassAt`, `Priority` (0..1 importance, 0.5 neutral default), `Summary`, `SummaryAt`, `Description`, `HasNote`, `NotebookPath`, `NotebookRef`, `NotebookTitle`, `NotebookStatus`, `CellStatus`, `LastChanged`, `PrivacyLevel`, `AddedAt`, `LinkKind`, `LinkId`, `MailRecordId`, `URI`. Effective `Status`/`Deadline`/`Recur`/`Priority` already have the overlay and recurrence logic applied — callers should not re-merge overlays manually.
 
 ## Core query
 
 ### SourceVaultTodos[query, opts]
-Returns the unified todo list as `List[Association]`. Chain with `Select`/`SortBy`, or render with `SourceVaultTodosView`. `SourceVaultTodos[opts]` is shorthand for `SourceVaultTodos["", opts]` (empty query = no text filter). Default ordering (`"SortBy"->"Deadline"`): dated items first by ascending deadline (overdue included), then undated items newest-`AddedAt`-first.
+Returns the unified todo list as `List[Association]`. Chain with `Select`/`SortBy`, or render with `SourceVaultTodosView`. `SourceVaultTodos[opts]` is shorthand for `SourceVaultTodos["", opts]` (empty query = no text filter). The query is a case-insensitive substring match over Text/Title/Summary/Description/NotebookTitle and saved-note text. Default ordering (`"SortBy"->"Deadline"`): dated items first by ascending deadline (overdue included), then undated items newest-`AddedAt`-first.
 → List[Association]
 Options: "Status" -> "Open" (also accepts "All", a status string, or a list of statuses), "Origin" -> All ("notebook" | "standalone" | All), "Source" -> All ("manual"|"cloud"|"mail"|"summary"|"notebook" | All), "HasDeadline" -> All (True | False | All), "DueWithinDays" -> None (integer n: only items due within n days, overdue included), "MinPriority" -> None (number: only items with effective Priority >= this value), "SortBy" -> "Deadline" ("Deadline" | "Priority"), "Limit" -> Automatic (integer caps result count)
 例: SourceVaultTodos["", "Status" -> "Open", "DueWithinDays" -> 7]
 
 ### SourceVaultTodosView[query, opts]
-Renders SourceVaultTodos as a Grid with row actions (done mark, recurrence marker, open note/notebook). All SourceVaultTodos options pass through. Display capped at $SourceVaultTodoViewMaxRows unless overridden.
+Renders SourceVaultTodos as a Grid with row actions (done mark, recurrence marker, open note/notebook, settings button). `SourceVaultTodosView[opts]` is shorthand for query "". All SourceVaultTodos options pass through. Display capped at $SourceVaultTodoViewMaxRows unless overridden.
 → Grid | Style (message string if no rows match)
 Options: (all SourceVaultTodos options) plus "MaxRows" -> Automatic (integer, or All for no cap; falls back to $SourceVaultTodoViewMaxRows)
 
@@ -34,8 +34,8 @@ Returns the effective merged record for one todo id (notebook or standalone).
 ## Mutations
 
 ### SourceVaultNewTodo[spec] → Association
-Creates a standalone todo (not attached to any notebook). `SourceVaultNewTodo[title_String]` is shorthand for `SourceVaultNewTodo[<|"Title"->title|>]`. Returns `<|"Status"->"OK"|"Failed", "TodoId"->..., "Record"->...|>` (on failure, `"Reason"` instead of `"Record"`).
-spec keys: "Title" (required, non-empty string), "Description" (string), "Deadline" (DateObject | "yyyy-mm-dd" string | None), "Priority" (0..1), "PrivacyLevel" (number 0.–1., default 1.0 fail-safe), "Source" (default "manual"), "MailRecordId", "LinkKind"/"LinkId" (attach to an existing summary row), "Recur", "AddedAt" (ISO string, defaults to now).
+Creates a standalone todo (not attached to any notebook). `SourceVaultNewTodo[title_String]` is shorthand for `SourceVaultNewTodo[<|"Title"->title|>]`. Returns `<|"Status"->"OK"|"Failed", "TodoId"->..., "Record"->...|>` (on failure, `"Reason"` instead of `"Record"`, e.g. "EmptyTitle", "WriteFailed"). Other argument shapes return `<|"Status"->"Failed","Reason"->...|>`.
+spec keys: "Title" (required, non-empty string; "Item" accepted as alias), "Description" (string), "Deadline" (DateObject | "yyyy-mm-dd" string | None), "Priority" (0..1), "PrivacyLevel" (number 0.–1., default 1.0 fail-safe), "Source" (default "manual"), "MailRecordId", "LinkKind"/"LinkId" (attach to an existing summary row), "Recur", "AddedAt" (ISO string, defaults to now).
 
 ### SourceVaultNewTodoTemplate[] → Association
 Inserts an editable `SourceVaultNewTodo[<|...|>]` input template cell into the current InputNotebook[] (expression-centric input UI; used by the claudecode palette button). Fails with `<|"Status"->"Failed","Reason"->"NoInputNotebook"|>` if there is no input notebook.
@@ -44,7 +44,7 @@ Inserts an editable `SourceVaultNewTodo[<|...|>]` input template cell into the c
 Sets the effective status. `status`: `"Open"`|`"Done"`|`"Pass"`|`"Keep"`, or `Automatic` to clear the overlay override entirely (also clears DoneAt and PassAt). For notebook todos this writes the OVERLAY only — the `.nb` cell itself is untouched (use SourceVaultMarkTodo from the notebook-editing layer to change the cell). Setting `"Done"` stamps `DoneAt`; setting `"Pass"` stamps `PassAt` (both are recurrence anchors — a Passed item with a review cycle resurfaces at the next cycle just like a Done one).
 
 ### SourceVaultTodoDone[todoId] → Association
-Shorthand for `SourceVaultTodoSetStatus[todoId, "Done"]`.
+Shorthand for `SourceVaultTodoSetStatus[todoId, "Done"]`; keeps any recurrence marker so the item resurfaces next cycle.
 
 ### SourceVaultTodoPass[todoId] → Association
 Marks a todo Pass ("skipped this time"; records `PassAt`). With a review cycle set (see SourceVaultTodoRemindNext), the item resurfaces at the next cycle exactly as a Done one does.
@@ -70,7 +70,7 @@ Sets the privacy level of one todo, 0..1. For a notebook todo this OVERRIDES, fo
 ## Settings panel
 
 ### SourceVaultTodoEditPanel[todoId]
-The todo settings control (deadline, review cycle, importance, privacy level, Open/Done/Pass/Keep), in the shape of the mail classification panel — edits are collected in the panel and written by one apply call (SourceVaultTodoUpdate). Shown inside the todo note window (SourceVaultTodoShowSummary) and from the list view settings button.
+The todo settings control (deadline, review cycle, importance, privacy level, Open/Done/Pass/Keep), in the shape of the mail classification panel — edits are collected in the panel and written by one apply call (SourceVaultTodoUpdate). Shown inside the todo note window (SourceVaultTodoShowSummary) and from the list view settings button. Accepts the internal option "ShowNoteButton" (False when embedded in the note window).
 → dynamic panel expression
 
 ### SourceVaultTodoEditWindow[todoId]
@@ -80,22 +80,22 @@ Opens SourceVaultTodoEditPanel in its own window.
 ## Summaries and notes
 
 ### SourceVaultTodoShowSummary[todoId, opts]
-Opens the todo summary notebook (metadata + LLM summary + description + live SourceVaultTodoEditPanel). Like the Eagle summary window it has a save button; once saved under `todo/notes/`, the saved note (carrying user annotations) is opened instead on subsequent calls, and its plaintext becomes searchable via SourceVaultTodos text queries.
+Opens the todo summary notebook (metadata + LLM summary + description + live SourceVaultTodoEditPanel). Like the Eagle summary window it has a save button; once saved under `todo/notes/`, the saved note (carrying user annotations) is opened instead on subsequent calls, and its plaintext becomes searchable via SourceVaultTodos text queries. Notes saved with the old bare-Dynamic panel cell are migrated on open (only that cell is rewritten).
 → Association (the effective record) | NotebookObject side effect
 Options: "Fresh" -> False (True regenerates the summary window, ignoring any saved note)
 
 ### SourceVaultTodoBackfillSummaries[opts]
 Generates LLM summaries for todos lacking one, and refines deadlines: a "\:3006\:5207 yyyy/mm/dd"-style pattern in the text is parsed deterministically first (see deadline text-parse rules below); the LLM confirms/extracts otherwise. Notebook-derived rows add notebook context (title/keywords + plaintext up to "MaxChars"). Text is wrapped as UNTRUSTED before any LLM call.
-Model routing is fail-closed: rows with PrivacyLevel >= 0.5 (the confidential convention; undeclared/ordinary notebooks default to exactly 0.5) are sent ONLY to $ClaudePrivateModel (local LLM), passed explicitly so the hub's routing test cannot send them to the cloud; when no valid private model is configured, those rows are SKIPPED with reason "PrivateModelUnavailable" rather than falling back to cloud. Only PrivacyLevel < 0.5 rows use the cloud CLI. An explicit "Model" -> {provider, model, ...} option is an owner override that bypasses this guard entirely. There is no silent local→cloud fallback (calls `iCallSummaryLLM`, never the fallback variant).
+Model routing is fail-closed: rows with PrivacyLevel >= 0.5 (the confidential convention; undeclared/ordinary notebooks default to exactly 0.5) are sent ONLY to $ClaudePrivateModel (local LLM), passed explicitly so the hub's routing test cannot send them to the cloud; when no valid private model is configured, those rows are SKIPPED with reason "PrivateModelUnavailable" rather than falling back to cloud. Only PrivacyLevel < 0.5 rows use the cloud CLI. An explicit "Model" -> {provider, model, ...} option is an owner override that bypasses this guard entirely. There is no silent local→cloud fallback (calls `iCallSummaryLLM`, never the fallback variant). The hub's iCallSummaryLLM also routes pl >= 0.5 locally; this layer guard is kept as defense-in-depth.
 → Association (counts / per-row results)
 Options: "Limit" -> 10, "Force" -> False, "Model" -> Automatic (owner override, bypasses PL routing guard), "MaxChars" -> 6000 (notebook context truncation), "TimeoutSeconds" -> 120, "Status" -> "Open" (which rows are eligible)
 
-Deadline text-parse confidence tiers (used both live in SourceVaultTodos and during backfill): keyword ("\:3006\:5207"/"\:7de0\:5207"/"\:7de0\:3081\:5207\:308a"/"\:671f\:9650"/"deadline"/"due") + full yyyy/mm/dd → 0.9; keyword + month/day only (resolves to next future occurrence) → 0.7; bare yyyy/mm/dd anywhere in text with no keyword → 0.4. Only confidence >= 0.6 is auto-applied as the effective Deadline when no overlay/explicit deadline exists.
+Deadline text-parse confidence tiers (used both live in SourceVaultTodos and during backfill): keyword ("\:3006\:5207"/"\:7de0\:5207"/"\:7de0\:3081\:5207\:308a"/"\:671f\:9650"/"deadline"/"due") + full yyyy/mm/dd → 0.9; keyword + month/day only (resolves to next future occurrence) → 0.7; bare yyyy/mm/dd anywhere in text with no keyword → 0.4. Only confidence >= 0.6 is auto-applied as the effective Deadline when no overlay/explicit deadline exists. Date separators accepted: `/`, `-`, 年/月.
 
 ## Index and agenda
 
 ### SourceVaultTodoRebuildIndex[opts] → Association
-Refreshes the notebook-todo cache (LOCALAPPDATA-cached, keyed by source-file count/stamp).
+Refreshes the notebook-todo cache (LOCALAPPDATA-cached, keyed by source-file count/stamp). Returns counts.
 Options: "Scan" -> "OnWork" (incrementally re-indexes $onWork via the existing snapshot machinery; "All" also scans $offWork — slow the first time, but needed once so archived Done notebooks contribute their open todos; "None" only re-reads existing index files without rescanning)
 
 ### SourceVaultTodoAgendaItems[opts] → List[Association]
@@ -109,7 +109,7 @@ Attaches a todo/reminder to an existing summary row. `kind`: "eagle"|"arxiv"|"we
 ## Wolfram Cloud form
 
 ### SourceVaultTodoDeployCloudForm[opts]
-Deploys the Wolfram Cloud todo entry form to `<cloudbase>/obj/<user>/RegisterTodoForm` ($SourceVaultTodoCloudFormPath). Requires $SourceVaultTodoAllowCloudDeploy = True (deploy guard) or returns `Failure["DeployBlocked", ...]`. Form fields: item (required string), description (optional string), deadline (optional Date), privacy (Restricted["Number",{0,1}], default 1.0). AddedAt is stamped automatically server-side. The deployed handler runs in the cloud without SourceVault loaded — it only uses System` symbols and CloudPut, with the inbox path baked in as a literal. Submissions land in the private cloud inbox $SourceVaultTodoCloudInboxPath, one CloudObject per submission.
+Deploys the Wolfram Cloud todo entry form to `<cloudbase>/obj/<user>/RegisterTodoForm` ($SourceVaultTodoCloudFormPath). Requires $SourceVaultTodoAllowCloudDeploy = True (deploy guard; otherwise emits message SourceVaultTodoDeployCloudForm::deploy and returns `Failure["DeployBlocked", ...]`). Form fields: item (required string), description (optional string), deadline (optional Date), privacy (Restricted["Number",{0,1}], default 1.0). AddedAt is stamped automatically server-side. The deployed handler runs in the cloud without SourceVault loaded — it only uses System` symbols and CloudPut, with the inbox path baked in as a literal. Submissions land in the private cloud inbox $SourceVaultTodoCloudInboxPath, one CloudObject per submission.
 → CloudObject | Failure["DeployBlocked", ...]
 Options: "Permissions" -> "Public"
 
@@ -118,7 +118,7 @@ Fetches pending submissions from the cloud todo inbox, registers each as a stand
 Options: "Delete" -> True (set False to keep the cloud object after fetching)
 
 ### SourceVaultTodoCloudSyncStart[] → Association
-Registers the periodic cloud-inbox fetch on the shared claudecode polling tick (opt-in; does not create its own ScheduledTask). The fetch runs at most every $SourceVaultTodoCloudSyncIntervalHours hours and only when $CloudConnected is True. Set $SourceVaultTodoCloudSyncAutoStart = True in localInit to start automatically on package load.
+Registers the periodic cloud-inbox fetch on the shared claudecode polling tick (opt-in; does not create its own ScheduledTask). The fetch runs at most every $SourceVaultTodoCloudSyncIntervalHours hours (12 ≈ twice a day) and only when $CloudConnected is True. Set $SourceVaultTodoCloudSyncAutoStart = True in localInit to start automatically on package load.
 
 ### SourceVaultTodoCloudSyncStop[] → Association
 Unregisters the periodic cloud todo fetch registered by SourceVaultTodoCloudSyncStart.
@@ -127,7 +127,10 @@ Unregisters the periodic cloud todo fetch registered by SourceVaultTodoCloudSync
 Reports the periodic cloud todo fetch state: registered / last fetch time / last result.
 
 ## Cross-search integration
-A `"todo"` provider is registered into `SourceVault\`$SourceVaultSummaryProviders`, returning rows shaped like other summary providers (Kind "todo", Id, URI, Title, Authors "", Published (deadline ISO date), Summary, URL "", File (NotebookPath), Date (AddedAt), PrivacyLevel, plus todo-specific Status/Origin columns) so todos surface inside `SourceVaultSummaries`/`CrossLinks` alongside eagle/arxiv/mail rows. Row title-click opens `SourceVaultTodoShowSummary`; row open-action opens the linked notebook (NotebookPath), else the linked summary (LinkKind/LinkId), else falls back to the summary window.
+A `"todo"` provider is registered into `SourceVault\`$SourceVaultSummaryProviders`, returning rows shaped like other summary providers (Kind "todo", Id, URI, Title, Authors "", Published (deadline ISO date), Summary, URL "", File (NotebookPath), Date (AddedAt), PrivacyLevel, plus todo-specific Status/Origin columns; queried with "Status"->"All") so todos surface inside `SourceVaultSummaries`/`CrossLinks` alongside eagle/arxiv/mail rows. Row title-click opens `SourceVaultTodoShowSummary`; row open-action opens the linked notebook (NotebookPath), else the linked summary (LinkKind/LinkId), else falls back to the summary window.
+
+## Privacy contracts
+Registered weakly when `SourceVaultRegisterPrivacyContract` exists. Class Private (Sources {"todo"}): SourceVaultTodos/Get/Update/AgendaItems/BackfillSummaries/NewTodo/CloudFetch (Exit "Result"), SourceVaultTodosView/ShowSummary (Exit "View"). Class Public (no stored todo content flows out): DeployCloudForm, CloudSyncStart/Stop/Status, RebuildIndex, NewTodoTemplate, EditPanel, EditWindow, Pass, SetDeadline, SetPriority, SetPrivacyLevel.
 
 ## Configuration variables
 

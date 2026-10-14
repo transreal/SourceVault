@@ -349,14 +349,42 @@ SourceVaultSearXNGSearch[query_String, OptionsPattern[]] := Module[
   |>
 ];
 
+(* ---- Web egress guard (SourceVault_webguard.wl, 弱結合) ----
+   SearXNG 中継 / URL 取得の前に関所 (SourceVaultWebGuardCheck) を通す。
+   関所が未ロードのときは fail-closed: LLM 主体 (Actor.Type =!= HumanUser) は Deny、
+   オーナー自身の呼び出しは素通し ($SourceVaultWebGuardRequired = False で LLM も素通し)。 *)
+iWebGuardGate[req_Association] := Module[{actor, llmQ},
+  If[Length[DownValues[SourceVault`SourceVaultWebGuardCheck]] > 0,
+    Return[Quiet @ Check[SourceVault`SourceVaultWebGuardCheck[req],
+      <|"Decision" -> "Deny", "Reason" -> "GuardError",
+        "Message" -> "SourceVault web guard failed; access denied (fail-closed)."|>]]];
+  actor = Lookup[req, "Actor", <||>];
+  llmQ = AssociationQ[actor] && ToString @ Lookup[actor, "Type", "HumanUser"] =!= "HumanUser";
+  If[llmQ && SourceVault`$SourceVaultWebGuardRequired =!= False,
+    <|"Decision" -> "Deny", "Reason" -> "GuardUnavailable",
+      "Message" -> "SourceVault web guard is not loaded; LLM web access is disabled (fail-closed)."|>,
+    <|"Decision" -> "Allow", "Reason" -> "GuardUnavailable"|>]];
+
 Options[SourceVaultWebSearch] = Join[
   Options[SourceVaultSearXNGSearch],
-  {"FetchPages" -> False, "MaxFetch" -> 3, "StoreSearchRun" -> True,
+  {"FetchPages" -> False, "MaxFetch" -> 3, "StoreSearchRun" -> True, "GuardChecked" -> False,
    "RequestChannel" -> "Notebook",
    "InitiationType" -> "UserPromptSearch", "Actor" -> Automatic, "PromptRef" -> None}];
 
 SourceVaultWebSearch[query_String, opts : OptionsPattern[]] := Module[
-  {run, prov, runId, fetch, result},
+  {run, prov, runId, fetch, result, guard},
+  (* Web egress guard: SearXNG へ中継する前に関所を通す (spec webguard §4)。
+     job 経路で service 側が既に通した query は "GuardChecked" -> True で二重問い合わせを避ける。 *)
+  If[! TrueQ[OptionValue["GuardChecked"]],
+    guard = iWebGuardGate[<|"Kind" -> "Search", "Query" -> query,
+      "Actor" -> Replace[OptionValue["Actor"], Automatic -> <|"Type" -> "HumanUser"|>],
+      "Channel" -> OptionValue["RequestChannel"]|>];
+    If[Lookup[guard, "Decision", "Deny"] =!= "Allow",
+      Return[Failure["WebAccessGuard", <|
+        "Decision" -> Lookup[guard, "Decision", "Deny"], "Reason" -> Lookup[guard, "Reason", ""],
+        "RequestId" -> Lookup[guard, "RequestId", Missing[]],
+        "MessageTemplate" -> ToString @ Lookup[guard, "Message", "denied by the SourceVault web guard"],
+        "Query" -> query|>]]]];
   run = SourceVaultSearXNGSearch[query,
     Sequence @@ FilterRules[{opts}, Options[SourceVaultSearXNGSearch]]];
   If[FailureQ[run], Return[run]];
@@ -520,6 +548,9 @@ iWebSubmitJobToKernel[jobId_String, input_Association] := Module[{eo},
               With[{cf = FileNameJoin[{dir, "SourceVault_crypto.wl"}]},
                 If[FileExistsQ[cf], Quiet @ Check[Get[cf], $Failed]]];
               Quiet @ Check[Get[pkg], $Failed];
+              (* Web egress guard: 子で fetch する URL も関所を通す (FE 無しなので Ask は queue) *)
+              With[{gf = FileNameJoin[{dir, "SourceVault_webguard.wl"}]},
+                If[FileExistsQ[gf], Quiet @ Check[Get[gf], $Failed]]];
               (* mining は service manifest には無いが親では hook 登録済み。
                  子でも読んで結線し、取り込み後の著者/タグ抽出の挙動を親と揃える。 *)
               With[{mf = FileNameJoin[{dir, "SourceVault_mining.wl"}]},
@@ -734,11 +765,22 @@ iWebRunIngestHooks[ctx_Association] :=
 Options[SourceVaultWebFetch] = {"TimeoutSeconds" -> 30, "StoreEvidence" -> True,
   "Provenance" -> <||>, "RecordGap" -> True};
 SourceVaultWebFetch[url_String, OptionsPattern[]] := Module[
-  {timeout, store, prov, recGap, fetch, status, ct, bytes, ext, cleanText, bodyBlob, cleanBlob, doc, snap, es, prRec, result},
+  {timeout, store, prov, recGap, fetch, status, ct, bytes, ext, cleanText, bodyBlob, cleanBlob, doc, snap, es, prRec, result, guard},
   timeout = OptionValue["TimeoutSeconds"];
   store   = TrueQ[OptionValue["StoreEvidence"]];
   prov    = OptionValue["Provenance"];
   recGap  = TrueQ[OptionValue["RecordGap"]];
+  (* Web egress guard: URL を取る前に関所 (主体 = provenance の Actor、無ければ owner) *)
+  guard = iWebGuardGate[<|"Kind" -> "Fetch", "Url" -> url,
+    "Actor" -> Lookup[If[AssociationQ[prov], prov, <||>], "Actor", <|"Type" -> "HumanUser"|>],
+    "Channel" -> Lookup[If[AssociationQ[prov], prov, <||>], "RequestChannel", "Notebook"]|>];
+  If[Lookup[guard, "Decision", "Deny"] =!= "Allow",
+    Return[<|"Url" -> url,
+      "ExtractionStatus" -> If[Lookup[guard, "Decision", ""] === "Pending", "Pending", "Denied"],
+      "Reason" -> Lookup[guard, "Reason", ""], "Message" -> Lookup[guard, "Message", ""],
+      "RequestId" -> Lookup[guard, "RequestId", Missing[]],
+      "Guard" -> KeyTake[guard, {"Decision", "Reason", "Reasons", "Host", "ContextPL"}],
+      "FetchedAt" -> iWebNowIso[]|>]];
   fetch = iWebFetchUrl[url, timeout];
   If[FailureQ[fetch],
     If[recGap, iWebRecordFetchGap[url, "WebFetchFailed", ToString[fetch[[1]]], Missing[], prov]];

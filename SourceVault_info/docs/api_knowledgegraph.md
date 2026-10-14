@@ -38,7 +38,7 @@
 知識グラフ層の保存ディレクトリ (無ければ作成)。`$SourceVaultKGRoot` が Automatic なら `SourceVaultCoreRoot[]/knowledgegraph`、CoreRoot が無ければ `LOCALAPPDATA/SourceVault/knowledgegraph`。
 
 ### SourceVaultKGNew[graphId, opts] → Association
-空の KG。opts: `"Title"` (既定 `""`) / `"Language"` (既定 `"ja"`) / `"Sources"` (`{<|"Key","Locator","Kind","Note"|>..}`) / `"Kind"` (既定 `"Paper"`) / `"PrivacyLevel"` (既定 0.)。KG の `"Kind"` は Paper / Survey / Background / Scenario (文書の無い発表の筋書きから作った KG。検証で知らない値は Paper に丸める)。
+空の KG。opts: `"Title"` (既定 `""`) / `"Language"` (既定 `"ja"`) / `"Sources"` (`{<|"Key","Locator","Kind","Note"|>..}`) / `"Kind"` (既定 `"Paper"`) / `"PrivacyLevel"` (既定 0.)。KG の `"Kind"` は Paper / Survey / Background / Scenario (文書の無い発表の筋書きから作った KG) / Subgraph (v1.60、部分知識グラフ。下記)。検証で知らない値は Paper に丸める。
 
 ### SourceVaultKGValidate[kg] → Association
 正規化 (既定値・未知の辺種別 → RelatedTo・端点無し/自己ループ除去・Root 決定) + `"Warnings"`。
@@ -55,10 +55,31 @@ LLM 応答 (```json フェンス可) から KG。ノード 0 なら Failure。
 言語別テキスト取得 (Label / Summary / Talk / Cite / Lead / Gist は String、Points / Details は List)。無い言語は主言語 → 任意へ落ちる。
 
 ### SourceVaultKGSave[kg] / SourceVaultKGLoad[graphId] / SourceVaultKGList[] / SourceVaultKGDelete[graphId]
-List → `{<|"GraphId","Title","Kind","NodeCount","EdgeCount","UpdatedAtUTC"|>..}`。Load は無ければ Missing。Delete は history を残す。
+List → `{<|"GraphId","Title","Kind","NodeCount","EdgeCount","UpdatedAtUTC"|>..}`。Load は無ければ Missing。Delete は history を残す。部分知識グラフの Load / Save は次節。
 
 ### SourceVaultKGRepairMojibake[] → <|"Checked", "Fixed", "Files"|>
 保存済みの KG (`graphs/`) と周辺知識の書庫 (`background/`) のうち、UTF-8 バイトを 1 文字ずつ読んだ形の文字化け (`gawé` → `gawÃ©` など) を直して書き戻す。取り込み (`SourceVaultKGFromJSON` / `SourceVaultKGMerge`) は入口で同じ修復を行うので通常は不要。
+
+## 部分知識グラフ (Subgraph, v1.60-)
+母体 KG から 1 つの発表ぶんの部分知識グラフ (Kind `"Subgraph"`、`"Parent"` = 母体 Id) を切り出して `graphs/<subId>.json` に保存する。母体は分割も複写もしない。部分 KG が持つのは選んだノードの Id (`"Selection"`)・自分のノード (root / 目次の部 / `adj_*` / 周辺知識)・それに触れる辺・母体ノードの発表用の上書き (`"Overlay"`: Pinned / Hidden / Include / Role / Bridge / Terms / FigureLayout / Order / Importance)・目次・意味付け・題目・説明。`SourceVaultKGLoad[subId]` は母体を読んで実体化する (選んだノード + 上書き、両端が選ばれた母体の辺、根から最上位ノードへの Contains)。`SourceVaultKGSave` は書き戻しを分ける (本文・資産・母体ノード間の辺 → 母体、発表用の状態 → 部分 KG)。1 つの大きな KG から複数の発表を切れ、どの発表でノードを磨いても母体が良くなる。
+
+### SourceVaultKGSubgraphNew[parentId, subId, opts]
+母体 KG から部分知識グラフを切り出して保存する。subId が parentId と同じなら Failure (SameId)、母体が未保存なら Failure (NoGraph)。
+→ `<|"KG" (実体化した部分 KG), "GraphId", "Parent", "Selection", "Parts", "Kept", "Split"|>`
+Options: `"Title" -> Automatic`, `"Description" -> ""` (切り出しの記述), `"Members" -> {}` (母体の Id。節の Id は部分木ごと), `"Parts" -> {}` (`<|"Label","Gist","Role" (Main|Intro|Context|Closing),"Members"|>..` = 目次の根の子、話す順), `"Exclude" -> {}`, `"Language" -> Automatic`, `"MaxDegree" -> 6` (目次の子の上限), `"Keep" -> True` (前の版の上書き・`adj_*`・周辺知識を残す), `"Save" -> True`, `"PrivacyLevel" -> Automatic`, `"Subtree" -> True` (False: メンバーはそれ自身だけ。節だけで 1 枚になる), `"MemberOrder" -> "Source"` (`"Given"` で母体の順でなく列挙した順 = 話す順を保つ)
+
+### SourceVaultKGSubgraphQ[kg] → True | False
+kg が部分知識グラフ (Kind `"Subgraph"` かつ `"Parent"` あり) なら True。
+
+### SourceVaultKGSubgraphs[parentId] → {assoc..}
+母体 parentId から切り出した部分知識グラフの一覧 (`SourceVaultKGList` の行、`"Parent"` 付き)。
+
+### SourceVaultKGSubgraphSpec[kg] → <|"Parent", "Selection", "Parts", "Description", "Title"|>
+部分知識グラフの切り出し仕様。
+
+### SourceVaultKGSubgraphPrompt[motherKG, description, opts] → String
+母体 KG の節と項目の一覧に切り出しの記述を添えて、発表の部 (Parts: Label / Gist / Role / Members) と除く Id を JSON で返させる LLM プロンプト (純関数)。結果は `SourceVaultKGSubgraphNew` の `"Parts"` / `"Exclude"` にそのまま渡せる。
+Options: `"Language" -> Automatic`, `"Leaves" -> True` (節の下の項目も一覧に), `"MaxLabel" -> 40`, `"Title" -> ""`
 
 ## 聴き手
 
@@ -173,7 +194,7 @@ Options: `"Limit" -> 2`, `"MinScore" -> 1.5`
 
 ## プロンプト (純関数)
 
-`SourceVaultKGExtractionPrompt[text, "GraphId"/"Title"/"Language"/"SourceKey"/"PDFKey"/"MaxNodes"]` / `SourceVaultKGBackgroundPrompt[kg, aud]` / `SourceVaultKGSummaryPrompt[kg, tree]` / `SourceVaultKGTalkPrompt[outline]` / `SourceVaultKGTranslatePrompt[kg, lang]`。応答は `SourceVaultKGFromJSON` / `SourceVaultKGMerge` で取り込む (Translate は `SourceVaultKGMerge[kg, delta, "Language"->lang]`)。
+`SourceVaultKGExtractionPrompt[text, "GraphId"/"Title"/"Language"/"SourceKey"/"PDFKey"/"MaxNodes"]` / `SourceVaultKGBackgroundPrompt[kg, aud]` / `SourceVaultKGSummaryPrompt[kg, tree]` / `SourceVaultKGTalkPrompt[outline]` / `SourceVaultKGTranslatePrompt[kg, lang]` / `SourceVaultKGSubgraphPrompt[motherKG, description, opts]` (上記)。応答は `SourceVaultKGFromJSON` / `SourceVaultKGMerge` で取り込む (Translate は `SourceVaultKGMerge[kg, delta, "Language"->lang]`、Subgraph の応答は `SourceVaultKGSubgraphNew` の `"Parts"` / `"Exclude"` へ)。
 
 ## 投影と View
 

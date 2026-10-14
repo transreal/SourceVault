@@ -664,16 +664,22 @@ SourceVault`SourceVaultMailAgendaInheritTodo[___] :=
 
 (* raw-string content (BoxData["<|...|>"] or a text cell) parses via
    ToExpression+HoldComplete (non-evaluating); box content via MakeExpression *)
-iSVMAHeldParse[c_] := Which[
-  MatchQ[c, BoxData[_String]],
-    Quiet@Check[ToExpression[First[c], InputForm, HoldComplete], $Failed],
-  StringQ[c],
-    Quiet@Check[ToExpression[c, InputForm, HoldComplete], $Failed],
-  True,
-    Quiet@Check[MakeExpression[c, StandardForm], $Failed]];
+(* 結果 (HoldComplete か) で判定し、メッセージの有無では判定しない: 読めたのに
+   迷子メッセージ (影監視 sysshadow / ::shdw 等) が出ただけで $Failed に
+   落とさない (NBAccess iNBOnwParseHeld と同型、2026-10-13) *)
+iSVMAHeldParse[c_] := With[{r = Which[
+    MatchQ[c, BoxData[_String]],
+      Quiet[ToExpression[First[c], InputForm, HoldComplete]],
+    StringQ[c],
+      Quiet[ToExpression[c, InputForm, HoldComplete]],
+    True,
+      Quiet[MakeExpression[c, StandardForm]]]},
+  If[MatchQ[r, _HoldComplete], r, $Failed]];
 
 iSVMARecordIdFromNotebook[path_String] := Module[{nb, cands, held, meta},
-  nb = Quiet@Check[Import[path, "Notebook"], $Failed];
+  (* Head で判定 (Check 不使用): 完全修飾トークンを含むノートの Import は成功
+     しつつ影監視メッセージを出すため、Check だと読めたノートが Unreadable になる *)
+  nb = Quiet[Import[path, "Notebook"]];
   If[Head[nb] =!= Notebook, Return[Missing["Unreadable"]]];
   cands = Cases[nb, Cell[c_, "NotebookStatus", ___] :> c, Infinity];
   If[cands === {},

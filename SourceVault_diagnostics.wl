@@ -1973,7 +1973,7 @@ iSVDiagComprehensiveStaleQ[] :=
    recovers the key is forgotten, so a recurrence warns again.
    ------------------------------------------------------------ *)
 If[!ListQ[$iSVDiagWatchedComponents],
-  $iSVDiagWatchedComponents = {"LogCoverage", "Codex"}];
+  $iSVDiagWatchedComponents = {"LogCoverage", "Codex", "WebAccessReview"}];
 If[!AssociationQ[$iSVDiagWarnState], $iSVDiagWarnState = <||>];
 
 iSVDiagFENotice[comp_String, health_String, msg_String] :=

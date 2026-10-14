@@ -42,7 +42,7 @@ Eagle API 死活確認の再チェック間隔秒。`SourceVaultEagleRefresh[]` 
 
 ### $SourceVaultEagleCloudPublishableTag
 型: String, 初期値: "Cloud-Publishable"
-クラウド要約を許可するタグ名 (大文字小文字無視)。このタグが付いた item は "Method"->Automatic の要約でクラウド経路を使い、summary record に PrivacyLevel 0.0 が記録される。クラウド経路は `$ClaudeModel` の provider 準拠: claudecode/未設定→Claude Code CLI、chatgptcodex/codex→Codex CLI (テキストのみ。画像/動画は Codex 未対応のため Claude Code CLI にフォールバックする)。anthropic/openai を明示した場合のみ課金 API を使う。また summary record に PrivacyLevel が無くても実効 PL に `$SourceVaultEagleCloudPublishablePL` (既定 0.45) の上限が適用され、MCP release gate (sourcevault_get 等) でクラウド開示可になる。Cloud-Publishable 付き item のサマリーノートでは NBMarkCellConfidential で confidential マークされたセル (privacyLevel > 0.5) を検索インデックス/Note フィールドから除外する。タグ無し item のノートは全文がローカル検索対象 (メタ情報はライブラリ既定 PL の fail-safe マーキングが前提)。
+クラウド要約を許可するタグ名 (大文字小文字無視)。このタグが付いた item は "Method"->Automatic の要約でクラウド経路を使い、summary record に PrivacyLevel 0.0 が記録される。クラウド経路は `$ClaudeModel` の provider 準拠: claudecode/未設定→Claude Code CLI、chatgptcodex/codex→Codex CLI (テキストのみ。画像/動画は Codex 未対応のため Claude Code CLI にフォールバックする)。anthropic/openai を明示した場合のみ課金 API を使う。また summary record に PrivacyLevel が無くても実効 PL に `$SourceVaultEagleCloudPublishablePL` (既定 0.45) の上限が適用され、MCP release gate (sourcevault_get 等) でクラウド開示可になる。Cloud-Publishable 付き item のサマリーノートでは NBMarkCellConfidential で confidential マークされたセル (confidential=True または privacyLevel > 0.5) を検索インデックス/Note フィールドから除外する。タグ無し item のノートは全文がローカル検索対象 (メタ情報はライブラリ既定 PL の fail-safe マーキングが前提)。
 
 ### $SourceVaultEagleCloudPublishablePL
 型: Number, 初期値: 0.45
@@ -59,7 +59,7 @@ Eagle View/Dataset/Search/GeoView 出力セルの既定 PrivacyLevel。数値 (�
 ## ライブラリ登録・管理
 
 ### SourceVaultEagleRegisterLibrary[name, path]
-Eagle ライブラリを名前付きで登録する。最初の登録は現在ライブラリになる。パスは `{"$dropbox", "Eagle", "xxx.library"}` 形式のシンボリックパスで `PrivateVault/eagle/libraries.json` に永続化され、実パスが異なる PC でも同じ登録が使える。
+Eagle ライブラリを名前付きで登録する。最初の登録は現在ライブラリになる。パスは `{"$dropbox", "Eagle", "xxx.library"}` 形式のシンボリックパスで `PrivateVault/eagle/libraries.json` に永続化され、実パスが異なる PC でも同じ登録が使える。オフライン中でも登録可能 ("Online"->False 付きで Registered)。
 → Association
 Options: "Persist" -> True (False で今セッション限り)
 
@@ -184,7 +184,7 @@ Options: "Timeout" -> 15
 
 ## 変更 (Eagle 形式準拠)
 
-書込は Eagle が自分で書く JSON のみ。未知フィールドは `Import("RawJSON") → 変更 → Export("RawJSON")` で完全保全する。item 変更時は modificationTime/lastModified (epoch ms) と mtime.json を自動更新する。ライブラリ metadata.json 変更時は `backup/backup-<日時>.json` を事前作成する。
+書込は Eagle が自分で書く JSON のみ。未知フィールドは `Import("RawJSON") → 変更 → Export("RawJSON")` で完全保全する。item 変更時は modificationTime/lastModified (epoch ms) と mtime.json を自動更新する (mtime.json の "all" は総 item 数なので書き換えない)。ライブラリ metadata.json 変更時は `backup/backup-<日時>.json` を事前作成する。
 
 "Method" -> Automatic|"API"|"File": Automatic は API が使えて対象ライブラリが開いていれば API、閉じていればファイル直接。"API" 強制は Eagle 未起動なら Error。"File" 強制は対象ライブラリが Eagle で開かれていれば Error。
 
@@ -368,15 +368,15 @@ Options: "Library" -> Automatic
 Options: SourceVaultEagleSearch と同じ全オプション
 
 ### SourceVaultEagleObjectInfo[ref, "Library" -> lib] → Association
-Eagle item の参照 (`sv://object/eagle-<id>` / `eagle:<id>` / id) を SourceVault 共通スキーマ `<|"Status" (OK|NotFound), "SourceId" (""), "URI", "File", "Title", "PrivacyLevel" (実効 PL), "Kind" -> "eagle", "Ext"|>` に解決する。和訳ノートブック登録簿 (`SourceVault_papernb.wl`) が Eagle の PDF を元ソースとして扱うための読み口。
+Eagle item の参照 (`sv://object/eagle-<id>` / `eagle:<id>` / id) を SourceVault 共通スキーマ `<|"Status" (OK|NotFound), "SourceId" (""), "URI", "File", "Title", "PrivacyLevel" (実効 PL), "Kind" -> "eagle", "Ext"|>` に解決する。翻訳ノートブック登録簿 (`SourceVault_papernb.wl`) が Eagle の PDF を元ソースとして扱うための読み口。
 
 ### SourceVaultEagleView[query, opts]
-検索結果を行ごとに 原本を開く(▶)/Eagle で表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表で返す。列: ▶/⌂/☰・サムネイル・Date・Name・Ext・Size・Tags・Summary(先頭 150 字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(`sv://object/eagle-<id>`、`SourceVaultMCPGet` で解決可)。
+検索結果を、行ごとに 原本を開く(▶)/Eagle で表示(⌂)/サマリー表示(☰) ボタンとサムネイル付きの表で返す。PDF 行には 4 つ目のボタン「訳」(翻訳ノートブック: `$Language` の訳が登録済みなら開く、無ければ `DocImportPaper` で生成して登録。PL は item の実効 PrivacyLevel を継承。`SourceVault_papernb.wl` の登録簿が無ければ出ない)。ボタンは 1 列目にまとめる (Dataset では 2 列目以降の埋め込みボタンが押せなくなるため)。列: ▶⌂☰(・訳)・サムネイル・Date・Name・Ext・Size・Tags・Summary(先頭 150 字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(`sv://object/eagle-<id>`、`SourceVaultMCPGet` で解決可)。
 → Dataset
 Options: SourceVaultEagleSearch と同じ全オプション + "Thumbnails" -> True, "ThumbnailSize" -> 48
 
 ### SourceVaultEagleShowSummary[item, opts]
-サマリーをノートブックで開く (front end)。`PrivateVault/eagle/notes/` に保存済みノートがあればそれを開く (補足メモ・図などの追記が残る)。無ければ `$SourceVaultEagleNotebookStyle` スタイルで生成し「保存」ボタンで notes/ に保存できる。常に現在ライブラリ (`$SourceVaultEagleLibrary`) を対象とする ("Library" オプションは無い)。
+サマリーをノートブックで開く (front end)。`PrivateVault/eagle/notes/` に保存済みノートがあればそれを開く (補足メモ・図などの追記が残る)。無ければ `$SourceVaultEagleNotebookStyle` スタイルで生成し「保存」ボタンで notes/ に保存できる (以後 Ctrl+S で上書き)。常に現在ライブラリ (`$SourceVaultEagleLibrary`) を対象とする ("Library" オプションは無い)。
 Options: "Fresh" -> False (True で保存版を無視して最新サマリーから作り直す)
 
 ### SourceVaultEagleGeoView[query, opts]
@@ -408,11 +408,13 @@ Options: "Notebook" -> Automatic (省略時 `InputNotebook[]`), "Show" -> "Both"
 
 ## 動作原則
 
-**オフライン時**: 読み取り系はメモリ/ディスクキャッシュ上の最後に見えた状態をエラー無しで返す。書込系・原本アクセス系 (`SourceVaultEagleIngest` 含む) は `<|"Status"->"Error","Reason"->"LibraryOffline"|>` を静かに返す (Message なし)。保存済みサマリーはオフラインでも返る。
+**オフライン時**: 読み取り系はメモリ/ディスクキャッシュ上の最後に見えた状態をエラー無しで返す。書込系・原本アクセス系 (`SourceVaultEagleIngest` 含む) は `<|"Status"->"Error","Reason"->"LibraryOffline"|>` を静かに返す (Message なし)。保存済みサマリーはオフラインでも返る。復帰は自動。
 
 **item キャッシュ**: `PrivateVault/eagle/itemcache/` に BinarySerialize で永続化。2 回目以降のセッションは blob 1 読込 + mtime.json 差分のみ。mtime.json の再読込は `$SourceVaultEagleMtimeTTL` 秒で間引く。`SourceVaultEagleItems["Force"->True]` で差分判定をスキップし強制再照合できる。
 
 **URI スキーム**: Eagle item の正準 SourceVault URI は `"sv://object/eagle-<id>"`。`sourcevault_get` / `SourceVaultMCPGet` で解決可。`SourceVaultEagleView` の URI 列に表示される。
+
+**自動注入**: `ClaudeCode`$ClaudePackageAuxKeywordMap` の "SourceVault" → "eagle" にキーワード (Eagle, イーグル, SourceVaultEagle, サマリー, summarize, アノテーション, annotation, Exif, スマートフォルダ) を登録し、該当タスクで本ファイルが自動注入される。
 
 **Kind 分類** (SourceVaultEagleExtractText / SourceVaultEagleSummarize が内部で使用):
 - "PDF": pdf

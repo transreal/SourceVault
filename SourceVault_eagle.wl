@@ -151,8 +151,8 @@ SourceVaultEagleFolderView::usage = "SourceVaultEagleFolderView[folder, opts] �
 (* ---- 表示 ---- *)
 SourceVaultEagleSummaryRow::usage = "SourceVaultEagleSummaryRow[item] は一覧用の低漏洩行を SourceVault 共通スキーマで返す: <|Kind(\"eagle\"),Id,URI(sv://object/eagle-<id>),Title,Authors,Published,Summary,URL,File,Date,PrivacyLevel|> + eagle 固有の <|Ext,Size,Tags,Folders,Annotation|>。SourceVaultSourceRow (SourceVault.wl) と同じ共通キーを共有し、SourceVaultSummaries の横断検索行と互換。混在データセットの汎用 join/参照キーは \"URI\"。(旧キー \"Name\" は \"Title\" に改名)";
 SourceVaultEagleDataset::usage = "SourceVaultEagleDataset[query, opts] は検索結果を素の Dataset で返す (ボタン無し)。";
-SourceVaultEagleObjectInfo::usage = "SourceVaultEagleObjectInfo[ref, \"Library\" -> lib] は Eagle item の参照 (sv://object/eagle-<id> / eagle:<id> / id) を SourceVault 共通スキーマ <|\"Status\" (OK|NotFound), \"SourceId\" (\"\"), \"URI\", \"File\", \"Title\", \"PrivacyLevel\" (実効 PL), \"Kind\" -> \"eagle\", \"Ext\"|> に解決する。和訳ノートブック登録簿 (SourceVault_papernb.wl) が Eagle の PDF を元ソースとして扱うための読み口。";
-SourceVaultEagleView::usage = "SourceVaultEagleView[query, opts] は検索結果を、行ごとに 原本を開く(▶)/Eagleで表示(⌂)/サマリー表示(☰)、PDF なら 和訳ノートブック (訳: 登録済みなら開く、無ければ DocImportPaper で生成して登録。PL は item の実効 PrivacyLevel を継承。SourceVault_papernb.wl) のボタンとサムネイル付きの表 (Dataset) で返す。ボタンは 1 列目にまとめる (Dataset では 2 列目以降の埋め込みボタンが押せなくなるため)。列は ▶⌂☰・(サムネイル)・Date・Name・Ext・Size・Tags・Summary(サマリー先頭150字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(正準 SourceVault URI sv://object/eagle-<id>、sourcevault_get / SourceVaultMCPGet で解決可)。opts は SourceVaultEagleSearch + \"Thumbnails\", \"ThumbnailSize\"。";
+SourceVaultEagleObjectInfo::usage = "SourceVaultEagleObjectInfo[ref, \"Library\" -> lib] は Eagle item の参照 (sv://object/eagle-<id> / eagle:<id> / id) を SourceVault 共通スキーマ <|\"Status\" (OK|NotFound), \"SourceId\" (\"\"), \"URI\", \"File\", \"Title\", \"PrivacyLevel\" (実効 PL), \"Kind\" -> \"eagle\", \"Ext\"|> に解決する。翻訳ノートブック登録簿 (SourceVault_papernb.wl) が Eagle の PDF を元ソースとして扱うための読み口。";
+SourceVaultEagleView::usage = "SourceVaultEagleView[query, opts] は検索結果を、行ごとに 原本を開く(▶)/Eagleで表示(⌂)/サマリー表示(☰)、PDF なら 翻訳ノートブック (訳: 登録済みなら開く、無ければ DocImportPaper で生成して登録。PL は item の実効 PrivacyLevel を継承。SourceVault_papernb.wl) のボタンとサムネイル付きの表 (Dataset) で返す。ボタンは 1 列目にまとめる (Dataset では 2 列目以降の埋め込みボタンが押せなくなるため)。列は ▶⌂☰・(サムネイル)・Date・Name・Ext・Size・Tags・Summary(サマリー先頭150字、全文は☰)・PL(実効 PrivacyLevel = summary record の PrivacyLevel > Cloud-Publishable タグ上限 > ライブラリ既定)・URI(正準 SourceVault URI sv://object/eagle-<id>、sourcevault_get / SourceVaultMCPGet で解決可)。opts は SourceVaultEagleSearch + \"Thumbnails\", \"ThumbnailSize\"。";
 SourceVaultEagleShowSummary::usage = "SourceVaultEagleShowSummary[item, opts] はサマリーをノートブックで開く (front end)。PrivateVault/eagle/notes/ に保存済みノートがあればそれを開く (補足メモ・図などの追記が残る)。無ければ $SourceVaultEagleNotebookStyle のスタイルで生成し、ノート内の「保存」ボタンで notes/ に保存できる (以後 Ctrl+S で上書き、次回からは保存版が開く)。\"Fresh\"->True で保存版を無視して最新サマリーから作り直す (保存ボタンで上書き)。";
 $SourceVaultEagleNotebookStyle::usage = "$SourceVaultEagleNotebookStyle はサマリー/フォルダ表示ノートブックの StyleDefinitions。既定 \"SourceVault default.nb\"。";
 SourceVaultEagleGeoView::usage = "SourceVaultEagleGeoView[query, opts] は Exif GPS を持つ写真を地図上にサムネイル表示する (クリックで原本を開く)。opts は SourceVaultEagleSearch + \"GeoRange\", \"MarkerScale\", \"ThumbnailSize\"。";
@@ -3141,7 +3141,7 @@ iSVEGActRow[id_String, lsp_String] :=
     Tooltip[Button["\:2630", SourceVaultEagleShowSummary[id],
       Appearance -> "Frameless", Method -> "Queued"], "サマリー表示"]}];
 
-(* PDF には 4 つ目のボタン「訳」= 和訳ノートブック (SourceVault_papernb.wl)。登録済みなら開く、無ければ
+(* PDF には 4 つ目のボタン「訳」= 翻訳ノートブック (SourceVault_papernb.wl)。$Language の訳が登録済みなら開く、無ければ
    生成 (item の実効 PL を継承)。ボタンには正準 URI だけを焼く。登録簿が無ければ出さない *)
 iSVEGActRow[id_String, lsp_String, ext_String] := Module[{uri = iSVEGObjectURI[id], reg, base},
   base = {
@@ -3153,16 +3153,16 @@ iSVEGActRow[id_String, lsp_String, ext_String] := Module[{uri = iSVEGObjectURI[i
       Appearance -> "Frameless", Method -> "Queued"], "サマリー表示"]};
   If[ToLowerCase[ext] =!= "pdf" || Length[DownValues[SourceVault`SourceVaultPaperNotebook]] === 0,
     Return[iSVEGActionRow[base]]];
-  reg = Quiet @ Check[SourceVault`SourceVaultPaperNotebook[uri], $Failed];
+  reg = Quiet @ Check[SourceVault`SourceVaultPaperNotebook[uri, "Language" -> $Language], $Failed];
   iSVEGActionRow[Append[base,
     If[StringQ[reg],
       With[{u = uri},
         Tooltip[Button[Style["訳", Bold], SourceVault`SourceVaultOpenPaperNotebook[u],
-          Appearance -> "Frameless", Method -> "Queued"], "和訳ノートブックを開く: " <> reg]],
+          Appearance -> "Frameless", Method -> "Queued"], "翻訳ノートブックを開く: " <> reg]],
       With[{u = uri},
         Tooltip[Button["訳", SourceVault`SourceVaultMakePaperNotebook[u, "Interactive" -> True],
           Appearance -> "Frameless", Method -> "Queued"],
-          "DocImportPaper で和訳ノートブックを生成して登録 (item の実効 PL を継承)"]]]]]];
+          "DocImportPaper で翻訳ノートブック (" <> ToString[$Language] <> " へ。原文が同じ言語なら構造化だけ) を生成して登録 (item の実効 PL を継承)"]]]]]];
 
 iSVEGActDisplay[x_, ___] := Replace[x, {
   iSVEGAct[id_, lsp_, ext_] :> iSVEGActRow[id, lsp, ToString[ext]],

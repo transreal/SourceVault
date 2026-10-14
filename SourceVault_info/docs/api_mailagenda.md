@@ -17,22 +17,22 @@ SourceVaultInferMailDerivedBatch が事前計算)を**索引だけ**で読む(�
 NotebookCreated・TodoCreated)→ ⑤**オーナー宛て判定**(未解決スレッド内を新しい順に走査し、最初に閾値
 $SourceVaultMailAgendaDirectionThreshold=0.7 以上になったメールをスレッド代表として採用。
 To ∋ owner address → 1.0、To ∋ org address → 0.6、不足時のみ遅延 snapshot probe:
-Cc ∋ owner → 0.7 に引き上げ、OrgTo → 0.6 に引き上げ、本文冒頭に宛名パターン(既定「今井」)が
+Cc ∋ owner → 0.7 に引き上げ、OrgTo(To/Cc に org) → 0.6 に引き上げ、本文冒頭(400 文字)に宛名パターン(既定「今井」)が
 一致すると +0.3(上限 0.95)。ただし本文パターンは DirectTo/OrgTo/CcOwner のいずれかでベース
 スコアが 0 より大きいときのみ加算される(To/Cc とも owner/org と無関係なメールは本文パターン
-だけでは浮上しない)。閾値未満のメンバーしかいないスレッドは丸ごと除外)の順に絞る。owner/org
+だけでは浮上しない)。base スコアが閾値以上、または probe 不要(DirectTo)、または "SnapshotProbe"->None なら probe しない。閾値未満のメンバーしかいないスレッドは丸ごと除外)の順に絞る。owner/org
 アドレスとアドレス宛名パターンは identity 側の owner entity(下記「設定」参照)を第一権威とし、
 $SourceVaultMailAgenda* 変数・config ファイルはフォールバック。item = <|RecordId, Subject,
 From, Date(abs), Category, Priority, Deadline, Summary, DirectionScore, DirectionEvidence,
 MBox, PrivacyLevel, ThreadCount, ThreadRecordIds|>、新しい順。Category/Priority 未生成の
 メールは除外せず PendingCount で返す(見逃し防止。要約計算は SourceVaultMailAddSummaries[mbox]
-を明示実行)。
+を明示実行)。引数不正時は <|"Items"→{}, "PendingCount"→0|>。
 **スレッド(セッション)集約**: 同一スレッド(Re/Fwd を剥いだ正規化件名+MBox、
 "ThreadKeyFunction" で mailstructure セッション等に差替可)は 1 項目に集約。代表=
 オーナー宛て条件を満たす最新メール(ThreadCount/ThreadRecordIds 付き)。スレッドの
 最新受信より後に解決(返信/対応済み)されていれば消え、より新しい Re: が来ると再浮上。
 Options: "Mails"/"Interactions"/"Resolutions"/"SnapshotProbe"(すべて Automatic=ライブ、
-テスト注入可)、"Window"(Automatic→$SourceVaultMailAgendaWindow), "Now"(テスト用シーム),
+テスト注入可; SnapshotProbe は None でスキップ、fn rid → <|"CcOwner","OrgTo","BodyAddressee"|> を注入可)、"Window"(Automatic→$SourceVaultMailAgendaWindow), "Now"(テスト用シーム),
 "MaxItems"(60), "MaxPrivacyLevel"(1.0), "ThreadKeyFunction"(Automatic),
 "MBox"(Automatic→owner entity の PrimaryMBox に限定してスキャン; All=全 mbox)。
 
@@ -43,11 +43,12 @@ Pending → Done(Replied | NotebookCreated | TodoCreated | Dismissed)。返信�
 
 ### SourceVaultMailAgendaResolve[recordId, "Dismissed"|"NotebookCreated"|"TodoCreated", opts] → <|Status, RecordId, State|>
 解決を `<mailStoreRoot>/agenda.json`(Dropbox 共有・内容最小化=RecordId のみ、件名/本文なし、
-UTF-8 単一エンコード+アトミック rename で保存)へ記録。
+UTF-8 単一エンコード+アトミック rename で保存)へ記録。lazy snapshot probe の結果("Probe"→<|CcOwner,OrgTo,BodyAddressee|> の真偽値のみ)も同 RecordId エントリにキャッシュされ再復号しない。
+引数不正時は <|"Status"→"Failed","Reason"→...|>。
 Options: "NotebookPath" -> None。
 
 ### SourceVaultMailAgendaReopen[recordId] → <|Status, RecordId|>
-解決の取り消し(再列挙される)。
+解決の取り消し(再列挙される)。非マージ保存(削除した項目を復活させない)。引数不正時は <|"Status"→"Failed"|>。
 
 ### SourceVaultMailAgendaResolutions[] → <|RecordId → <|State, At, NotebookPath?|>...|>
 解決一覧 assoc。
@@ -57,11 +58,11 @@ Options: "NotebookPath" -> None。
 ### SourceVaultMailAgendaOpen[recordId | item] → NotebookObject
 要対応メールの**本文ウィンドウ**を開く: シャードを遅延ロードしたうえで
 SourceVaultMailShowBody[recordId] を呼ぶだけの 1 窓構成(旧・「要約→本文」の 2 段階ウィンドウ
-は廃止)。**[返信]/[全員に返信]/[翻訳して返信]**(SourceVaultMailOpenReplyNotebook; 送信で
+は廃止)。item は Association(RecordId キーを使用)。それ以外の引数は $Failed。**[返信]/[全員に返信]/[翻訳して返信]**(SourceVaultMailOpenReplyNotebook; 送信で
 自動 Done)・**[スレッド全体を表示]**(SourceVaultMailThreadNotebook)・
 **[ノートブックを作成して継承]**(下記 Inherit)・**[確認のみ・対応済み]**(Resolve Dismissed)
 は本文パネル側(maildb 層、SourceVaultMailView 経由で開いたメールと共通)に集約されている。
-maildb の UI 層(SourceVaultMailShowBody)が未ロードのとき、またはその呼び出しが失敗した
+maildb の UI 層(SourceVaultMailShowBody)が未ロードのとき、またはその呼び出しが失敗($Failed)した
 ときのみ、件名+From/Date+Summary+[↩ 返信する]/[📓 ノートブックを作成して継承]/
 [✓ 確認のみ・対応済み]+[☰ スレッド全体を表示]/[✉ 本文を表示] の旧・簡易操作窓に
 フォールバックする。
@@ -75,12 +76,13 @@ $onWork に作業ノートを作成しメールを**継承**する: Templates/So
 `<|Keywords→{"mail"}, Deadline(推定〆切があれば DateObject[{y,m,d}]), NextReview→
 Quantity[1,"Weeks"], Status→"Todo", Title(件名), MailRecordId|>` + Title セル +
 「✉ 元メール・返信を開く」ボタンセル(ButtonNotebook[] でクリック時に自分のノートを解決、
-シリアライズされたパス変数に依存しない)。NotebookCreated を記録(アジェンダから消える)し、
+シリアライズされたパス変数に依存しない)。ファイル名 = `<日付>-<件名先頭24字>.nb`(既存なら UnixTime 付与)。NotebookCreated を記録(アジェンダから消える)し、
 $SourceVaultMailAgendaEventSink へ継承イベント
 <|Type→"MailInheritedByNotebook",RecordId,NotebookPath,At|> を emit(マイニング層 seam、
 rule 11)。**プライバシー継承**: 作成ノートはメール内容(件名+本文導線)を含むため
 TaggingRules→{"SourceVault"→{"CloudPublishable"→False}} を明示宣言して書き出す(宣言なしでも
 PL 1.0 fail-safe だが原則を明示)。スタイルシートは "SourceVault default.nb"。
+失敗時は <|Status→"Failed", Reason→"NoDirectory"|"ExportFailed"|...|>。
 Options: "Directory"(Automatic→Global`$onWork), "Open"(True→SystemOpen),
 "Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject)。
 
@@ -90,7 +92,7 @@ TODO**を作成してメールを継承する(Inherit の軽量版)。件名+推
 Source->"mail" + MailRecordId(逆参照)+メールの派生 PrivacyLevel を TODO に持たせる。
 SourceVault_todo が未ロード(SourceVaultNewTodo 未定義)なら Status->"Failed",
 Reason->"TodoLayerUnavailable" を返す(弱結合、mailagenda は SourceVault_todo より先にロード
-されるため Symbol[] 経由の実行時解決で orphan symbol を避ける)。成功時は agenda.json に
+されるため Symbol[] 経由の実行時解決で orphan symbol を避ける)。NewTodo 失敗時は Reason->"NewTodoFailed"。成功時は agenda.json に
 TodoCreated を記録(アジェンダから消える)し、$SourceVaultMailAgendaEventSink へ
 <|Type→"MailInheritedByTodo",RecordId,TodoId,At|> を emit。
 Options: "Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject)。
@@ -135,14 +137,35 @@ maildb の検索/一覧/View 関数 (`SourceVaultSearchMailSnapshots` / `MailSea
 Self)が OrgEmails / AddresseePatterns / PrimaryMBox の第一権威。
 `SourceVaultUpdateEntity[1, <|"OrgEmails"->{...}, "PrimaryMBox"->"univ",
 "AddresseePatterns"->{...}|>]` で登録。AddresseePatterns 未登録時は entity の Names(Kanji
-の先頭トークン+Romaji の各トークン、3文字以上)から自動導出。identity 不在/未登録時のみ
+の先頭トークン+Romaji の各トークン、3文字以上)から自動導出(フォールバック変数の値は常に union)。owner アドレスは SourceVaultOwnerEmails[] +
+$SourceVaultMailAgendaOwnerAddresses の union。identity 不在/未登録時のみ
 下記変数・config ファイルへフォールバック。マッチングは大小文字非依存。
 
-$SourceVaultMailAgendaWindow(45, 日) / MinPriority(0.5) / DirectionThreshold(0.7) /
-OrgAddresses({}, フォールバック) / OwnerAddresses({}, identity 不在時フォールバック) /
-AddresseePatterns({"今井"}, フォールバック) /
-Categories({TaskRequest,AttendanceRequest,Confirmation}) / EventSink(None, または
-canonical event を受ける Function)。
+### $SourceVaultMailAgendaWindow
+型: Number, 初期値: 45
+候補スキャン窓(日)。
+### $SourceVaultMailAgendaMinPriority
+型: Number, 初期値: 0.5
+派生 Priority がこれ未満は SPAM/無関係として除外。
+### $SourceVaultMailAgendaDirectionThreshold
+型: Number, 初期値: 0.7
+オーナー宛てスコアの採用下限。
+### $SourceVaultMailAgendaOrgAddresses
+型: {String...}, 初期値: {}
+組織アドレス(score 0.6)。identity entity の OrgEmails が優先、これはフォールバック(union)。
+### $SourceVaultMailAgendaOwnerAddresses
+型: {String...}, 初期値: {}
+identity(SourceVaultOwnerEmails)不在時のフォールバック owner アドレス。
+### $SourceVaultMailAgendaAddresseePatterns
+型: {String...}, 初期値: {"今井"}
+本文冒頭の宛名パターン(フォールバック、union)。
+### $SourceVaultMailAgendaCategories
+型: {String...}, 初期値: {"TaskRequest","AttendanceRequest","Confirmation"}
+要対応とみなす派生カテゴリ。
+### $SourceVaultMailAgendaEventSink
+型: None | Function, 初期値: None
+canonical event(<|Type,RecordId,NotebookPath|TodoId,At|>)を受ける Function(マイニング/identity 層の seam)。
+
 個人アドレスはコードに焼き込まず `PrivateVault/config/mailagenda.json`
 (OrgAddresses/OwnerAddresses/AddresseePatterns/MinPriority/Window)で環境設定
 (起動時ロード、いずれのキーも省略可)。

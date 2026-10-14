@@ -2261,7 +2261,7 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
           "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_kb.wl",
           "SourceVault_diagnostics.wl", "SourceVault_issues.wl",
           "SourceVault_slidedeck.wl",
-          "SourceVault_servicemanager.wl", "SourceVault_webingest.wl",
+          "SourceVault_servicemanager.wl", "SourceVault_webingest.wl", "SourceVault_webguard.wl",
           "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl",
           "SourceVault_llmlog.wl", "SourceVault_autotrigger.wl",
           "SourceVault_mining.wl", "ClaudeOrchestrator_turnwiki.wl"},
@@ -2293,6 +2293,9 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_servicemanager.wl\"}]];\n",
         (* webingest / mcp は存在する場合のみ load (spec v6 §4.6)。未作成段階でも安全。 *)
         "  With[{wpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_webingest.wl\"}]}, If[FileExistsQ[wpath], Get[wpath]]];\n",
+        (* Web egress guard (関所): webingest の直後。存在ガードで fail-soft
+           (無ければ webingest 側の iWebGuardGate が LLM 主体を Deny する)。 *)
+        "  With[{gpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_webguard.wl\"}]}, If[FileExistsQ[gpath], Get[gpath]]];\n",
         (* packageapi (+依存 contracts) を mcp より前に load して、detached service
            kernel 単独でも packageapi adapter を available にする。存在ガードで
            fail-soft (packageapi は core のみ必須、contracts は alias 解決用で任意)。 *)

@@ -53,7 +53,9 @@
 		"SourceVault_slidedeck.wl",
 		"SourceVault_todo.wl",
 		"SourceVault_knowledgegraph.wl",
-		"SourceVault_papernb.wl"
+		"SourceVault_papernb.wl",
+		"SourceVault_oapdf.wl",
+		"SourceVault_webguard.wl"
 	],
 	"directories":[
 		"SourceVault_info",
