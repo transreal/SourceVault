@@ -401,6 +401,11 @@ service の各種レイテンシを実測し、probe ごとの分位点(P50Ms/P9
 Options: "Probes" -> `<||>` (probe 名 -> 事前計測 ms のリスト、または 0 引数関数。関数は "Repeats" 回 time 計測), "Repeats" -> 7
 → `<|"<ProbeName>.P50Ms" -> ..., "<ProbeName>.P95Ms" -> ..., ...|>`(未計測 probe は `Missing["NotMeasured"]`)
 
+## EvidenceGap 記録
+
+### SourceVaultRecordEvidenceGap[gap] → String (GapId)
+EvidenceGap (根拠が足りない問い) を `<CoreRoot>/curated/evidence_gaps.wl` に記録し `"gap:<SHA256 先頭 12 桁>"` の GapId を返す。gap は `<|"GapKind", "Question", "ReleaseContext", ...|>`。同じ {GapKind, Question, ReleaseContext} は dedup され、既存で State が "Closed" のときだけ "Open" で記録し直す。他サブモジュール (webingest の取得失敗など) から使う。
+
 ## Web UI / LLM バックエンド設定
 
 Web UI の HTTP は service 側で処理し、検索は必ず gate 越し(`SourceVaultSearch`)。LLM ライセンス/課金ポリシー: ClaudeCode/Codex(サブスク CLI)は契約者本人のみ = リクエスト元 IP がオーナー PC のときだけ許可、非オーナーは LM Studio(ローカル)一択(課金 OK なら課金 API も可)。client IP は proxy が実 TCP peer から付与する(X-Forwarded-For は非採用)。

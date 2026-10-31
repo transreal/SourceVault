@@ -2329,7 +2329,8 @@ iSVATExecuteCatalogWorkflow[job_Association] :=
       Return[<|"Status" -> "Skipped", "Reason" -> "RunWorkflowAsyncUnavailable",
         "Backend" -> "None", "StartedAtUTC" -> started,
         "FinishedAtUTC" -> iSVATUTCNow[]|>]];
-    runFn = Symbol["SourceVault`SourceVaultRunWorkflowAsync"];
+    (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+    runFn = Symbol[Identity["SourceVault`SourceVaultRunWorkflowAsync"]];
     res = Quiet @ Check[runFn[slug, form], $Failed];
     If[!AssociationQ[res] || Lookup[res, "Status", ""] =!= "Submitted",
       Return[<|"Status" -> "Failed", "Reason" -> "SubmitFailed",

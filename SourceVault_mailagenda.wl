@@ -557,7 +557,8 @@ Options[SourceVault`SourceVaultMailAgendaInherit] = {
 SourceVault`SourceVaultMailAgendaInherit[rid_String, OptionsPattern[]] := Module[
   {dir, row, subject, deadline, dl = Missing["None"], nbPath, cells, res},
   dir = With[{d = OptionValue["Directory"]},
-    If[d === Automatic, Quiet@Check[Symbol["Global`$onWork"], $Failed], d]];
+    (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+    If[d === Automatic, Quiet@Check[Symbol[Identity["Global`$onWork"]], $Failed], d]];
   If[!StringQ[dir] || !DirectoryQ[dir],
     Return[<|"Status" -> "Failed", "Reason" -> "NoDirectory", "Directory" -> dir|>]];
   row = If[Length[DownValues[SourceVault`SourceVaultMailIndexGet]] > 0,
@@ -607,7 +608,7 @@ SourceVault`SourceVaultMailAgendaInherit[___] :=
 
 iSVMATodoLayerReady[] :=
   Names["SourceVault`SourceVaultNewTodo"] =!= {} &&
-  With[{sym = Symbol["SourceVault`SourceVaultNewTodo"]},
+  With[{sym = Symbol[Identity["SourceVault`SourceVaultNewTodo"]]},
     Length[DownValues[sym]] > 0];
 
 Options[SourceVault`SourceVaultMailAgendaInheritTodo] = {
@@ -637,7 +638,7 @@ SourceVault`SourceVaultMailAgendaInheritTodo[rid_String, OptionsPattern[]] :=
     pl = With[{p = Lookup[row, "PrivacyLevel", Missing[]]},
       If[NumberQ[p], N[p], 1.0]];
     res = Quiet@Check[
-      Symbol["SourceVault`SourceVaultNewTodo"][<|
+      Symbol[Identity["SourceVault`SourceVaultNewTodo"]][<|
         "Title" -> subject,
         "Deadline" -> dl,
         "PrivacyLevel" -> pl,
@@ -676,15 +677,18 @@ iSVMAHeldParse[c_] := With[{r = Which[
       Quiet[MakeExpression[c, StandardForm]]]},
   If[MatchQ[r, _HoldComplete], r, $Failed]];
 
-iSVMARecordIdFromNotebook[path_String] := Module[{nb, cands, held, meta},
-  (* Head で判定 (Check 不使用): 完全修飾トークンを含むノートの Import は成功
-     しつつ影監視メッセージを出すため、Check だと読めたノートが Unreadable になる *)
-  nb = Quiet[Import[path, "Notebook"]];
-  If[Head[nb] =!= Notebook, Return[Missing["Unreadable"]]];
-  cands = Cases[nb, Cell[c_, "NotebookStatus", ___] :> c, Infinity];
+iSVMARecordIdFromNotebook[path_String] := Module[{found, cells, cands, held, meta},
+  (* .nb は NBAccess 経由で読む (rules/10、2026-10-31)。NBAccess は Import の結果を
+     Head で判定するので、影監視メッセージが出ただけのノートも読める *)
+  found = Quiet[NBAccess`NBFindCellByPredicate[path,
+    MatchQ[#, Cell[_, "NotebookStatus", ___] | Cell[_, ___, InitializationCell -> True, ___] |
+      Cell[_BoxData, "Input", ___]] &]];
+  If[!AssociationQ[found] || Lookup[found, "Status", ""] =!= "OK", Return[Missing["Unreadable"]]];
+  cells = Cases[Lookup[found, "Matches", {}], KeyValuePattern["Cell" -> HoldComplete[c_]] :> c];
+  cands = Cases[cells, Cell[c_, "NotebookStatus", ___] :> c];
   If[cands === {},
-    cands = Cases[nb, Cell[bx_, ___, InitializationCell -> True, ___] :> bx, Infinity]];
-  If[cands === {}, cands = Cases[nb, Cell[b_BoxData, "Input", ___] :> b, Infinity]];
+    cands = Cases[cells, Cell[bx_, ___, InitializationCell -> True, ___] :> bx]];
+  If[cands === {}, cands = Cases[cells, Cell[b_BoxData, "Input", ___] :> b]];
   If[cands === {}, Return[Missing["NoMetadata"]]];
   held = iSVMAHeldParse[First[cands]];
   If[!MatchQ[held, _HoldComplete], Return[Missing["ParseFailed"]]];

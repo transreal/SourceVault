@@ -194,7 +194,7 @@ SourceVaultOpenSourceNotebook[uri_String] := Module[{p},
         "\:5143\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30d5\:30a1\:30a4\:30eb\:304c\:898b\:3064\:304b\:308a\:307e\:305b\:3093 (\:79fb\:52d5/\:524a\:9664\:3055\:308c\:305f\:53ef\:80fd\:6027)\:3002"];
       $Failed,
     True,
-      Quiet @ Check[NotebookOpen[p, Visible -> True], $Failed]]];
+      Quiet @ Check[NotebookOpen[p, Visible -> True], $Failed]]]; (* :PolicyWaiver: PRIV-NB-READ 利用者の操作で元のノートブックを表示するだけで、中身はカーネルに読まない *)
 SourceVaultOpenSourceNotebook[_] := $Failed;
 
 (* ============================================================

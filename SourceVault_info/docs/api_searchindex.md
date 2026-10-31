@@ -274,11 +274,10 @@ lexical(BM25)を精度の主軸に、表記に依らない意味的 recall を d
 
 ### SourceVaultRegisterHTTPEmbeddingProvider[name, opts] → Association
 OpenAI 互換 `/v1/embeddings`（LM Studio 等）を叩く embedding provider を登録する**正準ヘルパ**。**body を `ExportByteArray[_,"RawJSON"]` で UTF-8 バイト化**（`ExportString[_,"RawJSON"]` の戻り値は UTF-8 バイトを Latin-1 char で並べた「バイト列文字列」で、そのまま HTTP body にすると二重エンコードされ日本語が文字化けし埋め込みが壊れる。手書き provider の典型的な落とし穴を回避）＋応答を `index` でソート。
-Options: `"URL" -> Automatic`（`Global\`$embeddingEndpoint`）, `"Model" -> Automatic`（`Global\`$embeddingModel`）, `"AuthToken" -> None`（None｜文字列｜token を返す関数）, `"Normalize" -> False`, `"SetActive" -> True`, `"TimeoutSeconds" -> 60`
+Options: `"URL" -> Automatic`（`Global\`$embeddingEndpoint`）, `"Model" -> Automatic`（`Global\`$embeddingModel`）, `"AuthToken" -> Automatic`（エンドポイントのベース URL で `NBGetLocalLLMAPIKey["lmstudio", base]` からトークンを自動解決（FE カーネルのみ・NBAccess 必要）。明示するなら文字列か token を返す関数、認証不要なら `None`）, `"Normalize" -> False`, `"SetActive" -> True`, `"TimeoutSeconds" -> 60`
 ```mathematica
 SourceVaultRegisterHTTPEmbeddingProvider["LMStudio"]   (* URL/Model は大域変数、認証は Automatic *)
 ```
-`"AuthToken"` の既定 **`Automatic`** は、エンドポイントの**ベース URL**（`/v1/embeddings` を剥がし localhost↔127.0.0.1 正規化）で `NBGetLocalLLMAPIKey["lmstudio", base]` からトークンを自動解決する（FE カーネルのみ・NBAccess 必要。フルパスや host 差でキーが外れる典型ミスを内部で吸収）。明示するなら `"AuthToken" -> 文字列` か `token を返す関数`、認証不要なら `None`。
 埋め込みモデル/エンドポイントは単一の大域変数 **`Global\`$embeddingModel`**（既定 `"text-embedding-baai-bge-m3-568m"`）/ **`Global\`$embeddingEndpoint`**（既定 `"http://localhost:1234/v1/embeddings"`）で、`$ClaudeModel` と同様にユーザーが設定できる（PDFIndex の embedder と共有）。
 
 ### SourceVaultRegisterEmbeddingProvider[name, fn] → Association
@@ -296,8 +295,9 @@ SourceVaultRegisterHTTPEmbeddingProvider["LMStudio"]   (* URL/Model は大域変
 ### SourceVaultEmbedTexts[{text..}] → {Vector...} | Failure
 既定 provider で埋め込みベクトルのリストを返す。
 
-### $SourceVaultEmbeddingDim → Integer
-既定(hashing)embedder の次元（既定 256）。実 provider は自身の次元を返してよい。
+### $SourceVaultEmbeddingDim
+型: Integer, 初期値: 256
+既定(hashing)embedder の次元。実 provider は自身の次元を返してよい。
 
 ### Global`$embeddingModel / Global`$embeddingEndpoint → String
 埋め込みモデル名・エンドポイントの**単一大域変数**（`$ClaudeModel` と同様にユーザー設定可）。既定 `"text-embedding-baai-bge-m3-568m"` / `"http://localhost:1234/v1/embeddings"`。`Global\`` context ゆえ PDFIndex（`iEmbedViaLMStudio`）と SourceVault（`SourceVaultRegisterHTTPEmbeddingProvider`）が結合なしで共有する。`SourceVaultRegisterHTTPEmbeddingProvider` の `"URL"`/`"Model"` の `Automatic` はこれを解決する。
@@ -447,7 +447,7 @@ spec 必須: `"TPOProfileRef" -> _String`, `"SelectionPolicy" -> _Association`�
 → `<|"Status" -> "OK", "ObjectRef", "SnapshotRef", "Digest", "Warnings"|>`
 
 ### SourceVaultListPurposeIndexes[] → {String...}
-登録済み PurposeIndexSpec の indexId を返す。
+登録済み PurposeIndexSpec の indexId を返す。`SourceVault`SourceVaultListPurposeIndexes[...]` として呼ぶ。
 
 ### SourceVaultBuildPurposeIndex[indexId, opts] → Association | Failure
 [`SourceVaultBuildPurposeIndex[indexId, tpoId, opts]`（TPO §16 節）と同名のオーバーロード] 先に `SourceVaultCreatePurposeIndexSpec` で登録した spec の `SurveyCorpusRef` を解決し、`SelectionPolicy`（`IncludeTopicTags` / `ExcludeTopicTags` / `RequireReviewState` / `MaxPrivacyLevel`。stale item は常に除外）で item を絞り込んで chunk 化し、native projection index (`<indexId>-proj`) を build する。結果を PurposeIndexSnapshot として保存し staged pointer を更新する（promote 前）。

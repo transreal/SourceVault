@@ -464,11 +464,35 @@ iSVDiagAtomicWrite[path_String, text_String] :=
       path,
       $Failed]];
 
+(* JSON-safe copy of a log / state record (2026-10-17). The RawJSON writers
+   reject the WHOLE record for a single Missing[] / symbol / DateObject / Rule
+   / non-string key anywhere inside it: the MailIntent record (Body carries
+   "SummaryURI" -> Missing[]) became a bare "{}" line on every escalation.
+   Missing values are dropped from Associations (an absent key reads back as
+   Missing, as in iSVDiagIssueFanOut) and become null in lists; non-string
+   keys and any other non-JSON value are stringified (iSVDiagShortForm,
+   <= 300 chars). Only used after a raw write fails, so records that already
+   serialize are written byte for byte as before. *)
+iSVDiagJSONSafe[a_Association] :=
+  Association @ KeyValueMap[
+    If[MissingQ[#2], Nothing,
+      If[StringQ[#1], #1, iSVDiagShortForm[#1]] -> iSVDiagJSONSafe[#2]] &, a];
+iSVDiagJSONSafe[l_List] := Map[If[MissingQ[#], Null, iSVDiagJSONSafe[#]] &, l];
+iSVDiagJSONSafe[x : (_String | _Integer | _Real | True | False | Null)] := x;
+iSVDiagJSONSafe[x_Rational] := N[x];
+iSVDiagJSONSafe[_Missing] := Null;
+iSVDiagJSONSafe[x_] := iSVDiagShortForm[x];
+
 (* compact (single-line) JSON: required for the append-only JSONL log
    where each record must occupy exactly one line. *)
 iSVDiagToJSON[assoc_] :=
-  Quiet @ Check[Developer`WriteRawJSONString[assoc, "Compact" -> True],
-    Quiet @ Check[ExportString[assoc, "RawJSON", "Compact" -> True], "{}"]];
+  Module[{w, s},
+    w = Quiet @ Check[Developer`WriteRawJSONString[#, "Compact" -> True], $Failed] &;
+    s = w[assoc];
+    If[! StringQ[s], s = w[iSVDiagJSONSafe[assoc]]];
+    If[! StringQ[s], s = Quiet @ Check[
+      ExportString[iSVDiagJSONSafe[assoc], "RawJSON", "Compact" -> True], $Failed]];
+    If[StringQ[s], s, "{}"]];
 
 (* weak existence check for a producer symbol: trap #18 safe (do not
    use ValueQ on a function symbol). *)
@@ -515,11 +539,50 @@ SourceVaultDiagnosticsRegisterProbe[id_String, probeFn_] :=
 
 SourceVaultDiagnosticsListProbes[] := Keys[$iSVDiagProbes];
 
+(* Probe-side faults (2026-10-17). A probe value that was neither a string
+   nor an Association used to collapse into a bare "ProbeBadResult" and was
+   thrown away, so the cause could not be found afterwards (strixhalo128 FE
+   kernel, Codex probe). A fault now keeps what was received: GotHead (its
+   Head) and Got (a short single-line InputForm, at most $iSVDiagGotMaxChars),
+   plus ProbeFault -> True: the checker, not the component, is at fault. *)
+$iSVDiagProbeFaultCodes =
+  {"ProbeBadResult", "ProbeError", "ProbeTimeout", "ProbeInternalError"};
+$iSVDiagGotMaxChars = 300;
+
+iSVDiagClip[s_String] :=
+  If[StringLength[s] > $iSVDiagGotMaxChars,
+    StringTake[s, $iSVDiagGotMaxChars - 3] <> "...", s];
+
+(* never throws; bounded in time and size. Short elides only under a finite
+   PageWidth (ToString's default is Infinity). *)
+iSVDiagShortForm[x_] :=
+  Module[{s},
+    s = Quiet @ Check[
+      TimeConstrained[
+        If[ByteCount[x] > 2*10^6,
+          "<" <> ToString[Head[x], InputForm] <> ", " <> ToString[ByteCount[x]] <> " bytes>",
+          ToString[Short[InputForm[x], 3], OutputForm, PageWidth -> 100]],
+        2, "<format timeout>"],
+      "<unprintable>"];
+    If[!StringQ[s], s = "<unprintable>"];
+    (* two passes: a line break comes as "\n \n>   ", whose leading whitespace
+       would swallow the "\n" of the ">" continuation marker in one pass *)
+    iSVDiagClip @ StringTrim @ StringReplace[StringReplace[s, "\n>" -> "\n"], Whitespace -> " "]];
+
+iSVDiagGot[x_] :=
+  <|"GotHead" -> iSVDiagShortForm[Head[x]], "Got" -> iSVDiagShortForm[x]|>;
+
+iSVDiagProbeFault[id_String, rc_String, extra_Association : <||>] :=
+  <|id -> <|"Health" -> "Degraded", "ReasonCode" -> rc,
+      "Detail" -> Join[<|"ReasonCode" -> rc, "ProbeFault" -> True|>, extra]|>|>;
+
 (* normalize a probe result into a component-name -> <|"Health"->...|> map *)
 iSVDiagNormalizeProbeResult[id_String, res_] :=
   Which[
     StringQ[res],
       <|id -> <|"Health" -> iSVDiagNormalizeHealth[res]|>|>,
+    AssociationQ[res] && KeyExistsQ[res, "Health"] && !StringQ[res["Health"]],
+      iSVDiagProbeFault[id, "ProbeBadResult", iSVDiagGot[res]],
     AssociationQ[res] && KeyExistsQ[res, "Health"],
       <|Lookup[res, "Component", id] ->
           <|"Health" -> iSVDiagNormalizeHealth[res],
@@ -530,29 +593,44 @@ iSVDiagNormalizeProbeResult[id_String, res_] :=
     AssociationQ[res],
       <|id -> <|"Health" -> "OK", "Detail" -> res|>|>,
     True,
-      <|id -> <|"Health" -> "Degraded", "ReasonCode" -> "ProbeBadResult"|>|>];
+      iSVDiagProbeFault[id, "ProbeBadResult", iSVDiagGot[res]]];
 
-(* run every registered probe defensively; a throwing / slow / absent
-   probe yields a Degraded "ProbeError" component, never crashes the doctor. *)
+iSVDiagThrownGot[v_, tag_] :=
+  iSVDiagClip["Throw[" <> iSVDiagShortForm[v] <>
+    If[tag === None, "", ", " <> iSVDiagShortForm[tag]] <> "]"];
+
+(* run every registered probe defensively; a throwing / slow / aborting /
+   $Failed probe yields a Degraded "ProbeError" / "ProbeTimeout" component
+   (with Got), never crashes the doctor. *)
 iSVDiagRunRegisteredProbes[] :=
   Module[{out = <||>},
     KeyValueMap[
       Function[{id, fn},
-        Module[{res},
+        Module[{res, returned = False},
           (* defensive against message / $Failed / Abort / Throw / timeout:
-             Quiet (messages), CheckAbort (Abort), Catch (any Throw tag),
-             TimeConstrained (slow). Quiet@Check alone does NOT catch Throw. *)
+             Quiet (messages), CheckAbort (Abort), TimeConstrained (slow) and two
+             Catch layers: Catch[e, _, f] takes every TAGGED Throw but lets an
+             untagged Throw[v] through (measured, WL 15.0); the outer Catch[e]
+             takes that one. Quiet@Check alone does NOT catch Throw. *)
           res = Quiet @ CheckAbort[
-            Catch[TimeConstrained[fn[], 15, $iSVDiagProbeTimeout],
-              _, ($iSVDiagProbeError &)],
-            $iSVDiagProbeError];
-          If[res === $Failed, res = $iSVDiagProbeError];
+            Catch[
+              With[{r = Catch[TimeConstrained[fn[], 15, $iSVDiagProbeTimeout],
+                  _, Function[{v, tag}, iSVDiagProbeThrown[v, tag]]]},
+                returned = True; r]],
+            $iSVDiagProbeAborted];
+          If[!returned && res =!= $iSVDiagProbeAborted,
+            res = iSVDiagProbeThrown[res, None]];
           out = Join[out,
             Which[
               res === $iSVDiagProbeTimeout,
-                <|id -> <|"Health" -> "Degraded", "ReasonCode" -> "ProbeTimeout"|>|>,
-              res === $iSVDiagProbeError,
-                <|id -> <|"Health" -> "Degraded", "ReasonCode" -> "ProbeError"|>|>,
+                iSVDiagProbeFault[id, "ProbeTimeout", <|"TimeoutSeconds" -> 15|>],
+              res === $iSVDiagProbeAborted,
+                iSVDiagProbeFault[id, "ProbeError", <|"GotHead" -> "Abort", "Got" -> "Abort[]"|>],
+              MatchQ[res, iSVDiagProbeThrown[_, _]],
+                iSVDiagProbeFault[id, "ProbeError",
+                  <|"GotHead" -> "Throw", "Got" -> iSVDiagThrownGot @@ res|>],
+              res === $Failed,
+                iSVDiagProbeFault[id, "ProbeError", iSVDiagGot[res]],
               True,
                 iSVDiagNormalizeProbeResult[id, res]]]]],
       $iSVDiagProbes];
@@ -713,13 +791,45 @@ iSVDiagExtractLLMCalls[text_String, minAbs_?NumericQ] :=
       lines];
     recs];
 
+(* Weak lookup by full name, without interning (2026-10-30). The name is passed
+   in so the Symbol[...] call is built anew on every call. A literal
+   Symbol["Ctx`f"] written in a definition or a registered Function is one
+   subexpression shared by all calls: once it comes back unevaluated the kernel
+   marks it as evaluated and returns it unchanged on every later call (measured,
+   WL 15.0; also inside Module and in definitions with arguments; Update[]
+   clears it). strixhalo128 FE kernel: the Codex probe's literal
+   Symbol["ClaudeCode`ClaudeCodexHealthProbe"][] stuck at 16:02 (during a
+   5-minute SlideWorkflow button) and stayed until the kernel was restarted,
+   while the same call typed fresh evaluated normally. What made Symbol[] fail
+   that once is unknown, so a failure is logged with the evaluation context. *)
+iSVDiagWeakValue[name_String] :=
+  If[Names[name] === {}, None, Symbol[name]];
+
+(* the defined function named name; None when absent / undefined, $Failed when
+   the name exists but Symbol[] stayed unevaluated (logged). Symbol["x"] left
+   unevaluated has head Symbol too: only an atom is the symbol. *)
+iSVDiagWeakFunction[name_String] :=
+  If[Names[name] === {}, None,
+    With[{s = Symbol[name]},
+      Which[
+        !AtomQ[Unevaluated[s]],
+          Quiet @ Check[
+            SourceVaultDiagnosticsLog[<|
+              "Type" -> "DiagnosticsEvent",
+              "Component" -> "WeakLookup",
+              "Health" -> "Degraded",
+              "ReasonCode" -> "SymbolUnevaluated",
+              "Name" -> name, "Context" -> $Context, "ContextPath" -> $ContextPath|>],
+            Null];
+          $Failed,
+        Length[DownValues[s]] > 0, s,
+        True, None]]];
+
 iSVDiagCodexWorkingDir[] :=
   Module[{v},
-    v = If[Names["ClaudeCode`$ChatgptWorkingDirectory"] =!= {},
-      Symbol["ClaudeCode`$ChatgptWorkingDirectory"], None];
+    v = iSVDiagWeakValue["ClaudeCode`$ChatgptWorkingDirectory"];
     If[StringQ[v] && v =!= "", Return[v]];
-    v = If[Names["ClaudeCode`$OpenaiWorkingDirectory"] =!= {},
-      Symbol["ClaudeCode`$OpenaiWorkingDirectory"], None];
+    v = iSVDiagWeakValue["ClaudeCode`$OpenaiWorkingDirectory"];
     If[StringQ[v] && v =!= "", v, FileNameJoin[{$HomeDirectory, "OpenAI Working"}]]];
 
 Options[SourceVaultDiagnosticsLogCoverageProbe] = {
@@ -837,13 +947,16 @@ SourceVaultDiagnosticsRegisterProbe["LogCoverage",
 (* Codex health (2026-10-02). The probe body is owned by claudecode
    (ClaudeCode`ClaudeCodexHealthProbe, local files only); it is reached by
    public-symbol name weakly, so the load order of claudecode / SourceVault
-   does not matter and nothing happens when claudecode is absent. *)
+   does not matter and nothing happens when claudecode is absent.
+   2026-10-30: looked up through iSVDiagWeakFunction (a literal lookup here
+   stuck for good, see there); a failed lookup skips this tick only. *)
 SourceVaultDiagnosticsRegisterProbe["Codex",
   Function[
-    If[Names["ClaudeCode`ClaudeCodexHealthProbe"] =!= {} &&
-       With[{s = Symbol["ClaudeCode`ClaudeCodexHealthProbe"]}, Length[DownValues[s]] > 0],
-      Symbol["ClaudeCode`ClaudeCodexHealthProbe"][],
-      <|"Health" -> "OK", "ReasonCode" -> "NotApplicable"|>]]];
+    With[{p = iSVDiagWeakFunction["ClaudeCode`ClaudeCodexHealthProbe"]},
+      Which[
+        p === None, <|"Health" -> "OK", "ReasonCode" -> "NotApplicable"|>,
+        p === $Failed, <|"Health" -> "OK", "ReasonCode" -> "ProbeSkipped"|>,
+        True, p[]]]]];
 
 (* ------------------------------------------------------------
    Shadow repair (2026-08-26): Remove[] the accidental empty
@@ -1191,6 +1304,7 @@ SourceVaultShadowSanitizeNotebook[nb_NotebookObject, OptionsPattern[]] :=
       (* in-memory scan (covers outputs produced since the last save) through
          the WXF byte form: every non-System symbol is fully qualified there,
          so the same token scan applies and nothing is evaluated *)
+      (* :PolicyWaiver: PRIV-NB-READ 利用者が指定したノート内のシンボル名だけをカーネル内で調べて直す。中身は外に出さない *)
       hits = iSVDiagShadowScanText[iSVDiagShadowWXFText[NotebookGet[nb]], "<notebook>",
         OptionValue["Names"]];
       targets = iSVDiagShadowSelectTargets[hits, OptionValue["Contexts"]];
@@ -1473,6 +1587,12 @@ SourceVaultDiagnosticsLog[record_Association] :=
        byte-string を ISO8859-1 で素通し (= 元バイトそのまま)。 *)
     json = Quiet @ Check[
       ExportByteArray[enriched, "RawJSON", "Compact" -> True], $Failed];
+    (* one non-JSON value (e.g. MailIntent Body "SummaryURI" -> Missing[])
+       fails the whole record: retry on the JSON-safe copy so the record keeps
+       its fields instead of falling through to "{}" *)
+    If[! ByteArrayQ[json],
+      json = Quiet @ Check[
+        ExportByteArray[iSVDiagJSONSafe[enriched], "RawJSON", "Compact" -> True], $Failed]];
     If[! ByteArrayQ[json],
       json = Quiet @ Check[
         StringToByteArray[iSVDiagToJSON[enriched], "ISO8859-1"], $Failed]];
@@ -1982,12 +2102,38 @@ iSVDiagFENotice[comp_String, health_String, msg_String] :=
       Bold, FontSize -> 11,
       If[health === "Failing", RGBColor[0.8, 0.1, 0.1], RGBColor[0.75, 0.35, 0.]]]]];
 
+(* 2026-10-17: a probe-side fault must not read like a broken component
+   ("Codex: ProbeBadResult" was taken for a Codex failure). The text says the
+   health check itself misbehaved and carries what it returned (Got). Severity
+   stays High / IssueRequested: the issue (with Got) is how the probe gets
+   fixed; the issue DB only takes High / Failing signals. *)
+iSVDiagProbeFaultQ[rc_String, d_Association] :=
+  MemberQ[$iSVDiagProbeFaultCodes, rc] || TrueQ[Lookup[d, "ProbeFault", False]];
+
+iSVDiagProbeFaultMessage[c_String, rc_String, d_Association] :=
+  Module[{what, got = Lookup[d, "Got", None], gh = Lookup[d, "GotHead", None]},
+    what = Switch[rc,
+      "ProbeTimeout",
+        "\:304c\:6642\:9593\:5185 (15 \:79d2) \:306b\:7d42\:308f\:308a\:307e\:305b\:3093\:3067\:3057\:305f",
+      "ProbeError",
+        "\:304c\:30a8\:30e9\:30fc\:3067\:6b62\:307e\:308a\:307e\:3057\:305f",
+      "ProbeInternalError",
+        "\:304c\:5185\:90e8\:3067\:60f3\:5b9a\:5916\:306e\:72b6\:614b\:306b\:306a\:308a\:307e\:3057\:305f",
+      _,
+        "\:304c\:60f3\:5b9a\:5916\:306e\:5024\:3092\:8fd4\:3057\:307e\:3057\:305f"];
+    c <> " \:306e\:5065\:5168\:6027\:30c1\:30a7\:30c3\:30af\:81ea\:4f53" <> what <>
+      " (" <> c <> " \:306e\:6545\:969c\:3067\:306f\:306a\:304f\:8a3a\:65ad\:5074\:306e\:4e0d\:5177\:5408\:3067\:3059\:3002ReasonCode: " <>
+      rc <> ")\:3002" <>
+      If[StringQ[got],
+        "\:53d7\:3051\:53d6\:3063\:305f\:5024 (" <> If[StringQ[gh], gh, "?"] <> "): " <> got,
+        ""]];
+
 iSVDiagWarnFromDoctor[doctor_Association] :=
   Module[{comps = Lookup[doctor, "ComponentHealth", <||>], now = AbsoluteTime[], out = {}},
     If[!AssociationQ[comps], Return[{}]];
     Scan[
       Function[c,
-        Module[{v = Lookup[comps, c, <||>], h, d, rc, key, msg, prior},
+        Module[{v = Lookup[comps, c, <||>], h, d, rc, key, msg, prior, fault},
           If[!AssociationQ[v], v = <||>];
           h = ToString @ Lookup[v, "Health", "OK"];
           d = Lookup[v, "Detail", <||>];
@@ -1998,12 +2144,17 @@ iSVDiagWarnFromDoctor[doctor_Association] :=
             prior = Lookup[$iSVDiagWarnState, key, None];
             If[!NumericQ[prior] || now - prior > 86400,
               $iSVDiagWarnState[key] = now;
-              msg = ToString @ Lookup[d, "Message", c <> ": " <> rc];
+              fault = iSVDiagProbeFaultQ[rc, d];
+              msg = If[fault, iSVDiagProbeFaultMessage[c, rc, d],
+                ToString @ Lookup[d, "Message", c <> ": " <> rc]];
               Quiet @ Check[
-                SourceVaultDiagnosticsEscalate[<|
+                SourceVaultDiagnosticsEscalate[Join[<|
                   "Component" -> c, "ReasonCode" -> rc, "Health" -> h,
                   "Severity" -> "High", "IssueRequested" -> True,
-                  "Producer" -> "diagnostics", "Summary" -> msg|>],
+                  "Producer" -> "diagnostics", "Summary" -> msg|>,
+                  If[fault,
+                    Join[<|"ProbeFault" -> True|>, KeyTake[d, {"GotHead", "Got"}]],
+                    <||>]]],
                 Null];
               Quiet @ Check[iSVDiagFENotice[c, h, msg], Null];
               AppendTo[out, key]],
@@ -2224,14 +2375,13 @@ iSVDiagSendMailReal[recipient_, subject_, body_] :=
    reentrancy guard: issues 層自身の障害 event は再投入しない (V3-B5)。
    ------------------------------------------------------------ *)
 
-iSVDiagIssueFanOut[event_Association] := Module[{comp, payload, e, r},
+iSVDiagIssueFanOut[event_Association] := Module[{comp, payload, e, r, sink},
   comp = ToString @ Lookup[event, "Component", ""];
   If[ToString @ Lookup[event, "Producer", ""] === "issues" ||
      comp === "IssueDB" || StringStartsQ[comp, "IssueDB:"],
     Return[<|"Queued" -> False, "Reason" -> "Reentrant"|>]];
-  If[Names["SourceVault`SourceVaultIssueSignalEnqueue"] === {} ||
-     With[{s = Symbol["SourceVault`SourceVaultIssueSignalEnqueue"]},
-       Length[DownValues[s]]] === 0,
+  sink = iSVDiagWeakFunction["SourceVault`SourceVaultIssueSignalEnqueue"];
+  If[sink === None || sink === $Failed,
     Return[<|"Queued" -> False, "Reason" -> "SinkUnavailable"|>]];
   payload = Replace[Lookup[event, "Payload", <||>],
     Except[_Association] -> <||>];
@@ -2258,8 +2408,7 @@ iSVDiagIssueFanOut[event_Association] := Module[{comp, payload, e, r},
     "SignalKind" -> Lookup[event, "SignalKind", Missing["NotProvided"]],
     "Correlation" -> Lookup[event, "Correlation", Missing["NotProvided"]]|>;
   e = DeleteCases[e, _Missing];
-  r = Quiet @ Check[
-    Symbol["SourceVault`SourceVaultIssueSignalEnqueue"][e], $Failed];
+  r = Quiet @ Check[sink[e], $Failed];
   Which[
     AssociationQ[r] && TrueQ[Lookup[r, "Queued", False]],
       <|"Queued" -> True, "Reason" -> ToString @ Lookup[r, "Reason", "Queued"],
@@ -2398,18 +2547,15 @@ iSVDiagIngestSeenPath[] :=
    schema 行) も ingest 対象にする。列挙は servicemanager の machine root へ
    弱結合 (service kernel は常に servicemanager を積んでいる)。単体テストから
    差し替えられるよう独立ヘルパにする。 *)
-iSVDiagWatchdogLogFiles[] := Module[{root, mroot},
+iSVDiagWatchdogLogFiles[] := Module[{root, mroot, machineRoot},
   (* 2026-07-09 fix: DownValues[Symbol["..."]] は HoldAll で機能しない
-     (DownValues::sym)。With でシンボルを束縛してから DownValues を取る。 *)
-  If[Names["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"] === {} ||
-     With[{sym = Symbol["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"]},
-       Length[DownValues[sym]]] === 0,
-    Return[{}]];
+     (DownValues::sym)。2026-10-30: 名前で引くのは iSVDiagWeakFunction
+     (直書きの Symbol["..."] は一度未評価になると固まる) *)
+  machineRoot = iSVDiagWeakFunction["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"];
+  If[machineRoot === None || machineRoot === $Failed, Return[{}]];
   root = Quiet @ Check[SourceVault`SourceVaultCoreRoot[], $Failed];
   If[! StringQ[root], Return[{}]];
-  mroot = Quiet @ Check[
-    Symbol["SourceVault`ServiceManagerPrivate`iRuntimeMachineRoot"][root],
-    $Failed];
+  mroot = Quiet @ Check[machineRoot[root], $Failed];
   If[! StringQ[mroot] || ! DirectoryQ[mroot], Return[{}]];
   Quiet @ Check[
     FileNames["watchdog.log.jsonl", FileNameJoin[{mroot, "services"}], 2],
@@ -2547,6 +2693,20 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
   <|"Ingested" -> ingested, "Corrupt" -> corrupt, "Foreign" -> foreign,
     "PrunedSpools" -> pruned,
     "Files" -> Length[files] + Length[wdFiles]|>];
+
+(* privacy contracts for functions added after the initial review (model: iSVMDRegisterPrivacyContracts
+   in SourceVault_maildb.wl). No-op when SourceVault_privacy.wl is not loaded. *)
+iSVDiagRegisterPrivacyContracts[] :=
+  Quiet @ Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Internal", "Module" -> "SourceVault_diagnostics.wl", "NoDataFlow" -> Last[#]|>] &,
+        {{"SourceVaultDiagnosticsLogCoverageProbe", "Reads the LLM-call log and project-folder timestamps but returns only health, reason codes and per-provider/day counts; no prompt text."},
+         {"SourceVaultShadowScanFiles", "Byte-level token search in the caller's own files; returns file paths, Ctx`Name tokens and counts, never cell content."},
+         {"SourceVaultShadowSanitizeFile", "Rewrites shadow tokens in the caller's file; returns the file, token counts and the backup path."},
+         {"SourceVaultShadowSanitizeNotebook", "Rewrites shadow symbols in an open notebook in place; returns the notebook object, a cell count and symbol names."}}]];
+    Null, Null];
+iSVDiagRegisterPrivacyContracts[];
 
 End[];
 

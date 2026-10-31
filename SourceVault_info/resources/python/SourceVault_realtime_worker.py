@@ -3383,6 +3383,7 @@ class LiveBridge(RealtimeBridge):
                 if suspended is not None and pieces:
                     self.pending_narration = suspended["id"]
                     self.narration_rest = pieces[1:]
+                    self._hold_start_timer_locked()
             self._write_state(qaOpen=False, interrupted=False)
             if deferred is not None and suspended is None:
                 # The next slide's script, held back while the Q&A ran.
@@ -3516,6 +3517,20 @@ class LiveBridge(RealtimeBridge):
             direction += "話し方 (声に出さない): " + self.narration_extra
         return direction
 
+    def _hold_start_timer_locked(self) -> None:
+        """Arm the start watch for a narration just published (purpose_lock held).
+
+        pending_narration is published a few file writes before
+        _send_narration_piece sets the real deadline.  A housekeeping tick in
+        between used the previous narration's clock -- 0.0 for the first one
+        of a session -- and gave the script up at once (2026-10-19: "読み上げが
+        始まらなかったため次へ進みます" 1.6 ms after slide 2 began; the slide
+        was skipped).  _send_narration_piece then sets the real deadline.
+        """
+        self.narration_sent_at = time.monotonic() + 120.0
+        self.narration_resent = False
+        self.narration_started_speaking = False
+
     def _send_narration_piece(self, piece: str, *, first: bool, resume: bool = False) -> None:
         """Deliver one piece of script in two steps (on a thread).
 
@@ -3608,6 +3623,7 @@ class LiveBridge(RealtimeBridge):
             self.suspended = None
             self.pending_narration = identifier
             self.narration_rest = pieces[1:]
+            self._hold_start_timer_locked()
         self._record_begin(command)
         self.qa_open = False
         self._write_state(narrationActive=identifier, narrationDone=None,

@@ -6,6 +6,8 @@
 
 **翻訳ノートブック**: `SourceVaultMakePaperNotebook` は web の HTML ソースに OA PDF が結ばれていれば PDF から `DocImportPaper` で作る (未確認ならその場で探す。`"PreferPDF" -> False` で HTML から)。
 
+**手で落とした PDF (SourceVaultAttachOpenAccessPDF, 2026-10-24)**: ScienceDirect などが OA の PDF でも機械取得を 403 で拒むときは、ブラウザで落とした PDF をページに結ぶ。OA の根拠は自動のときと同じ基準で確かめ、PDF の先頭ページに DOI か題があることも確かめる (違う PDF をページの PL で取り込まないため)。PDF はローカルファイルのソースとして取り込み、ページのメタの "OpenAccessPDF" は Via "manual" になる。手で結んだものは自動の再探索 (Force でも) で上書きしない。
+
 ## オープンアクセスの判定
 
 次のどれか 1 つがあれば OA。無ければ出版社の PDF は取りに行かない (大学の IP で購読誌の PDF が落とせても公開データ PL 0 として取り込まない)。arXiv は常に可。
@@ -54,12 +56,18 @@ Options: "RequireOpenAccess" -> True (False なら OA の根拠が無くても�
 
 ### SourceVaultIngestOpenAccessPDF[ref, opts] → Association
 探して取り込み、ページと結ぶ。
-→ `<|"Status" ("Ingested" | "AlreadyIngested" | "IsPDF" | "NotScholarly" | "NotOpenAccess" | "NoCandidate" | "Blocked" | "NotRetrieved"), "SourceId" (PDF のソース), "LandingSourceId", "URL", "Via", "DOI", "License", "Evidence", "Tried", "Title", "Cached"|>`
+→ `<|"Status" ("Ingested" | "AlreadyIngested" | "IsPDF" | "NotScholarly" | "NotOpenAccess" | "NoCandidate" | "Blocked" | "NotRetrieved"), "SourceId" (PDF のソース), "LandingSourceId", "URL", "Via", "DOI", "License", "Evidence", "CheckedAt", "Tried", "Title", "Cached"|>`
 Options: "Force" -> False (確認済みでも探し直す), "RequireOpenAccess" -> True, "FetchPage" -> True, "Verbose" -> False
 例: `SourceVaultIngestOpenAccessPDF["src-url-…", "Verbose" -> True]`、`SourceVaultIngestOpenAccessPDF["https://www.pnas.org/doi/10.1073/pnas.…"]`
 
 ### SourceVaultOpenAccessPDFSource[ref] → Association | Missing
 ページに結ばれた PDF のソース `<|"SourceId", "URL", "File" (現 PC の raw パス), "Title", "PrivacyLevel", "Via", "DOI", "License", "LandingSourceId"|>`。結ばれていなければ `Missing["NotChecked" | "NotOpenAccess" | "Blocked" | …]`。
+
+### SourceVaultAttachOpenAccessPDF[ref, pdfPath, opts] → Association
+手でダウンロードした PDF を論文ページ (ingest 済みの src-ID / URL) の OA PDF として取り込んで結ぶ。出版社サイトが機械取得を 403 で拒むとき用。OA の根拠 (`SourceVaultFindOpenAccessPDF` と同じ基準) が無ければ結ばない。PDF の先頭 3 ページにその論文の DOI か題があることも確かめる。PrivacyLevel と Topic はページから継承。ページのメタ "OpenAccessPDF" は Via "manual" になり、`SourceVaultIngestOpenAccessPDF` は Force でもこれを上書きしない。
+→ `<|"Status" ("Linked" | "NotIngested" | "IsPDF" | "NotPDF" | "NotScholarly" | "NotOpenAccess" | "Mismatch" | "IngestFailed"), "SourceId" (PDF のソース), "LandingSourceId", "DOI", "License", "Evidence", "Matched" ("DOI" | "Title" | "Skipped"), "PrivacyLevel"|>`
+Options: "URL" -> None (PDF を落とした URL。記録するだけ), "VerifyMatch" -> True (False で DOI / 題の照合を省く), "Verbose" -> False
+例: `SourceVaultAttachOpenAccessPDF["src-url-…", "/Downloads/paper.pdf"]`; 結んだ後 `SourceVaultMakePaperNotebook[ref, "Force" -> True]` で翻訳ノートブックを PDF から作り直す。
 
 ### SourceVaultBackfillOpenAccessPDFs[opts] → Dataset
 ingest 済みの web ソースのうち論文ページ (HTML で DOI / citation_pdf_url / citation_arxiv_id / 論文 URL) を走査して取り込む。列: SourceId, Title, Status, Via, PDFSourceId, DOI。

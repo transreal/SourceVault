@@ -943,8 +943,9 @@ SourceVaultCaneSensitiveDoctor[OptionsPattern[]] := Module[{d = iAnomRead[iAnomS
 If[! ValueQ[$svAnomProbeRegistered], $svAnomProbeRegistered = False];
 SourceVaultRegisterCaneDiagnostics[] := Quiet@Check[
   If[Names["SourceVault`SourceVaultDiagnosticsRegisterProbe"] =!= {} &&
-     With[{sym = Symbol["SourceVault`SourceVaultDiagnosticsRegisterProbe"]}, Length[DownValues[sym]]] > 0,
-    Symbol["SourceVault`SourceVaultDiagnosticsRegisterProbe"]["CaneAnomalyPipeline",
+     (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+     With[{sym = Symbol[Identity["SourceVault`SourceVaultDiagnosticsRegisterProbe"]]}, Length[DownValues[sym]]] > 0,
+    Symbol[Identity["SourceVault`SourceVaultDiagnosticsRegisterProbe"]]["CaneAnomalyPipeline",
       Function[SourceVaultCaneDiagnosticsProbe[]]];
     $svAnomProbeRegistered = True;
     <|"Status" -> "Registered", "ProbeId" -> "CaneAnomalyPipeline"|>,

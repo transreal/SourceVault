@@ -126,7 +126,7 @@ PrivacyLevelが0.5(クラウド送信境界)未満のときのみTrueを返す(s
 Options: opts
 
 ### SourceVaultClassifyProviderTrustDomain[label] → "Cloud"|"Local"|"Private"|Missing["UnclassifiedTrustDomain"]
-プロバイダー/ルートラベルをTrustDomainにマップする(spec 12.2)。ホストリゾルバーがTrustDomainを明示しないときのみ使うフォールバック分類(明示TrustDomainが常に優先)。"chatgptcodex"/"codex"/"ChatGPTCodexCLI"/"ClaudeCodeCLI"/"claudecode"/"CloudLLM"/"anthropic"/"openai" -> "Cloud"; "LocalOnly"/"local" -> "Local"; "PrivateLLM"/"private" -> "Private"。曖昧または不明なラベル(LocalOpenAICompatible, ExternalAPI等)はMissing["UnclassifiedTrustDomain"]でホストリゾルバーがTrustDomainを明示する必要がある。ChatGPT CodexはクラウドバックCLI(ファイルシステムはローカルだがLLM推論はクラウド)。
+プロバイダー/ルートラベルをTrustDomainにマップする(spec 12.2)。ホストリゾルバーがTrustDomainを明示しないときのみ使うフォールバック分類(明示TrustDomainが常に優先)。"chatgptcodex"/"codex"/"ChatGPTCodexCLI"/"ClaudeCodeCLI"/"claudecode"/"CloudLLM"/"anthropic"/"openai" -> "Cloud"; "LocalOnly"/"local"/"LocalOnlyLLM" -> "Local"; "PrivateLLM"/"private llm"/"private" -> "Private"。曖昧または不明なラベル(LocalOpenAICompatible, ExternalAPI等)はMissing["UnclassifiedTrustDomain"]でホストリゾルバーがTrustDomainを明示する必要がある。ChatGPT CodexはクラウドバックCLI(ファイルシステムはローカルだがLLM推論はクラウド)。
 
 ## 再処理計画
 

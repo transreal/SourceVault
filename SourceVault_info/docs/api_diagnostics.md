@@ -137,7 +137,7 @@ workflow / saved-prompt リスト先頭用のコンパクトな framed status ba
 
 ### SourceVaultDiagnosticsRegisterProbe[id_String, probeFn_] → id
 プロデューサヘルスプローブを id で登録。probeFn は SourceVaultSystemDoctor から 0-arg で呼ばれ、health string / "Health" キーを持つ Association / component-name -> <|"Health"->...|> の Association のいずれかを返さねばならない。同一 id の再登録は置換。レジストリは本ファイルの Get[] 再実行を生き残る（プロデューサは自身のロード時に弱く登録）。id を返す。
-ロード時に組込み登録: "LogCoverage"（SourceVaultDiagnosticsLogCoverageProbe）, "Codex"（ClaudeCode`ClaudeCodexHealthProbe を弱く呼ぶ。claudecode 不在なら OK/NotApplicable）。
+ロード時に組込み登録: "LogCoverage"（SourceVaultDiagnosticsLogCoverageProbe）, "Codex"（ClaudeCode`ClaudeCodexHealthProbe を弱く呼ぶ; claudecode 未ロードなら OK/NotApplicable、lookup 失敗（一時的障害）なら OK/ProbeSkipped）。
 
 ### SourceVaultDiagnosticsListProbes[] → List
 登録済み診断プローブ id のリストを返す。

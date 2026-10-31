@@ -10,6 +10,8 @@
 URI envelope 正準形: `<|"Status"->"OK", "URI"->"sv://artifact/...", "ObjectKind", "DomainKind", "MediaKind", "PrivacyLevel", "Marked"|>`。本文は持たない (中身は resolve で取得)。
 
 ### SourceVaultURIEnvelopeQ[x] → True|False
+x が URI envelope (Status/URI/PrivacyLevel 必須) か判定する。
+
 ### SourceVaultNormalizeURIEnvelope[x]
 envelope / `"sv://..."` 文字列を正準 envelope に正規化。PrivacyLevel 欠落は 0.85 (fail-closed)。
 → Association | Failure["InvalidURIEnvelope"]
@@ -20,6 +22,7 @@ envelope / `"sv://..."` 文字列を正準 envelope に正規化。PrivacyLevel 
 Options: `"Source"` -> "UserTyped" (PL 既定 0.) | "NotebookCell" | "VariableSnapshot" | "FileContent" | "StepOutput" (以上 PL 既定 0.85), `"PrivacyLevel"` -> Automatic | 数値
 
 ### SourceVaultValueEnvelopeQ[x] → True|False
+x が ValueEnvelope (PortType->"Value"+PrivacyLevel) か判定する。
 
 ## PortBindingRef (セル / 変数 / ファイル / URI の同一性つき束縛)
 
@@ -84,7 +87,7 @@ envelope/ValueEnvelope/PortBindingRef リストの PrivacyLevel の Max (判定�
 → True|False
 
 ### $SourceVaultConfidentialPrivacyLevel
-型: Real, 既定 1.0
+型: Real, 初期値: 1.0
 confidential 伝搬時に deposit へ適用する PrivacyLevel 下限。True のとき、ワークフローが SourceVault へ格納する全出力 (step 出力 WiringValue / InputBundle / blob) は PL >= この値 + `IngestProvenance.ConfidentialDependent->True` の秘密依存データになる。
 
 ## 関数選定 / wiring planner (propose - validate - execute)
@@ -112,11 +115,11 @@ manual / tests / 承認済み workflow 用の実行層。required 未充足は�
 Options: `"OnMissingInput"` -> "Return", `"AllowEffects"` -> False
 
 ### $SourceVaultWiringLLM
-型: None | Function (prompt_String -> response_String)
-LLM wiring エンジン。None なら ClaudeQuerySync を PrivacyLevel 1.0 (ローカルモデル強制) で弱結合利用。
+型: None | Function (prompt_String -> response_String), 初期値: None
+LLM wiring エンジン。None なら ClaudeCode`ClaudeQuerySync を PrivacyLevel 1.0 (ローカルモデル強制) で弱結合利用。capbroker 不在は fail-open、拒否は $Failed。テスト時は mock 関数を設定する。
 
 ### SourceVaultFillUnresolvedWithLLM[plan]
-Ambiguous 残余の LLM 充填 (ProposeWiringPlan Hybrid が自動適用)。候補外選択・不正 JSON は破棄して Warnings に記録。
+Ambiguous 残余の LLM 充填 (ProposeWiringPlan Hybrid が自動適用)。LLM には候補の identity (From/Kind/DomainKind/Preview、Redacted は除外) のみ渡し本文は渡さない。出力は固定 JSON schema (候補 From からの enum 選択のみ)。候補外選択・不正 JSON は破棄して Warnings に記録。採用 binding は FilledBy->"LLM"。"Deterministic" 指定で無効。
 → WiringPlan
 
 ## NB 境界 (初段 / 最終段)

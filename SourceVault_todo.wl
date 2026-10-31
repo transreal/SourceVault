@@ -759,8 +759,9 @@ iSVTDNbRowsEnsure[] :=
 Options[SourceVaultTodoRebuildIndex] = {"Scan" -> "OnWork"};
 SourceVaultTodoRebuildIndex[OptionsPattern[]] :=
   Module[{scan = OptionValue["Scan"], roots = {}, onw, offw, rows},
-    onw = Quiet@Check[Symbol["Global`$onWork"], $Failed];
-    offw = Quiet@Check[Symbol["Global`$offWork"], $Failed];
+    (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+    onw = Quiet@Check[Symbol[Identity["Global`$onWork"]], $Failed];
+    offw = Quiet@Check[Symbol[Identity["Global`$offWork"]], $Failed];
     Which[
       scan === "All",
         If[StringQ[onw] && DirectoryQ[onw], AppendTo[roots, onw]];
@@ -1326,7 +1327,7 @@ SourceVaultTodoShowSummary[id_String, OptionsPattern[]] :=
     noteFile = iSVTDNoteFile[id];
     If[! TrueQ[OptionValue["Fresh"]] && StringQ[noteFile],
       iSVTDNoteMigrate[noteFile];
-      Quiet@Check[NotebookOpen[noteFile], $Failed];
+      Quiet@Check[NotebookOpen[noteFile], $Failed]; (* :PolicyWaiver: PRIV-NB-READ shows the saved note the user asked for; nothing is read into the kernel *)
       Return[rec]];
     If[! AssociationQ[rec], Return[rec]];
     title = With[{t = Lookup[rec, "Title", id]},
@@ -1425,7 +1426,7 @@ iSVTDLLMReady[] :=
    use the cloud CLI (public/low-privacy content). *)
 iSVTDPrivateModelTuple[] :=
   If[Length[Names["ClaudeCode`$ClaudePrivateModel"]] > 0,
-    With[{m = Quiet@Check[Symbol["ClaudeCode`$ClaudePrivateModel"], $Failed]},
+    With[{m = Quiet@Check[Symbol[Identity["ClaudeCode`$ClaudePrivateModel"]], $Failed]},
       If[ListQ[m] && Length[m] >= 2, m, $Failed]],
     $Failed];
 iSVTDPrivateModelReady[] := ListQ[iSVTDPrivateModelTuple[]];

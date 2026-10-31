@@ -269,6 +269,19 @@ iKGStr[v_] := Which[StringQ[v], v, v === Null || MissingQ[v] || v === None, "", 
 iKGNum[v_, default_] := If[NumericQ[v], N[v], default];
 iKGClip[v_, default_] := If[NumericQ[v], Clip[N[v], {0., 1.}], default];
 iKGList[v_] := Which[ListQ[v], v, v === Null || MissingQ[v] || v === None, {}, True, {v}];
+
+(* ---- privacy exits (SourceVault_privacy.wl, DownValues-guarded weak coupling) ----
+   A KG's PL = Max of the graph's PrivacyLevel and every node's (the layer's default 0.0 = published paper).
+   Store readers and functions that turn KG content into a form without its own PrivacyLevel (Dataset /
+   Graphics / Graph / JSON / outline / prompt text) record it through the canonical Result exit, which keeps
+   the value as is (the views too, like SourceVaultMailDataset: SlideWorkflow and the tests compute on the
+   Dataset / Graphics, so no badge wrapper). Transforms that return a KG keep the PL inside the KG. *)
+iKGPL[kg_Association] := Max[iKGClip[Lookup[kg, "PrivacyLevel", 0.], 0.],
+  Map[iKGClip[Lookup[#, "PrivacyLevel", 0.], 0.] &, Select[iKGList[Lookup[kg, "Nodes", {}]], AssociationQ]], 0.];
+iKGPL[_] := 0.;
+iKGRecordsPL[rs_List] := Max[Map[iKGClip[Lookup[#, "PrivacyLevel", 0.], 0.] &, Select[rs, AssociationQ]], 0.];
+iKGResult[x_, pl_] := If[Length[DownValues[SourceVault`SourceVaultPrivateResult]] > 0,
+  Quiet @ Check[SourceVault`SourceVaultPrivateResult[x, pl], x], x];
 iKGStrList[v_] := Select[iKGStr /@ iKGList[v], # =!= "" &];
 iKGAssocQ[v_] := AssociationQ[v] || MatchQ[v, {___Rule}];
 iKGAssoc[v_] := If[MatchQ[v, {___Rule}], Association[v], v];
@@ -397,7 +410,9 @@ iKGNormalizeEdge[ed_?iKGAssocQ] := Module[{e = iKGAssoc[ed], kind, spec},
   e["OrderKind"] = With[{k = Lookup[e, "OrderKind", None]},
     If[StringQ[k] && k =!= "", k, spec["OrderKind"]]];
   e["EvidenceRefs"] = iKGStrList[Lookup[e, "EvidenceRefs", {}]];
-  KeyTake[e, {"From", "To", "EdgeKind", "Weight", "Confidence", "Order", "OrderKind", "EvidenceRefs"}]];
+  (* 2026-10-18: \:7531\:6765 (Origin\:3001\:4f8b "Link" = SlideGraphLink \:304c\:8db3\:3057\:305f\:7bc0\:3069\:3046\:3057\:306e\:8fba) \:3068\:7406\:7531 (Note) \:306f\:6587\:5b57\:5217\:306e\:3068\:304d\:3060\:3051\:6b8b\:3059 *)
+  Join[KeyTake[e, {"From", "To", "EdgeKind", "Weight", "Confidence", "Order", "OrderKind", "EvidenceRefs"}],
+    Select[KeyTake[e, {"Origin", "Note"}], StringQ[#] && StringTrim[#] =!= "" &]]];
 iKGNormalizeEdge[___] := $Failed;
 
 iKGPickRoot[nodes_List, explicit_] := Module[{ids = Lookup[nodes, "Id"], cand},
@@ -470,7 +485,7 @@ SourceVaultKGFromJSON[a_?iKGAssocQ] := Module[{kg = SourceVaultKGValidate[iKGFix
   kg];
 SourceVaultKGFromJSON[_] := Failure["BadJSON", <|"MessageTemplate" -> "expected JSON text or an Association"|>];
 
-SourceVaultKGToJSON[kg_Association] := iKGJSONString[kg];
+SourceVaultKGToJSON[kg_Association] := iKGResult[iKGJSONString[kg], iKGPL[kg]];
 
 SourceVaultKGNode[kg_Association, id_String] :=
   FirstCase[Lookup[kg, "Nodes", {}], n_Association /; n["Id"] === id, Missing["NoNode", id]];
@@ -575,21 +590,25 @@ iKGSaveRawFile[gid_String, kg_Association] := Module[{path = iKGGraphFile[gid], 
   iKGWriteJSON[path, Append[kg, "UpdatedAtUTC" -> iKGUTCNow[]]]];
 
 (* v1.60: a saved Subgraph record is materialized from its mother (see the Subgraph section below) *)
-SourceVaultKGLoad[graphId_String] := Module[{d = iKGReadJSON[iKGGraphFile[graphId]]},
-  Which[
+SourceVaultKGLoad[graphId_String] := Module[{d = iKGReadJSON[iKGGraphFile[graphId]], kg},
+  kg = Which[
     MissingQ[d], d,
     iKGSubgraphFileQ[d], iKGMaterializeSubgraph[iKGFixMojibakeDeep[d]],
-    True, SourceVaultKGValidate[iKGFixMojibakeDeep[d]]]];
+    True, SourceVaultKGValidate[iKGFixMojibakeDeep[d]]];
+  If[AssociationQ[kg], iKGResult[kg, iKGPL[kg]], kg]];
 
-SourceVaultKGList[] := Module[{files},
+(* the rows carry titles; PL = Max over the listed graphs (titles of a private graph are private) *)
+SourceVaultKGList[] := Module[{files, pls = {}, rows},
   files = Quiet @ Check[FileNames["*.json", iKGGraphDir[]], {}];
-  Select[Map[Function[f, With[{d = iKGReadJSON[f]},
+  rows = Select[Map[Function[f, With[{d = iKGReadJSON[f]},
     If[! AssociationQ[d], Nothing,
+      AppendTo[pls, iKGPL[d]];
       <|"GraphId" -> iKGStr[Lookup[d, "GraphId", ""]], "Title" -> iKGStr[Lookup[d, "Title", ""]],
         "Kind" -> iKGStr[Lookup[d, "Kind", ""]], "Parent" -> iKGStr[Lookup[d, "Parent", ""]],
         "NodeCount" -> Length[iKGList[Lookup[d, "Nodes", {}]]] + Length[iKGList[Lookup[d, "Selection", {}]]],
         "EdgeCount" -> Length[iKGList[Lookup[d, "Edges", {}]]],
-        "UpdatedAtUTC" -> iKGStr[Lookup[d, "UpdatedAtUTC", ""]], "File" -> f|>]]], files], AssociationQ]];
+        "UpdatedAtUTC" -> iKGStr[Lookup[d, "UpdatedAtUTC", ""]], "File" -> f|>]]], files], AssociationQ];
+  iKGResult[rows, Max[pls, 0.]]];
 
 SourceVaultKGDelete[graphId_String] := With[{p = iKGGraphFile[graphId]},
   If[FileExistsQ[p], Quiet @ Check[DeleteFile[p]; True, False], False]];
@@ -651,7 +670,7 @@ iKGMaterializeSubgraph[dIn_] := Module[
     "PrivacyLevel" -> Max[iKGClip[Lookup[d, "PrivacyLevel", 0.], 0.], iKGClip[Lookup[parent, "PrivacyLevel", 0.], 0.]],
     "Root" -> iKGStr[Lookup[d, "Root", "root"]], "Nodes" -> nodes, "Edges" -> edges, "Selection" -> sel,
     "Warnings" -> iKGStrList[Lookup[d, "Warnings", {}]], "ParentUpdatedAtUTC" -> iKGStr[Lookup[parent, "UpdatedAtUTC", ""]]|>;
-  Do[If[AssociationQ[Lookup[d, k, None]], kg[k] = KeyMap[ToString, d[k]]], {k, {"Toc", "Narrative"}}];
+  Do[If[AssociationQ[Lookup[d, k, None]], kg[k] = KeyMap[ToString, d[k]]], {k, {"Toc", "Narrative", "Links"}}];
   If[ListQ[Lookup[d, "Parts", None]], kg["Parts"] = iKGAssocList[d["Parts"]]];
   SourceVaultKGValidate[kg]];
 
@@ -702,12 +721,14 @@ iKGSubgraphSave[kgIn_Association] := Module[
     "Language" -> iKGStr[Lookup[kg, "Language", ""]], "Root" -> root, "Selection" -> sel, "Nodes" -> local, "Edges" -> localEdges,
     "Overlay" -> overlay, "PrivacyLevel" -> iKGClip[Lookup[kg, "PrivacyLevel", 0.], 0.],
     "Warnings" -> iKGStrList[Lookup[kg, "Warnings", {}]]|>;
-  Do[If[KeyExistsQ[kg, k] && kg[k] =!= None, sub[k] = kg[k]], {k, {"Toc", "Narrative", "Parts"}}];
+  Do[If[KeyExistsQ[kg, k] && kg[k] =!= None, sub[k] = kg[k]], {k, {"Toc", "Narrative", "Parts", "Links"}}];
   iKGSaveRawFile[gid, sub]];
 
 SourceVaultKGSubgraphs[parentId_String] := Select[SourceVaultKGList[], Lookup[#, "Parent", ""] === parentId &];
-SourceVaultKGSubgraphSpec[kg_Association] := <|"Parent" -> iKGStr[Lookup[kg, "Parent", ""]], "Selection" -> iKGStrList[Lookup[kg, "Selection", {}]],
-  "Parts" -> iKGAssocList[Lookup[kg, "Parts", {}]], "Description" -> iKGStr[Lookup[kg, "Description", ""]], "Title" -> iKGStr[Lookup[kg, "Title", ""]]|>;
+SourceVaultKGSubgraphSpec[kg_Association] := iKGResult[
+  <|"Parent" -> iKGStr[Lookup[kg, "Parent", ""]], "Selection" -> iKGStrList[Lookup[kg, "Selection", {}]],
+    "Parts" -> iKGAssocList[Lookup[kg, "Parts", {}]], "Description" -> iKGStr[Lookup[kg, "Description", ""]], "Title" -> iKGStr[Lookup[kg, "Title", ""]]|>,
+  iKGPL[kg]];
 
 (* cut a subgraph: members (ids; a section id takes its subtree) grouped into parts (the Toc's first level) *)
 (* "Subtree" -> False: a member takes only itself (a section without its paragraphs becomes one slide); "MemberOrder" -> "Given" keeps the
@@ -801,7 +822,9 @@ SourceVaultKGSubgraphNew[parentId_String, subId_String, OptionsPattern[]] := Mod
 
 (* prompt: the mother's sections and items, plus the description of the talk -> Parts / Exclude JSON *)
 Options[SourceVaultKGSubgraphPrompt] = {"Language" -> Automatic, "Leaves" -> True, "MaxLabel" -> 40, "Title" -> ""};
-SourceVaultKGSubgraphPrompt[kg_Association, description_String, OptionsPattern[]] := Module[
+SourceVaultKGSubgraphPrompt[kg_Association, description_String, opts : OptionsPattern[]] :=
+  iKGResult[iKGSubgraphPromptCore[kg, description, opts], iKGPL[kg]];
+iKGSubgraphPromptCore[kg_Association, description_String, OptionsPattern[SourceVaultKGSubgraphPrompt]] := Module[
   {lang, index = iKGNodeIndex[kg], kids = iKGContainsKids[kg], root = Lookup[kg, "Root", "root"], lines = {}, cut, visit, secQ, maxl},
   lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]];
   maxl = Replace[OptionValue["MaxLabel"], Except[_Integer?Positive] -> 40];
@@ -1543,7 +1566,9 @@ iKGSubtree[tree_Association, id_String] := Module[{out = {id}, q = {id}, c},
   out];
 
 Options[SourceVaultKGLevelSummaries] = {"Language" -> Automatic};
-SourceVaultKGLevelSummaries[kg_Association, tree_Association, OptionsPattern[]] := Module[
+SourceVaultKGLevelSummaries[kg_Association, tree_Association, opts : OptionsPattern[]] :=
+  iKGResult[iKGLevelSummariesCore[kg, tree, opts], iKGPL[kg]];
+iKGLevelSummariesCore[kg_Association, tree_Association, OptionsPattern[SourceVaultKGLevelSummaries]] := Module[
   {lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]], index = iKGNodeIndex[kg]},
   Association[Map[Function[id,
     With[{n = index[id], kids = Lookup[tree["Children"], id, {}]},
@@ -1708,7 +1733,7 @@ Options[SourceVaultKGOutline] = {"Language" -> Automatic, "MaxAssetsPerSlide" ->
    for hand-written talks of a fixed-length presentation *)
 $kgTalkCapQ = True;
 SourceVaultKGOutline[kg_Association, plan_Association, opts : OptionsPattern[]] :=
-  Block[{$kgTalkCapQ = TrueQ[OptionValue["TalkCap"]]}, iKGOutlineCore[kg, plan, opts]];
+  iKGResult[Block[{$kgTalkCapQ = TrueQ[OptionValue["TalkCap"]]}, iKGOutlineCore[kg, plan, opts]], iKGPL[kg]];
 
 (* 1 \:884c\:306e\:8868\:793a\:30b3\:30b9\:30c8: \:9577\:3044\:884c\:306f\:6298\:308a\:8fd4\:3057\:3066 2 \:884c\:4ee5\:4e0a\:3092\:5360\:3081\:308b (16:9 \:3067 1 \:884c \[TildeTilde] 40 \:5168\:89d2\:5b57) *)
 iKGLineCost[s_String, cpl_Integer] := Max[1, Ceiling[StringLength[s] / Max[10, cpl]]];
@@ -2331,9 +2356,10 @@ SourceVaultKGCompose[kgs_List, OptionsPattern[]] := Module[
 iKGBackgroundFile[bgId_String] := FileNameJoin[{iKGBackgroundDir[],
   StringReplace[bgId, StartOfString ~~ "bg:" -> "bg-"] <> ".json"}];
 
-SourceVaultKGBackgroundList[] := Select[Map[Function[f, With[{d = iKGReadJSON[f]},
+SourceVaultKGBackgroundList[] := With[{rs = Select[Map[Function[f, With[{d = iKGReadJSON[f]},
     If[AssociationQ[d], KeyMap[ToString, d], Nothing]]],
-  Quiet @ Check[FileNames["bg-*.json", iKGBackgroundDir[]], {}]], AssociationQ];
+  Quiet @ Check[FileNames["bg-*.json", iKGBackgroundDir[]], {}]], AssociationQ]},
+  iKGResult[rs, iKGRecordsPL[rs]]];
 
 Options[SourceVaultKGBackgroundSearch] = {"Limit" -> 5, "MinScore" -> 0.3};
 SourceVaultKGBackgroundSearch[text_String, OptionsPattern[]] := Module[{all = SourceVaultKGBackgroundList[], scored},
@@ -2375,7 +2401,17 @@ SourceVaultKGBackgroundLink[kgIn_Association, OptionsPattern[]] := Module[
 
 (* \:904e\:53bb\:30c7\:30c3\:30ad\:306e\:518d\:5229\:7528\:5019\:88dc (SourceVault_kb \:304c\:30ed\:30fc\:30c9\:6e08\:307f\:306e\:3068\:304d\:3060\:3051) *)
 Options[SourceVaultKGSuggestPastSlides] = {"Limit" -> 2, "MinScore" -> 1.5};
-SourceVaultKGSuggestPastSlides[kg_Association, kbId_String, OptionsPattern[]] := Module[{srcs, pathOf, out = {}},
+(* PL = Max of the KG and of each suggested deck's KB source (an unknown deck counts as 1.0) *)
+SourceVaultKGSuggestPastSlides[kg_Association, kbId_String, opts : OptionsPattern[]] :=
+  With[{rows = iKGSuggestPastSlidesCore[kg, kbId, opts]},
+    iKGResult[rows, Max[iKGPL[kg], iKGDeckPL[kbId, rows]]]];
+iKGDeckPL[_, {}] := 0.;
+iKGDeckPL[kbId_String, rows_List] := Module[{plOf},
+  plOf = Association[Map[(iKGStr[Lookup[#, "Path", ""]] -> iKGClip[Lookup[#, "PrivacyLevel", 1.], 1.]) &,
+    Select[iKGList[Quiet @ Check[SourceVault`SourceVaultKBSources[kbId], {}]], AssociationQ]]];
+  Max[Map[Lookup[plOf, iKGStr[Lookup[#, "Deck", ""]], 1.] &, Select[rows, AssociationQ]], 0.]];
+iKGDeckPL[_, _] := 0.;
+iKGSuggestPastSlidesCore[kg_Association, kbId_String, OptionsPattern[SourceVaultKGSuggestPastSlides]] := Module[{srcs, pathOf, out = {}},
   If[Length[DownValues[SourceVault`SourceVaultKBSearch]] === 0 ||
      ! TrueQ[Quiet @ Check[SourceVault`SourceVaultKBLoadedQ[kbId], False]], Return[{}]];
   srcs = Quiet @ Check[SourceVault`SourceVaultKBSources[kbId], {}];
@@ -2441,7 +2477,9 @@ SourceVaultKGExtractionPrompt[sourceText_String, OptionsPattern[]] :=
   "=== \:672c\:6587 ===\n" <> sourceText <> "\n=== \:672c\:6587\:3053\:3053\:307e\:3067 ===";
 
 Options[SourceVaultKGBackgroundPrompt] = {"MaxNodes" -> 12};
-SourceVaultKGBackgroundPrompt[kg_Association, audSpec_, OptionsPattern[]] := Module[
+SourceVaultKGBackgroundPrompt[kg_Association, audSpec_, opts : OptionsPattern[]] :=
+  iKGResult[iKGBackgroundPromptCore[kg, audSpec, opts], iKGPL[kg]];
+iKGBackgroundPromptCore[kg_Association, audSpec_, OptionsPattern[SourceVaultKGBackgroundPrompt]] := Module[
   {aud = SourceVaultKGAudience[audSpec], lang = Lookup[kg, "Language", "ja"], listing},
   listing = StringRiffle[Map[Function[n,
     "- " <> n["Id"] <> " [" <> n["Kind"] <> ", D=" <> ToString[n["Difficulty"]] <> ", " <> StringRiffle[n["Domains"], "/"] <> "] " <>
@@ -2457,7 +2495,9 @@ SourceVaultKGBackgroundPrompt[kg_Association, audSpec_, OptionsPattern[]] := Mod
   "\:51fa\:529b\:306f\:5dee\:5206 JSON {\"Nodes\": [...], \"Edges\": [...]} \:306e\:307f\:3002\:3059\:3079\:3066 " <> lang <> " \:3067\:66f8\:304f\:3002"];
 
 Options[SourceVaultKGSummaryPrompt] = {"Language" -> Automatic};
-SourceVaultKGSummaryPrompt[kg_Association, tree_Association, OptionsPattern[]] := Module[
+SourceVaultKGSummaryPrompt[kg_Association, tree_Association, opts : OptionsPattern[]] :=
+  iKGResult[iKGSummaryPromptCore[kg, tree, opts], iKGPL[kg]];
+iKGSummaryPromptCore[kg_Association, tree_Association, OptionsPattern[SourceVaultKGSummaryPrompt]] := Module[
   {lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]], index = iKGNodeIndex[kg], lines},
   lines = Map[Function[id, StringRepeat["  ", tree["Depth"][id]] <> "- " <> id <> ": " <>
     SourceVaultKGText[index[id], "Label", lang]], tree["Order"]];
@@ -2489,7 +2529,9 @@ SourceVaultKGTalkPrompt[outline_Association, OptionsPattern[]] := Module[{lines,
   "\:51fa\:529b\:306f JSON {\"Talks\": [{\"Slide\": 1, \"Talk\": \"...\"}]} \:306e\:307f\:3002\:8a00\:8a9e\:306f " <> Lookup[outline, "Language", "ja"] <> "\:3002"];
 
 Options[SourceVaultKGTranslatePrompt] = {};
-SourceVaultKGTranslatePrompt[kg_Association, lang_String, OptionsPattern[]] := Module[
+SourceVaultKGTranslatePrompt[kg_Association, lang_String, opts : OptionsPattern[]] :=
+  iKGResult[iKGTranslatePromptCore[kg, lang, opts], iKGPL[kg]];
+iKGTranslatePromptCore[kg_Association, lang_String, OptionsPattern[SourceVaultKGTranslatePrompt]] := Module[
   {primary = Lookup[kg, "Language", "ja"], items},
   items = Map[Function[n, <|"Id" -> n["Id"], "Label" -> SourceVaultKGText[n, "Label", primary],
     "Summary" -> SourceVaultKGText[n, "Summary", primary], "Points" -> SourceVaultKGText[n, "Points", primary],
@@ -2508,7 +2550,8 @@ $kgKindColors = <|"Claim" -> RGBColor[0.88, 0.49, 0.08], "Conclusion" -> RGBColo
   "Experiment" -> RGBColor[0.62, 0.11, 0.11], "Method" -> RGBColor[0.3, 0.55, 0.5]|>;
 
 Options[SourceVaultKGGraph] = {"Order" -> False, "Labels" -> True, "Language" -> Automatic};
-SourceVaultKGGraph[kg_Association, OptionsPattern[]] := Module[
+SourceVaultKGGraph[kg_Association, opts : OptionsPattern[]] := iKGResult[iKGGraphCore[kg, opts], iKGPL[kg]];
+iKGGraphCore[kg_Association, OptionsPattern[SourceVaultKGGraph]] := Module[
   {lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]], nodes = Lookup[kg, "Nodes", {}],
    edges = Lookup[kg, "Edges", {}], es, styles},
   If[TrueQ[OptionValue["Order"]], edges = Select[edges, TrueQ[#["Order"]] &]];
@@ -2521,7 +2564,8 @@ SourceVaultKGGraph[kg_Association, OptionsPattern[]] := Module[
     VertexSize -> Map[(#["Id"] -> 0.2 + 0.6 * #["Importance"]) &, nodes],
     EdgeStyle -> styles, GraphLayout -> "LayeredDigraphEmbedding"]];
 
-SourceVaultKGToTopicItemGraph[kg_Association] := Module[
+SourceVaultKGToTopicItemGraph[kg_Association] := iKGResult[iKGToTopicItemGraphCore[kg], iKGPL[kg]];
+iKGToTopicItemGraphCore[kg_Association] := Module[
   {lang = Lookup[kg, "Language", "ja"], nodes = Lookup[kg, "Nodes", {}], edges = Lookup[kg, "Edges", {}]},
   <|"ObjectClass" -> "SourceVaultTopicItemGraph", "GraphId" -> "svtopicgraph:" <> Lookup[kg, "GraphId", ""],
     "Nodes" -> Map[<|"TopicItemRef" -> #["Id"], "Label" -> SourceVaultKGText[#, "Label", lang], "SupportParagraphs" -> {}|> &, nodes],
@@ -2532,20 +2576,23 @@ SourceVaultKGToTopicItemGraph[kg_Association] := Module[
 
 iKGViewRows[rows_List] := Take[rows, UpTo[SourceVault`$SourceVaultKGViewMaxRows]];
 
-SourceVaultKGView[kg_Association] := Module[{lang = Lookup[kg, "Language", "ja"]},
+SourceVaultKGView[kg_Association] := iKGResult[iKGViewCore[kg], iKGPL[kg]];
+iKGViewCore[kg_Association] := Module[{lang = Lookup[kg, "Language", "ja"]},
   Dataset[iKGViewRows[Map[Function[n,
     <|"Id" -> n["Id"], "Kind" -> n["Kind"], "Label" -> SourceVaultKGText[n, "Label", lang],
       "Layer" -> n["Layer"], "Difficulty" -> n["Difficulty"], "Importance" -> n["Importance"],
       "Domains" -> StringRiffle[n["Domains"], ", "], "Assets" -> Length[n["Assets"]],
       "Background" -> Replace[n["BackgroundRef"], None -> ""]|>], Lookup[kg, "Nodes", {}]]]]];
 
-SourceVaultKGTreeView[kg_Association, tree_Association] := Module[{index = iKGNodeIndex[kg], lang = Lookup[kg, "Language", "ja"]},
+SourceVaultKGTreeView[kg_Association, tree_Association] := iKGResult[iKGTreeViewCore[kg, tree], iKGPL[kg]];
+iKGTreeViewCore[kg_Association, tree_Association] := Module[{index = iKGNodeIndex[kg], lang = Lookup[kg, "Language", "ja"]},
   Dataset[iKGViewRows[Map[Function[id,
     <|"Label" -> StringRepeat["\[LongDash] ", tree["Depth"][id]] <> SourceVaultKGText[index[id], "Label", lang],
       "Depth" -> tree["Depth"][id], "Id" -> id, "Kind" -> index[id]["Kind"],
       "Importance" -> index[id]["Importance"]|>], tree["Order"]]]]];
 
-SourceVaultKGPlanView[kg_Association, plan_Association] := Module[{index = iKGNodeIndex[kg], lang = Lookup[kg, "Language", "ja"]},
+SourceVaultKGPlanView[kg_Association, plan_Association] := iKGResult[iKGPlanViewCore[kg, plan], iKGPL[kg]];
+iKGPlanViewCore[kg_Association, plan_Association] := Module[{index = iKGNodeIndex[kg], lang = Lookup[kg, "Language", "ja"]},
   Dataset[iKGViewRows[MapIndexed[Function[{s, i},
     <|"No" -> First[i], "Title" -> StringRepeat["\[LongDash] ", s["Depth"]] <> SourceVaultKGText[index[s["NodeId"]], "Label", lang],
       "Packed" -> StringRiffle[SourceVaultKGText[index[#], "Label", lang] & /@ s["Packed"], " / "],
@@ -2561,7 +2608,7 @@ SourceVaultKGPlanView[kg_Association, plan_Association] := Module[{index = iKGNo
    \:8a08\:753b\:3092\:91cd\:306d\:308b\:3068\:679a\:756a\:53f7 (#n) \:304c\:4ed8\:304f *)
 
 $kgVizEdgeGroups = <|
-  "Order" -> {"Precedes", "LeadsTo", "Derives", "Motivates"},
+  "Order" -> {"Precedes", "LeadsTo", "Derives", "Motivates", "TalkOrder"},
   "Prerequisite" -> {"Prerequisite"},
   "Support" -> {"Supports", "Explains"},
   "Related" -> {"Contrasts", "RelatedTo", "Cites"},
@@ -2721,15 +2768,20 @@ iKGVizRadius[i_Association] := If[TrueQ[i["Section"]], 0.2, 0.09 + 0.14 * Clip[i
 
 (* ---- \:8a71\:306e\:6d41\:308c ---- *)
 iKGVizStory[kg_, info_, index_, lang_, groups_, labels_, onClick_, keepQ_] := Module[
-  {root = Lookup[kg, "Root", "root"], secs, parent, secOf, cols, colW = 2.6, rowH = 0.62, coords = <||>, maxRows = 0,
-   bg, bandY, buckets = <||>, nodes, prims, edges, radius, xmax, ymin, colIndex, width},
-  secs = SortBy[Select[iKGVizSectionIds[kg], KeyExistsQ[info, #] &], {info[#]["Order"] &, # &}];
+  {root = Lookup[kg, "Root", "root"], allSecs, secs, parent, secOf, cols, colW = 2.6, rowH = 0.62, coords = <||>, maxRows = 0,
+   bg, bandY, buckets = <||>, nodes, prims, edges, radius, xmax, ymin, colIndex, width, colQ},
+  allSecs = SortBy[Select[iKGVizSectionIds[kg], KeyExistsQ[info, #] &], {info[#]["Order"] &, # &}];
   parent = Association[Map[#["To"] -> #["From"] &, Reverse[Select[kg["Edges"], #["EdgeKind"] === "Contains" &]]]];
+  (* \:5217\:306b\:3059\:308b\:306e\:306f\:6839\:306e\:76f4\:4e0b\:306e\:7bc0 (\:5305\:542b\:306e\:89aa\:304c\:6839\:304b\:3001\:89aa\:304c\:7121\:3044\:7bc0) \:3060\:3051 (2026-10-18)\:3002\:305d\:306e\:4e0b\:306e\:7bc0 (\:90e8\:306e\:4e0b\:306e\:5404\:679a\:306e\:7bc0\:306a\:3069) \:306f
+     \:5916\:5074\:306e\:5217\:306e\:4e2d\:306b\:7e26\:306b\:4e26\:3079\:308b\:3002\:767a\:8868\:7528\:306e\:90e8\:5206 KG \:306f\:89aa\:306e\:8ad6\:6587\:306e\:7bc0\:3092\:679a\:3054\:3068\:306b\:501f\:308a\:308b\:306e\:3067\:3001\:5168\:90e8\:3092\:5217\:306b\:3059\:308b\:3068\:6a2a\:4e00\:5217\:306b 40 \:5217\:8fd1\:304f\:4e26\:3076 *)
+  secs = Select[allSecs, MemberQ[{root, None}, Lookup[parent, #, None]] &];
+  If[secs === {}, secs = allSecs];
   secOf[id_] := Module[{c = id, k = 0}, While[k < 30, c = Lookup[parent, c, None]; k++;
     Which[c === None, Return[None, Module], MemberQ[secs, c], Return[c, Module], c === root, Return[root, Module]]]; None];
+  colQ[id_] := id === root || MemberQ[secs, id];
   colIndex = Association[Join[{root -> 0}, MapIndexed[#1 -> First[#2] &, secs]]];
   (* \:5217: 0 = \:6839\:306e\:76f4\:4e0b\:30011.. = \:7bc0\:306e\:9806 *)
-  cols = GroupBy[Select[Values[info], ! TrueQ[#["Section"]] && keepQ[#] &], With[{s = secOf[#["Id"]]}, If[s === None, None, s]] &];
+  cols = GroupBy[Select[Values[info], ! colQ[#["Id"]] && ! TrueQ[#["Root"]] && keepQ[#] &], With[{s = secOf[#["Id"]]}, If[s === None, None, s]] &];
   Do[coords[id] = {colW * colIndex[id], 0.}, {id, Keys[colIndex]}];
   KeyValueMap[Function[{s, members},
       If[s =!= None,
@@ -2751,14 +2803,32 @@ iKGVizStory[kg_, info_, index_, lang_, groups_, labels_, onClick_, keepQ_] := Mo
   xmax = colW * (Max[Append[Values[colIndex], 0]] + 2);
   width = Round[38 * (xmax + 0.8)];
   edges = iKGVizEdgePrims[kg["Edges"], coords, info, groups, radius, lang, True, 9./width];
+  (* \:767a\:8868\:306e\:9806: \:8a08\:753b\:306e #n -> #n+1 \:3092\:9806\:5e8f\:306e\:77e2\:5370\:3067 (2026-10-18\:3001\:8868\:793a\:3060\:3051\:3002KG \:306e\:30c7\:30fc\:30bf\:306f\:5909\:3048\:306a\:3044)\:3002
+     \:767a\:8868\:7528\:306e\:90e8\:5206 KG \:306f\:5305\:542b\:306e\:8fba\:3057\:304b\:6301\:305f\:306a\:3044\:306e\:3067\:3001\:3053\:308c\:304c\:7121\:3044\:3068\:8a71\:306e\:6d41\:308c\:306b\:7dda\:304c 1 \:672c\:3082\:51fa\:306a\:3044\:3002
+     \:540c\:3058\:5411\:304d\:306e\:9806\:5e8f\:306e\:8fba\:304c KG \:306b\:3042\:308c\:3070\:91cd\:306d\:306a\:3044 *)
+  If[MemberQ[groups, "Order"],
+    Module[{seq = SortBy[Select[Values[info], IntegerQ[#["Slide"]] && KeyExistsQ[coords, #["Id"]] &], #["Slide"] &], have},
+      If[Length[seq] >= 2,
+        have = Association[Map[{#["From"], #["To"]} -> True &,
+          Select[kg["Edges"], iKGVizEdgeGroup[#["EdgeKind"]] === "Order" &]]];
+        edges = Join[edges, iKGVizEdgePrims[
+          Select[MapThread[<|"From" -> #1["Id"], "To" -> #2["Id"], "EdgeKind" -> "TalkOrder"|> &, {Most[seq], Rest[seq]}],
+            #["From"] =!= #["To"] && ! KeyExistsQ[have, {#["From"], #["To"]}] &],
+          coords, info, {"Order"}, radius, lang, True, 9./width]]]]];
   nodes = KeyValueMap[Function[{id, p},
       With[{i = info[id]}, {
         iKGVizNode[p, radius[id], i, index[id], lang, onClick],
         If[iKGVizLabelQ[i, labels],
-          If[TrueQ[i["Section"]],
-            Text[Style[iKGVizShort[If[TrueQ[i["Root"]], iKGVizT[lang, "(\:5168\:4f53) ", "(top) "], ""] <> i["Label"], 12], 8, Bold, GrayLevel[0.2]],
-              p + {0, If[OddQ[Round[p[[1]]/colW]], 0.62, 0.3]}, {0, -1}],
-            Text[Style[iKGVizLabelText[i, 12], 7, GrayLevel[0.15]], p + {radius[id] + 0.06, 0}, {-1, 0}]],
+          Which[
+            colQ[id],
+              Text[Style[iKGVizShort[If[TrueQ[i["Root"]], iKGVizT[lang, "(\:5168\:4f53) ", "(top) "], ""] <> i["Label"], 12], 8, Bold, GrayLevel[0.2]],
+                p + {0, If[OddQ[Round[p[[1]]/colW]], 0.62, 0.3]}, {0, -1}],
+            (* \:5217\:306e\:4e2d\:306b\:4e26\:3079\:305f\:7bc0: \:53f3\:306b\:300c#\:679a \:984c\:76ee\:300d\:3002\:89d2\:4e38\:306e\:5f62 (Header) \:306f\:6a2a\:306b 1.7 \:500d\:5e83\:3044 *)
+            TrueQ[i["Section"]],
+              Text[Style[iKGVizLabelText[i, 14], 7, GrayLevel[0.15]],
+                p + {If[i["Shape"] === "Header", 1.7, 1.] radius[id] + 0.06, 0}, {-1, 0}],
+            True,
+              Text[Style[iKGVizLabelText[i, 12], 7, GrayLevel[0.15]], p + {radius[id] + 0.06, 0}, {-1, 0}]],
           Nothing]}]],
     coords];
   ymin = Min[Append[Values[coords][[All, 2]], 0.]] - rowH;
@@ -2903,7 +2973,8 @@ iKGVizHierarchy[kg_, info_, index_, lang_, onClick_, d_Integer, treeIn_, leavesQ
 Options[SourceVaultKGVisualize] = {"View" -> "Story", "Focus" -> None, "Radius" -> 1, "EdgeKinds" -> Automatic,
   "Layers" -> All, "Labels" -> Automatic, "Plan" -> None, "Selected" -> None, "OnClick" -> None,
   "Language" -> Automatic, "Legend" -> True, "Hidden" -> True, "MaxDegree" -> 5, "Strategy" -> "Source", "Balance" -> Automatic};
-SourceVaultKGVisualize[kg_Association, OptionsPattern[]] := Module[
+SourceVaultKGVisualize[kg_Association, opts : OptionsPattern[]] := iKGResult[iKGVisualizeCore[kg, opts], iKGPL[kg]];
+iKGVisualizeCore[kg_Association, OptionsPattern[SourceVaultKGVisualize]] := Module[
   {lang = Replace[OptionValue["Language"], Automatic -> Lookup[kg, "Language", "ja"]], view = OptionValue["View"],
    info, index, groups, layers, keepQ, g, planInfo, focus = OptionValue["Focus"], ids},
   If[! ListQ[Lookup[kg, "Nodes", None]] || kg["Nodes"] === {}, Return[Failure["NoNodes", <|"MessageTemplate" -> "the graph has no nodes"|>]]];
@@ -2978,6 +3049,59 @@ SourceVaultKGLegend[lang_String : "ja", perRow_Integer : 0] := Module[{sw, kinds
     {Style["#n", 8], iKGVizT[lang, "\:8a08\:753b\:306e\:679a\:756a\:53f7", "slide no. in the plan"]}};
   rows = If[perRow > 0, Flatten[Map[Partition[#, UpTo[perRow]] &, {kinds, edges, marks}], 1], {kinds, edges, marks}];
   Column[Map[Row[Riffle[Map[Row[{#[[1]], " ", Style[#[[2]], 8]}] &, #], Spacer[10]]] &, rows], Spacings -> 0.4]];
+
+(* ---------------- privacy contracts (model: iSVMDRegisterPrivacyContracts in SourceVault_maildb.wl) ----------------
+   Private = the KG store is read, or KG text leaves in a form that no longer carries its PrivacyLevel.
+   Internal = the result is a KG (its PrivacyLevel travels inside it), structure only (ids / numbers / flags),
+   or a formatter over an outline (outlines hold only nodes released under the plan's ReleaseCeiling).
+   Weak coupling: no-op when SourceVault_privacy.wl is not loaded (standalone Get). *)
+iKGRegisterPrivacyContracts[] :=
+  Quiet @ Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Private", "Exit" -> Last[#], "Sources" -> {"knowledgegraph"},
+            "Module" -> "SourceVault_knowledgegraph.wl"|>] &,
+        {{"SourceVaultKGLoad", "Result"}, {"SourceVaultKGList", "Result"}, {"SourceVaultKGSubgraphs", "Result"},
+         {"SourceVaultKGSubgraphNew", "Result"}, {"SourceVaultKGBackgroundList", "Result"},
+         {"SourceVaultKGBackgroundSearch", "Result"}, {"SourceVaultKGSuggestPastSlides", "Result"},
+         {"SourceVaultKGView", "Result"}, {"SourceVaultKGTreeView", "Result"}, {"SourceVaultKGPlanView", "Result"},
+         {"SourceVaultKGVisualize", "Result"}, {"SourceVaultKGGraph", "Result"}, {"SourceVaultKGToJSON", "Result"},
+         {"SourceVaultKGOutline", "Result"}, {"SourceVaultKGLevelSummaries", "Result"},
+         {"SourceVaultKGSubgraphSpec", "Result"}, {"SourceVaultKGToTopicItemGraph", "Result"},
+         {"SourceVaultKGBackgroundPrompt", "Result"}, {"SourceVaultKGSummaryPrompt", "Result"},
+         {"SourceVaultKGTranslatePrompt", "Result"}, {"SourceVaultKGSubgraphPrompt", "Result"}}];
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Internal", "Module" -> "SourceVault_knowledgegraph.wl", "NoDataFlow" -> Last[#]|>] &,
+        Join[
+          Map[{#, "Returns a KG Association whose PrivacyLevel (graph and nodes) travels inside the value; reads no store. Exits (View / Save / Outline ...) re-derive it."} &,
+            {"SourceVaultKGValidate", "SourceVaultKGFromJSON", "SourceVaultKGMerge", "SourceVaultKGBalance",
+             "SourceVaultKGSetToc", "SourceVaultKGTocMove", "SourceVaultKGMechanicalToc", "SourceVaultKGImportNodes",
+             "SourceVaultKGCompose", "SourceVaultKGBackgroundLink"}],
+          Map[{#, "Structure only (node ids, orders, scores, flags, booleans, diagnostics) computed from a caller-held KG; no node text."} &,
+            {"SourceVaultKGNeed", "SourceVaultKGScores", "SourceVaultKGOrderGraph", "SourceVaultKGLinearOrder",
+             "SourceVaultKGOrderedTree", "SourceVaultKGOrderedTrees", "SourceVaultKGTocTree", "SourceVaultKGOverDegree",
+             "SourceVaultKGVerify", "SourceVaultKGVerifyPlan", "SourceVaultKGPlan", "SourceVaultKGTocPlan",
+             "SourceVaultKGTocQ", "SourceVaultKGSubgraphQ"}],
+          {{"SourceVaultKGText", "Accessor equivalent to Lookup on a caller-held node (called per text field in SlideWorkflow loops); the KG-level exits record the PL."},
+           {"SourceVaultKGNode", "Accessor returning a caller-held node, which keeps its own PrivacyLevel."},
+           {"SourceVaultKGOutlineToMarkdown", "Formatter over a caller-held outline; SourceVaultKGOutline (Private) already recorded the PL and outlines hold only nodes under the plan's ReleaseCeiling."},
+           {"SourceVaultKGTalkPrompt", "Prompt over a caller-held outline (same reason as SourceVaultKGOutlineToMarkdown)."},
+           {"SourceVaultKGSave", "Writes the store; returns the file path or $Failed."},
+           {"SourceVaultKGDelete", "Deletes a stored graph; returns True/False."},
+           {"SourceVaultKGRepairMojibake", "Rewrites stored files in place; returns counts and file paths only."},
+           {"SourceVaultKGRoot", "Store directory path only."}}]];
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Public", "Module" -> "SourceVault_knowledgegraph.wl", "NoDataFlow" -> Last[#]|>] &,
+        Join[
+          {{"SourceVaultKGAudience", "Normalizes the caller's audience spec against the built-in presets."},
+           {"SourceVaultKGLegend", "Static legend graphic."},
+           {"SourceVaultKGNew", "Empty KG from the caller's own options."},
+           {"SourceVaultKGExtractionPrompt", "Prompt template around caller-supplied source text; reads no store (the caller decides where that text may go)."}},
+          Map[{#, "Setting / static table."} &,
+            {"$SourceVaultKGRoot", "$SourceVaultKGEdgeKinds", "$SourceVaultKGNodeKinds", "$SourceVaultKGAudiencePresets",
+             "$SourceVaultKGDomainAliases", "$SourceVaultKGViewMaxRows", "$SourceVaultKGTooHard"}]]]];
+    Null, Null];
+iKGRegisterPrivacyContracts[];
 
 End[]
 

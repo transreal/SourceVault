@@ -50,7 +50,7 @@ Options: `"MachineTag"` -> All | _String, `"Project"` -> All | _String (部分�
 Options: `"Limit"` -> 20, `"MachineTag"` -> All, `"Project"` -> All, `"Kind"` -> All | "interactive" | "harness"
 
 ### SourceVaultClaudeCodeSessionSearchView[query, opts]
-上記の Dataset 表示版。列 = Score / Machine / Last / **Kind / Title / 概要** / SessionId。概要は LLM 要約 (キャッシュ) があればそれ、無ければ先頭発話 (最大2件) + "…(要約未生成)"。digest が要約後に伸びていれば "(追記あり・要約は旧版)" を付す。
+上記の Dataset 表示版。列 = Score / Machine / Last / Kind / Title / 概要 / SessionId。概要は LLM 要約 (キャッシュ) があればそれ、無ければ先頭発話 (最大2件) + "…(要約未生成)"。digest が要約後に伸びていれば "(追記あり・要約は旧版)" を付す。
 Options: 検索と同じ (Limit/MachineTag/Project/Kind) + `"Summarize"` -> False (True で表示行の未生成分をその場で LLM 生成; 1 件数秒〜数十秒の同期実行), `"MaxRows"` -> 25
 
 ## 生 transcript の Dropbox ミラー + 全文閲覧
@@ -63,7 +63,7 @@ Options: 検索と同じ (Limit/MachineTag/Project/Kind) + `"Summarize"` -> Fals
 Options: `"DryRun"` -> False, `"MaxFilesPerRun"` -> Automatic
 
 ### $SourceVaultClaudeCodeRawMirrorRoot
-既定 Automatic = `<CoreRoot の親>/claudecodelogs`。文字列で上書き可。
+型: String | Automatic, 既定 Automatic = `<CoreRoot の親>/claudecodelogs`。文字列で上書き可。
 
 ### SourceVaultClaudeCodeSessionTranscript[sessionId, opts]
 全文 transcript (core 版)。生ログを **local → mirror (他マシン分) → digest** の順で解決 (`.claude/projects` 配下で `<sessionId>.jsonl` を depth 2 まで探索)。assistant turn には元 `message.model` を `"Model"` として保持。

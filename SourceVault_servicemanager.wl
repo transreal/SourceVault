@@ -4148,6 +4148,18 @@ SourceVault`SourceVaultDeadlineDecision[remainingMs_?NumericQ, budgets_Associati
     remainingMs < al, <|"Allowed" -> "Vector", "SkippedByDeadline" -> {"LLM"}|>,
     True, <|"Allowed" -> "LLM", "SkippedByDeadline" -> {}|>]];
 
+(* privacy contracts for the 2026-09-22 additions (model: iSVMDRegisterPrivacyContracts in
+   SourceVault_maildb.wl). SourceVaultServiceMain stays in SourceVault_privacy.wl section 7b. *)
+iSMRegisterPrivacyContracts[] :=
+  Quiet @ Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Internal", "Module" -> "SourceVault_servicemanager.wl", "NoDataFlow" -> Last[#]|>] &,
+        {{"SourceVaultRefreshCLIMCP", "Re-registers the headless CLI's MCP server configuration; returns its registration status only."},
+         {"$SourceVaultServiceExtraPackages", "Setting (package file names loaded by the service kernel)."}}]];
+    Null, Null];
+iSMRegisterPrivacyContracts[];
+
 End[]  (* `ServiceManagerPrivate` *)
 
 EndPackage[]  (* SourceVault` *)

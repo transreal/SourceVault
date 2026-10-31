@@ -103,8 +103,9 @@ iSVWFLoadDir = Quiet @ Check[
 
 (* call-time root: prefer Global`$packageDirectory, then load-time dir, then cwd *)
 iSVWFPackageRoot[] := Which[
-  StringQ[Quiet @ Check[Symbol["Global`$packageDirectory"], $Failed]],
-    Symbol["Global`$packageDirectory"],
+  (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+  StringQ[Quiet @ Check[Symbol[Identity["Global`$packageDirectory"]], $Failed]],
+    Symbol[Identity["Global`$packageDirectory"]],
   StringQ[iSVWFLoadDir] && iSVWFLoadDir =!= "",
     iSVWFLoadDir,
   True, Directory[]];
@@ -254,9 +255,9 @@ SourceVaultRunWorkflowAsync[slug_String, form_String: "run"] :=
         "Message" ->
          "非同期実行の基盤 (ClaudeOrchestrator`Workflow` エンジン / ClaudeRuntime_externalrunner) をロードできませんでした。"|>]];
     (* External executor を live 稼働 (launcher/killer 結線・poll tick 登録・完了 hook)。冪等 *)
-    Quiet @ Check[Symbol["ClaudeRuntime`ClaudeActivateExternalExecutor"][], Null];
+    Quiet @ Check[Symbol[Identity["ClaudeRuntime`ClaudeActivateExternalExecutor"]][], Null];
     nb = Quiet[InputNotebook[]];
-    sub = Symbol["ClaudeOrchestrator`Workflow`ClaudeSubmitExternalHeldExprJob"][
+    sub = Symbol[Identity["ClaudeOrchestrator`Workflow`ClaudeSubmitExternalHeldExprJob"]][
       With[{s = slug, f = form, lg = $Language},
         HoldComplete[SourceVault`SourceVaultRunWorkflowChild[s, f, lg]]],
       "BootstrapFiles" -> {FileNameJoin[{root, "SourceVault.wl"}]},
@@ -342,8 +343,8 @@ SourceVaultRunWorkflowResult[jobDirOrId_String] :=
       Lookup[$iSVRunAsyncJobs[jobDirOrId], "JobDir", jobDirOrId],
     StringStartsQ[jobDirOrId, "job-"] &&
       iSVFnDefinedQ["ClaudeRuntime`ClaudeExternalJobRoot"] &&
-      DirectoryQ[FileNameJoin[{Symbol["ClaudeRuntime`ClaudeExternalJobRoot"][], jobDirOrId}]],
-      FileNameJoin[{Symbol["ClaudeRuntime`ClaudeExternalJobRoot"][], jobDirOrId}],
+      DirectoryQ[FileNameJoin[{Symbol[Identity["ClaudeRuntime`ClaudeExternalJobRoot"]][], jobDirOrId}]],
+      FileNameJoin[{Symbol[Identity["ClaudeRuntime`ClaudeExternalJobRoot"]][], jobDirOrId}],
     True, jobDirOrId];
 (* Association: SourceVaultRunWorkflowAsync の返り値 (JobDir を含む) *)
 SourceVaultRunWorkflowResult[submit_Association] :=

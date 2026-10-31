@@ -3374,6 +3374,7 @@ iSVISFindOrOpenNotebook[rec_Association] := Module[{path, nbs, hit},
   hit = SelectFirst[Replace[nbs, Except[_List] -> {}],
     Quiet @ Check[NotebookFileName[#], ""] === path &, None];
   If[Head[hit] === NotebookObject, hit,
+    (* :PolicyWaiver: PRIV-NB-READ このパッケージが作ったイシューノートを開いて経過を書き足すだけで、中身はカーネルに読まない *)
     With[{o = Quiet @ Check[NotebookOpen[path], $Failed]},
       If[Head[o] === NotebookObject, o, Missing["OpenFailed"]]]]];
 iSVISFindOrOpenNotebook[___] := Missing["BadArgs"];
@@ -3920,12 +3921,12 @@ iSVISHeldParse[c_] := With[{r = Which[
       Quiet[MakeExpression[c, StandardForm]]]},
   If[MatchQ[r, _HoldComplete], r, $Failed]];
 
-iSVISIdFromNotebookPath[path_String] := Module[{nb, cands, held, hits},
-  (* Head で判定 (Check 不使用): 完全修飾トークンを含むノートの Import は成功
-     しつつ影監視メッセージを出すため、Check だと読めたノートが Unreadable になる *)
-  nb = Quiet[Import[path, "Notebook"]];
-  If[Head[nb] =!= Notebook, Return[Missing["Unreadable"]]];
-  cands = Cases[nb, Cell[c_, "NotebookStatus", ___] :> c, Infinity];
+iSVISIdFromNotebookPath[path_String] := Module[{found, cands, held, hits},
+  (* .nb は NBAccess 経由で読む (rules/10、2026-10-31)。NBAccess は Import の結果を
+     Head で判定するので、影監視メッセージが出ただけのノートも読める *)
+  found = Quiet[NBAccess`NBFindCellByPredicate[path, MatchQ[#, Cell[_, "NotebookStatus", ___]] &]];
+  If[!AssociationQ[found] || Lookup[found, "Status", ""] =!= "OK", Return[Missing["Unreadable"]]];
+  cands = Cases[Lookup[found, "Matches", {}], KeyValuePattern["Cell" -> HoldComplete[Cell[c_, ___]]] :> c];
   If[cands === {}, Return[Missing["NoMetadata"]]];
   held = iSVISHeldParse[First[cands]];
   If[!MatchQ[held, _HoldComplete], Return[Missing["ParseFailed"]]];

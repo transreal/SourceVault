@@ -1011,9 +1011,10 @@ iSVWResolveLLMEngine[] :=
     SourceVault`$SourceVaultWiringLLM =!= None,
       SourceVault`$SourceVaultWiringLLM,
     Names["ClaudeCode`ClaudeQuerySync"] =!= {} &&
-      Length[DownValues[Evaluate @ Symbol["ClaudeCode`ClaudeQuerySync"]]] > 0,
-      With[{f = Symbol["ClaudeCode`ClaudeQuerySync"],
-            plOpt = Symbol["ClaudeCode`PrivacyLevel"]},
+      (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+      Length[DownValues[Evaluate @ Symbol[Identity["ClaudeCode`ClaudeQuerySync"]]]] > 0,
+      With[{f = Symbol[Identity["ClaudeCode`ClaudeQuerySync"]],
+            plOpt = Symbol[Identity["ClaudeCode`PrivacyLevel"]]},
         Function[prompt,
           (* 1H-S boundary gate: wiring LLM エンジンの最終境界(ローカル強制経路。
              拒否は $Failed=呼び出し側の非文字列失敗系。capbroker 不在は fail-open) *)
@@ -1433,7 +1434,7 @@ SourceVault`SourceVaultCellInput[nb_NotebookObject, OptionsPattern[]] :=
 iSVWWriteText[nb_, text_String] :=
   If[Names["ClaudeCode`ClaudeWriteResponse"] =!= {},
     Quiet @ Check[
-      Symbol["ClaudeCode`ClaudeWriteResponse"][nb, text]; True, False],
+      Symbol[Identity["ClaudeCode`ClaudeWriteResponse"]][nb, text]; True, False],
     Quiet @ Check[
       NBAccess`NBWriteText[nb, text, "Text"]; True, False]];
 

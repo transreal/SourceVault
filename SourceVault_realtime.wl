@@ -105,11 +105,25 @@ SourceVaultRealtimeInstall::usage =
 SourceVaultRealtimeDevices::usage =
   "SourceVaultRealtimeDevices[] は Python から見えるオーディオデバイスの一覧を返す (既定デバイスに \"DefaultInput\" / \"DefaultOutput\" が立つ)。";
 
+SourceVaultRealtimeAudioCheck::usage =
+  "SourceVaultRealtimeAudioCheck[] は音声会話が使う出力 (AI の声) と入力 (AI の耳) が本当につながっているかを確かめ、結果を Association で返す (Zoom のマイクテストに相当)。\n" <>
+  "出力: 試験音 (ピッ 3 回) をワーカーと同じ方法で書き込み、書き込みが止まらないか (スタンバイ復帰後の固まり) を見る。出力が仮想ケーブル (\"CABLE Input\" など) なら反対側 (\"CABLE Output\" = Zoom のマイクにする側) で届いたかも録音して確かめる。\n" <>
+  "入力: \"ListenSeconds\" 秒 (既定 8) 聞いて 100 ms ごとのレベルを測る。その間に Zoom の「スピーカーのテスト」を押すか、相手に話してもらう。\n" <>
+  "デバイスは既定で次に始める音声会話と同じ (SetOptions[SourceVaultRealtimeStart, \"OutputDevice\" -> .., \"InputDevice\" -> ..] の値、無ければ Windows の既定)。音声会話が動いていれば、実際に使っているデバイスと mute も報告する。\n" <>
+  "opts: \"OutputDevice\" / \"InputDevice\" (名前の一部), \"Tone\" (\"Beep\" 既定 / \"Quiet\" = -60 dBFS でほぼ聞こえない), \"Loopback\" (Automatic / None / 録音デバイス名), \"ListenSeconds\", \"Output\" / \"Input\" (False で省く), " <>
+  "\"Speak\" (True = 動いている音声会話に短く話させ、ワーカーが再生したか・ケーブルの反対側に届いたかを確かめる。相手にも聞こえる), \"Audio\" (True = 聞いた音を \"Audio\" に入れる), \"Progress\" (FE でレベルを表示)。\n" <>
+  "戻り値: \"Verdict\" (\"OK\" / \"Check\" / \"Problem\"), \"Findings\" (部分ごとの判定と日本語の説明), \"Output\", \"Input\", \"Session\", \"Speak\", \"Audio\"。表で見るには SourceVaultRealtimeAudioCheckView。";
+
+SourceVaultRealtimeAudioCheckView::usage =
+  "SourceVaultRealtimeAudioCheckView[] / SourceVaultRealtimeAudioCheckView[opts] は SourceVaultRealtimeAudioCheck[opts] を実行して、判定・説明・入力レベルの図・聞いた音を 1 枚にまとめて見せる。\n" <>
+  "SourceVaultRealtimeAudioCheckView[result] は既にある結果を見せる。";
+
 (* ---- 会話の開始 / 停止 ---- *)
 
 SourceVaultRealtimeStart::usage =
   "SourceVaultRealtimeStart[] はこの機械の既定のマイクとスピーカーで音声会話 (既定 gpt-realtime、\"Model\" -> \"gpt-live-1\" で GPT-Live) を開始する (非ブロック)。\n" <>
   "経過はノートブックのウインドウステータスバーへ 1 行ずつ出る。宛先は \"Notebook\" (既定 Automatic = 評価中のノートブック)。\n" <>
+  "そのノートブックが非公開 (Private) と宣言されていれば始めない (Failure[\"SourceVaultRealtimePrivateNotebook\"]。SourceVaultRealtimeRender も同じ)。\n" <>
   "主なオプション: \"Model\", \"API\" (既定 Automatic = モデルから決める), \"Voice\", \"Instructions\", \"InputDevice\", \"OutputDevice\", \"AllowBargeIn\" (既定 False = 応答中はマイクを送らない), \"StartMuted\" (接続だけ先にしてマイクは後から), \"TranscribeInput\" (既定 False = こちらの発話は文字にしない。GPT-Live は常に書き起こす), \"RequirePaidAPIApproval\" (既定 True), \"StatusBar\", \"PollSeconds\"。";
 
 SourceVaultRealtimeStop::usage =
@@ -270,15 +284,17 @@ SourceVaultRealtimeModelAPI[model_String] := Module[{entry},
 
 SourceVaultRealtimeModelAPI[_] := "Realtime";
 
-$iSVRTProcess = None;
-$iSVRTStateFile = None;
-$iSVRTControlFile = None;
-$iSVRTNotebook = None;
-$iSVRTPumpTask = None;
-$iSVRTLastSeq = -1;
-$iSVRTLastSlideRequest = None;
-$iSVRTLastAskRequest = None;
-$iSVRTCommandCount = 0;
+(* このファイルだけを読み直しても、動いている音声会話を見失わない (プロセス・状態ファイル・
+   送り番号は前の値を保つ) *)
+If[! ValueQ[$iSVRTProcess], $iSVRTProcess = None];
+If[! ValueQ[$iSVRTStateFile], $iSVRTStateFile = None];
+If[! ValueQ[$iSVRTControlFile], $iSVRTControlFile = None];
+If[! ValueQ[$iSVRTNotebook], $iSVRTNotebook = None];
+If[! ValueQ[$iSVRTPumpTask], $iSVRTPumpTask = None];
+If[! ValueQ[$iSVRTLastSeq], $iSVRTLastSeq = -1];
+If[! ValueQ[$iSVRTLastSlideRequest], $iSVRTLastSlideRequest = None];
+If[! ValueQ[$iSVRTLastAskRequest], $iSVRTLastAskRequest = None];
+If[! ValueQ[$iSVRTCommandCount], $iSVRTCommandCount = 0];
 $iSVRTDepsOK = None;   (* セッションキャッシュ: 依存の確認は毎回プロセスを起こさない *)
 $iSVRTVoskOK = None;   (* 同上: 発表中の割り込み (許可ワード) に使う vosk の有無 *)
 
@@ -469,6 +485,325 @@ SourceVaultRealtimeDevices[] := Module[{runtime, r, json},
     "DefaultInput" -> TrueQ[#["defaultInput"]],
     "DefaultOutput" -> TrueQ[#["defaultOutput"]]] & /@ Lookup[json, "devices", {}]];
 
+(* ---- 接続テスト (Zoom のマイクテストに相当) ----
+   音を出すのも聞くのも外部の Python (SourceVault_realtime_audiocheck.py) で、デバイスの
+   解決はワーカーと同じ関数・同じ 24 kHz / 20 ms。ここは結果を読んで説明を付けるだけ。
+   2026-10-19: スタンバイ復帰後に本体スピーカーが書き込みを受け付けなくなり、ワーカーの
+   再生が最初の 1 回で止まったまま無音だった。その固まりも「書き込みが終わらない」で分かる。 *)
+
+If[! ValueQ[$iSVRTAudioCheckProgress], $iSVRTAudioCheckProgress = <||>];
+
+iSVRTAudioCheckHelper[] := FileNameJoin[{DirectoryName[iSVRTWorkerPath[]],
+  "SourceVault_realtime_audiocheck.py"}];
+
+(* 仮想ケーブルの反対側 (Python の loopback_spec と同じ規則) と、出口から見た入口 *)
+iSVRTLoopbackOf[name_String] := With[{m = StringCases[name,
+    RegularExpression["(?i)^\\s*(CABLE(?:-[A-Z])?)\\s+In(?:put)?\\b"] :> "$1 Output", 1]},
+  If[m === {}, None, First[m]]];
+iSVRTLoopbackOf[_] := None;
+iSVRTInletOf[name_String] := With[{m = StringCases[name,
+    RegularExpression["(?i)^\\s*(CABLE(?:-[A-Z])?)\\s+Output\\b"] :> "$1 Input", 1]},
+  If[m === {}, None, First[m]]];
+iSVRTInletOf[_] := None;
+
+(* Automatic = 次に始める音声会話が使うデバイス (SourceVaultRealtimeStart の既定値) *)
+iSVRTAudioDeviceSpec[value_, key_String] := Module[{v = value},
+  If[v === Automatic, v = OptionValue[SourceVaultRealtimeStart, key]];
+  If[StringQ[v], StringTrim[v], ""]];
+
+iSVRTReadJSONFile[path_String] := If[FileExistsQ[path],
+  With[{v = Quiet @ Check[Import[path, "RawJSON"], None]}, If[AssociationQ[v], v, None]], None];
+
+iSVRTWriteJSONFile[path_String, data_Association] := Quiet @ Check[
+  Module[{strm = OpenWrite[path, BinaryFormat -> True]},
+    If[Head[strm] === OutputStream,
+      WithCleanup[BinaryWrite[strm, ExportByteArray[data, "RawJSON"]], Quiet @ Close[strm]]];
+    path],
+  $Failed];
+
+(* 測っている間の表示 (FE のみ)。$iSVRTAudioCheckProgress は Python の進捗ファイルの写し *)
+iSVRTAudioCheckBar[db_?NumericQ] := Graphics[{
+    GrayLevel[0.88], Rectangle[{0, 0}, {1, 1}],
+    Which[db > -6, RGBColor[0.85, 0.3, 0.2], db > -50, RGBColor[0.25, 0.65, 0.35], True, GrayLevel[0.6]],
+    Rectangle[{0, 0}, {Clip[(db + 70.)/70., {0, 1}], 1}]},
+  ImageSize -> {180, 12}, PlotRange -> {{0, 1}, {0, 1}}, PlotRangePadding -> 0];
+
+iSVRTAudioCheckMeter[p_Association] := Module[
+  {phase = Lookup[p, "phase", ""], levels = Lookup[p, "levels", {}], db, t},
+  Switch[phase,
+    "output", Row[{"AI の声を流しています: ", Lookup[p, "device", ""],
+      If[StringQ[Lookup[p, "loopback", None]], " \[RightArrow] " <> p["loopback"] <> " で聞いています", ""]}],
+    "input",
+      db = If[MatchQ[levels, {__List}], N[levels[[-1, 3]]], -90.];
+      t = If[MatchQ[levels, {__List}], levels[[-1, 1]], 0];
+      Row[{"聞いています: ", Lookup[p, "device", ""], "   ", iSVRTAudioCheckBar[db], " ",
+        ToString[Round[db]], " dBFS   ", ToString[t], " / ", ToString[Lookup[p, "seconds", "?"]], " 秒"}],
+    "speak", Row[{"音声会話に話させています。", Lookup[p, "device", ""], " で聞いています"}],
+    _, "準備しています\[Ellipsis]"]];
+iSVRTAudioCheckMeter[_] := "準備しています\[Ellipsis]";
+
+(* Python を 1 回走らせる。onStart はプロセスを起こした直後、onTick は待つ間 0.1 s ごと *)
+iSVRTAudioCheckRun[python_String, helper_String, spec_Association, args_List,
+    wantAudio_, progress_, timeout_?NumericQ, onStart_ : None, onTick_ : None] := Module[
+  {tag = StringReplace[CreateUUID[], "-" -> ""], specFile, progFile, resFile, capFile,
+   proc, deadline, p, res, audio = None, data, cleanup},
+  {specFile, progFile, resFile, capFile} = FileNameJoin[{$TemporaryDirectory,
+      "sourcevault-audiocheck-" <> # <> "-" <> tag}] & /@ {"spec.json", "progress.json", "result.json", "capture.wav"};
+  cleanup := Quiet[If[FileExistsQ[#], DeleteFile[#]] & /@ {specFile, progFile, resFile, capFile,
+    resFile <> ".tmp", progFile <> ".tmp"}];
+  If[iSVRTWriteJSONFile[specFile, spec] === $Failed,
+    Return[iSVRTFailure["SourceVaultRealtimeAudioCheckFailed", "試験の設定を書き出せませんでした。"]]];
+  $iSVRTAudioCheckProgress = <|"phase" -> "starting"|>;
+  If[progress =!= False && $Notebooks,
+    PrintTemporary[Dynamic[iSVRTAudioCheckMeter[$iSVRTAudioCheckProgress],
+      TrackedSymbols :> {$iSVRTAudioCheckProgress}]]];
+  (* 環境は渡さない (SourceVaultRealtimeStart と同じ)。デバイス名は spec ファイルで渡す *)
+  proc = Quiet @ Check[StartProcess[Join[{python, "-X", "utf8", helper,
+      "--spec-file", specFile, "--progress-file", progFile, "--result-file", resFile},
+      If[TrueQ[wantAudio], {"--capture-file", capFile}, {}], args]], $Failed];
+  If[! MatchQ[proc, _ProcessObject],
+    cleanup;
+    Return[iSVRTFailure["SourceVaultRealtimeAudioCheckFailed", "試験用の Python を起動できませんでした。",
+      <|"Python" -> python, "Helper" -> helper|>]]];
+  If[onStart =!= None, onStart[]];
+  deadline = AbsoluteTime[] + timeout;
+  While[ProcessStatus[proc] === "Running" && AbsoluteTime[] < deadline,
+    p = iSVRTReadJSONFile[progFile];
+    If[AssociationQ[p], $iSVRTAudioCheckProgress = p];
+    If[onTick =!= None, onTick[]];
+    Pause[0.1]];
+  If[ProcessStatus[proc] === "Running",
+    Quiet[KillProcess[proc]]; cleanup;
+    Return[iSVRTFailure["SourceVaultRealtimeAudioCheckTimeout",
+      "試験が " <> ToString[Round[timeout]] <> " 秒で終わりませんでした。"]]];
+  res = iSVRTReadJSONFile[resFile];
+  If[! AssociationQ[res],
+    res = Quiet @ Check[ImportByteArray[StringToByteArray[
+      Replace[Quiet[ReadString[ProcessConnection[proc, "StandardOutput"], EndOfBuffer]], Except[_String] -> ""],
+      "UTF-8"], "RawJSON"], None]];
+  If[TrueQ[wantAudio] && FileExistsQ[capFile],
+    data = Quiet @ Check[Import[capFile, "Data"], None];
+    If[ArrayQ[data, _, NumericQ] && Length[Flatten[data]] > 0,
+      audio = Quiet @ Check[Audio[Flatten[data], SampleRate -> Lookup[Replace[res, Except[_Association] -> <||>], "rate", 24000]], None]]];
+  cleanup;
+  If[! AssociationQ[res],
+    Return[iSVRTFailure["SourceVaultRealtimeAudioCheckFailed", "試験の結果を読めませんでした。"]]];
+  <|"Result" -> res, "Audio" -> audio|>];
+
+iSVRTAudioCheckOutput[o_Association] := <|
+  "Status" -> Lookup[o, "status", None],
+  "Requested" -> Lookup[o, "requested", ""],
+  "Device" -> Lookup[o, "device", None],
+  "Loopback" -> Lookup[o, "loopback", None],
+  "LoopbackStatus" -> Lookup[o, "loopbackStatus", None],
+  "LatencyMilliseconds" -> Lookup[o, "latencyMs", None],
+  "Tone" -> Lookup[o, "tone", None],
+  "Seconds" -> Lookup[o, "seconds", None],
+  "Elapsed" -> Lookup[o, "elapsed", None],
+  "Pace" -> Lookup[o, "pace", None],
+  "Error" -> FirstCase[Lookup[o, {"error", "writeError", "loopbackError"}, Null], _String, None]|>;
+iSVRTAudioCheckOutput[_] := None;
+
+iSVRTAudioCheckInput[i_Association] := <|
+  "Status" -> Lookup[i, "status", None],
+  "Requested" -> Lookup[i, "requested", ""],
+  "Device" -> Lookup[i, "device", None],
+  "Seconds" -> Lookup[i, "seconds", None],
+  "Peak" -> Lookup[i, "peak", None],
+  "PeakDB" -> Lookup[i, "peakDb", None],
+  "Levels" -> Replace[Lookup[i, "levels", {}], Except[_List] -> {}],
+  "Error" -> Replace[Lookup[i, "error", None], Except[_String] -> None]|>;
+iSVRTAudioCheckInput[_] := None;
+
+iSVRTAudioCheckSession[None, _, _] := <|"Running" -> False|>;
+iSVRTAudioCheckSession[state_Association, outName_, inName_] := Module[
+  {so = Lookup[state, "resolvedOutputDevice", None], si = Lookup[state, "resolvedInputDevice", None]},
+  <|"Running" -> True,
+    "Connected" -> TrueQ[Lookup[state, "connected", False]],
+    "Model" -> Lookup[state, "model", None],
+    "OutputDevice" -> so, "InputDevice" -> si,
+    "Muted" -> TrueQ[Lookup[state, "muted", False]],
+    "OutputChunks" -> Lookup[state, "outputChunks", None],
+    (* 名前はワーカーと同じ関数で作っているので、同じデバイスなら同じ文字列 *)
+    "OutputMatches" -> (! StringQ[outName] || ! StringQ[so] || so === outName),
+    "InputMatches" -> (! StringQ[inName] || ! StringQ[si] || si === inName)|>];
+
+(* 動いている音声会話に短く話させる。ワーカーが再生したか (speaking / outputChunks)、
+   出口が仮想ケーブルなら反対側に声が出たか *)
+iSVRTAudioCheckSpeak[python_String, helper_String, state_Association, progress_] := Module[
+  {lb, chunks0, maxChunks, spoke = False, said = False, r, heard = None, tick, say},
+  lb = iSVRTLoopbackOf[Lookup[state, "resolvedOutputDevice", None]];
+  chunks0 = Replace[Lookup[state, "outputChunks", 0], Except[_Integer] -> 0];
+  maxChunks = chunks0;
+  tick := With[{st = iSVRTReadState[]},
+    If[TrueQ[Lookup[st, "speaking", False]], spoke = True];
+    maxChunks = Max[maxChunks, Replace[Lookup[st, "outputChunks", 0], Except[_Integer] -> 0]]];
+  say := (Pause[0.8]; said = ! FailureQ[Quiet[SourceVaultRealtimeSay[
+      "接続のテストです。「こちらは音声のテストです。聞こえていますか。」とだけ、声に出して言ってください。"]]]);
+  If[StringQ[lb],
+    r = iSVRTAudioCheckRun[python, helper, <|"inputDevice" -> lb|>,
+      {"--skip-output", "--listen-seconds", "10"}, False, progress, 30, say & , tick &];
+    If[FailureQ[r], Return[<|"Status" -> "Error", "Loopback" -> lb, "Failure" -> r|>]];
+    heard = Lookup[Lookup[r["Result"], "input", <||>], "status", None] === "Signal",
+    say; Do[tick; Pause[0.1], {100}]];
+  If[spoke || maxChunks > chunks0, Null, tick];
+  <|"Status" -> Which[! said, "NotSent", ! (spoke || maxChunks > chunks0), "Silent",
+      heard === False, "NotHeard", True, "OK"],
+    "Spoke" -> (spoke || maxChunks > chunks0),
+    "OutputChunks" -> {chunks0, maxChunks},
+    "Loopback" -> lb, "Heard" -> heard|>];
+
+iSVRTAudioCheckFindings[out_, in_, session_Association, speak_] := Module[{f = {}, add, name},
+  (* 「…」の前後の空白は詰める (コードの読みやすさのために空白を入れて連結している) *)
+  add[part_, level_, msg_] := AppendTo[f, <|"Part" -> part, "Level" -> level,
+    "Message" -> StringReplace[msg, {" \:300c" -> "\:300c", "\:300d " -> "\:300d"}]|>];
+  (* MME の名前は 31 文字で切れる ("CABLE-B Output (VB-Audio Virtua")。仮想ケーブルは Zoom の
+     一覧と照らせる短い名前 ("CABLE-B Output") で言う *)
+  name[x_] := Which[
+    ! StringQ[x] || x === "", "(既定のデバイス)",
+    StringStartsQ[x, "CABLE", IgnoreCase -> True], "\:300c" <> StringTrim[First[StringSplit[x, " ("]]] <> "\:300d",
+    True, "\:300c" <> x <> "\:300d"];
+  If[AssociationQ[out],
+    With[{dev = name[out["Device"]], lb = name[out["Loopback"]]},
+      Switch[out["Status"],
+        "NotFound", add["Output", "Problem", "出力デバイス" <> name[out["Requested"]] <>
+          " が見つかりません。SourceVaultRealtimeDevices[] で名前を確かめてください。"],
+        "Error", add["Output", "Problem", "出力 " <> dev <> " を開けません: " <> ToString[out["Error"]]],
+        "Stalled", add["Output", "Problem", "出力 " <> dev <> " が音を受け取りません (書き込みが終わりません)。" <>
+          "スタンバイ復帰のあとに起きることがあります。デバイスマネージャで無効→有効にするか、Windows Audio を再起動するか、" <>
+          "PC を再起動してから、音声会話を入れ直してください (応答off→on)。"],
+        "Unpaced", add["Output", "Problem", "出力 " <> dev <> " が音を実時間で流していません (" <>
+          ToString[out["Seconds"]] <> " 秒分が " <> ToString[out["Elapsed"]] <> " 秒で入りました)。鳴っていない疑いがあります。"],
+        "Played", Switch[out["LoopbackStatus"],
+          "Arrived", add["Output", "OK", "AI の声は " <> dev <> " から " <> lb <> " まで届いています" <>
+            If[NumericQ[out["LatencyMilliseconds"]], " (遅れ 約 " <> ToString[out["LatencyMilliseconds"]] <> " ms)", ""] <>
+            "。Zoom のマイクを " <> lb <> " にすれば相手に聞こえます。"],
+          "Silent" | "OtherSound", add["Output", "Problem", dev <> " に流した試験音が " <> lb <> " に出てきません。"],
+          "Error", add["Output", "Check", "書き込みは正常でしたが、反対側 " <> lb <> " を録音できませんでした: " <> ToString[out["Error"]]],
+          _, add["Output", "Check", If[out["Tone"] === "quiet",
+            "出力 " <> dev <> " への書き込みは正常に進みました (小さな試験音なので耳では確かめられません)。",
+            "出力 " <> dev <> " で試験音 (ピッ 3 回) を鳴らしました。聞こえたかを耳で確かめてください (このデバイスは録音して確かめられません)。"]]],
+        _, add["Output", "Problem", "出力の試験が終わりませんでした。"]]]];
+  If[AssociationQ[in],
+    With[{dev = name[in["Device"]], inlet = iSVRTInletOf[in["Device"]]},
+      Switch[in["Status"],
+        "Signal", add["Input", "OK", "AI の耳 " <> dev <> " に音が来ています (最大 " <> ToString[in["PeakDB"]] <> " dBFS)。"],
+        "Quiet", add["Input", "Check", dev <> " は動いていますが、聞こえたのは小さな雑音だけでした。" <>
+          "テスト中に Zoom の「スピーカーのテスト」を押すか、相手に話してもらってください。"],
+        "Zeros", add["Input", "Check", dev <> " には何も流れてきませんでした (デジタル無音)。" <>
+          If[StringQ[inlet], "Zoom のスピーカーを\:300c" <> inlet <> "\:300dにして、", ""] <>
+          "テスト中に Zoom の「スピーカーのテスト」を押すか、相手に話してもらってください。"],
+        "NotFound", add["Input", "Problem", "入力デバイス" <> name[in["Requested"]] <>
+          " が見つかりません。SourceVaultRealtimeDevices[] で名前を確かめてください。"],
+        "Stalled", add["Input", "Problem", "入力 " <> dev <> " から音が読めません (録音が止まりました)。"],
+        _, add["Input", "Problem", "入力 " <> dev <> " を開けません: " <> ToString[in["Error"]]]]]];
+  If[TrueQ[session["Running"]],
+    If[! session["Connected"], add["Session", "Problem", "音声会話はサーバーにつながっていません。"]];
+    If[! session["OutputMatches"], add["Session", "Problem", "動いている音声会話は出力 " <> name[session["OutputDevice"]] <>
+      " を使っています (確かめたのは " <> name[Lookup[Replace[out, Except[_Association] -> <||>], "Device", None]] <> ")。応答off→on で入れ直すと新しい設定になります。"]];
+    If[! session["InputMatches"], add["Session", "Problem", "動いている音声会話は入力 " <> name[session["InputDevice"]] <>
+      " を使っています (確かめたのは " <> name[Lookup[Replace[in, Except[_Association] -> <||>], "Device", None]] <> ")。応答off→on で入れ直すと新しい設定になります。"]];
+    If[session["Muted"], add["Session", "Check", "音声会話のマイクはいま閉じています (mute)。質問を聞かせるときは開けてください。"]];
+    If[session["Connected"] && session["OutputMatches"] && session["InputMatches"] && ! session["Muted"],
+      add["Session", "OK", "音声会話は同じデバイスで動いています (" <> ToString[session["Model"]] <> ")。"]],
+    add["Session", "Info", "音声会話は止まっています。応答on にすると、ここで確かめたデバイスで始まります。"]];
+  If[AssociationQ[speak],
+    Switch[speak["Status"],
+      "OK", add["Speak", "OK", If[StringQ[speak["Loopback"]],
+        "音声会話が話した声が\:300c" <> speak["Loopback"] <> "\:300dまで届きました。", "音声会話が話しました (ワーカーの再生は動いています)。"]],
+      "NotHeard", add["Speak", "Problem", "ワーカーは話しましたが、声が\:300c" <> speak["Loopback"] <> "\:300dに出てきません。"],
+      "Silent", add["Speak", "Problem", "音声会話に話させましたが、ワーカーが音を再生しませんでした (再生が止まっている疑い)。応答off→on で入れ直してください。"],
+      "NoSession", add["Speak", "Info", "音声会話が動いていないので、話させる試験はしませんでした。"],
+      _, add["Speak", "Problem", "音声会話に話させる依頼を送れませんでした。"]]];
+  f];
+
+Options[SourceVaultRealtimeAudioCheck] = {
+  "OutputDevice" -> Automatic, "InputDevice" -> Automatic,
+  "Tone" -> "Beep", "Loopback" -> Automatic, "ListenSeconds" -> 8,
+  "Output" -> True, "Input" -> True, "Speak" -> False,
+  "Audio" -> True, "Progress" -> Automatic};
+
+SourceVaultRealtimeAudioCheck[OptionsPattern[]] := Module[
+  {runtime, helper, outSpec, inSpec, tone, loop, listen, doOut, doIn, state, run = None,
+   res = <||>, out, in, session, speak = None, findings, levels},
+  runtime = SourceVaultRealtimeRuntime[];
+  If[runtime["Status"] =!= "OK",
+    Return[iSVRTFailure["SourceVaultRealtimeUnavailable",
+      "音声会話ワーカーの Python を実行できません。", <|"Hint" -> runtime["Hint"]|>]]];
+  helper = iSVRTAudioCheckHelper[];
+  If[! FileExistsQ[helper],
+    Return[iSVRTFailure["SourceVaultRealtimeAudioCheckFailed",
+      "SourceVault_realtime_audiocheck.py が見つかりません。", <|"Helper" -> helper|>]]];
+  outSpec = iSVRTAudioDeviceSpec[OptionValue["OutputDevice"], "OutputDevice"];
+  inSpec = iSVRTAudioDeviceSpec[OptionValue["InputDevice"], "InputDevice"];
+  tone = If[ToLowerCase[ToString[OptionValue["Tone"]]] === "quiet", "quiet", "beep"];
+  loop = Replace[OptionValue["Loopback"], {Automatic -> "auto", None -> "none",
+    s_String :> s, _ -> "auto"}];
+  listen = N[Clip[Replace[OptionValue["ListenSeconds"], Except[_?NumericQ] -> 8], {1, 60}]];
+  doOut = TrueQ[OptionValue["Output"]];
+  doIn = TrueQ[OptionValue["Input"]];
+  state = If[iSVRTRunningQ[], iSVRTReadState[], None];
+  If[doOut || doIn,
+    run = iSVRTAudioCheckRun[runtime["Python"], helper,
+      <|"outputDevice" -> outSpec, "inputDevice" -> inSpec, "loopback" -> loop|>,
+      Join[{"--tone", tone, "--listen-seconds", ToString[listen]},
+        If[doOut, {}, {"--skip-output"}], If[doIn, {}, {"--skip-input"}]],
+      TrueQ[OptionValue["Audio"]] && doIn, OptionValue["Progress"],
+      listen + If[doOut, 10, 0] + 25];
+    If[FailureQ[run], Return[run]];
+    res = run["Result"]];
+  out = iSVRTAudioCheckOutput[Lookup[res, "output", None]];
+  in = iSVRTAudioCheckInput[Lookup[res, "input", None]];
+  session = iSVRTAudioCheckSession[state,
+    If[AssociationQ[out], out["Device"], None], If[AssociationQ[in], in["Device"], None]];
+  If[TrueQ[OptionValue["Speak"]],
+    speak = If[AssociationQ[state] && iSVRTRunningQ[],
+      iSVRTAudioCheckSpeak[runtime["Python"], helper, state, OptionValue["Progress"]],
+      <|"Status" -> "NoSession"|>]];
+  findings = iSVRTAudioCheckFindings[out, in, session, speak];
+  <|"Verdict" -> Which[
+      MemberQ[Lookup[findings, "Level"], "Problem"], "Problem",
+      MemberQ[Lookup[findings, "Level"], "Check"], "Check",
+      True, "OK"],
+    "Findings" -> findings,
+    "Output" -> out, "Input" -> in, "Session" -> session, "Speak" -> speak,
+    "Audio" -> If[AssociationQ[run], run["Audio"], None],
+    "Error" -> Lookup[res, "error", None],
+    "Date" -> DateString[{"Year", "-", "Month", "-", "Day", " ", "Hour", ":", "Minute", ":", "Second"}]|>];
+
+(* ---- View ---- *)
+
+$iSVRTAudioCheckParts = <|"Output" -> "AI の声 (出力)", "Input" -> "AI の耳 (入力)",
+  "Session" -> "音声会話", "Speak" -> "話させた声"|>;
+
+iSVRTAudioCheckMark[level_] := Switch[level,
+  "OK", Style["\[Checkmark]", Bold, RGBColor[0.15, 0.55, 0.25]],
+  "Check", Style["\[WarningSign]", Bold, RGBColor[0.85, 0.55, 0.1]],
+  "Problem", Style["\[Times]", Bold, RGBColor[0.8, 0.2, 0.15]],
+  _, Style["\[CenterDot]", GrayLevel[0.5]]];
+
+SourceVaultRealtimeAudioCheckView[r_Association] := Module[{levels, verdict = Lookup[r, "Verdict", "?"]},
+  levels = Lookup[Replace[Lookup[r, "Input", None], Except[_Association] -> <||>], "Levels", {}];
+  Panel[Column[DeleteCases[{
+      Row[{Style["接続テスト  ", Bold, 14],
+        Style[Switch[verdict, "OK", "つながっています", "Check", "確かめてください", "Problem", "問題があります", _, verdict],
+          Bold, 14, Switch[verdict, "OK", RGBColor[0.15, 0.55, 0.25], "Check", RGBColor[0.85, 0.55, 0.1],
+            _, RGBColor[0.8, 0.2, 0.15]]],
+        Style["   " <> ToString[Lookup[r, "Date", ""]], GrayLevel[0.5], 10]}],
+      Grid[{iSVRTAudioCheckMark[#Level], Style[Lookup[$iSVRTAudioCheckParts, #Part, #Part], GrayLevel[0.35]],
+          Pane[#Message, ImageSize -> {560, Automatic}]} & /@ Lookup[r, "Findings", {}],
+        Alignment -> {Left, Top}, Spacings -> {1, 0.6}],
+      If[MatchQ[levels, {{_?NumericQ, _?NumericQ, _?NumericQ} ..}],
+        ListLinePlot[levels[[All, {1, 3}]], PlotRange -> {All, {-80, 0}}, Filling -> Bottom,
+          GridLines -> {None, {-50}}, AxesLabel -> {"秒", "dBFS"}, ImageSize -> 460, AspectRatio -> 0.22,
+          PlotLabel -> "AI の耳のレベル (100 ms ごとの RMS、-50 dBFS より上を音とみなす)"],
+        Nothing],
+      If[Head[Lookup[r, "Audio", None]] === Audio, Row[{"聞いた音: ", r["Audio"]}], Nothing]},
+    Nothing], Spacings -> 1]]];
+SourceVaultRealtimeAudioCheckView[f_Failure] := f;
+SourceVaultRealtimeAudioCheckView[opts___Rule] :=
+  SourceVaultRealtimeAudioCheckView[SourceVaultRealtimeAudioCheck[opts]];
+
 (* ---- プロセス / 状態 ---- *)
 
 iSVRTRunningQ[] := MatchQ[$iSVRTProcess, _ProcessObject] &&
@@ -616,6 +951,15 @@ iSVRTEnsureNBAccess[] := Module[{path, loaded},
   loaded = Quiet @ Check[Block[{$CharacterEncoding = "UTF-8"}, Get[path]], $Failed];
   loaded =!= $Failed && Length[DownValues[NBAccess`NBGetAPIKey]] > 0];
 
+(* 非公開 (Private) 宣言のノートのための会話・読み上げはクラウド (OpenAI) で行わない (rule 61、2026-10-31)。
+   有料 API の許可と同じく、"Notebook" のノートを単位に判断する。判定は NBAccess (Private = 1.0)。
+   NBAccess が答えられないときも断る (fail-closed)。ノートが無ければ判断しない (None) *)
+iSVRTPrivateNotebookFailure[nb_NotebookObject] :=
+  If[TrueQ[Quiet @ Check[NBAccess`NBNotebookRequiredAccessLevel[nb], 1.0] < 0.5], None,
+    iSVRTFailure["SourceVaultRealtimePrivateNotebook",
+      "このノートブックは非公開 (Private) と宣言されているので、クラウドの音声 (OpenAI) へは送りません。"]];
+iSVRTPrivateNotebookFailure[_] := None;
+
 iSVRTResolveNotebook[Automatic] := Quiet @ Check[EvaluationNotebook[], None];
 iSVRTResolveNotebook[None] := None;
 iSVRTResolveNotebook[nb_] := nb;
@@ -702,6 +1046,8 @@ SourceVaultRealtimeStart[OptionsPattern[]] := Module[
     If[! TrueQ @ Quiet @ NBAccess`NBGetNotebookPaidAPIAllowed[nb],
       Return[iSVRTFailure["SourceVaultRealtimePaidAPINotAllowed",
         "このノートブックは有料 API を許可していません。NBAccess`NBSetNotebookPaidAPIAllowed[nb, True] で許可してください。"]]]];
+
+  With[{f = iSVRTPrivateNotebookFailure[nb]}, If[FailureQ[f], Return[f]]];
 
   (* クラウド経路のプロバイダゲート: SourceVault のプライバシー契約と同じ入口 *)
   If[! TrueQ @ Quiet @ NBAccess`NBProviderCanAccess["openai", 0.5],
@@ -1053,6 +1399,7 @@ SourceVaultRealtimeRender[jobsIn_List, OptionsPattern[]] := Module[
     If[! TrueQ @ Quiet @ NBAccess`NBGetNotebookPaidAPIAllowed[nb],
       Return[iSVRTFailure["SourceVaultRealtimePaidAPINotAllowed",
         "このノートブックは有料 API を許可していません。NBAccess`NBSetNotebookPaidAPIAllowed[nb, True] で許可してください。"]]]];
+  With[{f = iSVRTPrivateNotebookFailure[nb]}, If[FailureQ[f], Return[f]]];
   If[! TrueQ @ Quiet @ NBAccess`NBProviderCanAccess["openai", 0.5],
     Return[iSVRTFailure["SourceVaultRealtimeOpenAIDisabled",
       "NBAccess のプロバイダ方針が現在 OpenAI へのアクセスを認めていません。"]]];
@@ -1115,6 +1462,27 @@ SourceVaultRealtimeRender[jobsIn_List, OptionsPattern[]] := Module[
     "Fatal" -> Lookup[result, "fatal", None], "Model" -> model, "Voice" -> voice,
     "Elapsed" -> Round[AbsoluteTime[] - started, 0.1],
     "TimedOut" -> (AbsoluteTime[] - started >= limit)|>];
+
+(* privacy contracts for functions added after the module's initial review (model:
+   iSVMDRegisterPrivacyContracts in SourceVault_maildb.wl). No-op without the privacy layer. *)
+iSVRTRegisterPrivacyContracts[] :=
+  Quiet @ Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Internal", "Module" -> "SourceVault_realtime.wl", "NoDataFlow" -> Last[#]|>] &,
+        {{"SourceVaultRealtimeAddContext", "Forwards caller-supplied text to the running voice session and returns the worker's acknowledgement; reads no store."},
+         {"SourceVaultRealtimeRender", "Renders caller-supplied scripts to wav files; returns file paths, durations and status; reads no store."},
+         {"SourceVaultRealtimeAudioCheck", "Device check: test tone and live input levels; the optional Audio is a fresh capture the caller asked for, not stored data."},
+         {"SourceVaultRealtimeAudioCheckView", "Displays an SourceVaultRealtimeAudioCheck result (same data)."}}];
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Public", "Module" -> "SourceVault_realtime.wl", "NoDataFlow" -> Last[#]|>] &,
+        {{"SourceVaultRealtimeModels", "Static model registry."},
+         {"SourceVaultRealtimeModelAPI", "Model name -> API kind lookup."},
+         {"$SourceVaultRealtimeModels", "Setting (user-added model entries)."},
+         {"$SourceVaultRealtimeInterruptWords", "Setting (word list)."},
+         {"$SourceVaultRealtimeKeepAliveLevel", "Setting (dBFS)."}}]];
+    Null, Null];
+iSVRTRegisterPrivacyContracts[];
 
 End[];
 

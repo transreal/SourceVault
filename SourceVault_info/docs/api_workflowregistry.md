@@ -53,7 +53,7 @@ slug の実フォルダ（root / testing / production を横断解決）にあ�
 
 ## 非同期実行 (FE を止めずに launch を走らせる)
 
-生成ワークフローの launch を FRONT END をブロックせずに走らせる薄い配線。新しい非同期基盤は作らず、既存の External executor（`ClaudeRuntime` externalrunner + `ClaudeOrchestrator\`Workflow\`ClaudeSubmitExternalHeldExprJob`）に子カーネル評価として投げる。安全性のため完了時はノートへ summary のみ書き（single committer）、本体（View 等）は `output.wxf` に保存し `SourceVaultRunWorkflowResult` で明示取得する。
+生成ワークフローの launch を FRONT END をブロックせずに走らせる薄い配線。新しい非同期基盤は作らず、既存の External executor（[ClaudeRuntime_externalrunner](https://github.com/transreal/ClaudeRuntime_externalrunner) + `ClaudeOrchestrator\`Workflow\`ClaudeSubmitExternalHeldExprJob`）に子カーネル評価として投げる。安全性のため完了時はノートへ summary のみ書き（single committer）、本体（View 等）は `output.wxf` に保存し `SourceVaultRunWorkflowResult` で明示取得する。
 
 ### SourceVaultRunWorkflowAsync[slug, form:"run"] → Association
 外部 executor を稼働（冪等）させ、子カーネルで `SourceVaultRunWorkflowChild[slug, form, $Language]` を held 式として投入する。即座に返る（FE 非ブロック）。base SourceVault はエンジンは載せるが外部ランナーは載せないため、未定義なら先に `ClaudeRuntime_externalrunner.wl` を `Get` してから activate する。`$Language` は FE から引き継ぐ。ユーザー操作起点（FE 対話の代理実行）として `"SeatPriority" -> 90` で投入するため、FE+常駐で空きが Reserve 分のみのトポロジーでも恒久 `NoSeat` にならない。投入成功時は内部レジストリに登録し、`ClaudeProcessList` 等に実行中ワークフローとして出す。

@@ -4485,6 +4485,19 @@ SourceVaultMCPDispatch[method_String, params_Association] := Switch[method,
 ];
 SourceVaultMCPDispatch[method_String] := SourceVaultMCPDispatch[method, <||>];
 
+(* privacy contracts for the 2026-09-22 extension point (model: iSVMDRegisterPrivacyContracts in
+   SourceVault_maildb.wl). The older MCP functions are declared in SourceVault_privacy.wl section 7b;
+   tool calls themselves go through SourceVaultMCPCallTool / SourceVaultMCPDispatch (Private, Head). *)
+iSVMCPRegisterPrivacyContracts[] :=
+  Quiet @ Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Internal", "Module" -> "SourceVault_mcp.wl", "NoDataFlow" -> Last[#]|>] &,
+        {{"SourceVaultMCPRegisterTools", "Stores another package's tool definitions and handler; returns the id. Data only flows when a tool is called, through SourceVaultMCPCallTool (Private)."},
+         {"$SourceVaultMCPExternalTools", "Registry of tool definitions / handlers (code and schemas, no stored data)."}}]];
+    Null, Null];
+iSVMCPRegisterPrivacyContracts[];
+
 End[]  (* `MCPPrivate` *)
 
 

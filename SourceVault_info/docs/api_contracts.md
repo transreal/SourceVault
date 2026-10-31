@@ -50,7 +50,7 @@ symbol の `Requires` DAG をトポロジカル順に冪等実行する。各 In
 → Association `<|"Status", "Executed", "Skipped", "Failed"|>`
 
 ### SourceVaultInitPlan[symbol]
-実行せず初期化順序だけ返す (dry-run)。循環依存は `Failure["InitCycle"]`。
+実行せず初期化順序だけ返す (dry-run)。循環依存は `Failure["InitCycle"]`。List 引数も受け付け、複数 symbol の DAG をマージする。
 → Association `<|"Status", "Order", "Missing"|>` | Failure
 
 ### $SourceVaultInitInProgress
@@ -71,7 +71,7 @@ alias -> 正準の決定的書き換えのみ (deprecated symbol の head 置換
 ### SourceVaultRepairCallExpression[heldExpr, opts]
 Normalize + 未知 option の最近傍提案の適用。既定は SuggestOnly (式は不変)。
 → Association `<|"Status", "Expression", "Applied", "Remaining"|>`
-Options: `"ApplySuggestions"` -> False (True で自動置換して再検証)
+Options: `"ApplySuggestions"` -> False (True で自動置換して再検証), `"UnknownSymbolPolicy"` -> "Pass"
 
 ### SourceVaultExplainCallContract[symbol]
 契約を人間・LLM 可読な文字列に整形 (Signature / Options 一覧「これ以外の option は無い」/ Requires の EnsureInitialized 前置き案内 / Supersedes)。
@@ -88,3 +88,31 @@ registry と実装の乖離を検査する: Symbol 実在 / `Options[sym]` と O
 ### SourceVaultCallContractValidatorHook[heldExpr]
 ClaudeRuntime `$ClaudeCallContractValidator` の実体。提案式全体を**深くスキャン**し (Module/CompoundExpression 内も対象)、契約登録済み head の呼び出しをすべて検証。違反時は LLM 向け修復指示 `RepairText` を返し、Runtime 側で Decision="RepairNeeded" の修復ターンになる。fail-open (契約外・解釈不能は素通し)。ロード時に両側 handshake で自動配線 (rule 11)。
 → Association `<|"Status"->"OK"|"Failed", "Checked", "RepairText", "Failures", "FailureTags"|>`
+
+## Pilot 契約 (SourceVault.wl ロード済み時のみ登録)
+
+以下の契約は `SourceVault.wl` が先にロード済みの場合のみ自動登録される。standalone テストでは登録されない。
+
+### SourceVaultInitialize[opts] — Kind: Init
+SourceVault の状態 (`$SourceVaultRoots`) を初期化する。Provides: `$SourceVaultRoots`。InitializedQRef: `SourceVault`Private`iSVRootsReadyQ`。
+Options: `"Roots"` -> Automatic, `"Force"` -> False (allowed: {True, False}), `"InitMode"` -> "Force" (allowed: {"Force", "Ensure"})
+
+### SourceVaultLookup[topic, key, opts]
+registry からエントリを lookup する。Requires: SourceVaultInitialize。
+→ Association
+Options: `"Channel"` -> "public" (allowed: {"public", "private"}), `"AllowSeed"` -> True (allowed: {True, False})
+
+### SourceVaultFindNotebooks[opts]
+ノートブックを条件検索する。Requires: SourceVaultInitialize。CapabilityTags: notebook.search, todo.filter。
+→ List
+Options: `"OpenTodos"`, `"NextReview"`, `"Deadline"`, `"Keywords"`, `"Title"`, `"Status"`, `"Scope"`, `"ForceReindex"` -> False (allowed: {True, False}), `"Format"` -> False (allowed: {True, False})
+
+### SourceVaultUpcomingSchedule[opts]
+期日ベースのスケジュール (Deadline / NextReview) を表示する。Requires: SourceVaultInitialize。CapabilityTags: schedule.review, todo.filter, notebook.search。UseInsteadOf SourceVaultFindNotebooks when 期日ベーススケジュール表示が目的。CostClass: Kernel。
+→ Dataset | List
+Options: `"Scope"` -> Automatic, `"Period"` -> Quantity[7, "Days"], `"IncludeOverdue"` -> True (allowed: {True, False}), `"Recursive"` -> True (allowed: {True, False}), `"Refresh"` -> "Never" (allowed: {"Never", "IfStale", "Force"}), `"FallbackToCloud"` -> "Ask" (allowed: {"Ask", "Allow", "Deny"}), `"StatusFilter"` -> {"Todo"}, `"UseCache"` -> True (allowed: {True, False}), `"OpenTodos"` -> Missing[], `"DateField"` -> "Both" (allowed: {"Both", "Deadline", "NextReview"}), `"FilterSpec"` -> Missing[], `"OutputFormat"` -> "Dataset" (allowed: {"Dataset", "Rows", "Records"})
+
+### SourceVaultResolve[kind, query, opts]
+kind (String) と query (Association) を受け取り、用途に合うモデル等を解決する。Requires: SourceVaultInitialize。CapabilityTags: registry.resolve, model.resolve。
+→ Association
+Options: `"Channel"` -> "public" (allowed: {"public", "private"}), `"AllowSeed"` -> True (allowed: {True, False}), `"Topic"` -> Automatic

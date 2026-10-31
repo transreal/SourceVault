@@ -324,7 +324,7 @@ Options: SourceVaultEagleSearch と同じ全オプション + "ForceRefresh" -> 
 
 ### SourceVaultEagleIndexRecord[item, opts] → Association
 検索用の統合 record を返す:
-`<|Id, Name, Ext, Kind, Star(★数), Width, Height, Megapixels, Size, SizeMB, Added(追加日), Created(作成日), Modified(変更日), Tags, Folders, Annotation, URL, Deleted, Summary(保存済みサマリー本文), HasSummary, SummaryStatus, FrameCount(動画のフレーム数、動画以外は Missing), Note(サマリーノート補足), HasNote, HasExif, CameraModel, TakenAt(撮影日), ISO, FNumber, ExposureTime, FocalLength, GPS, Exif|>`
+`<|Id, Name, Ext, Kind, Star(★数), Width, Height, Megapixels, Size, SizeMB, Added(追加日), Created(作成日), Modified(変更日), Tags, Folders, Annotation, URL, Deleted, Summary(保存済みサマリー本文), HasSummary, SummaryStatus, FrameCount(動画のフレーム数。動画以外は Missing), Note(サマリーノート補足の本文), HasNote, HasExif, CameraModel, TakenAt(撮影日), ISO, FNumber, ExposureTime, FocalLength, GPS, Exif|>`
 日付は DateObject。Exif は `SourceVaultEagleBuildExifIndex` 済み分のみ (未索引は Missing)。
 Options: "Library" -> Automatic
 

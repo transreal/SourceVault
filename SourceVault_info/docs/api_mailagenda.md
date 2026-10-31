@@ -75,7 +75,7 @@ $onWork に作業ノートを作成しメールを**継承**する: Templates/So
 準拠のレイアウトで先頭に "NotebookStatus" スタイルセル(InputForm 生テキスト、非評価往復可能)
 `<|Keywords→{"mail"}, Deadline(推定〆切があれば DateObject[{y,m,d}]), NextReview→
 Quantity[1,"Weeks"], Status→"Todo", Title(件名), MailRecordId|>` + Title セル +
-「✉ 元メール・返信を開く」ボタンセル(ButtonNotebook[] でクリック時に自分のノートを解決、
+「✉ 元メール・返信を開く」ボタンセル(ButtonNotebook[] でクリック時に自ノートのパスを動的解決、
 シリアライズされたパス変数に依存しない)。ファイル名 = `<日付>-<件名先頭24字>.nb`(既存なら UnixTime 付与)。NotebookCreated を記録(アジェンダから消える)し、
 $SourceVaultMailAgendaEventSink へ継承イベント
 <|Type→"MailInheritedByNotebook",RecordId,NotebookPath,At|> を emit(マイニング層 seam、
@@ -83,7 +83,7 @@ rule 11)。**プライバシー継承**: 作成ノートはメール内容(件�
 TaggingRules→{"SourceVault"→{"CloudPublishable"→False}} を明示宣言して書き出す(宣言なしでも
 PL 1.0 fail-safe だが原則を明示)。スタイルシートは "SourceVault default.nb"。
 失敗時は <|Status→"Failed", Reason→"NoDirectory"|"ExportFailed"|...|>。
-Options: "Directory"(Automatic→Global`$onWork), "Open"(True→SystemOpen),
+Options: "Directory"(Automatic→Global`$onWork; Symbol[Identity[...]] で実行時解決し WL 15 の literal lookup 問題を回避), "Open"(True→SystemOpen),
 "Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject)。
 
 ### SourceVaultMailAgendaInheritTodo[recordId, opts] → <|Status, TodoId, RecordId|>
@@ -98,9 +98,7 @@ TodoCreated を記録(アジェンダから消える)し、$SourceVaultMailAgend
 Options: "Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject)。
 
 ### SourceVaultMailForNotebook[nbPath | NotebookObject] → recordId | Missing[...]
-継承ノートのメタデータ MailRecordId を**非評価**で読み(NotebookStatus セル優先、なければ
-旧形式の init/input セルへフォールバック → HoldComplete 解析 → NBAccess`NBOnWorkTaskSafeExtract
-の safe extractor、whitelist に MailRecordId 追加済み)、SourceVaultMailThreadNotebook で
+継承ノートのメタデータ MailRecordId を**非評価**で読み(NBAccess`NBFindCellByPredicate でセル取得、影監視メッセージ耐性; NotebookStatus セル優先、なければ旧形式の init/input セルへフォールバック → HoldComplete 解析 → NBAccess`NBOnWorkTaskSafeExtract の safe extractor、whitelist に MailRecordId 追加済み)、SourceVaultMailThreadNotebook で
 スレッド(後続の返信含む)を開く。ノートブック→メールの逆参照。読み取り不能/リンクなしは
 Missing["Unreadable"|"NoMetadata"|"ParseFailed"|"NoMailLink"|"NotebookNotSaved"|"BadArgs"]。
 

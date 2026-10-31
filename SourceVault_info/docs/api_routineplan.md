@@ -78,6 +78,7 @@ Options: PriorPlan -> (none), + SourceVaultRoutinePlacePlan の全 opts
 - `SourceVault_routineplan_reschedule_test.wls` **20/20**(CapacityModel/pins/replan auto-heal/PlanInputDegraded/
   FocusRequest/Conflict+escalation/immovable pin)。**合計 48 green**。
 - **罠**: `used` の日キーは Round[dayAbs] 整数化必須(浮動小数 bit 不一致で二重予約)。
+- **罠**: 弱結合シンボル解決には `Symbol[Identity["Ctx`name"]]` を使うこと。`Symbol["Ctx`name"]` のリテラル形式は WL 15 で一度 unevaluated を返すと以後も unevaluated のまま固着し、後から DownValues が増えても呼び出せなくなる(2026-10-30 確認)。
 
 ## プライバシー継承原則(全 view/data 共通)
 
@@ -166,6 +167,8 @@ Options: CapacityModel -> Automatic (=SourceVaultRoutineDefaultCapacityModel[]),
 〆切が優先(重複行なし)。`Due`/`DueKind` しか持たないレガシー/注入レコードは従来どおり1件。
 これがないと**遠い将来の Deadline が窓内の NextReview を隠し**、「今週のノートブック」
 (SourceVaultUpcomingSchedule は Deadline 列と NextReview 列を両方出す)と食い違う。
+State が `Done`/`Pass`/`Keep` のタスクは日リストにも overdue バンドにも出ない(`Keep` = 意図的に
+保留中; リマインダー不要)。
 締切のあるメールは `"MailDeadline"` として該当日の AllDay にも合流(クリックで対応ウィンドウを開く)。
 締切のある standalone todo(ノートブックに属さない todo)は `"Todo"` として該当日の AllDay に、
 過去日なら Overdue に合流する(締切のない todo は day/Overdue に出ず、別バンド="Todos" に集計)。

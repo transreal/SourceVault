@@ -147,8 +147,11 @@ iPNResolveSource[ref_String] := Module[{r},
   (* Eagle \:306e PDF (sv://object/eagle-<id> / eagle:<id>) \:306f Eagle \:5074\:306e\:8aad\:307f\:53e3\:3067\:89e3\:6c7a\:3059\:308b (SourceVault_eagle.wl)\:3002
      SourceId \:306f\:7121\:3044\:306e\:3067\:767b\:9332\:7c3f\:306f\:6b63\:6e96 URI \:3067\:5f15\:304f *)
   r = Which[
+    (* the flag skips ObjectInfo's privacy exit: this runs once per row of the Eagle / Sources views,
+       and every caller here carries the resolved PL through its own exit or returns only the PL *)
     iPNEagleRefQ[ref] && Length[DownValues[SourceVault`SourceVaultEagleObjectInfo]] > 0,
-      Quiet @ Check[SourceVault`SourceVaultEagleObjectInfo[ref], $Failed],
+      Block[{SourceVault`Private`$iSVEGObjectInfoNoExit = True},
+        Quiet @ Check[SourceVault`SourceVaultEagleObjectInfo[ref], $Failed]],
     ! TrueQ[$iPNNoResolve] && Length[DownValues[SourceVault`SourceVaultResolveReference]] > 0,
       Block[{$iPNNoResolve = True}, Quiet @ Check[SourceVault`SourceVaultResolveReference[ref], $Failed]],
     True, $Failed];
@@ -163,6 +166,17 @@ iPNResolveSource[ref_String] := Module[{r},
       "File" -> "", "Title" -> "", "URL" -> "", "Kind" -> "", "PrivacyLevel" -> 1.0|>]];
 
 SourceVaultSourcePrivacy[ref_String] := iPNResolveSource[ref]["PrivacyLevel"];
+
+(* ---- privacy exits (SourceVault_privacy.wl, weak coupling) ----
+   Registry entries carry the PrivacyLevel inherited from their source, so a public reader records it
+   through the canonical Result exit, which keeps the value as is (the Dataset views too, like
+   SourceVaultMailDataset). The per-row path lookups (SourceVaultPaperNotebook / SourceVaultComputeNotebook,
+   called for every row of the Sources / Eagle views) use the exit-free cores iPNEntry / iCNEntry instead. *)
+iPNEntryPL[e_Association] := With[{p = Lookup[e, "PrivacyLevel", 1.0]}, If[NumericQ[p], N[p], 1.0]];
+iPNEntryPL[_] := 0.;
+iPNMaxPL[es_List] := Max[Prepend[iPNEntryPL /@ Select[es, AssociationQ], 0.]];
+iPNResult[x_, pl_] := If[Length[DownValues[SourceVault`SourceVaultPrivateResult]] > 0,
+  Quiet @ Check[SourceVault`SourceVaultPrivateResult[x, pl], x], x];
 
 (* \:5143\:30bd\:30fc\:30b9\:306e\:5f62\:5f0f: PDF \:306f DocImportPaper\:3001\:305d\:308c\:4ee5\:5916\:306f DocImportWebPage *)
 iPNSourceFormat[file_String] := Switch[ToLowerCase[FileExtension[file]],
@@ -210,8 +224,11 @@ iPNRelativeFile[path_String] := Module[{root = SourceVaultPaperNotebookRoot[], a
 (* \:307e\:305a\:767b\:9332\:7c3f\:3092 ref \:305d\:306e\:3082\:306e (SourceId / URI) \:3067\:5f15\:304f\:3002\:305d\:308c\:3067\:898b\:3064\:304b\:3089\:306a\:3044\:3068\:304d\:3060\:3051\:53c2\:7167\:89e3\:6c7a\:3092\:901a\:3059
    (\:4e00\:89a7\:306e 1 \:884c\:3054\:3068\:306e\:547c\:3073\:51fa\:3057\:3092 O(\:5168\:30bd\:30fc\:30b9\:8d70\:67fb) \:306b\:3057\:306a\:3044\:30fb\:518d\:5e30\:3057\:306a\:3044) *)
 Options[SourceVaultPaperNotebookEntry] = {"Language" -> Automatic};
-SourceVaultPaperNotebookEntry[ref_String, OptionsPattern[]] := Module[
-  {entries = iPNReadRegistry[], lang = OptionValue["Language"], cands, e, src},
+SourceVaultPaperNotebookEntry[ref_String, OptionsPattern[]] :=
+  With[{e = iPNEntry[ref, OptionValue["Language"]]}, If[AssociationQ[e], iPNResult[e, iPNEntryPL[e]], e]];
+
+iPNEntry[ref_String, langIn_] := Module[
+  {entries = iPNReadRegistry[], lang = langIn, cands, e, src},
   lang = If[StringQ[lang] && StringTrim[lang] =!= "", lang, Automatic];
   cands = Select[entries, Function[x,
     With[{sid = iPNStr[Lookup[x, "SourceId", ""]], uri = iPNStr[Lookup[x, "URI", ""]], psid = iPNStr[Lookup[x, "PDFSourceId", ""]]},
@@ -224,7 +241,7 @@ SourceVaultPaperNotebookEntry[ref_String, OptionsPattern[]] := Module[
 
 Options[SourceVaultPaperNotebook] = {"Language" -> Automatic};
 SourceVaultPaperNotebook[ref_String, OptionsPattern[]] := Module[
-  {e = SourceVaultPaperNotebookEntry[ref, "Language" -> OptionValue["Language"]]},
+  {e = iPNEntry[ref, OptionValue["Language"]]},
   If[! AssociationQ[e], Return[e]];
   If[StringQ[e["Notebook"]] && e["Notebook"] =!= "" && FileExistsQ[e["Notebook"]], e["Notebook"], Missing["NoFile", e["Notebook"]]]];
 
@@ -235,12 +252,14 @@ iPNSafeName[s_String] := Module[{t},
   t = StringReplace[t, Whitespace .. -> " "];
   StringTrim[StringTake[t, UpTo[60]]]];
 
+(* the default path embeds the source title, so it carries the source PL (only when a title was used) *)
 SourceVaultPaperNotebookPath[ref_String] := Module[{src = iPNResolveSource[ref], sid, base},
   sid = Which[src["SourceId"] =!= "", src["SourceId"],
     StringStartsQ[src["URI"], "sv://object/"], StringDrop[src["URI"], StringLength["sv://object/"]],
     True, iPNSafeName[ref]];
   base = If[src["Title"] =!= "", iPNSafeName[src["Title"]] <> "_" <> sid, sid];
-  FileNameJoin[{SourceVaultPaperNotebookRoot[], base <> ".nb"}]];
+  iPNResult[FileNameJoin[{SourceVaultPaperNotebookRoot[], base <> ".nb"}],
+    If[src["Title"] =!= "", src["PrivacyLevel"], 0.]]];
 
 SourceVaultPaperNotebookPath[ref_String, lang_String] :=
   With[{p = SourceVaultPaperNotebookPath[ref]},
@@ -300,7 +319,7 @@ SourceVaultRegisterPaperNotebook[ref_String, nbPath_String, OptionsPattern[]] :=
   entries = If[AssociationQ[prior], Replace[entries, x_ /; x === prior :> e, {1}], Append[entries, e]];
   If[! StringQ[iPNWriteRegistry[entries]],
     Return[Failure["SaveFailed", <|"MessageTemplate" -> "could not write the notebook registry"|>]]];
-  Join[e, <|"Notebook" -> abs, "Declared" -> declared|>]];
+  iPNResult[Join[e, <|"Notebook" -> abs, "Declared" -> declared|>], pl]];
 
 Options[SourceVaultUnregisterPaperNotebook] = {"Language" -> Automatic};
 SourceVaultUnregisterPaperNotebook[ref_String, OptionsPattern[]] := Module[
@@ -311,16 +330,18 @@ SourceVaultUnregisterPaperNotebook[ref_String, OptionsPattern[]] := Module[
   If[drop === {}, Return[False]];
   StringQ[iPNWriteRegistry[Select[entries, ! MemberQ[drop, #] &]]]];
 
-SourceVaultPaperNotebooks[] := Map[Append[#, "Notebook" -> iPNAbsolutePath[#]] &, iPNReadRegistry[]];
+SourceVaultPaperNotebooks[] := With[{es = iPNNotebooks[]}, iPNResult[es, iPNMaxPL[es]]];
+iPNNotebooks[] := Map[Append[#, "Notebook" -> iPNAbsolutePath[#]] &, iPNReadRegistry[]];
 
-SourceVaultPaperNotebooksView[] := Dataset[Map[
+SourceVaultPaperNotebooksView[] := With[{es = iPNNotebooks[]}, iPNResult[iPNNotebooksDataset[es], iPNMaxPL[es]]];
+iPNNotebooksDataset[es_List] := Dataset[Map[
   <|"SourceId" -> iPNStr[#["SourceId"]], "Title" -> iPNStr[Lookup[#, "Title", ""]],
     "PL" -> Lookup[#, "PrivacyLevel", 1.0], "Public" -> TrueQ[Lookup[#, "CloudPublishable", False]],
     "Language" -> iPNStr[Lookup[#, "TargetLanguage", ""]], "From" -> iPNStr[Lookup[#, "SourceLanguage", ""]],
     "Translated" -> Lookup[#, "Translated", Null], "Format" -> iPNStr[Lookup[#, "Format", ""]],
     "Status" -> iPNStr[Lookup[#, "Status", ""]],
     "Exists" -> FileExistsQ[iPNStr[#["Notebook"]]], "Updated" -> iPNStr[Lookup[#, "UpdatedAtUTC", ""]],
-    "Notebook" -> iPNStr[#["Notebook"]]|> &, SourceVaultPaperNotebooks[]]];
+    "Notebook" -> iPNStr[#["Notebook"]]|> &, es]];
 
 (* ---------------- \:751f\:6210 (DocImportPaper \:7d4c\:7531\:3001PL \:7d99\:627f) ---------------- *)
 
@@ -437,15 +458,18 @@ iPNOpenNotebookFront[p_String] := Module[{abs, existing, nb},
   existing = SelectFirst[Notebooks[],
     Function[n, With[{f = Quiet @ Check[NotebookFileName[n], $Failed]},
       StringQ[f] && (f === abs || Quiet @ Check[AbsoluteFileName[f] === abs, False])]], None];
+  (* :PolicyWaiver: PRIV-NB-READ brings the notebook the user picked to the front; nothing is read into the kernel *)
   nb = If[existing =!= None, existing, Quiet @ Check[NotebookOpen[abs], $Failed]];
   If[Head[nb] === NotebookObject,
     Quiet @ Check[SetOptions[nb, Visible -> True], Null];
     Quiet @ Check[SetSelectedNotebook[nb], Null]];
   nb];
 
-SourceVaultOpenPaperNotebook[ref_String] := Module[{p = SourceVaultPaperNotebook[ref, "Language" -> $Language]},
+SourceVaultOpenPaperNotebook[ref_String] := Module[{e = iPNEntry[ref, $Language], p},
+  p = If[AssociationQ[e] && StringQ[e["Notebook"]] && e["Notebook"] =!= "" && FileExistsQ[e["Notebook"]],
+    e["Notebook"], None];
   If[StringQ[p],
-    If[$FrontEnd =!= Null && TrueQ[$Notebooks], iPNOpenNotebookFront[p], p],
+    iPNResult[If[$FrontEnd =!= Null && TrueQ[$Notebooks], iPNOpenNotebookFront[p], p], iPNEntryPL[e]],
     SourceVaultMakePaperNotebook[ref, "Interactive" -> True]]];
 
 (* ---------------- \:8a08\:7b97\:30ce\:30fc\:30c8 (v1.47): \:7d20\:6750\:304b\:3089\:4f5c\:3063\:305f Mathematica \:306e\:8a08\:7b97\:3068\:7d50\:679c\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af ----------------
@@ -490,9 +514,11 @@ iCNMatch[entries_List, ref_String] := Module[{id = iCNIdOf[ref], abs = None},
   SelectFirst[entries, iPNStr[Lookup[#, "Id", ""]] === id || (StringQ[abs] && iCNAbs[iCNAbsolutePath[#]] === abs) &,
     Missing["NotRegistered"]]];
 
-SourceVaultComputeNotebookEntry[ref_String] := With[{e = iCNMatch[iCNReadRegistry[], ref]},
+SourceVaultComputeNotebookEntry[ref_String] :=
+  With[{e = iCNEntry[ref]}, If[AssociationQ[e], iPNResult[e, iPNEntryPL[e]], e]];
+iCNEntry[ref_String] := With[{e = iCNMatch[iCNReadRegistry[], ref]},
   If[AssociationQ[e], Append[e, "Notebook" -> iCNAbsolutePath[e]], e]];
-SourceVaultComputeNotebook[ref_String] := Module[{e = SourceVaultComputeNotebookEntry[ref]},
+SourceVaultComputeNotebook[ref_String] := Module[{e = iCNEntry[ref]},
   If[! AssociationQ[e], Return[e]];
   If[StringQ[e["Notebook"]] && e["Notebook"] =!= "" && FileExistsQ[e["Notebook"]], e["Notebook"], Missing["NoFile", e["Notebook"]]]];
 SourceVaultComputeNotebookPath[title_String, id_String] := FileNameJoin[{SourceVaultComputeNotebookRoot[],
@@ -508,7 +534,7 @@ iCNNewId[seed_String] := Module[{entries = iCNReadRegistry[], id, k = 0},
    \:305d\:308c\:4ee5\:5916 (URL\:30fbarXiv\:30fb\:30ed\:30fc\:30ab\:30eb\:30d5\:30a1\:30a4\:30eb\:30fbKG \:30ce\:30fc\:30c9) \:306f 0 *)
 iCNSourcePL[ref_String] := Which[
   StringStartsQ[ref, $iCNURIPrefix] || StringMatchQ[ref, "cnb-" ~~ WordCharacter ..],
-    With[{e = SourceVaultComputeNotebookEntry[ref]}, If[AssociationQ[e] && NumericQ[Lookup[e, "PrivacyLevel", None]], N[e["PrivacyLevel"]], 1.]],
+    With[{e = iCNEntry[ref]}, If[AssociationQ[e] && NumericQ[Lookup[e, "PrivacyLevel", None]], N[e["PrivacyLevel"]], 1.]],
   StringStartsQ[ref, "sv://"] || StringStartsQ[ref, "src-"] || iPNEagleRefQ[ref], iPNResolveSource[ref]["PrivacyLevel"],
   True, 0.];
 iCNSourceRows[s_] := Select[Map[Which[
@@ -547,20 +573,54 @@ SourceVaultRegisterComputeNotebook[nbPath_String, OptionsPattern[]] := Module[
   entries = If[AssociationQ[prior], Replace[entries, x_ /; x === prior :> e, {1}], Append[entries, e]];
   If[! StringQ[iCNWriteRegistry[entries]],
     Return[Failure["SaveFailed", <|"MessageTemplate" -> "could not write the compute notebook registry"|>]]];
-  Join[e, <|"Notebook" -> abs, "Declared" -> declared|>]];
+  iPNResult[Join[e, <|"Notebook" -> abs, "Declared" -> declared|>], pl]];
 
 SourceVaultUnregisterComputeNotebook[ref_String] := Module[{entries = iCNReadRegistry[], prior},
   prior = iCNMatch[entries, ref];
   If[! AssociationQ[prior], Return[False]];
   StringQ[iCNWriteRegistry[DeleteCases[entries, prior]]]];
 
-SourceVaultComputeNotebooks[] := Map[Append[#, "Notebook" -> iCNAbsolutePath[#]] &, iCNReadRegistry[]];
-SourceVaultComputeNotebooksView[] := Dataset[Map[
+SourceVaultComputeNotebooks[] := With[{es = iCNNotebooks[]}, iPNResult[es, iPNMaxPL[es]]];
+iCNNotebooks[] := Map[Append[#, "Notebook" -> iCNAbsolutePath[#]] &, iCNReadRegistry[]];
+SourceVaultComputeNotebooksView[] := With[{es = iCNNotebooks[]}, iPNResult[iCNNotebooksDataset[es], iPNMaxPL[es]]];
+iCNNotebooksDataset[es_List] := Dataset[Map[
   <|"Id" -> iPNStr[#["Id"]], "Title" -> iPNStr[Lookup[#, "Title", ""]], "Units" -> Lookup[#, "Units", Null],
     "Sources" -> StringRiffle[Lookup[Replace[Lookup[#, "Sources", {}], Except[_List] -> {}], "Ref", {}], ", "],
     "PL" -> Lookup[#, "PrivacyLevel", 1.0], "Public" -> TrueQ[Lookup[#, "CloudPublishable", False]],
     "Status" -> iPNStr[Lookup[#, "Status", ""]], "Exists" -> FileExistsQ[iPNStr[#["Notebook"]]],
-    "Updated" -> iPNStr[Lookup[#, "UpdatedAtUTC", ""]], "Notebook" -> iPNStr[#["Notebook"]]|> &, SourceVaultComputeNotebooks[]]];
+    "Updated" -> iPNStr[Lookup[#, "UpdatedAtUTC", ""]], "Notebook" -> iPNStr[#["Notebook"]]|> &, es]];
+
+(* ---------------- privacy contracts (model: iSVMDRegisterPrivacyContracts in SourceVault_maildb.wl) ----------------
+   Private = registry entries / titles / paths of ingested sources flow out (PL inherited from the source).
+   The path lookups and the PL number are Internal: see the reasons below. No-op without the privacy layer. *)
+iPNRegisterPrivacyContracts[] :=
+  Quiet @ Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Private", "Exit" -> Last[#], "Sources" -> {"papernb"},
+            "Module" -> "SourceVault_papernb.wl"|>] &,
+        {{"SourceVaultPaperNotebookEntry", "Result"}, {"SourceVaultPaperNotebooks", "Result"},
+         {"SourceVaultPaperNotebooksView", "Result"}, {"SourceVaultPaperNotebookPath", "Result"},
+         {"SourceVaultRegisterPaperNotebook", "Result"}, {"SourceVaultMakePaperNotebook", "Result"},
+         {"SourceVaultOpenPaperNotebook", "Head"},
+         {"SourceVaultComputeNotebookEntry", "Result"}, {"SourceVaultComputeNotebooks", "Result"},
+         {"SourceVaultComputeNotebooksView", "Result"}, {"SourceVaultRegisterComputeNotebook", "Result"}}];
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Internal", "Module" -> "SourceVault_papernb.wl", "NoDataFlow" -> Last[#]|>] &,
+        {{"SourceVaultPaperNotebook", "Path lookup called once per row by SourceVaultSourcesView / the Eagle views / SlideWorkflow reference resolution; those callers carry the row PL through their own exits, and a per-row watermark would cost an FE round trip per row. The notebook itself carries its CloudPublishable declaration."},
+         {"SourceVaultComputeNotebook", "Path lookup used by SlideWorkflow reference resolution (same pattern as SourceVaultPaperNotebook); the notebook carries its CloudPublishable declaration."},
+         {"SourceVaultSourcePrivacy", "Returns the PL number only (fail-closed 1.0); no title or content."},
+         {"SourceVaultUnregisterPaperNotebook", "Returns True/False only."},
+         {"SourceVaultUnregisterComputeNotebook", "Returns True/False only."}}];
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Public", "Module" -> "SourceVault_papernb.wl", "NoDataFlow" -> Last[#]|>] &,
+        {{"SourceVaultPaperNotebookRoot", "Registry directory path only."},
+         {"SourceVaultComputeNotebookRoot", "Registry directory path only."},
+         {"SourceVaultComputeNotebookPath", "Pure path builder from the caller's own title and id; reads no store."},
+         {"$SourceVaultPaperNBRoot", "Setting (directory override)."},
+         {"$SourceVaultComputeNBRoot", "Setting (directory override)."}}]];
+    Null, Null];
+iPNRegisterPrivacyContracts[];
 
 End[]
 

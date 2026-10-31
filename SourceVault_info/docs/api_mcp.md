@@ -59,7 +59,7 @@ ClaudeEval / LM Studio / Codex の自然文プロンプト (「○○のスレ�
 - **`sourcevault_oops_search_threads`** {query, limit=10} — スレッド (mail session) を BM25 で検索し `{Session, Subject, Score, Snippet}` を返す。日本語・英語クエリ可。実体 `SourceVaultOOPSSearchThreads`。
 - **`sourcevault_oops_thread`** {session} — 1 スレッド詳細 `{Session, Subject, SessionKind, MailCounters, MailCount, Digest, TopicLabels}` を返す (Digest = LLM 非依存の決定的要約, per-mail timeline 付き)。QuoteEdges は返却から除外 (compact)。未知 id は `isError:true`「Thread not found: …」。実体 `SourceVaultOOPSThread`。
 
-**scope (負荷制御)**: 全コーパス (161 ファイル / 数千 session) を service カーネルで on-demand build すると重すぎる (session index = per-session TopicEnrichment)。既定 `SourceVault`$svOOPSMCPScope = {"oops 200506.txt"}` の bounded scope に絞る (この既定値は SourceVault_mcp.wl 自身が定義する)。初回 tool 呼び出しで ~10s (quote-table parse 込み) → 以降 cache。広げるには service カーネルで `$svOOPSMCPScope` を設定 (再起動 or `SourceVaultOOPSEnsureLoaded["Force"->True]` で反映)。
+**scope (負荷制御)**: 全コーパス (161 ファイル / 数千 session) を service カーネルで on-demand build すると重すぎる (session index = per-session TopicEnrichment)。既定 `$svOOPSMCPScope = {"oops 200506.txt"}` の bounded scope に絞る (この既定値は SourceVault_mcp.wl 自身が定義する)。初回 tool 呼び出しで ~10s (quote-table parse 込み) → 以降 cache。広げるには service カーネルで `$svOOPSMCPScope` を設定 (再起動 or `SourceVaultOOPSEnsureLoaded["Force"->True]` で反映)。
 
 **privacy gate (§6.5.3)**: OOPS アーカイブは公開リスト (`OOPS Mailing List`) と私的リスト (`... Under Ground` = oops-ura) のメールが同一ファイルに混在する。MCP tool は cloud 到達し得るので、3 tool すべて **cloud-safe gate を常に適用**する:
 - `search_threads` は厳格な release context `oops-corpus-cloud` (`DenyTags -> {NoCloudLLM, NoPublicExport, PrivateML}`) で検索し、私的リストスレッドを結果から除外する (`SourceVaultOOPSSearchThreads["CloudSafe" -> True]`)。
@@ -71,7 +71,7 @@ notebook / local から直接 `SourceVaultOOPS...` を呼ぶ場合は既定 `Clo
 
 OOPS 以外の一般メール (univ 等 maildb) を返信/引用 session ＋ topic に構造化して検索する 3 tool。実体は [api_mailstructure.md](api_mailstructure.md) の `SourceVaultMailStruct...` 関数群 (thin wrapper)。
 
-- **`sourcevault_mail_status`** — scope (`SourceVault`$svMailStructMCPScope = {mbox, period}`、既定 `{"univ", "202606"}`。この変数は SourceVault_mailstructure 側で定義され、本ファイルには存在しない) のメールをロード → StructureMail → BM25 index を cloud PrivacyScope で lazy build し状態 (`Loaded / Scope / MailCount / SessionCount / VocabSize / IndexId`) を返す。検索前に一度呼ぶ。実体 `SourceVaultMailStructEnsureIndex`。
+- **`sourcevault_mail_status`** — scope (`$svMailStructMCPScope = {mbox, period}`、既定 `{"univ", "202606"}`。この変数は SourceVault_mailstructure 側で定義され、本ファイルには存在しない) のメールをロード → StructureMail → BM25 index を cloud PrivacyScope で lazy build し状態 (`Loaded / Scope / MailCount / SessionCount / VocabSize / IndexId`) を返す。検索前に一度呼ぶ。実体 `SourceVaultMailStructEnsureIndex`。
 - **`sourcevault_mail_search_threads`** {query, limit=10} — session を BM25 で検索し `{Session, Subject, Score, Snippet}` を返す。実体 `SourceVaultMailStructSearchThreads`。
 - **`sourcevault_mail_thread`** {session} — 1 session 詳細 `{SessionId, Subject, MailCount, Topics, CurrentDigest, HistoricalReferences, Released}` を返す。**digest は current session の結論と historical reference (過去メールの引用/前例/テンプレート) を分離** (§9)。実体 `SourceVaultMailStructThread`。
 

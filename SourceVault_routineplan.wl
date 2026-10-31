@@ -733,10 +733,11 @@ iSVRPAttachOpenTodos[item_Association] := Module[
      public symbol is never created just by probing. *)
   If[!ListQ[td] && StringQ[p] &&
       Names["SourceVault`SourceVaultExtractNotebookTodos"] =!= {} &&
-      With[{sym = Symbol["SourceVault`SourceVaultExtractNotebookTodos"]},
+      (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+      With[{sym = Symbol[Identity["SourceVault`SourceVaultExtractNotebookTodos"]]},
         Length[DownValues[sym]] > 0],
     td = Quiet@Check[
-      Symbol["SourceVault`SourceVaultExtractNotebookTodos"][p], {}]];
+      Symbol[Identity["SourceVault`SourceVaultExtractNotebookTodos"]][p], {}]];
   If[!ListQ[td], td = {}];
   Append[item,
     "OpenTodos" -> Select[Cases[td, _Association], iSVRPOpenTodoQ]]];
@@ -851,10 +852,10 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
       With[{o = OptionValue["TodoItems"]},
         If[o === Automatic,
           If[Names["SourceVault`SourceVaultTodoAgendaItems"] =!= {} &&
-              With[{sym = Symbol["SourceVault`SourceVaultTodoAgendaItems"]},
+              With[{sym = Symbol[Identity["SourceVault`SourceVaultTodoAgendaItems"]]},
                 Length[DownValues[sym]] > 0],
             Quiet@Check[
-              Symbol["SourceVault`SourceVaultTodoAgendaItems"][
+              Symbol[Identity["SourceVault`SourceVaultTodoAgendaItems"]][
                 PrivacySpec -> ps], {}], {}],
           o]], {}];
     If[!ListQ[tds], tds = {}];
@@ -1016,12 +1017,12 @@ iSVRPAgendaItemRow[item_, tz_, showDue_] := Module[
        Symbol[] resolved at CLICK time so load order never matters) *)
     StringQ[Lookup[item, "TodoId", Missing[]]] &&
       Names["SourceVault`SourceVaultTodoShowSummary"] =!= {} &&
-      With[{sym = Symbol["SourceVault`SourceVaultTodoShowSummary"]},
+      With[{sym = Symbol[Identity["SourceVault`SourceVaultTodoShowSummary"]]},
         Length[DownValues[sym]] > 0],
     With[{t = item["TodoId"], lbl = label, c = col},
       Tooltip[
         Button[Mouseover[Style[lbl, c, 12], Style[lbl, c, 12, Underlined]],
-          Symbol["SourceVault`SourceVaultTodoShowSummary"][t],
+          Symbol[Identity["SourceVault`SourceVaultTodoShowSummary"]][t],
           Appearance -> None, Method -> "Queued"],
         "\:958b\:304f: todo \:30ce\:30fc\:30c8 (\:30b5\:30de\:30ea\:30fc/\:4fdd\:5b58\:7248)"]],
     True, Style[label, col, 12]];
@@ -1268,7 +1269,7 @@ iSVRPTodoRow[item_Association] := Module[
    tid = Lookup[item, "TodoId", Missing[]], openable},
   openable = StringQ[tid] &&
     Names["SourceVault`SourceVaultTodoShowSummary"] =!= {} &&
-    With[{sym = Symbol["SourceVault`SourceVaultTodoShowSummary"]},
+    With[{sym = Symbol[Identity["SourceVault`SourceVaultTodoShowSummary"]]},
       Length[DownValues[sym]] > 0];
   Row[{Style["\:2611 ", RGBColor[0.55, 0.3, 0.7], 11],
     If[openable,
@@ -1276,7 +1277,7 @@ iSVRPTodoRow[item_Association] := Module[
         Tooltip[
           Button[Mouseover[Style[lbl, GrayLevel[0.15], 12],
               Style[lbl, GrayLevel[0.15], 12, Underlined]],
-            Symbol["SourceVault`SourceVaultTodoShowSummary"][t],
+            Symbol[Identity["SourceVault`SourceVaultTodoShowSummary"]][t],
             Appearance -> None, Method -> "Queued"],
           "\:958b\:304f: todo \:30ce\:30fc\:30c8"]],
       Style[label, GrayLevel[0.15], 12]]}]];

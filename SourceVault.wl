@@ -735,7 +735,7 @@ SourceVaultNotebookLint::usage =
 SourceVaultExtractNotebookTaggingRules::usage =
   "SourceVaultExtractNotebookTaggingRules[path] \:306f notebook \:5168\:4f53\:304a\:3088\:3073\:5404 TodoItem cell \:306e TaggingRules \:3092\:53d6\:5f97\:3059\:308b\:3002\n" <>
   "Stage 9 Phase 2 (P1) Step 1 \:3067\:8ffd\:52a0\:3055\:308c\:305f\:3001TaggingRules \:6a19\:6e96\:5316\:306e\:305f\:3081\:306e\:30d5\:30a1\:30a4\:30eb\:7d4c\:7531\:30e1\:30bf\:30c7\:30fc\:30bf\:53d6\:5f97 API\:3002\n" <>
-  "Wolfram \:6a19\:6e96\:95a2\:6570\:512a\:5148\:539f\:5247 (rule 102) \:306b\:57fa\:3065\:304d\:3001`Import[path, \"Notebook\"]` \:306e Notebook \:5f0f\:304b\:3089 TaggingRules \:3092\:62bd\:51fa + `NotebookImport[path, style -> \"Cell\"]` \:3067\:5404 TodoItem cell \:306e options \:304b\:3089 TaggingRules \:3092\:62bd\:51fa\:3059\:308b\:3002\n" <>
+  "NBAccess`NBFileLoadSlim \:3067\:8aad\:3093\:3060 Notebook \:5f0f\:304b\:3089\:3001notebook \:5168\:4f53\:3068\:5404 TodoItem cell \:306e options \:306e TaggingRules \:3092\:62bd\:51fa\:3059\:308b (.nb \:306f NBAccess \:7d4c\:7531\:3067\:8aad\:3080\:3001rules/10)\:3002\n" <>
   "\:623b\:308a\:5024: <|\"Status\" -> \"OK\" | \"Failed\",\n" <>
   "  \"Path\" -> _String,\n" <>
   "  \"NotebookTaggingRules\" -> _Association  (Notebook[..., TaggingRules -> _] \:306e\:5024\:3001\:7121\:3051\:308c\:3070 <||>),\n" <>
@@ -1475,7 +1475,8 @@ iCwd[] := iReadStringSymbol["$ClaudeWorkingDirectory"];
    \:898b\:3064\:304b\:3089\:306a\:3051\:308c\:3070\:5f93\:6765\:306e iReadStringSymbol \:306b fallback\:3002 *)
 iPackageDir[] :=
   Module[{direct},
-    direct = Quiet @ Symbol["Global`$packageDirectory"];
+    (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+    direct = Quiet @ Symbol[Identity["Global`$packageDirectory"]];
     If[StringQ[direct] && direct =!= "", Return[direct]];
     iReadStringSymbol["$packageDirectory"]
   ];
@@ -2314,7 +2315,9 @@ iIngestLocalFile[file_String, opts:OptionsPattern[SourceVaultIngest]] :=
     
     If[FileExistsQ[rawPath],
       existingSnap = iSnapshotMetaLoad[snapshotId];
-      If[AssociationQ[existingSnap],
+      (* source のメタも要る (2026-10-24 まで .nb 以外は source のメタの保存が黙って失敗していたので、作り直させる) *)
+      If[AssociationQ[existingSnap] &&
+         With[{s = Lookup[existingSnap, "SourceId", sourceId]}, StringQ[s] && AssociationQ[iSourceMetaLoad[s]]],
         (* \:65e2\:5b58: \:30e1\:30bf\:30b5\:30a4\:30c9\:5b8c\:5099 \[RightArrow] AlreadyCurrent \:3067\:65e9\:671f Return *)
         iLockRelease[lockInfo];
         Return[<|
@@ -2363,8 +2366,9 @@ iIngestLocalFile[file_String, opts:OptionsPattern[SourceVaultIngest]] :=
       "OriginalPath" -> expanded,
       "Snapshots" -> {snapshotId},
       "CreatedAt" -> iIsoNow[],
-      "SourceUUID" -> If[AssociationQ[uuidEnsure],
-        Lookup[uuidEnsure, "UUID", Missing[]], Missing[]]
+      (* UUID が無いときは null (Missing[] は JSON に書けず、iSaveJSON が黙って失敗して source のメタが残らなかった) *)
+      "SourceUUID" -> With[{u = If[AssociationQ[uuidEnsure], Lookup[uuidEnsure, "UUID", Null], Null]},
+        If[StringQ[u], u, Null]]
     |>;
     
     snapshotMeta = <|
@@ -3733,7 +3737,7 @@ SourceVaultShowSourceSummary[sourceId_String, OptionsPattern[]] :=
     (* 保存済みノートがあればそれを開く (ユーザーの追記が正本) *)
     noteFile = iSVSourceSummaryNoteFile[sourceId];
     If[!TrueQ[OptionValue["Fresh"]] && StringQ[noteFile],
-      Quiet@Check[NotebookOpen[noteFile], $Failed];
+      Quiet@Check[NotebookOpen[noteFile], $Failed]; (* :PolicyWaiver: PRIV-NB-READ 利用者の操作で保存済みノートを表示するだけで、中身はカーネルに読まない *)
       Return[<|"Status" -> "OpenedSaved", "SourceId" -> sourceId,
         "Note" -> noteFile|>]];
     row = iSVSourceRowOf[meta];
@@ -9285,7 +9289,7 @@ SourceVaultNewNotebook[opts:OptionsPattern[]] :=
     sessionId = OptionValue["SessionID"];
 
     (* \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:3092\:5f0f\:3068\:3057\:3066\:8aad\:307f\:8fbc\:3080 (\:526f\:4f5c\:7528\:306a\:3057) *)
-    nbExpr = Quiet[Import[tmplPath, "Notebook"]];
+    nbExpr = Quiet[Import[tmplPath, "Notebook"]]; (* :PolicyWaiver: PRIV-NB-READ 新しいノートの雛形 (既定は $packageDirectory/Templates の同梱テンプレート) を複製元として読む。利用者のデータではない *)
     If[!MatchQ[nbExpr, Notebook[_List, ___]],
       Return[<|"Status" -> "Failed", "Reason" -> "TemplateNotANotebook",
         "TemplatePath" -> tmplPath|>]];
@@ -10210,9 +10214,8 @@ SourceVaultNotebookLint[path_String] :=
 
 (* ============================================================
    Stage 9 Phase 2 (P1) Step 1: TaggingRules \:6a19\:6e96\:5316
-   - Notebook \:5168\:4f53\:306e TaggingRules: Import[path, "Notebook"] \:7d4c\:7531
-   - Cell \:5358\:4f4d\:306e TaggingRules: NotebookImport[path, style -> "Cell"] \:7d4c\:7531
-   - \:3044\:305a\:308c\:3082 Wolfram \:6a19\:6e96\:95a2\:6570\:7d4c\:7531 (rule 102)
+   - Notebook \:5168\:4f53\:3068 Cell \:5358\:4f4d\:306e TaggingRules: NBAccess`NBFileLoadSlim \:3067\:8aad\:3093\:3060\:5f0f\:304b\:3089 (iReadNotebookExpr)
+   - .nb \:306f NBAccess \:7d4c\:7531\:3067\:8aad\:3080 (rules/10\:30012026-10-31 \:306b NotebookImport \:306e\:76f4\:8aad\:307f\:3092\:3084\:3081\:305f)
    - context \:975e\:4f9d\:5b58 (`SymbolName[Head[]]` / `SymbolName[Keys[]]` \:30d1\:30bf\:30fc\:30f3\:3001\:7f60 #23 \:56de\:907f)
    ============================================================ *)
 
@@ -10250,37 +10253,31 @@ iCellTaggingRulesFromOptions[opts_Association] :=
     If[AssociationQ[tagging], tagging, <||>]
   ];
 
-(* \:5404 TodoItem cell \:306e TaggingRules \:3092 path \:304b\:3089\:53d6\:5f97 (NotebookImport \:7d4c\:7531\:3001Stage 9 P0 \:3068\:540c\:3058\:7d4c\:8def) *)
-iExtractTodoCellTaggingRulesFromPath[path_String] :=
-  Module[{styles, results = {}, idx = 0},
-    If[!FileExistsQ[path], Return[{}]];
-    styles = {"TodoItem_1", "TodoItem_2", "TodoItem_3"};
+(* 各 TodoItem cell の TaggingRules を、NBAccess`NBFileLoadSlim で読んだ notebook 式
+   (iReadNotebookExpr の "Expr") から取得する。2026-10-31: NotebookImport で .nb を
+   直接読むのをやめた (rules/10)。並びは従来どおりスタイル順 (TodoItem_1 → _2 → _3)、
+   同じスタイルの中は文書順で、Index はこの順の通し番号 *)
+iExtractTodoCellTaggingRulesFromExpr[nbExpr_HoldComplete] :=
+  Module[{all, results = {}, idx = 0},
+    all = iFlattenCells[nbExpr];
     Scan[
       Function[style,
-        Module[{cells},
-          cells = Quiet[NotebookImport[path, style -> "Cell"]];
-          If[ListQ[cells],
-            Scan[
-              Function[c,
-                If[SymbolName[Head[c]] === "Cell" && Length[c] >= 2,
-                  Module[{args = List @@ c, opts, tr},
-                    idx = idx + 1;
-                    opts = Association[Cases[Drop[args, 2], _Rule]];
-                    tr = iCellTaggingRulesFromOptions[opts];
-                    AppendTo[results, <|
-                      "Index" -> idx,
-                      "CellStyle" -> style,
-                      "TaggingRules" -> tr
-                    |>]
-                  ]
-                ]
-              ],
-              cells
+        Scan[
+          Function[c,
+            Module[{opts},
+              idx = idx + 1;
+              opts = Association[Cases[Drop[List @@ c, 2], _Rule]];
+              AppendTo[results, <|
+                "Index" -> idx,
+                "CellStyle" -> style,
+                "TaggingRules" -> iCellTaggingRulesFromOptions[opts]
+              |>]
             ]
-          ]
+          ],
+          Select[all, Length[#] >= 2 && #[[2]] === style &]
         ]
       ],
-      styles
+      {"TodoItem_1", "TodoItem_2", "TodoItem_3"}
     ];
     results
   ];
@@ -10303,7 +10300,7 @@ SourceVaultExtractNotebookTaggingRules[path_String,
         "Path" -> abs|>]];
     nbExpr = Lookup[readResult, "Expr"];
     nbTr = iNotebookTaggingRulesFromExpr[nbExpr];
-    cellTrs = iExtractTodoCellTaggingRulesFromPath[abs];
+    cellTrs = iExtractTodoCellTaggingRulesFromExpr[nbExpr];
     <|"Status" -> "OK",
       "Path" -> abs,
       "NotebookTaggingRules" -> nbTr,
@@ -10895,7 +10892,7 @@ iCallSummaryLLM[prompt_String, model_, privacyLevel_] :=
     (* $ClaudePrivateModel \:306e\:5024\:3092\:53d6\:5f97 (Symbol \:7d4c\:7531\:3067 ClaudeCode \:30b3\:30f3\:30c6\:30ad\:30b9\:30c8\:306e\:5024\:3092\:53d6\:308b) *)
     privModel = Which[
       Length[Names["ClaudeCode`$ClaudePrivateModel"]] > 0,
-        Quiet @ Symbol["ClaudeCode`$ClaudePrivateModel"],
+        Quiet @ Symbol[Identity["ClaudeCode`$ClaudePrivateModel"]],
       True, Null
     ];
 
@@ -11205,7 +11202,7 @@ iSVDefaultNotebookFolder[] :=
   Module[{f, v},
     f = $SourceVaultDefaultNotebookFolder;
     If[StringQ[f] && DirectoryQ[f], Return[f]];
-    v = Quiet @ Symbol["Global`$onWork"];
+    v = Quiet @ Symbol[Identity["Global`$onWork"]];
     If[StringQ[v] && DirectoryQ[v], Return[v]];
     v = iPackageDir[];
     If[StringQ[v] && DirectoryQ[v], Return[v]];
@@ -11218,7 +11215,7 @@ iSVResolveScope[scope_] :=
       scope === Automatic || scope === None,
         val = iSVDefaultNotebookFolder[];
         If[StringQ[val] && DirectoryQ[val], val,
-          Quiet @ Symbol["Global`$packageDirectory"]],
+          Quiet @ Symbol[Identity["Global`$packageDirectory"]]],
       StringQ[scope] && DirectoryQ[scope], scope,
       StringQ[scope] && StringStartsQ[scope, "$"],
         val = Quiet @ Symbol["Global`" <> StringDrop[scope, 1]];
@@ -12999,7 +12996,7 @@ iSVPrivateModelTuple[] :=
   Module[{v},
     If[Length[Names["ClaudeCode`$ClaudePrivateModel"]] === 0,
       Return[Missing["NotDefined"]]];
-    v = Quiet @ Symbol["ClaudeCode`$ClaudePrivateModel"];
+    v = Quiet @ Symbol[Identity["ClaudeCode`$ClaudePrivateModel"]];
     If[MatchQ[v, {_String, _String, _String}], v,
       Missing["NotConfigured"]]
   ];

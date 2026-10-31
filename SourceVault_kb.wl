@@ -1768,6 +1768,17 @@ SourceVaultKBGraph[kbId_String, OptionsPattern[]] := Module[
 (* ロード時に既定 release context を登録 (冪等・失敗してもロードは続行) *)
 Quiet @ Check[SourceVaultKBRegisterDefaults[], Null];
 
+(* privacy contract for the function added after the module's initial review (model:
+   iSVMDRegisterPrivacyContracts in SourceVault_maildb.wl). No-op without the privacy layer. *)
+iKBRegisterPrivacyContracts[] :=
+  Quiet @ Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      SourceVault`SourceVaultRegisterPrivacyContract["SourceVaultKBRefreshDeckPrivacy",
+        <|"Class" -> "Internal", "Module" -> "SourceVault_kb.wl",
+          "NoDataFlow" -> "Re-reads each deck notebook's CloudPublishable declaration and rewrites the stored PL; returns only SourceIds, PL numbers, skip reasons and a rebuilt flag (no slide text)."|>]];
+    Null, Null];
+iKBRegisterPrivacyContracts[];
+
 End[];
 
 EndPackage[];

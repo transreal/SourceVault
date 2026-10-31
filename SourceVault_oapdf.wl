@@ -35,6 +35,12 @@
        "NotRetrieved"), SourceId, URL, Via, DOI, License, CheckedAt, Tried|>
      見つからなかった結果も記録し、$SourceVaultOARecheckDays 日は自動では再試行しない (Force で再試行)。
 
+   手で落とした PDF (SourceVaultAttachOpenAccessPDF, 2026-10-24):
+     ScienceDirect などが OA の PDF でも機械取得を 403 で拒むときは、ブラウザで落とした PDF をページに結ぶ。
+     OA の根拠は自動のときと同じ基準で確かめ、PDF の先頭ページに DOI か題があることも確かめる
+     (違う PDF をページの PL (多くは 0) で取り込まないため)。PDF はローカルファイルのソースとして取り込み、
+     ページのメタの "OpenAccessPDF" は Via "manual" になる。手で結んだものは自動の再探索 (Force でも) で上書きしない。
+
    外部サービス: Crossref (api.crossref.org)・Europe PMC (www.ebi.ac.uk / europepmc.org)・NCBI の ID 変換
      (www.ncbi.nlm.nih.gov) は認証なし・DOI だけを送る。
      Unpaywall は利用者のメールアドレスが要るので既定では使わない ($SourceVaultUnpaywallEmail を設定したときだけ)。
@@ -65,6 +71,16 @@ SourceVaultOpenAccessPDFSource::usage =
   "SourceVaultOpenAccessPDFSource[ref] はページのソース (src-ID / URL) に結ばれたオープンアクセス PDF のソース " <>
   "<|\"SourceId\", \"URL\", \"File\" (現 PC の raw パス), \"Title\", \"PrivacyLevel\", \"Via\", \"DOI\", \"License\", \"LandingSourceId\"|> を返す。" <>
   "結ばれていなければ Missing (確認結果の Status を理由に入れる)。翻訳ノートブック (SourceVaultMakePaperNotebook) が使う。";
+
+SourceVaultAttachOpenAccessPDF::usage =
+  "SourceVaultAttachOpenAccessPDF[ref, pdfPath, opts] は手でダウンロードした PDF を論文ページ (ingest 済みの src-ID / URL) の " <>
+  "オープンアクセス PDF として取り込んで結ぶ (出版社のサイトが機械取得を 403 で拒むとき用)。OA の根拠 (SourceVaultFindOpenAccessPDF と同じ基準) " <>
+  "が無ければ結ばない。PDF の先頭 3 ページにその論文の DOI か題があることも確かめる。PDF の PrivacyLevel と Topic はページから継承し、" <>
+  "ページのメタ \"OpenAccessPDF\" は Via \"manual\" になる (SourceVaultIngestOpenAccessPDF は Force でもこれを上書きしない)。" <>
+  "戻り値 <|\"Status\" (\"Linked\" | \"NotIngested\" | \"IsPDF\" | \"NotPDF\" | \"NotScholarly\" | \"NotOpenAccess\" | \"Mismatch\" | " <>
+  "\"IngestFailed\"), \"SourceId\" (PDF のソース), \"LandingSourceId\", \"DOI\", \"License\", \"Evidence\", \"Matched\" (\"DOI\" | \"Title\" | \"Skipped\"), " <>
+  "\"PrivacyLevel\"|>。opts: \"URL\" -> None (PDF を落とした URL。記録するだけ), \"VerifyMatch\" -> True (False で DOI / 題の照合を省く), " <>
+  "\"Verbose\" -> False。結んだ後 SourceVaultMakePaperNotebook[ref, \"Force\" -> True] で翻訳ノートブックを PDF から作り直す。";
 
 SourceVaultBackfillOpenAccessPDFs::usage =
   "SourceVaultBackfillOpenAccessPDFs[opts] は ingest 済みの web ソースのうち論文ページ (DOI / citation_pdf_url / arXiv) を走査し、" <>
@@ -447,12 +463,37 @@ iOAAnalyze[ctx_Association, OptionsPattern[]] :=
       "PageURL" -> url, "DOI" -> doi, "ArXivId" -> preprint, "Title" -> title, "Authors" -> authors, "Published" -> published,
       "OpenAccess" -> oa, "Evidence" -> evidence, "License" -> license, "Candidates" -> cands|>];
 
+(* ---------------- privacy exits (SourceVault_privacy.wl, DownValues-guarded) ----------------
+   Results describe an ingested page (title, DOI, linked PDF) and inherit its PrivacyLevel: PL = Max of the
+   landing source, the PDF source and any "PrivacyLevel" in the result. A source without a numeric PL counts
+   as the fail-closed default; a ref that is not ingested (DOI / URL looked up live) counts as 0. The public
+   functions record it through the canonical Result exit (value unchanged; the backfill report stays a
+   Dataset like SourceVaultMailDataset); the after-ingest hook and the batch backfill call the exit-free
+   cores (iOAIngestCore / iOAFindCore) so a plain SourceVaultIngest does not start marking cells. *)
+iOASourcePL[sid_String] := If[! StringStartsQ[sid, "src-"], 0.,
+  With[{m = Quiet[Check[iSourceMetaLoad[sid], $Failed]],
+        dflt = If[NumericQ[SourceVault`$SourceVaultPrivacyDefaultLevel], N[SourceVault`$SourceVaultPrivacyDefaultLevel], 0.85]},
+    If[! AssociationQ[m], 0.,
+      With[{p = Lookup[m, "PrivacyLevel", Missing[]]}, If[NumericQ[p], Clip[N[p], {0., 1.}], dflt]]]]];
+iOASourcePL[_] := 0.;
+iOAResultPL[r_Association] := Max[iOASourcePL[iOAStr[Lookup[r, "LandingSourceId", ""]]],
+  iOASourcePL[iOAStr[Lookup[r, "SourceId", ""]]],
+  With[{p = Lookup[r, "PrivacyLevel", 0.]}, If[NumericQ[p], Clip[N[p], {0., 1.}], 0.]]];
+iOAResultPL[_] := 0.;
+iOAPrivResult[x_, pl_] := If[Length[DownValues[SourceVault`SourceVaultPrivateResult]] > 0,
+  Quiet[Check[SourceVault`SourceVaultPrivateResult[x, pl], x]], x];
+
 Options[SourceVaultFindOpenAccessPDF] = {"RequireOpenAccess" -> True, "FetchPage" -> True};
-SourceVaultFindOpenAccessPDF[ref_String, OptionsPattern[]] :=
-  Module[{info},
+SourceVaultFindOpenAccessPDF[ref_String, opts : OptionsPattern[]] :=
+  With[{r = iOAFindCore[ref, opts]}, iOAPrivResult[First[r], iOASourcePL[Last[r]]]];
+(* -> {info, landing SourceId ("" when the ref is not ingested)} *)
+iOAFindCore[ref_String, OptionsPattern[SourceVaultFindOpenAccessPDF]] :=
+  Module[{info, ctx},
     iEnsureRoots[];
-    info = iOAAnalyze[iOAContext[ref, OptionValue["FetchPage"]], "RequireOpenAccess" -> OptionValue["RequireOpenAccess"]];
-    Append[info, "Candidates" -> Map[KeyTake[#, {"URL", "Via"}] &, Lookup[info, "Candidates", {}]]]];
+    ctx = iOAContext[ref, OptionValue["FetchPage"]];
+    info = iOAAnalyze[ctx, "RequireOpenAccess" -> OptionValue["RequireOpenAccess"]];
+    {Append[info, "Candidates" -> Map[KeyTake[#, {"URL", "Via"}] &, Lookup[info, "Candidates", {}]]],
+     iOAStr[ctx["LandingSourceId"]]}];
 
 (* ---------------- 取り込みと結び付け ---------------- *)
 
@@ -496,7 +537,9 @@ iOARecordLanding[landingSid_String, rec_Association, title_String : ""] :=
           If[title =!= "" && StringTrim[iOAStr[Lookup[m, "Title", ""]]] === "", <|"Title" -> title|>, <||>]]]]]];
 
 Options[SourceVaultIngestOpenAccessPDF] = {"Force" -> False, "RequireOpenAccess" -> True, "FetchPage" -> True, "Verbose" -> False};
-SourceVaultIngestOpenAccessPDF[ref_String, OptionsPattern[]] :=
+SourceVaultIngestOpenAccessPDF[ref_String, opts : OptionsPattern[]] :=
+  With[{r = iOAIngestCore[ref, opts]}, iOAPrivResult[r, iOAResultPL[r]]];
+iOAIngestCore[ref_String, OptionsPattern[SourceVaultIngestOpenAccessPDF]] :=
   Module[{ctx, sid, prior, info, tried = {}, got = None, status, rec, verbose = TrueQ[OptionValue["Verbose"]], log},
     iEnsureRoots[];
     log = Function[s, If[verbose, Print["[OA PDF] ", s]]];
@@ -508,6 +551,10 @@ SourceVaultIngestOpenAccessPDF[ref_String, OptionsPattern[]] :=
       Return[<|"Status" -> "IsPDF", "LandingSourceId" -> sid, "SourceId" -> sid, "Cached" -> False|>]];
     (* 確認済み: 結ばれている PDF が生きていればそれ、見つからなかった結果は期限内なら繰り返さない *)
     prior = Lookup[ctx["LandingMeta"], "OpenAccessPDF", None];
+    (* 手で結んだ PDF (SourceVaultAttachOpenAccessPDF) は自動では取れなかったものなので、Force でも探し直して上書きしない *)
+    If[AssociationQ[prior] && Lookup[prior, "Status", ""] === "Linked" && Lookup[prior, "Via", ""] === "manual" &&
+        AssociationQ[iSourceMetaLoad[iOAStr[Lookup[prior, "SourceId", ""]]]],
+      Return[Join[prior, <|"Status" -> "AlreadyIngested", "LandingSourceId" -> sid, "Cached" -> True|>]]];
     If[! TrueQ[OptionValue["Force"]] && AssociationQ[prior],
       Which[
         Lookup[prior, "Status", ""] === "Linked" && AssociationQ[iSourceMetaLoad[iOAStr[Lookup[prior, "SourceId", ""]]]],
@@ -580,11 +627,88 @@ SourceVaultOpenAccessPDFSource[ref_String] :=
     pm = iSourceMetaLoad[iOAStr[rec["SourceId"]]];
     If[! AssociationQ[pm], Return[Missing["PDFSourceMissing"]]];
     file = iOALatestRaw[pm];
-    <|"SourceId" -> rec["SourceId"], "URL" -> iOAStr[Lookup[rec, "URL", ""]], "File" -> file,
-      "Title" -> iOAStr[Lookup[pm, "Title", ""]],
-      "PrivacyLevel" -> With[{p = Lookup[pm, "PrivacyLevel", 1.0]}, If[NumericQ[p], N[p], 1.0]],
-      "Via" -> iOAStr[Lookup[rec, "Via", ""]], "DOI" -> iOAStr[Lookup[rec, "DOI", ""]],
-      "License" -> iOAStr[Lookup[rec, "License", ""]], "LandingSourceId" -> sid|>];
+    With[{r = <|"SourceId" -> rec["SourceId"], "URL" -> iOAStr[Lookup[rec, "URL", ""]], "File" -> file,
+        "Title" -> iOAStr[Lookup[pm, "Title", ""]],
+        "PrivacyLevel" -> With[{p = Lookup[pm, "PrivacyLevel", 1.0]}, If[NumericQ[p], N[p], 1.0]],
+        "Via" -> iOAStr[Lookup[rec, "Via", ""]], "DOI" -> iOAStr[Lookup[rec, "DOI", ""]],
+        "License" -> iOAStr[Lookup[rec, "License", ""]], "LandingSourceId" -> sid|>},
+      iOAPrivResult[r, iOAResultPL[r]]]];
+
+(* ---------------- 手でダウンロードした PDF を結ぶ ---------------- *)
+
+(* PDF の先頭ページの文字 (論文との照合用)。読めなければ "" *)
+iOAPDFHeadText[path_String, nPages_Integer : 3] :=
+  Module[{n = Quiet[Import[path, "PageCount"]], t},
+    t = If[IntegerQ[n] && n > 0,
+      Quiet[TimeConstrained[Import[path, {"PagePlaintext", Range[Min[n, nPages]]}], 120, $Failed]], $Failed];
+    Which[ListQ[t], StringRiffle[Select[t, StringQ], "\n"], StringQ[t], t, True, ""]];
+
+(* 照合用: 合字 (fi 等) を戻し、文字と数字だけを小文字で *)
+iOAMatchKey[s_String] := ToLowerCase[StringDelete[CharacterNormalize[s, "NFKC"], Except[LetterCharacter | DigitCharacter]]];
+
+(* PDF がその論文か: DOI (空白・改行を除いて) か題 (文字と数字だけにして) が先頭ページにあれば "DOI" / "Title"、無ければ None *)
+iOAPDFMatch[text_String, doi_String, title_String] :=
+  Module[{key = iOAMatchKey[title]},
+    Which[
+      doi =!= "" && StringContainsQ[ToLowerCase[StringDelete[text, WhitespaceCharacter]], ToLowerCase[doi]], "DOI",
+      StringLength[key] >= 12 && StringContainsQ[iOAMatchKey[text], StringTake[key, UpTo[60]]], "Title",
+      True, None]];
+
+Options[SourceVaultAttachOpenAccessPDF] = {"URL" -> None, "VerifyMatch" -> True, "Verbose" -> False};
+SourceVaultAttachOpenAccessPDF[ref_String, pdfIn_String, opts : OptionsPattern[]] :=
+  With[{r = iOAAttachCore[ref, pdfIn, opts]}, iOAPrivResult[r, iOAResultPL[r]]];
+iOAAttachCore[ref_String, pdfIn_String, OptionsPattern[SourceVaultAttachOpenAccessPDF]] :=
+  Module[{pdf = ExpandFileName[pdfIn], head, ctx, sid = "", info, doi, title, text, matched = "Skipped", file, r, pdfSid, pm, pl,
+          url = Replace[OptionValue["URL"], Except[_String] -> ""], rec, fail, log},
+    iEnsureRoots[];
+    log = Function[s, If[TrueQ[OptionValue["Verbose"]], Print["[OA PDF] ", s]]];
+    fail = Function[{st, extra}, (log[st]; Join[<|"Status" -> st, "LandingSourceId" -> sid|>, extra])];
+    head = If[FileExistsQ[pdf] && ! DirectoryQ[pdf], iOAReadBytes[pdf, 5], $Failed];
+    If[! ByteArrayQ[head] || FromCharacterCode[Normal[head]] =!= "%PDF-", Return[fail["NotPDF", <|"Path" -> pdf|>]]];
+    ctx = iOAContext[ref, True];
+    sid = ctx["LandingSourceId"];
+    If[sid === "", Return[fail["NotIngested", <|"Ref" -> ref|>]]];
+    If[KeyExistsQ[ctx["LandingMeta"], "LandingSourceId"] || ToLowerCase[FileExtension[iOALatestRaw[ctx["LandingMeta"]]]] === "pdf",
+      Return[fail["IsPDF", <||>]]];
+    (* OA の根拠は自動のときと同じ基準 (根拠が無ければページの PL で取り込まない) *)
+    info = iOAAnalyze[ctx, "RequireOpenAccess" -> True];
+    If[info["Status"] === "NotScholarly", Return[fail["NotScholarly", <||>]]];
+    doi = iOAStr[Lookup[info, "DOI", ""]];
+    title = iOAStr[Lookup[info, "Title", ""]];
+    If[! TrueQ[info["OpenAccess"]], Return[fail["NotOpenAccess", <|"DOI" -> doi, "Evidence" -> {}|>]]];
+    If[TrueQ[OptionValue["VerifyMatch"]],
+      text = iOAPDFHeadText[pdf];
+      matched = iOAPDFMatch[text, doi, title];
+      If[matched === None,
+        Return[fail["Mismatch", <|"DOI" -> doi, "Title" -> title, "Path" -> pdf,
+          "Reason" -> If[StringTrim[text] === "", "NoText", "NoDOIOrTitle"]|>]]]];
+    (* 拡張子が pdf でない (ブラウザの保存名) ときは .pdf の写しを取り込む (raw の拡張子で形式を見分けるため) *)
+    file = If[ToLowerCase[FileExtension[pdf]] === "pdf", pdf,
+      With[{dir = FileNameJoin[{SourceVault`$SourceVaultRoots["Tmp"], "sourcevault", "fetch"}]},
+        iEnsureDir[dir];
+        Quiet[CopyFile[pdf, FileNameJoin[{dir, FileBaseName[pdf] <> ".pdf"}], OverwriteTarget -> True]]]];
+    If[! StringQ[file], Return[fail["IngestFailed", <|"Reason" -> "CopyFailed", "Path" -> pdf|>]]];
+    r = iIngestLocalFile[file, PrivacyLabel -> ctx["PL"], Topic -> ctx["Topic"]];
+    If[file =!= pdf, Quiet[DeleteFile[file]]];
+    If[! iOAIngestOKQ[r], Return[fail["IngestFailed", <|"Reason" -> iOAStr[Lookup[r, "Reason", Lookup[r, "Status", ""]]], "Path" -> pdf|>]]];
+    pdfSid = iOAStr[r["SourceId"]];
+    If[! AssociationQ[iSourceMetaLoad[pdfSid]], Return[fail["IngestFailed", <|"Reason" -> "NoSourceMeta", "SourceId" -> pdfSid, "Path" -> pdf|>]]];
+    (* 写しから取り込んだときも、元のファイルを指すようにする (写しは消したので) *)
+    If[file =!= pdf && r["Status"] =!= "AlreadyCurrent",
+      With[{m = iSourceMetaLoad[pdfSid]},
+        If[AssociationQ[m], iSourceMetaSave[pdfSid, Join[m, <|"OriginalPath" -> pdf, "CanonicalURI" -> "local:" <> pdf|>]]]]];
+    iOAAnnotatePDFSource[pdfSid, info, sid, ctx["PageURL"], "manual"];
+    pm = iSourceMetaLoad[pdfSid];
+    (* 同じ PDF が前に高い PL で取り込まれていれば、その PL のまま (下げない) *)
+    pl = With[{p = If[AssociationQ[pm], Lookup[pm, "PrivacyLevel", 1.0], 1.0]}, If[NumericQ[p], N[p], 1.0]];
+    rec = <|"Status" -> "Linked", "SourceId" -> pdfSid, "URL" -> url, "Via" -> "manual",
+      "DOI" -> doi, "License" -> iOAStr[info["License"]], "Evidence" -> info["Evidence"],
+      "CheckedAt" -> iIsoNow[], "Tried" -> {}, "Matched" -> matched|>;
+    iOARecordLanding[sid, rec, title];
+    log["linked " <> pdfSid <> " to " <> sid <> " (matched " <> matched <> ", PL " <> ToString[pl] <> ")"];
+    iLog["OpenAccessPDF", <|"LandingSourceId" -> sid, "SourceId" -> pdfSid, "Via" -> "manual", "DOI" -> doi|>];
+    Join[rec, <|"LandingSourceId" -> sid, "Title" -> title, "PrivacyLevel" -> pl,
+      "New" -> (r["Status"] =!= "AlreadyCurrent")|>]];
 
 (* SourceVaultIngest[url] の後に呼ばれる (SourceVault.wl)。論文ページなら OA PDF も取り込み、結果に "OpenAccessPDF" を足す。
    取り込みの結果そのものは変えない (失敗しても ingest は成功のまま) *)
@@ -597,9 +721,9 @@ iSVOpenAccessAfterIngest[res_Association, url_String, opts_List] :=
     oa = Which[
       MemberQ[{"Ingested", "RebuiltMetadata", "AlreadyCurrent"}, st] && sid =!= "" &&
         MemberQ[{"html", "htm", "xhtml", "shtml"}, ToLowerCase[FileExtension[raw]]],
-        Quiet[TimeConstrained[SourceVaultIngestOpenAccessPDF[sid], 300, <|"Status" -> "Timeout"|>]],
+        Quiet[TimeConstrained[iOAIngestCore[sid], 300, <|"Status" -> "Timeout"|>]],
       st === "Failed" && MemberQ[{401, 403, 429}, code] && iOAScholarlyURLQ[url],
-        Quiet[TimeConstrained[SourceVaultIngestOpenAccessPDF[url, "FetchPage" -> False], 300, <|"Status" -> "Timeout"|>]],
+        Quiet[TimeConstrained[iOAIngestCore[url, "FetchPage" -> False], 300, <|"Status" -> "Timeout"|>]],
       True, Return[res]];
     If[AssociationQ[oa] && Lookup[oa, "Status", ""] =!= "NotScholarly",
       Append[res, "OpenAccessPDF" -> KeyTake[oa, {"Status", "SourceId", "URL", "Via", "DOI"}]],
@@ -617,15 +741,17 @@ iOAScholarlyPageQ[meta_Association] :=
     StringContainsQ[head, "citation_pdf_url" | "citation_doi" | "prism.doi" | "citation_arxiv_id", IgnoreCase -> True]];
 
 Options[SourceVaultBackfillOpenAccessPDFs] = {"Force" -> False, "Limit" -> All, "DryRun" -> False, "Verbose" -> True};
+(* one exit for the whole report (PL = Max over the scanned pages and linked PDFs), not one per row *)
 SourceVaultBackfillOpenAccessPDFs[OptionsPattern[]] :=
-  Module[{rows = {}, n = 0, lim = OptionValue["Limit"], dry = TrueQ[OptionValue["DryRun"]]},
+  Module[{rows = {}, n = 0, lim = OptionValue["Limit"], dry = TrueQ[OptionValue["DryRun"]], pls = {}},
     iEnsureRoots[];
     Do[
       Module[{m = iSourceMetaLoad[id], r},
         If[AssociationQ[m] && Lookup[m, "SourceType", ""] === "URL" && ! KeyExistsQ[m, "LandingSourceId"] &&
            (lim === All || n < lim) && iOAScholarlyPageQ[m],
           n++;
-          r = If[dry, SourceVaultFindOpenAccessPDF[id], SourceVaultIngestOpenAccessPDF[id, "Force" -> OptionValue["Force"]]];
+          r = If[dry, First[iOAFindCore[id]], iOAIngestCore[id, "Force" -> OptionValue["Force"]]];
+          AppendTo[pls, Max[iOASourcePL[id], If[dry, 0., iOAResultPL[r]]]];
           AppendTo[rows, <|"SourceId" -> id,
             "Title" -> StringTake[iOAStr[Lookup[m, "Title", Lookup[m, "OriginalURL", ""]]], UpTo[80]],
             "Status" -> iOAStr[Lookup[r, "Status", ""]],
@@ -633,7 +759,26 @@ SourceVaultBackfillOpenAccessPDFs[OptionsPattern[]] :=
             "PDFSourceId" -> iOAStr[Lookup[r, "SourceId", ""]], "DOI" -> iOAStr[Lookup[r, "DOI", ""]]|>];
           If[TrueQ[OptionValue["Verbose"]], Print[id, "  ", Last[rows]["Status"], "  ", Last[rows]["Via"], "  ", Last[rows]["Title"]]]]],
       {id, Select[SourceVaultList[], StringStartsQ[#, "src-url-"] &]}];
-    Dataset[rows]];
+    iOAPrivResult[Dataset[rows], Max[pls, 0.]]];
+
+(* ---------------- privacy contracts (model: iSVMDRegisterPrivacyContracts in SourceVault_maildb.wl) ---------------- *)
+iOARegisterPrivacyContracts[] :=
+  Quiet @ Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Private", "Exit" -> Last[#], "Sources" -> {"sources"},
+            "Module" -> "SourceVault_oapdf.wl",
+            "Note" -> "Title / DOI / URL / file of an ingested page and its linked PDF; PL = Max of the landing and PDF sources."|>] &,
+        {{"SourceVaultFindOpenAccessPDF", "Result"}, {"SourceVaultIngestOpenAccessPDF", "Result"},
+         {"SourceVaultAttachOpenAccessPDF", "Result"}, {"SourceVaultOpenAccessPDFSource", "Result"},
+         {"SourceVaultBackfillOpenAccessPDFs", "Result"}}];
+      Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
+          <|"Class" -> "Public", "Module" -> "SourceVault_oapdf.wl", "NoDataFlow" -> Last[#]|>] &,
+        {{"$SourceVaultAutoOpenAccessPDF", "Setting (True/False)."},
+         {"$SourceVaultOARecheckDays", "Setting (days)."},
+         {"$SourceVaultUnpaywallEmail", "Setting: the user's own contact address, sent only to api.unpaywall.org as that API requires."}}]];
+    Null, Null];
+iOARegisterPrivacyContracts[];
 
 End[]
 

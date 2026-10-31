@@ -811,7 +811,8 @@ iSVLLSummaryLLMAvailableQ[] :=
    薄いラッパを持つ (エラー本文検出は notebook summary と同じ)。 *)
 iSVLLDocModel[] := Which[
   Length[Names["ClaudeCode`$ClaudeDocModel"]] === 0, Missing["NoClaudeCode"],
-  True, With[{m = Quiet @ Symbol["ClaudeCode`$ClaudeDocModel"]},
+  (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+  True, With[{m = Quiet @ Symbol[Identity["ClaudeCode`$ClaudeDocModel"]]},
     Which[
       StringQ[m] && m =!= "", m,
       ListQ[m] && Length[m] >= 2, m,

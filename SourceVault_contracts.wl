@@ -1192,7 +1192,8 @@ Quiet @ Check[iSVRegisterPilotContracts[], Null];
 iSVWireRuntimeValidator[] :=
   If[Names["ClaudeRuntime`$ClaudeCallContractValidator"] =!= {},
     With[{cur = Quiet @ Check[
-        Symbol["ClaudeRuntime`$ClaudeCallContractValidator"], $Failed]},
+        (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+        Symbol[Identity["ClaudeRuntime`$ClaudeCallContractValidator"]], $Failed]},
       If[cur === None,
         ToExpression[
           "ClaudeRuntime`$ClaudeCallContractValidator = " <>

@@ -716,7 +716,8 @@ iEnsurePDFIndexLoaded[] := Module[{loader, path},
     Return[iPDFIndexReadyQ[]]];
   path = Quiet @ Check[FindFile["PDFIndex.wl"], $Failed];
   If[! StringQ[path],
-    With[{pkg = Quiet @ Symbol["Global`$packageDirectory"]},
+    (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+    With[{pkg = Quiet @ Symbol[Identity["Global`$packageDirectory"]]},
       If[StringQ[pkg] && FileExistsQ[FileNameJoin[{pkg, "PDFIndex.wl"}]],
         path = FileNameJoin[{pkg, "PDFIndex.wl"}]]]];
   If[! StringQ[path], Return[False]];
@@ -822,7 +823,7 @@ If[! AssociationQ[$svPdfDocMetaCache], $svPdfDocMetaCache = <||>];
 iSVPdfIndexStoreDirs[] := Module[{base, attach, pkg, dirs = {}},
   base = Quiet @ PDFIndex`$pdfIndexBaseDir;
   attach = Quiet @ PDFIndex`$pdfIndexAttachDir;
-  pkg = Quiet @ Symbol["Global`$packageDirectory"];
+  pkg = Quiet @ Symbol[Identity["Global`$packageDirectory"]];
   If[! StringQ[base] && StringQ[pkg],
     base = FileNameJoin[{pkg, "pdfindex_private"}]];
   If[! StringQ[attach] && StringQ[pkg],

@@ -1582,7 +1582,8 @@ iSVPRExtractSlotValuesDiag[route_Association, newPrompt_String, opts : OptionsPa
          iSVPRSymbolPresentQ["ClaudeCode`ClaudeEval"]),
       Return[<|"Values" -> <||>, "Reason" -> "NoClaudeQueryBg"|>]];
     (* ClaudeCode` \:306f\:30ed\:30fc\:30c9\:6e08\:307f\:3002\:30d5\:30eb\:30cd\:30fc\:30e0\:3067\:65e2\:5b58\:30b7\:30f3\:30dc\:30eb\:3092\:53d6\:5f97\:3002 *)
-    queryBg = Symbol["ClaudeCode`ClaudeQueryBg"];
+    (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
+    queryBg = Symbol[Identity["ClaudeCode`ClaudeQueryBg"]];
     (* system \:76f8\:5f53\:306e\:6307\:793a\:6587\:ff08\:65e5\:672c\:8a9e\:ff09 *)
     sysPrompt = StringJoin[
       "\:3042\:306a\:305f\:306f\:4fdd\:5b58\:6e08\:307f\:306e Wolfram \:5f0f\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:306e\:30d1\:30e9\:30e1\:30fc\:30bf\:30b9\:30ed\:30c3\:30c8\:3092\:3001",
@@ -2748,7 +2749,7 @@ SourceVaultResolveModelForPromptRouter[query_Association,
     routingClass = Which[
       Lookup[nq, "WeightClass", Automatic] =!= "Light", None,
       Names["ClaudeCode`ClaudeRoutingModelClass"] === {}, None,
-      True, Quiet @ Check[Symbol["ClaudeCode`ClaudeRoutingModelClass"][], None]];
+      True, Quiet @ Check[Symbol[Identity["ClaudeCode`ClaudeRoutingModelClass"]][], None]];
     If[routingClass === "Off",
       Return[<|
         "Status"        -> "RoutingDisabled",
@@ -2792,7 +2793,7 @@ SourceVaultResolveModelForPromptRouter[query_Association,
 
     (* delegate the actual model choice to the host resolver *)
     raw = Quiet @ Check[
-      Symbol["SourceVault`SourceVaultResolve"]["Model",
+      Symbol[Identity["SourceVault`SourceVaultResolve"]]["Model",
         If[StringQ[registryClass], <|"Class" -> registryClass|>, nq]],
       $Failed];
 
@@ -3824,7 +3825,7 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
     If[!StringQ[targetExpr],
       Module[{shared},
         shared = Quiet @ Check[
-          Symbol["ClaudeCode`$ClaudeEvalLastProposedExprString"],
+          Symbol[Identity["ClaudeCode`$ClaudeEvalLastProposedExprString"]],
           Missing["NotCaptured"]];
         If[StringQ[shared] && shared =!= "", targetExpr = shared]]];
 
@@ -3838,7 +3839,7 @@ SaveLastPrompt[memo_String, opts:OptionsPattern[]] :=
        literal. No new claudecode global is required. *)
     ctxBinding = Module[{ctx},
       ctx = Quiet @ Check[
-        Symbol["ClaudeCode`$ClaudeEvalNotebookContext"], ""];
+        Symbol[Identity["ClaudeCode`$ClaudeEvalNotebookContext"]], ""];
       If[!StringQ[ctx], ctx = ""];
       <|"ContextText" -> ctx, "UsedNotebookContext" -> (ctx =!= "")|>];
     safetyRes = SourceVaultClassifyPromptReplaySafety[
@@ -5322,7 +5323,7 @@ SourceVaultUpdatePromptRouteMemo[___] :=
 iSVPRLastEvalPrompt[] :=
   Module[{p, cap, run},
     p = Quiet @ Check[
-      Symbol["ClaudeCode`$iClaudeEvalAutoSaveTask"], Missing["NoGlobal"]];
+      Symbol[Identity["ClaudeCode`$iClaudeEvalAutoSaveTask"]], Missing["NoGlobal"]];
     If[StringQ[p] && StringTrim[p] =!= "", Return[p]];
     cap = Quiet @ Check[SourceVaultCaptureLastPromptRun[], <||>];
     If[AssociationQ[cap] && Lookup[cap, "Status", ""] === "OK",
@@ -5621,7 +5622,7 @@ SourceVaultAutoSaveLastPrompt[prompt_String, opts:OptionsPattern[]] :=
     exprStr = Which[
       StringQ[exprOpt] && StringTrim[exprOpt] =!= "", exprOpt,
       True, Module[{s = Quiet @ Check[
-          Symbol["ClaudeCode`$ClaudeEvalLastProposedExprString"], Missing[]]},
+          Symbol[Identity["ClaudeCode`$ClaudeEvalLastProposedExprString"]], Missing[]]},
         If[StringQ[s] && StringTrim[s] =!= "", s, Missing[]]]];
     (* nothing executable to capture -> skip (we only save replayable runs) *)
     If[!StringQ[exprStr],

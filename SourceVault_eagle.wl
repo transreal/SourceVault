@@ -3188,8 +3188,20 @@ iSVEGRefToId[ref_String] := Which[
   StringStartsQ[ref, "eagle:", IgnoreCase -> True], StringDrop[ref, 6],
   True, ref];
 
+(* Privacy (2026-10-31): the public symbol records the item's effective PL through the canonical
+   Result exit (the value keeps its shape). papernb resolves Eagle refs once per row of the Eagle /
+   Sources views and carries the PL through its own exits, so it sets $iSVEGObjectInfoNoExit to skip
+   this per-row watermark (an FE round trip each). iSVEGObjectInfo is the exit-free core. *)
+If[! BooleanQ[$iSVEGObjectInfoNoExit], $iSVEGObjectInfoNoExit = False];
 Options[SourceVaultEagleObjectInfo] = {"Library" -> Automatic};
-SourceVaultEagleObjectInfo[ref_String, OptionsPattern[]] := Module[{lib = iSVEGLib[OptionValue["Library"]], id, item, row},
+SourceVaultEagleObjectInfo[ref_String, opts : OptionsPattern[]] :=
+  With[{r = iSVEGObjectInfo[ref, OptionValue["Library"]]},
+    If[! TrueQ[$iSVEGObjectInfoNoExit] && Length[DownValues[SourceVault`SourceVaultPrivateResult]] > 0 &&
+        Lookup[r, "Status", ""] === "OK",
+      Quiet @ Check[SourceVault`SourceVaultPrivateResult[r, r["PrivacyLevel"]], r], r]];
+
+iSVEGObjectInfo[ref_String] := iSVEGObjectInfo[ref, Automatic];
+iSVEGObjectInfo[ref_String, libSpec_] := Module[{lib = iSVEGLib[libSpec], id, item, row},
   id = StringTrim[iSVEGRefToId[ref]];
   If[lib === $Failed || id === "", Return[<|"Status" -> "NotFound", "Ref" -> ref|>]];
   item = Quiet @ Check[SourceVaultEagleItem[id, "Library" -> lib], $Failed];
@@ -3628,7 +3640,7 @@ SourceVaultEagleShowSummary[itemSpec_, OptionsPattern[]] :=
     (* 保存済みノートがあればそれを開く (ユーザーの追記が正本) *)
     noteFile = iSVEGSummaryNoteFile[id];
     If[! TrueQ[OptionValue["Fresh"]] && StringQ[noteFile],
-      Quiet@Check[NotebookOpen[noteFile], $Failed];
+      Quiet@Check[NotebookOpen[noteFile], $Failed]; (* :PolicyWaiver: PRIV-NB-READ 利用者の操作で保存済みノートを表示するだけで、中身はカーネルに読まない *)
       Return[rec]];
     title = If[AssociationQ[rec],
       ToString@Lookup[rec, "Name", id] <> "." <> ToString@Lookup[rec, "Ext", ""], id];
@@ -4067,6 +4079,19 @@ SourceVaultObjectToCell[uri_String, OptionsPattern[]] := Module[
 SourceVaultObjectToCell[___] := <|"Status" -> "Failed", "Reason" -> "BadArguments"|>;
 
 End[]  (* `ObjectViewPrivate` *)
+
+(* privacy contracts registered by this module itself (model: iSVMDRegisterPrivacyContracts in
+   SourceVault_maildb.wl). The older eagle functions are still declared in the cross-module table
+   of SourceVault_privacy.wl (section 7b). Weak coupling: no-op when the privacy layer is absent. *)
+SourceVault`Private`iSVEGRegisterPrivacyContracts[] :=
+  Quiet@Check[
+    If[Length[DownValues[SourceVault`SourceVaultRegisterPrivacyContract]] > 0,
+      SourceVault`SourceVaultRegisterPrivacyContract["SourceVaultEagleObjectInfo",
+        <|"Class" -> "Private", "Exit" -> "Result", "Sources" -> {"eagle"},
+          "Module" -> "SourceVault_eagle.wl",
+          "Note" -> "Returns the item's Title and original file path; PL = the item's effective PL (summary record > tag cap > library default)."|>]];
+    Null, Null];
+SourceVault`Private`iSVEGRegisterPrivacyContracts[];
 
 EndPackage[];
 
