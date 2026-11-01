@@ -91,7 +91,10 @@ Quiet[ClearAll[
   "SourceVault`SourceVaultDiagnosticsCloudPeerLiveness",
   "SourceVault`SourceVaultDiagnosticsCloudConsume",
   "SourceVault`SourceVaultDiagnosticsIngestSpool",
-  "SourceVault`$SourceVaultDiagIngestIntervalSeconds"
+  "SourceVault`$SourceVaultDiagIngestIntervalSeconds",
+  "SourceVault`ShowSystemDoctorPalette",
+  "SourceVault`SourceVaultSystemDoctorView",
+  "SourceVault`SourceVaultDiagnosticsLogView"
 ]];
 
 $SourceVaultDiagnosticsVersion = "0.1-phase0";
@@ -112,6 +115,23 @@ DiagnosticsEvent を正準 diagnostics-log へ転記する (hardening 05 Inc2)�
 呼び出しは service kernel の低頻度 hook からのみ (単一書き手原則)。\
 offset sidecar (<file>.ingest.json) で差分読み・EventId dedup で冪等。\
 消化済みの過去日 shard は削除。戻り値は件数集計。";
+
+ShowSystemDoctorPalette::usage =
+  "ShowSystemDoctorPalette[] は SystemDoctor のパレットを開く (ShowClaudePalette / ShowDocPalette と同じ浮動パレット)。\n" <>
+  "診断の実行と結果表示、診断ログ・SIEM spool・イシュー・プロセス・ライセンス・シャドウ検査のウインドウ、\n" <>
+  "NBAccess 分離検査の [検査…] [全体検査] [修正…] [実行一覧] [検出一覧…] (claudecode の ClaudeSeparationRunStart /\n" <>
+  "ClaudeSeparationRunsView)、定期診断とシャドウ監視の開始・停止を置く。常駐の自動更新はしない (表示はボタンで更新)。";
+
+SourceVaultSystemDoctorView::usage =
+  "SourceVaultSystemDoctorView[] は SourceVaultSystemDoctor の結果を表で表示する: 全体の状態、部品ごとの状態・理由・\n" <>
+  "メッセージ (Separation なら実行一覧、SupervisedProcesses ならプロセス一覧などへのボタン付き)、ライセンス、登録済み probe。\n" <>
+  "[再診断] [完全診断] (プロセス構成の照会込み) [診断を記録] (diagnostics-log に DoctorRun を残す) で描き直す。\n" <>
+  "Options: \"IncludeTopology\" -> False。";
+
+SourceVaultDiagnosticsLogView::usage =
+  "SourceVaultDiagnosticsLogView[n] はこのマシンの diagnostics-log.jsonl の末尾 n 件 (既定 200) を新しい順に表で表示する\n" <>
+  "(時刻・種類・部品/発生元・状態/重さ・理由・要約)。[すべて] / [Degraded 以上] で絞り込み、[更新] で読み直す。\n" <>
+  "ファイルの末尾 1 MB だけを読む。";
 
 $SourceVaultDiagIngestIntervalSeconds::usage =
   "$SourceVaultDiagIngestIntervalSeconds は service ループの spool ingest 周期 (秒, 既定 60)。";
@@ -953,6 +973,18 @@ SourceVaultDiagnosticsRegisterProbe["LogCoverage",
 SourceVaultDiagnosticsRegisterProbe["Codex",
   Function[
     With[{p = iSVDiagWeakFunction["ClaudeCode`ClaudeCodexHealthProbe"]},
+      Which[
+        p === None, <|"Health" -> "OK", "ReasonCode" -> "NotApplicable"|>,
+        p === $Failed, <|"Health" -> "OK", "ReasonCode" -> "ProbeSkipped"|>,
+        True, p[]]]]];
+
+(* NBAccess separation-check runs (2026-11-01). The body is owned by claudecode
+   (ClaudeCode`ClaudeSeparationHealthProbe reads only its run records; no process
+   query); reached weakly like Codex. Degraded when a check / fix run was cut off
+   without an end record, or a run failed in the last 24 h. *)
+SourceVaultDiagnosticsRegisterProbe["Separation",
+  Function[
+    With[{p = iSVDiagWeakFunction["ClaudeCode`ClaudeSeparationHealthProbe"]},
       Which[
         p === None, <|"Health" -> "OK", "ReasonCode" -> "NotApplicable"|>,
         p === $Failed, <|"Health" -> "OK", "ReasonCode" -> "ProbeSkipped"|>,
@@ -2694,6 +2726,393 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
     "PrunedSpools" -> pruned,
     "Files" -> Length[files] + Length[wdFiles]|>];
 
+(* ------------------------------------------------------------
+   SystemDoctor palette and views (2026-11-01).
+   ShowSystemDoctorPalette[] is a floating palette like ShowClaudePalette /
+   ShowDocPalette: run the doctor, open the report / log / issue / process /
+   license / shadow windows, start and manage NBAccess separation checks and
+   fixes (claudecode's ClaudeSeparationRunStart / ClaudeSeparationRunsView,
+   reached weakly), and toggle the diagnostics tick and the shadow watch.
+   No resident timer and no kernel work on redraw: the palette state lives in
+   DynamicModule-local variables that the buttons set, and each view redraws
+   from its own [Refresh] button (palette-freeze rules, see the memory notes
+   palette-service-section-updateinterval-freeze / claudeprocesslist-manual-refresh).
+   Button actions run inside ClaudeCode`ClaudeHoldFrontEnd when it exists, so
+   the shared polling tick does not touch the front end while a dialog or a
+   new window is open.
+   ------------------------------------------------------------ *)
+
+If[!ValueQ[$iSVDocPalette], $iSVDocPalette = None];
+If[!AssociationQ[$iSVDocWindows], $iSVDocWindows = <||>];
+
+iSVDocL[ja_String, en_String] := If[$Language === "Japanese", ja, en];
+
+iSVDocFont[] := With[{v = iSVDiagWeakValue["ClaudeCode`$ClaudeStandardFont"]},
+  If[StringQ[v] && v =!= "", v, "Yu Gothic UI"]];
+
+SetAttributes[iSVDocHold, HoldAll];
+iSVDocHold[expr_] := With[{h = iSVDiagWeakFunction["ClaudeCode`ClaudeHoldFrontEnd"]},
+  If[h === None || h === $Failed, expr, h[expr]]];
+
+(* the claudecode function named name, or None (and a dialog) when claudecode is absent *)
+iSVDocClaude[name_String] :=
+  With[{f = iSVDiagWeakFunction["ClaudeCode`" <> name]},
+    If[f === None || f === $Failed,
+      Quiet @ MessageDialog[iSVDocL["claudecode の " <> name <> " が使えません (claudecode.wl 未読み込み)。",
+        "claudecode's " <> name <> " is not available (claudecode.wl not loaded)."]];
+      None, f]];
+
+(* open (or replace) a named view window; title and content are evaluated here
+   (HoldRest holds the title too, so it must not be matched as _String) *)
+SetAttributes[iSVDocOpenWindow, HoldRest];
+iSVDocOpenWindow[key_String, title0_, content_] :=
+  Module[{old = Lookup[$iSVDocWindows, key, None], nb, title = ToString[title0]},
+    If[MatchQ[old, _NotebookObject], Quiet @ NotebookClose[old]];
+    nb = Quiet @ Check[
+      CreateDocument[ExpressionCell[content, "Output"],
+        WindowTitle -> title, WindowSize -> {1150, 760}],
+      $Failed];
+    If[MatchQ[nb, _NotebookObject],
+      $iSVDocWindows[key] = nb,
+      Quiet @ MessageDialog[iSVDocL["ウインドウを開けませんでした: ", "Could not open: "] <> title]];
+    nb];
+
+iSVDocHealthText[h_] := Switch[h,
+  "OK", iSVDocL["正常", "OK"], "Degraded", iSVDocL["低下", "Degraded"],
+  "Failing", iSVDocL["障害", "Failing"], _, ToString[h]];
+
+iSVDocHealthChip[h_] := Framed[Style[iSVDocHealthText[h], 10, Bold, White],
+  Background -> Switch[h, "OK", RGBColor[0.15, 0.55, 0.3], "Degraded", RGBColor[0.85, 0.5, 0.],
+    "Failing", RGBColor[0.8, 0.15, 0.15], _, GrayLevel[0.55]],
+  FrameStyle -> None, RoundingRadius -> 3, FrameMargins -> {{4, 4}, {1, 1}}];
+
+iSVDocLocalTime[utc_String] :=
+  Module[{m = StringCases[utc, RegularExpression[
+      "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})"] :> {"$1", "$2", "$3", "$4", "$5", "$6"}]},
+    If[m === {}, utc,
+      Quiet @ Check[
+        DateString[TimeZoneConvert[DateObject[ToExpression /@ First[m], TimeZone -> 0], $TimeZone],
+          {"Month", "/", "Day", " ", "Hour24", ":", "Minute", ":", "Second"}], utc]]];
+iSVDocLocalTime[x_] := ToString[x];
+
+(* ---- report view ---- *)
+iSVDocComponentAction[name_String, ff_] := Switch[name,
+  "Separation",
+    Button[Style[iSVDocL["実行一覧", "Runs"], 10, FontFamily -> ff],
+      iSVDocHold[iSVDocOpenSeparationRuns[]], Method -> "Queued"],
+  "SupervisedProcesses",
+    Button[Style[iSVDocL["プロセス", "Processes"], 10, FontFamily -> ff],
+      iSVDocHold[iSVDocOpenProcesses[]], Method -> "Queued"],
+  "LogCoverage" | "Codex" | "WebAccessReview",
+    Button[Style[iSVDocL["診断ログ", "Log"], 10, FontFamily -> ff],
+      iSVDocHold[iSVDocOpenLog[]], Method -> "Queued"],
+  _, ""];
+
+iSVDocComponentRows[comp_Association, ff_] :=
+  KeyValueMap[Function[{name, c},
+    Module[{d = Replace[Lookup[c, "Detail", <||>], Except[_Association] -> <||>], rc, ms},
+      rc = Lookup[d, "ReasonCode", Lookup[c, "ReasonCode", ""]];
+      ms = Lookup[d, "Message", Lookup[d, "Summary", ""]];
+      {Style[name, Bold, 10, FontFamily -> ff],
+       iSVDocHealthChip[Lookup[c, "Health", "?"]],
+       Style[If[StringQ[rc], rc, ""], 10, FontFamily -> ff],
+       Style[If[StringQ[ms], StringTake[ms, UpTo[160]], ""], 10, FontFamily -> ff,
+         LineIndent -> 0],
+       iSVDocComponentAction[name, ff]}]],
+    KeySort[comp]];
+
+iSVDocReport[doc_Association, ff_] :=
+  Module[{lic = Replace[Lookup[doc, "License", <||>], Except[_Association] -> <||>],
+          topo = Replace[Lookup[doc, "Topology", <||>], Except[_Association] -> <||>],
+          rec = Replace[Lookup[doc, "Reclaimable", <||>], Except[_Association] -> <||>],
+          comp = Replace[Lookup[doc, "ComponentHealth", <||>], Except[_Association] -> <||>]},
+    Column[{
+      Row[{Style["SystemDoctor  ", Bold, 13, FontFamily -> ff], iSVDocHealthChip[doc["GlobalHealth"]],
+        Style["   " <> Lookup[doc, "MachineTag", "?"] <> "   " <>
+          iSVDocLocalTime[Lookup[doc, "GeneratedAtUTC", "?"]], 10, GrayLevel[0.4], FontFamily -> ff]}],
+      Grid[Prepend[iSVDocComponentRows[comp, ff],
+          Style[#, Bold, 10, FontFamily -> ff] & /@
+            {iSVDocL["部品", "Component"], iSVDocL["状態", "Health"], iSVDocL["理由", "Reason"],
+             iSVDocL["メッセージ", "Message"], ""}],
+        Alignment -> {Left, Center}, Spacings -> {1.2, 0.5},
+        Dividers -> {None, {2 -> GrayLevel[0.7]}},
+        Background -> {None, {{None, GrayLevel[0.97]}}},
+        (* every column fixed: with only the message column fixed, the others collapsed and
+           wrapped one character per line in the front end (2026-11-01) *)
+        ItemSize -> {{14, 4, 15, 34, 7}}],
+      Style[iSVDocL["ライセンス: ", "License: "] <> ToString[Lookup[lic, "LicenseProcesses", "?"]] <> " / " <>
+        ToString[Lookup[lic, "MaxLicenseProcesses", "?"]] <> iSVDocL[" プロセス (空き ", " processes (free "] <>
+        ToString[Lookup[lic, "ProcessSlotsFree", "?"]] <> iSVDocL[")、サブカーネル空き ", "), subkernels free "] <>
+        ToString[Lookup[lic, "SubprocessSlotsFree", "?"]] <> " / " <>
+        ToString[Lookup[lic, "MaxLicenseSubprocesses", "?"]], 10, FontFamily -> ff],
+      If[TrueQ[Lookup[topo, "Classified", False]],
+        Column[{
+          Style[iSVDocL["カーネルの種類: ", "Kernel classes: "] <>
+            StringRiffle[KeyValueMap[#1 <> " " <> ToString[#2] &,
+              Replace[Lookup[topo, "ClassCounts", <||>], Except[_Association] -> <||>]], ", "],
+            10, FontFamily -> ff],
+          Style[iSVDocL["回収できる MCP カーネル: ", "Reclaimable MCP kernels: "] <>
+            ToString[Lookup[rec, "ReclaimableMCPKernels", "?"]] <> "  " <>
+            ToString[Lookup[rec, "Recommendation", ""]], 10, FontFamily -> ff]}],
+        Style[iSVDocL["プロセス構成は照会していません ([完全診断] で照会)。",
+          "Process topology not probed ([Full] probes it)."], 10, GrayLevel[0.5], FontFamily -> ff]],
+      Style[iSVDocL["登録済み probe: ", "Registered probes: "] <>
+        StringRiffle[Lookup[doc, "RegisteredProbeIds", {}], ", "], 10, GrayLevel[0.45], FontFamily -> ff]
+    }, Spacings -> 0.8]];
+
+iSVDocRunDoctor[topo_, emit_] :=
+  Quiet @ Check[SourceVaultSystemDoctor["IncludeTopology" -> TrueQ[topo], "Emit" -> TrueQ[emit]], $Failed];
+
+Options[SourceVaultSystemDoctorView] = {"IncludeTopology" -> False};
+SourceVaultSystemDoctorView[opts : OptionsPattern[]] :=
+  With[{ff = iSVDocFont[], topo0 = TrueQ[OptionValue["IncludeTopology"]]},
+    DynamicModule[{tick = 0, topo = topo0, emit = False, msg = ""},
+      Framed[Column[{
+        Row[{
+          Button[Style[iSVDocL["再診断", "Re-run"], FontFamily -> ff],
+            (topo = False; emit = False; msg = ""; tick++), Method -> "Queued"], " ",
+          Button[Style[iSVDocL["完全診断 (プロセス構成込み)", "Full (with process topology)"], FontFamily -> ff],
+            (topo = True; emit = False; msg = ""; tick++), Method -> "Queued"], " ",
+          Button[Style[iSVDocL["診断を記録", "Run and log"], FontFamily -> ff],
+            (emit = True; msg = iSVDocL["診断結果を diagnostics-log に記録しました。",
+              "The result was written to the diagnostics log."]; tick++), Method -> "Queued"]}],
+        Dynamic[If[msg === "", "", Style[msg, 10, RGBColor[0.1, 0.35, 0.6], FontFamily -> ff]],
+          TrackedSymbols :> {msg}],
+        Dynamic[tick;
+          With[{d = iSVDocRunDoctor[topo, emit]},
+            emit = False;
+            If[AssociationQ[d], iSVDocReport[d, ff],
+              Style[iSVDocL["診断できませんでした。", "The doctor failed."], RGBColor[0.8, 0.15, 0.15]]]],
+          TrackedSymbols :> {tick}, SynchronousUpdating -> False]
+      }, Spacings -> 0.8], FrameStyle -> GrayLevel[0.85], RoundingRadius -> 4, FrameMargins -> 10]]];
+
+(* ---- diagnostics-log view ---- *)
+iSVDocReadLogTail[n_Integer] :=
+  Module[{path = iSVDiagLogPath[], size, strm, bytes, text, lines},
+    If[!StringQ[path] || !FileExistsQ[path], Return[{}, Module]];
+    size = FileByteCount[path];
+    strm = Quiet @ Check[OpenRead[path, BinaryFormat -> True], $Failed];
+    If[strm === $Failed, Return[{}, Module]];
+    bytes = Quiet @ Check[
+      SetStreamPosition[strm, Max[0, size - 1000000]];
+      ReadByteArray[strm], $Failed];
+    Close[strm];
+    If[!ByteArrayQ[bytes], Return[{}, Module]];
+    (* started mid-file: drop the partial first line so the UTF-8 decode starts on a boundary *)
+    If[size > 1000000,
+      With[{nl = FirstPosition[Normal[bytes[[;; Min[65536, Length[bytes]]]]], 10, {0}][[1]]},
+        If[nl > 0 && nl < Length[bytes], bytes = bytes[[nl + 1 ;;]]]]];
+    text = Quiet @ Check[ByteArrayToString[bytes, "UTF-8"], ""];
+    lines = Select[StringSplit[text, "\n"], StringStartsQ[#, "{"] && StringEndsQ[StringTrim[#], "}"] &];
+    lines = Take[lines, -Min[n, Length[lines]]];
+    Reverse @ Select[
+      Quiet @ Check[ImportByteArray[StringToByteArray[#, "UTF-8"], "RawJSON"], Nothing] & /@ lines,
+      AssociationQ]];
+
+iSVDocLogSeverityRank[r_Association] := Module[{h = Lookup[r, "Health", ""], s = Lookup[r, "Severity", ""]},
+  Which[
+    h === "Failing" || MemberQ[{"error", "Critical", "critical"}, s], 3,
+    h === "Degraded" || MemberQ[{"warn", "High", "high"}, s], 2,
+    True, 1]];
+
+iSVDocLogRow[r_Association, ff_] :=
+  Module[{payload = Lookup[r, "Payload", <||>], summary},
+    summary = Which[
+      StringQ[Lookup[r, "Summary", None]], r["Summary"],
+      StringQ[Lookup[r, "Message", None]], r["Message"],
+      AssociationQ[payload] && payload =!= <||>,
+        StringRiffle[KeyValueMap[#1 <> "=" <> StringTake[ToString[#2], UpTo[40]] &, payload], ", "],
+      True, ""];
+    {Style[iSVDocLocalTime[Lookup[r, "AtUTC", "?"]], 10, FontFamily -> ff],
+     Style[ToString[Lookup[r, "EventClass", Lookup[r, "Type", ""]]], 10, FontFamily -> ff],
+     Style[ToString[Lookup[r, "Component", Lookup[r, "Producer", ""]]], 10, FontFamily -> ff],
+     Style[ToString[Lookup[r, "Health", Lookup[r, "Severity", ""]]], 10, Bold, FontFamily -> ff,
+       Switch[iSVDocLogSeverityRank[r], 3, RGBColor[0.8, 0.15, 0.15], 2, RGBColor[0.8, 0.45, 0.], _, GrayLevel[0.35]]],
+     Style[ToString[Lookup[r, "ReasonCode", ""]], 10, FontFamily -> ff],
+     Tooltip[Style[StringTake[summary, UpTo[110]], 10, FontFamily -> ff], summary]}];
+
+SourceVaultDiagnosticsLogView[n_Integer : 200] :=
+  With[{ff = iSVDocFont[], nn = Max[1, n]},
+    DynamicModule[{tick = 0, minRank = 1},
+      Framed[Column[{
+        Row[{Style[iSVDocL["診断ログ (このマシン)", "Diagnostics log (this machine)"], Bold, 14, FontFamily -> ff],
+          "    ",
+          Button[Style[iSVDocL["更新", "Refresh"], FontFamily -> ff], tick++, Method -> "Queued"], " ",
+          Button[Style[iSVDocL["すべて", "All"], FontFamily -> ff], (minRank = 1; tick++), Method -> "Queued"], " ",
+          Button[Style[iSVDocL["Degraded 以上", "Degraded+"], FontFamily -> ff], (minRank = 2; tick++),
+            Method -> "Queued"]}],
+        Style[ToString[iSVDiagLogPath[]], 9, GrayLevel[0.5], FontFamily -> "Consolas"],
+        Dynamic[tick;
+          Module[{rows = Select[iSVDocReadLogTail[nn], iSVDocLogSeverityRank[#] >= minRank &]},
+            If[rows === {},
+              Style[iSVDocL["記録がありません。", "No records."], Italic, GrayLevel[0.5], FontFamily -> ff],
+              Pane[Grid[Prepend[iSVDocLogRow[#, ff] & /@ rows,
+                  Style[#, Bold, 10, FontFamily -> ff] & /@
+                    {iSVDocL["時刻", "Time"], iSVDocL["種類", "Type"], iSVDocL["部品/発生元", "Component"],
+                     iSVDocL["状態", "Health"], iSVDocL["理由", "Reason"], iSVDocL["要約", "Summary"]}],
+                Alignment -> Left, Spacings -> {1.2, 0.35}, Dividers -> {None, {2 -> GrayLevel[0.7]}},
+                Background -> {None, {{None, GrayLevel[0.97]}}}],
+                ImageSize -> {1080, UpTo[620]}, Scrollbars -> {False, True}]]],
+          TrackedSymbols :> {tick, minRank}, SynchronousUpdating -> False]
+      }, Spacings -> 0.8], FrameStyle -> GrayLevel[0.85], RoundingRadius -> 4, FrameMargins -> 10]]];
+
+(* ---- palette actions ---- *)
+iSVDocOpenReport[topo_] := iSVDocOpenWindow["report", "SystemDoctor",
+  SourceVaultSystemDoctorView["IncludeTopology" -> TrueQ[topo]]];
+iSVDocOpenLog[] := iSVDocOpenWindow["log", iSVDocL["診断ログ", "Diagnostics log"],
+  SourceVaultDiagnosticsLogView[200]];
+iSVDocOpenSpool[] := With[{f = iSVDocClaude["ClaudeDiagEvents"]},
+  If[f =!= None, iSVDocOpenWindow["spool", "SIEM spool", f[80]]]];
+iSVDocOpenProcesses[] := With[{f = iSVDocClaude["ClaudeProcessList"]},
+  If[f =!= None, iSVDocOpenWindow["processes", iSVDocL["プロセス一覧", "Processes"], f[]]]];
+iSVDocOpenIssues[] := If[Length[DownValues[SourceVault`SourceVaultIssuePanel]] > 0,
+  iSVDocOpenWindow["issues", "SourceVault Issues", SourceVault`SourceVaultIssuePanel[]],
+  Quiet @ MessageDialog[iSVDocL["イシュー機能 (SourceVault_issues) が読み込まれていません。",
+    "SourceVault_issues is not loaded."]]];
+iSVDocOpenLicense[] := iSVDocOpenWindow["license", iSVDocL["ライセンスとカーネル", "License and kernels"],
+  SourceVaultDiagnosticsPanel[]];
+iSVDocOpenShadow[] := iSVDocOpenWindow["shadow", iSVDocL["シャドウ検査", "Shadowed symbols"],
+  With[{s = SourceVaultShadowedSystemSymbols[]},
+    Which[
+      s === {}, Style[iSVDocL["System` を隠しているシンボルはありません。", "No symbol shadows a System` symbol."], 12],
+      ListQ[s], Column[{Dataset[s],
+        Style[iSVDocL["直し方: ソースの修飾参照を消してから SourceVaultRepairShadowedSystemSymbols[] (再起動不要)。",
+          "Fix: remove the qualified reference in the source, then SourceVaultRepairShadowedSystemSymbols[]."],
+          10, GrayLevel[0.4]]}],
+      True, s]]];
+iSVDocOpenSeparationRuns[] := With[{f = iSVDocClaude["ClaudeSeparationRunsView"]},
+  If[f =!= None, f["OpenWindow" -> True]]];
+iSVDocStartSeparation[kind_String, target_] :=
+  With[{f = iSVDocClaude["ClaudeSeparationRunStart"]},
+    If[f =!= None,
+      With[{r = If[target === Automatic,
+          f[kind, "Caller" -> "SystemDoctor", "Notebook" -> None],
+          f[kind, target, "Caller" -> "SystemDoctor", "Notebook" -> None]]},
+        Which[
+          StringQ[r], iSVDocOpenSeparationRuns[],
+          FailureQ[r] && target =!= Automatic, Quiet @ MessageDialog[r["Message"]],
+          True, Null]]]];
+(* main packages in $packageDirectory: <name>.wl without an owner <owner>_*.wl prefix; names with
+   whitespace (backups, conflicted copies) are left out *)
+iSVDocMainPackages[] :=
+  Module[{dir = Global`$packageDirectory, bases},
+    If[!StringQ[dir] || !DirectoryQ[dir], Return[{}, Module]];
+    bases = Select[FileBaseName /@ FileNames["*.wl", dir], !StringContainsQ[#, WhitespaceCharacter] &];
+    Sort[Select[bases, Function[b, NoneTrue[bases, (b =!= # && StringStartsQ[b, # <> "_"]) &]]]]];
+
+(* current findings of one package in ClaudeSeparationView (ClaudePackageManager) *)
+iSVDocOpenFindings[] :=
+  Module[{pkgs, t},
+    If[Length[DownValues[ClaudePackageManager`ClaudeSeparationView]] === 0,
+      Quiet @ MessageDialog[iSVDocL["ClaudePackageManager.wl が読み込まれていません (ClaudeSeparationView が使えません)。",
+        "ClaudePackageManager.wl is not loaded (ClaudeSeparationView unavailable)."]];
+      Return[Null, Module]];
+    pkgs = iSVDocMainPackages[];
+    If[pkgs === {}, Return[Null, Module]];
+    t = DialogInput[
+      DynamicModule[{p = If[MemberQ[pkgs, "claudecode"], "claudecode", First[pkgs]]},
+        Column[{Style[iSVDocL["検出一覧を開くパッケージ", "Package to list findings for"], Bold, 13],
+          PopupMenu[Dynamic[p], pkgs],
+          Row[{DefaultButton[iSVDocL["開く", "Open"], DialogReturn[p]], "  ", CancelButton[]}]},
+          Spacings -> 1]],
+      WindowTitle -> iSVDocL["検出一覧", "Findings"]];
+    If[StringQ[t],
+      iSVDocOpenWindow["findings", iSVDocL["検出一覧: ", "Findings: "] <> t,
+        ClaudePackageManager`ClaudeSeparationView[t]]]];
+
+iSVDocTickRunningQ[] := With[{f = iSVDiagWeakFunction["ClaudeCode`ClaudePollingTickKeys"]},
+  If[f === None || f === $Failed, False, MemberQ[Quiet @ f[], $iSVDiagTickKey]]];
+iSVDocShadowWatchQ[] := TrueQ[$iSVDiagShadowWatchOn] && $NewSymbol === iSVDiagShadowWatchHook;
+
+iSVDocInitialHealth[] := Module[{r = $iSVDiagLastTickResult},
+  If[AssociationQ[r] && StringQ[Lookup[r, "GlobalHealth", None]],
+    <|"Health" -> r["GlobalHealth"], "At" -> Lookup[r, "AtUTC", ""]|>,
+    <|"Health" -> None, "At" -> ""|>]];
+
+(* the color is evaluated here (Button holds its options, so an unevaluated If would reach the FE) *)
+SetAttributes[iSVDocButton, HoldRest];
+iSVDocButton[label_, color_, action_] := With[{c = color},
+  Button[Style[label, Bold, 10, White], iSVDocHold[action],
+    Appearance -> "Frameless", Background -> c, ImageSize -> {110, 18},
+    FrameMargins -> {{4, 4}, {1, 1}}, Method -> "Queued"]];
+SetAttributes[iSVDocButton2, HoldRest];
+iSVDocButton2[label_, color_, action_] := With[{c = color},
+  Button[Style[label, Bold, 8, White], iSVDocHold[action],
+    Appearance -> "Frameless", Background -> c, ImageSize -> {54, 18},
+    FrameMargins -> {{1, 1}, {1, 1}}, Method -> "Queued"]];
+iSVDocButtonRow[b1_, b2_] := Grid[{{b1, b2}}, Spacings -> 0.1];
+iSVDocSection[ja_, en_] := Style[iSVDocL[ja, en], Bold, 8, GrayLevel[0.3]];
+
+ShowSystemDoctorPalette[] := (
+  If[MatchQ[$iSVDocPalette, _NotebookObject], Quiet @ NotebookClose[$iSVDocPalette]];
+  $iSVDocPalette = Quiet @ CreatePalette[
+    With[{h0 = iSVDocInitialHealth[], tick0 = iSVDocTickRunningQ[], sw0 = iSVDocShadowWatchQ[]},
+      DynamicModule[{hl = h0, tickOn = tick0, swOn = sw0},
+        Column[{
+          Style["System Doctor", Bold, 11, RGBColor[0.55, 0.22, 0.22]],
+          Dynamic[
+            Row[{If[StringQ[hl["Health"]], iSVDocHealthChip[hl["Health"]],
+                Style["—", GrayLevel[0.5]]], " ",
+              Style[If[hl["At"] === "", "", iSVDocLocalTime[hl["At"]]], 8, GrayLevel[0.45]]}],
+            TrackedSymbols :> {hl}, SynchronousUpdating -> False],
+
+          (* -- diagnose -- *)
+          iSVDocSection[" 診断", " Diagnose"],
+          iSVDocButton[iSVDocL["\[FilledRightTriangle] 診断を実行", "\[FilledRightTriangle] Run doctor"],
+            RGBColor[0.6, 0.3, 0.3],
+            With[{d = iSVDocRunDoctor[False, False]},
+              If[AssociationQ[d], hl = <|"Health" -> d["GlobalHealth"], "At" -> d["GeneratedAtUTC"]|>];
+              iSVDocOpenReport[False]]],
+          iSVDocButtonRow[
+            iSVDocButton2[iSVDocL["完全診断", "Full"], RGBColor[0.55, 0.32, 0.38], iSVDocOpenReport[True]],
+            iSVDocButton2[iSVDocL["診断ログ", "Log"], RGBColor[0.45, 0.4, 0.5], iSVDocOpenLog[]]],
+          iSVDocButtonRow[
+            iSVDocButton2["SIEM", RGBColor[0.42, 0.42, 0.55], iSVDocOpenSpool[]],
+            iSVDocButton2[iSVDocL["イシュー", "Issues"], RGBColor[0.48, 0.38, 0.42], iSVDocOpenIssues[]]],
+          iSVDocButtonRow[
+            iSVDocButton2[iSVDocL["プロセス", "Processes"], RGBColor[0.35, 0.45, 0.5], iSVDocOpenProcesses[]],
+            iSVDocButton2[iSVDocL["ライセンス", "License"], RGBColor[0.35, 0.5, 0.45], iSVDocOpenLicense[]]],
+
+          (* -- NBAccess separation check / fix -- *)
+          iSVDocSection[" 分離検査", " Separation"],
+          iSVDocButtonRow[
+            iSVDocButton2[iSVDocL["検査…", "Check…"], RGBColor[0.3, 0.45, 0.62],
+              iSVDocStartSeparation["Check", Automatic]],
+            iSVDocButton2[iSVDocL["全体検査", "Check all"], RGBColor[0.25, 0.4, 0.58],
+              iSVDocStartSeparation["Check", All]]],
+          iSVDocButtonRow[
+            iSVDocButton2[iSVDocL["修正…", "Fix…"], RGBColor[0.62, 0.38, 0.25],
+              iSVDocStartSeparation["Fix", Automatic]],
+            iSVDocButton2[iSVDocL["実行一覧", "Runs"], RGBColor[0.35, 0.4, 0.55],
+              iSVDocOpenSeparationRuns[]]],
+          iSVDocButton[iSVDocL["検出一覧…", "Findings…"], RGBColor[0.4, 0.45, 0.6], iSVDocOpenFindings[]],
+
+          (* -- watch -- *)
+          iSVDocSection[" 監視", " Watch"],
+          Dynamic[
+            iSVDocButton[If[tickOn, iSVDocL["定期診断: 稼働中", "Tick: running"], iSVDocL["定期診断: 停止中", "Tick: stopped"]],
+              If[tickOn, RGBColor[0.2, 0.55, 0.35], GrayLevel[0.5]],
+              (If[iSVDocTickRunningQ[], SourceVaultDiagnosticsStopTick[],
+                 SourceVaultDiagnosticsStartTick["IntervalSeconds" -> 300]];
+               tickOn = iSVDocTickRunningQ[])],
+            TrackedSymbols :> {tickOn}, SynchronousUpdating -> False],
+          Dynamic[
+            iSVDocButton[If[swOn, iSVDocL["シャドウ監視: 稼働中", "Shadow watch: on"], iSVDocL["シャドウ監視: 停止中", "Shadow watch: off"]],
+              If[swOn, RGBColor[0.2, 0.55, 0.35], GrayLevel[0.5]],
+              (If[iSVDocShadowWatchQ[], SourceVaultShadowWatchStop[], SourceVaultShadowWatchStart[]];
+               swOn = iSVDocShadowWatchQ[])],
+            TrackedSymbols :> {swOn}, SynchronousUpdating -> False],
+          iSVDocButton[iSVDocL["シャドウ検査", "Shadow scan"], RGBColor[0.45, 0.45, 0.4], iSVDocOpenShadow[]],
+          Spacer[1]
+        }, Alignment -> Center, Spacings -> 0]]],
+    WindowTitle -> "System Doctor",
+    WindowSize -> {105, All},   (* same as the Claude Code / Documentation palettes *)
+    WindowFloating -> True,
+    WindowClickSelect -> False,
+    WindowMargins -> {{Automatic, 222}, {Automatic, 4}},
+    Saveable -> False];
+  $iSVDocPalette);
+
 (* privacy contracts for functions added after the initial review (model: iSVMDRegisterPrivacyContracts
    in SourceVault_maildb.wl). No-op when SourceVault_privacy.wl is not loaded. *)
 iSVDiagRegisterPrivacyContracts[] :=
@@ -2704,7 +3123,10 @@ iSVDiagRegisterPrivacyContracts[] :=
         {{"SourceVaultDiagnosticsLogCoverageProbe", "Reads the LLM-call log and project-folder timestamps but returns only health, reason codes and per-provider/day counts; no prompt text."},
          {"SourceVaultShadowScanFiles", "Byte-level token search in the caller's own files; returns file paths, Ctx`Name tokens and counts, never cell content."},
          {"SourceVaultShadowSanitizeFile", "Rewrites shadow tokens in the caller's file; returns the file, token counts and the backup path."},
-         {"SourceVaultShadowSanitizeNotebook", "Rewrites shadow symbols in an open notebook in place; returns the notebook object, a cell count and symbol names."}}]];
+         {"SourceVaultShadowSanitizeNotebook", "Rewrites shadow symbols in an open notebook in place; returns the notebook object, a cell count and symbol names."},
+         {"ShowSystemDoctorPalette", "Opens a button palette; shows only the doctor's global health and opens the diagnostics views / starts separation runs on package source; no store content."},
+         {"SourceVaultSystemDoctorView", "Shows the doctor's component health, reason codes and probe messages (operational metadata); no notebook, mail or log content."},
+         {"SourceVaultDiagnosticsLogView", "Shows this machine's diagnostics log (operational events: time, type, component, health, reason code, short summary); no private-store content."}}]];
     Null, Null];
 iSVDiagRegisterPrivacyContracts[];
 
@@ -2721,3 +3143,21 @@ EndPackage[];
    Opt out: Global`$SourceVaultDiagnosticsDisableAutoTick = True before load. *)
 If[TrueQ[$Notebooks] && !TrueQ[Global`$SourceVaultDiagnosticsDisableAutoTick],
   Quiet @ Check[SourceVault`SourceVaultDiagnosticsStartTick["IntervalSeconds" -> 300], Null]];
+
+(* 2026-11-01: "System Doctor" in the Palettes menu (same registration as claudecode /
+   documentation / SlideWorkflow). Front-end kernels only; the palette is not shown on load. *)
+If[TrueQ[$Notebooks],
+  Quiet @ Check[
+    Module[{itemList, dummyFunction, tempFunction, temp},
+      SetAttributes[FrontEnd`AddMenuCommands, HoldRest];
+      MathLink`CallFrontEnd[FrontEnd`ResetMenusPacket[{Automatic}]];
+      itemList = {
+        Item["System Doctor",
+          FrontEnd`KernelExecute[{EvaluatePacket[
+            dummyFunction["Needs[\"SourceVault`\"]; SourceVault`ShowSystemDoctorPalette[]"]]}],
+          FrontEnd`MenuEvaluator -> Automatic]};
+      temp = Function[x,
+        tempFunction[{FrontEnd`AddMenuCommands["MenuListPalettesMenu",
+          x]}]][itemList] /. dummyFunction -> ToExpression;
+      temp /. tempFunction -> FrontEndExecute],
+    Null]];

@@ -133,11 +133,28 @@ compact な status Association（version, sink, license summary, reclaimable sum
 ### SourceVaultDiagnosticsStatusBand[] → Framed
 workflow / saved-prompt リスト先頭用のコンパクトな framed status band（spec 9.0）を返す。global SystemDoctor health, per-component health badges, license process / subprocess pool summary、（マシン登録時は）multi-machine rollup + active aggregator 行を含む。
 
+## SystemDoctor パレットと View (2026-11-01)
+
+### ShowSystemDoctorPalette[] → NotebookObject
+SystemDoctor のパレットを開く（ShowClaudePalette / ShowDocPalette と同じ浮動パレット。幅もそれらと同じ 105、右端から 222 の位置）。開き直すと前のパレットは閉じる。FE のカーネルで SourceVault を読み込むと、「パレット」メニューに「System Doctor」が登録され、そこからも開ける（読み込み時に自動では開かない）。
+- 状態: 全体の健康状態と時刻（開いた時点では直近の定期診断の結果。[診断を実行] で更新）。
+- 診断: [診断を実行]（軽量診断を実行して状態を更新し、SourceVaultSystemDoctorView のウインドウを開く）、[完全診断]（プロセス構成込み）、[診断ログ]（SourceVaultDiagnosticsLogView）、[SIEM]（ClaudeCode`ClaudeDiagEvents）、[イシュー]（SourceVaultIssuePanel）、[プロセス]（ClaudeCode`ClaudeProcessList）、[ライセンス]（SourceVaultDiagnosticsPanel）。
+- 分離検査: [検査…]（対象をダイアログで選ぶ）、[全体検査]、[修正…]（ファイルを選んで確認）、[実行一覧]（ClaudeCode`ClaudeSeparationRunsView のウインドウ）、[検出一覧…]（パッケージを選んで ClaudePackageManager`ClaudeSeparationView）。実行は ClaudeCode`ClaudeSeparationRunStart (Caller "SystemDoctor") で記録され、開始すると実行一覧を開く。
+- 監視: [定期診断: 稼働中/停止中]（SourceVaultDiagnosticsStartTick (300 秒) / StopTick の切替）、[シャドウ監視]（SourceVaultShadowWatchStart / Stop の切替）、[シャドウ検査]（SourceVaultShadowedSystemSymbols の結果）。
+常駐の自動更新はしない（状態はパレット内の DynamicModule 変数をボタンが更新する）。ボタンの処理は ClaudeCode`ClaudeHoldFrontEnd で包み、その間は claudecode の共有 polling tick がフロントエンドに触れない。ウインドウは種類ごとに 1 つで、開き直すと前のものは閉じる。claudecode / ClaudePackageManager / SourceVault_issues が無い機能はダイアログで知らせる。
+
+### SourceVaultSystemDoctorView[opts] → DynamicModule
+SourceVaultSystemDoctor の結果を表で表示する: 全体の状態、部品ごとの状態・理由 (ReasonCode)・メッセージ、ライセンス、（完全診断時）カーネルの種類と回収できる MCP カーネル、登録済み probe。部品の行には関連ウインドウを開くボタンが付く（Separation → 実行一覧、SupervisedProcesses → プロセス一覧、LogCoverage / Codex / WebAccessReview → 診断ログ）。[再診断]（軽量）、[完全診断 (プロセス構成込み)]、[診断を記録]（"Emit" -> True で diagnostics-log に DoctorRun を残す）で描き直す。
+Options: "IncludeTopology" -> False
+
+### SourceVaultDiagnosticsLogView[n] → DynamicModule
+このマシンの diagnostics-log.jsonl の末尾 n 件（既定 200）を新しい順に表で表示する（時刻 (ローカル)・種類 (EventClass / Type)・部品/発生元・状態/重さ・理由・要約 (Summary / Message / Payload)）。ファイルの末尾 1 MB だけを読む。[すべて] / [Degraded 以上] で絞り込み、[更新] で読み直す。
+
 ## プローブレジストリ
 
 ### SourceVaultDiagnosticsRegisterProbe[id_String, probeFn_] → id
 プロデューサヘルスプローブを id で登録。probeFn は SourceVaultSystemDoctor から 0-arg で呼ばれ、health string / "Health" キーを持つ Association / component-name -> <|"Health"->...|> の Association のいずれかを返さねばならない。同一 id の再登録は置換。レジストリは本ファイルの Get[] 再実行を生き残る（プロデューサは自身のロード時に弱く登録）。id を返す。
-ロード時に組込み登録: "LogCoverage"（SourceVaultDiagnosticsLogCoverageProbe）, "Codex"（ClaudeCode`ClaudeCodexHealthProbe を弱く呼ぶ; claudecode 未ロードなら OK/NotApplicable、lookup 失敗（一時的障害）なら OK/ProbeSkipped）。
+ロード時に組込み登録: "LogCoverage"（SourceVaultDiagnosticsLogCoverageProbe）, "Codex"（ClaudeCode`ClaudeCodexHealthProbe を弱く呼ぶ; claudecode 未ロードなら OK/NotApplicable、lookup 失敗（一時的障害）なら OK/ProbeSkipped）, "Separation"（2026-11-01。ClaudeCode`ClaudeSeparationHealthProbe を同じ形で弱く呼ぶ。ClaudeCheckSeparation / ClaudeFixSeparation の実行記録だけを読み、閉じられていない途切れた実行があれば Degraded / SeparationRunAbandoned、24 時間以内の失敗があれば Degraded / SeparationRunFailed）。
 
 ### SourceVaultDiagnosticsListProbes[] → List
 登録済み診断プローブ id のリストを返す。
