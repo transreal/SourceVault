@@ -88,7 +88,7 @@ SourceVault をロードすると、以下が自動的に有効になります�
 | オープンアクセス PDF の取り込み | `SourceVault_oapdf.wl` が、論文ページ (web) を ingest した直後にオープンアクセス PDF を探して取り込み、ページのメタに結ぶ (Crossref / Europe PMC)。core の ingest に依存する。詳細は「論文ページとオープンアクセス PDF」を参照 |
 | Todo キャッシュ DB | `SourceVault_todo.wl` が todo 項目の正準キャッシュを提供 (`SourceVault_routineplan.wl` / `SourceVault_mailagenda.wl` からは弱結合)。各 todo record は `LastChanged` (最終セル変更時刻。対象セルの `CellChangeTimes` の最大値から算出した AbsoluteTime) を持ち、Done 化タイミングの推定やリマインドの起点 (anchor) として使われる。`LastChanged` を持たない旧 snapshot は `Missing["None"]` として読み取れる (additive フィールドのため再 index は不要)。標準ワークフロー (`SourceVaultTodos` / `SourceVaultNewTodo` / `SourceVaultTodoDone` 等) の詳細は後述の「Todo 管理 (SourceVault_todo)」節を参照 |
 | 匿名化 (declassification) 拡張 | `SourceVault_anonymize.wl` が canonicalization / KeyRing (NBAccess MAC KeyRef 上) / 衝突耐性 ID 式 (EntityID / SourceObjectID / SourceUnitID / DerivedUnitID) / 役割別 token (Subject / Item / Job / ResultSlot) + ReleaseHandle (CSPRNG) を提供。現時点では本文を読まない schema-only の `SourceVaultAnonymizationPlan` までが実装されており、高 PrivacyLevel の本文を実際に読んで匿名化する Execute 相当の関数は未実装 (grant gate の実装後に追加予定) |
-| SIEM / システム診断層 | `SourceVault_diagnostics.wl` が NBAccess / claudecode / ClaudeOrchestrator / サービスマネージャ横断の診断情報を集約する collector / store / doctor 層を提供する。LLM 呼び出しログの取り込み網羅性 (log coverage)・Codex の健全性・Web アクセスの月次レビュー (WebAccessReview) も監視し、FE カーネルでは診断 tick が自動起動する。詳細は「システム診断 / SIEM 基盤 (SourceVault_diagnostics)」節を参照 |
+| SIEM / システム診断層 | `SourceVault_diagnostics.wl` が NBAccess / claudecode / ClaudeOrchestrator / サービスマネージャ横断の診断情報を集約する collector / store / doctor 層を提供する。LLM 呼び出しログの取り込み網羅性 (log coverage)・Codex の健全性・Web アクセスの月次レビュー (WebAccessReview) も監視し、FE カーネルでは診断 tick が自動起動する。Palettes メニューの「System Doctor」パレット (`SourceVaultShowSystemDoctorPalette` 相当の `ShowSystemDoctorPalette[]`) から診断ログ・プロセス構成・診断実行・分離診断の実行一覧/検出一覧を閲覧できる (パレットはロード時には表示されない)。詳細は「システム診断 / SIEM 基盤 (SourceVault_diagnostics)」節を参照 |
 | 論文の翻訳ノートブック登録簿 | `SourceVault_papernb.wl` が、取り込み済み論文 (arXiv/web/local ソースおよび Eagle の PDF 項目) に対する翻訳ノートブック (訳先は `$Language`) の生成・登録簿を提供する (PL 継承)。さらに、複数の素材から作る「計算ノートブック」(v1.47) の登録簿も持つ。core の root 解決だけに依存するため早い段階でロードされる。詳細は後述の「論文の翻訳ノートブック (SourceVault_papernb)」節を参照 |
 | 発表用知識グラフ層 (KG) | `SourceVault_knowledgegraph.wl` が、論文の内容と周辺知識を順序・難易度つきの知識グラフとして保持し、聴き手 (理解度・前提知識) と時間 (枚数・分) から階層構成・アウトラインを決定的に計算する機能を提供する (LLM 非依存、FrontEnd/Notebook 非依存)。取り込み・保存の入口では UTF-8 の文字化けも自動修復する。詳細は後述の「発表用知識グラフ (SourceVault_knowledgegraph)」節を参照 |
 | ローカル資産解決層 / 発表登録簿 / KB 層・対話 QA・音声会話層の自動ロード | `SourceVault_voice.wl` / `SourceVault_vision.wl` (ローカル資産の解決層。$packageDirectory と LOCALAPPDATA だけを参照し、core の root 解決にも依存しない。VRCRealtime の private TTS / 追尾などが起動時に問い合わせる) / `SourceVault_slidedeck.wl` (発表〈スライド + 発表シナリオ〉登録簿。core の root 解決だけに依存するため早い段階でロードされる。MCP tool / service command は呼び出し時解決) / `SourceVault_kb.wl` (KB: Graph-RAG 低遅延応答層。lexical / searchindex に依存するため、それらのロード後に読み込まれる) / `SourceVault_talkqa.wl` (KB の上に載る対話型 QA 層) / `SourceVault_oopsseed.wl` / `SourceVault_realtime.wl` (クラウド経路の音声会話。OpenAI Realtime / GPT-Live を既定のマイク/スピーカーで使う。`SourceVault_voice.wl` と対になる層だが、依存は呼び出し時にだけ効くため、この位置での自動ロードで問題ない) を自動ロード。これら発表インフラの詳細は後述の「発表インフラ: スライド登録簿・低遅延 QA・クラウド音声会話」節を参照 |
@@ -1651,7 +1651,7 @@ $packageDirectory\
   SourceVault_mailagenda.wl        ← メール由来のアジェンダ/議題項目管理 (自動ロード)
   SourceVault_todo.wl              ← Todo キャッシュ DB (routineplan/mailagenda から弱結合。各 record は LastChanged を保持、ノートの設定パネルは開くたびに組み立て、自動ロード)
   SourceVault_anonymize.wl         ← 匿名化 (declassification) 拡張。Canonicalization / KeyRing / 衝突耐性 ID・役割別 token (schema-only の Plan まで実装、自動ロード)
-  SourceVault_diagnostics.wl       ← cross-package 診断 / SIEM collector・store・doctor 層 (log coverage / Codex 健全性 / WebAccessReview の監視を含む、自動ロード)
+  SourceVault_diagnostics.wl       ← cross-package 診断 / SIEM collector・store・doctor 層 (log coverage / Codex 健全性 / WebAccessReview の監視、System Doctor パレットを含む、自動ロード)
   SourceVault_eagle.wl             ← Eagle 連携 + privacy 継承付きセル出力 (旧 objectview を統合。PDF 項目には翻訳ノートブックボタンも追加)
   NBAccess_crypto.wl               ← 鍵隔離 (NBAccess` 文脈)
   SourceVault_crypto.wl            ← 暗号 + 鍵 + 鍵バンドル + 暗号 record + release
@@ -2040,6 +2040,32 @@ SourceVaultDiagnosticsStatus[]             (* 現在の診断ステータス *)
 SourceVaultDiagnosticsPanel[]              (* 最小の状態パネル *)
 ```
 
+### System Doctor パレット (診断の GUI)
+
+診断ログ・プロセス構成・ドクター結果・分離診断を 1 か所で見るための GUI として、**System Doctor パレット**が用意されています。claudecode などと同じ仕組みで **Palettes メニューに「System Doctor」として登録**され、メニューから開けます。直接開く場合は次を呼びます。
+
+```mathematica
+SourceVault`ShowSystemDoctorPalette[]
+```
+
+- 登録されるのは Front End のカーネルだけです。**ロード時にパレットが自動表示されることはありません** (メニューから開いたときだけ表示されます)。
+- 常駐の自動更新はしません。各ビューは、ボタン (更新・再診断など) を押したときにだけ描き直されます。パレットのフリーズを避けるため、ボタンの操作は claudecode の `ClaudeCode\`ClaudeHoldFrontEnd` があればその内側で実行されます。
+- 各ビューの文言は `$Language` に応じて日本語/英語に切り替わります。
+
+パレットには次のビューがあります。
+
+| ビュー | 内容 |
+|---|---|
+| 診断ログ (Log) | diagnostics-log の新しい順の一覧。列は時刻・種類・部品/発生元・状態/重さ・理由・要約。**[すべて]** / **[Degraded 以上]** で絞り込み、**[更新]** で読み直す。ログの読み込みはファイル末尾の約 1 MB だけを対象とし、巨大なログでも固まらない。日時は UTC 記録をローカル時刻へ変換して表示する |
+| プロセス (Processes) | カーネルプロセス構成 (`SourceVaultDiagnosticsKernelProcessTopology` 相当) と、ドクターが集約したコンポーネントの健全性 (`ComponentHealth`) の表示 |
+| 診断 (Diagnose) | **[再診断]** (通常の診断)、**[完全診断]** (プロセス構成の照会込み)、**[診断を記録]** (diagnostics-log に `DoctorRun` を残す) で結果を描き直す。結果は OK / Degraded / Failing を色分けしたバッジで表示される |
+| 実行一覧 (Runs) | claudecode が持つ分離診断 (`ClaudeSeparationRunStart`) の実行記録の一覧 (`ClaudeSeparationRunsView`)。記録を読むだけで、プロセスの起動・停止はしない (`ClaudeSeparationHealthProbe` は run record だけを読む) |
+| 検出一覧 | パッケージ名を選び、そのパッケージの現在の分離検出一覧を開く (ClaudePackageManager の `ClaudeSeparationView`)。既定の選択は `claudecode` |
+
+また、パレットには定期診断 (診断 tick) とシャドウ監視 (`SourceVaultShadowWatchStart` / `SourceVaultShadowWatchStop`) の開始・停止スイッチがあり、状態を反映して切り替わります。
+
+> 連携先の claudecode や ClaudePackageManager が未ロードの場合、該当ボタンは「claudecode の … は利用できません (claudecode.wl 未ロード)」「ClaudePackageManager.wl が未ロードです (ClaudeSeparationView は利用不可)」というメッセージを返すだけで、パレット全体の動作には影響しません。
+
 ### LLM ログ取り込みの網羅性 (log coverage プローブ)
 
 LLM 呼び出しの記録 (正準 diagnostics ログの `LLMCall` レコード) が、実際の利用量に対して取りこぼされていないか、また取り込み (ingest) 自体が止まっていないかを監視するプローブです。「記録が取れていないのに警告が一切出ない」状態を防ぐのが目的です。
@@ -2115,7 +2141,7 @@ SourceVaultDiagnosticsIngestSpool[]
 
 ### Shadow 監視 / Guard 系ユーティリティ
 
-同モジュールには、システムシンボルの shadow 検出・修復・監視（`SourceVaultShadowedSystemSymbols` / `SourceVaultRepairShadowedSystemSymbols` / `SourceVaultShadowWatchStart` / `SourceVaultShadowWatchStop` / `SourceVaultShadowWatchLog` / `SourceVaultShadowScanFiles` / `SourceVaultShadowSanitizeFile` / `SourceVaultShadowSanitizeNotebook`）も含まれます。
+同モジュールには、システムシンボルの shadow 検出・修復・監視（`SourceVaultShadowedSystemSymbols` / `SourceVaultRepairShadowedSystemSymbols` / `SourceVaultShadowWatchStart` / `SourceVaultShadowWatchStop` / `SourceVaultShadowWatchLog` / `SourceVaultShadowScanFiles` / `SourceVaultShadowSanitizeFile`）も含まれます。開いているノートブックの shadow シンボルをその場で書き換える `SourceVaultShadowSanitizeNotebook` は、公開関数の一覧から削除されました。ファイル単位の修正には `SourceVaultShadowSanitizeFile` を使ってください。System Doctor パレットの検出一覧からの修復案内も、ソース側の修飾参照を取り除いたうえで `SourceVaultRepairShadowedSystemSymbols[]` を実行する手順を示します。
 
 > **設計メモ:** このモジュールは独立パッケージではなく `SourceVault\`` 文脈の拡張で、Get[] だけで単体ロードできます（producer / vault root が無くてもロードは成功します）。冪等 (`Get[]` の再実行で安全に再定義) であり、producer への Needs 依存 (`ClaudeRuntime\`` / `ClaudeOrchestrator\`` 等) は一切持たず、公開シンボル名のみで弱く到達します。アグリゲータのフェイルオーバー・Wolfram Cloud 経由通信・comprehensive-doctor の auto-trigger 連携は、現時点では後続 increment に持ち越されています。
 

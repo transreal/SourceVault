@@ -45,7 +45,7 @@ GitHubInstallPackage["SourceVault",
 - `SourceVault_routineplan.wl` — ルーティン計画(routine plan)
 - `SourceVault_mailagenda.wl` — メールアジェンダ(オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層。maildb の既存派生 (Summary/Category/Priority/Deadline) を索引だけで読み、LLM/IMAP/シャード本体はロードしない。routineplan の日別カレンダー・「✉ 要対応メール」バンドに統合される)
 - `SourceVault_todo.wl` — Todo キャッシュ DB。notebook 内 TodoItem の状態と最終セル変更時刻(LastChanged)を蓄積するストア。routineplan / mailagenda からは弱結合(索引参照のみ)で使われる。Todo 個別ノートの設定パネルセルの保存形式も扱う(後述)
-- `SourceVault_diagnostics.wl` — 横断診断 / SIEM 層(collector・store・doctor)。Wolfram ライセンス席の実測プローブ・カーネルプロセストポロジ分類・重複 MCP カーネル等の reclaimable capacity 検出・service manager health を集約する `SourceVaultSystemDoctor`・マシンローカル heartbeat を提供する。さらに、LLM 呼び出しログの取りこぼし・取り込み停止・破損行を検出するログ網羅性プローブ(`SourceVaultDiagnosticsLogCoverageProbe`)と、claudecode 側の Codex ヘルスプローブの取り込み・エスカレーションを担う。Web アクセスレビュー(`WebAccessReview`)の劣化も監視対象に含まれる。対話 FE カーネルでは診断 tick が自動起動する。NBAccess / claudecode / Orchestrator / service manager / auto-trigger など各プロデューサ側は本ファイル不在でも壊れない弱結合(no-op fallback)で診断を投入する
+- `SourceVault_diagnostics.wl` — 横断診断 / SIEM 層(collector・store・doctor)。Wolfram ライセンス席の実測プローブ・カーネルプロセストポロジ分類・重複 MCP カーネル等の reclaimable capacity 検出・service manager health を集約する `SourceVaultSystemDoctor`・マシンローカル heartbeat を提供する。さらに、LLM 呼び出しログの取りこぼし・取り込み停止・破損行を検出するログ網羅性プローブ(`SourceVaultDiagnosticsLogCoverageProbe`)と、claudecode 側の Codex ヘルスプローブの取り込み・エスカレーションを担う。Web アクセスレビュー(`WebAccessReview`)の劣化も監視対象に含まれる。診断結果・診断ログ・プロセス構成・分離検査の実行一覧をひとつの画面で見られる**システム診断パレット**(`ShowSystemDoctorPalette[]`。Palettes メニューの「System Doctor」から開く)も備える。対話 FE カーネルでは診断 tick が自動起動する。NBAccess / claudecode / Orchestrator / service manager / auto-trigger など各プロデューサ側は本ファイル不在でも壊れない弱結合(no-op fallback)で診断を投入する
 - `SourceVault_servicemanager.wl` — サービス管理・Python proxy・headless dispatch。他パッケージ(例: ResoLoop.wl)が MCP tool を自己登録できるよう、SourceVault 群の後に追加でロードするパッケージファイルの一覧(`$SourceVaultServiceExtraPackages`)を service kernel の起動スクリプトへ橋渡しする。service kernel の起動スクリプトは `SourceVault_webingest.wl` の直後に `SourceVault_webguard.wl`(存在すれば)もロードする
 - `SourceVault_webingest.wl` — SearXNG クライアント・Web 検索・本文取得。検索・URL 取得の入口で Web egress guard(`SourceVault_webguard.wl`)を通す
 - `SourceVault_webguard.wl` — LLM Web egress guard(関所)・ホスト identity・アクセスログ。ローカル LLM などの Web アクセス(`sourcevault_web_search` / `sourcevault_get_document`)について、URL・クエリの不審度(決定的、LLM 不使用)、その LLM 呼び出しに渡っているデータの PrivacyLevel(文脈 PL)、ホスト(ドメイン)の AccessLevel を照合して Allow / Ask / Deny を決める。core 以外に依存せず、webingest の直後にロードされる(詳細は後述「Web egress guard(関所)」)
@@ -121,7 +121,7 @@ $packageDirectory\
   SourceVault_routineplan.wl     ← ルーティン計画(本体ロード時に自動ロード)
   SourceVault_mailagenda.wl      ← メールアジェンダ(本体ロード時に自動ロード)
   SourceVault_todo.wl            ← Todo キャッシュ DB(本体ロード時に自動ロード)
-  SourceVault_diagnostics.wl     ← 横断診断 / SIEM 層(本体ロード時に自動ロード)
+  SourceVault_diagnostics.wl     ← 横断診断 / SIEM 層・システム診断パレット(本体ロード時に自動ロード)
   SourceVault_servicemanager.wl  ← サービス管理・headless dispatch(本体ロード時に自動ロード)
   SourceVault_webingest.wl       ← SearXNG/Web 検索(本体ロード時に自動ロード)
   SourceVault_webguard.wl        ← LLM Web egress guard(関所)(webingest の直後に自動ロード)
@@ -250,7 +250,7 @@ SourceVault`Private`$iSVDisableAutoTriggerScheduler = True;
 SourceVault`SourceVaultAutoTriggerStartScheduler[]
 ```
 
-> **診断 tick の自動起動(2026-10-02)**: 同様に、`SourceVault_diagnostics.wl` の診断 tick(包括診断・ログ網羅性の定期チェック・heartbeat)も、対話 FE カーネルでは SourceVault の (再)ロード時に自動で起動します(claudecode の共有ポーリング tick に相乗りし、claudecode が無ければ何もしません)。これが無かった頃は、包括診断や heartbeat が定期実行されず、警告が一度も出ない状態になり得ました。包括診断は毎 tick ではなく **1 日 1 回**だけ実行されます。headless カーネルでは起動しません。
+> **診断 tick の自動起動(2026-10-02)**: 同様に、`SourceVault_diagnostics.wl` の診断 tick(包括診断・ログ網羅性の定期チェック・heartbeat)も、対話 FE カーネルでは SourceVault の (再)ロード時に自動で起動します(claudecode の共有ポーリング tick に相乗りし、claudecode が無ければ何もしません)。これが無かった頃は、包括診断や heartbeat が定期実行されず、警告が一度も出ない状態になり得ました。包括診断は毎 tick ではなく **1 日 1 回**だけ実行されます。headless カーネルでは起動しません。診断 tick の開始・停止は、後述のシステム診断パレットからも行えます。
 
 ### FE レス compute ノードでの headless dispatch(任意)
 
@@ -1266,6 +1266,30 @@ SourceVault`SourceVaultDiagnosticsStatus[]
 
 > `SourceVaultSystemDoctor[]` は、後述の「サービスカーネルが起動直後に消える」(Wolfram ライセンス席枯渇)のようなトラブルの一次切り分けに使えます。`$LicenseProcesses` / `$MaxLicenseProcesses` / `$MaxLicenseSubprocesses` の実測値と、重複する MCP サーバカーネルなどの reclaimable capacity を集約して返します。
 
+#### システム診断パレット(ShowSystemDoctorPalette)
+
+診断結果・診断ログ・プロセス構成・分離検査の実行一覧を、ひとつのパレットから見られます(2026-11-01)。Palettes メニューに「System Doctor」として登録されます(claudecode 等と同じ登録方式。対話 FE カーネルのみで、ロード時にパレット自体は表示されません)。メニューを使わずに開く場合は次を実行します。
+
+```mathematica
+SourceVault`ShowSystemDoctorPalette[]
+```
+
+パレットのボタンは、それぞれ次の画面を開きます。いずれもボタンを押したときに描き直すだけで、常駐の自動更新はしません(パレットを凍らせないための設計)。
+
+| ボタン | 内容 |
+|--------|------|
+| 診断(総合) | 現在の総合状態(OK / Degraded / Failing)と部品ごとの状態。[再診断] で描き直し、[完全診断] はプロセス構成の照会込みで実行し、[診断を記録] は診断結果を診断ログ(diagnostics-log)に `DoctorRun` として残します |
+| 診断ログ | 診断ログの一覧(時刻・種類・部品/発生元・状態/重さ・理由・要約)。[すべて] / [Degraded 以上] で絞り込み、[更新] で読み直します。大きなログでも固まらないよう、ファイルの末尾 1 MB だけを読みます |
+| プロセス | カーネルのプロセス構成(トポロジ分類)の一覧 |
+| 実行一覧 | claudecode 側の分離検査(`ClaudeSeparationRunStart`)の実行記録一覧(`ClaudeSeparationRunsView`)。記録を読むだけで、プロセスは起動しません |
+| 検出一覧 | 選んだパッケージの現在の検出結果を、ClaudePackageManager の `ClaudeSeparationView` で開きます |
+
+あわせて、パレットには定期診断(診断 tick)とシャドウ監視の開始・停止の切り替えが置かれています。
+
+> claudecode(`ClaudeSeparationRunsView` / `ClaudeSeparationHealthProbe` を提供)や ClaudePackageManager(`ClaudeSeparationView` を提供)がロードされていない環境では、該当ボタンは「利用できません」という趣旨のメッセージを表示するだけで、パレット自体は動作します。ボタンの処理は、存在すれば `ClaudeCode`ClaudeHoldFrontEnd` の内側で実行されます。
+>
+> 診断で検出された「システム記号を覆い隠すシャドウ記号」の修復提案には `SourceVaultRepairShadowedSystemSymbols[]` が示されます。なお、開いているノートブックのシャドウ記号を書き換えていた `SourceVaultShadowSanitizeNotebook` は公開関数の一覧から外れました。
+
 #### ログ網羅性プローブ(SourceVaultDiagnosticsLogCoverageProbe)
 
 LLM 呼び出しの診断ログが取りこぼされていないか、また取り込みが止まっていないかを確認するプローブです(読み取り専用。結果は 10 分キャッシュされ、包括診断からも呼ばれます)。ローカルの活動記録(Claude Code のプロジェクトフォルダ `claude-project-<unixtime>-*`、Codex の作業ディレクトリ `codex_project_*`)と、正準診断ログ内の `LLMCall` 記録、およびローカルの取り込み状態(`*.ingest.json`)を突き合わせます。
@@ -1353,7 +1377,8 @@ SourceVaultNotebookSummary[nbPath]
 | LLM(MCP クライアント)の Web 検索・URL 取得が `Pending` / `Deny` になる | Web egress guard(関所)の判定です。戻り値の `Message`(モデル向け英文)と `Reason` を確認し、`SourceVaultWebGuardPendingRequests[]` の許可待ちをオーナーが承認するか、ホストを `SourceVaultWebHostSetAccess` で許可してください。判定の根拠は `SourceVaultWebGuardContext[]`(文脈 PL)と `SourceVaultWebHostProfile[host]` で確認できます。`SourceVault_webguard.wl` が未ロードのときは LLM 主体の Web アクセスが fail-closed で Deny されます(`SourceVaultWebGuardStatus[]` で連携状態を確認し、service は再起動して反映) |
 | Todo 個別ノートを開くたびに FE が数秒固まる | 旧形式(素の `Dynamic`)の設定パネルセルを持つノートは、開いたときに `iSVTDNoteMigrate` が新形式(`TrackedSymbols` 付き `DynamicBox`)へ書き換えます。SourceVault を最新版に更新して一度開き直してください(他のセルは変更されません。既に開いているノートは書き換えず、次回開いたときに移行されます) |
 | `SourceVaultSystemDoctor[]` / 診断が `LLMLogGap` / `LogIngestStalled` / `LogCorruptLines` で Degraded | ログ網羅性プローブ(`SourceVaultDiagnosticsLogCoverageProbe[]`)が、LLM 呼び出しの記録が活動量に対し足りない、取り込みが `IngestStallHours` 以上停止、または診断ログに壊れた行を検出しています。メッセージ中の日付・プロバイダ・未取り込み件数と、SourceVault サービス(取り込み側)が稼働しているかを確認してください。SourceVault サービスの無い PC では `NotApplicable` となり警告は出ません |
-| 診断 tick / 包括診断・heartbeat が定期的に動いていない | 対話 FE カーネルでは SourceVault の (再)ロードで診断 tick が自動起動します(claudecode が無いと何もしません)。headless カーネルでは起動しません。包括診断は 1 日 1 回です |
+| 診断 tick / 包括診断・heartbeat が定期的に動いていない | 対話 FE カーネルでは SourceVault の (再)ロードで診断 tick が自動起動します(claudecode が無いと何もしません)。headless カーネルでは起動しません。包括診断は 1 日 1 回です。システム診断パレット(`ShowSystemDoctorPalette[]`)の定期診断の切り替えでも開始・停止できます |
+| システム診断パレットの「診断ログ」「実行一覧」「検出一覧」が表示されない／「利用できません」と出る | 「実行一覧」は claudecode(`ClaudeSeparationRunsView`)、「検出一覧」は ClaudePackageManager(`ClaudeSeparationView`)がロードされている必要があります。未ロードの環境ではメッセージが出るだけでパレット本体は動作します。表示は自動更新されないので、[更新] / [再診断] を押してください。診断ログが大きい場合は末尾 1 MB だけが表示対象です |
 | `SourceVaultNotePrivacy` でマークした入力セルが赤くならない(出力セルは正しく機密表示される)／評価が「実行中」のまま終わらない | 環境によっては出力セル確定前に評価完了扱いとなり、遅延 flush が走らないケースがありました(2026-09-11 実機で判明)。現在は `$SourceVaultPrivacyCellEpilog`(既定 True)により、評価完了後(出力セルが存在する時点)の CellEpilog で確実に flush します。前の評価で出力セルが取れなかった要求は、次の評価のついでに流されます(他セルの未処理があるときだけ、かつ 2 秒に 1 回まで)。以前は 0.4 秒ごとにポーリングする ScheduledTask が本評価と取り合い、長い評価(初期化で 10 秒超)中に「実行中のまま終わらない」症状を起こしていた(2026-10-06 実機報告)ため、epilog を張れた環境ではこのポーリングを動かしません。CellEpilog を張れない環境だけ従来の遅延タスクにフォールバックします。SourceVault を最新版に更新すれば自動的に有効になります |
 | 大きい notebook(`SkipReason` -> `"FileTooLarge"`)の Header/Todo が再 index しても復元されない | skip 済み (too-large) snapshot は Header/Todos を保持しない仕様(再生成不可)。旧形式 (`SourceSize` フィールド無しの `snap-toolarge-*`) は最新形式へ自動アップグレードされ、以後は毎回ではなく 1 度だけ ForceReindex すれば済みます |
 | `SourceVaultMailFetchNew` が失敗する | IMAP アカウント (`SourceVaultRegisterMailAccount`) と `SystemCredential[CredKey]` のパスワードが設定済みか、`$NBCredentialBackend = "SystemCredential"` でロードしているか確認 |
@@ -1387,7 +1412,7 @@ SourceVaultNotebookSummary[nbPath]
 | 自動トリガスケジューラが動かない／二重に動く | 自動起動は対話 FE カーネル(`$FrontEnd =!= Null`)に限定。`SourceVault`Private`$iSVAutoTriggerSchedulerAutoStartResult` の `Status`/`Reason` を確認(`NotFrontEndKernel` = headless、`DisabledByUser` = `$iSVDisableAutoTriggerScheduler` が `True`、`AutoTriggerUnavailable` = claudecode 未ロード)。手動起動は `SourceVaultAutoTriggerStartScheduler[]`(冪等)。無効化は SourceVault ロード前に `SourceVault`Private`$iSVDisableAutoTriggerScheduler = True` |
 | FE レス compute ノード(対話 FE なし)でジョブが自動的に拾われない | 対話 FE 限定の自動トリガスケジューラの対象外(`NotFrontEndKernel`)。そのマシン上だけでジョブ dispatch を拾わせたい場合は `SourceVaultEnableHeadlessDispatch[]` で headless dispatch を opt-in する。対話 FE のスケジューラと併用しても atomic dispatch claim により二重実行はされない |
 | 「Claude Code のログ」検索が GitHub コミット履歴やリポジトリ検索に誤ルートする | llmlog 専用キーワード(`"セッションログ"` / `"実行ログ"` / `"svcclog"` 等)を使う。取り込みは `SourceVaultIngestClaudeCodeLogs[]`、検索は `SourceVaultClaudeCode[...]`。`SourceVault_llmlog.wl` がロードされているか確認 |
-| ライセンス席の枯渇や service 健全性をすぐ確認したい | `SourceVault`SourceVaultSystemDoctor[]`(OK/Degraded/Failing の集約診断)または `SourceVaultDiagnosticsStatus[]` を実行する。ライセンス席の実測・重複 MCP カーネル等の reclaimable capacity も併せて確認できる。producer(NBAccess/claudecode/Orchestrator 等)は `SourceVault_diagnostics.wl` 不在でも壊れない(弱結合の no-op) |
+| ライセンス席の枯渇や service 健全性をすぐ確認したい | `SourceVault`SourceVaultSystemDoctor[]`(OK/Degraded/Failing の集約診断)、`SourceVaultDiagnosticsStatus[]`、またはシステム診断パレット(`ShowSystemDoctorPalette[]`)を使う。ライセンス席の実測・重複 MCP カーネル等の reclaimable capacity も併せて確認できる。producer(NBAccess/claudecode/Orchestrator 等)は `SourceVault_diagnostics.wl` 不在でも壊れない(弱結合の no-op) |
 | `SourceVaultVoice[]` が `SourceVaultVoiceUnavailable` を返す / VRCRealtime が「ローカル音声合成の資産が無いため SourceVault 連携を切って起動します」と言う | 合成ランタイムか声モデルが未導入。`SourceVaultVoiceStatus[]` の `"Missing"` と `"Hint"` を見る。上の「ローカル音声・視覚資産のセットアップ」に従って `SourceVault_voice/tts/` へ導入する。資産が無いときに非公開資料を OpenAI へ 回すことはしない設計なので、連携が切れるのは安全側の挙動 |
 | `SourceVaultVoiceSpeak` が `SourceVaultVoiceSynthesisFailed` / `"Response" -> EndOfFile` を返す | piper が要求を読めずに即終了している。まず `"StandardError"` を見る。 2026-08-21 以前は要求を `WriteLine` で書いており、`$CharacterEncoding` が UTF-8 でないカーネル(日本語 Windows の FE メインカーネルは既定 ShiftJIS)で JSON 内の日本語が化けて必ずこうなった。現在は生の UTF-8 バイトで書き込む。 回帰テストは `test codes/sourcevault_voice_test.wls` |
 | 別の声に替えたら合成が失敗する・無音になる | 単言語の声に多言語用の `language` を送っている可能性。`SourceVaultVoices[]` の `"Multilingual"` を確認する(`False` の声には `language` を送らない)。声ごとの 言語・サンプリング周波数は config から読むので、config が欠けている声は `SourceVaultVoices[]` の `"Config"` が `None` になる |
@@ -1410,4 +1435,5 @@ SourceVaultNotebookSummary[nbPath]
 - [claudecode](https://github.com/transreal/claudecode)
 - [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)
 - [ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator)
+- [ClaudePackageManager](https://github.com/transreal/ClaudePackageManager)
 - [github](https://github.com/transreal/github)

@@ -2,7 +2,7 @@
 
 Wolfram Language / Mathematica 上で動作する **Source-First Knowledge Vault** エンジンです。文書 (URL / arXiv / PDF / Notebook / テキスト) を first-class source として ingest し、snapshot lifecycle・claim 抽出・Evidence Bundle・Notebook Management を一貫した状態機械として管理します。さらに、`ClaudeEval` の定型プロンプトを deterministic な関数呼び出しとして再実行する **PromptRouter**、release context に基づく公開ポリシー基盤と Web 検索サービス管理 (**SourceVault_searchindex** / **SourceVault_servicemanager**)、[Eagle](https://eagle.cool) デジタルアセットライブラリ統合 (**SourceVault_eagle**)、排他制御・immutable snapshot・append-only event log を提供するコア基盤 (**SourceVault_core**) を備えます。加えて、関数契約と型付き配線による API コンパイラ層 (**SourceVault_contracts** / **SourceVault_wiring**)、シミュレーション実行基盤 (**SourceVault_simrun**)、検索結果を「たどれる作業面」として扱う検索ビュー層 (**SourceVault_searchview**)、一般メールの構造化・スレッド提案 (**SourceVault_mailstructure** / **SourceVault_mailsuggest**)、オーナー宛ての要対応メールを routine アジェンダへ供給する薄い層 (**SourceVault_mailagenda**)、Claude Code セッションログ統合 (**SourceVault_llmlog**)、コード化ワークフローのレジストリ・カタログ管理 (**SourceVault_workflowregistry** / **SourceVault_workflowcatalog**)、自動トリガスケジューラ (**SourceVault_autotrigger**)、クロスパッケージ診断層 (**SourceVault_diagnostics**)、関数粒度のパッケージ API 索引 (**SourceVault_packageapi**)、[ComfyUI](https://github.com/comfyanonymous/ComfyUI) 画像・動画生成統合 (**SourceVault_comfyui**) も備えます。さらに、oops メーリングリストのアーカイブを「ベース基準座標」とする認知支援・安全基盤 (Cane: **SourceVault_knowledgehome** / **SourceVault_cognition** / **SourceVault_adjudication** / **SourceVault_capbroker** / **SourceVault_taint** / **SourceVault_anomaly** / **SourceVault_routine** / **SourceVault_routineplan**) も統合しており、いずれも既定では判定を記録するだけの observe-only / shadow モードで動作します。私的データを扱う全関数の出力が別名呼び出しや `Map`・`ClaudeEval` 越しでも確実に機密マークされるようにする、プライバシー伝達の正準層 (**SourceVault_privacy**) も統合されています。
 
-加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、論文内容を「関連度 + 順序制約（因果・年代・導出・難易度）」つきの知識グラフとして保持し聴き手の理解度と時間から発表スライド構成を決定的に計算する発表用知識グラフ基盤 (**SourceVault_knowledgegraph**)、取り込み済み論文・Eagle 上の PDF・Web ページの翻訳ノートブックと、素材から作った計算ノートブックを登録する層 (**SourceVault_papernb**)、論文ページのオープンアクセス PDF を探して取り込みページと結ぶ層 (**SourceVault_oapdf**)、LLM による Web アクセスの関所となる egress guard (**SourceVault_webguard**)、notebook 由来 Todo とスタンドアロン Todo を横断的に統合管理する Todo キャッシュ DB (**SourceVault_todo**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
+加えて、内容を破壊せず身元情報だけを取り除く匿名化基盤 (**SourceVault_anonymize**)、パッケージ横断の汎用 issue 管理 (**SourceVault_issues**)、低遅延音声応答向けの Graph-RAG ナレッジベース (**SourceVault_kb**) とその上に載るプレゼンテーション向けライブ Q&A 層 (**SourceVault_talkqa**)、メール・OOPS アーカイブ・Eagle・ingest 済みソースを横断してたどれるハイパーリンク層 (**SourceVault_crosslink**)、一般メールボックスを OOPS ブラウザと同等のハイパーテキストで閲覧する層 (**SourceVault_mailbrowse**)、メール分類・優先度判定へのユーザー訂正を学習する層 (**SourceVault_mailfeedback**)、Microsoft Graph API 経由で Exchange Online メールボックスを取得するトランスポート層 (**SourceVault_mailgraph**)、授業の演習・試験・成績を扱う授業支援機能 (**SourceVault_course** / 非公開拡張 **SourceVault_course_private**)、発表（スライド + 発表シナリオ）の登録簿 (**SourceVault_slidedeck**)、論文内容を「関連度 + 順序制約（因果・年代・導出・難易度）」つきの知識グラフとして保持し聴き手の理解度と時間から発表スライド構成を決定的に計算する発表用知識グラフ基盤 (**SourceVault_knowledgegraph**)、取り込み済み論文・Eagle 上の PDF・Web ページの翻訳ノートブックと、素材から作った計算ノートブックを登録する層 (**SourceVault_papernb**)、論文ページのオープンアクセス PDF を探して（または手でダウンロードした PDF を）取り込みページと結ぶ層 (**SourceVault_oapdf**)、LLM による Web アクセスの関所となる egress guard (**SourceVault_webguard**)、notebook 由来 Todo とスタンドアロン Todo を横断的に統合管理する Todo キャッシュ DB (**SourceVault_todo**)、ローカル完結の音声合成・音声認識・人物検出資産解決層 (**SourceVault_voice** / **SourceVault_vision**)、クラウド経由のリアルタイム音声対話層 (**SourceVault_realtime**) も統合されています。
 
 ## 設計思想と実装の概要
 
@@ -47,6 +47,8 @@ deterministic な index (sources/snapshots/todos/review/lint)
 `SourceVault_oapdf.wl` は、論文ページ (Nature / Elsevier / PNAS / Frontiers などの web ソース) にオープンアクセスの PDF があれば、その PDF を別の web ソースとして ingest し、ページのソースと相互に結ぶ層です。`SourceVaultIngest[url]` は論文ページを取り込んだ直後に自動でこれを呼び (`$SourceVaultAutoOpenAccessPDF`、または `"OpenAccessPDF" -> False` で停止)、ページが 401 / 403 / 429 で取れない場合も URL から DOI が分かれば PDF だけ取り込みます。
 
 オープンアクセスの判定は、Creative Commons ライセンスへのリンク・schema.org の `isAccessibleForFree`・Crossref のライセンス・Europe PMC の `isOpenAccess`・Unpaywall (メール設定時のみ) のいずれかによります。根拠が無ければ出版社の PDF は取りに行かず (購読誌は取り込まない)、出版社の 401 / 403 は回避せず次の候補 (arXiv・`citation_pdf_url`・Europe PMC・Elsevier API など) へ進みます。外部へ送るのは DOI (と設定したメール) だけです。`SourceVaultFindOpenAccessPDF` (探すだけ)・`SourceVaultIngestOpenAccessPDF` (取り込み + 結合)・`SourceVaultBackfillOpenAccessPDFs` (既存 web ソースの一括補完) があり、ソース一覧には「▶ PDF」ボタンが付きます。取り込んだ PDF は翻訳ノートブック生成 (`SourceVaultMakePaperNotebook`) でも優先して使われます。
+
+ScienceDirect のように OA の PDF でも機械取得を 403 で拒む出版社向けには、ブラウザで手でダウンロードした PDF をページに結ぶ `SourceVaultAttachOpenAccessPDF` があります。OA の根拠は自動取り込みと同じ基準で確かめ、PDF の先頭ページにその論文の DOI か題があることも照合します (違う PDF をページの PrivacyLevel で取り込まないため)。手で結んだ PDF は自動の再探索（`"Force"` 指定時を含む）で上書きされません。
 
 ### PromptRouter — ClaudeEval の式提案契約
 
@@ -201,7 +203,7 @@ Ask はオーナーに問い合わせ (FE があれば ダイアログ、service
 
 `SourceVault_voice.wl` / `SourceVault_vision.wl` は、外部認証情報を必要としないローカル完結の音声合成 (Piper Plus TTS、および VOICEVOX 互換のローカル HTTP TTS である AivisSpeech Engine の 2 エンジン)・音声認識 (Vosk ASR)・人物検出 / 姿勢推定 (MediaPipe ONNX モデル) の資産解決層です。PrivacyLevel が 0.5 以上のデータを外部サービスへ送らないという SourceVault の契約を音声・映像入出力の面で実装するもので、[VRCRealtime](https://github.com/transreal/VRCRealtime) のようなリアルタイム音声対話統合が起動時に問い合わせます。
 
-`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI とライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。モデル名で使用 API を自動選択し、`gpt-realtime-*` は 1 つのモデルが聞く・考える・話すを担う Realtime API、`gpt-live-*`（GPT-Live）は全二重（聞きながら話せる）で動作し、client delegation によりスライド操作・SourceVault 問い合わせをクライアント側ハンドラ（`$SourceVaultRealtimeSlideHandler` / `$SourceVaultRealtimeAskHandler`、両 API 共通）へ委譲します。質問応答の背景（発表全体の要約など）は `SourceVaultRealtimeAddContext` で会話へ渡せます。GPT-Live はナレーション中の聴衆発話への割り込み（キーワード検知＋エコー除去付き部分認識 `"Words"`、または単純な発話検知 `"Detect"` の 2 方式）にも対応し、Q&A 終了後は元の説明へ自動的に戻ります。台本は短い単位に分けて「聞こえた」ことを確認しながら配信され、台本と無関係な短い応答（「はい」等）は再要求されるため、スライドが読み飛ばされません。また、話していない間もスピーカーへ聞こえない小さなノイズを流し続け（`$SourceVaultRealtimeKeepAliveLevel`）、Bluetooth スピーカー等がスリープして話し始めが欠けるのを防ぎます。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。
+`SourceVault_realtime.wl` は、この機械の既定マイク/スピーカーをそのまま使って OpenAI とライブ音声会話を行う **クラウド経路**の解決層です（VRChat を介さない点で VRCRealtime とは別物）。モデル名で使用 API を自動選択し、`gpt-realtime-*` は 1 つのモデルが聞く・考える・話すを担う Realtime API、`gpt-live-*`（GPT-Live）は全二重（聞きながら話せる）で動作し、client delegation によりスライド操作・SourceVault 問い合わせをクライアント側ハンドラ（`$SourceVaultRealtimeSlideHandler` / `$SourceVaultRealtimeAskHandler`、両 API 共通）へ委譲します。質問応答の背景（発表全体の要約など）は `SourceVaultRealtimeAddContext` で会話へ渡せます。GPT-Live はナレーション中の聴衆発話への割り込み（キーワード検知＋エコー除去付き部分認識 `"Words"`、または単純な発話検知 `"Detect"` の 2 方式）にも対応し、Q&A 終了後は元の説明へ自動的に戻ります。台本は短い単位に分けて「聞こえた」ことを確認しながら配信され、台本と無関係な短い応答（「はい」等）は再要求されるため、スライドが読み飛ばされません。また、話していない間もスピーカーへ聞こえない小さなノイズを流し続け（`$SourceVaultRealtimeKeepAliveLevel`）、Bluetooth スピーカー等がスリープして話し始めが欠けるのを防ぎます。音声キャプチャ・再生と WebSocket 接続は外部 Python worker プロセスに切り出され、カーネルは制御ファイルへの書き込みと状態ファイルのポーリングのみを行うため音声/ネットワークのホットパスに乗りません。マイク音声・会話テキストが OpenAI に送信されるため、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上は拒否) と、既定では対象ノートブックの Paid API 承認を通過しない限り起動しません。さらに、対象ノートブックが **Private 宣言**（`CloudPublishable -> False`）の場合は、他の設定に関わらず `SourceVaultRealtimeStart` / `SourceVaultRealtimeRender` は拒否されます。
 
 ### 発表用知識グラフ (SourceVault_knowledgegraph)
 
@@ -335,7 +337,7 @@ SourceVault_llmlog.wl                   Claude Code セッションログの取�
 SourceVault_simrun.wl                   シミュレーション実行基盤 (マシンプロファイル・SimulationRun・CUDA)
 SourceVault_packageapi.wl               パッケージ API 索引 (aux、wiring の後)
 SourceVault_papernb.wl                  翻訳ノートブック・計算ノートブック登録簿 (初回呼び出し時にオンデマンドロード)
-SourceVault_oapdf.wl                    オープンアクセス PDF の探索・取り込み (papernb の次、ingest が自動呼び出し)
+SourceVault_oapdf.wl                    オープンアクセス PDF の探索・取り込み・手動添付 (papernb の次、ingest が自動呼び出し)
 SourceVault_workflowregistry.wl         コード化ワークフローのオンデマンドローダ (SourceVault_workflows/ 配下を解決)
 SourceVault_autotrigger.wl              自動トリガスケジューラ (対話 FE カーネルでのみ自動起動)
 SourceVault_promptrouter.wl             同ディレクトリにあれば自動ロード
@@ -370,10 +372,10 @@ LLM 呼び出しを伴う API (`SourceVaultExtract` / `SourceVaultNotebookSummar
 - `SourceVault_privacy` の **評価スコープ透かし**により、私的データを扱う関数の出力は別名呼び出し・`Map`・`ClaudeEval` 越しでも Max 伝搬・非降下で機密マークされ、テキストパターン照合には依存しません。出力セルのマークは評価セルの `CellEpilog` により評価完了直後に行われます。宣言レジストリと呼び出しグラフ監査 (`SourceVaultPrivacyAudit`) が未宣言の漏洩を fail-closed で検出します。NBAccess と合流することで、LLM が提案したコードの実行結果を LLM 自身へ返してよいか（スキーマのみに留めるか）も同じ透かしで判定されます。
 - `SourceVault_anonymize` の実行系 (`SourceVaultAnonymize`) は、owner が検証済みの `DeclassificationGrant` を持たない限り本文を一切読まず `NeedsOwnerApproval` で fail-closed します。未確定な入力は推測せず必ず `$Failed` / `Failure` を返します。
 - KB (`SourceVault_kb`) の低遅延検索も既存の release context gate を通過した chunk のみを返し、gate を迂回する経路はありません。`SourceVault_talkqa` の回答経路も同じ PrivacyLevel/`Route` 判定をビルド時に焼き込み、本番中に緩めることはありません。
-- `SourceVault_realtime` はマイク音声・会話テキストを OpenAI へ送るクラウド経路であり、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上を拒否) と Paid API 承認を通過しない限り起動しません。
+- `SourceVault_realtime` はマイク音声・会話テキストを OpenAI へ送るクラウド経路であり、`NBAccess` の provider access 判定 (PrivacyLevel 0.5 以上を拒否) と Paid API 承認を通過しない限り起動しません。対象ノートブックが Private 宣言 (`CloudPublishable -> False`) の場合は他の設定に関わらず拒否されます。
 - `SourceVault_mcp` の外部 MCP tool 拡張点 (`SourceVaultMCPRegisterTools`) は組み込み tool と名前が衝突した場合は組み込みを優先し、外部登録 tool は `SourceVaultMCPTools[]` / `SourceVaultMCPCallTool` を通じて組み込み tool と同じ dispatch・監査経路に載ります。ファイル参照系 MCP tool は allow-list root 配下に限られ、`.env` / 鍵 / credential 類は拒否されます。
 - `SourceVault_webguard` は LLM 主体の Web アクセスを URL/クエリの不審度・文脈 PrivacyLevel・ホストの AccessLevel で照合し、guard 未ロード時は fail-closed で拒否します。文脈 PL が不明な場合は私的データありの側に倒し、Ask の判定はオーナーの決定として id 付きで記録されます。
-- `SourceVault_oapdf` は、オープンアクセスの根拠 (CC ライセンス・Crossref・Europe PMC・Unpaywall 等) が確認できない出版社 PDF を取り込まず、出版社の 401 / 403 は回避しません。外部へ送るのは DOI (と任意設定のメール) のみで、Elsevier の API キーはヘッダでのみ送られ URL・メタ・ログには残りません。
+- `SourceVault_oapdf` は、オープンアクセスの根拠 (CC ライセンス・Crossref・Europe PMC・Unpaywall 等) が確認できない出版社 PDF を取り込まず、出版社の 401 / 403 は回避しません。手動添付 (`SourceVaultAttachOpenAccessPDF`) も同じ OA 根拠と DOI / 題の照合を要求します。外部へ送るのは DOI (と任意設定のメール) のみで、Elsevier の API キーはヘッダでのみ送られ URL・メタ・ログには残りません。
 
 ### 永続化レイアウト
 
@@ -690,7 +692,7 @@ $packageDirectory\
   SourceVault_promptrouter.wl    ← PromptRouter 拡張 (本体ロード時に自動ロード)
   SourceVault_packageapi.wl      ← パッケージ API 索引 (本体ロード時に自動ロード)
   SourceVault_papernb.wl         ← 翻訳・計算ノートブック登録簿 (本体ロード時に自動ロード / Eagle 統合等の初回呼び出し時にもオンデマンドロード)
-  SourceVault_oapdf.wl           ← オープンアクセス PDF の探索・取り込み (本体ロード時に自動ロード、papernb の次)
+  SourceVault_oapdf.wl           ← オープンアクセス PDF の探索・取り込み・手動添付 (本体ロード時に自動ロード、papernb の次)
   SourceVault_workflowcatalog.wl ← ワークフローカタログ (任意、workflowregistry 依存)
   SourceVault_diagnostics.wl     ← クロスパッケージ診断 (任意)
   SourceVault_issues.wl          ← 汎用Issue管理 (任意)
@@ -869,6 +871,9 @@ r["OpenAccessPDF"]
 (* 手動で探索・取り込み *)
 SourceVaultFindOpenAccessPDF["src-url-..."]
 SourceVaultIngestOpenAccessPDF["src-url-...", "Verbose" -> True]
+
+(* 機械取得が 403 で拒まれるときは、ブラウザで落とした PDF を結ぶ *)
+SourceVaultAttachOpenAccessPDF["src-url-...", "C:\\path\\to\\paper.pdf"]
 ```
 
 **LLM 要約（ClaudeRuntime 必須）:**
@@ -932,6 +937,7 @@ SourceVaultNotebookSummary[nbPath]
 | **オープンアクセス PDF (SourceVault_oapdf)** | |
 | `SourceVaultFindOpenAccessPDF[ref, opts]` | 論文ページ / DOI / arXiv URL からオープンアクセス PDF の候補を探す（ダウンロード・書き込みなし）。`"RequireOpenAccess"` / `"FetchPage"` オプション。 |
 | `SourceVaultIngestOpenAccessPDF[ref, opts]` | OA PDF を探して別 web ソースとして取り込み、ページのソースと相互に結ぶ。`"Force"` / `"RequireOpenAccess"` / `"Verbose"` オプション。 |
+| `SourceVaultAttachOpenAccessPDF[ref, pdfPath, opts]` | 手でダウンロードした PDF を論文ページの OA PDF として取り込んで結ぶ（出版社が機械取得を 403 で拒むとき用）。OA の根拠と DOI / 題の照合が必要で、自動の再探索では上書きされない。`"URL"` / `"VerifyMatch"` / `"Verbose"` オプション。 |
 | `SourceVaultOpenAccessPDFSource[ref]` | ページに結ばれた PDF のソース情報を返す。結ばれていなければ `Missing`。 |
 | `SourceVaultBackfillOpenAccessPDFs[opts]` | ingest 済み web ソースのうち論文ページを走査して OA PDF を一括補完。`"DryRun"` 対応。 |
 | `$SourceVaultAutoOpenAccessPDF` / `$SourceVaultUnpaywallEmail` / `$SourceVaultOARecheckDays` | 自動取り込みの有効/無効、Unpaywall 照会用メール、未発見結果の再試行間隔（既定 30 日）。 |
@@ -1012,7 +1018,7 @@ SourceVaultNotebookSummary[nbPath]
 | `SourceVaultSlideDeckRegister[entry, talk]` | 発表タイトルと Sliden mp4 URL（またはポスター PDF URL）・発表シナリオを登録簿に upsert する（再登録は既存エントリへマージ）。 |
 | `SourceVaultVoiceSpeak[text, opts]` | ローカル Piper Plus TTS / AivisSpeech Engine でテキストを音声合成する。 |
 | `SourceVaultVisionModel[name]` | 人物検出/姿勢推定 ONNX モデルの絶対パスを解決する。 |
-| `SourceVaultRealtimeStart[opts]` | 既定マイク/スピーカーで OpenAI Realtime または GPT-Live とのクラウド音声会話セッションを開始する（モデル名で API 自動選択、Paid API 承認・provider access 判定必須）。 |
+| `SourceVaultRealtimeStart[opts]` | 既定マイク/スピーカーで OpenAI Realtime または GPT-Live とのクラウド音声会話セッションを開始する（モデル名で API 自動選択、Paid API 承認・provider access 判定必須。Private 宣言ノートブックでは拒否）。 |
 | `SourceVaultRealtimeAddContext[text]` | 質問応答の背景（発表全体の要約など）を音声会話へ渡す。 |
 | **Todo 管理 (SourceVault_todo)** | |
 | `SourceVaultTodos[query, opts]` | notebook 由来 + standalone の Todo を統合した `List[Association]` を返す。`"Status"` / `"HasDeadline"` / `"DueWithinDays"` / `"MinPriority"` / `"SortBy"` 等対応。 |
@@ -1184,7 +1190,7 @@ SourceVaultNotebookSummary[nbPath]
 | `api_servicemanager.md` | サービス管理 API（Web サービス・HTTP proxy・detached service・PDF グループ検索 profile・headless CLI MCP 再登録） |
 | `api_webingest.md` | Web 検索 API（SearXNG・本文取得・importance・参照イベント rollup・要約・job 実行体） |
 | `api_webguard.md` | Web egress guard API（URL/クエリ不審度解析・判定表・文脈 PL 申告・ホスト identity/AccessLevel・アクセスログ） |
-| `api_oapdf.md` | オープンアクセス PDF API（OA 判定・PDF 候補探索・取り込み/結合・既存ソースの一括補完） |
+| `api_oapdf.md` | オープンアクセス PDF API（OA 判定・PDF 候補探索・取り込み/結合・手動ダウンロード PDF の添付・既存ソースの一括補完） |
 | `api_mcp.md` | MCP tool schema / dispatch API（sv:// オブジェクト解決・外部パッケージ向け MCP tool 拡張点・組み込み tool 一覧を含む） |
 | `api_objectview.md` | sv:// オブジェクト解決 API（実データ取得・全プロパティ取得・privacy 継承付きセル出力） |
 | `api_llmlog.md` | Claude Code セッションログ統合 API（ingest/rollup・検索・生 transcript ミラー） |
@@ -1197,7 +1203,7 @@ SourceVaultNotebookSummary[nbPath]
 | `api_papernb.md` | 翻訳ノートブック登録簿 + 計算ノートブック登録簿 API（`DocImportPaper` / `DocImportWebPage` 委譲・訳先言語ごとの登録・元ソース/素材の PrivacyLevel 継承・OA PDF 優先・SlideWorkflow 文献解決） |
 | `api_voice.md` | ローカル音声資産 API（Piper Plus TTS・AivisSpeech Engine・Vosk ASR の解決・合成） |
 | `api_vision.md` | ローカル視覚資産 API（人物検出・姿勢推定 ONNX モデルの解決・導入） |
-| `api_realtime.md` | クラウド音声対話 API（OpenAI Realtime / GPT-Live・Python worker 連携・スライド制御/QA ツール接続・GPT-Live の割り込み処理・台本の確認付き配信・背景コンテキスト注入・無音キープアライブ） |
+| `api_realtime.md` | クラウド音声対話 API（OpenAI Realtime / GPT-Live・Python worker 連携・スライド制御/QA ツール接続・GPT-Live の割り込み処理・台本の確認付き配信・背景コンテキスト注入・無音キープアライブ・Private ノートブックの拒否） |
 | `api_packageapi.md` | パッケージ API 索引 API（関数粒度 chunk 索引・決定的検索・契約 view・関連候補） |
 | `api_issues.md` | 汎用Issue管理 API（データモデル v2・取り込み・分割・Risk/Importance 採点・解決ワークフロー） |
 | `api_diagnostics.md` | クロスパッケージ診断 API（ライセンス/トポロジプローブ・SystemDoctor・spool 取り込み・issue fan-out・heartbeat・マルチ PC rollup） |
@@ -1289,6 +1295,11 @@ SourceVaultOpenAccessPDFSource["src-url-..."]
 
 (* 既存の web ソースを一括補完 (まず DryRun で確認) *)
 SourceVaultBackfillOpenAccessPDFs["DryRun" -> True]
+
+(* 出版社が機械取得を拒む場合: ブラウザで落とした PDF を結ぶ *)
+SourceVaultAttachOpenAccessPDF["src-url-...", "C:\\Downloads\\paper.pdf"]
+(* 結んだ後、翻訳ノートブックを PDF から作り直す *)
+SourceVaultMakePaperNotebook["src-url-...", "Force" -> True]
 ```
 
 ### Notebook Management
