@@ -140,12 +140,28 @@ SystemDoctor のパレットを開く（ShowClaudePalette / ShowDocPalette と�
 - 状態: 全体の健康状態と時刻（開いた時点では直近の定期診断の結果。[診断を実行] で更新）。
 - 診断: [診断を実行]（軽量診断を実行して状態を更新し、SourceVaultSystemDoctorView のウインドウを開く）、[完全診断]（プロセス構成込み）、[診断ログ]（SourceVaultDiagnosticsLogView）、[SIEM]（ClaudeCode`ClaudeDiagEvents）、[イシュー]（SourceVaultIssuePanel）、[プロセス]（ClaudeCode`ClaudeProcessList）、[ライセンス]（SourceVaultDiagnosticsPanel）。
 - 分離検査: [検査…]（対象をダイアログで選ぶ）、[全体検査]、[修正…]（ファイルを選んで確認）、[実行一覧]（ClaudeCode`ClaudeSeparationRunsView のウインドウ）、[検出一覧…]（パッケージを選んで ClaudePackageManager`ClaudeSeparationView）。実行は ClaudeCode`ClaudeSeparationRunStart (Caller "SystemDoctor") で記録され、開始すると実行一覧を開く。
+- リポジトリ: [リポジトリ状況]（SourceVaultRepositoryStatusView のウインドウ）。
 - 監視: [定期診断: 稼働中/停止中]（SourceVaultDiagnosticsStartTick (300 秒) / StopTick の切替）、[シャドウ監視]（SourceVaultShadowWatchStart / Stop の切替）、[シャドウ検査]（SourceVaultShadowedSystemSymbols の結果）。
 常駐の自動更新はしない（状態はパレット内の DynamicModule 変数をボタンが更新する）。ボタンの処理は ClaudeCode`ClaudeHoldFrontEnd で包み、その間は claudecode の共有 polling tick がフロントエンドに触れない。ウインドウは種類ごとに 1 つで、開き直すと前のものは閉じる。claudecode / ClaudePackageManager / SourceVault_issues が無い機能はダイアログで知らせる。
 
 ### SourceVaultSystemDoctorView[opts] → DynamicModule
 SourceVaultSystemDoctor の結果を表で表示する: 全体の状態、部品ごとの状態・理由 (ReasonCode)・メッセージ、ライセンス、（完全診断時）カーネルの種類と回収できる MCP カーネル、登録済み probe。部品の行には関連ウインドウを開くボタンが付く（Separation → 実行一覧、SupervisedProcesses → プロセス一覧、LogCoverage / Codex / WebAccessReview → 診断ログ）。[再診断]（軽量）、[完全診断 (プロセス構成込み)]、[診断を記録]（"Emit" -> True で diagnostics-log に DoctorRun を残す）で描き直す。
 Options: "IncludeTopology" -> False
+
+### SourceVaultRepositoryStatus[opts] → List | Failure
+$packageDirectory にソース (`<pkg>.wl` または Paclet) があり github.wl が管理する (GitHubREST`GitHubManagedRepositories) パッケージごとに (ほかのパッケージの upload_manifest.json の files に `<そのパッケージ>_*.wl` として入っている補助モジュールと、名前に空白を含む競合コピーは除く。補助モジュールの変更はその親パッケージの行に入る)、ドキュメントの鮮度 (GitHubREST`PackageDocsFreshnessGate) と前回コミットからの変更 (GitHubREST`PackageCommitDiff、GithubRepositories のミラーとの差) を返す。読み取りだけで、ネットワークは使わない (30 件で約 6 秒)。要対応 (古いドキュメント・変更あり・ミラーなし・判定失敗) の行が先。
+各行: "Package", "Repository", "Owner", "DocsStatus" ("OK"|"Stale"|"NoDocs"|"Failed"), "StaleDocs" (古いドキュメント名), "StaleDetail" (<|Doc, Wl, DocDate, WlDate|>), "TooLargeDocs" (ClaudeCode`$ClaudeDocApiMaxBytes を超えて自動更新されない古いドキュメント), "DocsDir", "DocUpdateActive" (ClaudeUpdateDocumentation が進行中), "DiffStatus", "SnapshotExists", "Added", "Changed", "Removed", "ChangeCount", "NeedsAttention"
+Options: "Packages" -> All (名前のリストで絞る)
+github.wl が読み込まれていなければ Failure["GitHubUnavailable", ...]。
+
+### SourceVaultRepositoryStatusView[opts] → DynamicModule | Style
+SourceVaultRepositoryStatus を表で表示する。既定は要対応の行だけ ([すべて表示] で全件)。列: パッケージ (ツールチップにリポジトリ名)、ドキュメント (OK / 古い n (大きすぎるものがあれば「大」) / docs なし / 更新中)、前回コミットからの変更 (件数と追加・変更・削除の内訳 / なし / 未コミット)。行のボタン:
+- [詳細]: 古いドキュメントと対応するソース、追加・変更・削除のファイル名。
+- [ドキュメント更新]: 確認ダイアログのあと、新しいノートブック「ドキュメント更新: <pkg>」を開き、そこで `ClaudeUpdateDocumentation["<pkg>", TargetFiles -> {古いドキュメント}]` を評価する (NBAccess`NBInsertAndEvaluateInput。進捗はそのノートブックに出る)。古いドキュメントが無いときは自動判定 (TargetFiles なし)。128 KB を超えるものは対象から外し、それしか無ければ始めない。更新中なら始めない。
+- [コミット…] (変更があるか、ミラーが無いとき): GitHubREST`PackageCommitPlan でメッセージ案・ポリシー検査を作り (1 分ほどかかる)、ダイアログで変更ファイル・増えた検出・メッセージ (直せる) を確認してから `PackageCommit[pkg, "DryRun" -> False, "MessageGenerator" -> メッセージ]`。ドキュメントが古くて止められたら、その場でドキュメント更新に回せる。変更が無ければそう知らせる。
+- [履歴]: 新しいノートブックで `GitHubCommitDataset["<pkg>"]` を評価する (ネットワーク)。
+一覧は開いたときと [更新] のときに計算し、表示の描き直しでは計算しない。コミットの後はその行だけ計算し直す。ボタンの処理は ClaudeCode`ClaudeHoldFrontEnd で包む。
+Options: "ShowAll" -> False
 
 ### SourceVaultDiagnosticsLogView[n] → DynamicModule
 このマシンの diagnostics-log.jsonl の末尾 n 件（既定 200）を新しい順に表で表示する（時刻 (ローカル)・種類 (EventClass / Type)・部品/発生元・状態/重さ・理由・要約 (Summary / Message / Payload)）。ファイルの末尾 1 MB だけを読む。[すべて] / [Degraded 以上] で絞り込み、[更新] で読み直す。

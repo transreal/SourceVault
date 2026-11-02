@@ -51,10 +51,7 @@ Options: "Caller" -> "ClaudeEval"
 (プロンプト, 式) ペアを**直接**保存 PromptRoute として登録する(事前の ClaudeEval 実行不要)。
 「特定プロンプトへの対応の再定義」を一覧パネルの「新規プロンプト定義を追加」行またはコードから行う正準入口。
 例: `SourceVaultAddSavedPrompt["今日の予定", "SourceVaultRoutineAgendaView[Quantity[3, \"Days\"]]"]`。
-SaveLastPrompt 機構(正規化/バージョングループ/privacy/暗号化)を通し、直近実行のノートブック
-コンテキストは遮断して ReplaySafety を汚染しない。既定で "Primary"->True(グループの PRIMARY 化=
-Order-9 完全一致で起動)+"AutoExecute"->True(確認なし自動実行)。式は InputForm 構文チェック
-(非評価)され、実行時安全は SourceVaultRunPrimaryRoute の ReadOnly/SafeCreate+deny-list 再チェックが担保。
+SaveLastPrompt 機構(正規化/バージョングループ/privacy/暗号化)を通し、直近実行のノートブックコンテキストは遮断して ReplaySafety を汚染しない。既定で "Primary"->True(グループの PRIMARY 化=Order-9 完全一致で起動)+"AutoExecute"->True(確認なし自動実行)。式は InputForm 構文チェック(非評価)され、実行時安全は SourceVaultRunPrimaryRoute の ReadOnly/SafeCreate+deny-list 再チェックが担保。
 → SaveLastPrompt の戻り値+ "PrimaryResult"
 Options: "Primary" -> True, "AutoExecute" -> True, "Memo" -> "", "Channel" -> Automatic, "Encrypt" -> False, "DryRun" -> False
 
@@ -126,7 +123,7 @@ PrivacyLevelが0.5(クラウド送信境界)未満のときのみTrueを返す(s
 Options: opts
 
 ### SourceVaultClassifyProviderTrustDomain[label] → "Cloud"|"Local"|"Private"|Missing["UnclassifiedTrustDomain"]
-プロバイダー/ルートラベルをTrustDomainにマップする(spec 12.2)。ホストリゾルバーがTrustDomainを明示しないときのみ使うフォールバック分類(明示TrustDomainが常に優先)。"chatgptcodex"/"codex"/"ChatGPTCodexCLI"/"ClaudeCodeCLI"/"claudecode"/"CloudLLM"/"anthropic"/"openai" -> "Cloud"; "LocalOnly"/"local"/"LocalOnlyLLM" -> "Local"; "PrivateLLM"/"private llm"/"private" -> "Private"。曖昧または不明なラベル(LocalOpenAICompatible, ExternalAPI等)はMissing["UnclassifiedTrustDomain"]でホストリゾルバーがTrustDomainを明示する必要がある。ChatGPT CodexはクラウドバックCLI(ファイルシステムはローカルだがLLM推論はクラウド)。
+プロバイダー/ルートラベルをTrustDomainにマップする(spec 12.2)。ホストリゾルバーがTrustDomainを明示しないときのみ使うフォールバック分類(明示TrustDomainが常に優先)。"chatgptcodex"/"codex"/"chatgpt codex cli"/"chatgpt-codex"/"ChatGPTCodexCLI"/"ClaudeCodeCLI"/"claudecode"/"CloudLLM"/"anthropic"/"openai" -> "Cloud"; "LocalOnly"/"local only"/"local"/"LocalOnlyLLM" -> "Local"; "PrivateLLM"/"private llm"/"private" -> "Private"。曖昧または不明なラベル(LocalOpenAICompatible, ExternalAPI等)はMissing["UnclassifiedTrustDomain"]でホストリゾルバーがTrustDomainを明示する必要がある。ChatGPT CodexはクラウドバックCLI(ファイルシステムはローカルだがLLM推論はクラウド)。
 
 ## 再処理計画
 

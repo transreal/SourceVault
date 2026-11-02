@@ -4247,6 +4247,76 @@ iSVPRBumpLaunchId[___] := $Failed;
 iSVPRBumpLaunch[rt_Association, err_:False] :=
   iSVPRBumpLaunchId[ToString[Lookup[rt, "RouteId", ""]], err];
 
+(* ---- 一覧の行ボタンの動作本体 (SourceVaultFormatPromptRouteList から呼ぶ) ----
+   行ごとのボタン式には id 等の小さな値だけを焼き込み、ルート連想そのものは
+   クリック時に RouteId で引き直す (一覧描画の箱を軽く保つため)。 *)
+iSVPRPanelRouteById[rid_String] :=
+  Module[{r},
+    r = Quiet @ Check[SourceVaultSearchPromptRoutes["", "Channel" -> All], {}];
+    If[! ListQ[r], Return[Missing["NotFound"]]];
+    SelectFirst[Select[Map[iSVPRNormalizeRoute, r], AssociationQ],
+      Lookup[#, "RouteId", Null] === rid &, Missing["NotFound"]]];
+iSVPRPanelRouteById[_] := Missing["NotFound"];
+
+(* ToInput: LightLLM ルートは置換ダイアログを経由、それ以外は提案式をそのまま書く *)
+iSVPRToInputClick[rid_, ie_, rc_] :=
+  Module[{target = InputNotebook[], route, replay, exprStr, wrote = False},
+    If[rc === "LightLLM",
+      route = iSVPRPanelRouteById[ToString[rid]];
+      replay = If[AssociationQ[route],
+        Quiet @ Check[iSVPRLightLLMReplayDialog[route], $Failed], $Failed];
+      If[replay === $Canceled, Return[Null, Module]];
+      exprStr = If[AssociationQ[replay],
+        Lookup[replay, "ExprString", Missing[]], Missing[]];
+      If[!StringQ[exprStr], exprStr = ie];
+      If[Head[target] === NotebookObject && StringQ[exprStr],
+        NBAccess`NBWriteInputCellAndMaybeEvaluate[
+          target, exprStr, False]; wrote = True],
+      If[Head[target] === NotebookObject && StringQ[ie],
+        NBAccess`NBWriteInputCellAndMaybeEvaluate[
+          target, ie, False]; wrote = True]];
+    (* 起動回数を加算 (書き込めなかった場合はエラー扱い) *)
+    iSVPRBumpLaunchId[ToString[rid], ! wrote]];
+
+iSVPRPrimaryClick[rid_String, safe_] :=
+  Module[{choice},
+    choice = ChoiceDialog[
+      Column[{
+        Style["\:30d7\:30e9\:30a4\:30de\:30ea\:8a2d\:5b9a: " <> rid, Bold],
+        If[safe === "EnvironmentIndependent",
+          Style["\:81ea\:52d5\:5b9f\:884c\:3082\:8a31\:53ef\:3067\:304d\:307e\:3059\:3002",
+            FontSize -> 10],
+          Style["\:3053\:306e\:5f0f\:306f\:74b0\:5883\:4f9d\:5b58\:ff08" <> ToString[safe] <>
+            "\:ff09\:306e\:305f\:3081\:81ea\:52d5\:5b9f\:884c\:306f\:3067\:304d\:307e\:305b\:3093\:3002",
+            FontSize -> 10, RGBColor[0.6, 0.5, 0.2]]]}],
+      Flatten[{
+        "Primary\:306e\:307f" -> "PrimaryOnly",
+        If[safe === "EnvironmentIndependent",
+          {"Primary+\:81ea\:52d5\:5b9f\:884c" -> "PrimaryAuto"}, {}],
+        "\:30ad\:30e3\:30f3\:30bb\:30eb" -> $Canceled}]];
+    If[choice =!= $Canceled,
+      MessageDialog[Column[{
+        Style["Primary\:8a2d\:5b9a\:5b8c\:4e86", Bold],
+        SourceVaultSetPrimaryPromptRoute[rid,
+          "AutoExecute" -> (choice === "PrimaryAuto")],
+        Style["\:6700\:65b0\:72b6\:614b\:306f\:518d\:8868\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
+          FontSize -> 10, GrayLevel[0.4]]}]]]];
+iSVPRPrimaryClick[___] := Null;
+
+iSVPRDeleteClick[rid_String] :=
+  Module[{ok},
+    ok = ChoiceDialog[
+      Style["\:524a\:9664\:3057\:307e\:3059\:304b: " <> rid,
+        RGBColor[0.7, 0.15, 0.15]]];
+    If[TrueQ[ok],
+      MessageDialog[Column[{
+        Style["\:524a\:9664\:5b8c\:4e86", Bold],
+        SourceVaultDeletePromptRoute[rid,
+          "DryRun" -> False, "Confirm" -> True],
+        Style["\:6700\:65b0\:72b6\:614b\:306f\:518d\:8868\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
+          FontSize -> 10, GrayLevel[0.4]]}]]]];
+iSVPRDeleteClick[___] := Null;
+
 Options[SourceVaultFormatPromptRouteList] = {"MaxRows" -> Infinity};
 
 SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
@@ -4381,30 +4451,19 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                     RGBColor[0.6, 0.5, 0.2],
                   True, GrayLevel[0.5]]]
             }, Spacings -> 0.15],
+            (* ボタン式に焼き込むのは id・式文字列などの小さな値だけ。動作本体は
+               iSVPRToInputClick / iSVPRPrimaryClick / iSVPRDeleteClick に置く
+               (ルート連想とダイアログ式を行ごとにインライン化すると 155 行で
+               箱が 6.6MB になり、全件描画で FE が固まった)。 *)
             With[{rid = routeId, ie = proposedExpr, rc = replayClass,
-                  theRoute = rt, safe = Lookup[rt, "ReplaySafety", "Unknown"]},
+                  safe = Lookup[rt, "ReplaySafety", "Unknown"]},
               Column[{
                 (* ToInput: \:4fdd\:5b58\:6642\:306e\:63d0\:6848\:5f0f\:3092\:65b0\:898f\:5165\:529b\:30bb\:30eb\:306b\:66f8\:304f (\:8a55\:4fa1\:306f\:3057\:306a\:3044)\:3002
                    \:5024\:306f build \:6642\:306b\:5916\:5074 With \:3067\:30ea\:30c6\:30e9\:30eb\:5316\:3055\:308c\:308b (Module \:5c40\:6240\:5909\:6570\:6f0f\:308c\:9632\:6b62) *)
                 Button[
                   Style["ToInput", FontFamily -> "Yu Gothic UI", FontSize -> 10,
                     RGBColor[0.2, 0.38, 0.65]],
-                  Module[{target = InputNotebook[], replay, exprStr, wrote = False},
-                    If[rc === "LightLLM",
-                      replay = Quiet @ Check[
-                        iSVPRLightLLMReplayDialog[theRoute], $Failed];
-                      If[replay === $Canceled, Return[Null, Module]];
-                      exprStr = If[AssociationQ[replay],
-                        Lookup[replay, "ExprString", Missing[]], Missing[]];
-                      If[!StringQ[exprStr], exprStr = ie];
-                      If[Head[target] === NotebookObject && StringQ[exprStr],
-                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                          target, exprStr, False]; wrote = True],
-                      If[Head[target] === NotebookObject && StringQ[ie],
-                        NBAccess`NBWriteInputCellAndMaybeEvaluate[
-                          target, ie, False]; wrote = True]];
-                    (* 起動回数を加算 (書き込めなかった場合はエラー扱い) *)
-                    iSVPRBumpLaunch[theRoute, ! wrote]],
+                  iSVPRToInputClick[rid, ie, rc],
                   Appearance -> "Frameless",
                   BaseStyle -> {"Hyperlink"},
                   Method -> "Queued"],
@@ -4412,28 +4471,7 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                 Button[
                   Style["Primary\:8a2d\:5b9a", FontFamily -> "Yu Gothic UI",
                     FontSize -> 10, RGBColor[0.5, 0.3, 0.55]],
-                  Module[{choice},
-                    choice = ChoiceDialog[
-                      Column[{
-                        Style["\:30d7\:30e9\:30a4\:30de\:30ea\:8a2d\:5b9a: " <> rid, Bold],
-                        If[safe === "EnvironmentIndependent",
-                          Style["\:81ea\:52d5\:5b9f\:884c\:3082\:8a31\:53ef\:3067\:304d\:307e\:3059\:3002",
-                            FontSize -> 10],
-                          Style["\:3053\:306e\:5f0f\:306f\:74b0\:5883\:4f9d\:5b58\:ff08" <> ToString[safe] <>
-                            "\:ff09\:306e\:305f\:3081\:81ea\:52d5\:5b9f\:884c\:306f\:3067\:304d\:307e\:305b\:3093\:3002",
-                            FontSize -> 10, RGBColor[0.6, 0.5, 0.2]]]}],
-                      Flatten[{
-                        "Primary\:306e\:307f" -> "PrimaryOnly",
-                        If[safe === "EnvironmentIndependent",
-                          {"Primary+\:81ea\:52d5\:5b9f\:884c" -> "PrimaryAuto"}, {}],
-                        "\:30ad\:30e3\:30f3\:30bb\:30eb" -> $Canceled}]];
-                    If[choice =!= $Canceled,
-                      MessageDialog[Column[{
-                        Style["Primary\:8a2d\:5b9a\:5b8c\:4e86", Bold],
-                        SourceVaultSetPrimaryPromptRoute[rid,
-                          "AutoExecute" -> (choice === "PrimaryAuto")],
-                        Style["\:6700\:65b0\:72b6\:614b\:306f\:518d\:8868\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
-                          FontSize -> 10, GrayLevel[0.4]]}]]]],
+                  iSVPRPrimaryClick[rid, safe],
                   Appearance -> "Frameless",
                   BaseStyle -> {"Hyperlink"},
                   Method -> "Queued"],
@@ -4441,17 +4479,7 @@ SourceVaultFormatPromptRouteList[routes_List, opts:OptionsPattern[]] :=
                 Button[
                   Style["\:524a\:9664", FontFamily -> "Yu Gothic UI",
                     FontSize -> 10, RGBColor[0.7, 0.15, 0.15]],
-                  Module[{ok},
-                    ok = ChoiceDialog[
-                      Style["\:524a\:9664\:3057\:307e\:3059\:304b: " <> rid,
-                        RGBColor[0.7, 0.15, 0.15]]];
-                    If[TrueQ[ok],
-                      MessageDialog[Column[{
-                        Style["\:524a\:9664\:5b8c\:4e86", Bold],
-                        SourceVaultDeletePromptRoute[rid,
-                          "DryRun" -> False, "Confirm" -> True],
-                        Style["\:6700\:65b0\:72b6\:614b\:306f\:518d\:8868\:793a\:3057\:3066\:304f\:3060\:3055\:3044\:3002",
-                          FontSize -> 10, GrayLevel[0.4]]}]]]],
+                  iSVPRDeleteClick[rid],
                   Appearance -> "Frameless",
                   BaseStyle -> {"Hyperlink"},
                   Method -> "Queued"]
@@ -4558,19 +4586,21 @@ SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
            "private" -> "private", "local" -> "local"},
           BaseStyle -> {FontFamily -> "Yu Gothic UI"}],
         Spacer[6],
-        (* \:691c\:7d22: \:30ad\:30fc\:30ef\:30fc\:30c9\:6709\:308a\:306a\:3089\:30de\:30c3\:30c1\:3092\:5168\:4ef6\:8868\:793a\:3001\:7a7a\:306a\:3089\:6a19\:6e96\:8868\:793a\:ff08\:5236\:9650\:ff09 *)
+        (* \:691c\:7d22: \:30ad\:30fc\:30ef\:30fc\:30c9\:6709\:308a\:306a\:3089\:30de\:30c3\:30c1\:3092\:5168\:4ef6\:8868\:793a\:3001\:7a7a\:306a\:3089\:6a19\:6e96\:8868\:793a\:ff08\:5236\:9650\:ff09\:3002
+           結果を先に算出してから routes → showAll の順に代入する。逆順 (showAll が先)
+           だと「旧 routes (全件) × 制限なし」の中間状態を FE が拾って全件を描画し
+           始め、検索しただけで FE が固まった (2026-11-01)。 *)
         Button[Style["\:691c\:7d22", FontFamily -> "Yu Gothic UI"],
-          showAll = (StringTrim[query] =!= "");
-          routes = Quiet @ Check[
-            iSVPRPanelRoutes[query, channel], {}],
+          Module[{r = Quiet @ Check[iSVPRPanelRoutes[query, channel], {}]},
+            routes = r;
+            showAll = (StringTrim[query] =!= "")],
           Method -> "Queued"],
         Spacer[4],
         (* \:5168\:4ef6: \:691c\:7d22\:306a\:3057\:3067\:3082\:5236\:9650\:3092\:5916\:3057\:3066\:5168\:4ef6\:8868\:793a *)
         Tooltip[
           Button[Style["\:5168\:4ef6", FontFamily -> "Yu Gothic UI"],
-            query = ""; showAll = True;
-            routes = Quiet @ Check[
-              iSVPRPanelRoutes["", channel], {}],
+            Module[{r = Quiet @ Check[iSVPRPanelRoutes["", channel], {}]},
+              query = ""; routes = r; showAll = True],
             Method -> "Queued"],
           "\:5168\:4ef6\:3092\:5236\:9650\:306a\:3057\:3067\:8868\:793a\:3057\:307e\:3059\:ff08\:9577\:3044\:3068\:8868\:793a\:304c\:91cd\:304f\:306a\:308a\:307e\:3059\:ff09\:3002"],
         Spacer[4],
@@ -4633,11 +4663,16 @@ SourceVaultPromptRoutePanel[opts:OptionsPattern[]] :=
           Style[ToString[Length[If[ListQ[routes], routes, {}]]] <> " \:4ef6",
             FontFamily -> "Yu Gothic UI", FontSize -> 10, GrayLevel[0.45]]}],
         TrackedSymbols :> {routes}],
-      (* \:6a19\:6e96\:8868\:793a\:ff08showAll=False\:ff09\:3067\:306f mr \:884c\:306b\:5236\:9650\:3001\:691c\:7d22/\:5168\:4ef6\:306f Infinity \:3067\:5168\:4ef6\:3002 *)
+      (* \:6a19\:6e96\:8868\:793a\:ff08showAll=False\:ff09\:3067\:306f mr \:884c\:306b\:5236\:9650\:3001\:691c\:7d22/\:5168\:4ef6\:306f Infinity \:3067\:5168\:4ef6\:3002
+         表の再描画は main link 経由 (SynchronousUpdating -> False)。同期だと Queued
+         ボタンの評価中に preemptive で走り、カーネルが行を組んで数 MB の箱を返す
+         まで FE のメインスレッドが待ち続けて「応答なし」になる。非同期ならボタンの
+         評価が終わってから最終状態で 1 回だけ描画され、FE の操作は止まらない。 *)
       Dynamic[
         SourceVaultFormatPromptRouteList[If[ListQ[routes], routes, {}],
           "MaxRows" -> If[TrueQ[showAll], Infinity, mr]],
-        TrackedSymbols :> {routes, showAll}]},
+        TrackedSymbols :> {routes, showAll},
+        SynchronousUpdating -> False]},
       Spacings -> 0.6],
       ImageMargins -> 4],
     (* フォールバック: 保存ノート再オープン等で routes が未確定の時のみ再取得。

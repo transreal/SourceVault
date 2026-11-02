@@ -94,7 +94,9 @@ Quiet[ClearAll[
   "SourceVault`$SourceVaultDiagIngestIntervalSeconds",
   "SourceVault`ShowSystemDoctorPalette",
   "SourceVault`SourceVaultSystemDoctorView",
-  "SourceVault`SourceVaultDiagnosticsLogView"
+  "SourceVault`SourceVaultDiagnosticsLogView",
+  "SourceVault`SourceVaultRepositoryStatus",
+  "SourceVault`SourceVaultRepositoryStatusView"
 ]];
 
 $SourceVaultDiagnosticsVersion = "0.1-phase0";
@@ -132,6 +134,21 @@ SourceVaultDiagnosticsLogView::usage =
   "SourceVaultDiagnosticsLogView[n] はこのマシンの diagnostics-log.jsonl の末尾 n 件 (既定 200) を新しい順に表で表示する\n" <>
   "(時刻・種類・部品/発生元・状態/重さ・理由・要約)。[すべて] / [Degraded 以上] で絞り込み、[更新] で読み直す。\n" <>
   "ファイルの末尾 1 MB だけを読む。";
+
+SourceVaultRepositoryStatus::usage =
+  "SourceVaultRepositoryStatus[] は $packageDirectory にソースがあり github.wl が管理する (GitHubManagedRepositories) パッケージごとに、\n" <>
+  "ドキュメントの鮮度 (PackageDocsFreshnessGate) と前回コミットからの変更 (PackageCommitDiff) を返す。読み取りだけでネットワークは使わない。\n" <>
+  "各行: \"Package\", \"Repository\", \"Owner\", \"DocsStatus\" (\"OK\"|\"Stale\"|\"NoDocs\"|\"Failed\"), \"StaleDocs\", \"StaleDetail\",\n" <>
+  "  \"TooLargeDocs\" ($ClaudeDocApiMaxBytes を超えて自動更新しない古いドキュメント), \"DocsDir\", \"DocUpdateActive\",\n" <>
+  "  \"DiffStatus\", \"SnapshotExists\", \"Added\", \"Changed\", \"Removed\", \"ChangeCount\", \"NeedsAttention\"。要対応の行が先。\n" <>
+  "Options: \"Packages\" -> All (名前のリストで絞る)。github.wl が無ければ Failure[\"GitHubUnavailable\", ...]。";
+
+SourceVaultRepositoryStatusView::usage =
+  "SourceVaultRepositoryStatusView[] は SourceVaultRepositoryStatus の結果を表で表示する (既定は要対応の行だけ。[すべて表示] で全件)。\n" <>
+  "行ごとに [詳細] (古いドキュメントと変更ファイル)、[ドキュメント更新] (確認のうえ新しいノートブックで ClaudeUpdateDocumentation[pkg,\n" <>
+  "TargetFiles -> 古いもの] を評価。128 KB を超えるものは除く)、[コミット…] (PackageCommitPlan のメッセージ案・ポリシー検査を見て、\n" <>
+  "メッセージを直してから PackageCommit[pkg, \"DryRun\" -> False]。ドキュメントが古くて止まったら更新へ回せる)、[履歴] (新しいノートブックで\n" <>
+  "GitHubCommitDataset) を出す。一覧は開いたときと [更新] で計算し、表示の再描画では計算しない。Options: \"ShowAll\" -> False。";
 
 $SourceVaultDiagIngestIntervalSeconds::usage =
   "$SourceVaultDiagIngestIntervalSeconds は service ループの spool ingest 周期 (秒, 既定 60)。";
@@ -2766,12 +2783,13 @@ iSVDocClaude[name_String] :=
    (HoldRest holds the title too, so it must not be matched as _String) *)
 SetAttributes[iSVDocOpenWindow, HoldRest];
 iSVDocOpenWindow[key_String, title0_, content_] :=
-  Module[{old = Lookup[$iSVDocWindows, key, None], nb, title = ToString[title0]},
+  Module[{old = Lookup[$iSVDocWindows, key, None], nb, title = ToString[title0], c},
     If[MatchQ[old, _NotebookObject], Quiet @ NotebookClose[old]];
-    nb = Quiet @ Check[
-      CreateDocument[ExpressionCell[content, "Output"],
-        WindowTitle -> title, WindowSize -> {1150, 760}],
-      $Failed];
+    (* success is judged by the result, not by messages: Check also caught unrelated messages
+       (e.g. a shared polling tick running meanwhile) and refused to open the window *)
+    c = Quiet[content];
+    nb = Quiet @ CreateDocument[ExpressionCell[c, "Output"],
+      WindowTitle -> title, WindowSize -> {1150, 760}];
     If[MatchQ[nb, _NotebookObject],
       $iSVDocWindows[key] = nb,
       Quiet @ MessageDialog[iSVDocL["ウインドウを開けませんでした: ", "Could not open: "] <> title]];
@@ -2956,6 +2974,335 @@ SourceVaultDiagnosticsLogView[n_Integer : 200] :=
           TrackedSymbols :> {tick, minRank}, SynchronousUpdating -> False]
       }, Spacings -> 0.8], FrameStyle -> GrayLevel[0.85], RoundingRadius -> 4, FrameMargins -> 10]]];
 
+(* ---- repository status (2026-11-01) ----
+   Packages in $packageDirectory that github.wl manages (GitHubManagedRepositories, local only):
+   whether api.md / api_*.md are older than their source (PackageDocsFreshnessGate) and what changed
+   since the last commit (PackageCommitDiff against the GithubRepositories mirror). Both are read-only
+   and take about 6 s for 30 packages, so the rows are computed by a button press (normal
+   evaluation) and the Dynamic only draws them (dynamic-panel-render-cost).
+   From the list: ClaudeUpdateDocumentation runs in a new notebook of its own (it writes its progress
+   into EvaluationNotebook[], which must not be the list window), PackageCommit goes through
+   PackageCommitPlan + a confirmation dialog with the editable message, and the GitHub history
+   (GitHubCommitDataset) opens in a new notebook. github.wl / claudecode are reached weakly. *)
+
+iSVRepoFn[name_String] := iSVDiagWeakFunction["GitHubREST`" <> name];
+iSVRepoFnQ[f_] := !(f === None || f === $Failed);
+
+iSVRepoSourceQ[pkg_String] :=
+  Module[{dir = Global`$packageDirectory},
+    StringQ[dir] && !StringContainsQ[pkg, WhitespaceCharacter] &&   (* conflicted copies *)
+      (FileExistsQ[FileNameJoin[{dir, pkg <> ".wl"}]] ||
+       FileExistsQ[FileNameJoin[{dir, pkg, "PacletInfo.wl"}]])];
+
+(* names whose <name>.wl is listed in another package's upload_manifest "files": an auxiliary module
+   committed with that package (SourceVault_routineplan in SourceVault; a stray GithubRepositories
+   mirror of its own made github.wl list it as a package, 2026-11-02). Read-only; GitHubReadManifest
+   is not used because it writes a manifest when one is missing. *)
+iSVRepoAuxModules[] :=
+  Module[{dir = Global`$packageDirectory},
+    If[!StringQ[dir] || !DirectoryQ[dir], Return[{}, Module]];
+    Union @ Flatten @ Map[
+      Function[m, With[{j = Quiet @ Check[Import[m, "RawJSON"], None]},
+        If[!AssociationQ[j], {},
+          (* only <own>_*.wl: a package bundled in another manifest under its own name stays a package *)
+          With[{own = Lookup[j, "packageName", ""]},
+            If[!StringQ[own] || own === "", {},
+              Select[FileBaseName /@ Select[Replace[Lookup[j, "files", {}], Except[_List] -> {}],
+                  StringQ[#] && ToLowerCase[FileExtension[#]] === "wl" &],
+                StringStartsQ[#, own <> "_"] &]]]]]],
+      FileNames["upload_manifest.json", Select[FileNames["*_info", dir], DirectoryQ]]]];
+
+iSVRepoDocMaxBytes[] := With[{v = iSVDiagWeakValue["ClaudeCode`$ClaudeDocApiMaxBytes"]},
+  If[NumericQ[v] || v === Infinity, v, Infinity]];
+
+iSVRepoRow[r_Association, gate_, diff_, active_, max_] :=
+  Module[{p = r["Package"], g, d, staleA, stale, docsDir, big, docs, act, n},
+    (* judged by the result (AssociationQ below), not by messages: github.wl quiets benign ones itself *)
+    g = Quiet @ gate[p];
+    d = Quiet @ diff[p];
+    staleA = If[AssociationQ[g], Select[Replace[Lookup[g, "StaleDocs", {}], Except[_List] -> {}], AssociationQ], {}];
+    stale = ToString[Lookup[#, "Doc", "?"]] & /@ staleA;
+    docsDir = If[AssociationQ[g], Lookup[g, "DocsDir", None], None];
+    big = If[StringQ[docsDir],
+      Select[stale, With[{f = FileNameJoin[{docsDir, #}]}, FileExistsQ[f] && FileByteCount[f] > max] &], {}];
+    docs = Which[
+      !AssociationQ[g], "Failed",
+      Lookup[g, "Status", ""] === "NoDocs", "NoDocs",
+      stale =!= {}, "Stale",
+      Lookup[g, "Status", ""] === "OK", "OK",
+      True, "Failed"];
+    act = If[iSVRepoFnQ[active], TrueQ[Quiet @ active[p]], False];
+    n = If[AssociationQ[d], Lookup[d, "ChangeCount", Missing[]], Missing[]];
+    <|"Package" -> p, "Repository" -> Lookup[r, "Repository", p], "Owner" -> Lookup[r, "Owner", Automatic],
+      "DocsStatus" -> docs, "StaleDocs" -> stale, "StaleDetail" -> staleA, "TooLargeDocs" -> big,
+      "DocsDir" -> docsDir, "DocUpdateActive" -> act,
+      "DiffStatus" -> If[AssociationQ[d], Lookup[d, "Status", "Failed"], "Failed"],
+      "SnapshotExists" -> AssociationQ[d] && TrueQ[Lookup[d, "SnapshotExists", False]],
+      "Added" -> If[AssociationQ[d], Lookup[d, "Added", {}], {}],
+      "Changed" -> If[AssociationQ[d], Lookup[d, "Changed", {}], {}],
+      "Removed" -> If[AssociationQ[d], Lookup[d, "Removed", {}], {}],
+      "ChangeCount" -> n,
+      "NeedsAttention" -> (stale =!= {} || (IntegerQ[n] && n > 0) || docs === "Failed" ||
+        !(AssociationQ[d] && TrueQ[Lookup[d, "SnapshotExists", False]]))|>];
+
+Options[SourceVaultRepositoryStatus] = {"Packages" -> All};
+SourceVaultRepositoryStatus[opts : OptionsPattern[]] :=
+  Module[{list = iSVRepoFn["GitHubManagedRepositories"], gate = iSVRepoFn["PackageDocsFreshnessGate"],
+          diff = iSVRepoFn["PackageCommitDiff"], active, max, repos, want = OptionValue["Packages"]},
+    If[!iSVRepoFnQ[list] || !iSVRepoFnQ[gate] || !iSVRepoFnQ[diff],
+      Return[Failure["GitHubUnavailable", <|"MessageTemplate" ->
+        iSVDocL["github.wl (GitHubREST) が読み込まれていません。", "github.wl (GitHubREST) is not loaded."]|>], Module]];
+    repos = Select[Replace[Quiet @ list[], Except[_List] -> {}], AssociationQ[#] && StringQ[Lookup[#, "Package", None]] &];
+    repos = Select[repos, iSVRepoSourceQ[#Package] &];
+    With[{aux = iSVRepoAuxModules[]}, repos = Select[repos, !MemberQ[aux, #Package] &]];
+    If[want =!= All, repos = Select[repos, MemberQ[Flatten[{want}], #Package] &]];
+    active = iSVDiagWeakFunction["ClaudeCode`iDocUpdateActiveQ"];
+    max = iSVRepoDocMaxBytes[];
+    SortBy[iSVRepoRow[#, gate, diff, active, max] & /@ repos, {!TrueQ[#NeedsAttention] &, #Package &}]];
+
+(* boxes for a call typed into a notebook (no symbol is created in this file) *)
+iSVRepoStrBox[s_String] := "\"" <> StringReplace[s, {"\\" -> "\\\\", "\"" -> "\\\""}] <> "\"";
+iSVRepoListBox[items_List] := If[items === {}, RowBox[{"{", "}"}], RowBox[{"{", RowBox[Riffle[items, ","]], "}"}]];
+iSVRepoCallBox[head_String, args_List] := RowBox[{head, "[", RowBox[Riffle[args, ","]], "]"}];
+
+(* evaluate a call in a new notebook of its own, as if typed there *)
+iSVRepoRunInNotebook[title_String, boxes_] :=
+  Module[{nb = Quiet @ CreateDocument[{}, WindowTitle -> title]},
+    If[!MatchQ[nb, _NotebookObject], Return[$Failed, Module]];
+    NBAccess`NBInsertAndEvaluateInput[nb, boxes];
+    nb];
+
+iSVRepoDocUpdateBoxes[pkg_String, targets_List] :=
+  iSVRepoCallBox["ClaudeUpdateDocumentation",
+    Join[{iSVRepoStrBox[pkg]},
+      If[targets === {}, {}, {RowBox[{"TargetFiles", "->", iSVRepoListBox[iSVRepoStrBox /@ targets]}]}]]];
+
+(* returns a status line for the view *)
+iSVRepoDocUpdate[row_Association] :=
+  Module[{pkg = row["Package"], targets, big = row["TooLargeDocs"], ok, nb},
+    If[TrueQ[row["DocUpdateActive"]],
+      Return[iSVDocL[pkg <> " のドキュメント更新は進行中です。", "A documentation update of " <> pkg <> " is running."], Module]];
+    If[iSVDiagWeakFunction["ClaudeCode`ClaudeUpdateDocumentation"] === None,
+      Return[iSVDocL["claudecode が読み込まれていません。", "claudecode is not loaded."], Module]];
+    targets = Complement[row["StaleDocs"], big];
+    If[row["StaleDocs"] =!= {} && targets === {},
+      Return[iSVDocL["古いドキュメントはどれも大きすぎて自動では更新できません (手で更新): ",
+        "Every stale document is too large to regenerate (update by hand): "] <> StringRiffle[big, ", "], Module]];
+    ok = ChoiceDialog[Column[{
+        Style[pkg <> iSVDocL[" のドキュメントを更新します", ": update the documentation"], Bold],
+        iSVDocL["対象: ", "Target: "] <> If[targets === {}, iSVDocL["自動判定 (前回の更新からの変更)", "automatic (changes since the last update)"],
+          StringRiffle[targets, ", "]],
+        If[big =!= {}, Style[iSVDocL["大きすぎて対象外 (手で更新): ", "Too large, left out (update by hand): "] <>
+          StringRiffle[big, ", "], RGBColor[0.8, 0.35, 0.]], Nothing],
+        iSVDocL["LLM を使い、外部プロセスで数分かかります。進捗は新しいノートブックに出ます。",
+          "Uses the LLM in an external process (a few minutes). Progress goes to a new notebook."]}, Spacings -> 0.6],
+      {iSVDocL["更新する", "Update"] -> True, iSVDocL["やめる", "Cancel"] -> False},
+      WindowTitle -> iSVDocL["ドキュメント更新", "Update documentation"]];
+    If[!TrueQ[ok], Return["", Module]];
+    nb = iSVRepoRunInNotebook[iSVDocL["ドキュメント更新: ", "Documentation update: "] <> pkg,
+      iSVRepoDocUpdateBoxes[pkg, targets]];
+    If[MatchQ[nb, _NotebookObject],
+      iSVDocL[pkg <> " のドキュメント更新を始めました (新しいノートブック)。終わったら [更新] で確かめてください。",
+        "Started the documentation update of " <> pkg <> " (new notebook). Press [Refresh] when it is done."],
+      iSVDocL["ノートブックを開けませんでした。", "Could not open a notebook."]]];
+
+iSVRepoHistory[pkg_String] :=
+  If[MatchQ[iSVRepoRunInNotebook[iSVDocL["コミット履歴: ", "Commit history: "] <> pkg,
+       iSVRepoCallBox["GitHubCommitDataset", {iSVRepoStrBox[pkg]}]], _NotebookObject],
+    "", iSVDocL["ノートブックを開けませんでした。", "Could not open a notebook."]];
+
+iSVRepoFileList[label_String, files_List] :=
+  If[files === {}, Nothing,
+    Style[label <> " (" <> ToString[Length[files]] <> "): " <> StringRiffle[Take[files, UpTo[12]], ", "] <>
+      If[Length[files] > 12, ", …", ""], 10]];
+
+(* the commit dialog: plan summary + editable message. Returns the message or $Canceled *)
+iSVRepoCommitDialog[pkg_String, plan_Association] :=
+  Module[{diff = Replace[Lookup[plan, "Diff", <||>], Except[_Association] -> <||>],
+          lint = Replace[Lookup[plan, "PolicyLint", <||>], Except[_Association] -> <||>], m0},
+    m0 = Replace[Lookup[plan, "CommitMessage", ""], Except[_String] -> ""];
+    DialogInput[
+      DynamicModule[{m = m0},
+        Column[{
+          Style[pkg <> iSVDocL[" をコミットします", ": commit"], Bold, 13],
+          Style[ToString[Lookup[diff, "Summary", ""]], 10, GrayLevel[0.35]],
+          iSVRepoFileList[iSVDocL["追加", "Added"], Replace[Lookup[diff, "Added", {}], Except[_List] -> {}]],
+          iSVRepoFileList[iSVDocL["変更", "Changed"], Replace[Lookup[diff, "Changed", {}], Except[_List] -> {}]],
+          iSVRepoFileList[iSVDocL["削除", "Removed"], Replace[Lookup[diff, "Removed", {}], Except[_List] -> {}]],
+          If[lint === <||>, Nothing,
+            Style[iSVDocL["ポリシー検査 (前回コミットより増えた検出): Error ", "Policy lint (new since the last commit): Error "] <>
+              ToString[Lookup[lint, "NewErrors", 0]] <> iSVDocL["、要確認 ", ", Review "] <> ToString[Lookup[lint, "NewReview", 0]] <>
+              StringJoin[("\n  " <> FileNameTake[ToString[Lookup[#, "File", "?"]]] <> ":" <> ToString[Lookup[#, "Line", "?"]] <>
+                " " <> ToString[Lookup[#, "RuleID", "?"]]) & /@ Take[Select[Replace[Lookup[lint, "New", {}], Except[_List] -> {}],
+                  AssociationQ], UpTo[5]]],
+              10, If[TrueQ[Lookup[lint, "NewErrors", 0] > 0], RGBColor[0.8, 0.15, 0.15], GrayLevel[0.3]]]],
+          Style[iSVDocL["コミットメッセージ (直せます)", "Commit message (editable)"], Bold, 10],
+          InputField[Dynamic[m], String, FieldSize -> {60, {2, 6}}],
+          Row[{DefaultButton[iSVDocL["コミット", "Commit"], DialogReturn[m]], "  ", CancelButton[iSVDocL["やめる", "Cancel"], DialogReturn[$Canceled]]}]},
+          Spacings -> 0.7]],
+      WindowTitle -> iSVDocL["コミット: ", "Commit: "] <> pkg]];
+
+(* PackageCommitPlan -> dialog -> PackageCommit[..., "DryRun" -> False]. Returns a status line *)
+iSVRepoCommit[row_Association] :=
+  Module[{pkg = row["Package"], planF = iSVRepoFn["PackageCommitPlan"], commitF = iSVRepoFn["PackageCommit"],
+          plan, st, m, r},
+    If[!iSVRepoFnQ[planF] || !iSVRepoFnQ[commitF],
+      Return[iSVDocL["github.wl が読み込まれていません。", "github.wl is not loaded."], Module]];
+    plan = Quiet @ planF[pkg];   (* by the result: the plan warns (PackageCommit::policylint) by design *)
+    st = If[AssociationQ[plan], Lookup[plan, "Status", "?"], "Failed"];
+    Switch[st,
+      "NoChange", iSVDocL[pkg <> " に前回コミットからの変更はありません。", pkg <> " has no change since the last commit."],
+      "Blocked",
+        With[{stale = ToString[Lookup[#, "Doc", "?"]] & /@ Select[Replace[Lookup[plan, "StaleDocs", {}], Except[_List] -> {}], AssociationQ],
+              ack = Replace[Lookup[plan, "AckLossFiles", {}], Except[_List] -> {}]},
+          Which[
+            stale =!= {},
+              If[TrueQ[ChoiceDialog[
+                  pkg <> iSVDocL[" はドキュメントが古いのでコミットできません: ", ": stale documentation blocks the commit: "] <>
+                    StringRiffle[stale, ", "] <> iSVDocL["\n先にドキュメントを更新しますか。", "\nUpdate the documentation first?"],
+                  {iSVDocL["ドキュメント更新へ", "Update docs"] -> True, iSVDocL["やめる", "Cancel"] -> False}]],
+                iSVRepoDocUpdate[Join[row, <|"StaleDocs" -> stale|>]],
+                iSVDocL["コミットを止めました (ドキュメントが古い)。", "Commit stopped (stale documentation)."]],
+            ack =!= {},
+              iSVDocL["README の「## 謝辞」節が消えるためコミットを止めました: ", "Commit stopped: the README acknowledgements would be removed: "] <>
+                StringRiffle[ToString /@ ack, ", "],
+            True, iSVDocL["コミットが止められました: ", "Commit blocked: "] <> ToString[Short[plan, 2]]]],
+      "OK",
+        m = iSVRepoCommitDialog[pkg, plan];
+        If[!StringQ[m] || StringTrim[m] === "",
+          Return[iSVDocL["コミットをやめました。", "Commit cancelled."], Module]];
+        r = Quiet @ commitF[pkg, "DryRun" -> False, "MessageGenerator" -> m];
+        If[AssociationQ[r] && Lookup[r, "Status", ""] === "Committed",
+          iSVDocL[pkg <> " をコミットしました。", "Committed " <> pkg <> "."],
+          iSVDocL[pkg <> " をコミットできませんでした: ", "Could not commit " <> pkg <> ": "] <>
+            If[AssociationQ[r], ToString[Lookup[r, "Status", "?"]] <> " " <>
+              StringTake[ToString[Lookup[r, "Reason", Lookup[r, "Error", ""]]], UpTo[200]], ToString[r]]],
+      _, iSVDocL["コミットの準備に失敗しました: ", "Could not prepare the commit: "] <> st]];
+
+SetAttributes[iSVRepoGuard, HoldAll];
+iSVRepoGuard[busy_, msg_, startMsg_, body_] :=
+  If[TrueQ[busy],
+    msg = iSVDocL["前の処理が終わるまでお待ちください。", "Please wait for the previous action."],
+    busy = True; msg = startMsg; FinishDynamic[];
+    WithCleanup[iSVDocHold[body], busy = False]];
+
+(* recompute one package's row in place *)
+SetAttributes[iSVRepoRefreshOne, HoldRest];
+iSVRepoRefreshOne[pkg_String, rows_] :=
+  With[{new = SourceVaultRepositoryStatus["Packages" -> {pkg}]},
+    If[ListQ[new] && Length[new] === 1,
+      rows = Replace[rows, a_Association /; a["Package"] === pkg :> First[new], {1}]]];
+
+iSVRepoDocsCell[r_Association, ff_] := Which[
+  TrueQ[r["DocUpdateActive"]], iSVRepoChip[iSVDocL["更新中", "Updating"], RGBColor[0.15, 0.4, 0.75]],
+  r["DocsStatus"] === "OK", iSVRepoChip["OK", RGBColor[0.15, 0.55, 0.3]],
+  r["DocsStatus"] === "NoDocs", Style[iSVDocL["docs なし", "no docs"], 10, GrayLevel[0.5], FontFamily -> ff],
+  r["DocsStatus"] === "Stale",
+    Tooltip[Row[{iSVRepoChip[iSVDocL["古い ", "stale "] <> ToString[Length[r["StaleDocs"]]], RGBColor[0.85, 0.5, 0.]],
+        If[r["TooLargeDocs"] =!= {}, Style[iSVDocL[" (大)", " (large)"], 10, RGBColor[0.8, 0.35, 0.]], ""]}],
+      StringRiffle[r["StaleDocs"], ", "]],
+  True, iSVRepoChip[iSVDocL["失敗", "failed"], RGBColor[0.8, 0.15, 0.15]]];
+
+iSVRepoChip[label_String, color_] := Framed[Style[label, 10, Bold, White], Background -> color,
+  FrameStyle -> None, RoundingRadius -> 3, FrameMargins -> {{4, 4}, {1, 1}}];
+
+iSVRepoChangesCell[r_Association, ff_] := Which[
+  !TrueQ[r["SnapshotExists"]], iSVRepoChip[iSVDocL["未コミット", "never committed"], RGBColor[0.55, 0.35, 0.65]],
+  !IntegerQ[r["ChangeCount"]], iSVRepoChip[iSVDocL["失敗", "failed"], RGBColor[0.8, 0.15, 0.15]],
+  r["ChangeCount"] === 0, Style[iSVDocL["なし", "none"], 10, GrayLevel[0.5], FontFamily -> ff],
+  True, Row[{iSVRepoChip[ToString[r["ChangeCount"]], RGBColor[0.3, 0.45, 0.62]],
+    Style[" " <> StringRiffle[DeleteCases[{
+        If[r["Added"] =!= {}, iSVDocL["追加 ", "+"] <> ToString[Length[r["Added"]]], Nothing],
+        If[r["Changed"] =!= {}, iSVDocL["変更 ", "~"] <> ToString[Length[r["Changed"]]], Nothing],
+        If[r["Removed"] =!= {}, iSVDocL["削除 ", "-"] <> ToString[Length[r["Removed"]]], Nothing]}, Nothing], " "],
+      10, GrayLevel[0.35], FontFamily -> ff]}]];
+
+SetAttributes[iSVRepoRowCells, HoldRest];
+iSVRepoRowCells[r_Association, rows_, sel_, msg_, busy_, ff_] :=
+  With[{pkg = r["Package"], rr = r},
+    {Tooltip[Style[pkg, 11, Bold, FontFamily -> ff],
+       iSVDocL["リポジトリ: ", "Repository: "] <> ToString[r["Repository"]]],
+     iSVRepoDocsCell[r, ff],
+     iSVRepoChangesCell[r, ff],
+     Row[{
+       Button[Style[iSVDocL["詳細", "Details"], 10, FontFamily -> ff], sel = If[sel === pkg, None, pkg],
+         Method -> "Queued"],
+       If[r["DocsStatus"] =!= "NoDocs",
+         Button[Style[iSVDocL["ドキュメント更新", "Update docs"], 10, FontFamily -> ff],
+           iSVRepoGuard[busy, msg, iSVDocL["確認しています…", "Confirming…"], msg = iSVRepoDocUpdate[rr]],
+           Method -> "Queued"], Nothing],
+       If[(IntegerQ[r["ChangeCount"]] && r["ChangeCount"] > 0) || !TrueQ[r["SnapshotExists"]],
+         Button[Style[iSVDocL["コミット…", "Commit…"], 10, FontFamily -> ff],
+           iSVRepoGuard[busy, msg,
+             iSVDocL["コミットの準備中 (メッセージ作成・ポリシー検査、1 分ほど)…",
+               "Preparing the commit (message, policy lint; about a minute)…"],
+             msg = iSVRepoCommit[rr]; iSVRepoRefreshOne[pkg, rows]],
+           Method -> "Queued"], Nothing],
+       Button[Style[iSVDocL["履歴", "History"], 10, FontFamily -> ff],
+         iSVRepoGuard[busy, msg, iSVDocL["履歴を開いています…", "Opening the history…"], msg = iSVRepoHistory[pkg]],
+         Method -> "Queued"],
+       ""}, " "]}];
+
+iSVRepoDetail[rows_List, sel_, ff_] :=
+  With[{r = SelectFirst[rows, #Package === sel &, None]},
+    If[!AssociationQ[r], "",
+      Framed[Column[{
+        Style[r["Package"] <> "  (" <> ToString[r["Repository"]] <> ")", Bold, 12, FontFamily -> ff],
+        If[r["StaleDetail"] =!= {},
+          Column[Style[ToString[Lookup[#, "Doc", "?"]] <> iSVDocL["  がソース  ", "  older than  "] <>
+              ToString[Lookup[#, "Wl", "?"]] <> iSVDocL["  より古い", ""] <>
+              If[MemberQ[r["TooLargeDocs"], ToString[Lookup[#, "Doc", ""]]],
+                iSVDocL["  (128 KB 超・自動更新しない)", "  (over the size limit, not regenerated)"], ""],
+              10, FontFamily -> ff] & /@ r["StaleDetail"]], Nothing],
+        iSVRepoFileList[iSVDocL["追加", "Added"], r["Added"]],
+        iSVRepoFileList[iSVDocL["変更", "Changed"], r["Changed"]],
+        iSVRepoFileList[iSVDocL["削除", "Removed"], r["Removed"]],
+        If[!TrueQ[r["SnapshotExists"]],
+          Style[iSVDocL["GithubRepositories にミラーがありません (まだコミットしていない)。",
+            "No mirror in GithubRepositories (never committed)."], 10, GrayLevel[0.4], FontFamily -> ff], Nothing]},
+        Spacings -> 0.5], FrameStyle -> GrayLevel[0.8], Background -> GrayLevel[0.98], RoundingRadius -> 4,
+        FrameMargins -> 8]]];
+
+SetAttributes[iSVRepoTable, HoldRest];
+iSVRepoTable[rows0_List, rows_, showAll_, sel_, msg_, busy_, ff_] :=
+  Module[{vis = If[TrueQ[showAll], rows0, Select[rows0, TrueQ[#NeedsAttention] &]]},
+    If[vis === {},
+      Style[iSVDocL["要対応のパッケージはありません ([すべて表示] で全件)。",
+        "Nothing needs attention ([Show all] lists every package)."], Italic, GrayLevel[0.5], FontFamily -> ff],
+      Grid[Prepend[iSVRepoRowCells[#, rows, sel, msg, busy, ff] & /@ vis,
+          Style[#, Bold, 10, FontFamily -> ff] & /@
+            {iSVDocL["パッケージ", "Package"], iSVDocL["ドキュメント", "Docs"],
+             iSVDocL["前回コミットからの変更", "Changes since the last commit"], ""}],
+        Alignment -> {Left, Center}, Spacings -> {1.4, 0.5}, ItemSize -> {{16, 9, 16, 36}},
+        Dividers -> {None, {2 -> GrayLevel[0.7]}}, Background -> {None, {{None, GrayLevel[0.97]}}}]]];
+
+Options[SourceVaultRepositoryStatusView] = {"ShowAll" -> False};
+SourceVaultRepositoryStatusView[opts : OptionsPattern[]] :=
+  With[{ff = iSVDocFont[], rows0 = SourceVaultRepositoryStatus[], all0 = TrueQ[OptionValue["ShowAll"]],
+        at0 = DateString[{"Month", "/", "Day", " ", "Hour24", ":", "Minute"}]},
+    If[FailureQ[rows0], Style[rows0["Message"], RGBColor[0.8, 0.15, 0.15]],
+      DynamicModule[{rows = rows0, showAll = all0, sel = None, msg = "", busy = False, at = at0},
+        Framed[Column[{
+          Row[{Style[iSVDocL["リポジトリの状況", "Repository status"], Bold, 14, FontFamily -> ff], "    ",
+            Button[Style[iSVDocL["更新", "Refresh"], FontFamily -> ff],
+              iSVRepoGuard[busy, msg, iSVDocL["調べています…", "Checking…"],
+                rows = SourceVaultRepositoryStatus[]; at = DateString[{"Month", "/", "Day", " ", "Hour24", ":", "Minute"}];
+                msg = ""], Method -> "Queued"], "   ",
+            Checkbox[Dynamic[showAll]], Style[iSVDocL[" すべて表示", " Show all"], FontFamily -> ff], "   ",
+            Dynamic[Style[iSVDocL["調べた時刻 ", "checked "] <> at <> "  (" <> ToString[Length[rows]] <>
+              iSVDocL[" 件中 要対応 ", " packages, needing attention: "] <>
+              ToString[Count[rows, r_ /; TrueQ[r["NeedsAttention"]]]] <> ")", 10, GrayLevel[0.45], FontFamily -> ff],
+              TrackedSymbols :> {rows, at}]}],
+          Style[iSVDocL["$packageDirectory のパッケージのうち GitHub に登録されたもの。ドキュメント: api.md / api_*.md が対応するソースより古いか。" <>
+              "変更: 前回コミット (GithubRepositories のミラー) との差。ネットワークは使いません。",
+            "Packages in $packageDirectory registered with GitHub. Docs: api.md / api_*.md older than their source. " <>
+              "Changes: difference from the last commit (the GithubRepositories mirror). No network access."],
+            10, GrayLevel[0.45], FontFamily -> ff],
+          Dynamic[If[msg === "", "", Style[msg, 11, RGBColor[0.1, 0.35, 0.6], FontFamily -> ff]], TrackedSymbols :> {msg}],
+          Dynamic[iSVRepoTable[rows, rows, showAll, sel, msg, busy, ff], TrackedSymbols :> {rows, showAll, sel}],
+          Dynamic[iSVRepoDetail[rows, sel, ff], TrackedSymbols :> {rows, sel}]
+        }, Spacings -> 0.8], FrameStyle -> GrayLevel[0.85], RoundingRadius -> 4, FrameMargins -> 10]]]];
+
 (* ---- palette actions ---- *)
 iSVDocOpenReport[topo_] := iSVDocOpenWindow["report", "SystemDoctor",
   SourceVaultSystemDoctorView["IncludeTopology" -> TrueQ[topo]]];
@@ -2980,6 +3327,8 @@ iSVDocOpenShadow[] := iSVDocOpenWindow["shadow", iSVDocL["シャドウ検査", "
           "Fix: remove the qualified reference in the source, then SourceVaultRepairShadowedSystemSymbols[]."],
           10, GrayLevel[0.4]]}],
       True, s]]];
+iSVDocOpenRepos[] := iSVDocOpenWindow["repos", iSVDocL["リポジトリの状況", "Repository status"],
+  SourceVaultRepositoryStatusView[]];
 iSVDocOpenSeparationRuns[] := With[{f = iSVDocClaude["ClaudeSeparationRunsView"]},
   If[f =!= None, f["OpenWindow" -> True]]];
 iSVDocStartSeparation[kind_String, target_] :=
@@ -3013,7 +3362,7 @@ iSVDocOpenFindings[] :=
       DynamicModule[{p = If[MemberQ[pkgs, "claudecode"], "claudecode", First[pkgs]]},
         Column[{Style[iSVDocL["検出一覧を開くパッケージ", "Package to list findings for"], Bold, 13],
           PopupMenu[Dynamic[p], pkgs],
-          Row[{DefaultButton[iSVDocL["開く", "Open"], DialogReturn[p]], "  ", CancelButton[]}]},
+          Row[{DefaultButton[iSVDocL["開く", "Open"], DialogReturn[p]], "  ", CancelButton[iSVDocL["やめる", "Cancel"], DialogReturn[$Canceled]]}]},
           Spacings -> 1]],
       WindowTitle -> iSVDocL["検出一覧", "Findings"]];
     If[StringQ[t],
@@ -3087,6 +3436,10 @@ ShowSystemDoctorPalette[] := (
               iSVDocOpenSeparationRuns[]]],
           iSVDocButton[iSVDocL["検出一覧…", "Findings…"], RGBColor[0.4, 0.45, 0.6], iSVDocOpenFindings[]],
 
+          (* -- repositories: docs freshness and changes since the last commit -- *)
+          iSVDocSection[" リポジトリ", " Repositories"],
+          iSVDocButton[iSVDocL["リポジトリ状況", "Repo status"], RGBColor[0.3, 0.5, 0.42], iSVDocOpenRepos[]],
+
           (* -- watch -- *)
           iSVDocSection[" 監視", " Watch"],
           Dynamic[
@@ -3126,7 +3479,9 @@ iSVDiagRegisterPrivacyContracts[] :=
          {"SourceVaultShadowSanitizeNotebook", "Rewrites shadow symbols in an open notebook in place; returns the notebook object, a cell count and symbol names."},
          {"ShowSystemDoctorPalette", "Opens a button palette; shows only the doctor's global health and opens the diagnostics views / starts separation runs on package source; no store content."},
          {"SourceVaultSystemDoctorView", "Shows the doctor's component health, reason codes and probe messages (operational metadata); no notebook, mail or log content."},
-         {"SourceVaultDiagnosticsLogView", "Shows this machine's diagnostics log (operational events: time, type, component, health, reason code, short summary); no private-store content."}}]];
+         {"SourceVaultDiagnosticsLogView", "Shows this machine's diagnostics log (operational events: time, type, component, health, reason code, short summary); no private-store content."},
+         {"SourceVaultRepositoryStatus", "Reads package sources in $packageDirectory and the GithubRepositories mirror (docs freshness and changed file names); no notebook, mail or vault store."},
+         {"SourceVaultRepositoryStatusView", "Shows SourceVaultRepositoryStatus (package names, stale doc names, changed file names) and starts doc updates / commits of package source the user confirms; no private-store content."}}]];
     Null, Null];
 iSVDiagRegisterPrivacyContracts[];
 
