@@ -50,11 +50,14 @@ vault 配下 (全 root + mail store) のファイルを指す開きっぱなし�
 ### SourceVaultFileStreams[path] → List[stream]
 path (ファイルまたはディレクトリ) 配下の stream に限定する。
 
-### SourceVaultReleaseFileStreams[] → Association
+### SourceVaultReleaseFileStreams[opts] → Association
 vault 配下の開きっぱなし stream を全て Close して OS ファイルハンドルを解放する。書込み操作の途中では呼ばないこと (呼び出し元が使用中の stream も閉じてしまうため、top-level / tick 境界でのみ呼ぶ)。
 → `<|"Status" -> "OK", "Released" -> n, "Files" -> {path, ...}|>`
-### SourceVaultReleaseFileStreams[path] → Association
-対象を path (ファイル/ディレクトリ) 配下に限定して解放する。
+Options: `"MinAgeSeconds" -> 0` (n 秒以上、読み書き位置が動いていない stream だけを閉じる。繰り返し呼ぶ間の位置変化で判定する)
+ScheduledTask / polling tick から呼ぶときは `"MinAgeSeconds"` 指定が必須。tick は評価中のメインカーネルに割り込むため、使用中の stream を閉じるとカーネルが落ちる。
+### SourceVaultReleaseFileStreams[path, opts] → Association
+対象を path (ファイル/ディレクトリ) 配下に限定して解放する。Options は同上。
+例: `SourceVaultReleaseFileStreams["MinAgeSeconds" -> 60]`
 
 ## Digest / Canonicalization
 
@@ -149,6 +152,7 @@ event を append-only event directory に one-event-one-file で commit する�
 event directory の event を新しい順に返す。
 → List[Association]
 Options: `"Limit" -> 100` (取得上限; `All` で全件), `"EventClass" -> All` (class でフィルタ)
+`"EventClass"` が文字列の場合、JSON パース前にクラス名を含まない本文を捨てる (粗い部分一致の事前絞り込み。厳密判定は後段で行うので取りこぼしは無い)。event 総数が多い vault でも EventClass 指定でパース量が減る。ただし全 event ファイルの読み込み自体は発生する。
 
 ## Blob store (§17.12.6)
 
@@ -248,4 +252,4 @@ Options: `"Processes" -> 2` (仮想プロセス数), `"PerProcessEvents" -> 100`
 - 異 host の stale lock は自動回収せず operator review が必要 (`NeedsOperatorRecovery`)。
 - root が未解決な場合、core API は fail-closed する (推測 fallback しない)。
 - blob 読み出し (`SourceVaultReadBlob`) / artifact 内容解決 (`SourceVaultResolveArtifactContent`) は main-kernel sanctioned reader であり、MCP / 低trust projection へは公開しない。生データは必ず PrivacyLevel を伴わせ、欠落時は既定 0.85 に fail-closed する。
-- 開いたままの write stream は Dropbox 同期を止め conflicted copy を生む。top-level / tick 境界で `SourceVaultReleaseFileStreams[]` を呼べる状態を保つこと (書込み操作の途中では呼ばない)。
+- 開いたままの write stream は Dropbox 同期を止め conflicted copy を生む。top-level / tick 境界で `SourceVaultReleaseFileStreams[]` を呼べる状態を保つこと (書込み操作の途中では呼ばない)。ScheduledTask / polling tick から呼ぶ場合は `"MinAgeSeconds"` を指定し、使用中の stream を閉じてカーネルを落とさないこと。

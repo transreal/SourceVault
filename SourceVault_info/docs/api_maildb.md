@@ -198,7 +198,7 @@ agenda.json の Dismissed/NotebookCreated、または返信送信済み (`Source
 ### SourceVaultMailFetchNew[mbox_String, opts]
 IMAP から新着のみ取得し snapshot 化して store に保存する。RecordId で既存と重複排除する (Overwrite->True なら同一 RecordId も再取得・上書き)。既定は LLM 処理なし。取込完了後 PostFetchHooks を実行し各フックの戻り値を結果に載せる (フック失敗は fetch を壊さない)。
 → Association `<|Status, MBox, Fetched, New, Stored, Overwritten, Duplicates, Processed, ProcessMode, PostFetchHooks|>`
-Options: "Period" -> "Latest" ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> Automatic (Automatic はアカウントの "AuthMethod" を $SourceVaultMailSourceProviders で解決して使う。未登録/該当プロバイダ無しなら実IMAP=Python imaplib。関数を直接渡せば注入・headless テスト可), "Inferencer" -> Automatic (実LLM=LM Studio, 注入可), "Persist" -> True, "MaxEmails" -> Automatic, "Overwrite" -> False (True で同一 RecordId の既存メールも再取得し上書き)
+Options: "Period" -> "Latest" ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> Automatic (Automatic はアカウントの "AuthMethod" を $SourceVaultMailSourceProviders で解決して使う。未登録/該当プロバイダ無しなら実IMAP=Python imaplib。関数を直接渡せば注入・headless テsmoke 可), "Inferencer" -> Automatic (実LLM=LM Studio, 注入可), "Persist" -> True, "MaxEmails" -> Automatic, "Overwrite" -> False (True で同一 RecordId の既存メールも再取得し上書き)
 
 ### SourceVaultRegisterPostFetchHook[name_String, f]
 SourceVaultMailFetchNew の取り込み完了時に呼ぶフック `f[mbox, fetchResult]` を登録する。フック失敗は fetch を壊さない。
@@ -411,7 +411,7 @@ SourceVaultMailEnableAutoConfidential[] で装着したフックを解除し、N
 
 ## 横断検索連携 (SourceVaultSummaries provider)
 
-mail は SourceVaultSummaries 横断検索 (eagle/sources 等と混在検索) の provider として自己登録する (`$SourceVaultSummaryProviders["mail"]`、行タイトルアクションは `$iSVRowTitleActions["mail"]`)。`.svmailidx` sidecar のみを走査し本文暗号文はロードしない。共通スキーマ `<|Kind->"mail", Id, URI->"sv://record/<RecordId>", Title(=Subject), Authors(=From), Published, Summary, URL, File, Date, PrivacyLevel|>` へ投影する (Title は件名欠落時 `"(件名無し)"` / 暗号化時 `"(件名無し・暗号化)"`、PrivacyLevel 欠落は fail-safe で 1.0)。行タイトルのクリックは索引行のみを読む窓 (Subject/From/Date/PL/URI) を開く。全文/サマリーの詳細取得は本 API (SourceVaultMailSearchSummary 等) を別途使う。この連携は自動登録のみで公開関数は無い。
+mail は SourceVaultSummaries 横断検索 (eagle/sources 等と混在検索) の provider として自己登録する (`$SourceVaultSummaryProviders["mail"]`、行タイトルアクションは `$iSVRowTitleActions["mail"]`)。`.svmailidx` sidecar のみを走査し本文暗号文はロードしない。共通スキーマ `<|Kind->"mail", Id, URI->"sv://record/<RecordId>", Title(=Subject), Authors(=From), Published, Summary, URL, File, Date, PrivacyLevel|>` へ投影する (Title は件名欠落時 `"(件名無し)"` / 暗号化時 `"(件名無し・暗号化)"`、PrivacyLevel 欠落は fail-safe で 1.0)。行タイトルのクリックは、メール専用の表示関数を使う: タイトル/サマリークリック → SourceVaultMailShowBody (✉ と同じ本文窓、返信/翻訳/アジェンダ操作付き)、「▶ 開く」→ SourceVaultMailThreadNotebook (☰ と同じスレッド窓)。いずれも索引行の ShardKey から必要シャードだけ遅延ロードし、復号できない場合は低漏洩ヘッダ (Subject/From/Date/PL/URI) だけの窓にフォールバックする。全文/サマリーの詳細取得は本 API (SourceVaultMailSearchSummary 等) を別途使う。この連携は自動登録のみで公開関数は無い。
 
 ## 設定変数
 

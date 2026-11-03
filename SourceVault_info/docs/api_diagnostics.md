@@ -30,7 +30,7 @@ Phase 0 スコープ: シンク可用性の弱検出 / 構造化 append-only 診
 ## 診断ログ
 
 ### SourceVaultDiagnosticsLog[record_Association] → Association | Failure
-構造化診断レコード（reason code / component / severity / health / machine tag）を machine-local append-only 診断ログに追記する。格納したレコードを返す。vault root が解決できない場合は Failure。
+構造化診断レコード（reason code / component / severity / health / machine tag）を machine-local append-only 診断ログに追記する（AtUTC / MachineTag を付加）。格納したレコードを返す。vault root が解決できない場合は Failure["VaultRootUnresolved"]、ディレクトリ作成不可は Failure["LogDirUnwritable"]、open 失敗は Failure["LogOpenFailed"]。非 JSON 値（Missing 等）を含むレコードは JSON-safe コピーで再書き込みする。
 
 ### SourceVaultDiagnosticsPublish[event_Association] → Association
 診断 event の bus 入口（issues spec v0.4 §4.2）。canonical diagnostics-log へ記録し、issue DB へ弱結合 fan-out（machine-local outbox への enqueue のみ・登録/分析は writer 側 reconciler が担当）する。mail/FE escalation は行わない（それは SourceVaultDiagnosticsEscalate = Publish + mail policy）。返り値は "IssueSignalQueued" を含む。issues 層自身の障害 event は再投入しない（reentrancy guard）。
@@ -52,16 +52,16 @@ producer spool directory の上書き（既定 Automatic = `$UserBaseDirectory/A
 Wolfram ライセンス容量を実測（$LicenseProcesses / $MaxLicenseProcesses / $MaxLicenseSubprocesses / $LicenseType）。宣言値を信頼しない。ProcessSlotsFree と SubprocessSlotsFree を含む Association（LicenseType, MaxLicenseProcesses, LicenseProcesses, ProcessSlotsFree, MaxLicenseSubprocesses, Subprocesses, SubprocessSlotsFree, MeasuredAtUTC, MachineTag）を返す。取得不能値は Missing["Unavailable"]。
 
 ### SourceVaultDiagnosticsKernelProcessTopology[] → Association
-稼働中の Wolfram kernel プロセスを列挙し各々を分類（Service / MCPServer / FEKernel / Subkernel / PlayerSandbox / FrontEndUI / Other）。Windows は CIM 経由の best-effort、他環境では name-only count に degrade。
+稼働中の Wolfram kernel プロセスを列挙し各々を分類（Service / MCPServer / FEKernel / Subkernel / PlayerSandbox / FrontEndUI / Other）。ClassCounts を含む。Windows は CIM 経由の best-effort、他環境では name-only count に degrade。
 
 ### SourceVaultDiagnosticsReclaimableCapacity[topo_Association] → Association
 ### SourceVaultDiagnosticsReclaimableCapacity[] → Association
-kernel トポロジ（省略時は SourceVaultDiagnosticsKernelProcessTopology[] を計算）を検査し再利用可能なプロセススロット（主に単一共有ゲートウェイへ collapse すべき重複 AgentTools MCP-server kernel）を検出。ReclaimableMCPKernels と recommendation を返す。
+kernel トポロジ（省略時は SourceVaultDiagnosticsKernelProcessTopology[] を計算）を検査し再利用可能なプロセススロット（主に単一共有ゲートウェイへ collapse すべき重複 AgentTools MCP-server kernel）を検出。MCPServerKernels, ReclaimableMCPKernels (= max(0, MCP-1)), ReclaimableProcessSlots, Recommendation, MeasuredAtUTC を返す。
 
 ## システムドクター
 
 ### SourceVaultSystemDoctor[opts]
-Phase 0 のクロスパッケージヘルス集約: ライセンスプール, 再利用可能 MCP 容量, （弱く）既存 service-manager ヘルス, 登録済みプローブ。component スコープのヘルスと GlobalHealth（"OK" | "Degraded" | "Failing"）を返す。Read-only。
+Phase 0 のクロスパッケージヘルス集約: ライセンスプール, 再利用可能 MCP 容量, （弱く）既存 service-manager ヘルス, 登録済みプローブ。component スコープのヘルスと GlobalHealth（"OK" | "Degraded" | "Failing"）を返す。Read-only。プローブの throw / 遅延 / Abort / $Failed / 不正結果は Degraded の "ProbeError" / "ProbeTimeout" / "ProbeBadResult" コンポーネントとなり doctor を落とさない。
 → Association
 Options: "Emit" -> False (診断イベントを emit するか), "IncludeTopology" -> True (kernel-topology CIM プローブを含めるか。False で shell-out を回避)
 
@@ -82,13 +82,13 @@ machine-registry レコード（spec 3.4.1）を当該マシン自身の per-mac
 共有 diagnostics/machines ツリーから登録済み全マシンの registry.json を読む。
 
 ### SourceVaultDiagnosticsReadHeartbeats[] → Association
-各マシンの registry + heartbeat を読み per-machine liveness（OK | Stale | OfflineOrSleeping | Failing | NoHeartbeat）を返す。ExpectedAvailability を尊重し、Intermittent な laptop の stale は Failing でなく OfflineOrSleeping。クロスマシン age は heartbeat monotonic seconds を使用（clock skew の影響を受ける）。
+各マシンの registry + heartbeat を読み per-machine liveness（OK | Stale | OfflineOrSleeping | Failing | NoHeartbeat。age 不明は Unknown）を返す。ExpectedAvailability を尊重し、Intermittent な laptop の stale は Failing でなく OfflineOrSleeping。クロスマシン age は heartbeat monotonic seconds を使用（clock skew の影響を受ける）。
 
 ### SourceVaultDiagnosticsActiveAggregator[] → Association
-active aggregator を選出: 最高 AggregatorPriority を持つ fresh な AggregatorCandidate と standby candidates。
+active aggregator を選出: 最高 AggregatorPriority を持つ fresh（Liveness OK）な AggregatorCandidate と standby candidates。
 
 ### SourceVaultDiagnosticsAggregatorRollup[] → Association
-全マシン heartbeat を読み global rollup（worst-of health, per-machine liveness, problem machines, active aggregator）を返す。cloud peer liveness を fold-in し、cloud channel 経由で見えた peer は Dropbox-synced file heartbeat が遅延していても live として数える。Read-only。共有 rollup ファイルは owner maintenance task のみが書く。
+全マシン heartbeat を読み global rollup（worst-of health, per-machine liveness, problem machines, active aggregator）を返す。cloud peer liveness を fold-in し（CloudPeersConsidered を付加）、cloud channel 経由で見えた peer は Dropbox-synced file heartbeat が遅延していても live として数える。Read-only。共有 rollup ファイルは owner maintenance task のみが書く。
 
 ## Cloud comms（Wolfram Cloud 協調チャネル）
 非接続時は必ず polling fallback。受信メッセージは DATA としてのみ記録し内容を評価しない。
@@ -101,13 +101,13 @@ Options: "Send" -> True (True で Heartbeat メッセージを送信)
 共有 Wolfram Cloud 協調 ChannelObject を ensure して返す（同一 Wolfram アカウントの全マシンが共有）。非接続時は Available->False と polling fallback を返す。
 
 ### SourceVaultDiagnosticsCloudSend[message_Association] → Association
-message（this MachineTag / AtUTC / Type を付加）を協調チャネルへ ChannelSend する。inter-machine の heartbeat / wakeup / negotiation 用。offline 時は no-op fallback。
+message（this MachineTag / AtUTC / Type を付加。既定 Type "Message"）を協調チャネルへ ChannelSend する。inter-machine の heartbeat / wakeup / negotiation 用。offline 時は <|"Sent"->False, "Reason"->"NotCloudConnected", "Fallback"->"SourceVaultPolling"|>。成功時は <|"Sent"->True, "Channel", "Type"|>。
 
 ### SourceVaultDiagnosticsCloudListen[] → Association
-協調チャネルへ冪等に ChannelListen を開始する。受信パケットは DATA ONLY として bounded inbox に記録し（メッセージ内容は決して評価しない）、MessageID で dedup する。
+協調チャネルへ冪等に ChannelListen を開始する。受信パケットは DATA ONLY として bounded inbox に記録し（メッセージ内容は決して評価しない）、MessageID で dedup する。Status: "Listening" | "AlreadyListening" | "Skipped" | "Failed"。
 
-### SourceVaultDiagnosticsCloudStopListen[] → 結果
-本セッションのチャネルリスナを解除する。
+### SourceVaultDiagnosticsCloudStopListen[] → Association
+本セッションのチャネルリスナを解除する。Status: "Stopped" | "NotListening"。
 
 ### SourceVaultDiagnosticsCloudInbox[opts] → List
 受信済みチャネルメッセージ（MessageID / FromWolframID / FromMachineTag / Type / Message / ReceivedAtUTC）を返す。
@@ -170,14 +170,14 @@ Options: "ShowAll" -> False
 
 ### SourceVaultDiagnosticsRegisterProbe[id_String, probeFn_] → id
 プロデューサヘルスプローブを id で登録。probeFn は SourceVaultSystemDoctor から 0-arg で呼ばれ、health string / "Health" キーを持つ Association / component-name -> <|"Health"->...|> の Association のいずれかを返さねばならない。同一 id の再登録は置換。レジストリは本ファイルの Get[] 再実行を生き残る（プロデューサは自身のロード時に弱く登録）。id を返す。
-ロード時に組込み登録: "LogCoverage"（SourceVaultDiagnosticsLogCoverageProbe）, "Codex"（ClaudeCode`ClaudeCodexHealthProbe を弱く呼ぶ; claudecode 未ロードなら OK/NotApplicable、lookup 失敗（一時的障害）なら OK/ProbeSkipped）, "Separation"（2026-11-01。ClaudeCode`ClaudeSeparationHealthProbe を同じ形で弱く呼ぶ。ClaudeCheckSeparation / ClaudeFixSeparation の実行記録だけを読み、閉じられていない途切れた実行があれば Degraded / SeparationRunAbandoned、24 時間以内の失敗があれば Degraded / SeparationRunFailed）。
+ロード時に組込み登録: "LogCoverage"（SourceVaultDiagnosticsLogCoverageProbe）, "Codex"（ClaudeCode`ClaudeCodexHealthProbe を弱く呼ぶ; claudecode 未ロードなら OK/NotApplicable、lookup 失敗（一時的障害）なら OK/ProbeSkipped）, "Separation"（2026-11-01。ClaudeCode`ClaudeSeparationHealthProbe を同じ形で弱く呼ぶ。ClaudeCheckSeparation / ClaudeFixSeparation の実行記録だけを読み、閉じられていない途切れた実行があれば Degraded / SeparationRunAbandoned、24 時間以内の失敗があれば Degraded / SeparationRunFailed）, "system-symbol-shadow"（SourceVaultShadowedSystemSymbols が非空なら Degraded / SystemSymbolShadowed、スキャン失敗は Degraded / ProbeError）。
 
 ### SourceVaultDiagnosticsListProbes[] → List
 登録済み診断プローブ id のリストを返す。
 
 ### SourceVaultDiagnosticsLogCoverageProbe[opts] → Association
 SystemDoctor プローブ "LogCoverage"。PC 上の LLM 活動の独立証拠（Claude Code project フォルダ claude-project-<unixtime>-*, Codex codex_project_* フォルダ）を、canonical diagnostics log + local spool の LLMCall レコードと provider × ローカル日で突き合わせる（直近 WindowDays）。活動 >= MinActivity かつ records < MinCoverage × 活動 の日は gap（Degraded, ReasonCode "LLMLogGap"）。spool が IngestStallHours 以上 un-ingested なら Degraded（"LogIngestStalled"）、ingest が報告した corrupt 行でも Degraded（"LogCorruptLines"）。canonical log が 30 日間空の PC（SourceVault service なし）では NotApplicable。Read-only、10 分キャッシュ。
-Options: "WindowDays" -> 7 (対象日数), "MinActivity" -> 3 (gap 判定の最小活動数), "MinCoverage" -> 0.25 (最小カバレッジ比), "IngestStallHours" -> 6 (ingest 停滞判定時間), "UseCache" -> True (キャッシュ使用; 下記 override 指定時は無効), "LogPath" -> Automatic, "SpoolDir" -> Automatic, "ClaudeProjectsDir" -> Automatic, "CodexWorkingDir" -> Automatic, "Now" -> Automatic (テスト用 override)
+Options: "WindowDays" -> 7 (対象日数), "MinActivity" -> 3 (gap 判定の最小活動数), "MinCoverage" -> 0.25 (最小カバレッジ比), "IngestStallHours" -> 6 (ingest 停滞判定時間), "UseCache" -> True (キャッシュ使用; 下記 override 指定時は無効), "LogPath" -> Automatic, "SpoolDir" -> Automatic, "ClaudeProjectsDir" -> Automatic, "CodexWorkingDir" -> Automatic, "Now" -> Automatic (テスト用 override。LogPath / SpoolDir / ClaudeProjectsDir / CodexWorkingDir / Now のいずれかを指定するとキャッシュを使わない)
 
 ## シンボル shadow 診断
 
@@ -195,13 +195,13 @@ Repair はセッション内の症状のみを直す。根本原因は SourceVau
 
 ### SourceVaultShadowScanFiles[path | {paths..}, opts] → List
 notebook / パッケージファイル / Put・WXF キャッシュ（ディレクトリを渡すと *.nb, *.m, *.wl, *.wls, *.wxf, *.mx を再帰探索）を、永続化された shadow シンボル（built-in と同名の完全修飾トークン Ctx`Name, 例: 評価済み Dataset 出力セル内の `GitHubREST`MaxItems`）についてバイトレベルのトークン検索でスキャンする。評価は一切行わずシンボルも生成しない。
-→ `<|"File", "Symbol", "Context", "Name", "Count", "Active"|>` のリスト。"Active" -> True は当該 context が現在の $ContextPath 上で System` より前にあること（= そのファイルをロード/表示すると shadow が再生成される）を意味する。"Active" -> False（OutputSizeLimit`Skeleton 等）は WL 内部由来で無害。
+→ `<|"File", "Symbol", "Context", "Name", "Count", "Active"|>` のリスト。"Active" -> True は当該 context が現在の $ContextPath 上で System` より前にあること（= そのファイルをロード/表示すると shadow が再生成される。Front End は保存済み出力を描画のたびに kernel へ送る）を意味する。"Active" -> False（OutputSizeLimit`Skeleton 等）は WL 内部由来で無害。
 Options: "Names" -> Automatic (走査対象を特定の short name に限定)
 
 ### SourceVaultShadowSanitizeFile[file_String, opts] → Association | Failure
 SourceVaultShadowScanFiles が検出した永続 shadow トークンを file 内で書き換える（Ctx`Name -> Name）。テキストファイル（.nb/.m/.wl/.wls）はトークン部分以外バイト完全一致で書き換え、.wxf は長さを考慮したバイト列書き換え（再 Import で検証、非圧縮 WXF のみ対応）。既定で書き換え前に `<file>.shadowbak-<timestamp>` バックアップを作成。既定では Active なトークンのみ書き換える。Front End で開いているノートブックは Failure["NotebookOpen"]（代わりに SourceVaultShadowSanitizeNotebook を使う）。.mx（DumpSave）は Failure["Unsupported"]。
 → `<|"File", "Replaced" -> <|token -> count|>, "Backup"|>`
-Options: "Contexts" -> Automatic (Active なトークンのみ; {ctx..} で明示指定または All), "Backup" -> True (False でバックアップをスキップ), "Names" -> Automatic (対象 short name を限定)
+Options: "Contexts" -> Automatic (Active なトークンのみ; {ctx..} で明示指定（github.wl 未ロードの headless kernel 等）または All), "Backup" -> True (False でバックアップをスキップ), "Names" -> Automatic (対象 short name を限定)
 
 ### SourceVaultShadowSanitizeNotebook[nbObject, opts] → Association
 ### SourceVaultShadowSanitizeNotebook[opts] → Association
@@ -221,20 +221,20 @@ shadow watch を無効化し、（自分がインストールしたものであ�
 ## Polling Tick
 
 ### SourceVaultDiagnosticsTick[opts] → String | Association
-共有 polling tick から呼ばれる軽量 body。throttle あり（default 60s; 期間内は <|"Status"->"Throttled", "SinceLastSeconds"->..|>）。各実行で軽量 machine heartbeat（topology なし）を書き、heartbeat の doctor 結果から監視対象コンポーネント（log coverage, Codex）を warning へ escalate し、aborted write により開いたままの stray vault file stream を解放し（SourceVaultReleaseFileStreams; 開いたハンドルは Dropbox sync をブロックし conflicted copy を招くため。解放時は StrayStreamsReleased を記録）、comprehensive doctor が freshness window（90000 秒 = 24h+1h grace）内に走っていなければ DoctorStale を emit する（ログは 1 日 1 回まで）。kernel を spawn せず Front End にも触れない。短い status を返す。手動呼び出しも安全。
+共有 polling tick から呼ばれる軽量 body。throttle あり（default 60s; 期間内は <|"Status"->"Throttled", "SinceLastSeconds"->..|>）。各実行で軽量 machine heartbeat（topology なし）を書き、heartbeat の doctor 結果から監視対象コンポーネント（log coverage, Codex, WebAccessReview）を warning へ escalate し（(component, reason) ごとに 24h に 1 回、issue DB signal・status band/mail・FE 通知。回復でキーを忘れ再発時は再警告。プローブ自身の異常は ProbeFault として別文言）、aborted write により開いたままの stray vault file stream を解放し（SourceVaultReleaseFileStreams の "MinAgeSeconds" 指定: 10 分アイドルのストリームのみ。tick は main evaluation を interrupt するため使用中ストリームを閉じると kernel がクラッシュする; 開いたハンドルは Dropbox sync をブロックし conflicted copy を招くため。解放時は StrayStreamsReleased を記録）、comprehensive doctor が freshness window（90000 秒 = 24h+1h grace）内に走っていなければ DoctorStale を emit する（ログは 1 日 1 回まで）。kernel を spawn せず Front End にも触れない。短い status を返す。手動呼び出しも安全。
 Options: "IntervalSeconds" -> 60 (body の throttle 秒数), "Force" -> False (True で throttle を無視)
 
-### SourceVaultDiagnosticsStartTick[opts] → 登録結果
-claudecode の共有 polling base（ClaudeRegisterPollingTick）に SourceVaultDiagnosticsTick を弱く登録する。claudecode 不在時は no-op。独自の ScheduledTask は作らない（rule 95）。ロード時に start はしないが、Front End kernel では末尾のロード後フックにより自動 start される（service / script kernel は対象外）。
+### SourceVaultDiagnosticsStartTick[opts] → Association
+claudecode の共有 polling base（ClaudeRegisterPollingTick）に SourceVaultDiagnosticsTick を弱く登録する（Phase "SourceVaultDiagnostics", Priority 1, Suppressible, RunInline）。claudecode 不在時は <|"Status"->"ClaudeCodeAbsent"|> で no-op。成功時は <|"Status"->"Registered", "Key", "IntervalSeconds"|>。独自の ScheduledTask は作らない（rule 95）。ロード時に start はしないが、Front End kernel では末尾のロード後フックにより自動 start される（service / script kernel は対象外）。
 Options: "IntervalSeconds" -> 60 (body の throttle 秒数)
 
-### SourceVaultDiagnosticsStopTick[] → 結果
-共有 polling base から軽量診断 tick を解除する。
+### SourceVaultDiagnosticsStopTick[] → Association
+共有 polling base から軽量診断 tick を解除する（Status "Unregistered" | "ClaudeCodeAbsent"）。
 
 ## エスカレーション / メール
 
 ### SourceVaultDiagnosticsEscalate[event_Association] → Association
-診断イベントにエスカレーションポリシーを適用。常にイベントを記録し（Type "DiagnosticsEscalation"）、issue DB へ fan-out（"IssueSignalQueued"）、High / Critical / Failing（または Escalate->True）イベントは（(Component, ReasonCode) 単位の dedup window を条件に）通知を route する。非通知時は <|"Escalated"->False, "Reason"->"CoalescedWithinWindow"|"BelowThreshold", "FEPresent", "Recorded", "IssueSignalQueued"|>。Front End 存在時はイベントを status-band / message-window reader 向けに記録しメールは deferred fallback 扱い（event の "ForceMail"->True で上書き）、なければメールが primary チャネル。メールは SourceVaultDiagnosticsConfigureMail で実送信が有効になるまで DRY-RUN がデフォルト（intent のみ記録、SMTP なし）。メール body は cloud-safe metadata のみ（reason code / component / machine / time / SummaryURI）で raw error text や private data を含まない。実送信は per-event dedup に加えグローバル rate limit（最小送信間隔 60 秒・1 時間あたり 6 通）を課す。routing summary を返す。
+診断イベントにエスカレーションポリシーを適用。常にイベントを記録し（Type "DiagnosticsEscalation"）、issue DB へ fan-out（"IssueSignalQueued"）、High / Critical / Failing（または Escalate->True）イベントは（(Component, ReasonCode) 単位の dedup window を条件に）通知を route する。非通知時は <|"Escalated"->False, "Reason"->"CoalescedWithinWindow"|"BelowThreshold", "FEPresent", "Recorded", "IssueSignalQueued"|>。Front End 存在時はイベントを status-band / message-window reader 向けに記録しメールは deferred fallback 扱い（event の "ForceMail"->True で上書き）、なければメールが primary チャネル。メールは SourceVaultDiagnosticsConfigureMail で実送信が有効になるまで DRY-RUN がデフォルト（intent のみ記録、SMTP なし）。メール body は cloud-safe metadata のみ（reason code / component / machine / time / SummaryURI）で raw error text や private data を含まない。実送信は per-event dedup に加えグローバル rate limit（最小送信間隔 60 秒・1 時間あたり 6 通; 違反時は "RateLimited:MinInterval" / "RateLimited:MaxPerHour"）を課す。routing summary を返す。
 
 ### SourceVaultDiagnosticsConfigureMail[config_Association] → Association
 診断通知メール設定を vault config（config/diagnostics-mail.json）に set & persist し、recipient をソースにハードコードしない（rule 03）。effective config を返す。

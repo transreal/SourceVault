@@ -913,9 +913,13 @@ SourceVaultMailStoreSave[OptionsPattern[]] :=
     written = (iSVMDWriteShard[#, Lookup[$iSVMDShardMembers, #, {}]]) & /@ keys;
     $iSVMDDirtyShards = <||>;
     (* 書込み完了後、store 配下に残る stray stream を一括解放 (ハンドル保持は
-       Dropbox 同期を止めるため、保存の区切りで必ず開放する) *)
+       Dropbox 同期を止めるため、保存の区切りで開放する)。
+       2026-11-02: 保存はボタンや tick の割り込みでも走り、そのとき割り込まれた評価が別 shard を
+       読込中だと Close でカーネルが落ちる。一括解放は位置が 10 分動かない stream に限る
+       (書込む shard 自身は iSVMDWriteShard の path 限定解放で即時に片付く)。 *)
     If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0,
-      Quiet @ SourceVault`SourceVaultReleaseFileStreams[SourceVaultMailStoreRoot[]]];
+      Quiet @ SourceVault`SourceVaultReleaseFileStreams[SourceVaultMailStoreRoot[],
+        "MinAgeSeconds" -> 600]];
     <|"Status" -> "Saved", "Shards" -> Length[keys], "Count" -> Total[Select[written, IntegerQ]]|>];
 
 iSVMDReadShardFile[path_String] :=

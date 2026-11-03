@@ -94,7 +94,10 @@ SourceVaultReleaseFileStreams::usage =
   "OS ファイルハンドルを解放する (保持中は Dropbox が同期できず conflicted copy の原因になる)。\n" <>
   "SourceVaultReleaseFileStreams[path] は対象をファイル/ディレクトリ配下に限定する。\n" <>
   "戻り値 <|\"Status\",\"Released\",\"Files\"|>。書込み操作の途中では呼ばないこと\n" <>
-  "(呼び出し元が使用中の stream も閉じてしまうため、top-level / tick 境界でのみ呼ぶ)。";
+  "(呼び出し元が使用中の stream も閉じてしまうため、top-level でのみ呼ぶ)。\n" <>
+  "オプション \"MinAgeSeconds\" -> n (既定 0) を指定すると、繰り返し呼ぶ間に読み書き位置が\n" <>
+  "n 秒以上動いていない stream だけを閉じる。ScheduledTask / polling tick から呼ぶときは必須:\n" <>
+  "tick は評価中のメインカーネルに割り込むので、使用中の stream を閉じるとカーネルが落ちる。";
 
 (* ---- digest / snapshot store (§8.2a) ---- *)
 SourceVaultCanonicalizeForDigest::usage =
@@ -385,7 +388,12 @@ SourceVaultStorageDir[class_String] := Module[{pv},
    カーネル終了まで残る。開いた write ハンドルは Dropbox 同期を止め、複数マシンが
    同じ shard を書く mail store 等で conflicted copy を生む (kernel kill で一斉同期
    する現象の正体)。ここで Streams[] を走査して vault 配下の stray stream を Close する。
-   呼び出しは top-level / tick 境界のみ (書込み中の呼び出し元 stream も閉じるため)。 *)
+   呼び出しは top-level のみ (書込み中の呼び出し元 stream も閉じるため)。
+
+   2026-11-02: tick は「境界」ではない。ScheduledTask は評価中のメインカーネルに割り込むので、
+   ReadByteArray の途中の stream を tick から Close すると復帰後にカーネルが落ちる
+   (WolframRTL_Kernel.dll の AV。診断 tick の StrayStreamsReleased と同じ秒に 3 回クラッシュ)。
+   tick からは "MinAgeSeconds" を付けて、位置が動かないまま残っている stream だけを閉じる。 *)
 
 iStreamPathCanon[p_String] := Module[{e},
   e = Quiet @ Check[ExpandFileName[p], p];
@@ -417,9 +425,28 @@ iReleaseStreams[sts_List] := (
   <|"Status" -> "OK", "Released" -> Length[sts],
     "Files" -> DeleteDuplicates[First[#, ""] & /@ sts]|>);
 
-SourceVaultReleaseFileStreams[] := iReleaseStreams[SourceVaultFileStreams[]];
-SourceVaultReleaseFileStreams[prefix_String] :=
-  iReleaseStreams[SourceVaultFileStreams[prefix]];
+If[! AssociationQ[$iStreamWatch], $iStreamWatch = <||>];
+
+(* sts のうち、読み書き位置が minAge 秒以上変わっていないものを返す。初回に見た stream は
+   経過 0 秒なので必ず除外される。範囲外 (prefix 指定時の他 stream) の記録は保持し、
+   閉じられた stream の記録だけ落とす。 *)
+iStreamsIdleFor[sts_List, minAge_] := Module[{now = AbsoluteTime[], live = Streams[], watch},
+  If[! (NumericQ[minAge] && minAge > 0), Return[sts, Module]];
+  watch = KeySelect[$iStreamWatch, MemberQ[live, #] &];
+  Scan[
+    Function[st,
+      With[{pos = Quiet @ Check[StreamPosition[st], None], prev = Lookup[watch, st, None]},
+        If[! AssociationQ[prev] || prev["Position"] =!= pos,
+          watch[st] = <|"Since" -> now, "Position" -> pos|>]]],
+    sts];
+  $iStreamWatch = watch;
+  Select[sts, now - watch[#]["Since"] >= minAge &]];
+
+Options[SourceVaultReleaseFileStreams] = {"MinAgeSeconds" -> 0};
+SourceVaultReleaseFileStreams[opts : OptionsPattern[]] :=
+  iReleaseStreams[iStreamsIdleFor[SourceVaultFileStreams[], OptionValue["MinAgeSeconds"]]];
+SourceVaultReleaseFileStreams[prefix_String, opts : OptionsPattern[]] :=
+  iReleaseStreams[iStreamsIdleFor[SourceVaultFileStreams[prefix], OptionValue["MinAgeSeconds"]]];
 
 iSub[parts__] := Module[{r = iResolveRoot[]},
   If[FailureQ[r], r, FileNameJoin[{r, parts}]]

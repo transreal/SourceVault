@@ -420,8 +420,10 @@ SourceVaultDiagnosticsTick::usage =
   "SourceVaultDiagnosticsTick[] is the lightweight body called by the shared \
 polling tick. Throttled (default 60s); each run writes a lightweight machine \
 heartbeat (no topology), releases stray vault file streams left open by \
-aborted writes (SourceVaultReleaseFileStreams; open handles block Dropbox sync \
-and cause conflicted copies), and emits DoctorStale when the comprehensive \
+aborted writes (SourceVaultReleaseFileStreams with \"MinAgeSeconds\": only \
+streams idle for 10 minutes, because the tick interrupts the main evaluation \
+and closing an in-use stream crashes the kernel; open handles block Dropbox \
+sync and cause conflicted copies), and emits DoctorStale when the comprehensive \
 doctor has not run within its freshness window. Never spawns a kernel or \
 touches the Front End. Returns a short status. Safe to call manually.";
 
@@ -2229,9 +2231,12 @@ SourceVaultDiagnosticsTick[opts : OptionsPattern[]] :=
     (* stray stream release (weak coupling: core 不在なら no-op)。Abort/打ち切りで
        Open〜Close の間に取り残された vault 配下 stream はカーネル終了まで残り、
        開いた write ハンドルが Dropbox 同期を止め conflicted copy を作る。
-       tick 境界 (この時点で正当な保持者はいない) で強制 Close する。 *)
+       2026-11-02: この tick は評価中のメインカーネルに割り込むので「正当な保持者はいない」
+       は誤り。読込中の stream を閉じてカーネルが落ちていた (「新着メール」実行中の
+       events/*.json 読込など)。位置が 10 分動かない stream だけを stray として閉じる。 *)
     If[Length[DownValues[SourceVault`SourceVaultReleaseFileStreams]] > 0,
-      Module[{swR = Quiet @ Check[SourceVault`SourceVaultReleaseFileStreams[], <||>]},
+      Module[{swR = Quiet @ Check[
+          SourceVault`SourceVaultReleaseFileStreams["MinAgeSeconds" -> 600], <||>]},
         If[AssociationQ[swR] && Lookup[swR, "Released", 0] > 0,
           Quiet @ Check[
             SourceVaultDiagnosticsLog[<|
