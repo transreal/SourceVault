@@ -167,6 +167,7 @@ v1.44 `"View" -> "Hierarchy"` (階層): 順序木を 1 ノード 1 行で深さ�
 
 ### SourceVaultKGOutlineToMarkdown[outline] → <|"Markdown", "Assets", "SlideCount"|>
 SlideWorkflow シナリオ md。資産は `<<FIGn>>` + 資産指定リスト (実体化は SlideWorkflow の `SlideGraphGenerate`)。表・画像は md に直接。見出しは `## 題目 {expected=秒 node=<ノード Id>}` (用語ミニ辞書は `node=glossary`、空白や括弧を含む Id は付けない。SlideWorkflow が題目セルの CellTags `KGNode:<id>` にして、生成し直すときに前回の枚を見分ける)。枚の `"QA"` (質疑応答セルの本文) があれば `qa:` 行で出す。v1.42: ノードの `"FigureLayout" -> "Row"` の枚は図を 4 つまで載せ、1 行に `<<FIG1>> <<FIG2>>` と並べる (SlideWorkflow が高さをそろえて横に並べる)。
+v1.66 (SlideWorkflow): 注釈付きプログラムリストの資産 `{"Type": "Listing", "Lines": [{"Code", "Note", "Kind"}], "Footer", "Language"}` (と、`"Table"` + `"Layout": "AnnotatedListing"` = 行 {コード, 説明}・1 行目は見出し) は、md に ```` ```listing ```` の囲みで直接書く (1 行 = コード + 2 つ以上の空白 + `← 説明`、`@out` は出力、`@check` は検査結果の行)。図の `<<FIGn>>` にはならない。計画の行数は表と同じく行数 + 1 で数える (`iKGTableAssetQ`)。
 
 ## 合成・周辺知識
 

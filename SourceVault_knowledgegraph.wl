@@ -1843,10 +1843,11 @@ iKGPartLabel[lang_String, k_Integer, title_String] :=
   iKGWord[lang, "Part"] <> ToString[k] <> iKGWord[lang, "PartSuffix"] <> " " <> title;
 
 (* \:8cc7\:7523\:304c\:5360\:3081\:308b\:884c\:6570: \:56f3 (\:4f55\:679a\:3067\:3082\:7e2e\:3081\:3066\:4e26\:3079\:308b) \:306f figLines\:3001\:8868\:306f\:884c\:6570 + \:898b\:51fa\:3057 *)
-iKGTableAssetQ[a_] := AssociationQ[a] && Lookup[a, "Type", ""] === "Table";
+(* v1.66 (SlideWorkflow): \:6ce8\:91c8\:4ed8\:304d\:30d7\:30ed\:30b0\:30e9\:30e0\:30ea\:30b9\:30c8 (Listing) \:3082\:8868\:3068\:540c\:3058\:304f\:884c\:6570\:3067\:6570\:3048\:308b *)
+iKGTableAssetQ[a_] := AssociationQ[a] && MemberQ[{"Table", "Listing"}, Lookup[a, "Type", ""]];
 iKGAssetLines[assets_List, figLines_Integer] :=
   If[AnyTrue[assets, ! iKGTableAssetQ[#] &], figLines, 0] +
-  Total[(Length[iKGList[Lookup[#, "Rows", {}]]] + 1) & /@ Select[assets, iKGTableAssetQ]];
+  Total[(Length[iKGList[Lookup[#, "Rows", Lookup[#, "Lines", {}]]]] + 1) & /@ Select[assets, iKGTableAssetQ]];
 (* \:8868\:306e\:30bb\:30eb\:3084\:8aad\:307f\:4e0a\:3052\:306b\:4f7f\:3046\:5e73\:6587: **\:5f37\:8abf** \:3068 $\[Ellipsis]$ \:306e\:5370\:3092\:5916\:3059 *)
 iKGPlain[s_String] := StringTrim[StringReplace[s, {"**" -> "", "$" -> "", "\\mathrm" -> "", "\\" -> ""}]];
 iKGPlain[_] := "";
@@ -2223,6 +2224,24 @@ iKGTalkFallback[points_List, title_String, lang_String] := Module[{ps = Select[p
     title =!= "", title <> StringTrim[sep],
     True, ""]];
 
+(* v1.66 (SlideWorkflow): \:6ce8\:91c8\:4ed8\:304d\:30d7\:30ed\:30b0\:30e9\:30e0\:30ea\:30b9\:30c8\:306e\:8cc7\:7523 \:2192 md \:306e ```listing \:306e\:56f2\:307f (\:884c = \:30b3\:30fc\:30c9 + 2 \:3064\:4ee5\:4e0a\:306e\:7a7a\:767d + \:2190 \:8aac\:660e)\:3002
+   {"Type": "Listing", "Lines": [{"Code", "Note", "Kind"}], "Footer", "Language"} \:3068\:3001Table + "Layout": "AnnotatedListing"
+   (\:884c = {\:30b3\:30fc\:30c9, \:8aac\:660e}\:30011 \:884c\:76ee\:306f\:898b\:51fa\:3057) \:306e\:4e21\:65b9 *)
+iKGListingMd[a_Association] := Module[{ls, disp, w, f = Lookup[a, "Footer", None], lg = iKGStr[Lookup[a, "Language", ""]]},
+  ls = If[Lookup[a, "Type", ""] === "Table",
+    Map[<|"Code" -> iKGStr[First[iKGList[#], ""]], "Note" -> iKGStr[If[Length[iKGList[#]] >= 2, iKGList[#][[2]], ""]], "Kind" -> ""|> &,
+      Rest[iKGList[Lookup[a, "Rows", {}]]]],
+    Map[If[AssociationQ[#], <|"Code" -> iKGStr[Lookup[#, "Code", ""]], "Note" -> iKGStr[Lookup[#, "Note", ""]],
+      "Kind" -> iKGStr[Lookup[#, "Kind", ""]]|>, Nothing] &, iKGList[Lookup[a, "Lines", {}]]]];
+  disp = {If[#["Kind"] === "Output", "@out ", ""] <> #["Code"], #["Note"]} & /@ ls;
+  w = Max[0, StringLength[First[#]] & /@ Select[disp, Last[#] =!= "" &]];
+  Join[{"```listing" <> If[StringQ[lg] && lg =!= "", " " <> lg, ""]},
+    Map[If[Last[#] === "", First[#], StringPadRight[First[#], w + 2] <> "\:2190 " <> Last[#]] &, disp],
+    If[AssociationQ[f], {"@check " <> iKGStr[Lookup[f, "Label", ""]] <> " | " <> iKGStr[Lookup[f, "Status", ""]] <> " | " <>
+      iKGStr[Lookup[f, "Detail", ""]]}, {}],
+    {"```"}]];
+iKGListingMd[_] := {};
+
 SourceVaultKGOutlineToMarkdown[outline_Association] := Module[{lines = {}, assets = {}, k = 0, title, det},
   title = iKGStr[Lookup[outline, "Title", ""]];
   If[title =!= "", lines = Join[lines, {"---", "Title: " <> title, "---", ""}]];
@@ -2236,7 +2255,7 @@ SourceVaultKGOutlineToMarkdown[outline_Association] := Module[{lines = {}, asset
     det = PadRight[Replace[Lookup[s, "Details", {}], Except[_List] -> {}], Length[s["Points"]], ""];
     (* \:56f3\:304c 2 \:679a\:4ee5\:4e0a\:3067\:7b87\:6761 (\:8981\:70b9\:3068\:8a70\:3081\:8fbc\:3093\:3060\:5b50) \:3082 2 \:3064\:4ee5\:4e0a\:306a\:3089\:3001\:7b87\:6761\:306e\:9593\:306b\:56f3\:3092\:631f\:3080
        (\:7b87\:6761 \[RightArrow] \:56f3 \[RightArrow] \:7b87\:6761 \[RightArrow] \:56f3)\:3002\:8868\:306f\:6700\:5f8c *)
-    Module[{figs = Select[s["Assets"], ! MemberQ[{"Table", "Image"}, Lookup[#, "Type", ""]] &],
+    Module[{figs = Select[s["Assets"], ! MemberQ[{"Table", "Image", "Listing"}, Lookup[#, "Type", ""]] &],
             blocks, nbk, breaks, fi = 0, emitFig, rowQ},
       emitFig[] := (fi++; k++; AppendTo[assets, figs[[fi]]]; AppendTo[lines, "<<FIG" <> ToString[k] <> ">>"]);
       blocks = Join[Table[{"P", i}, {i, Length[s["Points"]]}], Table[{"S", j}, {j, Length[s["Sub"]]}]];
@@ -2257,7 +2276,9 @@ SourceVaultKGOutlineToMarkdown[outline_Association] := Module[{lines = {}, asset
       If[rowQ,
         AppendTo[lines, StringRiffle[Table[(fi++; k++; AppendTo[assets, figs[[fi]]]; "<<FIG" <> ToString[k] <> ">>"), {Length[figs] - fi}], " "]],
         While[fi < Length[figs], emitFig[]]]];
-    Do[Switch[Lookup[a, "Type", ""],
+    Do[Switch[If[Lookup[a, "Layout", ""] === "AnnotatedListing", "Listing", Lookup[a, "Type", ""]],
+        (* v1.66: \:6ce8\:91c8\:4ed8\:304d\:30d7\:30ed\:30b0\:30e9\:30e0\:30ea\:30b9\:30c8 \:2192 SlideWorkflow \:306e ```listing \:306e\:56f2\:307f *)
+        "Listing", (AppendTo[lines, ""]; Do[AppendTo[lines, l], {l, iKGListingMd[a]}]),
         "Table", With[{rows = iKGList[Lookup[a, "Rows", {}]]},
           AppendTo[lines, ""];
           Do[AppendTo[lines, "| " <> StringRiffle[StringReplace[iKGStr /@ iKGList[r], "|" -> "/"], " | "] <> " |"];
