@@ -16,6 +16,7 @@
      DocImportPaper \:3067\:4f5c\:3063\:305f\:7ffb\:8a33\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:5bfe\:5fdc\:3065\:3051\:308b\:767b\:9332\:7c3f\:3002\:751f\:6210\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306f
      \:5143\:30bd\:30fc\:30b9\:306e PrivacyLevel \:3092\:7d99\:627f\:3057 (CloudPublishable \:5ba3\:8a00 = PL < 0.5)\:3001\:7ffb\:8a33\:306e LLM \:7d4c\:8def\:3082
      \:305d\:306e PL \:3067\:6c7a\:3081\:308b (PL >= 0.5 \:306f $ClaudePrivateModel \:306e\:307f\:3002\:7121\:3051\:308c\:3070 fail-closed)\:3002
+     \:9001\:4fe1\:5148\:304c\:305d\:306e PL \:3092\:6271\:3048\:306a\:3044\:3068\:304d (Subnet \:3092\:4fe1\:7528\:3057\:3066\:3044\:306a\:3044 LAN \:306e\:5225\:6a5f\:306a\:3069) \:306f\:751f\:6210\:3057\:306a\:3044 (rule 107)\:3002
      \:4e00\:89a7 (SourceVaultSourcesView / ArXivView) \:306e\:300c\:7ffb\:8a33NB\:300d\:5217\:3068\:3001SlideWorkflow \:306e\:6587\:732e\:89e3\:6c7a
      (sv:// / src- \:3092\:6307\:5b9a\:3057\:305f\:3089\:767b\:9332\:6e08\:307f\:306e\:7ffb\:8a33\:30ce\:30fc\:30c8\:3092\:81ea\:52d5\:3067\:4f7f\:3046) \:304c\:3053\:308c\:3092\:5f15\:304f\:3002
 
@@ -41,7 +42,7 @@ SourceVaultPaperNotebooks::usage = "SourceVaultPaperNotebooks[] \:306f\:767b\:93
 SourceVaultPaperNotebooksView::usage = "SourceVaultPaperNotebooksView[] \:306f\:767b\:9332\:4e00\:89a7\:306e Dataset (View)\:3002";
 SourceVaultPaperNotebookPath::usage = "SourceVaultPaperNotebookPath[ref] \:306f\:65b0\:3057\:304f\:751f\:6210\:3059\:308b\:3068\:304d\:306e\:65e2\:5b9a\:306e\:4fdd\:5b58\:30d1\:30b9 (<root>/<\:984c\:540d>_<SourceId>.nb)\:3002SourceVaultPaperNotebookPath[ref, lang] \:306f\:8a00\:8a9e\:540d\:3092\:4ed8\:3051\:305f\:30d1\:30b9 (<root>/<\:984c\:540d>_<SourceId>_<lang>.nb\:3002\:65e2\:5b9a\:306e\:30d1\:30b9\:3092\:5225\:306e\:8a00\:8a9e\:306e\:767b\:9332\:304c\:4f7f\:3063\:3066\:3044\:308b\:3068\:304d\:306b\:4f7f\:3046)\:3002";
 SourceVaultSourcePrivacy::usage = "SourceVaultSourcePrivacy[ref] \:306f\:53d6\:308a\:8fbc\:307f\:6e08\:307f\:30bd\:30fc\:30b9\:306e PrivacyLevel (\:89e3\:6c7a\:3067\:304d\:306a\:3051\:308c\:3070 1.0 = fail-closed)\:3002";
-SourceVaultMakePaperNotebook::usage = "SourceVaultMakePaperNotebook[ref, opts] \:306f\:53d6\:308a\:8fbc\:307f\:6e08\:307f\:30bd\:30fc\:30b9\:306e\:7ffb\:8a33\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:751f\:6210\:3057\:3066\:767b\:9332\:3059\:308b\:3002PDF \:306f DocImportPaper\:3001Web \:30da\:30fc\:30b8 (HTML / \:30c6\:30ad\:30b9\:30c8 / Markdown\:3002\:7a2e\:5225 web \:306e\:30bd\:30fc\:30b9) \:306f DocImportWebPage \:3067\:4f5c\:308b\:3002\:8a33\:5148\:306f \"TargetLanguage\" (\:65e2\:5b9a $Language) \:3067\:3001\:539f\:6587\:304c\:540c\:3058\:8a00\:8a9e\:306a\:3089\:7ffb\:8a33\:305b\:305a\:69cb\:9020\:5316\:3060\:3051\:884c\:3046\:3002\:305d\:306e\:8a00\:8a9e\:3067\:767b\:9332\:6e08\:307f\:3067\:30d5\:30a1\:30a4\:30eb\:304c\:3042\:308c\:3070\:751f\:6210\:305b\:305a\:958b\:304f (\"Force\"->True \:3067\:4f5c\:308a\:76f4\:3057)\:3002PL \:3092\:7d99\:627f: \:51fa\:529b\:306e CloudPublishable = (PL < 0.5)\:3001\:7ffb\:8a33\:306e LLM \:306f PL >= 0.5 \:306a\:3089 $ClaudePrivateModel \:306e\:307f\:3002opts: \"Force\" / \"Open\" (Automatic = FE \:306a\:3089\:958b\:304f) / \"Interactive\" (True = \:73fe\:5728\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306b\:8a55\:4fa1\:30bb\:30eb\:3092\:66f8\:3044\:3066\:5b9f\:884c) \:3068 DocImportPaper / DocImportWebPage \:306e\:30aa\:30d7\:30b7\:30e7\:30f3 (\"Pages\" / \"Reconstruct\" / \"Translate\" / \"Images\" / Model / Fallback ...)\:3002\"PreferPDF\" -> Automatic: web \:306e\:8ad6\:6587\:30da\:30fc\:30b8\:306b\:30aa\:30fc\:30d7\:30f3\:30a2\:30af\:30bb\:30b9 PDF \:304c\:7d50\:3070\:308c\:3066\:3044\:308c\:3070 (SourceVault_oapdf.wl\:3001\:672a\:78ba\:8a8d\:306a\:3089\:3053\:3053\:3067\:63a2\:3057\:3066\:53d6\:308a\:8fbc\:3080) PDF \:304b\:3089 DocImportPaper \:3067\:4f5c\:308b (False \:3067 HTML \:304b\:3089)\:3002";
+SourceVaultMakePaperNotebook::usage = "SourceVaultMakePaperNotebook[ref, opts] \:306f\:53d6\:308a\:8fbc\:307f\:6e08\:307f\:30bd\:30fc\:30b9\:306e\:7ffb\:8a33\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:751f\:6210\:3057\:3066\:767b\:9332\:3059\:308b\:3002PDF \:306f DocImportPaper\:3001Web \:30da\:30fc\:30b8 (HTML / \:30c6\:30ad\:30b9\:30c8 / Markdown\:3002\:7a2e\:5225 web \:306e\:30bd\:30fc\:30b9) \:306f DocImportWebPage \:3067\:4f5c\:308b\:3002\:8a33\:5148\:306f \"TargetLanguage\" (\:65e2\:5b9a $Language) \:3067\:3001\:539f\:6587\:304c\:540c\:3058\:8a00\:8a9e\:306a\:3089\:7ffb\:8a33\:305b\:305a\:69cb\:9020\:5316\:3060\:3051\:884c\:3046\:3002\:305d\:306e\:8a00\:8a9e\:3067\:767b\:9332\:6e08\:307f\:3067\:30d5\:30a1\:30a4\:30eb\:304c\:3042\:308c\:3070\:751f\:6210\:305b\:305a\:958b\:304f (\"Force\"->True \:3067\:4f5c\:308a\:76f4\:3057)\:3002PL \:3092\:7d99\:627f: \:51fa\:529b\:306e CloudPublishable = (PL < 0.5)\:3001\:7ffb\:8a33\:306e LLM \:306f PL >= 0.5 \:306a\:3089 $ClaudePrivateModel \:306e\:307f\:3002\:9001\:4fe1\:5148\:304c\:305d\:306e PL \:3092\:6271\:3048\:306a\:3051\:308c\:3070\:751f\:6210\:305b\:305a Failure[\"AccessLevelExceeded\"] \:3092\:8fd4\:3059 (Subnet \:3092\:4fe1\:7528\:3057\:3066\:3044\:306a\:3044 LAN \:306e\:5225\:6a5f\:306a\:3069\:3002Model \:3092\:660e\:793a\:6307\:5b9a\:3057\:305f\:3068\:304d\:306f LAN \:306e\:5225\:6a5f\:3078\:306e\:4e0a\:9650\:3060\:3051\:3092\:78ba\:304b\:3081\:308b)\:3002opts: \"Force\" / \"Open\" (Automatic = FE \:306a\:3089\:958b\:304f) / \"Interactive\" (True = \:73fe\:5728\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306b\:8a55\:4fa1\:30bb\:30eb\:3092\:66f8\:3044\:3066\:5b9f\:884c) \:3068 DocImportPaper / DocImportWebPage \:306e\:30aa\:30d7\:30b7\:30e7\:30f3 (\"Pages\" / \"Reconstruct\" / \"Translate\" / \"Images\" / Model / Fallback ...)\:3002\"PreferPDF\" -> Automatic: web \:306e\:8ad6\:6587\:30da\:30fc\:30b8\:306b\:30aa\:30fc\:30d7\:30f3\:30a2\:30af\:30bb\:30b9 PDF \:304c\:7d50\:3070\:308c\:3066\:3044\:308c\:3070 (SourceVault_oapdf.wl\:3001\:672a\:78ba\:8a8d\:306a\:3089\:3053\:3053\:3067\:63a2\:3057\:3066\:53d6\:308a\:8fbc\:3080) PDF \:304b\:3089 DocImportPaper \:3067\:4f5c\:308b (False \:3067 HTML \:304b\:3089)\:3002";
 SourceVaultOpenPaperNotebook::usage = "SourceVaultOpenPaperNotebook[ref] \:306f $Language \:306e\:7ffb\:8a33\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:958b\:304f (FE)\:3002\:672a\:767b\:9332\:306a\:3089 SourceVaultMakePaperNotebook \:3092\:547c\:3076\:3002";
 $SourceVaultComputeNBRoot::usage = "$SourceVaultComputeNBRoot \:306f\:8a08\:7b97\:30ce\:30fc\:30c8\:767b\:9332\:7c3f\:306e\:4fdd\:5b58\:5148 (Automatic = SourceVaultCoreRoot[]/computenb)\:3002";
 SourceVaultComputeNotebookRoot::usage = "SourceVaultComputeNotebookRoot[] \:306f\:8a08\:7b97\:30ce\:30fc\:30c8\:306e\:767b\:9332\:7c3f\:3068\:65e2\:5b9a\:306e\:4fdd\:5b58\:5148\:306e\:30c7\:30a3\:30ec\:30af\:30c8\:30ea (\:7121\:3051\:308c\:3070\:4f5c\:308b)\:3002";
@@ -234,7 +235,10 @@ iPNEntry[ref_String, langIn_] := Module[
     With[{sid = iPNStr[Lookup[x, "SourceId", ""]], uri = iPNStr[Lookup[x, "URI", ""]], psid = iPNStr[Lookup[x, "PDFSourceId", ""]]},
       (sid =!= "" && sid === ref) || (uri =!= "" && uri === ref) || (psid =!= "" && psid === ref)]]];
   e = iPNPick[cands, lang];
-  If[! AssociationQ[e] && ! TrueQ[$iPNNoResolve],
+  (* the canonical Eagle URI is already the registry key (registration stores the resolved URI, and the
+     resolver adds no SourceId for Eagle), so resolving it would only repeat the match above. The
+     Sources / Eagle views ask this for every PDF row, and each resolution reads the item from the library *)
+  If[! AssociationQ[e] && ! TrueQ[$iPNNoResolve] && ! StringStartsQ[ref, "sv://object/eagle-"],
     src = iPNResolveSource[ref];
     e = iPNMatchEntry[entries, ref, src, lang]];
   If[AssociationQ[e], Append[e, "Notebook" -> iPNAbsolutePath[e]], e]];
@@ -356,6 +360,37 @@ iPNRouteModel[pl_?NumericQ, explicit_] := Module[{priv},
   priv = If[ValueQ[ClaudeCode`$ClaudePrivateModel], ClaudeCode`$ClaudePrivateModel, None];
   If[ListQ[priv] && Length[priv] >= 2, priv, $Failed]];
 
+(* rule 107 (2026-11-05): \:9001\:4fe1\:5148\:306e\:6700\:7d42\:78ba\:8a8d\:3002\:7ffb\:8a33\:306f ClaudeQueryBg \:3078 Model \:3092\:6e21\:3059\:304c\:3001\:3053\:306e\:7d4c\:8def\:306b PL \:306e\:78ba\:8a8d\:306f\:7121\:3044
+   (\:5916\:90e8\:30af\:30e9\:30a6\:30c9\:7528\:306e preflight \:306f\:30ed\:30fc\:30ab\:30eb provider \:3092\:7d20\:901a\:3057\:3059\:308b)\:3002\:3053\:3053\:3067\:5b9f\:969b\:306e\:9001\:4fe1\:5148\:3092\:89e3\:6c7a\:3057\:3066 NBAccess \:306b\:554f\:3046\:3002
+   Subnet \:304c\:300c\:4fe1\:7528\:3057\:306a\:3044\:300d\:306a\:3089\:540c\:3058 LAN \:306e\:5225\:6a5f\:306f\:4e0a\:9650 0.25 \:306b\:306a\:308a\:3001\:305d\:308c\:3092\:8d85\:3048\:308b PL \:306f\:6b62\:307e\:308b\:3002localhost \:306f\:5e38\:306b\:901a\:308b\:3002
+   \:5224\:5b9a\:306f\:958b\:59cb\:6642\:306e 1 \:56de\:3002Model \:306e\:660e\:793a\:6307\:5b9a\:306f\:3069\:306e\:67a0\:3092\:4f7f\:3046\:304b\:306e\:4e0a\:66f8\:304d\:306a\:306e\:3067\:3001LAN \:306e\:5225\:6a5f\:3078\:306e\:4e0a\:9650\:3060\:3051\:3092\:78ba\:304b\:3081\:308b (iPNExplicitDenial)\:3002
+   NBAccess \:304c\:7121\:3044\:74b0\:5883\:3067\:306f\:78ba\:8a8d\:3067\:304d\:306a\:3044\:306e\:3067 PL < 0.5 \:3060\:3051\:901a\:3059\:3002\:623b\:308a\:5024\:306f None \:304b Failure\:3002 *)
+iPNAccessMessage[subnetQ_] := If[$Language === "Japanese",
+  If[subnetQ, "PrivacyLevel `1` \:306e\:30c7\:30fc\:30bf\:3092 `2` \:3078\:9001\:308c\:307e\:305b\:3093\:3002\:63a5\:7d9a\:5148\:306f\:540c\:3058 LAN \:4e0a\:306e\:5225\:6a5f\:3067\:3001Subnet \:304c\:300c\:4fe1\:7528\:3057\:306a\:3044\:300d\:306e\:305f\:3081\:4e0a\:9650\:306f `3` \:3067\:3059\:3002\:30d1\:30ec\:30c3\:30c8\:306e Subnet \:3092\:300c\:4fe1\:7528\:3059\:308b\:300d\:306b\:5207\:308a\:66ff\:3048\:308b\:304b\:3001\:81ea\:6a5f\:306e\:30e2\:30c7\:30eb\:306b\:5207\:308a\:66ff\:3048\:3066\:304f\:3060\:3055\:3044\:3002", "PrivacyLevel `1` \:306e\:30c7\:30fc\:30bf\:3092 `2` \:3078\:9001\:308c\:307e\:305b\:3093 (\:4e0a\:9650 `3`)\:3002\:3053\:306e\:30ec\:30d9\:30eb\:3092\:6271\:3048\:308b\:30e2\:30c7\:30eb\:3092\:9078\:3093\:3067\:304f\:3060\:3055\:3044\:3002"],
+  If[subnetQ, "Cannot send PrivacyLevel `1` data to `2`: it is another host on this LAN and subnet trust is off, so the limit is `3`. Turn on the palette's Subnet toggle, or switch to a model on this machine.", "Cannot send PrivacyLevel `1` data to `2` (limit `3`). Choose a model that can handle this level."]];
+
+iPNAccessDenial[model_, pl_?NumericQ] := Module[{spec, prov, url, limit, prox, subnetQ},
+  If[Length[DownValues[NBAccess`NBModelCanHandleAccessLevel]] === 0,
+    Return[If[pl < 0.5, None,
+      Failure["AccessCheckUnavailable", <|"MessageTemplate" ->
+        "PrivacyLevel `1` needs the NBAccess access check, which is not loaded", "MessageParameters" -> {pl}|>]], Module]];
+  spec = If[Length[DownValues[ClaudeCode`ClaudeResolvedModelSpec]] > 0,
+    ClaudeCode`ClaudeResolvedModelSpec[model], model];
+  If[TrueQ[NBAccess`NBModelCanHandleAccessLevel[spec, pl]], Return[None, Module]];
+  prov = NBAccess`NBModelProviderName[spec];
+  url = If[ListQ[spec] && Length[spec] >= 3 && StringQ[spec[[3]]], spec[[3]], None];
+  limit = If[StringQ[url], NBAccess`NBLocalLLMEffectiveMaxAccessLevel[prov, url], NBAccess`NBGetProviderMaxAccessLevel[prov]];
+  prox = If[StringQ[url], NBAccess`NBLocalLLMURLProximity[url], None];
+  subnetQ = prox === "SameSubnet" && ! TrueQ[NBAccess`NBSubnetTrustActive[]];
+  Failure["AccessLevelExceeded", <|"MessageTemplate" -> iPNAccessMessage[subnetQ],
+    "MessageParameters" -> {pl, If[StringQ[url], prov <> " (" <> url <> ")", prov], limit},
+    "PrivacyLevel" -> pl, "Provider" -> prov, "URL" -> url, "Limit" -> limit, "Proximity" -> prox|>]];
+
+(* Model \:306e\:660e\:793a\:6307\:5b9a: \:3069\:306e\:67a0\:3092\:4f7f\:3046\:304b\:306e\:4e0a\:66f8\:304d\:306a\:306e\:3067 PL \:306e\:7dcf\:5408\:5224\:5b9a\:306f\:7701\:304f\:304c\:3001LAN \:306e\:5225\:6a5f\:3078\:306e\:4e0a\:9650 (rule 107) \:306f\:78ba\:304b\:3081\:308b *)
+iPNExplicitDenial[model_, pl_?NumericQ] :=
+  If[Length[DownValues[ClaudeCode`ClaudeLocalLLMAccessCheck]] === 0, None,
+    With[{r = ClaudeCode`ClaudeLocalLLMAccessCheck[model, pl]}, If[FailureQ[r], r, None]]];
+
 iPNInsertAndEvaluate[code_String] := Module[{nb = Quiet[InputNotebook[]]},
   If[Head[nb] =!= NotebookObject, Return[$Failed]];
   SelectionMove[nb, After, Notebook];
@@ -377,7 +412,7 @@ iPNOpenAccessPDF[src_Association] := Module[{sid = src["SourceId"], r},
 $iPNOwnOptions = {"Force" -> False, "Open" -> Automatic, "Interactive" -> False, "Verbose" -> True, "PreferPDF" -> Automatic};
 SourceVaultMakePaperNotebook[ref_String, opts___Rule] := Module[
   {own = Association[$iPNOwnOptions], all = Association[{opts}], src, lang, existingE, existing, fmt, path,
-   pl, model, fallback, docOpts, common, res, la, entry, fe, pdfSrc = None, srcFile},
+   pl, model, denied, fallback, docOpts, common, res, la, entry, fe, pdfSrc = None, srcFile},
   own = Join[own, KeyTake[all, Keys[own]]];
   fe = $FrontEnd =!= Null && TrueQ[$Notebooks];
   (* \:30d1\:30ec\:30c3\:30c8 / \:4e00\:89a7\:30dc\:30bf\:30f3\:304b\:3089: \:73fe\:5728\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306b\:8a55\:4fa1\:30bb\:30eb\:3092\:66f8\:3044\:3066\:5b9f\:884c (\:9032\:6357\:304c\:898b\:3048\:308b\:30fb\:3084\:308a\:76f4\:305b\:308b) *)
@@ -417,6 +452,9 @@ SourceVaultMakePaperNotebook[ref_String, opts___Rule] := Module[
   If[model === $Failed,
     Return[Failure["PrivateModelUnavailable", <|"MessageTemplate" ->
       "PrivacyLevel `1` requires $ClaudePrivateModel (local model); none is configured", "MessageParameters" -> {pl}|>]]];
+  denied = If[ListQ[Lookup[all, ClaudeCode`Model, Automatic]] && Length[Lookup[all, ClaudeCode`Model, Automatic]] >= 2,
+    iPNExplicitDenial[model, pl], iPNAccessDenial[model, pl]];
+  If[FailureQ[denied], Return[denied]];
   fallback = If[pl < 0.5,
     Lookup[all, ClaudeCode`Fallback,
       If[Length[DownValues[ClaudeCode`GetPaletteFallback]] > 0, TrueQ[Quiet @ Check[ClaudeCode`GetPaletteFallback[], False]], False]],

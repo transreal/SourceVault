@@ -1372,11 +1372,16 @@ iSVWResolveHeadSymbol[fq_String] :=
    10. NB 境界 (§7.1 / §7.2 / §7.3・Inc ζ)
    ============================================================ *)
 
+(* セル式 -> 平文。FE の PlainText 書き出しは ↓ を \[DownArrow] に、× を * に書き換える
+   ので、読み取りはメールと同じ iSVUICellPlainText に揃える (maildb は wiring より先に
+   ロード済み)。maildb が読めなかったときは、入力を空にしないよう従来の書き出しに落ちる。 *)
 iSVWCellPlainText[cellExpr_] :=
-  Quiet @ Check[
-    First @ FrontEndExecute[
-      FrontEnd`ExportPacket[cellExpr, "PlainText"]],
-    $Failed];
+  With[{t = SourceVault`Private`iSVUICellPlainText[cellExpr]},
+    If[StringQ[t], t,
+      Quiet @ Check[
+        First @ FrontEndExecute[
+          FrontEnd`ExportPacket[cellExpr, "PlainText"]],
+        $Failed]]];
 
 Options[SourceVault`SourceVaultCellInput] =
   {"Cells" -> Automatic, "PrivacyLevel" -> Automatic};

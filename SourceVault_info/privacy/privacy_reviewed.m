@@ -566,6 +566,7 @@
    "SourceVaultMailMigrateToShards", "SourceVaultMailOpenAttachment", 
    "SourceVaultMailOpenReplyNotebook", "SourceVaultMailParseEmails", 
    "SourceVaultMailRebuildMetadataIndex", 
+   "SourceVaultMailRecipientPrivacyFloor", 
    "SourceVaultMailRecomputePriorities", "SourceVaultMailRowActions", 
    "SourceVaultMailSearchIndex", "SourceVaultMailSearchIndexView", 
    "SourceVaultMailSearchSummary", "SourceVaultMailSend", 

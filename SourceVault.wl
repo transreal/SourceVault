@@ -286,6 +286,8 @@ SourceVaultSummaries::usage =
   "    \"Providers\" に provider 名でない語 (\"web\" 等) を書いた場合も種別指定として解釈する),\n" <>
   "  \"Limit\",\n" <>
   "  \"Since\"/\"Until\"/\"On\" -> 登録/生成日での絞り込み, \"Author\" -> 著者部分一致,\n" <>
+  "  \"Folder\" -> None|名前|{名前..} (Eagle のフォルダ: 通常フォルダ/スマートフォルダの名前か id、子フォルダ込み。\n" <>
+  "    指定するとフォルダを持つ provider (eagle) の行だけになる。例: SourceVaultSummariesView[\"\", \"Folder\" -> \"Papers\"]),\n" <>
   "  \"FetchMetadata\", \"Format\" -> \"Rows\" (既定)|\"Dataset\"|\"Grid\" (後方互換: View へ委譲)\n" <>
   "pdfindex 行の本文検索 (チャンク単位・gate 付き) は SourceVaultSearch[query, \"Group\" -> name]。";
 
@@ -3821,6 +3823,17 @@ SourceVaultOpenSourceFile[sourceId_String] :=
 If[!AssociationQ[$iSVRowTitleActions], $iSVRowTitleActions = <||>];
 If[!AssociationQ[$iSVRowOpenActions], $iSVRowOpenActions = <||>];
 
+(* 翻訳NB 欄 (SourceVault_papernb.wl の登録簿) の参照を種別ごとに決める:
+   $iSVRowPaperNBRefs[kind] = fn[row] -> 参照文字列 ("" なら欄は空)。
+   既定 (arxiv/web/local) は SourceId。eagle は SourceVault_eagle.wl が PDF の item だけ
+   正準 URI sv://object/eagle-<id> を返す関数を登録する (登録簿はその URI で引く)。 *)
+If[!AssociationQ[$iSVRowPaperNBRefs], $iSVRowPaperNBRefs = <||>];
+iSVRowPaperNBRef[kind_String, id_String, row_] := Which[
+  MemberQ[{"arxiv", "web", "local"}, kind], id,
+  KeyExistsQ[$iSVRowPaperNBRefs, kind],
+    With[{r = Quiet @ Check[$iSVRowPaperNBRefs[kind][row], ""]}, If[StringQ[r], r, ""]],
+  True, ""];
+
 (* 論文ページ (web) に結ばれたオープンアクセス PDF の SourceId (SourceVault_oapdf.wl がページのメタの
    "OpenAccessPDF" に記録する)。無ければ "" *)
 iSVLinkedOpenAccessPDF[kind_String, id_String] :=
@@ -3840,7 +3853,7 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
       {"種別", "タイトル", "著者", "出版", "サマリー", "PL", "URL", "ファイル", "翻訳NB", "登録"};
     body = Function[row,
       Module[{kind, id, title, authors, published, summary, pl, url, file,
-              date, titleAct, openAct, act, clickHint},
+              date, titleAct, openAct, act, clickHint, pnRef, pnPath},
         kind = ToString @ Lookup[row, "Kind", ""];
         id = ToString @ Lookup[row, "Id", ""];
         title = ToString @ Lookup[row, "Title", ""];
@@ -3853,6 +3866,7 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
         date = ToString @ Lookup[row, "Date", ""];
         titleAct = Lookup[$iSVRowTitleActions, kind, Automatic];
         openAct = Lookup[$iSVRowOpenActions, kind, Automatic];
+        pnRef = iSVRowPaperNBRef[kind, id, row];
         (* 既定 (arxiv/web/local) は編集可能サマリーノートを開く。
            eagle/mail/workflow/pdfindex は各 adapter 登録のアクション
            (mail = 返信・翻訳つきの本文ウインドウ、pdfindex = 原本 PDF)。 *)
@@ -3911,19 +3925,20 @@ iSVRenderRowsGrid[rows_List, total_Integer, caption_String] :=
                        BaseStyle -> "Hyperlink"], "オープンアクセス PDF: " <> pdfId]}]]],
            True, ""],
          (* 翻訳ノートブック (SourceVault_papernb.wl): $Language の訳が登録済みなら開く、無ければ生成 (PL 継承)。
-            PDF は DocImportPaper、web (HTML 等) は DocImportWebPage。ボタンには sourceId だけを焼く *)
+            PDF は DocImportPaper、web (HTML 等) は DocImportWebPage。ボタンには参照 (sourceId、
+            Eagle の PDF は正準 URI) だけを焼く。参照は iSVRowPaperNBRef ($iSVRowPaperNBRefs) が決める *)
          Which[
-           ! MemberQ[{"arxiv", "web", "local"}, kind] || id === "", "",
+           pnRef === "", "",
            Length[DownValues[SourceVault`SourceVaultPaperNotebook]] === 0, "",
-           StringQ[Quiet @ Check[SourceVault`SourceVaultPaperNotebook[id, "Language" -> $Language], $Failed]],
-             With[{theId = id, p = SourceVault`SourceVaultPaperNotebook[id, "Language" -> $Language]},
+           StringQ[pnPath = Quiet @ Check[SourceVault`SourceVaultPaperNotebook[pnRef, "Language" -> $Language], $Failed]],
+             With[{theId = pnRef, p = pnPath},
                Tooltip[
                  Button[Style["▶ 翻訳NB", "Hyperlink", FontFamily -> ff],
                    SourceVault`SourceVaultOpenPaperNotebook[theId],
                    Appearance -> "Frameless", Method -> "Queued", BaseStyle -> "Hyperlink"],
                  p]],
            file =!= "",
-             With[{theId = id},
+             With[{theId = pnRef},
                Tooltip[
                  Button[Style["＋ 翻訳NB", "Hyperlink", FontFamily -> ff],
                    SourceVault`SourceVaultMakePaperNotebook[theId, "Interactive" -> True],
@@ -4337,14 +4352,23 @@ SourceVaultRegisterSummaryProvider["sources", iSVSourcesRows];
 
 SourceVaultSummaries::unkfilter =
   "\"Providers\" / \"Kind\" の `1` は登録 provider 名でも行の種別名でもありません。指定可能: `2`。";
+SourceVaultSummaries::nofolder =
+  "\"Folder\" の `1` が見つかりません (通常フォルダ・スマートフォルダの名前か id)。";
+SourceVaultSummaries::folderprov =
+  "\"Folder\" を扱えるのは `2` だけです。`1` の行は \"Folder\" 指定では返しません。";
+
+(* "Folder" を扱える provider: $iSVSummaryFolderProviders[name] = fn[{spec..}] -> 見つからない指定のリスト。
+   provider は opts["Folder"] ({spec..}、未指定は {}) でフォルダ内の行に絞る。Eagle adapter が登録する *)
+If[!AssociationQ[$iSVSummaryFolderProviders], $iSVSummaryFolderProviders = <||>];
 
 Options[SourceVaultSummaries] = {
   "Limit" -> Automatic, "Providers" -> All, "Kind" -> All,
   "FetchMetadata" -> Automatic, "Format" -> "Rows",
-  "Since" -> None, "Until" -> None, "On" -> None, "Author" -> None};
+  "Since" -> None, "Until" -> None, "On" -> None, "Author" -> None,
+  "Folder" -> None};
 SourceVaultSummaries[query_String : "", OptionsPattern[]] :=
-  Module[{provs, sel, names, provNames, kindNames, kinds, o, rows, avail,
-          unknown, total, lim},
+  Module[{provs, sel, names, provNames = {}, kindNames, kinds, o, rows, avail,
+          unknown, total, lim, folders, fprovs, missing},
     provs = If[AssociationQ[$SourceVaultSummaryProviders],
       $SourceVaultSummaryProviders, <||>];
     sel = OptionValue["Providers"];
@@ -4362,8 +4386,23 @@ SourceVaultSummaries[query_String : "", OptionsPattern[]] :=
       If[kindNames =!= {},
         kinds = If[kinds === All, kindNames, Intersection[kinds, kindNames]]];
       provs = If[provNames === {}, provs, KeyTake[provs, provNames]]];
+    (* "Folder": フォルダを持つ provider だけを引き、その provider がフォルダ内の行に絞る。
+       フォルダの概念が無い provider (sources / mail 等) の行は混ぜない *)
+    folders = With[{f = OptionValue["Folder"]},
+      If[MatchQ[f, None | Automatic | All | "" | {}], {}, Flatten[{f}]]];
+    If[folders =!= {},
+      fprovs = If[AssociationQ[$iSVSummaryFolderProviders], $iSVSummaryFolderProviders, <||>];
+      With[{other = Complement[provNames, Keys[fprovs]]},
+        If[other =!= {}, Message[SourceVaultSummaries::folderprov, other, Keys[fprovs]]]];
+      provs = KeyTake[provs, Keys[fprovs]];
+      missing = If[provs === <||>, {},
+        Intersection @@ Map[
+          Function[nm, With[{m = Quiet @ Check[fprovs[nm][folders], folders]},
+            If[ListQ[m], m, folders]]],
+          Keys[provs]]];
+      If[missing =!= {}, Message[SourceVaultSummaries::nofolder, missing]]];
     o = <|"FetchMetadata" -> OptionValue["FetchMetadata"],
-      "Kind" -> kinds|>;
+      "Kind" -> kinds, "Folder" -> folders|>;
     rows = Join @@ Map[
       Function[fn, Module[{r = Quiet @ Check[fn[query, o], {}]},
         If[ListQ[r], Select[r, AssociationQ], {}]]],
@@ -5249,7 +5288,7 @@ SourceVaultOCREnable[backend_String:"ClaudeVision", opts:OptionsPattern[]] :=
             True, "unknown"];
           warning = If[currentProvider === "claudecode",
             "$ClaudeModel uses provider 'claudecode' (CLI) which does NOT support vision. " <>
-            "Set $ClaudeModel = {\"anthropic\", \"claude-sonnet-4-20250514\"} (paid) before OCR runs, " <>
+            "Set $ClaudeModel = {\"anthropic\", \"claude-sonnet-5-5\"} (paid) before OCR runs, " <>
             "or use \"TextRecognize\" / \"Custom\" backend.",
             Null];
           <|"Status" -> "Enabled",
@@ -10881,7 +10920,7 @@ iSVSummaryPrivacyTier[declared_] :=
    \:78ba\:5b9f\:306a\:65b9\:6cd5: SourceVault \:5074\:3067 PrivacyLevel \:3092\:30e2\:30c7\:30eb\:9078\:629e\:306b\:5909\:63db\:3057\:3001
    \:5e38\:306b Model \:3092\:660e\:793a\:7684\:306b\:6307\:5b9a\:3059\:308b (PrivacyLevel \:30aa\:30d7\:30b7\:30e7\:30f3\:306f\:6e21\:3055\:306a\:3044)\:3002 *)
 iCallSummaryLLM[prompt_String, model_, privacyLevel_] :=
-  Module[{response, effectiveModel, privModel},
+  Module[{response, effectiveModel, privModel, accessDenial},
     (* ClaudeCode \:30d1\:30c3\:30b1\:30fc\:30b8\:3092\:5fc5\:8981\:6642\:306b\:30ed\:30fc\:30c9 *)
     Quiet @ Needs["ClaudeCode`"];
     If[Length[Names["ClaudeCode`ClaudeQuerySync"]] === 0,
@@ -10915,6 +10954,15 @@ iCallSummaryLLM[prompt_String, model_, privacyLevel_] :=
       Return[<|"Status" -> "Failed",
         "Reason" -> "PrivateModelUnavailable",
         "PrivacyLevel" -> If[NumericQ[privacyLevel], N[privacyLevel], 1.0]|>]];
+    (* rule 107 (2026-11-06): 送信先が LAN 上のローカル LLM なら距離で決まる上限を確かめる。
+       明示指定のモデルも対象 (どの枠を使うかの上書きであって、送信先の上限の上書きではない)。
+       Automatic は $ClaudeModel に解決して確かめる。 *)
+    accessDenial = iSVLocalLLMAccessDenial[effectiveModel,
+      If[NumericQ[privacyLevel], privacyLevel, 1.0]];
+    If[FailureQ[accessDenial],
+      Return[<|"Status" -> "Failed", "Reason" -> "AccessLevelExceeded",
+        "PrivacyLevel" -> If[NumericQ[privacyLevel], N[privacyLevel], 1.0],
+        "Detail" -> accessDenial["Text"], "ResolvedModel" -> effectiveModel|>]];
 
     (* 1H-S boundary gate: ClaudeQuerySync 委譲の最終境界 (maildb/llmlog 共有ハブ。
        capbroker 不在は fail-open) *)
@@ -12988,6 +13036,25 @@ SourceVaultModelEndpointStatus[] :=
       "CheckedAt" -> DateString[DateObject[]],
       "Endpoints" -> status|>
   ];
+
+(* rule 107 (2026-11-06): ローカル LLM へ送る前の距離の確認 (要約ハブ・メール・Eagle・mining で共用)。
+   Subnet を信用していない同じ LAN の別機は上限 0.25 なので、機密データはここで止まる。
+   判定は claudecode の ClaudeLocalLLMAccessCheck (URL の解決と NBAccess の距離判定)。
+   claudecode が古い / 未ロードなら確認できないので None (未ロードなら $ClaudePrivateModel も
+   読めず、送信先は既定の localhost になる)。戻り値は None か Failure["AccessLevelExceeded"]。
+   引数は Model の値 ({provider, model, url} / Automatic 等) か、URL を取り出して直接 POST する
+   経路の <|"Provider" -> _, "Model" -> _, "URL" -> _|>。 *)
+iSVLocalLLMAccessDenial[llm_Association, pl_] :=
+  iSVLocalLLMAccessDenial[{Lookup[llm, "Provider", "lmstudio"], Lookup[llm, "Model", ""],
+    Lookup[llm, "URL", ""]}, pl];
+iSVLocalLLMAccessDenial[spec_, pl_] :=
+  If[Length[DownValues[ClaudeCode`ClaudeLocalLLMAccessCheck]] === 0, None,
+    With[{r = ClaudeCode`ClaudeLocalLLMAccessCheck[spec, If[NumericQ[pl], N[pl], 1.0]]},
+      If[FailureQ[r], r, None]]];
+
+(* URL を取り出して直接 POST する経路の provider ($ClaudePrivateModel の第 1 要素)。 *)
+iSVLocalProviderOf[pm_] :=
+  If[ListQ[pm] && Length[pm] >= 1 && StringQ[pm[[1]]], ToLowerCase[pm[[1]]], "lmstudio"];
 
 (* read ClaudeCode`$ClaudePrivateModel via Symbol (avoids a
    hard dependency on claudecode.wl being loaded).

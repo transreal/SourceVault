@@ -260,7 +260,7 @@ item 本文テキストを抽出する。PDF は原本から直接ページ抽�
 Options: "MaxPages" -> 15 (整数 | All | Infinity), "MaxChars" -> 8000 (全文が要るときは明示的に大きく指定), "Library" -> Automatic
 
 ### SourceVaultEagleSummarize[item, opts]
-item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約し書誌情報 (Title/Authors/Published) も同時抽出する (PDF は埋め込みメタデータをフォールバック)。画像はサムネイル優先 (原本フォールバック) で vision 要約する。動画は 2 段 pipeline: Stage 1 で n フレーム ("Frames" 個、nested dyadic 位置) を各 "FrameMaxLength" 文字で個別 vision 記述し record の `"Frames"[*]."Text"` に保存、Stage 2 でフレーム説明を時刻順統合して最終 summary を生成する。既定はローカル LLM (`$ClaudePrivateModel`)。`$SourceVaultEagleCloudPublishableTag` タグ付き item は Automatic でもクラウドへ切り替わる。PDF・画像・動画が混在するフォルダでも batch/summaries/search が一貫動作する (動画は vision 呼び出しが n 回になるためコスト増)。summary は `PrivateVault/eagle/summaries/<id>.json` に保存。
+item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約し書誌情報 (Title/Authors/Published) も同時抽出する (PDF は埋め込みメタデータをフォールバック)。画像はサムネイル優先 (原本フォールバック) で vision 要約する。動画は 2 段 pipeline: Stage 1 で n フレーム ("Frames" 個、nested dyadic 位置) を各 "FrameMaxLength" 文字で個別 vision 記述し record の `"Frames"[*]."Text"` に保存、Stage 2 でフレーム説明を時刻順統合して最終 summary を生成する。既定はローカル LLM (`$ClaudePrivateModel`)。`$SourceVaultEagleCloudPublishableTag` タグ付き item は Automatic でもクラウドへ切り替わる。"Local" 経路 (Cloud-Publishable でない = 機密扱いの item) は送る前に送信先の上限を PL 1.0 で確かめ (rule 107。`ClaudeCode`ClaudeLocalLLMAccessCheck`、claudecode 未ロードなら確認しない)、Subnet を信用していない同じ LAN の別機 (上限 0.25) などで止まると送らずに `<|"Status" -> "Error", "Reason" -> "AccessLevelExceeded", "Detail" -> 理由の文, "Id", "Hint"|>` を返す (ほかの空応答は従来どおり `"Reason" -> "LLMUnavailableOrEmpty"`。動画で再利用できるフレーム説明も無ければ、統合の前に `Failure["SourceVaultEagleVideoFramesUnavailable", ..]` で止まる)。PDF・画像・動画が混在するフォルダでも batch/summaries/search が一貫動作する (動画は vision 呼び出しが n 回になるためコスト増)。summary は `PrivateVault/eagle/summaries/<id>.json` に保存。
 → Association
 Options:
 "Method" -> Automatic ("Local"|"Claude"),
@@ -286,6 +286,7 @@ Options: "Library" -> Automatic
 
 ### SourceVaultEagleSummaries[query, opts]
 保存済みサマリーの一覧を連想リストで返す (core)。行は共通スキーマ (Kind/Id/URI/Title/Authors/Summary/Date/PrivacyLevel) + eagle 固有列 (Name/Method/CreatedAt/Status(Current|Stale|Unknown)/HasNote) で、Select/SortBy/LLM 処理へそのまま連鎖できる。query はサマリー本文/ノート補足/ファイル名の部分一致 ("" で全件)。ユーザーへ表として提示するときは `SourceVaultEagleSummariesView`。
+横断検索 `SourceVaultSummaries` には、現在ライブラリの保存済みサマリーを共通スキーマ行で返す eagle provider として相乗りする。eagle はフォルダで絞れる provider として名乗っており、`SourceVaultSummaries[query, "Folder" -> 名前|{名前..}]` (通常フォルダ/スマートフォルダの名前か id、子フォルダ込み、ゴミ箱の item は除く) でそのフォルダの item の行だけになる (`SourceVaultEagleSummaries` 自身に "Folder" オプションは無い。ライブラリ未設定なら 0 行)。`SourceVaultSummariesView` の「翻訳NB」列は PDF の item だけ正準 URI (`sv://object/eagle-<id>`) で翻訳ノートブック登録簿を引き (`SourceVaultEagleView` の「訳」と同じ登録)、画像など PDF 以外は空欄。
 → List[Association] | Dataset | Grid (後方互換)
 Options: "Library" -> Automatic, "Limit" -> Automatic (データ件数), "Format" -> "Rows" (既定)|"Dataset"|"Grid" (View へ委譲)
 
@@ -295,7 +296,7 @@ Options: "Library" -> Automatic, "Limit" -> Automatic (データ件数), "Format
 Options: SourceVaultEagleSummaries と同じ + "MaxRows" -> Automatic (既定 `$SourceVaultCatalogViewMaxRows` 行で描画打ち切り。All で全行)
 
 ### SourceVaultEagleExtractBibMeta[item, opts]
-要約済み item の書誌情報 (Title/Authors/Published) を本文先頭から LLM で抽出し summary record に追記する (旧 record の backfill 用。新規要約は `SourceVaultEagleSummarize` が同時抽出)。PDF は埋め込みメタデータをフォールバックに使う。既に Title を持つ record はスキップ ("ForceRefresh"->True で再抽出)。Method 解決は Summarize と同じ fail-safe (Cloud-Publishable タグ無しはローカル LLM)。
+要約済み item の書誌情報 (Title/Authors/Published) を本文先頭から LLM で抽出し summary record に追記する (旧 record の backfill 用。新規要約は `SourceVaultEagleSummarize` が同時抽出)。PDF は埋め込みメタデータをフォールバックに使う。既に Title を持つ record はスキップ ("ForceRefresh"->True で再抽出)。Method 解決は Summarize と同じ fail-safe (Cloud-Publishable タグ無しはローカル LLM)。ローカル LLM が送信先の上限 (rule 107) で止まったときは空応答と同じ扱いになる (PDF は埋め込みメタデータで補い、何も得られなければ `"Reason" -> "BibNotFound"`)。
 → Association
 Options: "Method" -> Automatic, "MaxChars" -> 2500, "MaxPages" -> 2, "Timeout" -> 120, "ForceRefresh" -> False, "Library" -> Automatic
 

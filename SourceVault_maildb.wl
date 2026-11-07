@@ -1499,6 +1499,8 @@ SourceVaultPostFetchHooks::usage =
   "SourceVaultPostFetchHooks[] \:306f\:767b\:9332\:6e08\:307f post-fetch \:30d5\:30c3\:30af\:540d\:306e\:30ea\:30b9\:30c8\:3092\:8fd4\:3059\:3002";
 SourceVaultMailComputePriority::usage =
   "SourceVaultMailComputePriority[snapshot, workRequest, category] \:306f\:69cb\:9020\:30b7\:30b0\:30ca\:30eb(\:9001\:4fe1\:8005\:30b0\:30eb\:30fc\:30d7\:91cd\:307f + To/Cc \:4f4d\:7f6e + ML\:5224\:5b9a + LLM \:4f9d\:983c\:5ea6 + LLM \:30ab\:30c6\:30b4\:30ea)\:304b\:3089\:91cd\:8981\:5ea6 0.0-1.0 \:3092\:6c7a\:5b9a\:7684\:306b\:8a08\:7b97\:3059\:308b\:3002category \:304c \"Notice\"(\:901a\:77e5\:30fb\:4e00\:6589\:914d\:4fe1\:30fb\:5e83\:544a)\:306a\:3089 -0.30 \:6e1b\:70b9\:3002<|Priority, Components|> \:3092\:8fd4\:3059\:3002";
+SourceVaultMailRecipientPrivacyFloor::usage =
+  "SourceVaultMailRecipientPrivacyFloor[snapshot] returns the deterministic lower bound on PrivacyLevel from the recipients: $SourceVaultMailPersonalPrivacyFloor for a non-bulk mail addressed to the owner with few recipients, otherwise 0.";
 SourceVaultMailExplainPriority::usage =
   "SourceVaultMailExplainPriority[snapshot] \:306f snapshot \:306e\:4fdd\:5b58\:6e08\:307f WorkRequest/Category \:3092\:4f7f\:3063\:3066\:91cd\:8981\:5ea6\:306e\:5185\:8a33(Components)\:3092\:8fd4\:3059\:3002";
 SourceVaultMailRecomputePriorities::usage =
@@ -1821,7 +1823,7 @@ iSVResolveLocalLLM[] :=
           j = Quiet@Check[ImportByteArray[r["BodyByteArray"], "RawJSON"], $Failed];
           If[AssociationQ[j] && ListQ[j["data"]] && Length[j["data"]] > 0,
             model = j["data"][[1]]["id"]; If[! StringQ[model], model = ""]]]]];
-    <|"URL" -> url, "Model" -> model|>];
+    <|"URL" -> url, "Model" -> model, "Provider" -> iSVLocalProviderOf[pm]|>];
 
 (* \:6240\:6709\:8005\:60c5\:5831\:306f SourceVault \:8b58\:5225\:5b50\:5c64 #1 \:304b\:3089\:53d6\:5f97 (identity \:672a\:30ed\:30fc\:30c9\:3067\:3082\:5b89\:5168) *)
 iSVMDOwnerEmails[] := Quiet@Check[
@@ -2151,6 +2153,9 @@ SourceVaultMailDerivedGroundingCheck[snap_Association] :=
 iSVMDInferOnce[mailspec_Association] :=
   Module[{llm, raw, hard = $SourceVaultMailLLMPromptTokenHardMax, n, body, budget0, budget1},
     llm = iSVResolveLocalLLM[];
+    (* rule 107 (2026-11-06): 本文の PL はこの推論で決まるので、未知 = 1.0 として送信先の上限を
+       確かめる (Subnet を信用していない同じ LAN の別機は 0.25)。 *)
+    If[FailureQ[iSVLocalLLMAccessDenial[llm, 1.0]], Return[Missing["AccessLevelExceeded"]]];
     $iSVMDLastPromptTokens = Missing["NotAvailable"];
     raw = iSVQueryLMStudio[iSVDerivePrompt[mailspec], llm["URL"], llm["Model"]];
     If[! StringQ[raw] || raw === "", Return[Missing["LLMUnavailable"]]];
@@ -2172,7 +2177,7 @@ SourceVaultMailInferDerived[mailspec_Association] :=
   Module[{parsed, gc, parsed2, gc2, rejected = {}},
     parsed = iSVMDInferOnce[mailspec];
     If[MissingQ[parsed],
-      Return[<|"Status" -> "Error", "Reason" -> "LLMUnavailable",
+      Return[<|"Status" -> "Error", "Reason" -> If[parsed === Missing["AccessLevelExceeded"], "AccessLevelExceeded", "LLMUnavailable"],
         "WorkRequest" -> Missing["NotGenerated"], "PrivacyLevel" -> Missing["NotGenerated"],
         "Category" -> Missing["NotGenerated"], "Deadline" -> Missing["NotGenerated"],
         "Summary" -> Missing["NotGenerated"]|>]];
@@ -2284,6 +2289,9 @@ iSVMDRecipientPrivacyFloor[snap_Association] :=
     nRecip = Length[SourceVaultMailParseEmails[ToString@Lookup[md, "To", ""]]] +
        Length[SourceVaultMailParseEmails[ToString@Lookup[md, "Cc", ""]]];
     If[1 <= nRecip <= $iSVMDPersonalRecipientMax, N@$SourceVaultMailPersonalPrivacyFloor, 0.]];
+
+SourceVaultMailRecipientPrivacyFloor[snap_Association] := iSVMDRecipientPrivacyFloor[snap];
+SourceVaultMailRecipientPrivacyFloor[_] := 0.;
 
 iSVMDSenderEntity[snap_Association] :=
   Quiet@Check[
@@ -2427,7 +2435,10 @@ iSVApplyDerived[snap_Association, res_Association] :=
     If[NumericQ[wr], d["WorkRequest"] = N@Clip[wr, {0., 1.}]];
     (* LLM \:63a8\:8ad6 PL \:306b\:53d7\:4fe1\:8005\:30d9\:30fc\:30b9\:306e\:6c7a\:5b9a\:7684\:30d5\:30ed\:30a2\:3092 additive(Max)\:9069\:7528=\:500b\:4eba\:30e1\:30fc\:30eb\:306e\:904e\:5c0f privacy \:3092\:9632\:3050 *)
     If[NumericQ[res["PrivacyLevel"]],
-      d["PrivacyLevel"] = Max[res["PrivacyLevel"], iSVMDRecipientPrivacyFloor[snap]]];
+      d["PrivacyLevel"] = Max[res["PrivacyLevel"], iSVMDRecipientPrivacyFloor[snap]];
+      (* a fresh value carries no learned adjustment: the audit record of the old
+         one holds the base the adjuster would otherwise start from *)
+      d = KeyDrop[d, "FeedbackAdjustment"]];
     If[StringQ[ct], d["Category"] = ct];
     (* \:3006\:5207\:306f\:30ad\:30fc\:304c\:5728\:308b\:3068\:304d\:3060\:3051\:66f4\:65b0: \:518d\:51e6\:7406\:3067\:300c\:3006\:5207\:306a\:3057\:300d\:306b\:306a\:308c\:3070 Missing \:3067\:4e0a\:66f8\:304d\:3001
        Deadline \:975e\:5bfe\:5fdc\:306e\:65e7 Inferencer \:3067\:306f\:65e2\:5b58\:5024\:3092\:4fdd\:6301\:3002 *)
@@ -3205,19 +3216,53 @@ iSVUITranslateReply[replyText_String, targetLang_String, origFormality_String] :
 iSVUIOwnerPrimaryEmail[] :=
   With[{e = iSVMDOwnerPrimaryEmail[]}, If[StringQ[e] && e =!= "", e, Missing[]]];
 
+(* ---- メールに載せる文字 ----
+   ↓ や全角空白など普通の文字はそのまま送る。送ってはいけない文字だけ、実体を
+   入れずエスケープ表記のまま見える形で残す。対象は、タブと改行以外の制御文字、
+   双方向の上書き (表示の偽装に使える)、単独サロゲートと非文字 (UTF-8 にできない)、
+   私用領域 (\[Rule] など WL 固有の記号。受信側で豆腐になる)。 *)
+iSVUIMailUnsafeCodeQ[c_Integer] :=
+  (c < 32 && c =!= 9 && c =!= 10) ||
+  127 <= c <= 159 ||
+  16^^202A <= c <= 16^^202E || 16^^2066 <= c <= 16^^2069 ||
+  16^^D800 <= c <= 16^^F8FF ||
+  16^^FDD0 <= c <= 16^^FDEF ||
+  BitAnd[c, 16^^FFFE] === 16^^FFFE ||
+  c >= 16^^F0000;
+
+iSVUIMailSafeText[s_String] :=
+  Module[{t, bad},
+    t = StringReplace[iSVUINormalizeNewlines[s],
+      {"\[LineSeparator]" -> "\n", "\[ParagraphSeparator]" -> "\n"}];
+    bad = Select[DeleteDuplicates@ToCharacterCode[t], iSVUIMailUnsafeCodeQ];
+    If[bad === {}, t,
+      StringReplace[t, Map[
+        FromCharacterCode[#] -> StringTake[
+          ToString[FromCharacterCode[#], InputForm, CharacterEncoding -> "PrintableASCII"],
+          {2, -2}] &, bad]]]];
+iSVUIMailSafeText[_] := "";
+
+(* 前後の空行だけ落とす。StringTrim は全角空白も削るので、1 行目の字下げが消える。 *)
+iSVUITrimBlankLines[s_String] :=
+  With[{lines = StringSplit[s, "\n", All]},
+    With[{pos = Flatten@Position[StringTrim /@ lines, Except[""], {1}, Heads -> False]},
+      If[pos === {}, "", StringRiffle[lines[[First[pos] ;; Last[pos]]], "\n"]]]];
+
 SourceVaultMailSend[spec_Association] :=
   Module[{to, cc, bcc, subject, body, atts, mailSpec, result, sig, self, rawAtts},
     to = StringTrim@ToString@Lookup[spec, "To", ""];
     If[to === "", Return[<|"Status" -> "Error", "Reason" -> "NoRecipient"|>]];
     cc = StringTrim@ToString@Lookup[spec, "Cc", ""];
-    subject = ToString@Lookup[spec, "Subject", ""];
+    (* 件名は 1 行に (改行が残るとヘッダが崩れる) *)
+    subject = StringReplace[iSVUIMailSafeText[ToString@Lookup[spec, "Subject", ""]],
+      RegularExpression["[\\n\\t]+"] -> " "];
     body = ToString@Lookup[spec, "Body", ""];
     sig = If[StringQ[$SourceVaultMailSignature] && StringTrim[$SourceVaultMailSignature] =!= "",
       "\n\n" <> $SourceVaultMailSignature, ""];
     body = body <> sig;
     (* \:6539\:884c\:3092 LF \:306b\:7d71\:4e00\:3002\r \:304c\:6b8b\:308b\:3068 SMTP \:306e \n->\r\n \:6b63\:898f\:5316\:3067 \r\r\n \:306b\:306a\:308a
        \:53d7\:4fe1\:5074\:3067\:4e8c\:91cd\:6539\:884c\:306b\:306a\:308b (\:65e7 maildb \:3068\:540c\:3058\:5bfe\:7b56)\:3002 *)
-    body = iSVUINormalizeNewlines[body];
+    body = iSVUIMailSafeText[body];
     rawAtts = Lookup[spec, "Attachments", {}];
     rawAtts = If[ListQ[rawAtts], rawAtts, {rawAtts}];
     atts = Select[rawAtts, StringQ[#] && FileExistsQ[#] &];
@@ -3275,16 +3320,55 @@ iSVUIAttachChips[attachments_, removeFn_] :=
    ShowDocPalette \:7b49) \:304c\:5bfe\:8c61\:30bb\:30eb\:3068\:3057\:3066\:305d\:306e\:307e\:307e\:4f7f\:3048\:308b\:3002
    \:5236\:5fa1\:30d1\:30cd\:30eb (To/Cc/\:4ef6\:540d/\:6dfb\:4ed8/\:9001\:4fe1) \:3060\:3051 DynamicModule\:3001\:672c\:6587/\:7ffb\:8a33/\:5f15\:7528\:306f\:30bb\:30eb\:3002 *)
 
-(* \:30bb\:30eb\:5f0f -> \:5e73\:6587\:3002FE \:306e PlainText \:30a8\:30af\:30b9\:30dd\:30fc\:30c8\:3092\:4f7f\:3044\:3001\:7a00\:306b\:6b8b\:308b \:XXXX \:3092\:5b9f\:6587\:5b57\:3078\:3002 *)
-iSVUICellPlainText[cellExpr_] :=
-  Module[{txt},
-    txt = Quiet@Check[
-      First@FrontEndExecute[FrontEnd`ExportPacket[cellExpr, "PlainText"]], $Failed];
+(* セル式 -> 平文。
+   ExportPacket["PlainText"] は ↓ を \[DownArrow] に、全角空白を 16 進表記に、
+   × を * に書き換える。しかも、元から打たれた同じ綴りとの区別がつかない。そこで
+   文字列はセル式からそのまま読み、数式など組版ボックスの部分だけ FE に書き出させる。 *)
+iSVUICellPlainText[cellExpr_Cell] :=
+  Module[{txt = iSVUICellTextOf[cellExpr]},
+    If[! StringQ[txt], txt = iSVUICellFEText[cellExpr]];
     If[! StringQ[txt], Return[$Failed]];
-    (* FE \:306f \r\n \:3092\:8fd4\:3057\:3046\:308b\:3002LF \:306b\:7d71\:4e00\:3057\:3066\:304b\:3089 \:XXXX \:3092\:5b9f\:6587\:5b57\:3078\:3002 *)
-    txt = iSVUINormalizeNewlines[txt];
-    StringReplace[txt,
-      RegularExpression["\\\\:([0-9a-fA-F]{4})"] :> FromCharacterCode[FromDigits["$1", 16]]]];
+    iSVUIMailSafeText[iSVUIPUAToPlain[iSVUINormalizeNewlines[txt]]]];
+iSVUICellPlainText[_] := $Failed;
+
+iSVUICellTextOf[s_String] := s;
+iSVUICellTextOf[l_List] :=
+  With[{parts = iSVUICellTextOf /@ l},
+    If[AllTrue[parts, StringQ], StringJoin[parts], $Failed]];
+iSVUICellTextOf[TextData[x_]] := iSVUICellTextOf[x];
+iSVUICellTextOf[(StyleBox | ButtonBox)[x_, ___]] := iSVUICellTextOf[x];
+iSVUICellTextOf[Cell[x : (_String | _TextData), ___]] := iSVUICellTextOf[x];
+iSVUICellTextOf[c_Cell] := iSVUICellFEText[c];
+iSVUICellTextOf[x_] := iSVUICellFEText[Cell[TextData[{x}], "Text"]];
+
+iSVUICellFEText[cell_] :=
+  Module[{t = Quiet@Check[
+      First@FrontEndExecute[FrontEnd`ExportPacket[cell, "PlainText"]], $Failed]},
+    If[StringQ[t], iSVUIUnescapeFEText[t], $Failed]];
+
+(* FE の書き出しに残るエスケープを実文字へ戻す。正規表現が中身を英数字に限るので、
+   ToExpression は文字列リテラルの読み取りにしかならない。読めない名前や
+   載せてはいけない文字になるものは、書かれたまま残す。 *)
+iSVUIUnescapeFEText[s_String] :=
+  StringReplace[s,
+    RegularExpression["\\\\(?:\\[[A-Za-z0-9]+\\]|:[0-9a-fA-F]{4}|\\|[0-9a-fA-F]{6}|\\.[0-9a-fA-F]{2})"] :>
+      iSVUIEscapeToChar["$0"]];
+
+iSVUIEscapeToChar[esc_String] :=
+  Module[{c = Quiet@Check[ToExpression["\"" <> esc <> "\""], $Failed]},
+    If[StringQ[c] && StringLength[c] === 1 &&
+        ! iSVUIMailUnsafeCodeQ[First@ToCharacterCode[c]],
+      c, esc]];
+
+(* 私用領域の WL 記号は FE の読み替えを使う (\[Rule] -> "->")。読み替えがなければ
+   次の iSVUIMailSafeText がエスケープ表記にする。 *)
+iSVUIPUAToPlain[s_String] :=
+  With[{pua = Select[DeleteDuplicates@ToCharacterCode[s], 16^^E000 <= # <= 16^^F8FF &]},
+    If[pua === {}, s,
+      StringReplace[s, Map[
+        Function[c, With[{ch = FromCharacterCode[c]},
+          ch -> With[{t = iSVUICellFEText[Cell[ch, "Text"]]}, If[StringQ[t], t, ch]]]],
+        pua]]]];
 
 (* CellTags \:3067\:30bb\:30eb\:3092\:63a2\:3057\:5e73\:6587\:3092\:8fd4\:3059\:3002\:7121\:3051\:308c\:3070 Missing["NoCell"]\:3002 *)
 iSVUIReadTaggedCell[nb_, tag_String] :=
@@ -3386,11 +3470,11 @@ iSVUIReplyControl[draft_Association, translateMode_, pl_ : 1.0] :=
               ! StringQ[mainTxt] || StringTrim[mainTxt] === "",
                 status = Style["\:672c\:6587\:304c\:7a7a\:3067\:3059", Red],
               True,
-                finalBody = StringTrim[mainTxt];
+                finalBody = iSVUITrimBlankLines[mainTxt];
                 If[TrueQ[includeQuote],
                   q = iSVUIReadTaggedCell[nb, "svReplyQuote"];
                   If[StringQ[q] && StringTrim[q] =!= "",
-                    finalBody = finalBody <> "\n\n" <> StringTrim[q]]];
+                    finalBody = finalBody <> "\n\n" <> iSVUITrimBlankLines[q]]];
                 spec = <|"To" -> to, "Cc" -> cc, "Subject" -> subject,
                    "Body" -> finalBody, "Attachments" -> attachments|>;
                 ok = iSVUISendConfirm[spec];
@@ -4642,7 +4726,11 @@ iSVMDRegisterPrivacyContracts[] :=
          {"SourceVaultMailThreadNotebook", "Head"},
          {"SourceVaultMailSnapshotDecryptBody", "Head"},
          {"SourceVaultMailComposeReply", "Head"},
-         {"SourceVaultMailTranslateBody", "Head"}}]];
+         {"SourceVaultMailTranslateBody", "Head"}}];
+      (* 2026-11-07: numeric floor only (no mail content in the output) *)
+      SourceVault`SourceVaultRegisterPrivacyContract["SourceVaultMailRecipientPrivacyFloor",
+        <|"Class" -> "Internal", "Module" -> "SourceVault_maildb.wl",
+          "NoDataFlow" -> "Reads the caller's snapshot headers and the owner's own addresses to decide personal vs bulk mail; returns only a PrivacyLevel number (0 or $SourceVaultMailPersonalPrivacyFloor), never addresses or text."|>]];
     Null, Null];
 iSVMDRegisterPrivacyContracts[];
 

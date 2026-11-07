@@ -9,6 +9,8 @@ The LLM inference is the prior. L2 only overrides it when the posterior margin e
 
 Layering precedence: explicit user override > L1 rules > L2 posterior > LLM prior. maildb's deterministic recipient privacy floor still binds the learned privacy value; only an explicit human override may go below it (and that is logged).
 
+A correction generalizes by its direction. Upward, the Priority/PrivacyLevel residual is learned on every matched feature. Downward, it is learned on the sender address only; the domain, recipient and subject-term features count the event with a zero residual. The owner's own addresses learn no residual in either direction. Category learning is not direction-dependent.
+
 Coupling: weak. maildb calls this module only through the seam $SourceVaultMailDerivedAdjuster when this package is loaded; nothing here is required for maildb to function. Content-minimized: the ledger stores addresses and subject-derived terms/numbers, never the mail body.
 
 Why hierarchical Bayes instead of plain naive Bayes: the correction stream is tiny and lopsided (few events, most features seen once). The shrinkage prior (alpha/kappa) plus per-family averaging (not summing) of log-odds gives graceful behavior at n=1 and converges to the empirical rate as evidence accumulates.
@@ -23,6 +25,7 @@ Stores the values as a hard per-mail override (Derived.UserOverride) that surviv
 → Association
 Options: "Scope" -> "Mail" (this mail only, plus L2 evidence; also accepts "Sender" to also create an L1 rule keyed on sender address, "Rule" to create an L1 rule from "Match", "None" for no learning), "Match" -> Automatic (explicit rule match spec, used with Scope->"Rule"), "Learn" -> True (feed the L2 model), "Reason" -> "" (free text, ledger only), "Persist" -> True, "Snapshot" -> Automatic (test seam), "Reapply" -> False (True also re-scores other mails of the same sender)
 Returns <|Status, RecordId, Old, New, Scope, RuleId, Learned, Priority, PrivacyLevel, Category, Reapplied?|>.
+An L1 rule from a lowered Priority is a ceiling ("PriorityMax"), from a raised one a floor ("PriorityMin"). PrivacyLevel always gives a floor ("PrivacyMin"): lowering it stays a soft learned shift, never a hard cap on a sender's later mail.
 例: SourceVaultMailCorrect["m123", <|"Category" -> "TaskRequest", "Priority" -> 0.8|>, "Scope" -> "Sender"]
 
 ### SourceVaultMailSetSenderWeight[recordIdOrEmail_String, weight_?NumericQ, opts]
@@ -44,7 +47,7 @@ Options: same as SourceVaultMailCorrections ("RecordId" -> Automatic, "Field" ->
 ## Rules (L1)
 
 ### SourceVaultMailAddRule[spec_Association, opts]
-Registers an L1 rule. spec: <|"Match" -> <|"From", "Domain", "To", "Subject" -> {terms...}, "Category"|>, "Action" -> <|"SetCategory", "SetWorkRequest", "PriorityAdjust", "PriorityMin", "PrivacyAdjust", "PrivacyMin", "PriorityMax", "PrivacyMax"|>, "Note", "Enabled", "Source"|>. Every given Match key must hold (AND); "Subject" requires ALL listed terms. RuleId is a hash of Match+Action, so re-adding the same rule is idempotent. A new enabled rule supersedes the same-name action fields of every earlier enabled rule with the same normalized Match: the old rule is trimmed to its remaining fields, or removed if none remain (rules on a different Match still combine, Min/Max-folded in the adjuster). Disabled rules are left untouched.
+Registers an L1 rule. spec: <|"Match" -> <|"From", "Domain", "To", "Subject" -> {terms...}, "Category"|>, "Action" -> <|"SetCategory", "SetWorkRequest", "PriorityAdjust", "PriorityMin", "PrivacyAdjust", "PrivacyMin", "PriorityMax", "PrivacyMax"|>, "Note", "Enabled", "Source"|>. Every given Match key must hold (AND); "Subject" requires ALL listed terms. RuleId is a hash of Match+Action, so re-adding the same rule is idempotent. A new enabled rule supersedes the same-name action fields of every earlier enabled rule with the same normalized Match: the old rule is trimmed to its remaining fields, or removed if none remain (rules on a different Match still combine, Min/Max-folded in the adjuster). "PriorityMin" and "PriorityMax" supersede each other on one Match; across different Matches a "PriorityMin" outranks a "PriorityMax". "PrivacyMax" is accepted and stored but not applied. Disabled rules are left untouched.
 → Association (the stored rule, plus "ReplacedRules" -> {superseded rule ids})
 Options: "Persist" -> True
 
@@ -58,7 +61,7 @@ Deletes an L1 rule. Returns <|Status, RuleId, Count|>.
 Enables/disables an L1 rule without deleting it. Returns <|Status, RuleId, Enabled|>.
 
 ### SourceVaultMailRulesView[] → notebook expression
-Shows the L1 rules as a Dataset with enable/delete buttons (front end).
+Shows the L1 rules as a Dataset with enable/delete buttons (front end). The effect column lists each action field; a Priority ceiling ("PriorityMax") is shown as "重要度≦<value>" next to the floor "重要度≧<value>".
 
 ### SourceVaultMailRuleProposals[opts]
 Returns L2 evidence strong and consistent enough to promote to a deterministic L1 rule (>= $SourceVaultMailFeedbackPromoteCount corrections on one feature agreeing on one category with >=80% consistency, excluding what an enabled rule already covers). Never auto-applied.
@@ -72,17 +75,17 @@ Promotes a proposal from SourceVaultMailRuleProposals (an Association, or a Prop
 ## Model (L2)
 
 ### SourceVaultMailFeedbackModel[] → Association
-Returns the L2 model: per-feature category counts ("Cat"), per-feature residual sufficient statistics N/Sum for Priority and PrivacyLevel ("Res"), global category counts ("Global"), event count ("Events"). Derived data, always rebuildable from the ledger.
+Returns the L2 model: per-feature category counts ("Cat"), per-feature residual sufficient statistics N/Sum for Priority and PrivacyLevel ("Res"), global category counts ("Global"), event count ("Events"), and the version of the residual-learning rule it was built under ("ResidualPolicy"; currently 2). Derived data, always rebuildable from the ledger.
 
 ### SourceVaultMailFeedbackRebuildModel[] → Association
-Rebuilds the L2 model from the correction ledger (source of truth). Use after editing/pruning the ledger or when the model file is lost.
+Rebuilds the L2 model from the correction ledger (source of truth). Use after editing/pruning the ledger or when the model file is lost. A stored model written under an older residual rule is rebuilt automatically when it is next loaded, unless the ledger reads empty. SourceVaultMailCorrect loads (and if needed rebuilds) the model before appending its event to the ledger, so a rebuild triggered by that load does not count the event twice.
 Returns <|Status, Events, Features|>.
 
 ### SourceVaultMailFeedbackFeatures[recordIdOrRowOrSnapshot] → Association
 Returns the feature list used by the learner: <|"From" -> {...}, "Dom" -> {...}, "To" -> {...}, "Subj" -> {...}|> (addresses lowercased and capped at 2 senders / 8 To+Cc recipients; subject reduced to ASCII words, bracketed tags, and 2/3-grams of kanji/katakana runs, capped at $SourceVaultMailFeedbackMaxSubjectTerms).
 
 ### SourceVaultMailFeedbackAdjust[snapshot, derived_Association] → Association
-Applies the feedback layers (L1 then L2) to a derived association and returns the adjusted one, with the audit trail in "FeedbackAdjustment" (<|RuleIds, CategoryFrom, CategoryTo, CategoryMargin, PriorityAdjust, PrivacyAdjust, Explain, At|>). This is the function maildb calls through $SourceVaultMailDerivedAdjuster; it is pure (no store writes) and never touches a field pinned by Derived.UserOverride. Returns derived unchanged if $SourceVaultMailFeedbackEnabled is False.
+Applies the feedback layers (L1 then L2) to a derived association and returns the adjusted one, with the audit trail in "FeedbackAdjustment" (<|RuleIds, CategoryFrom, CategoryTo, CategoryMargin, PriorityAdjust, PrivacyAdjust, PrivacyBase, Explain, At|>). Priority starts from the structural value; matched L1 ceilings ("PriorityMax", the lowest wins) are applied before floors ("PriorityMin", the highest wins), so a floor outranks a ceiling. PrivacyLevel starts from "PrivacyBase", its value before this layer touched it (taken from the stored FeedbackAdjustment; for a record stored before the base was recorded, the reported PrivacyAdjust is undone unless the value rests on the recipient floor), so adjusting again does not stack on a previous adjustment. PrivacyBase is Missing["NotApplied"] when PrivacyLevel was not adjusted (user override or no value). This is the function maildb calls through $SourceVaultMailDerivedAdjuster; it is pure (no store writes) and never touches a field pinned by Derived.UserOverride. Returns derived unchanged if $SourceVaultMailFeedbackEnabled is False.
 
 ### SourceVaultMailFeedbackExplain[recordId_String] → Association
 Explains how the current values of a mail were reached: LLM prior, matched L1 rules, L2 posterior per category, residual adjustments, and the user override.
@@ -91,7 +94,7 @@ Returns <|Status, RecordId, Category, Priority, PrivacyLevel, WorkRequest, Prior
 ## Reapply
 
 ### SourceVaultMailFeedbackReapply[opts]
-Re-scores mails already in the store with the CURRENT rules and model (no LLM call): recomputes structural priority from the stored WorkRequest/Category, then applies L1 + L2, then the user override.
+Re-scores mails already in the store with the CURRENT rules and model (no LLM call): recomputes structural priority from the stored WorkRequest/Category, then applies L1 + L2, then the recipient privacy floor, then the user override. Repeating it does not lower PrivacyLevel further: the value before the adjustment is kept in FeedbackAdjustment.PrivacyBase. Only shards already loaded in the kernel are scanned.
 → Association
 Options: "From" -> Automatic (only this sender address), "MBox" -> Automatic, "RecordIds" -> Automatic, "Persist" -> True, "DryRun" -> False
 Returns <|Status, Scanned, Changed, Total, DryRun|>. Returns <|Status -> "Skipped", Reason -> "MaildbUnavailable"|> if maildb's snapshot API is not loaded.

@@ -77,7 +77,7 @@ ResearchOnly->True`(§5.14 追補)。
 構築する。既定 stream: `LLMBoundaryMismatchRate`(LLMBoundaryGate/Shadow の非 Verified/mismatch 率)、
 `GuardMailMisalignedRate`(GuardMailParallelRecorded の非 aligned 率)。**owner 状態系は opt-in**:
 `"IncludeOwnerState"->True` で `OwnerInputHighRiskRate`(OwnerInputShadowRecorded の High 率)を追加。
-Options: `"WindowDays"`(14)、`"Limit"`(5000)、`"IncludeOwnerState"`(False)。→ RunCaneAnomalyWorkflow の "Streams" にそのまま渡せる
+Options: `"WindowDays"`(14。この期間の日付フォルダだけ読む=`SourceVaultTransactionLog` の `"Since"`。正の整数以外なら期間で絞らず全件読む)、`"Limit"`(5000。event class ごとに、期間で絞った後の新しい順で数える)、`"IncludeOwnerState"`(False)。→ RunCaneAnomalyWorkflow の "Streams" にそのまま渡せる
 Association。**実データが無い stream は含めない**(空捏造しない=I-15)。分子/分母を数え Wilson CI と
 baseline は DetectStreamAnomalies が付ける(cold start=MinBaselineSamples 未満は InsufficientBaseline)。
 schedule tick の既定 RunFn がこれを呼んで実 stream を供給する(owner 状態は profile の OwnerStateOptIn に従う)。
@@ -91,6 +91,7 @@ IntervalSeconds)。Enabled/Scheduled/非 Paused かつ前回 run から Interval
 run の idempotency(同一 idemKey→Reused)で安全。**Reused でも pipeline-status の liveness を更新**
 (LastScheduleOutcome 付き。空 streams の縮退で probe が偽 PipelineStale にならないように)。決して throw せず
 `<|Status: Disabled|NotDue|Ran|Reused|RunFailed|ProfileUnavailable|>`。Options: `"RunFn"`(Automatic、注入シーム=テスト用)。
+IntervalSeconds が数値でないか 60 未満なら 86400 とみなす(probe の PipelineStale 判定も同じ値を使う)。
 有効化手順: owner が `SourceVaultRegisterCaneAnomalySchedule[<|"IntervalSeconds"->86400|>,
 "OwnerAuthorization"->True]` → service 再起動(rule105 §8)で反映。
 
@@ -107,6 +108,6 @@ Options: `"Window"`(Automatic=入力 streams から自動導出)、`"Profile"`(A
 ### SourceVaultCaneDiagnosticsProbe[] / SourceVaultCaneSensitiveDoctor[opts] / SourceVaultRegisterCaneDiagnostics[]
 **二層分離**(§5.15)。通常 probe は `<|"Health"->"OK"|"Degraded"|"Failing","ReasonCode"->"PipelineHealthy"|
 "PipelineStale"|"PipelineFailed"|>` **のみ**。Health は検知 pipeline の liveness だけで決まり、**sensitive alert の
-有無で変化しない**(PendingSensitiveAlerts/owner 状態/hypothesis id/SLV ref を出さない)。SensitiveDoctor は local UI
+有無で変化しない**(PendingSensitiveAlerts/owner 状態/hypothesis id/SLV ref を出さない)。`PipelineStale` は schedule が有効で、実行予定(前回 + IntervalSeconds)から profile の FreshnessSeconds(既定 86400)を超えて遅れているとき(毎日実行なら前回から 48 時間超)。SensitiveDoctor は local UI
 限定の詳細(逸脱・仮説・lineage・分母/coverage・PendingSensitiveAlerts。heartbeat/cloud/mail に出してはならない)。
 Register は `SourceVaultDiagnosticsRegisterProbe` へ弱く冪等に登録(未ロードなら no-op=rule 11)。

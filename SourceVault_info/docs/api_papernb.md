@@ -4,7 +4,7 @@
 
 **翻訳ノートブック (2026-10-12、旧称「和訳ノートブック」)**: 訳先は `$Language` (`"TargetLanguage"` で変更可)。原文の言語 (`DocPaperDetectLanguage`) が訳先と同じなら翻訳せず構造化だけ行う。登録は (ソース, TargetLanguage) ごとに 1 件なので、多言語の利用者がそれぞれの言語の翻訳ノートを同じソースに持てる。TargetLanguage が空の古い登録はどの言語にも合う。中国語の簡体/繁体は同じ言語とみなす (言語名の比較は大文字小文字・空白・`-`・`_` を無視)。コンテキスト `SourceVault\`` (private `` `PaperNBPrivate` ``)。service-loadable (FrontEnd / NBAccess / documentation は DownValues guard の弱結合)。同ファイルは計算ノート (素材から作った Mathematica の計算と結果のノートブック) の登録簿も持つ (後述)。
 
-**PL の継承**: 生成ノートブックは元ソースの `PrivacyLevel` を継承する。`CloudPublishable` 宣言 = PL < 0.5 (NBAccess`NBSetCloudPublishable でファイルに書く。NBAccess の経路規則 `NBPrivacyLevelToRoutes` と同じ境界)。翻訳の LLM 経路も PL で決める: PL < 0.5 は既定 (Claude Code CLI / パレットのモデル)、PL ≥ 0.5 は `$ClaudePrivateModel` のみ (未設定なら fail-closed で Failure)。ローカル PDF パスを直接 `DocImportPaper` に渡す従来の呼び方は PL を継承しない (宣言なし)。
+**PL の継承**: 生成ノートブックは元ソースの `PrivacyLevel` を継承する。`CloudPublishable` 宣言 = PL < 0.5 (NBAccess`NBSetCloudPublishable でファイルに書く。NBAccess の経路規則 `NBPrivacyLevelToRoutes` と同じ境界)。翻訳の LLM 経路も PL で決める: PL < 0.5 は既定 (Claude Code CLI / パレットのモデル)、PL ≥ 0.5 は `$ClaudePrivateModel` のみ (未設定なら fail-closed で Failure)。さらに生成の開始時に 1 回、実際の送信先がその PL を扱えるかを確かめ、扱えなければ生成しない (rule 107。Subnet を信用していない同じ LAN の別機は上限 0.25 で、localhost は常に通る)。ローカル PDF パスを直接 `DocImportPaper` に渡す従来の呼び方は PL を継承しない (宣言なし)。
 
 保存: `SourceVaultCoreRoot[]/papernb/registry.json` と `papernb/<題名>_<SourceId>.nb` (既定のパスを別の言語の登録が使っていれば `<題名>_<SourceId>_<言語>.nb`)。`File` は root 内なら相対パス (Dropbox の root は PC ごとに違う)。登録簿 JSON は一時ファイル経由のアトミック書き込み (Dropbox 向けにリトライ)、読みはファイル更新日でキャッシュ。
 
@@ -25,7 +25,7 @@
 Options: "Language" -> Automatic (`$Language` の訳を優先し、無ければ他の言語の登録 = 文献解決が途切れない) | "English" 等 (その言語の登録だけ。一覧の列と「訳」ボタンは `"Language" -> $Language` で引く)
 
 ### SourceVaultPaperNotebookEntry[ref, opts] → Association | Missing
-`<|"SourceId", "URI", "File", "Notebook" (絶対パス), "Title", "PrivacyLevel", "CloudPublishable", "TargetLanguage", "SourceLanguage", "Translated", "Format" (pdf / html / markdown / text), "PDFSourceId", "Status", "FailedPages", "Pages", "CreatedAtUTC", "UpdatedAtUTC"|>`。まず登録簿を ref の SourceId / URI / PDFSourceId で引き、見つからない時だけ参照解決を通す (再帰しない)。"Language" は SourceVaultPaperNotebook と同じ。
+`<|"SourceId", "URI", "File", "Notebook" (絶対パス), "Title", "PrivacyLevel", "CloudPublishable", "TargetLanguage", "SourceLanguage", "Translated", "Format" (pdf / html / markdown / text), "PDFSourceId", "Status", "FailedPages", "Pages", "CreatedAtUTC", "UpdatedAtUTC"|>`。まず登録簿を ref の SourceId / URI / PDFSourceId で引き、見つからない時だけ参照解決を通す (再帰しない)。Eagle の正準 URI (`sv://object/eagle-<id>`) は登録簿のキーそのものなので、見つからなくても参照解決はしない (一覧が PDF の行ごとに引くため、ライブラリからの item の読み直しを避ける)。"Language" は SourceVaultPaperNotebook と同じ。
 Options: "Language" -> Automatic
 
 ### SourceVaultRegisterPaperNotebook[ref, nbPath, opts] → entry | Failure
@@ -52,8 +52,9 @@ Options: "Language" -> Automatic (SourceVaultPaperNotebookEntry が返す 1 件)
 ### SourceVaultMakePaperNotebook[ref, opts] → entry | Failure
 訳先 (`"TargetLanguage"`、既定 `$Language`) の登録があってファイルがあれば生成せず返す (`"Status" -> "Existing"`、FE なら開く。別の言語の登録しか無ければ新しく作る)。無ければ元ソースのファイル形式で振り分けて生成し登録する: PDF → `DocImportPaper`、HTML / テキスト / Markdown (種別 web のソースの raw snapshot) → `DocImportWebPage` (`"BaseURL"` = ソースの URL、`"Title"` = ソースの題)。共通に `"OutputPath"` (作り直しはその言語の登録のファイル、新規は既定パス・衝突時は言語名付き), `"TargetLanguage"`, `"CloudPublishable" -> (PL < 0.5)`, `Model -> PL 経路` を渡す。上記以外のオプションは変換関数へ渡す (`"Pages"` / `"Reconstruct"` / `"Translate"` / `"Images"` / `"MaxImages"` / `Model` / `Fallback` …。`"OutputPath"`/`"Save"`/`"CloudPublishable"` は無視)。PL ≥ 0.5 では Model は `$ClaudePrivateModel` のみ、Fallback は False (PL < 0.5 の Fallback 既定はパレットの `GetPaletteFallback[]`)。登録には変換結果の `SourceLanguage` / `Translated` / `Format` / `FailedPages` を記録する。
 **論文ページは OA PDF から** (2026-10-12): web の HTML ソースにオープンアクセス PDF が結ばれていれば (SourceVault_oapdf.wl。未確認ならその場で `SourceVaultIngestOpenAccessPDF` で探して取り込む) PDF から `DocImportPaper` で作る (数式・図表・段組みが崩れない)。登録はページの SourceId のまま `"Format" -> "pdf"`, `"PDFSourceId" -> <PDF のソース>` を記録し、PDF のソースからも同じノートを引ける。PDF のソースから作った同じ言語のノートがあればそれを `Existing` で返す。PL はページと PDF の大きい方。
+**送信先の確認** (rule 107): 経路のモデルを決めたあと、変換を始める前に 1 回、送信先がその PL を扱えるかを確かめる。既定の経路では `ClaudeCode`ClaudeResolvedModelSpec` で実際の送信先を解決して NBAccess (`NBModelCanHandleAccessLevel`) に問い、扱えなければ `Failure["AccessLevelExceeded", <|"PrivacyLevel", "Provider", "URL", "Limit", "Proximity"|>]` を返す (メッセージは `$Language` が Japanese なら日本語。同じ LAN の別機で Subnet を信用していないときはパレットの Subnet を「信用する」にするか自機のモデルに切り替えるよう案内する)。`Model` を `{provider, model, ..}` で明示指定したときは枠の上書きなので総合判定は省き、`ClaudeCode`ClaudeLocalLLMAccessCheck` で LAN の別機への上限だけを確かめる (claudecode が未ロードなら確かめない)。NBAccess が無い環境では確かめられないので PL < 0.5 だけ通し、PL ≥ 0.5 は `Failure["AccessCheckUnavailable", ..]`。
 Options: "Force" -> False (作り直し), "Open" -> Automatic (False 以外で FE なら開く。既に開いているノートは前面へ出す), "Interactive" -> False (True = 現在のノートブックに評価セルを書いて実行。一覧の「＋ 翻訳NB」がこれ), "Verbose" -> True, "PreferPDF" -> Automatic (False = OA PDF があっても HTML から作る)
-Failure: `SourceNotFound` / `UnsupportedFormat` (PDF・HTML・テキスト・Markdown 以外) / `DocumentationNotLoaded` / `PrivateModelUnavailable` / `ImportFailed` (変換が $Failed かファイルを作らなかった)。
+Failure: `SourceNotFound` / `UnsupportedFormat` (PDF・HTML・テキスト・Markdown 以外) / `DocumentationNotLoaded` / `PrivateModelUnavailable` / `AccessLevelExceeded` / `AccessCheckUnavailable` / `ImportFailed` (変換が $Failed かファイルを作らなかった)。
 
 ### SourceVaultOpenPaperNotebook[ref]
 `$Language` の翻訳ノートブックが登録済みなら開く (既に開いていれば前面へ。FE 無しならパス)、無ければ `SourceVaultMakePaperNotebook[ref, "Interactive" -> True]`。
@@ -89,7 +90,7 @@ ref = Id / `sv://computenb/<Id>` / 登録したファイルのパス。"Notebook
 
 ## 一覧との接続
 
-`SourceVaultEagleView` の 1 列目にも PDF なら「訳」ボタン (`$Language` の訳が登録済みなら太字 = 開く、未登録 = 生成)。`SourceVaultSourcesView` / `SourceVaultArXivView` (`iSVRenderRowsGrid`) に「翻訳NB」列 (種別 arxiv / web / local): `$Language` の訳が登録済み = 「▶ 翻訳NB」(開く)、未登録 = 「＋ 翻訳NB」(生成、tooltip に訳先と継承する PL)。ボタンには SourceId だけを焼く。`DocImportPaper["src-…"]` も同じ経路に委譲する。
+`SourceVaultEagleView` の 1 列目にも PDF なら「訳」ボタン (`$Language` の訳が登録済みなら太字 = 開く、未登録 = 生成)。`SourceVaultSourcesView` / `SourceVaultArXivView` / `SourceVaultSummariesView` (`iSVRenderRowsGrid`) に「翻訳NB」列: `$Language` の訳が登録済み = 「▶ 翻訳NB」(開く)、未登録でファイルがある = 「＋ 翻訳NB」(生成、tooltip に訳先と継承する PL)。登録簿を引く参照は種別ごとに決まる: arxiv / web / local は SourceId、eagle (横断一覧の行) は PDF の item だけ正準 URI `sv://object/eagle-<id>` (`SourceVaultEagleView` の「訳」と同じ登録。画像などは空欄)、それ以外の種別は空欄。ボタンにはその参照だけを焼く。`DocImportPaper["src-…"]` も同じ経路に委譲する。
 
 ## 検証
 

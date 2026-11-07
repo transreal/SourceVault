@@ -151,8 +151,9 @@ event を append-only event directory に one-event-one-file で commit する�
 ### SourceVaultTransactionLog[opts]
 event directory の event を新しい順に返す。
 → List[Association]
-Options: `"Limit" -> 100` (取得上限; `All` で全件), `"EventClass" -> All` (class でフィルタ)
-`"EventClass"` が文字列の場合、JSON パース前にクラス名を含まない本文を捨てる (粗い部分一致の事前絞り込み。厳密判定は後段で行うので取りこぼしは無い)。event 総数が多い vault でも EventClass 指定でパース量が減る。ただし全 event ファイルの読み込み自体は発生する。
+Options: `"Limit" -> 100` (取得上限; `All` で全件), `"EventClass" -> All` (class でフィルタ), `"Since" -> All` (`"YYYY-MM-DD"` を渡すと CreatedAtUTC の日付がこの日以降の event だけ返す)
+`"EventClass"` が文字列の場合、JSON パース前にクラス名を含まない本文を捨てる (粗い部分一致の事前絞り込み。厳密判定は後段で行うので取りこぼしは無い)。event 総数が多い vault でも EventClass 指定でパース量が減る。ただし `"Since"` を指定しない限り、全 event ファイルの読み込み自体は発生する。
+`"Since"` を渡すと、その日より前の日付フォルダを読まない。全件読みは OS のファイルキャッシュが冷えていると数分かかるので、期間で足りる呼び手は `"Since"` を使う。日付フォルダは `$TimeZone` の日付で切られていて CreatedAtUTC の日付と 1 日ずれうるため、指定日の前日のフォルダから読み、そのうえで CreatedAtUTC の日付 (先頭 10 文字) で厳密に絞る。CreatedAtUTC の無い event は `"Since"` 指定時には返らない。文字列以外の値は `All` と同じ扱い。`"Limit"` は絞り込み後に新しい順で適用される。
 
 ## Blob store (§17.12.6)
 

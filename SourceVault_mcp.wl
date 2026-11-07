@@ -3022,41 +3022,116 @@ iSVFSAccessQ[pathIn_String] := Module[{canon = iSVFSCanon[pathIn]},
     True, <|"Allowed" -> True, "Path" -> canon|>]];
 iSVFSAccessQ[_] := <|"Allowed" -> False, "Reason" -> "BadPath"|>;
 
+(* ---- declared PrivacyLevel of a file (2026-11-07) ----
+   The fs tools are documented as cloud-accessible, so they must not label
+   everything PL 0.0. Rules (shared with ClaudeDirectives`ClaudeDirectivePrivacyLevel,
+   spec claude_directives_privacy_spec_v1_0.md section 4.2):
+     - a path inside a directory named *_private is 1.0 unless it declares a level
+       (pdfindex_private, "Claude Directives_private", ...)
+     - line-start stamp (* :CodePrivacyLevel: x *) / <!-- ... --> in the first 4 KB
+     - .md frontmatter privacyLevel (a malformed value counts as 1.0)
+     - otherwise 0.0
+   The weakly coupled ClaudeDirectives function is preferred when loaded; the
+   local fallback implements the same rules for the service kernel. *)
+iSVFSPrivateSegmentQ[canon_String, includeLast_:False] := Module[{segs},
+  segs = Select[StringSplit[canon, "/"], # =!= "" &];
+  If[! TrueQ[includeLast], segs = Most[segs /. {} -> {""}]];
+  AnyTrue[segs, StringEndsQ[ToLowerCase[#], "_private"] &]];
+
+iSVFSParsePL[v_] := Module[{x = v},
+  If[StringQ[x], x = StringTrim[StringReplace[x, "\r" -> ""]];
+    x = If[StringMatchQ[x, NumberString], ToExpression[x], Missing["BadValue"]]];
+  If[NumericQ[x], N @ Clip[x, {0, 1}], Missing["BadValue"]]];
+
+iSVFSStampPL[head_String] := Replace[StringCases[head,
+    StartOfLine ~~ (" " | "\t") ... ~~ ("(*" | "<!--") ~~ WhitespaceCharacter ... ~~
+      ":CodePrivacyLevel:" ~~ WhitespaceCharacter ... ~~ lvl : NumberString ~~
+      WhitespaceCharacter ... ~~ ("*)" | "-->") :> lvl, 1],
+  {{l_String, ___} :> iSVFSParsePL[l], _ -> Missing["NoStamp"]}];
+
+iSVFSDeclaredPLLocal[canon_String] := Module[
+  {priv, ext, bytes, head, text, st, fmv = Missing["NotDeclared"], nums},
+  priv = iSVFSPrivateSegmentQ[canon];
+  ext = ToLowerCase[FileExtension[canon]];
+  If[! MemberQ[{"md", "txt", "wl", "m", "wls"}, ext], Return[If[priv, 1., 0.]]];
+  bytes = Quiet @ Check[ReadByteArray[canon], $Failed];
+  If[bytes === EndOfFile, Return[If[priv, 1., 0.]]];
+  If[! ByteArrayQ[bytes], Return[If[priv, 1., 0.]]];
+  (* the stamp is ASCII: Latin-1 fallback keeps a cut multibyte char from hiding it *)
+  head = Quiet @ Check[ByteArrayToString[ByteArray[Take[Normal[bytes], UpTo[4096]]], "UTF-8"], $Failed];
+  If[! StringQ[head], head = Quiet @ Check[
+    ByteArrayToString[ByteArray[Take[Normal[bytes], UpTo[4096]]], "ISO8859-1"], ""]];
+  st = iSVFSStampPL[head];
+  If[ext === "md",
+    text = Quiet @ Check[ByteArrayToString[bytes, "UTF-8"], $Failed];
+    If[StringQ[text],
+      fmv = Lookup[iSVFSFrontmatter[text], "privacyLevel",
+        Lookup[iSVFSFrontmatter[text], "privacy_level", Missing["NotDeclared"]]];
+      If[! MissingQ[fmv], fmv = iSVFSParsePL[fmv]]]];
+  nums = Select[{st, fmv}, NumericQ];
+  Which[
+    nums =!= {}, Max[nums],
+    priv, 1.,
+    MatchQ[fmv, Missing["BadValue"]], 1.,
+    True, 0.]];
+
+iSVFSDeclaredPL[canon_String] := Module[{r},
+  If[Length[Names["ClaudeDirectives`ClaudeDirectivePrivacyLevel"]] > 0,
+    r = Quiet @ Check[ToExpression["ClaudeDirectives`ClaudeDirectivePrivacyLevel"][canon], $Failed];
+    If[NumericQ[r], Return[N[r]]]];
+  iSVFSDeclaredPLLocal[canon]];
+iSVFSDeclaredPL[_] := 1.;
+
 iSVFSListDir[pathIn_String] := Module[{acc, canon, entries},
   acc = iSVFSAccessQ[pathIn];
   If[! TrueQ[Lookup[acc, "Allowed", False]],
     Return[<|"Status" -> "Denied", "Reason" -> Lookup[acc, "Reason", "Denied"], "Path" -> pathIn|>]];
   canon = acc["Path"];
   If[! DirectoryQ[canon], Return[<|"Status" -> "NotADirectory", "Path" -> canon|>]];
+  (* *_private directories hold content that is not cloud-safe: even the
+     file names stay local *)
+  If[iSVFSPrivateSegmentQ[canon, True],
+    Return[<|"Status" -> "Denied", "Reason" -> "PrivateDirDenied", "Path" -> canon|>]];
   entries = Take[Quiet @ Check[FileNames["*", canon], {}], UpTo[$svFSMaxListEntries]];
   <|"Status" -> "OK", "Path" -> canon, "PrivacyLevel" -> 0.0, "Count" -> Length[entries],
     "Entries" -> Map[Function[f, <|
       "name" -> FileNameTake[f],
       "type" -> If[DirectoryQ[f], "directory", "file"],
       "bytes" -> If[DirectoryQ[f], Missing["Directory"], Quiet @ Check[FileByteCount[f], Missing[]]],
-      "secret" -> iSVFSSecretQ[iSVFSCanon[f]]|>], entries]|>];
+      "secret" -> iSVFSSecretQ[iSVFSCanon[f]],
+      "private" -> iSVFSPrivateSegmentQ[iSVFSCanon[f], True]|>], entries]|>];
 iSVFSListDir[_] := <|"Status" -> "Denied", "Reason" -> "BadPath"|>;
 
 iSVFSReadFile[pathIn_String, maxBytesIn_:Automatic] := Module[
-  {acc, canon, maxB, bytes, trunc, text},
+  {acc, canon, maxB, bytes, trunc, text, pl},
   acc = iSVFSAccessQ[pathIn];
   If[! TrueQ[Lookup[acc, "Allowed", False]],
     Return[<|"Status" -> "Denied", "Reason" -> Lookup[acc, "Reason", "Denied"], "Path" -> pathIn|>]];
   canon = acc["Path"];
   If[DirectoryQ[canon], Return[<|"Status" -> "IsDirectory", "Path" -> canon|>]];
   If[! FileExistsQ[canon], Return[<|"Status" -> "NotFound", "Path" -> canon|>]];
+  (* 2026-11-07: report the declared PL instead of a fixed 0.0; PL >= 0.5 is
+     never released through this cloud-accessible tool (use sourcevault_get
+     with a grant from a local principal) *)
+  pl = iSVFSDeclaredPL[canon];
+  (* this tool has no principal / access level: anything inside a *_private
+     directory stays local whatever it declares (sourcevault_get applies the
+     per-principal gate instead) *)
+  If[iSVFSPrivateSegmentQ[canon] || ! NumericQ[pl] || pl >= 0.5,
+    Return[<|"Status" -> "Denied", "Reason" -> "PrivateFileDenied", "Path" -> canon,
+      "PrivacyLevel" -> If[NumericQ[pl], pl, 1.]|>]];
   maxB = If[IntegerQ[maxBytesIn] && maxBytesIn > 0, Min[maxBytesIn, $svFSMaxBytes], $svFSMaxBytes];
   bytes = Quiet @ Check[ReadByteArray[canon], $Failed];
   If[bytes === EndOfFile,
     Return[<|"Status" -> "OK", "Path" -> canon, "Bytes" -> 0, "Truncated" -> False,
-      "Text" -> "", "PrivacyLevel" -> 0.0|>]];
+      "Text" -> "", "PrivacyLevel" -> pl|>]];
   If[Head[bytes] =!= ByteArray, Return[<|"Status" -> "ReadFailed", "Path" -> canon|>]];
   trunc = Length[bytes] > maxB;
   text = Quiet @ Check[ByteArrayToString[If[trunc, Take[bytes, maxB], bytes], "UTF-8"], $Failed];
   If[! StringQ[text],
     Return[<|"Status" -> "NotUTF8Text", "Path" -> canon, "Bytes" -> Length[bytes]|>]];
   <|"Status" -> "OK", "Path" -> canon, "Bytes" -> Length[bytes],
-    "Truncated" -> trunc, "Text" -> text, "PrivacyLevel" -> 0.0|>];
+    "Truncated" -> trunc, "Text" -> text, "PrivacyLevel" -> pl|>];
 iSVFSReadFile[_, ___] := <|"Status" -> "Denied", "Reason" -> "BadPath"|>;
 
 (* ============================================================
@@ -3247,7 +3322,37 @@ iSVFSDirectiveTier[fm_Association, name_String] := Module[{t},
     StringStartsQ[name, "evolved-turn-"], "evolved",
     True, "guardrail"]];
 
-iSVFSDirectiveEntry[file_String, role_String] := Module[{text, fm, title, name, desc, models},
+(* ---- sv://directive/<opaqueId> (retrieval spec v0.3 section 7.2; directive
+   privacy spec 2026-11-07 section 4.3). opaqueId = first 24 hex of
+   SHA-256("directive|" <> role <> "|" <> name); same algorithm as
+   ClaudeDirectives`ClaudeDirectiveOpaqueId. role/name:
+     root -> "CLAUDE", rule -> file stem, skill -> skill folder name,
+     private -> note stem under <root>_private/notes/. ---- *)
+iSVDirectiveOpaqueId[role_String, name_String] :=
+  StringTake[ToLowerCase @ Hash[
+    StringToByteArray["directive|" <> role <> "|" <> name, "UTF-8"],
+    "SHA256", "HexString"], 24];
+iSVDirectiveURI[role_String, name_String] :=
+  "sv://directive/" <> iSVDirectiveOpaqueId[role, name];
+
+(* role/name of a file of the directive root (for the URI) *)
+iSVDirectiveRoleName[file_String, role_String] := Switch[role,
+  "root", "CLAUDE",
+  "skill", FileNameTake[DirectoryName[file]],
+  _, FileBaseName[file]];
+
+iSVDirectivePrivateRoot[root_String] := Module[{segs = FileNameSplit[ExpandFileName[root]]},
+  If[Length[segs] < 2, Missing["NoPrivateRoot"],
+    FileNameJoin[Append[Most[segs], Last[segs] <> "_private"]]]];
+
+(* relative path under the root with "/" separators (never absolute: the
+   absolute path carries the OS user name, which is not PL 0.0) *)
+iSVDirectiveRelPath[root_String, file_String] := Module[{r, f},
+  r = FileNameSplit[ExpandFileName[root]]; f = FileNameSplit[ExpandFileName[file]];
+  If[Length[f] > Length[r] && Take[f, Length[r]] === r,
+    StringRiffle[Drop[f, Length[r]], "/"], FileNameTake[file]]];
+
+iSVFSDirectiveEntry[file_String, role_String] := Module[{text, fm, title, name, desc, models, root, pl},
   text = Quiet @ Check[ByteArrayToString[ReadByteArray[file], "UTF-8"], ""];
   If[! StringQ[text], text = ""];
   fm = iSVFSFrontmatter[text];
@@ -3261,12 +3366,18 @@ iSVFSDirectiveEntry[file_String, role_String] := Module[{text, fm, title, name, 
   If[StringQ[desc] && StringLength[desc] > 600,
     desc = StringTake[First[StringSplit[desc, "\n\n"], desc], UpTo[600]]];
   models = Lookup[fm, "models", Missing[]];
+  root = iSVFSDirectivesRoot[];
+  pl = iSVFSDeclaredPL[iSVFSCanon[file]];
+  (* the listing itself is PL 0.0: a file that declares PL > 0 shows no description *)
+  If[! (NumericQ[pl] && pl == 0), desc = "(restricted: declared privacyLevel " <> ToString[pl] <> ")"];
   <|"role" -> role, "name" -> name,
     "description" -> desc,
     "tier" -> If[role === "rule", iSVFSDirectiveTier[fm, name], Missing[]],
     "models" -> If[ListQ[models] || StringQ[models], models, Missing[]],
-    "uri" -> ("sv://file/" <> iSVURIEnc[iSVFSCanon[file]]),
-    "path" -> file, "bytes" -> Quiet @ Check[FileByteCount[file], Missing[]]|>];
+    "uri" -> iSVDirectiveURI[role, iSVDirectiveRoleName[file, role]],
+    "path" -> If[StringQ[root], iSVDirectiveRelPath[root, file], FileNameTake[file]],
+    "privacyLevel" -> pl,
+    "bytes" -> Quiet @ Check[FileByteCount[file], Missing[]]|>];
 
 iSVFSDirectivesList[kindIn_:"all"] := Module[{root, kind, items, claudemd},
   root = iSVFSDirectivesRoot[];
@@ -3281,7 +3392,10 @@ iSVFSDirectivesList[kindIn_:"all"] := Module[{root, kind, items, claudemd},
   If[MemberQ[{"all", "root"}, kind],
     claudemd = FileNameJoin[{root, "CLAUDE.md"}];
     If[FileExistsQ[claudemd], items["Root"] = {iSVFSDirectiveEntry[claudemd, "root"]}]];
-  Join[<|"Status" -> "OK", "Root" -> root, "PrivacyLevel" -> 0.0,
+  (* I6: no absolute path in a PL 0.0 payload. "RootName" is a display name
+     ("Root" is the CLAUDE.md entry list when kind is all/root). *)
+  (* :PolicyWaiver: PRIV-LEVEL-LITERAL the listing carries only names, relative paths and descriptions of public directives; a file that declares PL > 0 has its description masked above, so the payload is PL 0.0 by construction *)
+  Join[<|"Status" -> "OK", "RootName" -> FileNameTake[root], "PrivacyLevel" -> 0.0,
     "Count" -> Total[Length /@ Values[items]]|>, items]];
 
 (* ---- one directive body by name (2026-09-08) ----
@@ -3314,6 +3428,16 @@ iSVFSDirectiveBody[nameIn_, kindIn_:"any", maxCharsIn_:Automatic] := Module[
       Quiet @ Check[FileNames["*-" <> name <> ".md", FileNameJoin[{root, "rules"}]], {}],
       FileExistsQ, Missing[]]];
   If[MissingQ[file], Return[<|"Status" -> "NotFound", "Name" -> name, "Kind" -> kind|>]];
+  With[{role = Which[StringContainsQ[file, FileNameJoin[{root, "rules"}]], "rule",
+        StringContainsQ[file, FileNameJoin[{root, "skills"}]], "skill", True, "root"],
+      pl = iSVFSDeclaredPL[iSVFSCanon[file]]},
+    (* 2026-11-07: this tool is handed to cloud models (incl. zai/kimi) as
+       PL 0.0. A directive that declares PL > 0 is not released here. *)
+    If[! (NumericQ[pl] && pl == 0),
+      Return[<|"Status" -> "PrivacyRestricted", "Name" -> name, "Kind" -> role,
+        "Uri" -> iSVDirectiveURI[role, iSVDirectiveRoleName[file, role]],
+        "PrivacyLevel" -> If[NumericQ[pl], pl, 1.],
+        "HowToProceed" -> "Not released through this tool. A local principal can read it with sourcevault_get on the Uri."|>]]];
   text = Quiet @ Check[ByteArrayToString[ReadByteArray[file], "UTF-8"], $Failed];
   If[! StringQ[text], Return[<|"Status" -> "ReadFailed", "Name" -> name|>]];
   fm = iSVFSFrontmatter[text];
@@ -3321,16 +3445,17 @@ iSVFSDirectiveBody[nameIn_, kindIn_:"any", maxCharsIn_:Automatic] := Module[
     $iSVFSDirectiveBodyMaxChars];
   body = text;
   If[StringLength[body] > maxc, body = StringTake[body, maxc]; truncated = True];
+  With[{role = Which[StringContainsQ[file, FileNameJoin[{root, "rules"}]], "rule",
+        StringContainsQ[file, FileNameJoin[{root, "skills"}]], "skill", True, "root"]},
   <|"Status" -> "OK", "Name" -> name,
-    "Kind" -> Which[StringContainsQ[file, FileNameJoin[{root, "rules"}]], "rule",
-      StringContainsQ[file, FileNameJoin[{root, "skills"}]], "skill", True, "root"],
-    "Tier" -> If[StringContainsQ[file, FileNameJoin[{root, "rules"}]],
-      iSVFSDirectiveTier[fm, FileBaseName[file]], Missing[]],
+    "Kind" -> role,
+    "Tier" -> If[role === "rule", iSVFSDirectiveTier[fm, FileBaseName[file]], Missing[]],
     "Description" -> Lookup[fm, "description", Missing[]],
     "Models" -> Lookup[fm, "models", Missing[]],
-    "Uri" -> ("sv://file/" <> iSVURIEnc[iSVFSCanon[file]]),
+    "Uri" -> iSVDirectiveURI[role, iSVDirectiveRoleName[file, role]],
     "Chars" -> StringLength[text], "Truncated" -> truncated,
-    "PrivacyLevel" -> 0.0, "Text" -> body|>];
+    (* the declared PL, already checked to be 0 above *)
+    "PrivacyLevel" -> N @ iSVFSDeclaredPL[iSVFSCanon[file]], "Text" -> body|>]];
 
 (* ---- sv://file/<abs-path> adapter (read-only; content in summary at PL 0.0) ---- *)
 iSVFileOwnsURIQ[parsed_Association] := Lookup[parsed, "Namespace", ""] === "file";
@@ -3341,7 +3466,9 @@ iSVFileResolve[parsed_Association, accessRequest_Association] := Module[{path, r
   r = iSVFSReadFile[path];
   If[Lookup[r, "Status", ""] === "OK",
     Return[<|"URI" -> ("sv://file/" <> iSVURIEnc[r["Path"]]), "Kind" -> "file",
-      "Title" -> FileNameTake[r["Path"]], "Summary" -> r["Text"], "PrivacyLevel" -> 0.0,
+      "Title" -> FileNameTake[r["Path"]], "Summary" -> r["Text"],
+      (* declared PL (2026-11-07); PL >= 0.5 never reaches here (PrivateFileDenied) *)
+      "PrivacyLevel" -> Lookup[r, "PrivacyLevel", 1.],
       "Metadata" -> <|"AccessTags" -> {}, "Bytes" -> Lookup[r, "Bytes", Missing[]],
         "Truncated" -> Lookup[r, "Truncated", False], "Type" -> "file"|>|>]];
   d = iSVFSListDir[path];
@@ -3352,6 +3479,73 @@ iSVFileResolve[parsed_Association, accessRequest_Association] := Module[{path, r
         StringRiffle[Lookup[#, "name"] & /@ Take[d["Entries"], UpTo[80]], ", "]),
       "PrivacyLevel" -> 0.0, "Metadata" -> <|"AccessTags" -> {}, "Type" -> "directory"|>|>]];
   Missing["NotAccessible"]];
+
+(* ---- directive adapter (2026-11-07): sv://directive/<opaqueId> ----
+   Resolves public directives (canonical root) and private notes
+   (<root>_private/notes/*.md). Privacy.Level = declared PL (iSVFSDeclaredPL).
+   Public directives (PL 0) are PublicDoc: body grant-free. Private notes with
+   PL < 0.5 are released by the ordinary release gate (principal AccessLevel,
+   e.g. zai/kimi 0.25); PL >= 0.5 needs a grant and a non-cloud sink. *)
+iSVDirectiveOwnsURIQ[parsed_Association] := Lookup[parsed, "Namespace", ""] === "directive";
+
+iSVDirectiveCatalog[] := Module[{root, priv, items = {}},
+  root = iSVFSDirectivesRoot[];
+  If[! StringQ[root], Return[<||>]];
+  With[{c = FileNameJoin[{root, "CLAUDE.md"}]},
+    If[FileExistsQ[c], AppendTo[items, {"root", "CLAUDE", c}]]];
+  Scan[AppendTo[items, {"rule", FileBaseName[#], #}] &,
+    Quiet @ Check[FileNames["*.md", FileNameJoin[{root, "rules"}]], {}]];
+  Scan[AppendTo[items, {"skill", FileNameTake[DirectoryName[#]], #}] &,
+    Quiet @ Check[FileNames["SKILL.md", FileNameJoin[{root, "skills"}], Infinity], {}]];
+  priv = iSVDirectivePrivateRoot[root];
+  If[StringQ[priv] && DirectoryQ[FileNameJoin[{priv, "notes"}]],
+    Scan[AppendTo[items, {"private", FileBaseName[#], #}] &,
+      Quiet @ Check[FileNames["*.md", FileNameJoin[{priv, "notes"}]], {}]]];
+  Association[Map[
+    (iSVDirectiveOpaqueId[#[[1]], #[[2]]] ->
+      <|"Role" -> #[[1]], "Name" -> #[[2]], "File" -> #[[3]]|>) &, items]]];
+
+iSVDirectiveEntryFor[parsed_Association] :=
+  Lookup[iSVDirectiveCatalog[], ToString @ Lookup[parsed, "Id", ""], Missing["NotFound"]];
+
+iSVDirectivePL[e_Association] := With[{pl = iSVFSDeclaredPL[iSVFSCanon[e["File"]]]},
+  If[NumericQ[pl], N[pl], 1.]];
+
+iSVDirectiveResolve[parsed_Association, accessRequest_Association] := Module[{e, text, pl, fm, desc},
+  e = iSVDirectiveEntryFor[parsed];
+  If[! AssociationQ[e], Return[Missing["NotFound"]]];
+  text = Quiet @ Check[ByteArrayToString[ReadByteArray[e["File"]], "UTF-8"], $Failed];
+  If[! StringQ[text], Return[Missing["ReadFailed"]]];
+  pl = iSVDirectivePL[e];
+  fm = iSVFSFrontmatter[text];
+  desc = Lookup[fm, "description", ""];
+  desc = If[StringQ[desc], StringTrim[StringReplace[desc, "\r" -> ""]], ""];
+  <|"URI" -> ("sv://directive/" <> iSVDirectiveOpaqueId[e["Role"], e["Name"]]),
+    "Kind" -> "directive",
+    "Title" -> (e["Role"] <> ": " <> e["Name"]),
+    (* summary projection: the text itself below 0.5, the description at/above *)
+    "Summary" -> If[pl < 0.5, text, desc],
+    "PrivacyLevel" -> pl,
+    "PrivacyClass" -> Which[pl == 0, "PublicDoc", pl < 0.5, "Private", True, "LocalOnly"],
+    "Metadata" -> <|"AccessTags" -> {}, "Role" -> e["Role"], "Name" -> e["Name"],
+      "Chars" -> StringLength[text], "Type" -> "directive"|>|>];
+
+(* grant-free only when the declared PL is strictly below 0.5 (fail-closed) *)
+iSVDirectiveBodyGrantRequiredQ[parsed_Association, view_, accessRequest_] := Module[{e},
+  e = iSVDirectiveEntryFor[parsed];
+  If[! AssociationQ[e], Return[True]];
+  ! (iSVDirectivePL[e] < 0.5)];
+
+iSVDirectiveReadBody[parsed_Association, grant_, accessRequest_Association, view_String] :=
+  Module[{e, text, pl},
+    e = iSVDirectiveEntryFor[parsed];
+    If[! AssociationQ[e], Return[$Failed]];
+    pl = iSVDirectivePL[e];
+    (* second line of defence: never hand PL >= 0.5 to a cloud sink *)
+    If[pl >= 0.5 && iSVCloudSinkQ[accessRequest], Return[Missing["RawNotReleased"]]];
+    text = Quiet @ Check[ByteArrayToString[ReadByteArray[e["File"]], "UTF-8"], $Failed];
+    If[! StringQ[text], Return[$Failed]];
+    <|"Body" -> text, "Kind" -> "directive", "Chars" -> StringLength[text]|>];
 
 (* ---- snapshot adapter: content-addressed 不変スナップショットを
    sv://snapshot/<class>/<hex> で解決し、privacy サイドレコードの level (既定 0.85) を
@@ -3587,7 +3781,19 @@ iSVRegisterDefaultAdapters[] := (
     "OwnsURIQ" -> iSVMailOwnsURIQ, "Resolve" -> iSVMailAdapterResolve,
     (* D3: 本文解放 (grant 必須・非cloud sink・main kernel のみ) *)
     "ReadBody" -> iSVMailAdapterReadBody|>];
-  (* filesystem: read-only, allow-listed, content released at PL 0.0 (cloud-ok). *)
+  (* directive: sv://directive/<opaqueId> (2026-11-07). Public directives are
+     PublicDoc; private notes carry their declared PL. *)
+  SourceVaultRegisterMCPDataAdapter["directive", <|
+    "Kinds" -> {"directive"}, "Available" -> True,
+    "Description" -> "Claude Directives (rules / skills / CLAUDE.md) and the owner's private directive notes, by sv://directive/<id>. Public directives are PL 0.0; private notes carry their declared PrivacyLevel.",
+    "Capabilities" -> <|"ReadMetadata" -> True, "ReadSummary" -> True,
+      "ResolveObjectURI" -> True, "ReadBody" -> True|>,
+    "RequireGrantFor" -> {"body", "raw"},
+    "OwnsURIQ" -> iSVDirectiveOwnsURIQ, "Resolve" -> iSVDirectiveResolve,
+    "BodyGrantRequired" -> iSVDirectiveBodyGrantRequiredQ,
+    "ReadBody" -> iSVDirectiveReadBody|>];
+  (* filesystem: read-only, allow-listed; content released at its declared PL
+     (PL >= 0.5 and *_private paths are denied, 2026-11-07). *)
   SourceVaultRegisterMCPDataAdapter["filesystem", <|
     "Kinds" -> {"file", "filesystem"}, "Available" -> True,
     "Capabilities" -> <|"ReadMetadata" -> True, "ReadSummary" -> True,
@@ -3893,14 +4099,14 @@ iSVMCPBuiltinTools[] := {
         "path" -> <|"type" -> "string", "description" -> "Absolute directory path under an allowed root."|>|>,
       "required" -> {"path"}|>|>,
   <|"name" -> "sourcevault_fs_read",
-    "description" -> "Read a UTF-8 text file under an allow-listed root (cloud-accessible privacy). Read-only and size-capped. Secret-looking files (.env, *secret*, *credential*, keys/certs, .ssh, etc.) and paths outside the allowed roots are denied. Write is not supported.",
+    "description" -> "Read a UTF-8 text file under an allow-listed root. Read-only and size-capped. Returns the file's declared PrivacyLevel (CodePrivacyLevel stamp / frontmatter privacyLevel; 0.0 when undeclared). Files declaring PL >= 0.5, anything inside a *_private directory, secret-looking files (.env, *secret*, *credential*, keys/certs, .ssh, etc.) and paths outside the allowed roots are denied. Write is not supported.",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
         "path" -> <|"type" -> "string", "description" -> "Absolute file path under an allowed root."|>,
         "maxBytes" -> <|"type" -> "integer", "description" -> "Optional read cap in bytes; clamped to the server max."|>|>,
       "required" -> {"path"}|>|>,
   <|"name" -> "sourcevault_directives",
-    "description" -> "List Claude Directives (rules/, skills/, CLAUDE.md) with name, description, tier (rules: safety | guardrail | procedure | style | evolved), model scope and an sv://file URI for each, so CLI and API agents share the same directive set. Read live from the canonical Claude Directives directory. Use sourcevault_directive_body (name) to fetch a directive's full text.",
+    "description" -> "List Claude Directives (rules/, skills/, CLAUDE.md) with name, description, tier (rules: safety | guardrail | procedure | style | evolved), model scope, relative path, declared privacyLevel and an sv://directive URI for each, so CLI and API agents share the same directive set. Read live from the canonical Claude Directives directory. Use sourcevault_directive_body (name) to fetch a directive's full text.",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
         "kind" -> <|"type" -> "string", "description" -> "rules | skills | root | all (default all)."|>|>,

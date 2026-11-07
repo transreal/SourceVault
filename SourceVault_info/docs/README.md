@@ -924,7 +924,7 @@ SourceVaultNotebookSummary[nbPath]
 | **コア基盤 (SourceVault_core)** | |
 | `SourceVaultWithLock[name, body, opts]` | 排他 lock を取得して body を評価し確実に解放（`HoldRest`）。`"TimeoutSeconds"` / `"TTLSeconds"` オプション。 |
 | `SourceVaultAppendEvent[event, opts]` | append-only event log に 1 event / 1 file で commit。同一 EventID の再 commit は digest 照合で冪等処理。 |
-| `SourceVaultTransactionLog[opts]` | event directory の全 event を新しい順で返す。`"Limit"` / `"EventClass"` オプション。 |
+| `SourceVaultTransactionLog[opts]` | event directory の全 event を新しい順で返す。`"Limit"` / `"EventClass"` / `"Since"` オプション。 |
 | `SourceVaultCommitBlob[data, opts]` | ByteArray / String をコンテントアドレス blob として create-only 保存。 |
 | `SourceVaultSaveImmutableSnapshot[class, assoc, opts]` | assoc を class 別 immutable snapshot として保存。同一内容の再保存は idempotent。`"Alias"` / `"AliasOverwrite"` オプション対応。 |
 | `SourceVaultLoadImmutableSnapshot[ref]` | snapshot ref または `"class/alias"` を読み、検証済み assoc を返す。 |

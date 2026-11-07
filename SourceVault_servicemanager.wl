@@ -120,8 +120,9 @@ SourceVaultServicePing::usage =
 
 SourceVaultServiceHealthDetail::usage =
   "SourceVaultServiceHealthDetail[serviceId] は health の判定内訳を返す (hardening 02 Inc3)。\n" <>
-  "<|\"Health\", \"Layer\"->\"L2\"|\"L3\"|\"L1\", \"Ping\"-><|\"L2\",\"RTTms\"...|>, \"Base\"|>。\n" <>
+  "<|\"Health\", \"Layer\"->\"L2\"|\"L3\"|\"L1\", \"Ping\"-><|\"L2\",\"RTTms\"...|>, \"Base\", \"WLMCP\"|>。\n" <>
   "L2 = command queue が実際に応答 (真の生存証明)。L3 = heartbeat 進行のみ。\n" <>
+  "WLMCP = heartbeat に載る Wolfram MCP バックエンドの状態 (未報告なら Missing[\"NotReported\"])。\n" <>
   "ping は " <> "PingIntervalSeconds キャッシュ (health 連打で queue を叩かない)。";
 
 $SourceVaultHealthRequireL2::usage =
@@ -1592,8 +1593,8 @@ iServiceHttpRender[cmd_Association] := Module[
    - 実行体はサービスカーネルが抱える永続サブカーネル (サブプロセス枠 16 側。
      プロセス席を消費しない)。AgentTools の startMCPServer は「init 部」と
      「stdio While ループ」が分離可能で、リクエスト処理の実体 handleMethod は
-     stdio に触れない純関数 (paclet 2.1.21 実測)。init をサブカーネル内で再現し、
-     JSON-RPC メッセージごとに handleMethod を呼ぶ。
+     stdio に触れない純関数 (paclet 2.1.21 / 2.2.0 実測)。init をサブカーネル内で
+     再現し、JSON-RPC メッセージごとに handleMethod を呼ぶ。
    - 非ブロッキング: WLMCP command は ParallelSubmit で投げて即 return
      (done を書かない=deferred)。tick の poll が結果ファイル (WXF) を検出して
      done を書く。長い評価中もサービスの heartbeat / sv MCP は生き続ける。
@@ -1619,18 +1620,45 @@ iSMWLMCPEnabledQ[serviceId_String] := Which[
   $SourceVaultServiceWLMCPEnabled === Automatic, serviceId === "sourcevault",
   True, False];
 
-(* サブカーネル内に定義するドライバ。AgentTools private 実装への参照はすべて
-   完全修飾 (Begin トリックは別コンテキスト由来ヘルパ catchAlways 等に新規空
-   シンボルを intern してしまい未評価連鎖になる: 実測)。init は startMCPServer
-   本体 (StartMCPServer.wl) の再現から stdio 部分を除いたもの。paclet 更新で
-   private シンボル名が変わったら Init が失敗し Ready=False に落ちる (fail-soft)。 *)
+(* サブカーネル内に定義するドライバ。AgentTools 内部への参照はすべて完全修飾
+   (Begin トリックは別コンテキスト由来ヘルパ catchAlways 等に新規空シンボルを
+   intern してしまい未評価連鎖になる: 実測)。init は startMCPServer 本体の再現
+   から stdio 部分を除いたもの。paclet のレイアウトは Layout[] で判定する:
+   - "Server" (2.2.0 以降): StartMCPServer` コンテキストが廃止され、
+     Common`initializeServerState / Common`handleMethod がトランスポート共通の
+     入口になった。状態変数は Server` と Common` にある。
+   - "StartMCPServer" (2.1.x。Wolfram 15 同梱の 2.1.17 もこれ): 実装は
+     StartMCPServer`Private`。
+   どちらでもなければ Init は Reason と版番号を返して Ready=False に落ちる
+   (fail-soft)。どちらもサービスログとクライアントへのエラー文に出る。 *)
 $iSMWLMCPDriverSource = "
-SourceVault`WLMCPChild`Init[name_String] := Module[
-  {obj, llmTools, toolList, promptList, promptLookup, logFile},
-  Needs[\"Wolfram`AgentTools`\"];
-  obj = Wolfram`AgentTools`Common`ensureMCPServerExists @
-    Wolfram`AgentTools`MCPServerObject[name];
-  obj = Wolfram`AgentTools`StartMCPServer`Private`ensurePacletsForStart @ obj;
+SourceVault`WLMCPChild`Layout[] := Which[
+  DownValues[Wolfram`AgentTools`Common`initializeServerState] =!= {} &&
+    DownValues[Wolfram`AgentTools`Common`handleMethod] =!= {}, \"Server\",
+  DownValues[Wolfram`AgentTools`StartMCPServer`Private`handleMethod] =!= {}, \"StartMCPServer\",
+  True, \"Unknown\"];
+SourceVault`WLMCPChild`LogFile[obj_] := Quiet @ Check[
+  Wolfram`AgentTools`Common`ensureFilePath @
+    Wolfram`AgentTools`Common`mcpServerLogFile @ obj,
+  FileNameJoin[{$TemporaryDirectory, \"svwlmcp.log\"}]];
+SourceVault`WLMCPChild`InitServer[obj0_] := Module[{state},
+  Wolfram`AgentTools`Common`$mcpEvaluation = True;
+  Wolfram`AgentTools`Server`$currentMCPServer = obj0;
+  state = Wolfram`AgentTools`Common`catchAlways @
+    Wolfram`AgentTools`Common`initializeServerState @ obj0;
+  If[AssociationQ[state],
+    Wolfram`AgentTools`Server`$toolList = state[\"ToolList\"];
+    Wolfram`AgentTools`Server`$llmTools = state[\"LLMTools\"];
+    Wolfram`AgentTools`Server`$promptList = state[\"PromptList\"];
+    Wolfram`AgentTools`Server`$promptLookup = state[\"PromptLookup\"];
+    Wolfram`AgentTools`Common`$toolOptions = state[\"ToolOptions\"];
+    Wolfram`AgentTools`Server`$logFile = SourceVault`WLMCPChild`LogFile[
+      Wolfram`AgentTools`Server`$currentMCPServer];
+    state[\"ToolList\"],
+    $Failed]];
+SourceVault`WLMCPChild`InitStartMCPServer[obj0_] := Module[
+  {obj, llmTools, toolList, promptList, promptLookup},
+  obj = Wolfram`AgentTools`StartMCPServer`Private`ensurePacletsForStart @ obj0;
   Wolfram`AgentTools`StartMCPServer`Private`runServerInitialization @ obj;
   llmTools = Wolfram`AgentTools`StartMCPServer`Private`disambiguateToolNames @
     obj[\"Tools\"];
@@ -1645,30 +1673,48 @@ SourceVault`WLMCPChild`Init[name_String] := Module[
   Wolfram`AgentTools`Common`$toolOptions =
     Wolfram`AgentTools`StartMCPServer`Private`parseToolOptions @
       Environment[\"MCP_TOOL_OPTIONS\"];
-  logFile = Quiet @ Check[
-    Wolfram`AgentTools`Common`ensureFilePath @
-      Wolfram`AgentTools`Common`mcpServerLogFile @ obj,
-    FileNameJoin[{$TemporaryDirectory, \"svwlmcp.log\"}]];
   Wolfram`AgentTools`StartMCPServer`Private`$toolList = toolList;
   Wolfram`AgentTools`StartMCPServer`Private`$llmTools = llmTools;
   Wolfram`AgentTools`StartMCPServer`Private`$promptList = promptList;
   Wolfram`AgentTools`StartMCPServer`Private`$promptLookup = promptLookup;
-  Wolfram`AgentTools`StartMCPServer`Private`$logFile = logFile;
+  Wolfram`AgentTools`StartMCPServer`Private`$logFile = SourceVault`WLMCPChild`LogFile[obj];
   Wolfram`AgentTools`StartMCPServer`Private`$currentMCPServer = obj;
   Wolfram`AgentTools`Common`$mcpEvaluation = True;
-  SourceVault`WLMCPChild`$Ready =
-    AssociationQ[llmTools] && ListQ[toolList] && Length[toolList] > 0;
-  <|\"Status\" -> If[TrueQ[SourceVault`WLMCPChild`$Ready], \"Initialized\", \"InitFailed\"],
-    \"Tools\" -> If[ListQ[toolList], Length[toolList], -1]|>];
-SourceVault`WLMCPChild`Handle[msg_Association] := Module[{method, id, req, resp},
+  toolList];
+SourceVault`WLMCPChild`Init[name_String] := Module[{obj, layout, version, toolList, ready},
+  Needs[\"Wolfram`AgentTools`\"];
+  version = Quiet @ Check[PacletObject[\"Wolfram/AgentTools\"][\"Version\"], \"?\"];
+  layout = SourceVault`WLMCPChild`Layout[];
+  SourceVault`WLMCPChild`$Layout = layout;
+  toolList = If[layout === \"Unknown\", $Failed,
+    obj = Wolfram`AgentTools`Common`ensureMCPServerExists @
+      Wolfram`AgentTools`MCPServerObject[name];
+    If[layout === \"Server\",
+      SourceVault`WLMCPChild`InitServer[obj],
+      SourceVault`WLMCPChild`InitStartMCPServer[obj]]];
+  ready = ListQ[toolList] && Length[toolList] > 0;
+  SourceVault`WLMCPChild`$Ready = ready;
+  Join[
+    <|\"Status\" -> If[ready, \"Initialized\", \"InitFailed\"],
+      \"Tools\" -> If[ListQ[toolList], Length[toolList], -1],
+      \"Layout\" -> layout, \"PacletVersion\" -> version|>,
+    If[ready, <||>, <|\"Reason\" -> Which[
+      layout === \"Unknown\", \"UnknownPacletLayout\",
+      ListQ[toolList], \"NoTools\",
+      True, \"StateInitFailed\"]|>]]];
+SourceVault`WLMCPChild`Handle[msg_Association] := Module[{method, id, req, resp, serverLayout},
   method = Lookup[msg, \"method\", None];
   id = Lookup[msg, \"id\", Null];
   req = <|\"jsonrpc\" -> \"2.0\", \"id\" -> id|>;
-  resp = Wolfram`AgentTools`Common`catchAlways @
-    Wolfram`AgentTools`StartMCPServer`Private`handleMethod[method, msg, req];
-  If[! AssociationQ[resp],
-    <|req, \"error\" -> <|\"code\" -> -32603, \"message\" -> \"Internal error\"|>|>,
-    resp]];
+  serverLayout = SourceVault`WLMCPChild`$Layout === \"Server\";
+  resp = Wolfram`AgentTools`Common`catchAlways @ If[serverLayout,
+    Wolfram`AgentTools`Common`handleMethod[method, msg, req],
+    Wolfram`AgentTools`StartMCPServer`Private`handleMethod[method, msg, req]];
+  Which[
+    ! AssociationQ[resp],
+      <|req, \"error\" -> <|\"code\" -> -32603, \"message\" -> \"Internal error\"|>|>,
+    serverLayout, Wolfram`AgentTools`Common`sanitizeResponse @ resp,
+    True, resp]];
 ";
 
 iSMWLMCPEnsure[dir_String] := Module[{init},
@@ -1699,6 +1745,26 @@ iSMWLMCPEnsure[dir_String] := Module[{init},
 iSMWLMCPResultFile[dir_String, doneName_String] :=
   FileNameJoin[{dir, "wlmcp", doneName <> ".wxf"}];
 
+(* heartbeat に載せる WLMCP の状態。SystemDoctor の MCPKernels はこれを読む。
+   クライアントが受ける不可エラーと同じ値 ($iSMWLMCPReady / $iSMWLMCPInitResult) を
+   出すので、診断の表示とクライアントの体験がずれない。 *)
+iSMWLMCPHeartbeatField[serviceId_String] := If[iSMWLMCPEnabledQ[serviceId],
+  Join[
+    <|"Enabled" -> True, "Ready" -> TrueQ[$iSMWLMCPReady],
+      "Pending" -> Length[$iSMWLMCPPending]|>,
+    KeyTake[$iSMWLMCPInitResult, {"Status", "Tools", "Layout", "PacletVersion", "Reason"}]],
+  <|"Enabled" -> False|>];
+
+(* クライアントへ返す不可エラーの文面。Init が理由を返していれば添える *)
+iSMWLMCPUnavailableMessage[] := Module[{reason, version},
+  reason = Lookup[$iSMWLMCPInitResult, "Reason", None];
+  version = Lookup[$iSMWLMCPInitResult, "PacletVersion", None];
+  "WLMCP backend unavailable: " <>
+    ToString[Lookup[$iSMWLMCPInitResult, "Status", "?"]] <>
+    If[StringQ[reason],
+      " (" <> reason <> If[StringQ[version], ", AgentTools " <> version, ""] <> ")",
+      ""]];
+
 (* JSON-RPC error 応答つき done を即書き (backend 不可時の明示エラー) *)
 iSMWLMCPFailDone[dir_String, doneName_String, cmd_Association, msgStr_String] :=
   iSMWriteJSON[FileNameJoin[{dir, "commands", "done", doneName}],
@@ -1715,9 +1781,7 @@ iSMWLMCPAccept[dir_String, doneName_String, cmd_Association] := Module[
   If[! AssociationQ[msg],
     iSMWLMCPFailDone[dir, doneName, cmd, "WLMCP: Message missing"]; Return[Null]];
   If[! iSMWLMCPEnsure[dir],
-    iSMWLMCPFailDone[dir, doneName, cmd,
-      "WLMCP backend unavailable: " <>
-        ToString[Lookup[$iSMWLMCPInitResult, "Status", "?"]]];
+    iSMWLMCPFailDone[dir, doneName, cmd, iSMWLMCPUnavailableMessage[]];
     Return[Null]];
   rf = iSMWLMCPResultFile[dir, doneName];
   iSMEnsureDir[DirectoryName[rf]];
@@ -2048,7 +2112,8 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
       iSMWriteJSON[hbPath, Join[
         <|"Counter" -> counter, "UpdatedAtUTC" -> iSMUTCNow[], "PID" -> $ProcessID|>,
         If[AssociationQ[dispatchState], <|"Dispatch" -> dispatchState|>, <||>],
-        If[AssociationQ[turnWikiState], <|"TurnWiki" -> turnWikiState|>, <||>]]];
+        If[AssociationQ[turnWikiState], <|"TurnWiki" -> turnWikiState|>, <||>],
+        <|"WLMCP" -> iSMWLMCPHeartbeatField[serviceId]|>]];
       stop = iProcessServiceCommands[dir];
       If[stop, Break[]];
       (* 対話 lease (2026-09-04): 音声ブリッジのような「60 秒で諦める」クライアントが
@@ -2553,6 +2618,7 @@ SourceVaultServiceStatus[serviceId_String, opts___] := Module[
     "HeartbeatAgeSeconds" -> age, "Health" -> health,
     "Dispatch" -> dispatch, "DispatchTickAgeSeconds" -> dispatchAge,
     "DispatchStalled" -> dispatchStalled,
+    "WLMCP" -> If[AssociationQ[hb], Lookup[hb, "WLMCP", Missing["NotReported"]], Missing["NotReported"]],
     "RuntimeDir" -> dir, "Exists" -> True|>];
 
 (* hardening 02 Inc3 (2026-07-08): L2 (command queue 応答) を health に統合。
@@ -2581,23 +2647,24 @@ iSMPingCached[serviceId_String] := Module[
   r];
 
 SourceVaultServiceHealthDetail[serviceId_String] := Module[
-  {st, base, ping},
+  {st, base, ping, wlmcp},
   st = SourceVaultServiceStatus[serviceId];
   base = Lookup[st, "Health", "Unknown"];
+  wlmcp = Lookup[st, "WLMCP", Missing["NotReported"]];
   (* L1/L3 の時点で非 OK なら queue はカーネルごと死んでいる: ping 不要 *)
   If[base =!= "OK",
-    Return[<|"Health" -> base, "Layer" -> "L1", "Base" -> base|>]];
+    Return[<|"Health" -> base, "Layer" -> "L1", "Base" -> base, "WLMCP" -> wlmcp|>]];
   ping = iSMPingCached[serviceId];
   Which[
     TrueQ[ping["L2"]],
-      <|"Health" -> "OK", "Layer" -> "L2", "Ping" -> ping, "Base" -> base|>,
+      <|"Health" -> "OK", "Layer" -> "L2", "Ping" -> ping, "Base" -> base, "WLMCP" -> wlmcp|>,
     TrueQ[$SourceVaultHealthRequireL2],
       (* heartbeat は進むのに queue 不応答 = busy (長時間ジョブ) か wedge *)
       <|"Health" -> "Degraded", "Layer" -> "L3", "Ping" -> ping,
-        "Base" -> base, "Note" -> "QueueUnresponsive"|>,
+        "Base" -> base, "Note" -> "QueueUnresponsive", "WLMCP" -> wlmcp|>,
     True,
       (* 移行期: L3 OK を許すが Layer で識別可能にする *)
-      <|"Health" -> "OK", "Layer" -> "L3", "Ping" -> ping, "Base" -> base|>]];
+      <|"Health" -> "OK", "Layer" -> "L3", "Ping" -> ping, "Base" -> base, "WLMCP" -> wlmcp|>]];
 
 SourceVaultServiceHealth[serviceId_String, opts___] :=
   Lookup[SourceVaultServiceHealthDetail[serviceId], "Health", "Unknown"];

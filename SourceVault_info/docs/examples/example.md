@@ -1610,7 +1610,7 @@ claudecode.wl の **claudecode CLI provider (`{"claudecode", ...}`) では visio
 
 ```mathematica
 (* OCR \:5b9f\:884c\:524d\:306b\:5207\:308a\:66ff\:3048 (\:6c38\:7d9a\:7684) *)
-ClaudeCode`$ClaudeModel = {"anthropic", "claude-sonnet-4-20250514"}
+ClaudeCode`$ClaudeModel = {"anthropic", "claude-sonnet-5-5"}
 
 (* \:307e\:305f\:306f\u3001\:30aa\:30fc\:30d7\:30f3 *)
 SourceVaultOCREnable["ClaudeVision"]

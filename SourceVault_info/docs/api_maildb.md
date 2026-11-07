@@ -223,10 +223,10 @@ Options: "MBox" -> Automatic (文字列でその mbox に限定), "DateFrom" -> 
 例: `Length[SourceVaultMailDerivedPending["MBox"->"univ", "DateFrom"->{2026,6,1}, "DateTo"->{2026,6,30}]]`
 
 ### SourceVaultMailInferDerived[mailspec_Association]
-mailspec (date/subject/from/to/cc/body) からローカル LLM で派生を推論する (優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン。Deadline は ISO 文字列または Missing["None"]。$SourceVaultMailGroundingGate が True (既定) なら出力を SourceVaultMailDerivedGroundingCheck にかけ、未接地は1回再試行のうえなお未接地なら `<|Status->"Error", Reason->"UngroundedOutput"|>` を返す (保存しない)。
+mailspec (date/subject/from/to/cc/body) からローカル LLM で派生を推論する (優先度は構造的に別計算)。Category は $SourceVaultMailCategories のトークン。Deadline は ISO 文字列または Missing["None"]。$SourceVaultMailGroundingGate が True (既定) なら出力を SourceVaultMailDerivedGroundingCheck にかけ、未接地は1回再試行のうえなお未接地なら `<|Status->"Error", Reason->"UngroundedOutput"|>` を返す (保存しない)。送る前に送信先の上限を確かめる (rule 107): 本文の PL はこの推論で決まるので未知 = 1.0 として扱い、Subnet を信用していない同じ LAN の別機 (上限 0.25) など上限が届かない送信先には送らず `<|Status->"Error", Reason->"AccessLevelExceeded"|>` を返す (各派生フィールドは Missing["NotGenerated"]。LLM 不達は従来どおり `Reason->"LLMUnavailable"`)。判定は `ClaudeCode`ClaudeLocalLLMAccessCheck` で、claudecode 未ロードなら確認しない。
 → Association `<|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|>`
 
-> **受信者ベースの決定的 privacy フロア (defense-in-depth)**: snapshot に派生を適用する際、LLM 推論 PrivacyLevel に **受信者(To/Cc)由来の下限**を `Max` で additive 適用する。**オーナーが直接の To/Cc 受信者・非 bulk・少数宛 (≤ 4 名)** のメール = 個人/小グループ通信とみなし `PrivacyLevel` を `$SourceVaultMailPersonalPrivacyFloor` (既定 0.6) 以上に保証する (LLM が個人メールの privacy を下げ過ぎて cloud gate を漏れるのを防ぐ)。ML/一斉配信はオーナーが To/Cc に入らず (position=Bulk)・bulk/多数宛は対象外 (floor 0.0)。フロアは privacy を**上げるだけ** (高い LLM 値は下げない)。`$SourceVaultMailPersonalPrivacyFloor = 0.0` で無効化。owner 未設定時は無効。
+> **受信者ベースの決定的 privacy フロア (defense-in-depth)**: snapshot に派生を適用する際、LLM 推論 PrivacyLevel に **受信者(To/Cc)由来の下限**を `Max` で additive 適用する。**オーナーが直接の To/Cc 受信者・非 bulk・少数宛 (≤ 4 名)** のメール = 個人/小グループ通信とみなし `PrivacyLevel` を `$SourceVaultMailPersonalPrivacyFloor` (既定 0.6) 以上に保証する (LLM が個人メールの privacy を下げ過ぎて cloud gate を漏れるのを防ぐ)。ML/一斉配信はオーナーが To/Cc に入らず (position=Bulk)・bulk/多数宛は対象外 (floor 0.0)。フロアは privacy を**上げるだけ** (高い LLM 値は下げない)。`$SourceVaultMailPersonalPrivacyFloor = 0.0` で無効化。owner 未設定時は無効。下限の値は `SourceVaultMailRecipientPrivacyFloor[snapshot]` で取れる。新しく推論した PrivacyLevel を適用するときは、前の値に付いていた学習調整の記録 (`Derived.FeedbackAdjustment`) を落とす (新しい値には学習調整が乗っていないので、SourceVault_mailfeedback が古い記録の基準値から調整を始めないようにするため)。
 
 ### SourceVaultInferMailDerivedBatch[opts]
 未処理 snapshot の派生をローカル LLM で増分生成し in-place 更新する。CheckpointEvery 件ごとに dirty シャードを保存する (中断耐性: 強制終了しても "Processed" 済みは pending に戻らず再処理されない)。生成したサマリーは接地判定 (SourceVaultMailDerivedGroundingCheck: サマリーが元メール本文に基づいているか検証) を通過したものだけを保存する。
@@ -264,6 +264,11 @@ mailspec enricher の登録を解除する。
 Options: "MBox" -> Automatic, "DateFrom" -> Automatic, "DateTo" -> Automatic
 
 ## 優先度計算
+
+### SourceVaultMailRecipientPrivacyFloor[snapshot_Association]
+受信者から決まる PrivacyLevel の決定的な下限を返す。オーナーが直接の To/Cc 受信者で、bulk でなく (送信者が no-reply 等でなく、To+Cc が 8 名未満)、To+Cc が 4 名以下のメールは $SourceVaultMailPersonalPrivacyFloor、それ以外 (owner 未設定・bulk・多数宛・$SourceVaultMailPersonalPrivacyFloor ≤ 0) は 0。引数が Association でなければ 0。派生の適用時に maildb が使う下限と同じもので、SourceVault_mailfeedback もこれを読んで学習値に掛ける。学習値はこの下限を割らない (人の明示訂正のみ下回れる)。
+→ Real
+例: `SourceVaultMailRecipientPrivacyFloor[SourceVaultMailSnapshotGet["<recordId>"]]`
 
 ### SourceVaultMailComputePriority[snapshot_Association, workRequest_, category_String]
 構造シグナル (送信者グループ重み + To/Cc 位置 + ML 判定 + LLM 依頼度 + LLM カテゴリ) から重要度 0.0–1.0 を決定的に計算する。"Notice" カテゴリは -0.30 減点。
@@ -347,12 +352,12 @@ snapshot の暗号化本文を復号して文字列で返す。
 Options: "ReplyAll" -> False (True で Cc 含む), "Body" -> "" (本文初期値)
 
 ### SourceVaultMailOpenReplyNotebook[recordId_String, opts]
-返信用ウインドウ (To/Cc/件名/本文編集・ファイル添付・確認付き送信) を開く (front end 必須)。
+返信用ウインドウ (To/Cc/件名/本文編集・ファイル添付・確認付き送信) を開く (front end 必須)。本文・訳文・引用のセル (翻訳プレビューへ渡す本文と送信する本文) はセル式から文字列をそのまま読む (FE の PlainText 書き出しは ↓ を `\[DownArrow]`、全角空白を 16 進表記、× を * に書き換えるため)。数式など組版ボックスの部分だけ FE に書き出させ、残るエスケープ表記は実文字へ戻す (読めない名前や送ってはいけない文字になるものは書かれたまま)。私用領域の WL 記号は FE の読み替え (`\[Rule]` → `->`) を使う。本文と引用は前後の空行だけを落とし、1 行目の全角空白の字下げは残す。
 → Association `<|Status->"ReplyNotebookOpened", Draft|>`
 Options: "ReplyAll" -> False (True で全員に返信), "Translate" -> False (True で日本語で書いて元メールの言語に翻訳して送る。元メールの言語とフォーマル度を LLM で判定し、返信文の敬体/常体も加味する。旧 maildb replyMailTr 踏襲)
 
 ### SourceVaultMailSend[spec_Association]
-メールを送信する。spec=`<|"To","Cc","Bcc","Subject","Body","Attachments"->{パス...}|>`。Bcc 省略時、$SourceVaultMailSendBccSelf が True ならオーナー主アドレス宛に控えを送る。$SourceVaultMailSignature が非空なら本文末尾に署名付加。存在しない添付は送信前に弾く。Mathematica の SendMail 設定 (Preferences > Internet Connectivity > Mail Settings) が必要。
+メールを送信する。spec=`<|"To","Cc","Bcc","Subject","Body","Attachments"->{パス...}|>`。Bcc 省略時、$SourceVaultMailSendBccSelf が True ならオーナー主アドレス宛に控えを送る。$SourceVaultMailSignature が非空なら本文末尾に署名付加。存在しない添付は送信前に弾く。件名は 1 行にする (改行・タブの並びを空白 1 つに)。件名と本文 (署名込み) の文字は、↓ や全角空白など普通の文字はそのまま送り、送ってはいけない文字だけを実体を入れずエスケープ表記のまま見える形で残す: タブと改行以外の制御文字、双方向の上書き文字 (表示の偽装に使える)、単独サロゲートと非文字、私用領域の文字 (`\[Rule]` など WL 固有の記号)。本文の改行は LF に揃え、行区切り・段落区切り文字も改行にする。Mathematica の SendMail 設定 (Preferences > Internet Connectivity > Mail Settings) が必要。
 → Association `<|Status->"Sent", To, Cc, Bcc, Subject, Attachments|>` または `<|Status->"Error", Reason, ...|>`
 
 ### SourceVaultMailView[query_String:"", opts]

@@ -326,6 +326,7 @@ Options: "LLMFn" -> Automatic (SourceVaultQueryLocalLLM), "Confidence" -> 0.7
 ### SourceVaultQueryLocalLLM[prompt, timeout]
 local LM Studio (OpenAI 互換 chat.completions, $ClaudePrivateModel) に temperature 0・tool 無しで問い合わせ、応答文字列を返す。接続不可は Missing。Authorization Bearer token は $SourceVaultLocalLLMKey -> NBAccess`NBGetLocalLLMAPIKey -> "lm-studio" の順で解決。
 2026-07-14: request に `chat_template_kwargs: enable_thinking->False` を追加(同期・非同期両経路)。JSON 抽出用途に thinking は不要で、Qwen3 系 reasoning モデルが思考を reasoning_content に出力して content が空/JSON 不遵守になる事故(1F 実機で proposer 2/3 落ち)を抑止する(maildb/eagle と同じ。非対応モデルは無害に無視)。
+2026-11-06 (rule 107): 送る前に送信先の上限を確かめる。素材の PL はここでは分からないので 1.0 として扱い、Subnet を信用していない同じ LAN の別機 (上限 0.25) など上限が届かない送信先には送らず `Missing["AccessLevelExceeded"]` を返す (`ClaudeCode`ClaudeLocalLLMAccessCheck` で判定。claudecode 未ロードなら確認しない)。非同期経路 ("AsyncLLM"->True の URLSubmit) も同じ確認をし、拒否はリクエスト失敗 ($Failed) として callback に渡る。
 → String | Missing
 
 ### $SourceVaultLocalLLMKey

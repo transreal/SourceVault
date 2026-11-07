@@ -1953,11 +1953,17 @@ iSVEGResolveLocalLLM[] :=
           If[AssociationQ[j] && ListQ[Lookup[j, "data", $Failed]] && Length[j["data"]] > 0,
             model = Quiet@Check[j["data"][[1]]["id"], ""];
             If[! StringQ[model], model = ""]]]]];
-    <|"URL" -> url, "Model" -> model|>];
+    <|"URL" -> url, "Model" -> model, "Provider" -> iSVLocalProviderOf[pm]|>];
+
+If[! ValueQ[$iSVEGLastAccessDenial], $iSVEGLastAccessDenial = None];
 
 (* OpenAI 互換 chat.completions (テキスト/vision 共通)。messages は最終形を受け取る。 *)
 iSVEGQueryLocalLLMMessages[messages_List, timeout_] :=
   Module[{llm = iSVEGResolveLocalLLM[], reqData, bodyBytes, resp, json, content},
+    (* rule 107 (2026-11-06): Local は Cloud-Publishable でない (= 機密) 項目の経路なので PL 1.0 で
+       送信先の上限を確かめる。止めた理由は $iSVEGLastAccessDenial に残し、要約の Reason に出す。 *)
+    $iSVEGLastAccessDenial = iSVLocalLLMAccessDenial[llm, 1.0];
+    If[FailureQ[$iSVEGLastAccessDenial], Return[""]];
     reqData = <|"messages" -> messages, "temperature" -> 0.2, "stream" -> False,
       "chat_template_kwargs" -> <|"enable_thinking" -> False|>|> ~Join~
       If[llm["Model"] =!= "", <|"model" -> llm["Model"]|>, <||>];
@@ -2564,7 +2570,8 @@ SourceVaultEagleSummarize[itemSpec_, opts : OptionsPattern[]] :=
       StringQ[raw] && iSVEGLooksLikeLLMError[raw],
         Return[<|"Status" -> "Error", "Reason" -> raw, "Id" -> id|>],
       ! StringQ[raw] || StringTrim[raw] === "",
-        Return[<|"Status" -> "Error", "Reason" -> "LLMUnavailableOrEmpty", "Id" -> id,
+        Return[<|"Status" -> "Error", "Reason" -> If[method === "Local" && FailureQ[$iSVEGLastAccessDenial], "AccessLevelExceeded", "LLMUnavailableOrEmpty"], "Id" -> id,
+          "Detail" -> If[method === "Local" && FailureQ[$iSVEGLastAccessDenial], $iSVEGLastAccessDenial["Text"], Missing["None"]],
           "Hint" -> If[method === "Local",
             "ローカル LLM (LM Studio) が応答しません。起動を確認するか \"Method\"->\"Claude\" (クラウド送信に注意) を指定してください。",
             "Claude 経由の要約に失敗しました。"]|>]];
@@ -3443,11 +3450,40 @@ iSVEGSummariesRowsView[rowsIn_, lib_, maxRows_] :=
    保存済みサマリー (SourceVaultEagleSummaries と同じ対象) を共通スキーマ行で
    返す。SourceVault.wl の SourceVaultRegisterSummaryProvider 経由で "eagle"
    provider として登録する (ロード順不問・再ロード冪等)。 *)
+(* SourceVaultSummaries の "Folder": フォルダ指定 (通常フォルダの名前/id、スマートフォルダの名前/id) の
+   リスト -> そこに入っている item の id 集合 (Association id -> True)。子フォルダも含める
+   (SourceVaultEagleSearch の "Recursive" 既定と同じ)。ゴミ箱の item は除く。 *)
+iSVEGFolderIdSet[lib_String, specs_List] :=
+  Module[{items, hits},
+    items = Select[SourceVaultEagleItems["Library" -> lib],
+      ! TrueQ[Lookup[#, "isDeleted", False]] &];
+    hits = Function[spec,
+      With[{res = iSVEGResolveFolderSpec[lib, spec, True]},
+        Which[
+          ! AssociationQ[res], {},
+          res["Type"] === "Smart", Select[items, iSVEGSmartPredOf[res["Folder"], True]],
+          True, With[{ids = res["Ids"]},
+            Select[items, IntersectingQ[ToString /@ Lookup[#, "folders", {}], ids] &]]]]] /@ specs;
+    AssociationMap[True &, DeleteDuplicates[ToString@Lookup[#, "id", ""] & /@ Flatten[hits]]]];
+
+(* 見つからないフォルダ指定のリスト (SourceVaultSummaries が知らせる。provider の中の
+   メッセージは Quiet@Check で消えるので、本体が別に問い合わせる) *)
+iSVEGSummaryFolderMissing[specs_List] :=
+  With[{lib = iSVEGLib[Automatic]},
+    If[! StringQ[lib], specs,
+      Select[specs, ! AssociationQ[iSVEGResolveFolderSpec[lib, #, True]] &]]];
+
 iSVEGCommonRows[query_String, opts_Association] :=
-  Module[{lib, listRows, libPL, cache},
+  Module[{lib, listRows, libPL, cache, folders},
     lib = iSVEGLib[Automatic];
     listRows = Quiet@Check[iSVEGSummaryListRows[query, lib], {}];
     If[! ListQ[listRows], Return[{}]];
+    (* "Folder" (SourceVaultSummaries から {spec..} で来る): そのフォルダの item の行だけ *)
+    folders = Lookup[opts, "Folder", {}];
+    If[ListQ[folders] && folders =!= {},
+      If[! StringQ[lib], Return[{}]];
+      With[{keep = iSVEGFolderIdSet[lib, folders]},
+        listRows = Select[listRows, KeyExistsQ[keep, ToString@Lookup[#, "Id", ""]] &]]];
     libPL = If[StringQ[lib], iSVEGLibraryPL[lib], 1.0];
     cache = If[StringQ[lib], Lookup[$iSVEGItemCache, lib, <||>], <||>];
     Map[Function[row,
@@ -3487,11 +3523,20 @@ iSVEGCommonRows[query_String] := iSVEGCommonRows[query, <||>];
 If[! AssociationQ[$SourceVaultSummaryProviders],
   $SourceVaultSummaryProviders = <||>];
 $SourceVaultSummaryProviders["eagle"] = iSVEGCommonRows;
+(* "Folder" を扱える provider として名乗る (値 = 見つからないフォルダ指定を返す関数) *)
+If[! AssociationQ[$iSVSummaryFolderProviders], $iSVSummaryFolderProviders = <||>];
+$iSVSummaryFolderProviders["eagle"] = iSVEGSummaryFolderMissing;
 
 If[! AssociationQ[$iSVRowTitleActions], $iSVRowTitleActions = <||>];
 $iSVRowTitleActions["eagle"] = Function[id, SourceVaultEagleShowSummary[id]];
 If[! AssociationQ[$iSVRowOpenActions], $iSVRowOpenActions = <||>];
 $iSVRowOpenActions["eagle"] = Function[id, SourceVaultEagleOpenItem[id]];
+(* 横断一覧の翻訳NB 欄: PDF の item だけ、正準 URI を翻訳ノートブック登録簿 (SourceVault_papernb.wl) の
+   参照にする (SourceVaultEagleView の「訳」ボタンと同じ登録を指す)。画像などは "" = 欄を空に *)
+If[! AssociationQ[$iSVRowPaperNBRefs], $iSVRowPaperNBRefs = <||>];
+$iSVRowPaperNBRefs["eagle"] = Function[row,
+  With[{u = ToString @ Lookup[row, "URI", ""], f = ToString @ Lookup[row, "File", ""]},
+    If[StringStartsQ[u, "sv://object/eagle-"] && ToLowerCase[FileExtension[f]] === "pdf", u, ""]]];
 
 If[! ValueQ[$SourceVaultEagleNotebookStyle],
   $SourceVaultEagleNotebookStyle = "SourceVault default.nb"];

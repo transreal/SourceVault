@@ -56,7 +56,7 @@ Wolfram ライセンス容量を実測（$LicenseProcesses / $MaxLicenseProcesse
 
 ### SourceVaultDiagnosticsReclaimableCapacity[topo_Association] → Association
 ### SourceVaultDiagnosticsReclaimableCapacity[] → Association
-kernel トポロジ（省略時は SourceVaultDiagnosticsKernelProcessTopology[] を計算）を検査し再利用可能なプロセススロット（主に単一共有ゲートウェイへ collapse すべき重複 AgentTools MCP-server kernel）を検出。MCPServerKernels, ReclaimableMCPKernels (= max(0, MCP-1)), ReclaimableProcessSlots, Recommendation, MeasuredAtUTC を返す。
+kernel トポロジ（省略時は SourceVaultDiagnosticsKernelProcessTopology[] を計算）を検査し再利用可能なプロセススロット（主に重複した AgentTools MCP-server kernel）を検出。MCPServerKernels, ReclaimableMCPKernels (= max(0, MCP-1)), ReclaimableProcessSlots, Recommendation, MeasuredAtUTC を返す。回収できる kernel があるときの Recommendation は、Wolfram MCP クライアントを StartMCPServer kernel ではなく SourceVault サービスのエンドポイント（MCP proxy 上の `/wl/mcp`）へ向けるよう勧める。
 
 ## システムドクター
 
@@ -64,6 +64,23 @@ kernel トポロジ（省略時は SourceVaultDiagnosticsKernelProcessTopology[]
 Phase 0 のクロスパッケージヘルス集約: ライセンスプール, 再利用可能 MCP 容量, （弱く）既存 service-manager ヘルス, 登録済みプローブ。component スコープのヘルスと GlobalHealth（"OK" | "Degraded" | "Failing"）を返す。Read-only。プローブの throw / 遅延 / Abort / $Failed / 不正結果は Degraded の "ProbeError" / "ProbeTimeout" / "ProbeBadResult" コンポーネントとなり doctor を落とさない。
 → Association
 Options: "Emit" -> False (診断イベントを emit するか), "IncludeTopology" -> True (kernel-topology CIM プローブを含めるか。False で shell-out を回避)
+
+service-manager のヘルスは `SourceVaultServiceHealthDetail["sourcevault"]` を doctor 1 回につき 1 度だけ読み（pid 確認の shell-out を伴うため）、`Service:sourcevault` コンポーネントと `MCPKernels` で共有する。servicemanager が無いときは `Service:sourcevault` を出さない。
+
+コンポーネント `MCPKernels` は Wolfram MCP バックエンド (WLMCP) の状態と重複 MCP カーネルの数を合わせて示す。状態はサービスの heartbeat から読み、`WLMCPStatus` コマンドの往復は待たない（Service ヘルスの L2 ping は `PingIntervalSeconds` のキャッシュ経由で従来どおり）。バックエンドが Failing ならそれが優先され、そうでなく重複カーネルがあれば Degraded で `ReasonCode` は DuplicateMCPKernels になる。`Detail` には `ReasonCode` / `Message` のほか、`ReclaimableMCPKernels`、バックエンド側の判定 `WLMCPReasonCode`、サービスが報告した値そのもの `WLMCP`（報告があるときだけ）が入る。`Detail` の `ReasonCode` は次のいずれか。監視対象 (`$iSVDiagWatchedComponents`) に入っているので、Degraded / Failing は共有 tick から警告される。
+
+| ReasonCode | Health | 意味 |
+|---|---|---|
+| WLMCPReady | OK | Wolfram MCP が使える |
+| WLMCPRecycled | OK | 評価の打ち切りでサブカーネルを作り直した。次の要求で再初期化する |
+| WLMCPDisabled | OK | そのサービスでは無効 |
+| WLMCPNotApplicable | OK | そのカーネルからサービスの状態を確認できない |
+| WLMCP<Status> (WLMCPInitFailed など) | Failing | 使えない。`Message` に理由と AgentTools の版が出る |
+| WLMCPNotReported | Unknown | 状態を報告しない古いサービスが動いている。再起動後に反映される |
+| WLMCPServiceDown | Unknown | サービスが動いていないので確認できない (`Service:sourcevault` が報告する) |
+| DuplicateMCPKernels | Degraded | 回収できる StartMCPServer カーネルがある (完全診断のときだけ数える) |
+
+Unknown は GlobalHealth に数えず、警告もしない。
 
 ### SourceVaultDiagnosticsLightweightDoctor[] → Association
 安価な doctor: ライセンスプローブ + service health + 登録済みプローブを実行し kernel-topology CIM プローブをスキップ（shell-out なし）。共有 polling tick 向け。`SourceVaultSystemDoctor["IncludeTopology" -> False]` と等価。
@@ -145,7 +162,7 @@ SystemDoctor のパレットを開く（ShowClaudePalette / ShowDocPalette と�
 常駐の自動更新はしない（状態はパレット内の DynamicModule 変数をボタンが更新する）。ボタンの処理は ClaudeCode`ClaudeHoldFrontEnd で包み、その間は claudecode の共有 polling tick がフロントエンドに触れない。ウインドウは種類ごとに 1 つで、開き直すと前のものは閉じる。claudecode / ClaudePackageManager / SourceVault_issues が無い機能はダイアログで知らせる。
 
 ### SourceVaultSystemDoctorView[opts] → DynamicModule
-SourceVaultSystemDoctor の結果を表で表示する: 全体の状態、部品ごとの状態・理由 (ReasonCode)・メッセージ、ライセンス、（完全診断時）カーネルの種類と回収できる MCP カーネル、登録済み probe。部品の行には関連ウインドウを開くボタンが付く（Separation → 実行一覧、SupervisedProcesses → プロセス一覧、LogCoverage / Codex / WebAccessReview → 診断ログ）。[再診断]（軽量）、[完全診断 (プロセス構成込み)]、[診断を記録]（"Emit" -> True で diagnostics-log に DoctorRun を残す）で描き直す。
+SourceVaultSystemDoctor の結果を表で表示する: 全体の状態、部品ごとの状態・理由 (ReasonCode)・メッセージ、ライセンス、（完全診断時）カーネルの種類と回収できる MCP カーネル、登録済み probe。部品の行には関連ウインドウを開くボタンが付く（Separation → 実行一覧、SupervisedProcesses → プロセス一覧、LogCoverage / Codex / WebAccessReview → 診断ログ）。[再診断]（軽量）、[完全診断 (プロセス構成込み)]、[診断を記録]（"Emit" -> True で diagnostics-log に DoctorRun を残す）で描き直す。状態 Unknown は灰色の「不明」として表示する。
 Options: "IncludeTopology" -> False
 
 ### SourceVaultRepositoryStatus[opts] → List | Failure
@@ -221,7 +238,7 @@ shadow watch を無効化し、（自分がインストールしたものであ�
 ## Polling Tick
 
 ### SourceVaultDiagnosticsTick[opts] → String | Association
-共有 polling tick から呼ばれる軽量 body。throttle あり（default 60s; 期間内は <|"Status"->"Throttled", "SinceLastSeconds"->..|>）。各実行で軽量 machine heartbeat（topology なし）を書き、heartbeat の doctor 結果から監視対象コンポーネント（log coverage, Codex, WebAccessReview）を warning へ escalate し（(component, reason) ごとに 24h に 1 回、issue DB signal・status band/mail・FE 通知。回復でキーを忘れ再発時は再警告。プローブ自身の異常は ProbeFault として別文言）、aborted write により開いたままの stray vault file stream を解放し（SourceVaultReleaseFileStreams の "MinAgeSeconds" 指定: 10 分アイドルのストリームのみ。tick は main evaluation を interrupt するため使用中ストリームを閉じると kernel がクラッシュする; 開いたハンドルは Dropbox sync をブロックし conflicted copy を招くため。解放時は StrayStreamsReleased を記録）、comprehensive doctor が freshness window（90000 秒 = 24h+1h grace）内に走っていなければ DoctorStale を emit する（ログは 1 日 1 回まで）。kernel を spawn せず Front End にも触れない。短い status を返す。手動呼び出しも安全。
+共有 polling tick から呼ばれる軽量 body。throttle あり（default 60s; 期間内は <|"Status"->"Throttled", "SinceLastSeconds"->..|>）。各実行で軽量 machine heartbeat（topology なし）を書き、heartbeat の doctor 結果から監視対象コンポーネント（log coverage, Codex, WebAccessReview, MCPKernels。MCPKernels は既定一覧と別に追加されるので、稼働中のカーネルで読み直しても入る。tick の doctor はプロセス構成を見ないので、重複 MCP カーネルだけではここから警告しない）を warning へ escalate し（(component, reason) ごとに 24h に 1 回、issue DB signal・status band/mail・FE 通知。回復でキーを忘れ再発時は再警告。プローブ自身の異常は ProbeFault として別文言）、aborted write により開いたままの stray vault file stream を解放し（SourceVaultReleaseFileStreams の "MinAgeSeconds" 指定: 10 分アイドルのストリームのみ。tick は main evaluation を interrupt するため使用中ストリームを閉じると kernel がクラッシュする; 開いたハンドルは Dropbox sync をブロックし conflicted copy を招くため。解放時は StrayStreamsReleased を記録）、comprehensive doctor が freshness window（90000 秒 = 24h+1h grace）内に走っていなければ DoctorStale を emit する（ログは 1 日 1 回まで）。kernel を spawn せず Front End にも触れない。短い status を返す。手動呼び出しも安全。
 Options: "IntervalSeconds" -> 60 (body の throttle 秒数), "Force" -> False (True で throttle を無視)
 
 ### SourceVaultDiagnosticsStartTick[opts] → Association

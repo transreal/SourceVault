@@ -60,7 +60,7 @@ Options: SourceVaultSourcesView と同じ
 → `<|"Candidates", "Updated", "AlreadyPresent", "NoAbstract", "Failed", "Results"|>`
 Options: `"Force"` -> False (True で既存 Summary も再生成), `"Model"` -> Automatic, `"Limit"` -> Automatic|n
 ### SourceVaultBackfillSourceSummaries[opts]
-web / local ソースのうち Summary が未設定 (または過去の LLM エラー本文) のものに、ingest 済み snapshot の本文 (plaintext) を LLM で要約して付与する (arXiv は SourceVaultBackfillArXivSummaries が担当)。モデルは行の PrivacyLevel で決まる: PL > 0.5 は `$ClaudePrivateModel` (ローカル LLM)、以下はクラウド CLI。PL 不明は fail-safe で 1.0 = ローカル扱い。本文は UNTRUSTED データ境界で包んでから渡し (prompt injection 対策)、prescan が quarantined と判定した本文は LLM へ渡さない (Status "Quarantined")。LLM エラー本文は保存されない (`iSVLooksLikeLLMError` ゲート)。`$Language` が Japanese のセッションで実行すること。
+web / local ソースのうち Summary が未設定 (または過去の LLM エラー本文) のものに、ingest 済み snapshot の本文 (plaintext) を LLM で要約して付与する (arXiv は SourceVaultBackfillArXivSummaries が担当)。モデルは行の PrivacyLevel で決まる: PL ≥ 0.5 は `$ClaudePrivateModel` (ローカル LLM)、未満はクラウド CLI。PL 不明は fail-safe で 1.0 = ローカル扱い。送信先が LAN 上のローカル LLM で、距離で決まる上限 (rule 107。Subnet を信用していない同じ LAN の別機は 0.25) がその PL に届かなければ送らず、その件は `"Status" -> "Failed"`, `"Reason" -> "AccessLevelExceeded"` になる (`"Model"` を明示指定しても送信先の上限は確かめる)。本文は UNTRUSTED データ境界で包んでから渡し (prompt injection 対策)、prescan が quarantined と判定した本文は LLM へ渡さない (Status "Quarantined")。LLM エラー本文は保存されない (`iSVLooksLikeLLMError` ゲート)。`$Language` が Japanese のセッションで実行すること。
 → `<|"Candidates", "Updated", "AlreadyPresent", "NoText", "Quarantined", "Failed", "Remaining", "Language", "Results"|>`
 Options: `"Kind"` -> `{"web", "local"}` (既定。`All` で arxiv も含む), `"Sources"` -> All|`{sourceId...}` (対象を明示指定), `"Force"` -> False (True で既存 Summary も再生成), `"Limit"` -> 10 (Infinity/Automatic で全件), `"Model"` -> Automatic (明示指定で PL 分岐を上書き), `"MaxChars"` -> Automatic (`$SourceVaultSourceSummaryMaxChars`), `"TimeoutSeconds"` -> 120 (本文抽出 1 件あたり)
 例: `SourceVaultBackfillSourceSummaries["Limit" -> 5]` (新しい順に 5 件だけ試す)
@@ -83,15 +83,17 @@ Options: `"FetchMetadata"` -> Automatic
 ### SourceVaultSummaries[query, opts]
 SourceVault が抱えるデータ全体 (ingest 済みソース + Eagle 保存済みサマリー + メール + PDF 検索索引ドキュメント (pdfindex provider。学生便覧等) 等、登録 provider 横断) を検索し、共通スキーマ行を `List[Association]` で返す (core)。
 → List[Association] | Dataset | Grid (後方互換)
-Options: `"Providers"` -> All|`{"sources", "eagle", "mail", "pdfindex", "workflow", ...}`, `"Kind"` -> All|`{"web", "arxiv", "local", "mail", "eagle", ...}` (行の種別。**provider 非依存に効く** — `"Kind"` を無視する provider の行も落とす。`"Providers"` に provider 名でない語 (`"web"` 等) を書いた場合も種別指定として解釈する。どちらでもない語は `SourceVaultSummaries::unkfilter` で知らせる), `"Limit"` -> Automatic, `"Since"`/`"Until"`/`"On"` -> None (登録/生成日での絞り込み), `"Author"` -> None (著者部分一致), `"FetchMetadata"` -> Automatic, `"Format"` -> `"Rows"` (既定)|`"Dataset"`|`"Grid"` (View へ委譲)
-例: `SourceVaultSummaries["可逆計算"]`、`SourceVaultSummariesView["便覧", "Providers" -> {"pdfindex"}]`
+Options: `"Providers"` -> All|`{"sources", "eagle", "mail", "pdfindex", "workflow", ...}`, `"Kind"` -> All|`{"web", "arxiv", "local", "mail", "eagle", ...}` (行の種別。**provider 非依存に効く** — `"Kind"` を無視する provider の行も落とす。`"Providers"` に provider 名でない語 (`"web"` 等) を書いた場合も種別指定として解釈する。どちらでもない語は `SourceVaultSummaries::unkfilter` で知らせる), `"Limit"` -> Automatic, `"Since"`/`"Until"`/`"On"` -> None (登録/生成日での絞り込み), `"Author"` -> None (著者部分一致), `"Folder"` -> None|名前|`{名前..}` (Eagle のフォルダ。通常フォルダ/スマートフォルダの名前か id、子フォルダ込み、複数指定はその和), `"FetchMetadata"` -> Automatic, `"Format"` -> `"Rows"` (既定)|`"Dataset"`|`"Grid"` (View へ委譲)
+例: `SourceVaultSummaries["可逆計算"]`、`SourceVaultSummariesView["便覧", "Providers" -> {"pdfindex"}]`、`SourceVaultSummariesView["", "Folder" -> "<フォルダ名>"]`
+`"Folder"` を指定すると、フォルダの概念を持つ provider (現在は eagle) だけを引き、その provider がフォルダ内の item の行 (ゴミ箱の item は除く。eagle は保存済みサマリーのある item だけ) に絞る。sources / mail などフォルダを持たない provider の行は混ぜない: `"Providers"` にそうした provider を書くと `SourceVaultSummaries::folderprov` で知らせてその行を返さない。見つからないフォルダ指定は `SourceVaultSummaries::nofolder` で知らせる。
 pdfindex 行の本文検索 (チャンク単位・gate 付き) は SourceVaultSearch[query, "Group" -> name] を使うこと。
 ### SourceVaultSummariesView[query, opts] / SourceVaultSummariesView[rows]
 横断検索の結果をユーザー提示用の表 (Grid) で返す View。タイトル/サマリークリックは種別ごとの表示アクションを呼ぶ: arxiv/web/local → サマリーノート、eagle → Eagle サマリー、**mail → メール本文ウインドウ (`SourceVaultMailShowBody`。返信/全員に返信/翻訳して返信/翻訳表示 + アジェンダ操作つき。索引行の ShardKey から必要シャードだけ遅延ロード)**、「▶ 開く」は mail ならスレッド窓 (`SourceVaultMailThreadNotebook`)。自前 Select で絞った行リストも `SourceVaultSummariesView[rows]` で表示する。
+「翻訳NB」列 (`SourceVault_papernb.wl` の翻訳ノートブック登録簿。`$Language` の訳が登録済みなら「▶ 翻訳NB」で開く、未登録でファイルがあれば「＋ 翻訳NB」で生成) は、arxiv/web/local の行は SourceId で、eagle の行は PDF の item だけ正準 URI (`sv://object/eagle-<id>`) で登録簿を引く (`SourceVaultEagleView` の「訳」ボタンと同じ登録)。画像など PDF 以外の eagle 行とその他の種別は空欄。
 → Grid | Column | Style
-Options: SourceVaultSummaries と同じ + `"MaxRows"` -> Automatic
+Options: SourceVaultSummaries と同じ (`"Folder"` を含む) + `"MaxRows"` -> Automatic
 ### SourceVaultRegisterSummaryProvider[name, fn]
-`SourceVaultSummaries` の横断検索 provider を登録する。fn のシグネチャ: `fn[query_String, opts_Association]` → 共通スキーマ行 (SourceVaultSourceRow 参照) のリスト。
+`SourceVaultSummaries` の横断検索 provider を登録する。fn のシグネチャ: `fn[query_String, opts_Association]` → 共通スキーマ行 (SourceVaultSourceRow 参照) のリスト。opts には `"FetchMetadata"`、`"Kind"`、`"Folder"` (フォルダ指定のリスト。未指定は `{}`) が入る。`"Folder"` で絞れる provider は SourceVault 内部の表にも名乗る (現在は Eagle adapter だけ)。名乗っていない provider は `"Folder"` 指定時には呼ばれない。
 → なし
 ### $SourceVaultSummaryProviders
 型: Association
@@ -194,7 +196,7 @@ OCR 実行時の進捗 Print を制御する変数。True で rasterization / AP
 OCR hook を有効化する。backend 既定 `"ClaudeVision"`。全 backend は単一の共有 Options プール (`Options[SourceVaultOCREnable]`: `"DPI"` -> 300, `"SplitHalves"` -> True, `"Timeout"` -> 180, `"Language"` -> `"Japanese"`, `"Prompt"` -> Automatic, `"Hook"` -> None, `"Mode"` -> `"Auto"`, `"Verbose"` -> False) で opts を検証するが、未指定キーの実効既定値は backend の内部実装依存 (下記)。
 → `<|"Status" -> "Enabled", "Backend" -> _String, "Mode" -> _String, "Options" -> _Association|>`
 backend:
-- `"ClaudeVision"`: `ClaudeCode`ClaudeQueryBg` 経由で Claude API にページ画像を送り OCR (PDFIndex 実証済みパターン)。大きいページは自動で上下分割 (30px overlap) して 2 回 OCR しマージ。実効既定: `"DPI"` -> 300, `"SplitHalves"` -> True, `"Timeout"` -> 180, `"Prompt"` -> Automatic (未指定時は内蔵プロンプト)
+- `"ClaudeVision"`: `ClaudeCode`ClaudeQueryBg` 経由で Claude API にページ画像を送り OCR (PDFIndex 実証済みパターン)。大きいページは自動で上下分割 (30px overlap) して 2 回 OCR しマージ。実効既定: `"DPI"` -> 300, `"SplitHalves"` -> True, `"Timeout"` -> 180, `"Prompt"` -> Automatic (未指定時は内蔵プロンプト)。戻り値には `"Provider"` (`$ClaudeModel` の provider) と `"Warning"` も入る: provider が `"claudecode"` (CLI。vision 非対応) なら、OCR 前に `$ClaudeModel = {"anthropic", "claude-sonnet-5-5"}` (有料) を設定するか `"TextRecognize"` / `"Custom"` を使うよう促す文、それ以外は Null
 - `"TextRecognize"`: Mathematica 組み込み TextRecognize (Python 不要、精度準等)。実効既定: `"DPI"` -> 150, `"Language"` -> `"Japanese"`
 - `"Custom"`: ユーザー提供 Function をそのまま `$SourceVaultOCRHook` に設定。Options: `"Hook"` -> `Function[req, text]` (必須、Head が Function でないと Failed)
 共通 Options: `"Mode"` -> `"Auto"` (既定) | `"Force"`, `"Verbose"` -> False | True
@@ -475,7 +477,7 @@ Status 値:
 - `Stale` — SemanticHash が変わった (再生成推奨)
 ## Stage 9 P1 Step 5: LLM 要約
 ### SourceVaultNotebookSummary[path, opts]
-notebook の内容を LLM で要約し Summary artifact として保存する (内部で SourceVaultRegisterNotebookSummary を SummaryFormat -> "text" 固定で呼ぶため、生成される SummaryFormat は常に text)。snapshot・SemanticHash 紐づけ・lifecycle 管理は自動。prompt は Header / Todo / Lint / 先頭複数セル (MaxCells 件) のテキストから構築する。`ClaudeCode`ClaudeQuerySync` 経由 (claudecode.wl 依存)。既定で PrivacyLevel 1.0 (ローカル LM 経由で notebook 内容を API に送らない)。
+notebook の内容を LLM で要約し Summary artifact として保存する (内部で SourceVaultRegisterNotebookSummary を SummaryFormat -> "text" 固定で呼ぶため、生成される SummaryFormat は常に text)。snapshot・SemanticHash 紐づけ・lifecycle 管理は自動。prompt は Header / Todo / Lint / 先頭複数セル (MaxCells 件) のテキストから構築する。`ClaudeCode`ClaudeQuerySync` 経由 (claudecode.wl 依存)。既定で PrivacyLevel 1.0 (ローカル LM 経由で notebook 内容を API に送らない)。送信先が LAN 上のローカル LLM で、距離で決まる上限 (rule 107。Subnet を信用していない同じ LAN の別機は 0.25) がその PL に届かなければ送らない (`ClaudeCode`ClaudeLocalLLMAccessCheck` で判定。claudecode が未ロードなら確認しない)。クラウドへ回せないノートでは `"Status" -> "Failed"`, `"Reason" -> "AccessLevelExceeded"` を返し、回せるノートではローカル失敗として `"FallbackToCloud"` の扱いに進む。
 要約レコードの PrivacyLevel はノートブックの公開宣言 (CloudPublishable) で決まる: Public (True) -> 0.0, 宣言なし -> 0.2, Private (False) -> 0.4。プロンプトに入れる先頭セルは、クラウド送信が起こり得る notebook (CloudPublishable 宣言済み) では confidential/dependent セルを除外する。ローカル LLM 固定の notebook (宣言なし・非公開パス等) では confidential セルもプロンプトに含めるが、その場合は生成された要約自体をクラウド送信可としない — summary record の PrivacyLevel を 1.0 に固定して残す。
 生成された要約は $SourceVaultSummaryForbiddenPatterns (+ 組み込み既定パターン: メール・電話番号・郵便番号・マイナンバー・学籍番号らしき ID・認証URLパラメータ・APIキーらしき文字列) による匿名化ダブルチェックを通過しないと破棄される (Status -> `"SchemaViolation"`)。これは表示上の安全策ではなく、ローカル LLM 匿名化＋機械的パターン照合の二段構えで、非公開 notebook の要約をクラウドに出す根拠そのものになっている。
 → `<|"Status" -> "OK"|"Failed"|"Inconsistent"|"SchemaViolation", "Summary" -> _String, "SummaryId" -> _String, "NotebookRef" -> _String, "LifecycleStatus" -> _String, ...|>` (Current で ForceRefresh 無しなら既存 record を返す。SchemaViolation 時は `"Violations" -> {_String, ...}` を含む)

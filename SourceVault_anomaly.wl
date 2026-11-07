@@ -807,33 +807,35 @@ iAnomBinStream[events_List, numPred_] := Module[{byDay, days},
       "EventCount" -> Count[grp, e_ /; TrueQ[numPred[e]]],
       "ExposureCount" -> Length[grp], "MissingCount" -> 0|>]] /@ days];
 
-iAnomReadEvents[cls_String, limit_] :=
-  Replace[Quiet @ Check[SourceVaultTransactionLog["Limit" -> limit, "EventClass" -> cls], {}],
+iAnomReadEvents[cls_String, limit_, since_] :=
+  Replace[Quiet @ Check[SourceVaultTransactionLog["Limit" -> limit, "EventClass" -> cls, "Since" -> since], {}],
     Except[_List] -> {}];
 
 Options[SourceVaultCollectCaneAnomalyStreams] = {"WindowDays" -> 14, "Limit" -> 5000,
   "IncludeOwnerState" -> False};
 SourceVaultCollectCaneAnomalyStreams[OptionsPattern[]] := Module[
-  {lim = OptionValue["Limit"], wd = OptionValue["WindowDays"], streams = <||>, cut, keepRecent, bpts, gpts, opts2},
+  {lim = OptionValue["Limit"], wd = OptionValue["WindowDays"], streams = <||>, cut, since, keepRecent, bpts, gpts, opts2},
   cut = If[IntegerQ[wd] && wd > 0,
     DateString[DatePlus[Now, {-wd, "Day"}], {"Year", "-", "Month", "-", "Day"}, TimeZone -> 0], ""];
+  (* window より古い event は keepRecent で捨てるので読まない (tick の TimedOut 対策) *)
+  since = If[cut === "", All, cut];
   (* 罠: 文字列に対する >= は評価されない(GreaterEqual のまま)→ OrderedQ で日付順比較。
      OrderedQ[{cut, day}] は cut<=day(ISO 文字列の辞書順=日付順)のとき True *)
   keepRecent = Function[pts, Select[pts,
     OrderedQ[{cut, StringTake[Lookup[#, "WindowStart", ""], UpTo[10]]}] &]];
   (* LLMBoundaryMismatchRate: gate + shadow 合算、非 Verified(mismatch 系)率 *)
   bpts = keepRecent @ iAnomBinStream[
-    Join[iAnomReadEvents["LLMBoundaryGateRecorded", lim],
-         iAnomReadEvents["LLMBoundaryShadowRecorded", lim]],
+    Join[iAnomReadEvents["LLMBoundaryGateRecorded", lim, since],
+         iAnomReadEvents["LLMBoundaryShadowRecorded", lim, since]],
     Function[e, MemberQ[$svAnomMismatchStatuses, Lookup[e, "Status", ""]]]];
   If[bpts =!= {}, streams["LLMBoundaryMismatchRate"] = <|"Points" -> bpts|>];
   (* GuardMailMisalignedRate: mail release 並走の非 aligned 率 *)
-  gpts = keepRecent @ iAnomBinStream[iAnomReadEvents["GuardMailParallelRecorded", lim],
+  gpts = keepRecent @ iAnomBinStream[iAnomReadEvents["GuardMailParallelRecorded", lim, since],
     Function[e, ! TrueQ[Lookup[e, "Aligned", False]]]];
   If[gpts =!= {}, streams["GuardMailMisalignedRate"] = <|"Points" -> gpts|>];
   (* OwnerInputHighRiskRate: owner 状態=opt-in のみ *)
   If[TrueQ[OptionValue["IncludeOwnerState"]],
-    opts2 = keepRecent @ iAnomBinStream[iAnomReadEvents["OwnerInputShadowRecorded", lim],
+    opts2 = keepRecent @ iAnomBinStream[iAnomReadEvents["OwnerInputShadowRecorded", lim, since],
       Function[e, Lookup[e, "Risk", ""] === "High"]];
     If[opts2 =!= {}, streams["OwnerInputHighRiskRate"] = <|"Points" -> opts2|>]];
   streams];
@@ -847,6 +849,9 @@ SourceVaultCollectCaneAnomalyStreams[OptionsPattern[]] := Module[
      不変=毎回 Reused でも、probe の staleness 判定が偽 Degraded にならないように)。
    - enforcement なし(I-16)。OS ScheduledTask は作らない(rule 95。呼び手は service ループ)。
    ============================================================ *)
+iAnomScheduleInterval[sched_] := With[{i = Lookup[sched, "IntervalSeconds", 86400]},
+  If[NumericQ[i] && i >= 60, i, 86400]];
+
 Options[SourceVaultCaneAnomalyScheduleTick] = {"RunFn" -> Automatic};
 SourceVaultCaneAnomalyScheduleTick[OptionsPattern[]] := Module[
   {prof, sched, interval, st, lastEpoch, now, runFn, r, outcome, runId},
@@ -856,8 +861,7 @@ SourceVaultCaneAnomalyScheduleTick[OptionsPattern[]] := Module[
   If[! (AssociationQ[sched] && TrueQ[Lookup[sched, "Enabled", False]] &&
         Lookup[sched, "Mode", ""] === "Scheduled" && ! TrueQ[Lookup[sched, "Paused", False]]),
     Return[<|"Status" -> "Disabled"|>]];
-  interval = Lookup[sched, "IntervalSeconds", 86400];
-  If[! (NumericQ[interval] && interval >= 60), interval = 86400];
+  interval = iAnomScheduleInterval[sched];
   now = iAnomEpoch[];
   st = iAnomRead[iAnomPipelineStatusPath[]];
   lastEpoch = If[AssociationQ[st], Lookup[st, "LastRunEpoch", 0], 0];
@@ -926,7 +930,10 @@ SourceVaultCaneDiagnosticsProbe[] := Module[{st, prof, sched, ageSec, fresh},
       <|"Health" -> "Failing", "ReasonCode" -> "PipelineFailed"|>,
     True,
       ageSec = iAnomEpoch[] - Lookup[st, "LastRunEpoch", 0];
-      If[TrueQ[Lookup[sched, "Enabled", False]] && ! TrueQ[Lookup[sched, "Paused", False]] && ageSec > fresh,
+      (* stale = 実行予定 (前回 + IntervalSeconds) から fresh を超えて遅れている。経過時間だけを fresh と
+         比べると、間隔が fresh 以上のとき正常運転でも予定時刻から次の tick までの間 Degraded になる。 *)
+      If[TrueQ[Lookup[sched, "Enabled", False]] && ! TrueQ[Lookup[sched, "Paused", False]] &&
+          ageSec > iAnomScheduleInterval[sched] + fresh,
         <|"Health" -> "Degraded", "ReasonCode" -> "PipelineStale"|>,
         <|"Health" -> "OK", "ReasonCode" -> "PipelineHealthy"|>]]];
 

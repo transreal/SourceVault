@@ -1492,9 +1492,9 @@ SourceVaultDiagnosticsReclaimableCapacity[topo_Association] :=
       "ReclaimableProcessSlots" -> reclaimable,
       "Recommendation" ->
         If[reclaimable > 0,
-          "Route Wolfram MCP clients through the single shared gateway " <>
-          "(wlmcp-gateway, http) so " <> ToString[mcp] <>
-          " StartMCPServer kernels collapse to 1; frees " <>
+          "Route Wolfram MCP clients through the SourceVault service endpoint " <>
+          "(/wl/mcp on the MCP proxy) instead of the " <> ToString[mcp] <>
+          " StartMCPServer kernels; frees at least " <>
           ToString[reclaimable] <> " process slot(s).",
           "No duplicate MCP-server kernels detected."],
       "MeasuredAtUTC" -> iSVDiagUTCNow[]
@@ -1533,24 +1533,96 @@ iSVDiagNormalizeHealth[h_] :=
     StringQ[h], h,
     True, "OK"];
 
-(* weakly read service-manager health for known service ids, if present *)
-iSVDiagServiceHealthComponents[] :=
-  Module[{ids = {"sourcevault"}, out = <||>},
-    If[!iSVDiagSymbolExistsQ["SourceVault`SourceVaultServiceHealth"],
-      Return[out]];
-    Scan[
-      Function[id,
-        Module[{h = iSVDiagCall["SourceVault`SourceVaultServiceHealth", id]},
-          If[StringQ[h] || AssociationQ[h],
-            out = Append[out,
-              ("Service:" <> id) -> <|"Health" -> iSVDiagNormalizeHealth[h]|>]]]],
-      ids];
+(* weakly read service-manager health for known service ids, if present.
+   The detail is read once per doctor run and shared with the MCPKernels verdict:
+   reading it costs a tasklist shell-out (the pid check). *)
+iSVDiagServiceHealthComponents[details_Association] :=
+  Module[{out = <||>},
+    KeyValueMap[
+      Function[{id, h},
+        If[StringQ[h] || AssociationQ[h],
+          out = Append[out,
+            ("Service:" <> id) -> <|"Health" -> iSVDiagNormalizeHealth[h]|>]]],
+      details];
     out];
+
+(* ------------------------------------------------------------
+   Wolfram MCP backend state for the MCPKernels component (2026-11-04).
+   The backend went InitFailed from 2026-08-12 to 2026-11-04 while MCPKernels stayed OK:
+   the component only counted duplicate StartMCPServer processes, and the backend is a
+   subkernel of the service, which that count never sees. The state comes from the
+   service heartbeat (no round trip: the doctor runs on the FE tick and must not wait on
+   the service), and it is the same state the client's "backend unavailable" error
+   reports. "Unknown" = could not be checked: shown as such, not counted in GlobalHealth
+   and not warned about (a stale heartbeat is Service:<id>'s to report, and it happens on
+   every resume from standby).
+   ------------------------------------------------------------ *)
+iSVDiagWLMCPVerdict[detail_] :=
+  Module[{h, wl, status, reason, version, tools, verdict},
+    h = If[AssociationQ[detail], Lookup[detail, "Health", "Unknown"], "Unknown"];
+    wl = If[AssociationQ[detail], Lookup[detail, "WLMCP", Missing[]], Missing[]];
+    status = If[AssociationQ[wl], Lookup[wl, "Status", "?"], "?"];
+    reason = If[AssociationQ[wl], Lookup[wl, "Reason", None], None];
+    version = If[AssociationQ[wl], Lookup[wl, "PacletVersion", None], None];
+    tools = If[AssociationQ[wl], Lookup[wl, "Tools", None], None];
+    verdict = Which[
+      h === "Unknown",
+        <|"Health" -> "OK", "ReasonCode" -> "WLMCPNotApplicable",
+          "Message" -> "このカーネルからはサービスの状態を確認できません。"|>,
+      h === "Failing",
+        <|"Health" -> "Unknown", "ReasonCode" -> "WLMCPServiceDown",
+          "Message" -> "サービスが動いていないので状態を確認できません (Service:sourcevault を参照)。"|>,
+      !AssociationQ[wl],
+        <|"Health" -> "Unknown", "ReasonCode" -> "WLMCPNotReported",
+          "Message" -> "サービスが状態を報告していません。サービスの再起動後に反映されます。"|>,
+      Lookup[wl, "Enabled", True] === False,
+        <|"Health" -> "OK", "ReasonCode" -> "WLMCPDisabled",
+          "Message" -> "このサービスでは Wolfram MCP を無効にしています。"|>,
+      TrueQ[Lookup[wl, "Ready", False]],
+        <|"Health" -> "OK", "ReasonCode" -> "WLMCPReady",
+          "Message" -> "Wolfram MCP は使えます" <>
+            If[StringQ[version] || IntegerQ[tools],
+              " (" <> StringRiffle[Join[
+                If[StringQ[version], {"AgentTools " <> version}, {}],
+                If[IntegerQ[tools], {ToString[tools] <> " ツール"}, {}]], "、"] <> ")",
+              ""] <> "。"|>,
+      (* recycled after an evaluation ran over the limit: re-initialized by the next
+         request, and that attempt reports its own failure if it fails *)
+      status === "Initialized",
+        <|"Health" -> "OK", "ReasonCode" -> "WLMCPRecycled",
+          "Message" -> "サブカーネルを作り直しました。次の要求で再初期化します。"|>,
+      True,
+        <|"Health" -> "Failing", "ReasonCode" -> "WLMCP" <> ToString[status],
+          "Message" -> "Wolfram MCP が使えません: " <> ToString[status] <>
+            If[StringQ[reason] || StringQ[version],
+              " (" <> StringRiffle[Join[
+                If[StringQ[reason], {reason}, {}],
+                If[StringQ[version], {"AgentTools " <> version}, {}]], "、"] <> ")",
+              ""] <> "。"|>];
+    If[AssociationQ[wl], Append[verdict, "Reported" -> wl], verdict]];
+
+(* the backend's state and the duplicate count share one component. A broken backend
+   leads: it is the outage; duplicates only waste a seat. *)
+iSVDiagMCPKernelsComponent[wl_Association, recl_] :=
+  Module[{dup = IntegerQ[recl] && recl > 0, lead},
+    lead = If[dup && wl["Health"] =!= "Failing",
+      <|"ReasonCode" -> "DuplicateMCPKernels",
+        "Message" -> "回収できる MCP カーネルが " <> ToString[recl] <> " 本あります。"|>,
+      wl];
+    <|"Health" -> Which[
+        wl["Health"] === "Failing", "Failing",
+        dup, "Degraded",
+        True, wl["Health"]],
+      "Detail" -> Join[
+        KeyTake[lead, {"ReasonCode", "Message"}],
+        <|"ReclaimableMCPKernels" -> If[IntegerQ[recl], recl, 0],
+          "WLMCPReasonCode" -> wl["ReasonCode"]|>,
+        If[KeyExistsQ[wl, "Reported"], <|"WLMCP" -> wl["Reported"]|>, <||>]]|>];
 
 Options[SourceVaultSystemDoctor] = {"Emit" -> False, "IncludeTopology" -> True};
 
 SourceVaultSystemDoctor[opts : OptionsPattern[]] :=
-  Module[{inclTopo, lic, topo, reclaim, comp, poolHealth, mcpHealth, svc,
+  Module[{inclTopo, lic, topo, reclaim, comp, poolHealth, svc, svcDetail,
           registered, global, result, seatNote, recl},
     inclTopo = TrueQ[OptionValue["IncludeTopology"]];
     lic = SourceVaultDiagnosticsLicenseProbe[];
@@ -1566,8 +1638,8 @@ SourceVaultSystemDoctor[opts : OptionsPattern[]] :=
         "Recommendation" -> "Topology probe skipped (lightweight)."|>];
     poolHealth = iSVDiagLicensePoolHealth[lic, reclaim];
     recl = Lookup[reclaim, "ReclaimableMCPKernels", 0];
-    mcpHealth = If[IntegerQ[recl] && recl > 0, "Degraded", "OK"];
-    svc = iSVDiagServiceHealthComponents[];
+    svcDetail = iSVDiagCall["SourceVault`SourceVaultServiceHealthDetail", "sourcevault"];
+    svc = iSVDiagServiceHealthComponents[<|"sourcevault" -> svcDetail|>];
     registered = iSVDiagRunRegisteredProbes[];
     (* core components first; registered producer probes do not silently
        overwrite the core license/MCP keys. *)
@@ -1576,7 +1648,7 @@ SourceVaultSystemDoctor[opts : OptionsPattern[]] :=
       svc,
       <|"LicensePool" -> <|"Health" -> poolHealth|>,
         "SubprocessPool" -> <|"Health" -> iSVDiagSubprocessPoolHealth[lic]|>,
-        "MCPKernels" -> <|"Health" -> mcpHealth|>|>];
+        "MCPKernels" -> iSVDiagMCPKernelsComponent[iSVDiagWLMCPVerdict[svcDetail], recl]|>];
     global = iSVDiagWorst[Lookup[#, "Health", "OK"] & /@ Values[comp]];
     (* license API is the authoritative process-used count; the topology
        SeatConsumingCount is an approximate breakdown and may differ
@@ -2145,6 +2217,11 @@ iSVDiagComprehensiveStaleQ[] :=
    ------------------------------------------------------------ *)
 If[!ListQ[$iSVDiagWatchedComponents],
   $iSVDiagWatchedComponents = {"LogCoverage", "Codex", "WebAccessReview"}];
+(* 2026-11-04: an unusable Wolfram MCP backend must warn, not only show in the table.
+   Added apart from the default so that a Get in a running kernel picks it up. The tick
+   runs the doctor without topology, so duplicate kernels alone do not warn here. *)
+If[!MemberQ[$iSVDiagWatchedComponents, "MCPKernels"],
+  AppendTo[$iSVDiagWatchedComponents, "MCPKernels"]];
 If[!AssociationQ[$iSVDiagWarnState], $iSVDiagWarnState = <||>];
 
 iSVDiagFENotice[comp_String, health_String, msg_String] :=
@@ -2802,7 +2879,7 @@ iSVDocOpenWindow[key_String, title0_, content_] :=
 
 iSVDocHealthText[h_] := Switch[h,
   "OK", iSVDocL["正常", "OK"], "Degraded", iSVDocL["低下", "Degraded"],
-  "Failing", iSVDocL["障害", "Failing"], _, ToString[h]];
+  "Failing", iSVDocL["障害", "Failing"], "Unknown", iSVDocL["不明", "Unknown"], _, ToString[h]];
 
 iSVDocHealthChip[h_] := Framed[Style[iSVDocHealthText[h], 10, Bold, White],
   Background -> Switch[h, "OK", RGBColor[0.15, 0.55, 0.3], "Degraded", RGBColor[0.85, 0.5, 0.],

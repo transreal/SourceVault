@@ -110,15 +110,15 @@ Stop command を queue に入れ、必要なら pid 検証後に kill する。s
 stop してから同プロファイルで start する。root 設定が異なるカーネルから呼ぶと run.wls が誤った roots で再生成される点に注意。
 
 ### SourceVaultServiceStatus[serviceId] → Association
-`pid.json` / `status.json` / `heartbeat.json` から状態 association を返す。
+`pid.json` / `status.json` / `heartbeat.json` から状態 association を返す。`"WLMCP"` は heartbeat に載る Wolfram MCP バックエンドの状態 (`Enabled` / `Ready` / `Pending` / `Status` / `Tools` / `Layout` / `PacletVersion` / `Reason`)。報告のない古いサービスでは `Missing["NotReported"]`。
 
 ### SourceVaultServiceHealth[serviceId] → String
 heartbeat の鮮度から `"OK"` / `"Degraded"` / `"Failing"` を返す。閾値は `$SourceVaultHealthThresholds` を参照。`$SourceVaultHealthRequireL2` が True なら `"OK"` は L2(Ping 応答)必須になる。
 
 ### SourceVaultServiceHealthDetail[serviceId] → Association
 health 判定の内訳を返す (hardening 02 Inc3)。
-→ `<|"Health", "Layer" -> "L2"|"L3"|"L1", "Ping" -> <|"L2", "RTTms", ...|>, "Base"|>`
-L2 = command queue が実際に応答(真の生存証明)。L3 = heartbeat 進行のみ。L1 = base health のみ。ping は `PingIntervalSeconds` キャッシュ (health 連打で queue を叩かない)。
+→ `<|"Health", "Layer" -> "L2"|"L3"|"L1", "Ping" -> <|"L2", "RTTms", ...|>, "Base", "WLMCP"|>`
+L2 = command queue が実際に応答(真の生存証明)。L3 = heartbeat 進行のみ。L1 = base health のみ。ping は `PingIntervalSeconds` キャッシュ (health 連打で queue を叩かない)。`WLMCP` は `SourceVaultServiceStatus` と同じ値で、`SourceVaultSystemDoctor` の `MCPKernels` が読む。
 
 ### $SourceVaultHealthRequireL2
 型: True | False, 初期値: False
@@ -261,7 +261,7 @@ MCP proxy の既定ポート。Automatic で既存 `proxy.config.json` から解
 
 ### $SourceVaultServiceWLMCPEnabled
 型: Automatic | True | False, 初期値: Automatic
-Wolfram AgentTools MCP(`/wl/mcp`)を SourceVault サービスに集約する機能のトグル。Automatic = serviceId `"sourcevault"` のみ有効 / True = 常に有効 / False = 無効。有効時、サービスは起動時に永続サブカーネル(サブプロセス枠。プロセス席を消費しない)を温め、proxy の `/wl/mcp` への JSON-RPC を AgentTools handleMethod で処理する。評価はサブカーネル内(非ブロッキング・資格情報カーネルから隔離)。状態確認は command `"WLMCPStatus"`。
+Wolfram AgentTools MCP(`/wl/mcp`)を SourceVault サービスに集約する機能のトグル。Automatic = serviceId `"sourcevault"` のみ有効 / True = 常に有効 / False = 無効。有効時、サービスは起動時に永続サブカーネル(サブプロセス枠。プロセス席を消費しない)を温め、proxy の `/wl/mcp` への JSON-RPC を AgentTools handleMethod で処理する。評価はサブカーネル内(非ブロッキング・資格情報カーネルから隔離)。状態確認は command `"WLMCPStatus"`、または heartbeat に載る `SourceVaultServiceStatus[serviceId]["WLMCP"]`(無効なら `<|"Enabled" -> False|>`)。
 
 ### SourceVaultStartMCP[opts] → Association
 MCP サーバ(WL service + HTTP/MCP proxy)を一括起動する。WL service を確保し `/sv/mcp` を公開する Python proxy を起動する。Port/MCPToken は Automatic なら既存 `proxy.config.json` から自動解決(env 依存値を直書きしない)。
@@ -291,10 +291,11 @@ headless claude CLI 向けの MCP 登録(`ClaudeRegisterCLIMCPServer`)をやり�
 
 proxy は `/sv/mcp` に加えて **`/wl/mcp`**(+`/wl/health`)を公開する。`/wl/mcp` への JSON-RPC は Command `"WLMCP"` としてファイルキュー経由でサービスカーネルへ渡り、サービスカーネルが抱える**永続サブカーネル**(サブプロセス枠=プロセス席を消費しない)内の AgentTools `handleMethod` で処理される。旧 wlmcp-gateway(9701、専用 `StartMCPServer` カーネル=独立プロセス 1 席)の置換で、定常のプロセス席は FE + サービス = **2 席**(2 席空き)になる。
 
-- **仕組み**: AgentTools の `startMCPServer` は init 部と stdio While ループが分離可能(paclet 2.1.21 実測)。init をサブカーネル内で再現し(`Wolfram`AgentTools`StartMCPServer`Private`` / `Common`` を完全修飾参照。Begin トリックは別コンテキストのヘルパに空シンボルを intern するため不可)、メッセージごとに `handleMethod` を呼ぶ。
+- **仕組み**: AgentTools の `startMCPServer` は init 部と stdio While ループが分離可能(paclet 2.1.21 / 2.2.0 実測)。init をサブカーネル内で再現し(AgentTools 内部は完全修飾参照。Begin トリックは別コンテキストのヘルパに空シンボルを intern するため不可)、メッセージごとに `handleMethod` を呼ぶ。paclet のレイアウトは起動時に判定する: `"Server"`(2.2.0 以降。`StartMCPServer`` 文脈が無くなり、`Wolfram`AgentTools`Common`` の `initializeServerState` / `handleMethod` を使い、応答は `sanitizeResponse` を通して返す)、`"StartMCPServer"`(2.1.x。実装は `Wolfram`AgentTools`StartMCPServer`Private``)。どちらでもなければ init は Ready=False に落ちる(fail-soft)。
+- **init の結果**: `<|"Status" -> "Initialized"|"InitFailed", "Tools" -> ツール数(取れなければ -1), "Layout" -> "Server"|"StartMCPServer"|"Unknown", "PacletVersion" -> AgentTools の版|>`。失敗時は `"Reason"` が付く: `"UnknownPacletLayout"`(レイアウト判定不能)/ `"NoTools"`(ツール一覧が空)/ `"StateInitFailed"`(状態の初期化に失敗)。サブカーネルを起動できなければ `"Status" -> "LaunchFailed"`、init 自体が値を返さなければ `"InitException"`、未試行は `"NotAttempted"`。結果はサービスログ(`WLMCPInitialized` / `WLMCPInitFailed`)に残る。
 - **非ブロッキング**: WLMCP command は deferred(受付時に done を書かず `ParallelSubmit`、tick の poll が結果 WXF を検出して done を書く)。8 秒評価中も `/sv/health` 0.02s・`/sv/mcp` 0.62s 応答を実測。サブカーネルの状態は評価間で維持(旧 gateway と同じセッション永続)。
-- **隔離/回復**: 任意コード評価は資格情報を持つサービスカーネルでなくサブカーネルで走る。pending が `$iSMWLMCPHardTTLSeconds`(既定 240s)超で wedge 扱い=タイムアウトエラー応答+サブカーネル再生成。init 失敗時は Ready=False で各リクエストに明示エラー(無言タイムアウトにしない)。
-- **トグル/観測**: `$SourceVaultServiceWLMCPEnabled`(Automatic=serviceId `"sourcevault"` のみ / True / False)。状態確認は Command `"WLMCPStatus"` → `<|Ready, Init, Pending, Kernels|>`。
+- **隔離/回復**: 任意コード評価は資格情報を持つサービスカーネルでなくサブカーネルで走る。pending が `$iSMWLMCPHardTTLSeconds`(既定 240s)超で wedge 扱い=タイムアウトエラー応答+サブカーネル再生成(次のリクエストで再初期化する。それまで heartbeat の `Ready` は False、`Status` は前回の `"Initialized"` のまま)。init 失敗時は Ready=False で各リクエストに明示エラー(無言タイムアウトにしない)。エラーは JSON-RPC の code -32000 で、文面は `WLMCP backend unavailable: <Status>`、init が Reason を返していれば ` (<Reason>, AgentTools <版>)` が付く。
+- **トグル/観測**: `$SourceVaultServiceWLMCPEnabled`(Automatic=serviceId `"sourcevault"` のみ / True / False)。状態確認は Command `"WLMCPStatus"` → `<|Ready, Init, Pending, Kernels|>`(`Init` は上記 init の結果)。同じ状態はサービスの heartbeat にも `"WLMCP"` として毎回載る: 有効時は `<|"Enabled" -> True, "Ready", "Pending", "Status", "Tools", "Layout", "PacletVersion", "Reason"|>`(init の結果にあるキーだけ)、無効時は `<|"Enabled" -> False|>`。`SourceVaultServiceStatus` / `SourceVaultServiceHealthDetail` の `"WLMCP"` と `SourceVaultSystemDoctor` の `MCPKernels` はこれを読むので、ラウンドトリップ無しで読め、クライアントが受けるエラーと同じ値になる。
 - **クライアント**: `.claude.json` / `.codex/config.toml` の Wolfram MCP を `http://127.0.0.1:8731/wl/mcp` へ。
 - **運用注意**: `SourceVaultStopService` は scheduled task も削除する。**run.wls を再生成せずに**サービスを再起動するには task を再作成して `/Run` する(run.wls は roots 注入済みスナップショット。root 設定が異なるカーネルから `RestartService` すると誤った roots で再生成される)。
 

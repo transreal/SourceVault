@@ -126,6 +126,7 @@ Ambiguous 残余の LLM 充填 (ProposeWiringPlan Hybrid が自動適用)。LLM 
 
 ### SourceVaultCellInput[nb, opts]
 選択セル (無ければ**評価セルの直前のセル**) を NotebookCellRef の PortBindingRef 列に。SnapshotNow でセル本文を artifact 化、cell UUID + content hash + notebook ref を Identity に。PL 既定 0.85。claudecode hook `$ClaudeCellInputProvider` に自動配線。
+セル本文の平文化はメール返信セル (SourceVault_maildb) と同じ読み取りに揃えている: 文字列はセル式から直接読み、数式など組版ボックスの部分だけ FE に書き出させる。FE の PlainText 書き出しのように ↓ が `\[DownArrow]`、× が `*` に化けることはない。maildb が読めないときは、入力を空にしないよう従来の FE PlainText 書き出しに落ちる。
 → List | Failure["NoFrontEnd"|"NoCellsSelected"]
 Options: `"Cells"` -> Automatic, `"PrivacyLevel"` -> Automatic
 

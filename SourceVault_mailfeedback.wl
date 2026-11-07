@@ -34,6 +34,13 @@
    privacy value (defense in depth); only an explicit human override may go
    below it, and that fact is written to the ledger.
 
+   A correction generalises by its direction. Upward it teaches every feature it
+   matched: a deadline notice matters because of its topic and its list. Downward
+   it teaches the sender ADDRESS only: junk or a spoofed mail says nothing about
+   its domain, its recipients or the words of its subject, which keep a zero
+   residual. The owner's own addresses learn no residual in either direction, as
+   nearly every direct mail carries them.
+
    Coupling: weak (rule 11). maildb calls this module through the documented
    seam $SourceVaultMailDerivedAdjuster only when it is loaded; nothing here is
    required for maildb to work. Content-minimised: the ledger stores addresses,
@@ -55,6 +62,11 @@ Options: \"Scope\" -> \"Mail\" (default: this mail only, plus L2 evidence) | \
 \"Sender\" (also create an L1 rule keyed on the sender address) | \"Rule\" \
 (create an L1 rule from \"Match\") | \"None\" (no learning at all), \
 \"Match\" (explicit rule match spec for Scope -> \"Rule\"), \
+A lowered Priority or PrivacyLevel is learned on the sender address only; a raised \
+one on the domain, recipients and subject terms as well. An L1 rule from a lowered \
+Priority is a ceiling (\"PriorityMax\"), from a raised one a floor (\"PriorityMin\"). \
+PrivacyLevel always gives a floor: lowering it stays a soft learned shift, never a \
+hard cap on a sender's later mail. \
 \"Learn\" -> True (feed the L2 model), \"Reason\" -> \"\" (free text, ledger only), \
 \"Persist\" -> True, \"Snapshot\" -> Automatic (test seam), \
 \"Reapply\" -> False (True also re-scores the other mails of the same sender). \
@@ -83,13 +95,16 @@ SourceVaultMailAddRule::usage =
   "SourceVaultMailAddRule[spec_Association, opts] registers an L1 rule. \
 spec: <|\"Match\" -> <|\"From\", \"Domain\", \"To\", \"Subject\" -> {terms...}, \
 \"Category\"|>, \"Action\" -> <|\"SetCategory\", \"SetWorkRequest\", \
-\"PriorityAdjust\", \"PriorityMin\", \"PrivacyAdjust\", \"PrivacyMin\"|>, \
+\"PriorityAdjust\", \"PriorityMin\", \"PriorityMax\", \"PrivacyAdjust\", \
+\"PrivacyMin\"|>, \
 \"Note\", \"Enabled\", \"Source\"|>. Every Match key given must hold (AND); \
 \"Subject\" requires ALL listed terms. The RuleId is a hash of Match+Action, so \
 re-adding the same rule is idempotent. A new enabled rule SUPERSEDES the \
-same-name action fields of every earlier enabled rule with the same Match: the \
+same-name action fields of every earlier enabled rule with the same Match, and \
+\"PriorityMin\" and \"PriorityMax\" supersede each other: the \
 old rule is trimmed to its other fields, or removed when none remain (rules on \
-different Matches still combine in the adjuster). Returns the stored rule plus \
+different Matches still combine in the adjuster, where a \"PriorityMin\" outranks \
+a \"PriorityMax\"). Returns the stored rule plus \
 \"ReplacedRules\" -> {superseded rule ids}.";
 
 SourceVaultMailRules::usage =
@@ -232,6 +247,9 @@ $iSVFBFields = {"Priority", "PrivacyLevel", "Category", "WorkRequest", "Deadline
 $iSVFBNumericFields = {"Priority", "PrivacyLevel", "WorkRequest"};
 $iSVFBResidualFields = {"Priority", "PrivacyLevel"};
 $iSVFBFamilies = {"From", "Dom", "To", "Subj"};
+(* the rule iSVFBResidualUpdates learns by. A stored model written under an older
+   rule is rebuilt from the ledger when it is next loaded (iSVFBModelMigrate). *)
+$iSVFBResidualPolicy = 2;
 
 (* ---------------- small helpers ---------------- *)
 
@@ -557,6 +575,13 @@ iSVFBNormAction[_] := <||>;
    trimmed action. Rules on OTHER Matches are untouched -- their Max
    combination is deliberate defence in depth. Disabled rules are historical
    record and are left alone (the adjuster skips them anyway). *)
+iSVFBSupersededFields[action_Association] :=
+  DeleteDuplicates@Join[Keys[action],
+    (* a Priority floor and ceiling on one Match are one decision: left together,
+       the ceiling would silently cancel a later correction upward *)
+    Lookup[<|"PriorityMin" -> "PriorityMax", "PriorityMax" -> "PriorityMin"|>,
+      Keys[action], Nothing]];
+
 iSVFBSupersedeSameMatch[match_Association, action_Association, id_String] :=
   Module[{keep = {}, replaced = {}},
     Scan[
@@ -568,7 +593,7 @@ iSVFBSupersedeSameMatch[match_Association, action_Association, id_String] :=
           AppendTo[keep, r],
           Module[{a, rest},
             a = With[{x = Lookup[r, "Action", <||>]}, If[AssociationQ[x], x, <||>]];
-            rest = KeyDrop[a, Keys[action]];
+            rest = KeyDrop[a, iSVFBSupersededFields[action]];
             Which[
               Length[rest] === Length[a], AppendTo[keep, r],
               rest === <||>, AppendTo[replaced, Lookup[r, "RuleId", ""]],
@@ -636,7 +661,8 @@ If[! ValueQ[$iSVFBModelRoot], $iSVFBModelRoot = ""];
 
 iSVFBEmptyModel[] :=
   <|"Cat" -> <||>, "Res" -> <|"Priority" -> <||>, "PrivacyLevel" -> <||>|>,
-    "Global" -> <||>, "Events" -> 0, "UpdatedAt" -> iSVFBNow[]|>;
+    "Global" -> <||>, "Events" -> 0, "UpdatedAt" -> iSVFBNow[],
+    "ResidualPolicy" -> $iSVFBResidualPolicy|>;
 
 iSVFBModelNormalize[m_] :=
   Module[{o = If[AssociationQ[m], m, <||>], res},
@@ -654,10 +680,28 @@ iSVFBModelLoad[] :=
   ($iSVFBModel = iSVFBModelNormalize[iSVFBReadJSON[iSVFBModelPath[]]];
    $iSVFBModelLoaded = True;
    $iSVFBModelRoot = SourceVaultMailFeedbackRoot[];
+   iSVFBModelMigrate[];
    $iSVFBModel);
 
+iSVFBModelCurrentQ[m_] :=
+  AssociationQ[m] &&
+    iSVFBNum[Lookup[m, "ResidualPolicy", 0], 0] >= $iSVFBResidualPolicy;
+
+(* the ledger is the source of truth, so a model learned under an older rule is
+   replayed through the current one. Never over a ledger that reads empty: a
+   transient state of the synced folder must not erase the learner. *)
+iSVFBModelMigrate[] :=
+  Which[
+    iSVFBModelCurrentQ[$iSVFBModel], Null,
+    FileExistsQ[iSVFBModelPath[]] && iSVFBLearnEvents[] =!= {},
+      SourceVaultMailFeedbackRebuildModel[],
+    True, $iSVFBModel["ResidualPolicy"] = $iSVFBResidualPolicy];
+
+(* the policy check also catches a kernel that reloaded this package while still
+   holding a model it read under the old code *)
 iSVFBModelEnsure[] :=
-  If[! TrueQ[$iSVFBModelLoaded] || $iSVFBModelRoot =!= SourceVaultMailFeedbackRoot[],
+  If[! TrueQ[$iSVFBModelLoaded] || $iSVFBModelRoot =!= SourceVaultMailFeedbackRoot[] ||
+      ! iSVFBModelCurrentQ[$iSVFBModel],
     iSVFBModelLoad[]];
 iSVFBModelSave[] := ($iSVFBModel["UpdatedAt"] = iSVFBNow[];
    iSVFBWriteJSON[iSVFBModelPath[], $iSVFBModel]);
@@ -755,11 +799,34 @@ iSVFBResidualAdjust[model_, field_String, sets_Association] :=
 iSVFBOverrideOf[d_Association] :=
   With[{o = Lookup[d, "UserOverride", <||>]}, If[AssociationQ[o], o, <||>]];
 
+iSVFBRecipientFloor[snap_Association] :=
+  Quiet@Check[
+    If[Length[DownValues[SourceVault`SourceVaultMailRecipientPrivacyFloor]] > 0,
+      iSVFBNum[SourceVault`SourceVaultMailRecipientPrivacyFloor[snap], 0.], 0.],
+    0.];
+iSVFBRecipientFloor[_] := 0.;
+
+(* PrivacyLevel before this layer touched it. Priority is recomputed from the
+   structure before every adjustment; PrivacyLevel is not, so its stored value
+   already carries the previous adjustment and must not take the next one on top
+   (each reapply lowered a sender's mails further, down to 0). *)
+iSVFBPrivacyBase[snap_, d_Association] :=
+  Module[{v = N[d["PrivacyLevel"]], fa = Lookup[d, "FeedbackAdjustment", <||>], b, floor},
+    If[! AssociationQ[fa], fa = <||>];
+    b = Lookup[fa, "PrivacyBase", Missing[]];
+    If[NumericQ[b], Return[N[b]]];
+    (* stored before the base was recorded: undo the adjustment it reports. A value
+       resting on the recipient floor does not carry that adjustment. *)
+    floor = iSVFBRecipientFloor[snap];
+    If[floor > 0. && v <= floor + 0.005, v,
+      N@Clip[v - iSVFBNum[Lookup[fa, "PrivacyAdjust", 0.], 0.], {0., 1.}]]];
+
 SourceVaultMailFeedbackAdjust[snap_, d0_Association] :=
   Module[{d = d0, facts, sets, ov, cat, llmCat, rules, ruleIds = {},
       catFrom, catTo = Missing[], margin = 0., prioAdj = 0., privAdj = 0.,
       model, sc, best, explain = <||>, setCat = Missing[], ruleP = 0., ruleV = 0.,
-      pMin = Missing[], vMin = Missing[], wrSet = Missing[]},
+      pMin = Missing[], pMax = Missing[], vMin = Missing[], wrSet = Missing[],
+      privBase = Missing["NotApplied"]},
     If[! TrueQ[$SourceVaultMailFeedbackEnabled], Return[d0]];
     ov = iSVFBOverrideOf[d0];
     facts = iSVFBFacts[If[AssociationQ[snap], snap, ToString[snap]]];
@@ -783,6 +850,8 @@ SourceVaultMailFeedbackAdjust[snap_, d0_Association] :=
             If[NumericQ[a["PrivacyAdjust"]], ruleV += N[a["PrivacyAdjust"]]];
             If[NumericQ[a["PriorityMin"]],
               pMin = If[NumericQ[pMin], Max[pMin, N[a["PriorityMin"]]], N[a["PriorityMin"]]]];
+            If[NumericQ[a["PriorityMax"]],
+              pMax = If[NumericQ[pMax], Min[pMax, N[a["PriorityMax"]]], N[a["PriorityMax"]]]];
             If[NumericQ[a["PrivacyMin"]],
               vMin = If[NumericQ[vMin], Max[vMin, N[a["PrivacyMin"]]], N[a["PrivacyMin"]]]]]]],
       rules];
@@ -828,9 +897,13 @@ SourceVaultMailFeedbackAdjust[snap_, d0_Association] :=
 
     If[! KeyExistsQ[ov, "Priority"] && NumericQ[Lookup[d, "Priority", Missing[]]],
       d["Priority"] = N@Round[Clip[d["Priority"] + prioAdj + ruleP, {0., 1.}], 0.01];
+      (* the floor is applied last: a rule marking a mail important outranks a
+         rule about its sender, and a missed mail costs more than a noisy one *)
+      If[NumericQ[pMax], d["Priority"] = N@Round[Min[d["Priority"], pMax], 0.01]];
       If[NumericQ[pMin], d["Priority"] = N@Round[Max[d["Priority"], pMin], 0.01]]];
     If[! KeyExistsQ[ov, "PrivacyLevel"] && NumericQ[Lookup[d, "PrivacyLevel", Missing[]]],
-      d["PrivacyLevel"] = N@Round[Clip[d["PrivacyLevel"] + privAdj + ruleV, {0., 1.}], 0.01];
+      privBase = iSVFBPrivacyBase[snap, d0];
+      d["PrivacyLevel"] = N@Round[Clip[privBase + privAdj + ruleV, {0., 1.}], 0.01];
       If[NumericQ[vMin], d["PrivacyLevel"] = N@Round[Max[d["PrivacyLevel"], vMin], 0.01]]];
 
     d["FeedbackAdjustment"] = <|
@@ -840,6 +913,7 @@ SourceVaultMailFeedbackAdjust[snap_, d0_Association] :=
       "CategoryMargin" -> N@Round[margin, 0.001],
       "PriorityAdjust" -> N@Round[prioAdj + ruleP, 0.001],
       "PrivacyAdjust" -> N@Round[privAdj + ruleV, 0.001],
+      "PrivacyBase" -> privBase,
       "Explain" -> explain,
       "At" -> iSVFBNow[]|>;
     d];
@@ -866,6 +940,33 @@ SourceVaultMailCorrections[OptionsPattern[]] :=
     pl = Max[Append[iSVFBNum[Lookup[#, "PrivacyLevel", 0], 0.] & /@ out, 0.]];
     If[Length[DownValues[SourceVault`SourceVaultPrivateResult]] > 0,
       SourceVault`SourceVaultPrivateResult[out, pl], out]];
+
+(* the owner's own addresses: nearly every direct mail carries them, so they say
+   nothing about one mail and would act as an intercept on all of them *)
+iSVFBOwnerAddrs[] :=
+  Quiet@Check[
+    If[Length[DownValues[SourceVault`SourceVaultOwnerEmails]] > 0,
+      With[{o = SourceVault`SourceVaultOwnerEmails[]},
+        If[ListQ[o], ToLowerCase /@ Select[o, StringQ], {}]],
+      {}],
+    {}];
+
+(* the residual statistics one correction updates, as {key -> added Sum}.
+   A correction DOWNWARD is evidence about the sender address only. The broader
+   features still count the event, with a zero residual: dropping it would leave
+   them holding only the upward corrections, and every mail in a domain or on a
+   list would drift upward (on the real ledger, the owner's address alone would
+   have raised all direct mail by 0.21). *)
+iSVFBResidualUpdates[sets_Association, delta_?NumericQ] :=
+  Module[{owner = iSVFBOwnerAddrs[]},
+    Flatten[
+      Function[fam,
+        Function[f,
+          Which[
+            fam === "To" && MemberQ[owner, f], Nothing,
+            delta < 0. && fam =!= "From", iSVFBKey[fam, f] -> 0.,
+            True, iSVFBKey[fam, f] -> N[delta]]] /@ Lookup[sets, fam, {}]] /@
+        $iSVFBFamilies]];
 
 iSVFBModelBump[model0_, ev_Association] :=
   Module[{model = iSVFBModelNormalize[model0], sets, keys, cat, base, new,
@@ -896,23 +997,26 @@ iSVFBModelBump[model0_, ev_Association] :=
           Module[{delta = N[new - base], fieldStore = Lookup[resStore, field, <||>]},
             If[! AssociationQ[fieldStore], fieldStore = <||>];
             Scan[
-              Function[k,
-                Module[{s = Lookup[fieldStore, k, <||>]},
+              Function[u,
+                Module[{k = First[u], s = Lookup[fieldStore, First[u], <||>]},
                   If[! AssociationQ[s], s = <||>];
                   s["N"] = iSVFBNum[Lookup[s, "N", 0], 0] + 1;
-                  s["Sum"] = iSVFBNum[Lookup[s, "Sum", 0], 0.] + delta;
+                  s["Sum"] = iSVFBNum[Lookup[s, "Sum", 0], 0.] + Last[u];
                   fieldStore[k] = s]],
-              keys];
+              iSVFBResidualUpdates[sets, delta]];
             resStore[field] = fieldStore]]],
       $iSVFBResidualFields];
     model["Res"] = resStore;
     model["Events"] = iSVFBNum[Lookup[model, "Events", 0], 0] + 1;
     model];
 
+iSVFBLearnEvents[] :=
+  Select[SortBy[iSVFBLedgerAll[], Lookup[#, "At", ""] &],
+    Lookup[#, "Learn", True] =!= False &];
+
 SourceVaultMailFeedbackRebuildModel[] :=
   Module[{evs, model = iSVFBEmptyModel[]},
-    evs = SortBy[iSVFBLedgerAll[], Lookup[#, "At", ""] &];
-    evs = Select[evs, Lookup[#, "Learn", True] =!= False &];
+    evs = iSVFBLearnEvents[];
     Scan[(model = iSVFBModelBump[model, #]) &, evs];
     $iSVFBModel = model; $iSVFBModelLoaded = True;
     iSVFBModelSave[];
@@ -1023,26 +1127,28 @@ SourceVaultMailCorrect[rid_String, updates_Association, OptionsPattern[]] :=
       "Reason" -> ToString@OptionValue["Reason"],
       "PrivacyLevel" -> iSVFBNum[Lookup[d, "PrivacyLevel", 0], 0.],
       "Features" -> sets|>;
+    (* load the model BEFORE the event reaches the ledger: a load may replay the
+       ledger (iSVFBModelMigrate), and the event would then count twice *)
+    If[learn, iSVFBModelEnsure[]];
     iSVFBAppendJSONL[iSVFBLedgerPath[], ev];
 
     (* L2 *)
     If[learn,
-      iSVFBModelEnsure[];
       $iSVFBModel = iSVFBModelBump[$iSVFBModel, ev];
       iSVFBModelSave[]];
 
     (* L1: explicit generalisation chosen by the user *)
     Which[
       scope === "Sender",
-        With[{r = iSVFBRuleFromCorrection[facts, sets, upd, "From"]},
+        With[{r = iSVFBRuleFromCorrection[facts, sets, upd, "From", modelBase]},
           If[AssociationQ[r], ruleId = Lookup[r, "RuleId", Missing[]]]],
       scope === "Rule",
         With[{m = OptionValue["Match"]},
           With[{r = If[AssociationQ[m],
               SourceVaultMailAddRule[<|"Match" -> m,
-                "Action" -> iSVFBActionFromUpdates[upd], "Source" -> "User",
+                "Action" -> iSVFBActionFromUpdates[upd, modelBase], "Source" -> "User",
                 "Note" -> "from correction " <> rid|>],
-              iSVFBRuleFromCorrection[facts, sets, upd, "Subject"]]},
+              iSVFBRuleFromCorrection[facts, sets, upd, "Subject", modelBase]]},
             If[AssociationQ[r], ruleId = Lookup[r, "RuleId", Missing[]]]]]];
 
     res = <|"Status" -> "Corrected", "RecordId" -> rid, "Old" -> KeyTake[old, Keys[upd]],
@@ -1061,16 +1167,24 @@ SourceVaultMailCorrect[rid_String, updates_Association, OptionsPattern[]] :=
 SourceVaultMailCorrect[rid_String, field_String, value_, opts : OptionsPattern[]] :=
   SourceVaultMailCorrect[rid, <|field -> value|>, opts];
 
-iSVFBActionFromUpdates[upd_Association] :=
-  Module[{a = <||>},
+(* base = the model's value before this correction. A Priority bound follows the
+   direction of the correction: a floor at a lowered value would do nothing.
+   PrivacyLevel always gets a floor: a hard ceiling on a sender could expose a later
+   confidential mail from them, so lowering stays the soft L2 shift. The floor at
+   the corrected value still matters, it replaces an earlier higher one. *)
+iSVFBActionFromUpdates[upd_Association, base_Association : <||>] :=
+  Module[{a = <||>, p = Lookup[upd, "Priority", Missing[]],
+      b = Lookup[base, "Priority", Missing[]]},
     If[StringQ[upd["Category"]], a["SetCategory"] = upd["Category"]];
     If[NumericQ[upd["WorkRequest"]], a["SetWorkRequest"] = upd["WorkRequest"]];
-    If[NumericQ[upd["Priority"]], a["PriorityMin"] = upd["Priority"]];
+    If[NumericQ[p],
+      If[NumericQ[b] && p < b, a["PriorityMax"] = p, a["PriorityMin"] = p]];
     If[NumericQ[upd["PrivacyLevel"]], a["PrivacyMin"] = upd["PrivacyLevel"]];
     a];
 
-iSVFBRuleFromCorrection[facts_Association, sets_Association, upd_Association, kind_String] :=
-  Module[{match = <||>, action = iSVFBActionFromUpdates[upd], from, terms},
+iSVFBRuleFromCorrection[facts_Association, sets_Association, upd_Association, kind_String,
+    base_Association : <||>] :=
+  Module[{match = <||>, action = iSVFBActionFromUpdates[upd, base], from, terms},
     If[action === <||>, Return[Missing["NoAction"]]];
     from = First[Append[Lookup[sets, "From", {}], ""]];
     Which[
@@ -1185,6 +1299,11 @@ SourceVaultMailFeedbackReapply[OptionsPattern[]] :=
         If[AssociationQ[cp],
           d["Priority"] = cp["Priority"]; d["PriorityComponents"] = cp["Components"]];
         d = SourceVaultMailFeedbackAdjust[snap, d];
+        (* maildb's rule: the recipient floor binds a learned value, only a human
+           override may go below it *)
+        If[NumericQ[Lookup[d, "PrivacyLevel", Missing[]]] &&
+            ! KeyExistsQ[iSVFBOverrideOf[d], "PrivacyLevel"],
+          d["PrivacyLevel"] = Max[d["PrivacyLevel"], iSVFBRecipientFloor[snap]]];
         d = iSVFBApplyOverrideLocal[snap, d];
         If[KeyDrop[d, {"FeedbackAdjustment"}] =!= KeyDrop[d0, {"FeedbackAdjustment"}],
           changed++;
@@ -1356,6 +1475,7 @@ iSVFBActionLabel[a_Association] :=
       If[KeyExistsQ[a, "SetCategory"], "\:5206\:985e\:2192" <> iSVFBCatLabel[a["SetCategory"]], Nothing],
       If[KeyExistsQ[a, "SetWorkRequest"], "\:4f9d\:983c\:5ea6=" <> iSVFBFmt[a["SetWorkRequest"]], Nothing],
       If[KeyExistsQ[a, "PriorityMin"], "\:91cd\:8981\:5ea6\:2267" <> iSVFBFmt[a["PriorityMin"]], Nothing],
+      If[KeyExistsQ[a, "PriorityMax"], "\:91cd\:8981\:5ea6\:2266" <> iSVFBFmt[a["PriorityMax"]], Nothing],
       If[KeyExistsQ[a, "PriorityAdjust"], "\:91cd\:8981\:5ea6" <>
          If[a["PriorityAdjust"] >= 0, "+", ""] <> iSVFBFmt[a["PriorityAdjust"]], Nothing],
       If[KeyExistsQ[a, "PrivacyMin"], "\:79d8\:533f\:2267" <> iSVFBFmt[a["PrivacyMin"]], Nothing],

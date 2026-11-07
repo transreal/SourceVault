@@ -175,7 +175,8 @@ SourceVaultAppendEvent::usage =
 
 SourceVaultTransactionLog::usage =
   "SourceVaultTransactionLog[opts] は event directory の event を新しい順に返す。\n" <>
-  "オプション: \"Limit\" (既定 100), \"EventClass\" -> filter。";
+  "オプション: \"Limit\" (既定 100), \"EventClass\" -> filter, " <>
+  "\"Since\" -> \"YYYY-MM-DD\" (CreatedAtUTC の日付がこの日以降の event だけ。古い日付フォルダを読まない。既定 All)。";
 
 (* ---- blob commit (§17.12.6) ---- *)
 SourceVaultCommitBlob::usage =
@@ -935,10 +936,24 @@ iAllEventFiles[] := Module[{dir = iSub["events"]},
     FileNames["*.json", dir, Infinity]]
 ];
 
-Options[SourceVaultTransactionLog] = {"Limit" -> 100, "EventClass" -> All};
-SourceVaultTransactionLog[OptionsPattern[]] := Module[{files, strs, evs, limit, cls},
-  limit = OptionValue["Limit"]; cls = OptionValue["EventClass"];
-  files = iAllEventFiles[];
+(* since (UTC の "YYYY-MM-DD") より前の日付フォルダを開かない。
+   iEventDir はフォルダを $TimeZone の日付で切るので CreatedAtUTC の日付と 1 日ずれうる
+   (JST だと 2026-10-18T20:40Z は 2026/10/19 に入る)。1 日余分に開き、厳密な比較は呼び手が行う。 *)
+iEventFilesSince[since_String] := Module[{dir = iSub["events"], cut, years, days},
+  If[FailureQ[dir] || ! DirectoryQ[dir], Return[{}]];
+  cut = DateString[AbsoluteTime[since] - 86400, {"Year", "-", "Month", "-", "Day"}];
+  years = Select[FileNames["*", dir], DirectoryQ];
+  days = Select[FileNames["*", FileNames["*", years]],
+    OrderedQ[{cut, StringReplace[FileNameTake[#, -3], {"\\" -> "-", "/" -> "-"}]}] &];
+  If[days === {}, {}, FileNames["*.json", days]]
+];
+
+Options[SourceVaultTransactionLog] = {"Limit" -> 100, "EventClass" -> All, "Since" -> All};
+SourceVaultTransactionLog[OptionsPattern[]] := Module[{files, strs, evs, limit, cls, since},
+  limit = OptionValue["Limit"]; cls = OptionValue["EventClass"]; since = OptionValue["Since"];
+  (* 性能 (2026-11-04): 全件読みは OS のファイルキャッシュが冷えていると 42,617 件で ~225s かかる
+     (温まっていれば ~3s)。期間で足りる呼び手は "Since" で読むフォルダを絞る。 *)
+  files = If[StringQ[since], iEventFilesSince[since], iAllEventFiles[]];
   strs = iReadStringUTF8 /@ files;
   (* 性能 (2026-07-22): EventClass 指定時は「クラス名を含まない本文」を **パース前に** 捨てる。
      event は 1 件 1 ファイルで、読み込み自体は安い (実測 17,448 件で ~1.1s) が JSON パースは
@@ -950,6 +965,8 @@ SourceVaultTransactionLog[OptionsPattern[]] := Module[{files, strs, evs, limit, 
   If[StringQ[cls], strs = Select[strs, StringQ[#] && StringContainsQ[#, cls] &]];
   evs = Select[iFromJSON /@ strs, AssociationQ];
   If[cls =!= All, evs = Select[evs, Lookup[#, "EventClass"] === cls &]];
+  If[StringQ[since], evs = Select[evs,
+    OrderedQ[{since, StringTake[Lookup[#, "CreatedAtUTC", ""], UpTo[10]]}] &]];
   evs = ReverseSortBy[evs, Lookup[#, "CreatedAtUTC", ""] &];
   If[IntegerQ[limit], Take[evs, UpTo[limit]], evs]
 ];
