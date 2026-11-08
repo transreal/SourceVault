@@ -79,6 +79,8 @@ Options: PriorPlan -> (none), + SourceVaultRoutinePlacePlan の全 opts
   FocusRequest/Conflict+escalation/immovable pin)。**合計 48 green**。
 - **罠**: `used` の日キーは Round[dayAbs] 整数化必須(浮動小数 bit 不一致で二重予約)。
 - **罠**: 弱結合シンボル解決には `Symbol[Identity["Ctx`name"]]` を使うこと。`Symbol["Ctx`name"]` のリテラル形式は WL 15 で一度 unevaluated を返すと以後も unevaluated のまま固着し、後から DownValues が増えても呼び出せなくなる(2026-10-30 確認)。
+- **罠**: live データ源(NBOnWorkTasks/NBCalendarEvents/todo items)の読み取りは「メッセージが出たか」でなく**結果が List か**で判定する(内部 `iSVRPReadList`)。`Quiet@Check[src, {}]` は無害な stray message(例: 初回 $onWork スキャンの r$::shdw)で成功した読み取りを捨て、初回表示で締切/レビューが欠落する(2026-11-07)。
+- **罠**: mailagenda の `SourceVaultMailAgendaItems`/`SourceVaultMailAgendaOpen` はパッケージ context 側で前方宣言済み(load 順に依らず public symbol に固定。未宣言だと Private の別 symbol を参照しメール帯が空になる)。
 
 ## プライバシー継承原則(全 view/data 共通)
 
@@ -137,9 +139,9 @@ Options: VertexLabels -> Automatic (Label/StepId/TaskId に解決したラベル
 に**弱結合**(未ロードなら空 `{}`/既定 capacityFn を返す。ハード依存しない)。
 
 ### SourceVaultRoutineFabricTasks[from, to, opts] → {task...}
-実データから plan tasks を構築: $onWork の notebook 締切(NBAccess`NBOnWorkTasks、[from,to] に Due がある
-open task を Title でラベル、Effort はメタデータか既定値)+ PreparationSpecs にマッチする calendar meeting
-から導出した準備タスク(SourceVaultRoutinePreparationTasks 経由)。
+実データから plan tasks を構築: $onWork の notebook 締切(NBAccess`NBOnWorkTasks、[from−1日, to] に Due がある
+open task を Title でラベル、Effort はメタデータか既定値。State が Done/Pass/Keep は IncludeDone->True でない限り除外)+
+PreparationSpecs にマッチする calendar meeting から導出した準備タスク(SourceVaultRoutinePreparationTasks 経由)。
 → `{<|"Kind"->"OnWorkTask","TaskId"->"nb:"<>id,"Label","DueAtUTC","Effort","Movable","PrivacyLevel",
 "DependsOn"->{}|>...}` (+ prep task 由来のエントリ)。SourceVaultRoutinePlacePlan / 各 view にそのまま渡せる。
 Options: PrivacySpec -> `<|"AccessLevel"->1.0|>` (LOCAL FE view は Title/Summary ラベルに 1.0 が必要),
@@ -205,7 +207,7 @@ notebook 行/メール行/todo 行はクリック可能(notebook=SystemOpen — 
 notebook の open (not Done/Pass) todo items をインデント箇条書きで列挙する。全セクション空なら
 「予定・締切・要対応メールはありません」を返す。要 FE。
 → column layout (Framed/Column)
-Options: SourceVaultRoutineAgendaData と同一
+Options: SourceVaultRoutineAgendaData と同一(PrivacySpec, CalendarEvents, OnWorkTasks, ModifiedWithinDays, IncludeOverdue, TimeZone, IncludeMail, MailItems, MailMaxPrivacyLevel, IncludeTodos, TodoItems。内部で FilterRules して Data に転送)
 
 ## 未実装(次以降)
 

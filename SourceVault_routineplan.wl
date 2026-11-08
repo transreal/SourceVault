@@ -598,6 +598,18 @@ iSVRPEventMatchesPrep[event_, match_] := Module[
     AnyTrue[pats, Function[p, TrueQ[Quiet@Check[
       StringContainsQ[hay, p, IgnoreCase -> True], False]]]]]];
 
+(* A live data source (NBOnWorkTasks / NBCalendarEvents / todo items) is
+   judged by its RESULT, never by "did a message fire" (2026-11-07). The
+   former Quiet@Check[src, {}] threw away a SUCCESSFUL read whenever one
+   harmless stray message rode along: in a fresh kernel the first $onWork
+   scan re-parses notes whose metadata cell holds user code, minting a
+   symbol emits r$::shdw once, and the schedule prompt's FIRST run showed no
+   notebook deadline/review at all (the second run, symbols already there,
+   was complete). Module (not With) so the returned records are never
+   substituted into a body. *)
+SetAttributes[iSVRPReadList, HoldFirst];
+iSVRPReadList[expr_] := Module[{r = Quiet[expr]}, If[ListQ[r], r, {}]];
+
 Options[SourceVaultRoutineFabricTasks] = {
   PrivacySpec -> <|"AccessLevel" -> 1.0|>, "OnWorkTasks" -> Automatic,
   "CalendarEvents" -> Automatic, "PreparationSpecs" -> {}, "DefaultEffortHours" -> 2,
@@ -610,8 +622,8 @@ SourceVaultRoutineFabricTasks[from_, to_, OptionsPattern[]] := Module[
   ow = With[{o = OptionValue["OnWorkTasks"]},
     If[o === Automatic,
       If[Length[Names["NBAccess`NBOnWorkTasks"]] > 0,
-        Quiet@Check[NBAccess`NBOnWorkTasks[PrivacySpec -> ps,
-          "IncludeDone" -> OptionValue["IncludeDone"]], {}], {}],
+        iSVRPReadList[NBAccess`NBOnWorkTasks[PrivacySpec -> ps,
+          "IncludeDone" -> OptionValue["IncludeDone"]]], {}],
       o]];
   If[!ListQ[ow], ow = {}];
   Do[Module[{due = iSVRPAbs[Lookup[t, "Due", Missing[]]],
@@ -637,9 +649,9 @@ SourceVaultRoutineFabricTasks[from_, to_, OptionsPattern[]] := Module[
     cal = With[{c = OptionValue["CalendarEvents"]},
       If[c === Automatic,
         If[Length[Names["NBAccess`NBCalendarEvents"]] > 0,
-          Quiet@Check[NBAccess`NBCalendarEvents[
+          iSVRPReadList[NBAccess`NBCalendarEvents[
             DateObject[FromAbsoluteTime[fromAbs]],
-            DateObject[FromAbsoluteTime[toAbs + 60*$svRPDay]], PrivacySpec -> ps], {}], {}],
+            DateObject[FromAbsoluteTime[toAbs + 60*$svRPDay]], PrivacySpec -> ps]], {}],
         c]];
     If[!ListQ[cal], cal = {}];
     Do[Do[If[iSVRPEventMatchesPrep[ev, Lookup[spec, "Match", <||>]],
@@ -736,8 +748,8 @@ iSVRPAttachOpenTodos[item_Association] := Module[
       (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
       With[{sym = Symbol[Identity["SourceVault`SourceVaultExtractNotebookTodos"]]},
         Length[DownValues[sym]] > 0],
-    td = Quiet@Check[
-      Symbol[Identity["SourceVault`SourceVaultExtractNotebookTodos"]][p], {}]];
+    td = iSVRPReadList[
+      Symbol[Identity["SourceVault`SourceVaultExtractNotebookTodos"]][p]]];
   If[!ListQ[td], td = {}];
   Append[item,
     "OpenTodos" -> Select[Cases[td, _Association], iSVRPOpenTodoQ]]];
@@ -770,8 +782,8 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
   cal = With[{c = OptionValue["CalendarEvents"]},
     If[c === Automatic,
       If[Length[Names["NBAccess`NBCalendarEvents"]] > 0,
-        Quiet@Check[NBAccess`NBCalendarEvents[DateObject[FromAbsoluteTime[fromDay]],
-          DateObject[FromAbsoluteTime[toDayEnd]], PrivacySpec -> ps], {}], {}],
+        iSVRPReadList[NBAccess`NBCalendarEvents[DateObject[FromAbsoluteTime[fromDay]],
+          DateObject[FromAbsoluteTime[toDayEnd]], PrivacySpec -> ps]], {}],
       c]];
   If[!ListQ[cal], cal = {}];
   Do[Module[{s = iSVRPAbs[Lookup[ev, "Start", Missing[]]],
@@ -798,8 +810,8 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
   ow = With[{o = OptionValue["OnWorkTasks"]},
     If[o === Automatic,
       If[Length[Names["NBAccess`NBOnWorkTasks"]] > 0,
-        Quiet@Check[NBAccess`NBOnWorkTasks[PrivacySpec -> ps,
-          "ModifiedWithinDays" -> OptionValue["ModifiedWithinDays"]], {}], {}],
+        iSVRPReadList[NBAccess`NBOnWorkTasks[PrivacySpec -> ps,
+          "ModifiedWithinDays" -> OptionValue["ModifiedWithinDays"]]], {}],
       o]];
   If[!ListQ[ow], ow = {}];
   (* A note can carry BOTH a Deadline and a NextReview, and they are
@@ -854,9 +866,9 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
           If[Names["SourceVault`SourceVaultTodoAgendaItems"] =!= {} &&
               With[{sym = Symbol[Identity["SourceVault`SourceVaultTodoAgendaItems"]]},
                 Length[DownValues[sym]] > 0],
-            Quiet@Check[
+            iSVRPReadList[
               Symbol[Identity["SourceVault`SourceVaultTodoAgendaItems"]][
-                PrivacySpec -> ps], {}], {}],
+                PrivacySpec -> ps]], {}],
           o]], {}];
     If[!ListQ[tds], tds = {}];
     Do[Module[{due = Lookup[td, "DueT", Missing[]], item, d},
@@ -903,8 +915,9 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
       mailRes = With[{m = OptionValue["MailItems"]},
         If[m === Automatic,
           If[Length[DownValues[SourceVaultMailAgendaItems]] > 0,
-            Quiet@Check[SourceVaultMailAgendaItems[
-              "MaxPrivacyLevel" -> effMpl], <||>], <||>],
+            (* judged by result (AssociationQ below), not by Check *)
+            Quiet[SourceVaultMailAgendaItems[
+              "MaxPrivacyLevel" -> effMpl]], <||>],
           <|"Items" -> m, "PendingCount" -> 0|>]];
       If[AssociationQ[mailRes],
         mailItems = Lookup[mailRes, "Items", {}];
