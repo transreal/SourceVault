@@ -3159,6 +3159,66 @@ iSVRepoDocUpdateBoxes[pkg_String, targets_List] :=
     Join[{iSVRepoStrBox[pkg]},
       If[targets === {}, {}, {RowBox[{"TargetFiles", "->", iSVRepoListBox[iSVRepoStrBox /@ targets]}]}]]];
 
+iSVRepoAllTooLargeQ[row_Association] :=
+  With[{st = Replace[Lookup[row, "StaleDocs", {}], Except[_List] -> {}]},
+    st =!= {} && Complement[st, Replace[Lookup[row, "TooLargeDocs", {}], Except[_List] -> {}]] === {}];
+
+iSVRepoShortDate[d_DateObject] := DateString[d, {"Month", "/", "Day", " ", "Hour24", ":", "Minute"}];
+iSVRepoShortDate[_] := "?";
+
+(* every stale doc is over $ClaudeDocApiMaxBytes: it can only be updated by hand, and a hand edit alone
+   never clears "stale" (the gate compares the recorded source hash, not dates), so the dialog records
+   the current source as documented once the person says the doc has been edited (2026-11-08).
+   Returns a status line for the view. *)
+iSVRepoMarkHandUpdated[row_Association] :=
+  Module[{pkg = row["Package"], big = row["TooLargeDocs"], dir = Lookup[row, "DocsDir", None],
+          detail = Select[Replace[Lookup[row, "StaleDetail", {}], Except[_List] -> {}], AssociationQ],
+          max = iSVRepoDocMaxBytes[], markF = iSVRepoFn["PackageDocsMarkCurrent"], lines, choice, r},
+    lines = Function[doc,
+      With[{dt = SelectFirst[detail, ToString[Lookup[#, "Doc", ""]] === doc &, <||>],
+            bytes = If[StringQ[dir], Quiet @ Check[FileByteCount[FileNameJoin[{dir, doc}]], Missing[]], Missing[]]},
+        With[{after = MatchQ[dt["DocDate"], _DateObject] && MatchQ[dt["WlDate"], _DateObject] &&
+                AbsoluteTime[dt["DocDate"]] > AbsoluteTime[dt["WlDate"]]},
+          Column[{
+            Style[doc <> If[IntegerQ[bytes], "  (" <> ToString[Round[bytes/1000.]] <> " KB)", ""], Bold],
+            iSVDocL["ドキュメント ", "Doc "] <> iSVRepoShortDate[dt["DocDate"]] <>
+              iSVDocL["  /  ソース ", "  /  source "] <> ToString[Lookup[dt, "Wl", "?"]] <> " " <>
+              iSVRepoShortDate[dt["WlDate"]],
+            If[after,
+              Style[iSVDocL["ソースより後に書き換えられています (手で直したのならそのまま記録できます)。",
+                "Edited after the source (if that was the hand update, it can be recorded as is)."], RGBColor[0.15, 0.5, 0.25]],
+              Style[iSVDocL["ソースの変更より前のままです。変更点を書き足してから記録してください。",
+                "Not edited since the source changed. Add the changes before recording."], RGBColor[0.8, 0.35, 0.]]]},
+            Spacings -> 0.2]]]] /@ big;
+    choice = ChoiceDialog[Column[Join[{
+        Style[pkg <> iSVDocL[" のドキュメントは大きすぎて自動では更新できません", ": the documentation is too large to regenerate"], Bold],
+        iSVDocL["上限 ", "Limit "] <> If[NumericQ[max], ToString[Round[max/1000.]] <> " KB", "-"] <>
+          iSVDocL[" ($ClaudeDocApiMaxBytes) を超えるため LLM の 1 回の応答で書き直せません。変更点を手で書き足してください。",
+            " ($ClaudeDocApiMaxBytes): the LLM cannot rewrite it in one response. Add the changes by hand."]},
+        lines,
+        {Style[iSVDocL["手で直したら「手で直した」を押すと、いまのソースで最新として記録します (ソースが次に変わるまで「古い」は出ず、コミットも止まりません)。",
+          "After editing, press \"Edited by hand\" to record the current source as documented (no \"stale\" and no commit block until the source changes again)."], 10]}],
+        Spacings -> 0.8],
+      {iSVDocL["手で直した", "Edited by hand"] -> "Mark", iSVDocL["ファイルを開く", "Open the file"] -> "Open",
+       iSVDocL["やめる", "Cancel"] -> False},
+      WindowTitle -> iSVDocL["ドキュメント更新", "Update documentation"]];
+    Switch[choice,
+      "Open",
+        If[StringQ[dir], Quiet @ SystemOpen[FileNameJoin[{dir, #}]] & /@ big];
+        iSVDocL["開きました: ", "Opened: "] <> StringRiffle[big, ", "] <>
+          iSVDocL["。直したら [ドキュメント更新] →「手で直した」で記録してください。",
+            ". After editing, record it with [Update docs] -> \"Edited by hand\"."],
+      "Mark",
+        If[!iSVRepoFnQ[markF],
+          Return[iSVDocL["github.wl (GitHubREST) が読み込まれていません。", "github.wl (GitHubREST) is not loaded."], Module]];
+        r = Quiet @ markF[pkg, big];
+        If[AssociationQ[r] && Lookup[r, "Status", ""] === "OK" && Lookup[r, "Marked", {}] =!= {},
+          iSVDocL[pkg <> ": " <> StringRiffle[r["Marked"], ", "] <> " を最新として記録しました。",
+            pkg <> ": recorded " <> StringRiffle[r["Marked"], ", "] <> " as current."],
+          iSVDocL["記録できませんでした: ", "Could not record: "] <>
+            If[AssociationQ[r], ToString[Lookup[r, "Reason", Lookup[r, "Status", "?"]]], ToString[r]]],
+      _, ""]];
+
 (* returns a status line for the view *)
 iSVRepoDocUpdate[row_Association] :=
   Module[{pkg = row["Package"], targets, big = row["TooLargeDocs"], ok, nb},
@@ -3168,8 +3228,7 @@ iSVRepoDocUpdate[row_Association] :=
       Return[iSVDocL["claudecode が読み込まれていません。", "claudecode is not loaded."], Module]];
     targets = Complement[row["StaleDocs"], big];
     If[row["StaleDocs"] =!= {} && targets === {},
-      Return[iSVDocL["古いドキュメントはどれも大きすぎて自動では更新できません (手で更新): ",
-        "Every stale document is too large to regenerate (update by hand): "] <> StringRiffle[big, ", "], Module]];
+      Return[iSVRepoMarkHandUpdated[row], Module]];
     ok = ChoiceDialog[Column[{
         Style[pkg <> iSVDocL[" のドキュメントを更新します", ": update the documentation"], Bold],
         iSVDocL["対象: ", "Target: "] <> If[targets === {}, iSVDocL["自動判定 (前回の更新からの変更)", "automatic (changes since the last update)"],
@@ -3311,7 +3370,8 @@ iSVRepoRowCells[r_Association, rows_, sel_, msg_, busy_, ff_] :=
          Method -> "Queued"],
        If[r["DocsStatus"] =!= "NoDocs",
          Button[Style[iSVDocL["ドキュメント更新", "Update docs"], 10, FontFamily -> ff],
-           iSVRepoGuard[busy, msg, iSVDocL["確認しています…", "Confirming…"], msg = iSVRepoDocUpdate[rr]],
+           iSVRepoGuard[busy, msg, iSVDocL["確認しています…", "Confirming…"],
+             msg = iSVRepoDocUpdate[rr]; If[iSVRepoAllTooLargeQ[rr], iSVRepoRefreshOne[pkg, rows]]],
            Method -> "Queued"], Nothing],
        If[(IntegerQ[r["ChangeCount"]] && r["ChangeCount"] > 0) || !TrueQ[r["SnapshotExists"]],
          Button[Style[iSVDocL["コミット…", "Commit…"], 10, FontFamily -> ff],
@@ -3334,7 +3394,8 @@ iSVRepoDetail[rows_List, sel_, ff_] :=
           Column[Style[ToString[Lookup[#, "Doc", "?"]] <> iSVDocL["  がソース  ", "  older than  "] <>
               ToString[Lookup[#, "Wl", "?"]] <> iSVDocL["  より古い", ""] <>
               If[MemberQ[r["TooLargeDocs"], ToString[Lookup[#, "Doc", ""]]],
-                iSVDocL["  (128 KB 超・自動更新しない)", "  (over the size limit, not regenerated)"], ""],
+                iSVDocL["  (大きすぎて自動更新しない: 手で直して [ドキュメント更新] →「手で直した」)",
+                  "  (too large to regenerate: edit by hand, then [Update docs] -> \"Edited by hand\")"], ""],
               10, FontFamily -> ff] & /@ r["StaleDetail"]], Nothing],
         iSVRepoFileList[iSVDocL["追加", "Added"], r["Added"]],
         iSVRepoFileList[iSVDocL["変更", "Changed"], r["Changed"]],
