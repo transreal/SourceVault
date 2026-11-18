@@ -7,6 +7,8 @@ Not plain chunk RAG but Graph-RAG: builds a Deck -- Slide -- Chunk -- Topic grap
 Reuses: BM25 (SourceVaultBuildLexicalStats / SourceVaultLexicalRank), EntityDictionary for term variation, SourceVaultEvaluateReleasePolicy for release gating, PDFIndex chunks (ingested once, not queried live), optional dense embeddings (SourceVaultEmbedTexts / RegisterHTTPEmbeddingProvider).
 Three idempotent, independently re-runnable stages: 1) ingest (notebook/PDF/text → source document, no LLM), 2) caption (figure → vision description, hash-cached, budgeted), 3) build (source + caption → chunk + graph + BM25 index).
 Load order: [SourceVault](https://github.com/transreal/SourceVault) → [SourceVault_core](https://github.com/transreal/SourceVault_core) → [SourceVault_lexical](https://github.com/transreal/SourceVault_lexical) → [SourceVault_searchindex](https://github.com/transreal/SourceVault_searchindex) → SourceVault_kb. Optional deps: [SlideWorkflow](https://github.com/transreal/SlideWorkflow) (deck splitting), [PDFIndex](https://github.com/transreal/PDFIndex) (PDF chunk ingest), claudecode (vision captioning).
+Storage layout: <root>/kb/<kbId>/{manifest.json, sources/<sourceId>.wxf, media/<hash>.png, captions.wxf, index.wxf}.
+Short forms: every function taking kbId also accepts a call without kbId (uses $SourceVaultKBDefaultId), e.g. SourceVaultKBBuild[opts], SourceVaultKBStatus[], SourceVaultKBIngestSlideDeck[nbPath, opts].
 
 ## Configuration / Globals
 ### $SourceVaultKBVersion
@@ -31,16 +33,16 @@ KB state: source/slide/figure counts (total and uncaptioned), chunk/node/edge co
 ### SourceVaultKBSources[kbId] → List of Association
 Overview of ingested source documents (no body text). Fields: SourceId, Kind, Title, Slides, Passages, Figures, PrivacyLevel, IngestedAtUTC.
 ### SourceVaultKBLoad[kbId] → Association
-Loads the built KB index into memory (subsequent searches run entirely in memory). Fails with "KBNotBuilt" if index.wxf is missing. Auto-reloads when index has been rebuilt since last load (detects stamp change), so a running service picks up a rebuilt index on its next query without restart.
+Loads the built KB index into memory (subsequent searches run entirely in memory). Fails with "KBNotBuilt" if index.wxf is missing. Auto-reloads when index has been rebuilt since last load (detects stamp change), so a running service picks up a rebuilt index on its next query without restart. Returns <|"Status"->"Loaded","KBId","ChunkCount","NodeCount","BuiltAtUTC","ElapsedSeconds"|>.
 ### SourceVaultKBUnload[kbId] → Association
-Releases the in-memory KB.
+Releases the in-memory KB. Returns <|"Status"->"Unloaded","KBId"|>.
 ### SourceVaultKBLoadedQ[kbId] → True | False
 Whether the KB is currently loaded in memory.
 
 ## Ingest
 ### SourceVaultKBIngestSlideDeck[kbId, nbPath, opts]
 Parses one slide notebook and stores per-slide text plus figures (rendered PNG + hash) as a source document. No LLM call (figure captions are filled later by SourceVaultKBCaptionFigures). Skips re-parsing if file size/mtime/SlideNotes digest is unchanged, unless "Force"->True; when only the PrivacyLevel differs, only the level is rewritten (Status "PrivacyUpdated", the index needs a rebuild).
-→ Association (<|"Status"->"OK"|"Unchanged"|"PrivacyUpdated", "KBId", "SourceId", "PrivacyLevel", "Slides", "ElapsedSeconds"|> or Failure)
+→ Association (<|"Status"->"OK"|"Unchanged"|"PrivacyUpdated", "KBId", "SourceId", "PrivacyLevel", "Slides", "ElapsedSeconds"|> or Failure: "NotebookNotFound", "InvalidSourceId")
 Options: "SourceId" -> Automatic (default: file base name), "Title" -> Automatic, "PrivacyLevel" -> Automatic (the notebook's own public declaration: CloudPublishable True → 0.0, undeclared/Private → 0.3; a number given explicitly wins; fail-closed: NBAccess unreadable → 0.3), "Tags" -> {}, "RenderFigures" -> Automatic (True if front end available), "MaxFiguresPerSlide" -> 4, "FigureImageWidth" -> 1024, "IncludeCode" -> False, "Force" -> False, "MaxSlideCharacters" -> 1500, "SlideNotes" -> <||> (Association slideIndex -> narration text; becomes the chunk body for image-only slides that have no extractable text), "Verbose" -> True
 ### SourceVaultKBRefreshDeckPrivacy[kbId, opts] → Association
 Updates the PrivacyLevel of ingested slide decks to match each notebook's own public declaration (TaggingRules > SourceVault > CloudPublishable, read with NBAccess`NBGetCloudPublishable): Public → 0.0; undeclared or Private → 0.3. Only sources whose level follows the declaration are touched — those ingested with "PrivacyLevel" -> Automatic (PrivacySource "Declaration") and older sources still at the former default 0.3; explicitly given levels (PrivacySource "Explicit") are left alone. Rebuilds the index when anything changed. A running service reloads a rebuilt index on its next query.
@@ -51,12 +53,12 @@ Batch-ingests multiple slide notebooks; a directory is searched recursively for 
 → Association (batch summary)
 Options: all SourceVaultKBIngestSlideDeck options, plus "FileNamePattern" -> "*.nb", "Exclude" -> {substring...}, "MaxFiles" -> Automatic
 ### SourceVaultKBIngestPDFCollection[kbId, collection, opts]
-Imports chunks from an existing PDFIndex collection into the KB (e.g. student handbook reuse). PDFIndex is read once at ingest time; search never touches it, keeping queries fast.
+Imports chunks from an existing PDFIndex collection into the KB (e.g. student handbook reuse). PDFIndex is read once at ingest time; search never touches it, keeping queries fast. Fails with "PDFIndexUnavailable", "PDFIndexLoadFailed", "NoChunks".
 → Association
 Options: "Group" -> None (registered search group name; inherits PrivacyLevel/ReleaseContext), "Docs" -> All (list of docId to include), "PrivacyLevel" -> Automatic (from group or 0.3), "Tags" -> {}, "MaxChunks" -> Automatic, "SourceId" -> Automatic (default "pdf-<collection>[-<group>]"), "Title" -> Automatic, "Verbose" -> True
 ### SourceVaultKBIngestTexts[kbId, sourceId, items, opts]
 Ingests arbitrary text fragments as a source document (web-fetched content, hand-added notes). items is a list of strings, or a list of <|"Title","Text","URL","Locator"|>.
-→ Association (<|"Status"->"OK", "KBId", "SourceId", "Passages", "PrivacyLevel"|> or Failure: "NoTexts")
+→ Association (<|"Status"->"OK", "KBId", "SourceId", "Passages", "PrivacyLevel"|> or Failure: "NoTexts", "SourceSaveFailed")
 Options: "Title" -> Automatic (default: sourceId), "PrivacyLevel" -> 0.0, "Tags" -> {}, "Kind" -> "Texts", "Replace" -> True (False appends after existing passages instead of overwriting), "Verbose" -> False
 
 ## Figure Captioning
@@ -72,7 +74,7 @@ Options: "Keywords" -> {}
 
 ## Build
 ### SourceVaultKBBuild[kbId, opts]
-Builds chunks / graph / BM25 index from ingested sources and figure captions, and saves it (seconds). Re-run after adding sources. Applies build-time release gate: only chunks that Permit under the release context are indexed (fail-closed); auto-registers default release contexts if unregistered.
+Builds chunks / graph / BM25 index from ingested sources and figure captions, and saves it (seconds). Re-run after adding sources. Applies build-time release gate: only chunks that Permit under the release context are indexed (fail-closed); auto-registers default release contexts if unregistered. PDFCollection/Texts/Web sources become passage chunks; slide decks become slide + figure chunks.
 → Association (<|"Status", "ChunkCount", "ExcludedChunks", ...|> or Failure: "NoSources", "NoChunks", "AllChunksDenied", "UnregisteredReleaseContext")
 Options: "ReleaseContext" -> Automatic (default $SourceVaultKBReleaseContext), "Dense" -> False (no embeddings), "MaxChunkCharacters" -> 1500, "IncludePendingFigures" -> False, "MaxTopics" -> 3000, "EntityStream" -> False (True only when using the synonym dictionary), "Load" -> True (load into memory right after build), "Verbose" -> True
 
@@ -98,7 +100,7 @@ Returns the KB graph as a Graph object for inspection/viewing. Short form Source
 → Graph
 Options: "Center" -> None (node id to center BFS on), "Radius" -> 2, "MaxVertices" -> 200, "Kinds" -> All (restrict to node kinds: "Chunk","Slide","Deck","Topic")
 ### SourceVaultKBSearchView[kbId, query, opts]
-Displays SourceVaultKBSearch results as a Dataset (view layer). Short form SourceVaultKBSearchView[query, opts] uses $SourceVaultKBDefaultId.
+Displays SourceVaultKBSearch results as a Dataset (view layer; columns 順/得点/資料/位置/図/本文/PL). Short form SourceVaultKBSearchView[query, opts] uses $SourceVaultKBDefaultId.
 → Dataset | Style["該当なし", Gray]
 Options: same as SourceVaultKBSearch
 ### SourceVaultKBExplain[kbId, query, opts] → Association

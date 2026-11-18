@@ -12,7 +12,7 @@ bootstrap 時の fallback model registry。compiled registry が無い場合の�
 クラウド共有フォルダのシンボル名リスト。例: `{"$packageDirectory", "$dropbox", "$onWork", "$offWork", "$mathematicaWork"}`。絶対パスがこれらの配下にあれば `{"$onWork", "folder", "file.nb"}` のようなシンボリックパスに正規化され、PC / OS をまたいで同一 ID になる。PC 固有フォルダ ($ClaudeWorkingDirectory 等) は含めない。
 ### $SourceVaultCloudRootAliases
 型: Association, 初期値: `<||>`
-クラウドルートのシンボル名 (`"$onWork"` 等) から、旧 PC など別環境での絶対パスリストへの対応。形式: `<|"$onWork" -> {"C:/Users/imai_/Dropbox/On Work"}, ...|>` (区切りは `/` でも `\` でも可)。別 PC で index された旧パスを `{"$onWork", ...}` に正規化し、複数 PC またぎの二重登録を防ぐ。エイリアスパスは現 PC に実在しなくてよい (前方一致・大小無視)。
+クラウドルートのシンボル名 (`"$onWork"` 等) から、旧 PC など別環境での絶対パスリストへの対応。形式: `<|"$onWork" -> {"C:/Users/username/Dropbox/On Work"}, ...|>` (区切りは `/` でも `\` でも可)。別 PC で index された旧パスを `{"$onWork", ...}` に正規化し、複数 PC またぎの二重登録を防ぐ。エイリアスパスは現 PC に実在しなくてよい (前方一致・大小無視)。
 ### $SourceVaultDefaultNotebookFolder
 型: String | Automatic, 初期値: Automatic
 SourceVault notebook の既定フォルダ。Automatic では `Global`$onWork`、無ければ `$packageDirectory` に解決。絶対パスを設定するとその folder が既定 Scope になり、PresentationListener の保存先にも使われる。
@@ -60,7 +60,7 @@ Options: SourceVaultSourcesView と同じ
 → `<|"Candidates", "Updated", "AlreadyPresent", "NoAbstract", "Failed", "Results"|>`
 Options: `"Force"` -> False (True で既存 Summary も再生成), `"Model"` -> Automatic, `"Limit"` -> Automatic|n
 ### SourceVaultBackfillSourceSummaries[opts]
-web / local ソースのうち Summary が未設定 (または過去の LLM エラー本文) のものに、ingest 済み snapshot の本文 (plaintext) を LLM で要約して付与する (arXiv は SourceVaultBackfillArXivSummaries が担当)。モデルは行の PrivacyLevel で決まる: PL ≥ 0.5 は `$ClaudePrivateModel` (ローカル LLM)、未満はクラウド CLI。PL 不明は fail-safe で 1.0 = ローカル扱い。送信先が LAN 上のローカル LLM で、距離で決まる上限 (rule 107。Subnet を信用していない同じ LAN の別機は 0.25) がその PL に届かなければ送らず、その件は `"Status" -> "Failed"`, `"Reason" -> "AccessLevelExceeded"` になる (`"Model"` を明示指定しても送信先の上限は確かめる)。本文は UNTRUSTED データ境界で包んでから渡し (prompt injection 対策)、prescan が quarantined と判定した本文は LLM へ渡さない (Status "Quarantined")。LLM エラー本文は保存されない (`iSVLooksLikeLLMError` ゲート)。`$Language` が Japanese のセッションで実行すること。
+web / local ソースのうち Summary が未設定 (または過去の LLM エラー本文) のものに、ingest 済み snapshot の本文 (plaintext) を LLM で要約して付与する (arXiv は SourceVaultBackfillArXivSummaries が担当)。モデルは行の PrivacyLevel で決まる: PL > 0.5 は `$ClaudePrivateModel` (ローカル LLM)、以下はクラウド CLI。PL 不明は fail-safe で 1.0 = ローカル扱い。送信先が LAN 上のローカル LLM で、距離で決まる上限 (rule 107。Subnet を信用していない同じ LAN の別機は 0.25) がその PL に届かなければ送らず、その件は `"Status" -> "Failed"`, `"Reason" -> "AccessLevelExceeded"` になる (`"Model"` を明示指定しても送信先の上限は確かめる)。本文は UNTRUSTED データ境界で包んでから渡し (prompt injection 対策)、prescan が quarantined と判定した本文は LLM へ渡さない (Status "Quarantined")。LLM エラー本文は保存されない (`iSVLooksLikeLLMError` ゲート)。`$Language` が Japanese のセッションで実行すること (headless では英語要約になる)。
 → `<|"Candidates", "Updated", "AlreadyPresent", "NoText", "Quarantined", "Failed", "Remaining", "Language", "Results"|>`
 Options: `"Kind"` -> `{"web", "local"}` (既定。`All` で arxiv も含む), `"Sources"` -> All|`{sourceId...}` (対象を明示指定), `"Force"` -> False (True で既存 Summary も再生成), `"Limit"` -> 10 (Infinity/Automatic で全件), `"Model"` -> Automatic (明示指定で PL 分岐を上書き), `"MaxChars"` -> Automatic (`$SourceVaultSourceSummaryMaxChars`), `"TimeoutSeconds"` -> 120 (本文抽出 1 件あたり)
 例: `SourceVaultBackfillSourceSummaries["Limit" -> 5]` (新しい順に 5 件だけ試す)

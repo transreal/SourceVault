@@ -29,10 +29,12 @@ SourceVaultMCPDispatch::usage =
   "未知 method は Failure[\"MCPMethodNotFound\", ...] (proxy が JSON-RPC error に変換)。";
 
 SourceVaultMCPTools::usage =
-  "SourceVaultMCPTools[] は MCP tool 定義 (name/description/inputSchema) のリストを返す。";
+  "SourceVaultMCPTools[] は MCP tool 定義 (name/description/inputSchema) のリストを返す。\n" <>
+  "全クライアントで無効なツール ($iSVMCPDisabledTools、2026-11-09 時点 sourcevault_workflow_write) は含まない (02 v1.2 A-1)。";
 
 SourceVaultMCPCallTool::usage =
-  "SourceVaultMCPCallTool[name, args] は tool を実行し MCP result <|\"content\",\"isError\"|> を返す。";
+  "SourceVaultMCPCallTool[name, args] は tool を実行し MCP result <|\"content\",\"isError\"|> を返す。\n" <>
+  "主体の束縛点 (3): 未束縛なら $SourceVaultPrincipal を MCP (Channel = 接続経路、ClaimedClient = _mcpClient の自己申告) に Block で束縛する。Model / OwnerCode / OwnerFE が既に束縛されたカーネル内呼び出しはそのまま (03 v0.4 §6.1、2026-11-09)。";
 
 SourceVaultMCPRegisterTools::usage =
   "SourceVaultMCPRegisterTools[id, spec] は外部パッケージの MCP tool 群を登録する (package-neutral な拡張点、2026-09-22)。\n" <>
@@ -201,7 +203,18 @@ SourceVaultStartBatch::usage =
 SourceVaultRecordMCPCall::usage =
   "SourceVaultRecordMCPCall[spec] は MCP call 監査 record を正規化し LocalState/hotlog/mcp_calls/\n" <>
   "YYYY-MM.jsonl へ append-only 記録する (spec §13.3)。best-effort instrumentation で、LocalState 未解決や\n" <>
-  "書込失敗でも応答を壊さない。戻り値 <|CallId, Recorded(bool), MaxReleasedPrivacy|>。単一書き手は service kernel。";
+  "書込失敗でも応答を壊さない。戻り値 <|CallId, Recorded(bool), MaxReleasedPrivacy|>。単一書き手は service kernel。\n" <>
+  "Decision は Permit | Redacted | Denied (Denied は無効ツールの呼び出し。spec に \"Reason\" があれば record に付く)。";
+
+$SourceVaultMCPCallReport::usage =
+  "$SourceVaultMCPCallReport は tools/call 1 回の放出 PL の返し口 (W1、文書 11 §5.1)。呼び出し元 (claudecode のツールループ) が Block で <||> にしておくと、\n" <>
+  "SourceVaultMCPCallTool が <|Tool, ObservedPL, MaxReleasedPrivacy, SelfPL, FloorPL, Empty, Error|> を入れる。ObservedPL はモデルに渡した中身の PL の見積もりで、\n" <>
+  "Max[結果に付いた PL (MaxReleasedPrivacy)、結果そのものの PL (fs_read の PrivacyLevel・kb_answer の MaxPrivacyLevel)、ツールごとの下限]。\n" <>
+  "エラーの応答は 0、0 件・見つからないときは下限を使わない。Block していなければ何も書かない (MCP の dispatch など)。";
+$SourceVaultMCPToolReadFloorPL::usage =
+  "$SourceVaultMCPToolReadFloorPL はツールごとの放出 PL の下限 <|tool -> pl|> (W1)。件ごとの PL を返さないメール・OOPS の読取に使う\n" <>
+  "(既定: mail_thread / mail_search_threads 0.7、oops_thread / oops_search_threads 0.5)。表に無い組み込みツールは 0、組み込みでないツール (外部登録) は 0.5。\n" <>
+  "代入は NBAccess の承認対象 (下限を下げると機密を読んだ後も外部検索が残る)。";
 
 SourceVaultMCPCallsRecent::usage =
   "SourceVaultMCPCallsRecent[opts] は記録済み MCPCall を時刻順に返す (main/service helper)。\n" <>
@@ -254,7 +267,16 @@ SourceVaultMCPGet::usage =
   "public と宣言済みドキュメントの sv://chunk/) は view=body を grant なしで解放する\n" <>
   "(release gate は通す)。adapter の \"ExtraViews\" に\n" <>
   "登録された view 名 (packageapi: contract/scaffolded/guided) はその projection を返す。\n" <>
-  "opts \"Principal\" / \"Trusted\" / \"View\"。sourcevault_get tool の実体。";
+  "opts \"Principal\" / \"Trusted\" / \"View\"。sourcevault_get tool の実体。\n" <>
+  "出口の関所で止めたとき (Released -> False) は、判定に加えて \"Schema\" (あること・型・欄の名前と大きさ・件数・更新日。値は入れない) と\n" <>
+  "\"Refusal\" (理由と次に取れる手段) を返す (文書 12 の 5.3 節)。水準は $SourceVaultMCPSchemaDisclosure。";
+
+$SourceVaultMCPSchemaDisclosure::usage =
+  "$SourceVaultMCPSchemaDisclosure は、SourceVaultMCPGet が出口の関所で止めた対象について返す「形」の設定 <|\"Enabled\" -> True, \"TypeOnlyPL\" -> 0.9|>。\n" <>
+  "Enabled が False なら形を返さない (判定だけ)。PL が TypeOnlyPL 以上の対象は、欄の名前や件数を返さず、型と見るための手続きだけを返す\n" <>
+  "(欄の名前や件数そのものが機密になりうる対象のため)。PL が分からない対象・AccessTags の範囲で止めた対象・受け手がクラウドの LLM のときも型だけ。\n" <>
+  "adapter は \"SchemaDisclosure\" -> \"TypeOnly\" | \"None\" で、自分の対象の水準を下げられる。値 (題名・要約・本文・メタデータの値) はどの水準でも返さない。\n" <>
+  "代入は NBAccess の承認対象 (TypeOnlyPL を上げると、機密の高い対象の欄の名前が出る)。";
 
 SourceVaultMCPReleaseGate::usage =
   "SourceVaultMCPReleaseGate[result, accessRequest] は正規化済み SearchResult を返却してよいか判定し\n" <>
@@ -974,6 +996,8 @@ SourceVaultStartBatch[] := SourceVaultStartBatch[<||>];
 (* MCPCall を正規化し hotlog へ append。best-effort (失敗は応答を壊さない)。 *)
 SourceVaultRecordMCPCall[spec_Association] := Module[{rec, path},
   rec = SourceVaultNormalizeMCPCallRecord[spec];
+  (* A-1 (2026-11-09): 拒否の理由は拒否 record にだけ付ける (既存 record の schema は変えない) *)
+  If[StringQ[Lookup[spec, "Reason", Null]], rec["Reason"] = spec["Reason"]];
   If[! StringQ[Lookup[rec, "StartedAtUTC", Missing[]]], rec["StartedAtUTC"] = iSVUTCNowString[]];
   If[! StringQ[Lookup[rec, "FinishedAtUTC", Missing[]]], rec["FinishedAtUTC"] = rec["StartedAtUTC"]];
   path = iSVMCPCallsMonthFile[];
@@ -988,7 +1012,9 @@ SourceVaultMCPCallsRecent[OptionsPattern[]] := Module[{all, bid, sid, lim},
   bid = OptionValue["BatchId"]; sid = OptionValue["SessionId"]; lim = OptionValue["Limit"];
   If[StringQ[bid], all = Select[all, Lookup[#, "BatchId", Missing[]] === bid &]];
   If[StringQ[sid], all = Select[all, Lookup[#, "SessionId", Missing[]] === sid &]];
-  all = SortBy[all, Lookup[#, "StartedAtUTC", ""] &];
+  (* 2026-11-09: 関数を {f} の形で渡すと同点 (同じ秒の StartedAtUTC) は元の順 = JSONL の追記順に残る。
+     SortBy[all, f] は同点を要素の正準順 (CallId の UUID 順) で並べ、同じ秒の記録の前後が不定だった。 *)
+  all = SortBy[all, {Lookup[#, "StartedAtUTC", ""] &}];
   If[IntegerQ[lim] && lim >= 0, all = Take[all, -Min[Length[all], lim]]];
   all];
 
@@ -1008,7 +1034,12 @@ iSVRecordToolCall[tool_String, args_Association, out_Association] := Quiet @ Mod
   projection = With[{v = Lookup[args, "view", Missing[]]}, If[StringQ[v], v, "metadata"]];
   idGiven = StringQ[Lookup[args, "batchId", Null]] || StringQ[Lookup[args, "jobId", Null]] ||
     StringQ[Lookup[args, "traceToken", Null]];
-  SourceVaultRecordMCPCall[<|
+  (* Inc2: 記録点 (iSVMCPCallToolRecorded) が CallId と放出 PL を Execute Activity に写す *)
+  $iSVMCPLastMaxPL = iSVMaxReleasedPrivacy[results];
+  (* W1: 結果そのものの PL と、0 件・見つからないか (ツールループの高水位の材料、iSVMCPCallReport) *)
+  $iSVMCPLastOutPL = iSVMCPOutSelfPL[out];
+  $iSVMCPLastOutEmpty = (IntegerQ[Lookup[out, "Count", None]] && out["Count"] === 0) || Lookup[out, "Found", Null] === False;
+  With[{rec = SourceVaultRecordMCPCall[<|
     "Tool" -> tool,
     "BatchId" -> Lookup[args, "batchId", Missing[]],
     "JobId" -> Lookup[args, "jobId", Missing[]],
@@ -1019,7 +1050,31 @@ iSVRecordToolCall[tool_String, args_Association, out_Association] := Quiet @ Mod
     "MaxReleasedPrivacy" -> iSVMaxReleasedPrivacy[results],
     "Decision" -> If[TrueQ[Lookup[out, "Released", Null]] ||
       (IntegerQ[Lookup[out, "Count", Null]] && Lookup[out, "Count"] > 0), "Permit", "Redacted"],
-    "LinkConfidence" -> If[idGiven, "Explicit", "Heuristic"]|>]];
+    "LinkConfidence" -> If[idGiven, "Explicit", "Heuristic"]|>]},
+    If[AssociationQ[rec], $iSVMCPLastCallId = Lookup[rec, "CallId", None]];
+    (* Inc2 (03 v0.4 §6.2 供給点): 文脈へ渡した結果を ServedToContext として記録 *)
+    iSVMCPProvServed[tool, out];
+    rec]];
+
+(* A-1 最小形 (02 v1.2 §7.1 / R-01, 2026-11-09): 無効ツールの呼び出しを MCP calls ログに
+   Decision "Denied" / Reason "ToolDisabled" で残し、isError 応答を返す。記録は best-effort
+   (記録に失敗しても拒否は返す)。全クライアント共通 (LM Studio / claudecode tool loop / 直接呼び出し)。 *)
+iSVMCPDenyDisabledTool[tool_String, args_Association] := Module[{rec},
+  rec = Quiet @ Check[SourceVaultRecordMCPCall[<|
+    "Tool" -> tool,
+    "BatchId" -> Lookup[args, "batchId", Missing[]],
+    "JobId" -> Lookup[args, "jobId", Missing[]],
+    "SessionId" -> Lookup[args, "sessionId", Missing[]],
+    "ReleasedURIs" -> {}, "ReleasedProjection" -> "none", "MaxReleasedPrivacy" -> 0.0,
+    "Decision" -> "Denied", "Reason" -> "ToolDisabled",
+    "LinkConfidence" -> If[StringQ[Lookup[args, "sessionId", Null]] ||
+      StringQ[Lookup[args, "batchId", Null]], "Explicit", "Heuristic"]|>], $Failed];
+  (* V2 (文書 12 の 5 章、2026-11-12): 理由に加えて、次に取れる手段を返す *)
+  iMCPError[tool <> " is disabled on this server (SourceVault A-1: file writes need an owner " <>
+    "ticket, which is not available yet). The call was recorded" <>
+    If[AssociationQ[rec] && StringQ[Lookup[rec, "CallId", Null]], " as " <> rec["CallId"], ""] <>
+    ". What you can do: put the content you wanted to write into your answer, so that the owner can save it. Do not retry."]];
+iSVMCPDenyDisabledTool[tool_, _] := iMCPError[ToString[tool] <> " is disabled on this server."];
 
 (* ============================================================
    Universal MCP Access -- model AccessProfile (universal spec §2.5 / §17.7)
@@ -1843,6 +1898,8 @@ SourceVaultMCPSearch[specIn_Association, OptionsPattern[]] := Module[
         "Screen", iSVDowngradeResult[r],
         _, Nothing]]], normalized],
     Nothing];
+  (* 03 v0.4 §9.2 (2026-11-10 Inc3): 検索フィルタ (描画の前。MCP は Purpose RAG に固定)。fail-closed の Failure なら結果を出さない *)
+  gated = iSVMCPIntegrityKeep["sourcevault_search", gated];
   off = Lookup[spec, "offset", 0]; lim = Lookup[spec, "limit", 20];
   limited = Take[Drop[gated, Min[Length[gated], Max[0, off]]], UpTo[Max[0, lim]]];
   fmt = Lookup[Lookup[spec, "return", <||>], "format", "compactText"];
@@ -2043,6 +2100,171 @@ iSVResolveOwningAdapter[parsed_Association] :=
       iSVAdapterAvailableQ[SourceVaultResolveMCPDataAdapter[#]] &,
     Missing["NoOwningAdapter"]];
 
+(* ---- V10 (文書 12 の 5.3 節、2026-11-13): 出口の関所で止めた対象の「形」 ----
+   所有者の方針: AccessLevel が PL に届かないときも、データのスキーマは提供する (文書 12 の P3)。
+   以前は、止めたときに判定だけを返していた。モデルには、対象があるのかも、形も、何をすれば見られるのかも分からなかった。
+   止めたときに返すもの (iSVDeniedGet): (a) あること、(b) 形 ("Schema")、(c) 理由と次に取れる手段 ("Refusal"。文書 12 の 5.1 節の契約)。
+   形には水準がある (iSVSchemaLevel)。
+   - "Shape": 型 (adapter・Kind)、欄の名前と型と大きさ (文字数は桁の幅、件数はそのまま。値は入れない)、メタデータの欄の名前、
+     件数の欄の値 (…Count など)、更新日 (日まで)、見られる view。
+   - "TypeOnly": 型と、見るための手続きだけ。欄の名前や件数そのものが機密になりうる対象に使う: PL が TypeOnlyPL (既定 0.9) 以上、
+     PL が分からない (fail-closed)、AccessTags の範囲で止めた、受け手がクラウドの LLM と分かっている (ProviderClass CloudLLM)、
+     adapter が "SchemaDisclosure" -> "TypeOnly" を宣言。受け手の分類が不明 (Unknown) のときは型だけにしない: ローカルのツールループと
+     LM Studio の MCP は Unknown なので、そこで型だけにすると、形を返す水準が実際には使われない。値はどの水準でも返さない。
+   - "None": 形は返さない (adapter が "SchemaDisclosure" -> "None" を宣言)。あることと手続きだけ。
+   値 (題名・要約・抜粋・本文・メタデータの値) は、どの水準でも返さない。欄の名前は、識別子の形 (英字と _ だけ、40 字まで) のものに限る:
+   データから作られた鍵 (人名や番号) が、欄の名前として出ないようにするため。それ以外の鍵は数だけを返す。
+   設定は $SourceVaultMCPSchemaDisclosure (代入は NBAccess の承認対象)。 *)
+If[! AssociationQ[SourceVault`$SourceVaultMCPSchemaDisclosure],
+  SourceVault`$SourceVaultMCPSchemaDisclosure = <|"Enabled" -> True, "TypeOnlyPL" -> 0.9|>];
+If[Length[DownValues[NBAccess`NBRegisterApprovalSetSymbols]] > 0,
+  Quiet @ NBAccess`NBRegisterApprovalSetSymbols[{"$SourceVaultMCPSchemaDisclosure"}]];
+iSVSchemaSetting[k_String, default_] := With[{s = SourceVault`$SourceVaultMCPSchemaDisclosure},
+  If[AssociationQ[s], Lookup[s, k, default], default]];
+$iSVSchemaScopeWhy = {"DenyTagIntersect", "MissingRequiredTags", "UntaggedDenied", "TagNotInAllow"};
+iSVSchemaLevel[gate_Association, aspec_, accessRequest_Association] := Module[{why, pl, decl, cap},
+  If[iSVSchemaSetting["Enabled", True] === False, Return["Off", Module]];
+  decl = If[AssociationQ[aspec], Lookup[aspec, "SchemaDisclosure", Automatic], Automatic];
+  If[MemberQ[{"None", None, False}, decl], Return["None", Module]];
+  why = Replace[Lookup[gate, "Why", {}], Except[_List] -> {}];
+  pl = Lookup[gate, "Level", Missing[]];
+  cap = With[{v = iSVSchemaSetting["TypeOnlyPL", 0.9]}, If[NumericQ[v], v, 0.9]];
+  Which[
+    decl === "TypeOnly", "TypeOnly",
+    IntersectingQ[why, $iSVSchemaScopeWhy], "TypeOnly",
+    ! NumericQ[pl], "TypeOnly",
+    pl >= cap, "TypeOnly",
+    Lookup[Replace[Lookup[accessRequest, "Principal", <||>], Except[_Association] -> <||>], "ProviderClass", "Unknown"] === "CloudLLM", "TypeOnly",
+    True, "Shape"]];
+iSVSchemaLevel[___] := "TypeOnly";
+iSVSchemaNameQ[k_] := StringQ[k] && StringMatchQ[k, RegularExpression["[A-Za-z][A-Za-z_]{0,39}"]];
+iSVSchemaType[v_] := Which[
+  MissingQ[v] || v === None || v === Null, "Missing",
+  StringQ[v], "String", IntegerQ[v], "Integer", NumericQ[v], "Number", BooleanQ[v], "Boolean",
+  ListQ[v], "List", AssociationQ[v], "Association", Head[v] === DateObject, "Date", True, "Other"];
+(* 文字列の長さは桁の幅だけ (正確な長さは値の手がかりになる) *)
+iSVSchemaChars[n_Integer] := Which[n < 100, "<100", n < 1000, "<1000", n < 10000, "<10000", True, ">=10000"];
+iSVSchemaField[k_String, v_] := Join[<|"Name" -> k, "Type" -> iSVSchemaType[v]|>,
+  Which[StringQ[v], <|"Chars" -> iSVSchemaChars[StringLength[v]]|>, ListQ[v], <|"Count" -> Length[v]|>,
+    AssociationQ[v], <|"Keys" -> Length[v]|>, True, <||>]];
+iSVSchemaFields[a_Association] := Module[{present = Select[Keys[a], iSVSchemaType[a[#]] =!= "Missing" &], named},
+  named = Select[present, iSVSchemaNameQ];
+  <|"Fields" -> (iSVSchemaField[#, a[#]] & /@ Take[named, UpTo[40]]), "OtherFields" -> Length[present] - Length[Take[named, UpTo[40]]]|>];
+iSVSchemaFields[_] := <|"Fields" -> {}, "OtherFields" -> 0|>;
+(* 件数の欄 (…Count・Size・Pages など、0 以上の整数) は値を返す。更新日は日までを返す *)
+$iSVSchemaCountRegex = "(?i).*(count|size|bytes|length|pages|chars|words|lines|items|messages|attachments)$";
+$iSVSchemaDateKeys = {"UpdatedAtUTC", "UpdatedAt", "Updated", "ModifiedAtUTC", "ModifiedAt", "Modified", "LastModified",
+  "DateUTC", "Date", "ReceivedAtUTC", "ReceivedAt", "SentAtUTC", "SentAt", "CreatedAtUTC", "CreatedAt", "Created", "AtUTC", "Timestamp"};
+iSVSchemaDate[v_] := Which[
+  Head[v] === DateObject, With[{s = Quiet @ Check[DateString[v, "ISODate"], $Failed]}, If[StringQ[s], s, Missing["NoDate"]]],
+  StringQ[v] && StringLength[v] <= 40 && StringMatchQ[v, RegularExpression["\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}.*"]],
+    First @ StringCases[v, RegularExpression["^\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}"], 1],
+  True, Missing["NoDate"]];
+iSVSchemaUpdated[as_List] := Module[{hit},
+  hit = SelectFirst[Flatten[Function[a, (iSVSchemaDate[Lookup[a, #, Missing[]]] &) /@ $iSVSchemaDateKeys] /@ Select[as, AssociationQ]], StringQ, Missing["NoDate"]];
+  hit];
+iSVSchemaViews[aspec_, reqGrant_] := Module[{caps, ev, need = If[ListQ[reqGrant], ToLowerCase /@ Select[reqGrant, StringQ], {}], vs},
+  caps = If[AssociationQ[aspec], Replace[Lookup[aspec, "Capabilities", <||>], Except[_Association] -> <||>], <||>];
+  ev = If[AssociationQ[aspec], Replace[Lookup[aspec, "ExtraViews", <||>], Except[_Association] -> <||>], <||>];
+  vs = Join[{"metadata", "summary"}, If[TrueQ[Lookup[caps, "ReadBody", False]], {"body"}, {}],
+    If[TrueQ[Lookup[caps, "ReadContext", False]], {"context"}, {}], Select[Keys[ev], StringQ]];
+  (<|"View" -> #, "NeedsGrant" -> MemberQ[need, ToLowerCase[#]]|> &) /@ DeleteDuplicates[vs]];
+iSVDeniedSchema[level_String, canonical_String, aname_String, aspec_, parsed_Association, normalized_Association, reqGrant_] := Module[
+  {kind, md, base, content, mdf, counts},
+  kind = With[{k = Lookup[normalized, "Kind", Missing[]]}, If[StringQ[k], k, ToString @ Lookup[parsed, "Namespace", "unknown"]]];
+  base = <|"Level" -> level, "Exists" -> True, "Adapter" -> aname, "Kind" -> kind,
+    "Namespace" -> With[{n = Lookup[parsed, "Namespace", Missing[]]}, If[StringQ[n], n, Missing["Unknown"]]]|>;
+  If[level =!= "Shape", Return[base, Module]];
+  md = Replace[Lookup[normalized, "Metadata", <||>], Except[_Association] -> <||>];
+  content = iSVSchemaFields[KeyTake[normalized, {"Title", "Summary", "Snippet", "Citation"}]];
+  mdf = iSVSchemaFields[md];
+  counts = Association @ KeyValueMap[
+    If[iSVSchemaNameQ[#1] && IntegerQ[#2] && #2 >= 0 && StringMatchQ[#1, RegularExpression[$iSVSchemaCountRegex]], #1 -> #2, Nothing] &, md];
+  Join[base, <|
+    "Fields" -> content["Fields"],
+    "MetadataFields" -> mdf["Fields"], "OtherMetadataFields" -> mdf["OtherFields"],
+    "Counts" -> counts,
+    "Updated" -> iSVSchemaUpdated[{md, Replace[Lookup[normalized, "Citation", <||>], Except[_Association] -> <||>]}],
+    "Views" -> iSVSchemaViews[aspec, reqGrant]|>]];
+iSVDeniedSchema[___] := <|"Level" -> "TypeOnly", "Exists" -> True|>;
+(* 理由と、次に取れる手段 (モデル向けの英文。文書 12 の 5.1 節の契約: Outcome・Reason・WhatYouCanDo・Provided・Retry・OwnerNotified) *)
+iSVDeniedRefusal[gate_Association, level_String, canonical_String, accessRequest_Association] := Module[
+  {why = Replace[Lookup[gate, "Why", {}], Except[_List] -> {}], code, pl, eff, reason, can, cloud, pc},
+  code = ToString @ First[why, "Denied"];
+  pl = Lookup[gate, "Level", Missing[]]; eff = Lookup[gate, "EffectiveAccessLevel", Missing[]];
+  pc = Lookup[Replace[Lookup[accessRequest, "Principal", <||>], Except[_Association] -> <||>], "ProviderClass", "Unknown"];
+  (* 受け手がクラウドか不明 (Unknown) で、対象が機密 (PL 0.5 以上): 申請しても、本文も要約もこの接続には出ない
+     (取得の上限も、許可証の本文の解放も、クラウドかもしれない受け手には効かない)。申請は勧めない *)
+  cloud = code === "CloudSinkHardCap" || (iSVCloudSinkQ[accessRequest] && NumericQ[pl] && pl >= 0.5);
+  reason = Which[
+    code === "PrivacyExceedsAccessLevel",
+      "the object's privacy level" <> If[NumericQ[pl], " (" <> ToString[Round[N[pl], 0.01]] <> ")", ""] <>
+        " is above the access level of this connection" <> If[NumericQ[eff], " (" <> ToString[Round[N[eff], 0.01]] <> ")", ""],
+    code === "CloudSinkHardCap",
+      "the object is private" <> If[pc === "CloudLLM", " and this connection is a cloud model",
+        " and SourceVault cannot confirm that this connection is a local model"] <>
+        "; private content is not sent to a model that may be in the cloud",
+    MemberQ[$iSVSchemaScopeWhy, code], "the object is outside the access scope (access tags) of this connection",
+    True, "the release gate did not permit it"];
+  can = If[cloud,
+    {"go on without this object and say in the answer that " <> canonical <> " exists but could not be read here",
+     "the owner can open it in Mathematica, or run the task with a model that SourceVault knows to be local",
+     "do not guess the content"},
+    {"if the tool sourcevault_request_access is available to you, call it with objectRefs [\"" <> canonical <>
+       "\"] and a purpose; a human decides, and you poll sourcevault_access_status",
+     "otherwise go on without this object: say in the answer that " <> canonical <>
+       " exists but is above your access level, and that the owner can grant access",
+     "do not guess the content"}];
+  <|"Outcome" -> "NotReleased", "Reason" -> reason, "WhatYouCanDo" -> can,
+    "Provided" -> Switch[level,
+      "Shape", "that the object exists, and its shape (type, field names, sizes, counts, update date). No values.",
+      "TypeOnly", "that the object exists, and its type. Field names and counts are not given for this object.",
+      _, "that the object exists."],
+    "Retry" -> "Do not retry with the same arguments; the result will be the same until access is granted.",
+    "OwnerNotified" -> False, "Code" -> code|>];
+iSVDeniedRefusal[___] := <|"Outcome" -> "NotReleased", "Code" -> "Denied"|>;
+(* 出口の関所で止めたときの応答。値は入れない *)
+iSVDeniedGet[canonical_String, aname_String, aspec_, parsed_Association, normalized_Association, gate_Association,
+    accessRequest_Association, reqGrant_, view_ : None] := Module[{level, out},
+  level = Quiet @ Check[iSVSchemaLevel[gate, aspec, accessRequest], "TypeOnly"];
+  out = <|"URI" -> canonical, "Found" -> True, "Released" -> False, "Adapter" -> aname|>;
+  If[StringQ[view], out["View"] = view];
+  out = Join[out, <|"Access" -> gate, "RequiresGrantFor" -> reqGrant, "Why" -> Lookup[gate, "Why", {"Denied"}],
+    "EffectiveAccessLevel" -> iSVEffectiveLevel[accessRequest]|>];
+  If[level === "Off", Return[out, Module]];
+  Join[out, <|
+    "Schema" -> Quiet @ Check[iSVDeniedSchema[level, canonical, aname, aspec, parsed, normalized, reqGrant],
+      <|"Level" -> "TypeOnly", "Exists" -> True|>],
+    "Refusal" -> Quiet @ Check[iSVDeniedRefusal[gate, level, canonical, accessRequest], <|"Outcome" -> "NotReleased"|>]|>]];
+(* compactText の描画 (sourcevault_get)。止めたときの形と手段を、読める 1 かたまりにする *)
+iSVDeniedText[out_Association] := Module[{sc = Lookup[out, "Schema", None], rf = Lookup[out, "Refusal", None], lines = {}, fld},
+  fld = Function[f, ToString @ Lookup[f, "Name", "?"] <> " (" <> ToString @ Lookup[f, "Type", "?"] <>
+    Which[KeyExistsQ[f, "Chars"], ", " <> ToString[f["Chars"]] <> " chars", KeyExistsQ[f, "Count"], ", " <> ToString[f["Count"]] <> " items",
+      KeyExistsQ[f, "Keys"], ", " <> ToString[f["Keys"]] <> " keys", True, ""] <> ")"];
+  If[AssociationQ[rf] && StringQ[Lookup[rf, "Reason", None]],
+    AppendTo[lines, "Not released. Reason: " <> rf["Reason"] <> "."]];
+  If[AssociationQ[rf] && StringQ[Lookup[rf, "Provided", None]], AppendTo[lines, "Provided: " <> rf["Provided"]]];
+  If[AssociationQ[sc],
+    AppendTo[lines, "Type: " <> ToString @ Lookup[sc, "Kind", "?"] <> " (adapter " <> ToString @ Lookup[sc, "Adapter", "?"] <> ")"];
+    If[Lookup[sc, "Level", ""] === "Shape",
+      With[{f = Replace[Lookup[sc, "Fields", {}], Except[_List] -> {}]},
+        If[f =!= {}, AppendTo[lines, "Fields: " <> StringRiffle[fld /@ f, ", "]]]];
+      With[{f = Replace[Lookup[sc, "MetadataFields", {}], Except[_List] -> {}], o = Lookup[sc, "OtherMetadataFields", 0]},
+        If[f =!= {} || (IntegerQ[o] && o > 0),
+          AppendTo[lines, "Metadata fields: " <> StringRiffle[fld /@ f, ", "] <>
+            If[IntegerQ[o] && o > 0, If[f =!= {}, ", ", ""] <> "and " <> ToString[o] <> " more (names not given)", ""]]]];
+      With[{c = Replace[Lookup[sc, "Counts", <||>], Except[_Association] -> <||>]},
+        If[Length[c] > 0, AppendTo[lines, "Counts: " <> StringRiffle[KeyValueMap[ToString[#1] <> " = " <> ToString[#2] &, c], ", "]]]];
+      With[{u = Lookup[sc, "Updated", Missing[]]}, If[StringQ[u], AppendTo[lines, "Updated: " <> u]]];
+      With[{v = Replace[Lookup[sc, "Views", {}], Except[_List] -> {}]},
+        If[v =!= {}, AppendTo[lines, "Views: " <> StringRiffle[
+          (ToString @ Lookup[#, "View", "?"] <> If[TrueQ[Lookup[#, "NeedsGrant", False]], " (needs a grant)", ""]) & /@ v, ", "]]]]]];
+  If[AssociationQ[rf] && ListQ[Lookup[rf, "WhatYouCanDo", None]],
+    AppendTo[lines, "What you can do: " <> StringRiffle[MapIndexed["(" <> ToString[First[#2]] <> ") " <> ToString[#1] &, rf["WhatYouCanDo"]], "; "] <> "."]];
+  If[AssociationQ[rf] && StringQ[Lookup[rf, "Retry", None]], AppendTo[lines, rf["Retry"]]];
+  StringRiffle[lines, "\n"]];
+iSVDeniedText[_] := "";
+
 Options[SourceVaultMCPGet] = {"Principal" -> Automatic, "Trusted" -> <||>,
   "AccessLevel" -> Automatic, "ReleaseContext" -> None, "Grant" -> None, "View" -> Automatic,
   "AccessProfile" -> Automatic};
@@ -2103,11 +2325,8 @@ SourceVaultMCPGet[uriIn_, OptionsPattern[]] := Module[
       OptionValue["Grant"], accessRequest, canonical, reqGrant]]];
   gate = SourceVaultMCPReleaseGate[normalized, accessRequest];
   If[! MemberQ[{"Permit", "Screen"}, Lookup[gate, "Decision"]],
-    (* gate で落ちたら内容は返さず判定のみ *)
-    Return[<|"URI" -> canonical, "Found" -> True, "Released" -> False,
-      "Adapter" -> aname, "Access" -> gate, "RequiresGrantFor" -> reqGrant,
-      "Why" -> Lookup[gate, "Why", {"Denied"}],
-      "EffectiveAccessLevel" -> iSVEffectiveLevel[accessRequest]|>]];
+    (* gate で落ちたら内容は返さない。V10 (文書 12 の 5.3 節): 判定に加えて、あること・形 ("Schema")・理由と次の手段 ("Refusal") を返す *)
+    Return[iSVDeniedGet[canonical, aname, aspec, parsed, normalized, gate, accessRequest, reqGrant]]];
   (* Screen は summary/snippet を抜いた metadata-only へ降格して返す (§2.6 MetadataOnly)。 *)
   With[{outR = If[Lookup[gate, "Decision"] === "Screen", iSVDowngradeResult[normalized], normalized]},
     <|"URI" -> canonical, "Found" -> True, "Released" -> True, "Adapter" -> aname,
@@ -2176,9 +2395,8 @@ iSVMCPGetBody[normalized_Association, parsed_Association, aspec_, aname_String, 
     Module[{g2, fn2, body2},
       g2 = SourceVaultMCPReleaseGate[normalized, accessRequest];
       If[! MemberQ[{"Permit", "Screen"}, Lookup[g2, "Decision"]],
-        Return[<|"URI" -> canonical, "Found" -> True, "Released" -> False,
-          "Adapter" -> aname, "View" -> view, "Access" -> g2,
-          "Why" -> Lookup[g2, "Why", {"Denied"}]|>]];
+        (* V10: 止めたときは、形と次の手段も返す (下の iSVDeniedGet) *)
+        Return[iSVDeniedGet[canonical, aname, aspec, parsed, normalized, g2, accessRequest, reqGrant, view]]];
       fn2 = If[AssociationQ[aspec], Lookup[aspec, "ReadBody", None], None];
       If[fn2 === None,
         Return[<|"URI" -> canonical, "Found" -> True, "Released" -> False,
@@ -3840,7 +4058,17 @@ iSVMCPCallExternalTool[name_String, args_Association] :=
         iMCPError[name <> " failed: " <> ToString[Lookup[r[[2]], "MessageTemplate", ToString[r[[1]]]]]],
       True, iMCPError[name <> " failed: " <> StringTake[ToString[r, InputForm], UpTo[500]]]]];
 
-SourceVaultMCPTools[] := Join[iSVMCPBuiltinTools[], iSVMCPExternalTools[]];
+(* A-1 最小形 (02 v1.2 §7.1 / R-01, 2026-11-09): 全クライアントで無効なツール。tools/list から外し、
+   tools/call (SourceVaultMCPCallTool) は実行せず拒否を MCP calls ログに残す (iSVMCPDenyDisabledTool)。
+   sourcevault_workflow_write は書いた .wl が後で Get される (書込 + 実行) ので、所有者 ticket 付きの
+   書込 (P0-11) ができるまで無効。緩める公開ノブは置かない (緩める方向は所有者のコード変更)。
+   定義 (inputSchema) は iSVMCPBuiltinTools に残す (将来の ticket 付き版の文書として)。 *)
+$iSVMCPDisabledTools = {"sourcevault_workflow_write"};
+iSVMCPDisabledToolQ[name_String] := MemberQ[$iSVMCPDisabledTools, name];
+iSVMCPDisabledToolQ[_] := False;
+
+SourceVaultMCPTools[] := Select[Join[iSVMCPBuiltinTools[], iSVMCPExternalTools[]],
+  ! iSVMCPDisabledToolQ[Lookup[#, "name", ""]] &];
 
 (* ---- tool 定義 (JSON Schema inputSchema) ---- *)
 iSVMCPBuiltinTools[] := {
@@ -3982,7 +4210,8 @@ iSVMCPBuiltinTools[] := {
   <|"name" -> "sourcevault_get",
     "description" -> "Resolve a single sv:// URI (e.g. from sourcevault_search results) to its low-privacy " <>
       "metadata/summary projection. Bodies/raw/attachments are NOT returned (they require an access grant); " <>
-      "the response lists requiresGrantFor. High-privacy items may be release-gated (released=false).",
+      "the response lists requiresGrantFor. High-privacy items may be release-gated (released=false): the response " <>
+      "then gives the reason, the item's shape (type, field names, sizes, counts - no values) and what you can do next.",
     "inputSchema" -> <|"type" -> "object",
       "properties" -> <|
         "uri" -> <|"type" -> "string", "description" -> "The sv:// URI to resolve."|>,
@@ -4301,7 +4530,145 @@ iSVOOPSMCPEnsureLoaded[] := Module[{st},
   If[AssociationQ[st], Append[st, "Scope" -> SourceVault`$svOOPSMCPScope], st]];
 
 (* ---- tool 実行 ---- *)
-SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
+(* I-01 (03 v0.4 §6.1、2026-11-09): 主体の束縛点 (3) MCP。主体は接続経路で決める: SourceVaultMCPDispatch
+   (proxy -> service の command queue) 経由なら Channel "MCP:dispatch"、カーネル内から直接呼ばれたら "MCP:direct"。
+   _mcpClient の自己申告は ClaimedClient として記録するだけで、主体の判定には使わない (02 C1・C2)。
+   既に Model (claudecode の tool loop) / OwnerCode (NBExecuteHeldExpr) / OwnerFE が束縛されているカーネル内呼び出しは
+   そのまま (呼び出し元の束縛点が正)。未束縛と Service hook の中からの呼び出しは MCP に束縛する
+   (service の権限を MCP クライアントに渡さない)。 *)
+If[! ValueQ[$iSVMCPDispatchChannel], $iSVMCPDispatchChannel = None];
+iSVMCPBoundPrincipalKind[] := Module[{p},
+  p = If[ValueQ[SourceVault`$SourceVaultPrincipal], SourceVault`$SourceVaultPrincipal, Missing[]];
+  If[AssociationQ[p], Lookup[p, "Kind", Missing[]], Missing[]]];
+iSVMCPPrincipal[args_Association] := <|"Kind" -> "MCP",
+  "Channel" -> If[StringQ[$iSVMCPDispatchChannel], $iSVMCPDispatchChannel, "MCP:direct"],
+  "ClaimedClient" -> Lookup[args, "_mcpClient", Missing["NotClaimed"]],
+  "SessionId" -> Lookup[args, "sessionId", Missing[]], "Ticket" -> Missing[]|>;
+SourceVaultMCPCallTool[name_String, args_Association] :=
+  If[MemberQ[{"Model", "OwnerCode", "OwnerFE"}, iSVMCPBoundPrincipalKind[]],
+    iSVMCPCallToolRecorded[name, args],
+    Block[{SourceVault`$SourceVaultPrincipal = iSVMCPPrincipal[args]}, iSVMCPCallToolRecorded[name, args]]];
+
+(* Inc2 (03 v0.4 §6.2、2026-11-10 第 4 週): tools/call 1 回の記録点。本体の間、供給点 (SourceVaultProvServed) の ActivityId を集め、
+   本体が返ったら Execute Activity (ツール名・引数の鍵付き digest・結果の SHA-256 (放出 PL < 0.5 のみ)・判定・CallId・結果に含めた Entity) を
+   SourceVaultProvRecordToolCall (SourceVault_integrity.wl) に渡す。provenance / integrity 未ロードなら何もしない。記録の失敗は本体の結果を変えない。
+   mcp_calls の adapter は ExternalRefs の CallId を見て補完専用 (無い分だけ) になる。 *)
+If[! ValueQ[$iSVMCPLastCallId], $iSVMCPLastCallId = None];
+If[! ValueQ[$iSVMCPLastMaxPL], $iSVMCPLastMaxPL = Null];
+iSVMCPCallToolRecorded[name_String, args_Association] :=
+  Block[{SourceVault`ProvenancePrivate`$iProvServedCollector = {}, $iSVMCPLastCallId = None, $iSVMCPLastMaxPL = Null, $iSVMCPIntegrityWithheld = 0,
+         $iSVMCPLastOutPL = Null, $iSVMCPLastOutEmpty = False},
+    Module[{r = iSVMCPCallToolBody[name, args]},
+      If[Length[DownValues[SourceVault`SourceVaultProvRecordToolCall]] > 0,
+        Quiet @ Check[SourceVault`SourceVaultProvRecordToolCall[name, args, r, "CallId" -> $iSVMCPLastCallId,
+          "ServedActivityIds" -> SourceVault`ProvenancePrivate`$iProvServedCollector, "MaxReleasedPrivacy" -> $iSVMCPLastMaxPL], Null]];
+      (* 03 v0.4 §9.2 (2026-11-10 Inc3): 1 件を返すツールで、その版が隔離中・利用不可 (検索フィルタ、Purpose RAG) なら応答を差し替える *)
+      If[$iSVMCPIntegrityWithheld > 0 && MemberQ[$iSVMCPSingleItemTools, name],
+        r = iMCPError["The requested item is quarantined or not usable for automatic use (03 v0.4 9.2); it was withheld. Ask the owner to review it."]];
+      (* W1 (文書 11 §5.1): 呼び出し元 (ツールループ) が返し口を Block していれば、モデルに渡した中身の PL を返す。
+         見積もりに失敗したら 0.5 (fail-closed)。 *)
+      If[AssociationQ[SourceVault`$SourceVaultMCPCallReport],
+        SourceVault`$SourceVaultMCPCallReport = Quiet @ Check[iSVMCPCallReport[name, r],
+          <|"Tool" -> name, "ObservedPL" -> 0.5, "Error" -> "ReportFailed"|>]];
+      r]];
+$iSVMCPSingleItemTools = {"sourcevault_get", "sourcevault_get_document", "sourcevault_fs_read", "sourcevault_directive_body", "sourcevault_directives"};
+
+(* W1 (文書 11 §5.1、2026-11-12): tools/call 1 回が文脈へ渡した中身の PL を呼び出し元 (ツールループ) へ返す。
+   G1: 以前はループの開始時の申告だけで文脈 PL が決まり、ループの途中でメールを読んでもその後の検索・取得は低い PL で判定された。
+   MaxReleasedPrivacy (released projection の PL) は search / get / kb_answer では付くが、メール・OOPS のツールは件の PL を
+   返さず 0 で記録されていた。そこでツールごとの下限を足す (既定の値は usage)。 *)
+If[! ValueQ[SourceVault`$SourceVaultMCPCallReport], SourceVault`$SourceVaultMCPCallReport = None];
+If[! AssociationQ[SourceVault`$SourceVaultMCPToolReadFloorPL],
+  SourceVault`$SourceVaultMCPToolReadFloorPL = <|
+    "sourcevault_mail_thread" -> 0.7, "sourcevault_mail_search_threads" -> 0.7,
+    "sourcevault_oops_thread" -> 0.5, "sourcevault_oops_search_threads" -> 0.5|>];
+If[Length[DownValues[NBAccess`NBRegisterApprovalSetSymbols]] > 0,
+  Quiet @ NBAccess`NBRegisterApprovalSetSymbols[{"$SourceVaultMCPToolReadFloorPL"}]];
+If[! ValueQ[$iSVMCPLastOutPL], $iSVMCPLastOutPL = Null];
+If[! ValueQ[$iSVMCPLastOutEmpty], $iSVMCPLastOutEmpty = False];
+(* iSVMCPCallToolBody の Switch にある組み込みツール (表に無ければ下限 0)。これ以外 (外部登録) は 0.5 *)
+$iSVMCPBuiltinToolNames = {
+  "sourcevault_web_search", "sourcevault_submit_web_search", "sourcevault_job_status", "sourcevault_job_result",
+  "sourcevault_get_document", "sourcevault_catalog", "sourcevault_runtime_capabilities", "sourcevault_search",
+  "sourcevault_kb_answer", "sourcevault_slidedeck", "sourcevault_get", "sourcevault_request_access",
+  "sourcevault_access_status", "sourcevault_feedback_submit", "sourcevault_orchestrator_help",
+  "sourcevault_orchestrator_subtask", "sourcevault_deposit", "sourcevault_fs_list", "sourcevault_fs_read",
+  "sourcevault_directives", "sourcevault_directive_body", "sourcevault_commit_log", "sourcevault_workflow_write",
+  "sourcevault_oops_status", "sourcevault_oops_search_threads", "sourcevault_oops_thread",
+  "sourcevault_mail_status", "sourcevault_mail_search_threads", "sourcevault_mail_thread"};
+iSVMCPToolFloorPL[name_String] := Module[{t = SourceVault`$SourceVaultMCPToolReadFloorPL, v},
+  v = If[AssociationQ[t], Lookup[t, name, Missing[]], Missing[]];
+  Which[NumericQ[v], Clip[N[v], {0., 1.}], MemberQ[$iSVMCPBuiltinToolNames, name], 0., True, 0.5]];
+iSVMCPToolFloorPL[_] := 0.5;
+(* 結果そのものに付いた PL: fs_read / fs_list の PrivacyLevel (Status OK のときだけ。拒否のときの値は出していない中身の PL)、
+   kb_answer の MaxPrivacyLevel (1 件以上のとき) *)
+iSVMCPOutSelfPL[out_Association] := Module[{st = ToString @ Lookup[out, "Status", ""], p = Lookup[out, "PrivacyLevel", None],
+    m = Lookup[out, "MaxPrivacyLevel", None], c = Lookup[out, "Count", 1]},
+  Clip[Max[0., If[st === "OK" && NumericQ[p], N[p], 0.], If[NumericQ[m] && ! (IntegerQ[c] && c <= 0), N[m], 0.]], {0., 1.}]];
+iSVMCPOutSelfPL[_] := 0.;
+iSVMCPCallReport[name_String, r_] := Module[{err, rel, own, empty, floor},
+  err = ! AssociationQ[r] || TrueQ[Lookup[r, "isError", False]];
+  rel = If[NumericQ[$iSVMCPLastMaxPL], N[$iSVMCPLastMaxPL], 0.];
+  own = If[NumericQ[$iSVMCPLastOutPL], N[$iSVMCPLastOutPL], 0.];
+  empty = TrueQ[$iSVMCPLastOutEmpty];
+  floor = If[empty, 0., iSVMCPToolFloorPL[name]];
+  <|"Tool" -> name, "ObservedPL" -> If[err, 0., Clip[Max[rel, own, floor], {0., 1.}]],
+    "MaxReleasedPrivacy" -> rel, "SelfPL" -> own, "FloorPL" -> floor, "Empty" -> empty, "Error" -> err|>];
+If[! IntegerQ[$iSVMCPIntegrityWithheld], $iSVMCPIntegrityWithheld = 0];
+(* 検索フィルタ (MCP の候補は Purpose RAG に固定、主体 MCP)。SourceVault_integrity.wl 未ロードなら全部残す。fail-closed の Failure なら全部除く *)
+iSVMCPIntegrityKeep[name_String, items_List] := If[items === {} || Length[DownValues[SourceVault`SourceVaultIntegrityRetrievalFilter]] === 0, items,
+  With[{f = Quiet @ Check[SourceVault`SourceVaultIntegrityRetrievalFilter[items, "Purpose" -> "RAG", "SupplyPoint" -> "mcp:" <> name,
+      "KeyFunction" -> Function[it, <|"LogicalRefs" -> Select[{Lookup[it, "SnapshotRef", None], Lookup[it, "Path", None]}, StringQ[#] && # =!= "" &],
+        "BlobIds" -> Select[{With[{h = Lookup[it, "ContentHash", None]}, If[StringQ[h] && StringMatchQ[h, RegularExpression["^(sha256:)?[0-9a-f]{64}$"]],
+          "blob:sha256:" <> StringReplace[h, "sha256:" -> ""], None]]}, StringQ]|>]], items]},
+    Which[ListQ[f], f, FailureQ[f], {}, True, items]]];
+
+(* 供給点 (MCP 側): search / get / kb_answer (Context)、fs_read / get_document / directive_body (Quote)、directives (Instruction) が
+   文脈へ渡したものを ServedToContext として記録する。渡した本文 (Text / Body / Snippet / Summary) が内容、無ければ ContentHash を申告 *)
+iSVMCPProvRole[name_String] := Which[
+  MemberQ[{"sourcevault_fs_read", "sourcevault_get_document", "sourcevault_directive_body"}, name], "Quote",
+  name === "sourcevault_directives", "Instruction",
+  True, "Context"];
+iSVMCPProvSpec[item_Association] := Module[{uri, text, hash, pl},
+  uri = SelectFirst[{Lookup[item, "URI", None], Lookup[item, "Uri", None], Lookup[item, "ObjectURI", None], Lookup[item, "SnapshotRef", None],
+    Lookup[item, "SourceId", None], Lookup[item, "Path", None]}, StringQ[#] && # =!= "" &, None];
+  text = SelectFirst[{Lookup[item, "Text", None], Lookup[item, "Body", None], Lookup[item, "Snippet", None], Lookup[item, "Summary", None]}, StringQ[#] && # =!= "" &, None];
+  hash = SelectFirst[{Lookup[item, "ContentHash", None], Lookup[item, "Digest", None], Lookup[item, "Hash", None]}, StringQ[#] && # =!= "" &, ""];
+  pl = Lookup[item, "PrivacyLevel", Automatic];
+  Join[<|"Kind" -> "PrimarySource", "LogicalRef" -> uri, "PrivacyLevel" -> If[NumericQ[pl], pl, Automatic],
+    "Refs" -> DeleteCases[<|"URI" -> uri, "SourceId" -> With[{s = Lookup[item, "SourceId", None]}, If[StringQ[s], s, Null]],
+      "Kind" -> With[{k = Lookup[item, "Kind", None]}, If[StringQ[k], k, Null]]|>, Null],
+    "Context" -> <|"Channel" -> "MCP"|>|>,
+    If[StringQ[text], <|"Content" -> text, "ContentKind" -> "Text"|>, <|"ClaimedContentHash" -> hash|>]]];
+iSVMCPProvServed[name_String, out_] := Quiet @ Check[
+  If[Length[DownValues[SourceVault`SourceVaultProvServed]] > 0,
+    Module[{items},
+      items = Which[
+        AssociationQ[out] && ListQ[Lookup[out, "Results", None]], Select[out["Results"], AssociationQ],
+        AssociationQ[out] && AssociationQ[Lookup[out, "Result", None]] && TrueQ[Lookup[out, "Released", True]], {out["Result"]},
+        AssociationQ[out] && ListQ[Lookup[out, "Items", None]], Select[out["Items"], AssociationQ],
+        AssociationQ[out] && MemberQ[{"OK", "Succeeded"}, ToString @ Lookup[out, "Status", Lookup[out, "ExtractionStatus", "OK"]]] &&
+          (StringQ[Lookup[out, "Text", None]] || StringQ[Lookup[out, "Body", None]] || StringQ[Lookup[out, "ContentHash", None]]), {out},
+        True, {}];
+      (* Inc3: 隔離中・利用不可の版は文脈へ渡さない (1 件を返すツールは iSVMCPCallToolRecorded が応答を差し替える) *)
+      With[{kept = iSVMCPIntegrityKeep[name, items]},
+        If[Length[kept] < Length[items], $iSVMCPIntegrityWithheld += Length[items] - Length[kept]];
+        items = kept];
+      If[items =!= {},
+        SourceVault`SourceVaultProvServed[iSVMCPProvSpec /@ items, "SupplyPoint" -> "mcp:" <> name, "Role" -> iSVMCPProvRole[name], "Channel" -> "MCP"]]]], Null];
+iSVMCPProvServed[___] := Null;
+
+(* A-4 (02 v1.2 §7.1, 2026-11-09): job 側の SourceVaultWebSearch に関所を再問い合わせさせない印は True ではなく、
+   webingest が発行する内部 token (query と関所の判定 LogEventId に HMAC で束縛、15 分)。任意の呼び出しの
+   "GuardChecked" -> True では飛ばせない。webingest 未ロードなら False (job 側で fail-closed)。 *)
+iSVMCPGuardCheckedToken[query_String, guard_Association] :=
+  If[Length[DownValues[SourceVault`WebIngestPrivate`iWebGuardCheckedToken]] > 0,
+    Quiet @ Check[SourceVault`WebIngestPrivate`iWebGuardCheckedToken[query, guard], False], False];
+iSVMCPGuardCheckedToken[___] := False;
+
+iSVMCPCallToolBody[name_String, args_Association] := Module[{prov, r},
+  (* A-1 最小形: 無効ツールは実行せず、拒否を記録して返す (tools/list に無くても名前指定で来る) *)
+  If[iSVMCPDisabledToolQ[name], Return[iSVMCPDenyDisabledTool[name, args], Module]];
   prov = iMCPProvenance[args];
   Switch[name,
     "sourcevault_web_search",
@@ -4314,9 +4681,22 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
         If[r[[1]] === "WebAccessGuard",
           (* 関所 (SourceVault_webguard) の Pending / Deny はモデルへの次の行動指示としてそのまま返す *)
           iMCPError[ToString @ Lookup[r[[2]], "MessageTemplate", "Denied by the SourceVault web guard."]],
-          iMCPError["Search failed: " <> ToString[r]]],
-        iMCPText["Found " <> ToString @ Lookup[r, "ResultCount", 0] <> " results for \"" <>
-          Lookup[args, "query", ""] <> "\":\n\n" <> iMCPFormatResults[Lookup[r, "Results", {}]]]],
+          (* 2026-11-12: SearXNG に届かないときも、検索の障害として理由と次の手段を返す (webingest の iWebSearchFailureNote) *)
+          With[{fn = If[Length[DownValues[SourceVault`WebIngestPrivate`iWebSearchFailureNote]] > 0,
+              Quiet @ Check[SourceVault`WebIngestPrivate`iWebSearchFailureNote[r], ""], ""]},
+            iMCPError[If[StringQ[fn] && fn =!= "", fn, "Search failed: " <> ToString[r]]]]],
+        (* 2026-11-12 (文書 12 §6): 「0 件」と「検索の障害」を分けて伝える。先の検索エンジンがすべて応答しないとき
+           (BackendStatus EnginesUnresponsive) は、0 件の結果ではなく障害として返す。以前は "Found 0 results" だけで、
+           モデルは情報が無いと受け取り、URL を推測して記憶から答えた。文面は webingest の iWebSearchBackendNote。 *)
+        Module[{note, st = ToString @ Lookup[r, "BackendStatus", "OK"]},
+          note = If[Length[DownValues[SourceVault`WebIngestPrivate`iWebSearchBackendNote]] > 0,
+            Quiet @ Check[SourceVault`WebIngestPrivate`iWebSearchBackendNote[r], ""], ""];
+          If[! StringQ[note], note = ""];
+          If[st === "EnginesUnresponsive" && note =!= "",
+            iMCPError[note],
+            iMCPText["Found " <> ToString @ Lookup[r, "ResultCount", 0] <> " results for \"" <>
+              Lookup[args, "query", ""] <> "\"" <> If[note =!= "", ". " <> note, ""] <> ":\n\n" <>
+              iMCPFormatResults[Lookup[r, "Results", {}]]]]]],
     "sourcevault_submit_web_search",
       (* 関所 (SourceVault_webguard): query は job (サブカーネル, FE 無し) に入る前に service 側で通し、
          job 内の SourceVaultWebSearch には GuardChecked で二重問い合わせさせない。関所未ロード時は
@@ -4334,7 +4714,9 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
           "MaxResults" -> Lookup[args, "maxResults", 10],
           "FetchPages" -> TrueQ[Lookup[args, "fetchPages", False]],
           "MaxFetch" -> Lookup[args, "maxFetch", 3],
-          "GuardChecked" -> gq,
+          "GuardChecked" -> If[gq, iSVMCPGuardCheckedToken[Lookup[args, "query", ""], g], False],
+          (* V11 (文書 12 の 8.18 節): 関所が「検索エンジンだけ」と決めた検索は、job でも送り先を絞る *)
+          "Engines" -> If[Lookup[g, "SearchRoute", None] === "EnginesOnly", Replace[Lookup[g, "SearchEngines", {}], Except[_List] -> {}], Automatic],
           "RequestChannel" -> "MCP", "InitiationType" -> "MCPIngest",
         (* SearchRun にも MCP Actor を通す ("Actor" は SourceVaultWebSearch のオプションなので
            iWebRunSearchJob の FilterRules で SearchRun の provenance に乗る)。
@@ -4403,6 +4785,9 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
           True,
             Module[{g = iMCPWebGate[r, args]},
               iMCPRecordWebRelease["sourcevault_get_document", args, {g}];
+              (* Inc2 (03 v0.4 §6.2 供給点): 放出した本文 (Quote) を ServedToContext として記録 (ContentHash = BlobId) *)
+              If[Lookup[Lookup[g, "Gate", <||>], "Decision", "Deny"] === "Permit",
+                iSVMCPProvServed["sourcevault_get_document", KeyTake[r, {"SnapshotRef", "ContentHash", "ExtractionStatus", "PrivacyLevel"}]]];
               iMCPText["WebDocument:\n  Url: " <> ToString @ Lookup[r, "Url", "?"] <>
                 "\n  Title: " <> ToString @ Lookup[r, "Title", ""] <>
                 "\n  ContentHash: " <> ToString @ Lookup[r, "ContentHash", "?"] <>
@@ -4506,6 +4891,8 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
             "  Released: " <> ToString @ Lookup[out, "Released", False] <>
             If[TrueQ[Lookup[out, "Released", False]],
               "\n" <> SourceVaultRenderSearchResults[{Lookup[out, "Result", <||>]}, "compactText"],
+              (* V10 (文書 12 の 5.3 節): 止めたときは、理由・形・次に取れる手段を書く *)
+              With[{t = iSVDeniedText[out]}, If[t === "", "", "\n" <> t]] <>
               "\nWhy: " <> ToString @ Lookup[out, "Why", {}]] <>
             "\nrequiresGrantFor: " <> ToString @ Lookup[out, "RequiresGrantFor", {}]],
           (* structuredJson: AccessRequest は内部情報なので返却から落とす *)
@@ -4588,10 +4975,10 @@ SourceVaultMCPCallTool[name_String, args_Association] := Module[{prov, r},
             "Count" -> Lookup[o, "Count", 0]|>];
         iMCPJSONText[o]],
     "sourcevault_workflow_write",
-      (* a write (scoped to SourceVault_workflows): not recorded via
-         iSVRecordToolCall (that log = read observation / observed-read-max). *)
-      Module[{o = iSVFSWriteFile[ToString @ Lookup[args, "path", ""], Lookup[args, "content", ""]]},
-        iMCPJSONText[o]],
+      (* A-1 最小形 (2026-11-09): 無効。先頭の iSVMCPDisabledToolQ で止まるが二重に拒否する。
+         iSVFSWriteFile (SourceVault_workflows 配下への書込) は ticket 付き書込 P0-11 が入るまで
+         どこからも呼ばれない。 *)
+      iSVMCPDenyDisabledTool[name, args],
     "sourcevault_oops_status",
       Module[{o},
         o = Quiet @ Check[iSVOOPSMCPEnsureLoaded[], $Failed];
@@ -4680,8 +5067,10 @@ SourceVaultMCPDispatch[method_String, params_Association] := Switch[method,
   "tools/list",
     <|"tools" -> SourceVaultMCPTools[]|>,
   "tools/call",
-    SourceVaultMCPCallTool[Lookup[params, "name", ""],
-      With[{a = Lookup[params, "arguments", <||>]}, If[AssociationQ[a], a, <||>]]],
+    (* 接続経路の印 (I-01): proxy -> command queue -> ここ。SourceVaultMCPCallTool が主体 MCP の Channel に使う *)
+    Block[{$iSVMCPDispatchChannel = "MCP:dispatch"},
+      SourceVaultMCPCallTool[Lookup[params, "name", ""],
+        With[{a = Lookup[params, "arguments", <||>]}, If[AssociationQ[a], a, <||>]]]],
   "ping",
     <||>,
   "notifications/initialized",

@@ -187,7 +187,7 @@ SourceVaultWorkflows[] := Module[{root, systemDirs, rows},
     {stage, $SourceVaultWorkflowStages}];
   rows];
 
-SourceVaultLoadWorkflow[slug_String] := Module[{folder, main, ctx},
+SourceVaultLoadWorkflow[slug_String] := Module[{folder, main, ctx, lv},
   ctx = SourceVaultWorkflowContext[slug];
   folder = iSVWFResolveFolder[slug];
   If[MissingQ[folder],
@@ -199,13 +199,28 @@ SourceVaultLoadWorkflow[slug_String] := Module[{folder, main, ctx},
   main = iSVWFMainFile[folder];
   If[MissingQ[main],
     Return[<|"Status" -> "NoMainFile", "Slug" -> slug, "Context" -> ctx, "Path" -> folder|>]];
+  (* Inc2 (03 v0.4 §7.1 LoadVerify、2026-11-10 第 4 週): ワークフローの .wl はモデルが書き得る群。読込の直前に基準ハッシュと照合し、
+     不一致・認可 (基準の受入) なしは読み込まずに返す (Finding は LoadVerify 側)。SourceVault_integrity.wl 未ロードなら照合しない *)
+  (* 2026-11-11 (レビュー 20261111 F05): 照合が例外・Failure で終わったら、強制の設定 ($SourceVaultIntegrityLoadVerifyEnforce、既定 True) では
+     読み込まない (以前は Allow)。integrity 未ロードは厳格な設定 (強制あり・$SourceVaultIntegrityBaselineAsAuthorization False) のときだけ
+     読み込まない。迷子のメッセージで結果を捨てないよう、Check でなく戻り値の形で判断する *)
+  lv = If[Length[DownValues[SourceVault`SourceVaultIntegrityLoadVerify]] > 0,
+    With[{r = Quiet @ Catch[SourceVault`SourceVaultIntegrityLoadVerify[main, "Workflow"]]},
+      If[AssociationQ[r] && StringQ[Lookup[r, "Decision", None]], r,
+        <|"Decision" -> If[TrueQ[SourceVault`$SourceVaultIntegrityLoadVerifyEnforce], "Deny", "Warn"], "Reason" -> "VerifyError"|>]],
+    <|"Decision" -> If[TrueQ[SourceVault`$SourceVaultIntegrityLoadVerifyEnforce] && SourceVault`$SourceVaultIntegrityBaselineAsAuthorization === False,
+        "Deny", "Allow"], "Reason" -> "IntegrityAbsent"|>];
+  If[AssociationQ[lv] && Lookup[lv, "Decision", "Deny"] === "Deny",
+    Return[<|"Status" -> "LoadDenied", "Slug" -> slug, "Context" -> ctx, "Path" -> main,
+      "LoadVerify" -> KeyTake[lv, {"Decision", "Reason", "Group", "Class", "BlobId", "Baseline"}]|>]];
   (* Load and judge success by whether the context actually registered, NOT by
      whether any message was emitted: self-bootstrapping workflows commonly emit
      benign messages (e.g. re-Get / shadowing) while still loading correctly, so
      a message-based Check produced false LoadFailed results. *)
   Quiet @ Block[{$CharacterEncoding = "UTF-8"}, Get[main]];
   <|"Status" -> If[iSVWFLoadedQ[ctx], "Loaded", "LoadFailed"],
-    "Slug" -> slug, "Context" -> ctx, "Path" -> main|>];
+    "Slug" -> slug, "Context" -> ctx, "Path" -> main,
+    "LoadVerify" -> If[AssociationQ[lv], KeyTake[lv, {"Decision", "Reason", "Group", "Class"}], Null]|>];
 
 (* ============================================================
    非同期実行: 生成ワークフローの launch を FRONT END を止めずに走らせる。

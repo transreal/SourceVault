@@ -395,8 +395,12 @@ SourceVaultIssueAttachResolution::usage =
   "SourceVaultIssueAttachResolution[nb] はダイアログでサマリー入力 (ノートのボタン用)。\n" <>
   "空のまま OK すると実装結果 (修正適用/安全性評価/検証試行) から自動生成する\n" <>
   "(既存サマリーがあればそれを保持)。キャンセルは中止。";
+SourceVault`$SourceVaultIssueResolveGuards::usage =
+  "$SourceVaultIssueResolveGuards は Resolved への遷移の前に呼ぶ検査 f[record, meta] の一覧 (True で通し、Failure で止める)。\n" <>
+  "03 v0.4 §9.3 (2026-11-10 Inc5): SourceVault_integrity.wl が「対応する Finding がすべて解決するまで閉じない」検査を登録する。代入は NBAccess の承認対象。";
 
 Begin["`IssuesPrivate`"];
+If[! ListQ[SourceVault`$SourceVaultIssueResolveGuards], SourceVault`$SourceVaultIssueResolveGuards = {}];
 
 (* ---------------- 共通ヘルパー ---------------- *)
 
@@ -450,7 +454,11 @@ If[!AssociationQ[$SourceVaultIssueProducerAdapters],
     "workflowcatalog" -> <|"AllowedClasses" -> {"workflow"}, "PLFloor" -> 0.85|>,
     "specimpl" -> <|"AllowedClasses" -> {"workflow"}, "PLFloor" -> 0.85|>,
     "privacy" -> <|"AllowedClasses" -> {"security"}, "PLFloor" -> 1.0|>,
-    "nbaccess" -> <|"AllowedClasses" -> {"security"}, "PLFloor" -> 1.0|>|>];
+    "nbaccess" -> <|"AllowedClasses" -> {"security"}, "PLFloor" -> 1.0|>,
+    (* 03 v0.4 §9.1 Inc2 (2026-11-10): service の検証器 (SourceVault_integrity.wl) の IntegrityFinding。本文はメタデータだけ、
+       PL は対象の版の最大 (event の PrivacyLevel) で下限 0.3 *)
+    "integrity" -> <|"AllowedClasses" -> {"security"}, "PLFloor" -> 0.3,
+      "ProducerCapability" -> "IntegrityVerifier"|>|>];
 
 iSVISPrivateVault[] := Quiet @ Check[
   If[Length[Names["SourceVault`SourceVaultRoot"]] > 0 &&
@@ -599,8 +607,13 @@ iSVISJournalFail[opId_String, class_String, err_] := (
     "LastError" -> ToString[err]|>];
   opId);
 
-iSVISMachineTag[] := StringReplace[ToString[$MachineName],
-  Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"];
+(* Inc0-b (03 v0.4 §2.1, 2026-11-09): 正準表記は core の SourceVaultMachineTag[] (大小文字保持)。
+   単体ロード時だけ同じ式を自前で持つ。 *)
+iSVISMachineTag[] :=
+  If[Length[DownValues[SourceVault`SourceVaultMachineTag]] > 0,
+    SourceVault`SourceVaultMachineTag[],
+    StringReplace[ToString[$MachineName],
+      Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"]];
 
 (* ---------------- schema v2 正準化 (v0.4 §3.1) ----------------
    純粋関数: read で disk を変更しない。v1 record は v2 view (Revision 0 +
@@ -1429,6 +1442,9 @@ SourceVault`SourceVaultIssueTransition[id_String, to_String,
   changes = <|"Status" -> to, "LastTransition" -> <|"From" -> from, "To" -> to,
     "AtUTC" -> iSVISNowIso[],
     "Reason" -> iSVISStr[Lookup[meta, "Reason", ""]]|>|>;
+  (* 03 v0.4 §9.3 (2026-11-10 Inc5): 登録された検査 (integrity の Finding が未解決なら閉じない) *)
+  If[to === "Resolved" && from =!= "Archived" && ListQ[SourceVault`$SourceVaultIssueResolveGuards],
+    Do[With[{gr = Quiet @ Check[g[rec, meta], True]}, If[FailureQ[gr], Return[gr, Module]]], {g, SourceVault`$SourceVaultIssueResolveGuards}]];
   Which[
     to === "Resolved" && from =!= "Archived",
       resolution = Join[
@@ -2759,6 +2775,9 @@ iSVISApplySignal[sig_Association, env_Association] := Module[
         "MachineTag" -> Lookup[sig, "MachineTag", ""],
         "Component" -> Lookup[sig, "Component", ""],
         "ReasonCode" -> Lookup[sig, "ReasonCode", ""],
+        (* 03 v0.4 §9.3 (Inc5): 対象 (Finding の ID など) と根拠の参照を残す (閉じるときの検査が読む) *)
+        "SubjectRef" -> Replace[Lookup[sig, "SubjectRef", <||>], Except[_Association] -> <||>],
+        "EvidenceRefs" -> Replace[Lookup[sig, "EvidenceRefs", {}], Except[_List] -> {}],
         "FirstSeenAt" -> observed, "LastSeenAt" -> observed,
         "OccurrenceCount" -> 1,
         "LastObservedHealth" -> Lookup[sig, "Health", "Unknown"]|>,
@@ -3367,12 +3386,20 @@ iSVISIsoUTC[___] := "";
 
 (* 保存済みノートブックを (開いていなければ開いて) 取得する。
    実体解決は iSVISResolveNotebookFile 経由 (記録された絶対パスは別 PC で外れる)。 *)
+(* NotebookOpen に渡すパスは OS の区切りで: / 区切りで開いた窓はメニューの保存が
+   「ディレクトリにアクセスできません」で失敗する ($SourceVaultIssueNotebookRoot や
+   記録された NotebookPath が / のことがある、2026-11-15)。文字列でないものはそのまま *)
+iSVISFEPath[p_String] := With[{a = Quiet @ AbsoluteFileName[p]},
+  If[StringQ[a], a, Replace[Quiet @ ExpandFileName[p], Except[_String] -> p]]];
+iSVISFEPath[other_] := other;
+
 iSVISFindOrOpenNotebook[rec_Association] := Module[{path, nbs, hit},
   path = iSVISResolveNotebookFile[rec];
   If[!StringQ[path], Return[Missing["NoNotebookFile"]]];
+  path = iSVISFEPath[path];
   nbs = Quiet @ Check[Notebooks[], {}];
   hit = SelectFirst[Replace[nbs, Except[_List] -> {}],
-    Quiet @ Check[NotebookFileName[#], ""] === path &, None];
+    iSVISFEPath[Quiet @ Check[NotebookFileName[#], ""]] === path &, None];
   If[Head[hit] === NotebookObject, hit,
     (* :PolicyWaiver: PRIV-NB-READ このパッケージが作ったイシューノートを開いて経過を書き足すだけで、中身はカーネルに読まない *)
     With[{o = Quiet @ Check[NotebookOpen[path], $Failed]},

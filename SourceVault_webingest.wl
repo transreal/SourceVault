@@ -222,6 +222,12 @@ SourceVaultDerivedArtifactsForSource::usage =
   "SourceVaultDerivedArtifactsForSource[recordId] は SourceRefs に recordId を含む DerivedArtifact を返す\n" <>
   "(「この source から作られた要約は?」の逆引き)。";
 
+$SourceVaultSummaryAllowedEndpoints::usage =
+  "$SourceVaultSummaryAllowedEndpoints は、要約 LLM クライアント (SourceVaultSummarizeText / iWebLLMComplete) が Bearer token を\n" <>
+  "付けて送ってよい送り先 (scheme://host[:port] か完全な URL) のリスト。既定 {} で、$SourceVaultSummaryEndpoint は常に含まれる。\n" <>
+  "\"Endpoint\" オプションにここに無い URL を渡すと、ネットワークに出る前に Failure[\"EndpointNotRegistered\"] で拒否する\n" <>
+  "(02 v1.2 §7.1 A-4 の『\"Endpoint\" の任意指定を廃止』、2026-11-09)。代入は NBAccess の承認対象 ($NBApprovalSetSymbols)。";
+
 $SourceVaultSummaryEndpoint::usage =
   "$SourceVaultSummaryEndpoint は要約に使う LLM の chat completions エンドポイント\n" <>
   "(既定 \"http://localhost:1234/v1/chat/completions\" = LM Studio OpenAI 互換)。";
@@ -262,6 +268,53 @@ $SourceVaultWebSearchIntegrationId::usage =
 $SourceVaultExaFallbackIntegrationId::usage =
   "$SourceVaultExaFallbackIntegrationId は SearXNG 不可時の後方互換 integration ID (既定 \"mcp/exa\")。";
 
+(* ---- SearXNG の健全性・版の確認・更新 (2026-11-12、文書 12 §6) ---- *)
+SourceVaultSearXNGHealth::usage =
+  "SourceVaultSearXNGHealth[] は検索の裏側 (SearXNG とその先の検索エンジン) の状態を返す:\n" <>
+  "<|\"Status\" -> \"OK\" | \"Degraded\" | \"EnginesUnresponsive\" | \"NoResults\" | \"Unreachable\" | Missing[\"NotObserved\"],\n" <>
+  "\"ResultCount\", \"Unresponsive\" -> {<|\"Engine\", \"Reason\"|>..}, \"ConsecutiveFailures\", \"AtUTC\", \"AgeSeconds\", \"LastOKAtUTC\", \"Probed\", \"Endpoint\"|>。\n" <>
+  "ふだんは SourceVaultSearXNGSearch が検索のたびに覚えた状態を返すだけで、通信しない。覚えた状態が無いか古い (\"MaxAgeSeconds\"、既定 600) ときと\n" <>
+  "\"Probe\" -> True のときだけ、決まった検索語 1 つで試す (検索語は指定できない)。EnginesUnresponsive = SearXNG は動いているが先の検索エンジンが\n" <>
+  "すべて応答しない (CAPTCHA・回数制限など)。これは「0 件」(NoResults) とは別で、MCP の sourcevault_web_search はモデルに検索の障害として返す。";
+
+SourceVaultSearXNGVersion::usage =
+  "SourceVaultSearXNGVersion[] は SearXNG の版を調べて返す: <|\"Running\" (動いている版の文字列)、\"RunningDate\"、\"AgeDays\"、\"Stale\" (AgeDays > $SourceVaultSearXNGMaxAgeDays)、\n" <>
+  "\"Container\" (docker の状態)、\"LocalImage\" (Id・Created・RepoDigests)、\"Latest\" (Docker Hub の最新タグの digest と更新日時)、\"UpdateAvailable\" (True / False / Missing)、\"Advice\"|>。\n" <>
+  "読み取りだけで何も変えない。\"CheckRemote\" -> False で Docker Hub への照会を省く。docker が使えない機では Container / LocalImage は Missing。\n" <>
+  "SearXNG の検索エンジンの読み取り部は相手のサイトの変更で頻繁に壊れるので、古い版は検索が 0 件になる主な原因になる (2026-11-12 の障害: 6 月の版で全エンジンが応答なし)。";
+
+SourceVaultSearXNGUpdate::usage =
+  "SourceVaultSearXNGUpdate[] は SearXNG のイメージを最新に更新する (所有者専用): 今のイメージに rollback-<日付> の名前を付けて残し、docker compose pull → up -d →\n" <>
+  "起動の確認 → SourceVaultSearXNGHealth の試し検索、の順に行う。新しい版が起動しない・更新前は検索できていたのに更新後にできない、のどちらかなら\n" <>
+  "元のイメージに戻す (\"Rollback\" -> False で戻さない)。既に最新なら何もしない (\"Force\" -> True で作り直す)。\n" <>
+  "返り値: <|\"Status\" -> \"Updated\" | \"AlreadyLatest\" | \"RolledBack\" | \"Failed\", \"Before\", \"After\", \"Health\", \"RollbackTag\", \"Steps\"|>。記録は LocalState/searxng/update-log.jsonl。\n" <>
+  "主体が所有者 (OwnerFE / OwnerCode) でなければ Failure[\"SearXNGNotAuthorized\"]。FE からは SourceVaultIntegrityOwnerAction[SourceVaultSearXNGUpdate[]]。NBAccess の承認 head。\n" <>
+  "\"DryRun\" -> True は実行する手順だけを返す。カーネルは pull の間 (数分) 止まる。";
+
+$SourceVaultSearXNGComposeDirectory::usage =
+  "$SourceVaultSearXNGComposeDirectory は SearXNG の docker-compose.yml があるフォルダ (既定 $HomeDirectory/searxng)。代入は NBAccess の承認対象。";
+$SourceVaultSearXNGComposeService::usage =
+  "$SourceVaultSearXNGComposeService は docker-compose.yml の中の SearXNG 本体の service 名 (既定 \"core\")。代入は NBAccess の承認対象。";
+$SourceVaultSearXNGMaxAgeDays::usage =
+  "$SourceVaultSearXNGMaxAgeDays は動いている SearXNG の版がこの日数より古いと Stale とみなす日数 (既定 30)。";
+SourceVaultFallbackSearch::usage =
+  "SourceVaultFallbackSearch[query] は、通常の検索 (SearXNG) が使えないときの予備の検索を行う (文書 12 §3.5、V5)。\n" <>
+  "経路 ($SourceVaultFallbackSearchRoutes): \"Wikipedia\" (MediaWiki の検索 API)、\"OfficialSite\" (Wikidata の「公式ウェブサイト」から組織の公式サイトを引き、\n" <>
+  "そのサイトの中を探す)、\"arXiv\"・\"Crossref\" (論文らしい検索語のときだけ)。鍵は要らない。範囲は狭い。\n" <>
+  "戻り値 <|Status (\"Succeeded\"/\"NoResults\"), Query, Results, Routes, RateLimited|>。Results の各件は Title・Url・Snippet・Route を持つ。\n" <>
+  "Routes は経路ごとの <|Route, Status (\"OK\"/\"NoResults\"/\"RateLimited\"/\"Failed\"/\"TimedOut\"/\"SkippedBudget\"), Count, Seconds|>。\n" <>
+  "検索語を関所に通すのは呼び出し側 (SourceVaultWebSearch)。公式サイトの中を探す取得は、この関数が関所に通す (行き先の評価が良好のホストだけ)。\n" <>
+  "SourceVaultWebSearch は、SearXNG に届かない・先の検索エンジンがすべて応答しないときに、これを自動で使う。\n" <>
+  "外部の API には回数の上限がある (Wikimedia は名乗らないクライアントを 1 分 10 回まで)。上限に近づいた経路は送らずに飛ばし (\"RateLimited\")、\n" <>
+  "429 が返ったら案内された時間だけ待つ。同じ問い合わせは 10 分覚えておく。$SourceVaultFallbackSearchUserAgent を参照。";
+$SourceVaultFallbackSearchRoutes::usage =
+  "$SourceVaultFallbackSearchRoutes は予備の検索に使う経路のリスト (既定 {\"Wikipedia\", \"OfficialSite\", \"arXiv\", \"Crossref\"})。{} で予備の検索を使わない。";
+$SourceVaultFallbackSearchUserAgent::usage =
+  "$SourceVaultFallbackSearchUserAgent は、予備の検索が外部の API に名乗るクライアント名 (User-Agent)。既定 Automatic は、連絡先も\n" <>
+  "このシステムの名前も含まない一般的な名前を送る。Wikimedia (Wikipedia・Wikidata) は連絡先の無いクライアントを 1 分 10 回までに\n" <>
+  "制限するので、既定では予備の検索は 1 分に 2 回ほどになる。連絡先 (URL かメールアドレス) を含む文字列を設定すると、Wikimedia の\n" <>
+  "決まりに沿ったクライアントとして扱われ、枠が広がる (こちらの上限も 1 分 60 回にする)。設定した文字列は、そのまま外部に送られる。";
+
 Begin["`WebIngestPrivate`"]
 
 (* 既定エンドポイント (既存値は尊重) *)
@@ -287,12 +340,37 @@ iNormResult[r_Association, rank_Integer] := <|
 |>;
 iNormResult[_, rank_Integer] := <|"Title" -> "", "Url" -> "", "Snippet" -> "", "Rank" -> rank|>;
 
+(* V11 (文書 12 の 8.18 節、2026-11-14): "Engines" -> {名前, …} で、送り先の検索エンジンを絞る (SearXNG の engines)。
+   関所が「検索エンジンだけ」(SearchRoute "EnginesOnly") と決めた検索で使う。SearXNG で有効なエンジンとの共通部分を送る
+   (無効にしたエンジン、たとえば CAPTCHA で止めた duckduckgo を、要求ごとに呼び起こさないため)。共通部分が空なら送らない。 *)
 Options[SourceVaultSearXNGSearch] = {
   "Endpoint" -> Automatic, "MaxResults" -> 10, "Language" -> "ja",
-  "SafeSearch" -> 1, "TimeoutSeconds" -> 20, "Categories" -> Automatic, "PageNo" -> Automatic};
+  "SafeSearch" -> 1, "TimeoutSeconds" -> 20, "Categories" -> Automatic, "PageNo" -> Automatic, "Engines" -> Automatic};
+
+(* SearXNG で有効なエンジン (/config。1 時間覚える): 名前 -> 分類の一覧。読めなければ Missing。
+   送り先の一覧は、その検索が使う分類 (指定が無ければ一般 general) で有効なエンジンとの共通部分にする: 送り先を絞ることは、
+   いつもの組から外すだけで、いつもは使わないエンジン (論文の索引の arxiv など) を足さない (実機 2026-11-14: 足すと、
+   一般の検索に論文の結果が混じった) *)
+If[! AssociationQ[$iSearXNGEnabledEngines], $iSearXNGEnabledEngines = <||>];
+iSearXNGEnabledEngines[endpoint_String] := Module[{c = Lookup[$iSearXNGEnabledEngines, endpoint, None], resp, json, en},
+  If[AssociationQ[c] && AbsoluteTime[] - c["At"] < 3600, Return[c["Engines"], Module]];
+  resp = Quiet @ Check[TimeConstrained[URLRead[HTTPRequest[endpoint <> "/config"], {"StatusCode", "Body"}], 5, $TimedOut], $Failed];
+  json = If[AssociationQ[resp] && resp["StatusCode"] === 200,
+    Quiet @ Check[ImportByteArray[StringToByteArray[ToString[resp["Body"]], "UTF-8"], "RawJSON"], $Failed], $Failed];
+  If[! AssociationQ[json], Return[Missing["Unavailable"], Module]];
+  en = Association @ Cases[Replace[Lookup[json, "engines", {}], Except[_List] -> {}],
+    e_Association /; TrueQ[Lookup[e, "enabled", False]] && StringQ[Lookup[e, "name", None]] :>
+      (ToLowerCase[e["name"]] -> Select[Replace[Lookup[e, "categories", {}], Except[_List] -> {}], StringQ])];
+  $iSearXNGEnabledEngines[endpoint] = <|"Engines" -> en, "At" -> AbsoluteTime[]|>;
+  en];
+iSearXNGUsableEngines[endpoint_String, want_List, cats_ : Automatic] := Module[
+  {w = DeleteDuplicates[ToLowerCase /@ Select[want, StringQ]], en, cs},
+  en = iSearXNGEnabledEngines[endpoint];
+  cs = If[StringQ[cats] && StringTrim[cats] =!= "", StringTrim /@ StringSplit[cats, ","], {"general"}];
+  If[AssociationQ[en], Select[w, KeyExistsQ[en, #] && IntersectingQ[en[#], cs] &], w]];
 
 SourceVaultSearXNGSearch[query_String, OptionsPattern[]] := Module[
-  {endpoint, maxR, lang, safe, timeout, cats, page, qpairs, req, resp, status, body, json, results, norm},
+  {endpoint, maxR, lang, safe, timeout, cats, page, qpairs, req, resp, status, body, json, results, norm, engs = Automatic},
   endpoint = iSearXNGEndpoint[OptionValue["Endpoint"]];
   maxR    = OptionValue["MaxResults"];
   lang    = OptionValue["Language"];
@@ -300,53 +378,72 @@ SourceVaultSearXNGSearch[query_String, OptionsPattern[]] := Module[
   timeout = OptionValue["TimeoutSeconds"];
   cats    = OptionValue["Categories"];
   page    = OptionValue["PageNo"];
+  If[ListQ[OptionValue["Engines"]],
+    engs = iSearXNGUsableEngines[endpoint, OptionValue["Engines"], cats];
+    If[engs === {},
+      Return[Failure["SearXNGNoAllowedEngine", <|"Endpoint" -> endpoint, "Query" -> query, "Engines" -> OptionValue["Engines"],
+        "Hint" -> "None of the search engines this search may be sent to is enabled in SearXNG."|>]]]];
   qpairs = Join[
     {"q" -> query, "format" -> "json"},
     If[StringQ[lang], {"language" -> lang}, {}],
     If[IntegerQ[safe], {"safesearch" -> ToString[safe]}, {}],
     If[StringQ[cats], {"categories" -> cats}, {}],
+    If[ListQ[engs], {"engines" -> StringRiffle[engs, ","]}, {}],
     If[IntegerQ[page], {"pageno" -> ToString[page]}, {}]
   ];
   req = HTTPRequest[endpoint <> "/search", <|"Query" -> qpairs|>];
-  resp = TimeConstrained[
-    Quiet @ Check[URLRead[req, {"StatusCode", "Body"}], $Failed],
-    If[NumericQ[timeout], timeout, 20], $TimedOut];
+  resp = iSearXNGRead[req, timeout];
   Which[
     resp === $TimedOut,
+      iSearXNGNoteHealth["Unreachable", {}, 0, endpoint];
       Return[Failure["SearXNGTimeout",
         <|"Endpoint" -> endpoint, "Query" -> query, "TimeoutSeconds" -> timeout|>]],
     resp === $Failed || ! AssociationQ[resp],
+      iSearXNGNoteHealth["Unreachable", {}, 0, endpoint];
       Return[Failure["SearXNGRequestFailed",
         <|"Endpoint" -> endpoint, "Query" -> query,
           "Hint" -> "SearXNG が 127.0.0.1 で起動しているか確認。"|>]]
   ];
   status = resp["StatusCode"]; body = resp["Body"];
   If[status =!= 200,
+    iSearXNGNoteHealth["Unreachable", {}, 0, endpoint];
     Return[Failure["SearXNGHTTPError",
       <|"Endpoint" -> endpoint, "StatusCode" -> status,
         "Hint" -> "settings.yml の search.formats に json を含め、limiter/botdetection を確認 (spec §5.2)。",
         "BodyHead" -> StringTake[ToString[body], UpTo[200]]|>]]];
   json = Quiet @ Check[ImportByteArray[StringToByteArray[ToString[body], "UTF-8"], "RawJSON"], $Failed];
   If[! AssociationQ[json],
+    iSearXNGNoteHealth["Unreachable", {}, 0, endpoint];
     Return[Failure["SearXNGJSONParseFailed",
       <|"Endpoint" -> endpoint, "BodyHead" -> StringTake[ToString[body], UpTo[200]]|>]]];
   results = Lookup[json, "results", {}];
   If[! ListQ[results], results = {}];
   norm = MapIndexed[iNormResult[#1, First[#2]] &, results];
   If[IntegerQ[maxR] && maxR > 0, norm = Take[norm, UpTo[maxR]]];
-  <|
-    "Provider"            -> "SearXNG",
-    "Endpoint"            -> endpoint,
-    "Query"               -> query,
-    "Language"            -> lang,
-    "ResultCount"         -> Length[norm],
-    "TotalAvailable"      -> Length[results],
-    "Results"             -> norm,
-    "Suggestions"         -> Lookup[json, "suggestions", {}],
-    "UnresponsiveEngines" -> Lookup[json, "unresponsive_engines", {}],
-    "FetchedAt"           -> iWebNowIso[],
-    "Status"              -> "Succeeded"
-  |>
+  (* 2026-11-12: 「0 件」と「先の検索エンジンが応答しない」を分ける。以前はどちらも Status Succeeded・ResultCount 0 で、
+     モデルには "Found 0 results" しか届かず、検索の障害を「情報が無い」と受け取って記憶から答えた (文書 12 §2)。 *)
+  With[{unresp = iSearXNGUnresponsive[Lookup[json, "unresponsive_engines", {}]]},
+    With[{bstatus = iSearXNGBackendStatus[Length[results], unresp]},
+      iSearXNGNoteHealth[bstatus, unresp, Length[results], endpoint];
+      <|
+        "Provider"            -> "SearXNG",
+        "Endpoint"            -> endpoint,
+        "Query"               -> query,
+        "Language"            -> lang,
+        "ResultCount"         -> Length[norm],
+        "TotalAvailable"      -> Length[results],
+        "Results"             -> norm,
+        "Suggestions"         -> Lookup[json, "suggestions", {}],
+        "UnresponsiveEngines" -> Lookup[json, "unresponsive_engines", {}],
+        "Unresponsive"        -> unresp,
+        "BackendStatus"       -> bstatus,
+        (* V11: 送り先に指定したエンジンと、結果を返したエンジン (送り先が守られたかを後で確かめるため) *)
+        "RequestedEngines"    -> If[ListQ[engs], engs, All],
+        "AnsweredEngines"     -> Union @ Flatten[Cases[results, r_Association :>
+          Select[Join[Replace[Lookup[r, "engines", {}], Except[_List] -> {}], {Lookup[r, "engine", Nothing]}], StringQ]]],
+        "FetchedAt"           -> iWebNowIso[],
+        "Status"              -> "Succeeded"
+      |>]]
 ];
 
 (* ---- Web egress guard (SourceVault_webguard.wl, 弱結合) ----
@@ -365,6 +462,75 @@ iWebGuardGate[req_Association] := Module[{actor, llmQ},
       "Message" -> "SourceVault web guard is not loaded; LLM web access is disabled (fail-closed)."|>,
     <|"Decision" -> "Allow", "Reason" -> "GuardUnavailable"|>]];
 
+(* ---- 主体 (I-01, 03 v0.4 §6.1, 2026-11-09) ----
+   関所に渡す Actor の Type は $SourceVaultPrincipal (5 つの束縛点だけが Block で設定、未束縛は Model) から導く。
+   オプション "Actor" / provenance の "Actor" の自己申告は ClaimedActor として残すだけで、
+   "Type" -> "HumanUser" を申告しても所有者にはならない (02 v1.2 P0-12)。 *)
+$iWebPrincipalKinds = {"OwnerFE", "OwnerCode", "Service", "Model", "MCP"};
+iWebPrincipal[] := Module[{p},
+  p = If[ValueQ[SourceVault`$SourceVaultPrincipal], SourceVault`$SourceVaultPrincipal, Missing[]];
+  If[AssociationQ[p] && MemberQ[$iWebPrincipalKinds, Lookup[p, "Kind", None]], p,
+    <|"Kind" -> "Model", "Channel" -> Missing["Unbound"]|>]];
+iWebPrincipalActor[claimed_] := Module[{p = iWebPrincipal[], kind, c, base},
+  kind = p["Kind"];
+  c = If[AssociationQ[claimed], claimed, <||>];
+  base = Switch[kind,
+    "OwnerFE" | "OwnerCode", <|"Type" -> "HumanUser", "Principal" -> kind|>,
+    "Service", <|"Type" -> "Service", "Principal" -> "Service",
+      "ClientName" -> Lookup[c, "ClientName", Missing[]]|>,
+    "MCP", <|"Type" -> "MCPClient", "Principal" -> "MCP",
+      "ClientName" -> Replace[Lookup[p, "ClaimedClient", Missing[]],
+        Except[_String] -> Lookup[c, "ClientName", "MCPClient"]]|>,
+    _, <|"Type" -> "Model", "Principal" -> "Model",
+      "Provider" -> Lookup[c, "Provider", Missing[]], "Model" -> Lookup[c, "Model", Missing[]],
+      "ClientName" -> Lookup[c, "ClientName", Missing[]]|>];
+  Join[base, <|"Channel" -> Lookup[p, "Channel", Missing[]],
+    "ClaimedActor" -> If[c === <||>, Missing["None"], c]|>]];
+
+(* ---- GuardChecked の内部 token (A-4, 2026-11-09) ----
+   MCP の submit 経路 (service) は関所を通した query を job (サブカーネル) に渡し、job 側の SourceVaultWebSearch は
+   再問い合わせしない。以前はオプション "GuardChecked" -> True がその印で、誰でも指定できた。いまは webingest が
+   ロード時に作る乱数鍵で query・関所の判定 (LogEventId)・期限 (15 分) を HMAC した token だけを受け付ける。
+   鍵はプロセス内だけに置き (ディスクに書かない)、job 用サブカーネルへは投入時に注入する。 *)
+If[! StringQ[$iWebGuardCheckedKey],
+  $iWebGuardCheckedKey = StringJoin[IntegerString[#, 16, 2] & /@ RandomInteger[{0, 255}, 32]]];
+$iWebGuardCheckedTTLSeconds = 900;
+iWebSha256Hex[str_String] := Hash[StringToByteArray[str, "UTF-8"], "SHA256", "HexString"];
+iWebHMACHex[key_String, msg_String] := Module[{b = 64, kb, k0, ipad, opad, inner},
+  kb = Normal[StringToByteArray[key, "UTF-8"]];
+  If[Length[kb] > b, kb = Normal[Hash[StringToByteArray[key, "UTF-8"], "SHA256", "ByteArray"]]];
+  k0 = PadRight[kb, b, 0];
+  ipad = BitXor[k0, ConstantArray[16^^36, b]];
+  opad = BitXor[k0, ConstantArray[16^^5C, b]];
+  inner = Normal[Hash[ByteArray[Join[ipad, Normal[StringToByteArray[msg, "UTF-8"]]]], "SHA256", "ByteArray"]];
+  Hash[ByteArray[Join[opad, inner]], "SHA256", "HexString"]];
+iWebGuardCheckedPayload[qhex_String, ev_String, exp_] := StringRiffle[{"GuardChecked/1", qhex, ev, ToString[Round[exp]]}, "\n"];
+iWebGuardCheckedToken[query_String, guard_Association] := Module[{exp, ev, qhex},
+  exp = Round[AbsoluteTime[] + $iWebGuardCheckedTTLSeconds];
+  ev = ToString @ Lookup[guard, "LogEventId", ""];
+  qhex = iWebSha256Hex[query];
+  <|"Query" -> qhex, "GuardEvent" -> ev, "ExpiresAtAbs" -> exp,
+    "Sig" -> iWebHMACHex[$iWebGuardCheckedKey, iWebGuardCheckedPayload[qhex, ev, exp]]|>];
+iWebGuardCheckedToken[___] := False;
+iWebGuardCheckedTokenValidQ[query_String, tok_Association] := Module[{exp, sig, expect},
+  exp = Lookup[tok, "ExpiresAtAbs", 0]; sig = Lookup[tok, "Sig", ""];
+  If[! NumberQ[exp] || exp <= AbsoluteTime[] || ! StringQ[sig], Return[False]];
+  If[ToString @ Lookup[tok, "Query", ""] =!= iWebSha256Hex[query], Return[False]];
+  expect = iWebHMACHex[$iWebGuardCheckedKey,
+    iWebGuardCheckedPayload[ToString @ Lookup[tok, "Query", ""], ToString @ Lookup[tok, "GuardEvent", ""], exp]];
+  StringLength[sig] === StringLength[expect] &&
+    (BitOr @@ MapThread[BitXor, {ToCharacterCode[sig], ToCharacterCode[expect]}]) === 0];
+iWebGuardCheckedTokenValidQ[___] := False;   (* True / False / anything else: not checked *)
+
+(* ---- 要約 LLM の送り先の allow-list (A-4, 2026-11-09) ---- *)
+If[! ListQ[SourceVault`$SourceVaultSummaryAllowedEndpoints], SourceVault`$SourceVaultSummaryAllowedEndpoints = {}];
+iWebAllowedEndpointBases[] := DeleteDuplicates[iWebLLMBase /@ Select[
+  Join[{SourceVault`$SourceVaultSummaryEndpoint},
+    Replace[SourceVault`$SourceVaultSummaryAllowedEndpoints, Except[_List] -> {}]],
+  StringQ[#] && # =!= "" &]];
+iWebEndpointAllowedQ[ep_String] := MemberQ[iWebAllowedEndpointBases[], iWebLLMBase[ep]];
+iWebEndpointAllowedQ[___] := False;
+
 Options[SourceVaultWebSearch] = Join[
   Options[SourceVaultSearXNGSearch],
   {"FetchPages" -> False, "MaxFetch" -> 3, "StoreSearchRun" -> True, "GuardChecked" -> False,
@@ -372,12 +538,13 @@ Options[SourceVaultWebSearch] = Join[
    "InitiationType" -> "UserPromptSearch", "Actor" -> Automatic, "PromptRef" -> None}];
 
 SourceVaultWebSearch[query_String, opts : OptionsPattern[]] := Module[
-  {run, prov, runId, fetch, result, guard},
+  {run, prov, runId, fetch, result, guard = None, route = "Open", routeWhy = None, engines = None, sopts},
   (* Web egress guard: SearXNG へ中継する前に関所を通す (spec webguard §4)。
-     job 経路で service 側が既に通した query は "GuardChecked" -> True で二重問い合わせを避ける。 *)
-  If[! TrueQ[OptionValue["GuardChecked"]],
+     job 経路で service 側が既に通した query は "GuardChecked" -> <内部 token> で二重問い合わせを避ける。
+     True や任意の値では飛ばせない (A-4、2026-11-09)。主体は $SourceVaultPrincipal から導く (I-01)。 *)
+  If[! iWebGuardCheckedTokenValidQ[query, OptionValue["GuardChecked"]],
     guard = iWebGuardGate[<|"Kind" -> "Search", "Query" -> query,
-      "Actor" -> Replace[OptionValue["Actor"], Automatic -> <|"Type" -> "HumanUser"|>],
+      "Actor" -> iWebPrincipalActor[OptionValue["Actor"]],
       "Channel" -> OptionValue["RequestChannel"]|>];
     If[Lookup[guard, "Decision", "Deny"] =!= "Allow",
       Return[Failure["WebAccessGuard", <|
@@ -385,9 +552,43 @@ SourceVaultWebSearch[query_String, opts : OptionsPattern[]] := Module[
         "RequestId" -> Lookup[guard, "RequestId", Missing[]],
         "MessageTemplate" -> ToString @ Lookup[guard, "Message", "denied by the SourceVault web guard"],
         "Query" -> query|>]]]];
-  run = SourceVaultSearXNGSearch[query,
-    Sequence @@ FilterRules[{opts}, Options[SourceVaultSearXNGSearch]]];
+  (* V11 (文書 12 の 8.18 節): 関所が「検索エンジンだけ」と決めた検索は、送り先を方針の SearchEngines に絞る (呼び出し側の
+     "Engines" より優先)。関所を通さない job の経路 (GuardChecked) は、service が関所の判定から渡した "Engines" を使う *)
+  sopts = FilterRules[{opts}, Options[SourceVaultSearXNGSearch]];
+  If[AssociationQ[guard] && Lookup[guard, "SearchRoute", None] === "EnginesOnly",
+    route = "EnginesOnly"; routeWhy = Lookup[guard, "SearchRouteWhy", None];
+    engines = Replace[Lookup[guard, "SearchEngines", {}], Except[_List] -> {}];
+    sopts = Append[FilterRules[sopts, Except["Engines"]], "Engines" -> engines],
+    If[! AssociationQ[guard] && ListQ[OptionValue["Engines"]],
+      route = "EnginesOnly"; routeWhy = "SubmittedJob"; engines = OptionValue["Engines"]]];
+  run = SourceVaultSearXNGSearch[query, Sequence @@ sopts];
+  (* V5 (文書 12 §3.5、2026-11-13): 検索の裏側の障害のときは、予備の経路 (Wikipedia・公式サイトなど) で調べる。
+     検索語は上で関所を通っている。結果が 1 件でもあれば、通常の結果と同じ形に置き換える (BackendStatus "Fallback")。
+     無ければ、障害をそのまま返す (呼び出し側が「検索が使えない」と伝える)。 *)
+  If[iWebFallbackWantedQ[run],
+    (* V11: 検索エンジンだけに送る検索では、公式サイトのサイト内検索 (検索語の残りをそのサイトに送る) を使わない *)
+    (* 予備の経路も、送ってよい宛先だけにする (Wikipedia → wikipedia、公式サイト → wikidata、arXiv → arxiv、Crossref → crossref) *)
+    With[{fb = Quiet @ Check[Block[{$SourceVaultFallbackSearchRoutes = If[route === "EnginesOnly",
+          Select[Replace[$SourceVaultFallbackSearchRoutes, Except[_List] -> {}],
+            MemberQ[ToLowerCase /@ Select[Replace[engines, Except[_List] -> {}], StringQ],
+              Lookup[<|"Wikipedia" -> "wikipedia", "OfficialSite" -> "wikidata", "arXiv" -> "arxiv", "Crossref" -> "crossref"|>, #, "-"]] &],
+          $SourceVaultFallbackSearchRoutes]},
+        SourceVaultFallbackSearch[query, "SiteSearch" -> (route =!= "EnginesOnly")]], $Failed]},
+      If[AssociationQ[fb] && ListQ[Lookup[fb, "Results", None]] && fb["Results"] =!= {},
+        run = iWebFallbackRun[query, run, fb]]]];
   If[FailureQ[run], Return[run]];
+  (* W0 (2026-11-11、文書 11 §5.0): 結果に出た URL を関所に覚えさせる。それをそのまま取得するときは、
+     符号化された部分 (動画の ID・アフィリエイトの linkId など) があっても関所が通す (URL はモデルが作ったものではない)。
+     検索語を映しただけの URL は関所の側で除く。予備の経路の結果は、出所に経路の名前を付ける (SearchResult:Fallback:<経路>)。 *)
+  If[Length[DownValues[SourceVault`SourceVaultWebGuardNoteURLs]] > 0 && AssociationQ[run],
+    If[Lookup[run, "BackendStatus", ""] === "Fallback",
+      KeyValueMap[Function[{route, rs},
+          Quiet @ Check[SourceVault`SourceVaultWebGuardNoteURLs[Cases[Lookup[rs, "Url", Missing[]], _String],
+            "SearchResult:Fallback:" <> ToString[route], <|"Query" -> query, "PrivateTerms" -> (routeWhy === "PrivateTerms")|>], Null]],
+        GroupBy[Cases[Lookup[run, "Results", {}], _Association], Lookup[#, "Route", "Other"] &]],
+      Quiet @ Check[SourceVault`SourceVaultWebGuardNoteURLs[
+        Cases[Lookup[Cases[Lookup[run, "Results", {}], _Association], "Url", Missing[]], _String],
+        "SearchResult", <|"Query" -> query, "PrivateTerms" -> (routeWhy === "PrivateTerms")|>], Null]]];
   runId = "searchrun-" <> StringTake[CreateUUID[], 12];
   (* 最小 provenance (spec v6 §10.1)。Web レコード限定。 *)
   prov = <|
@@ -397,7 +598,7 @@ SourceVaultWebSearch[query_String, opts : OptionsPattern[]] := Module[
     "UrlOrigin"         -> "SearchResult",
     "UserSpecifiedUrl"  -> False,
     "UserSpecifiedQuery"-> True,
-    "Actor"             -> Replace[OptionValue["Actor"], Automatic -> <|"Type" -> "HumanUser"|>],
+    "Actor"             -> iWebPrincipalActor[OptionValue["Actor"]],
     "PromptRef"         -> OptionValue["PromptRef"],
     "CreatedAt"         -> iWebNowIso[]
   |>;
@@ -405,7 +606,12 @@ SourceVaultWebSearch[query_String, opts : OptionsPattern[]] := Module[
   result = Join[run, <|
     "RunId"            -> runId,
     "IngestProvenance" -> prov,
-    "FetchPages"       -> fetch|>];
+    "FetchPages"       -> fetch,
+    (* V11: 送り先 ("Open" = SearXNG の既定、"EnginesOnly" = 方針の検索エンジンだけ) とその理由 ("PrivateTerms" = 検索語に機密の語、
+       "PrivateContext" = 公開でない資料を読んだ会話) *)
+    "SearchRoute"      -> route,
+    "SearchRouteWhy"   -> If[StringQ[routeWhy], routeWhy, Missing[]],
+    "SearchEngines"    -> If[ListQ[engines], engines, Missing[]]|>];
   (* 検索の監査記録 (spec v6 §17 WebSearchRun + §11 ReferenceEvents)。
      web_search は本文を保存しないが、検索自体は痕跡として残す (誰がいつ何を検索したか)。 *)
   If[TrueQ[OptionValue["StoreSearchRun"]],
@@ -539,7 +745,8 @@ iWebSubmitJobToKernel[jobId_String, input_Association] := Module[{eo},
     With[{jid = jobId, inp = input, pkg = $iWebPackageFile,
           root = SourceVault`$SourceVaultCoreRoot,
           roots = SourceVault`$SourceVaultInjectedRoots,
-          rhash = SourceVault`$SourceVaultInjectedRootHash},
+          rhash = SourceVault`$SourceVaultInjectedRootHash,
+          gkey = $iWebGuardCheckedKey},
       ParallelSubmit[
         If[! TrueQ[SourceVault`WebJobChild`$Ready],
           Block[{$CharacterEncoding = "UTF-8"},
@@ -560,6 +767,8 @@ iWebSubmitJobToKernel[jobId_String, input_Association] := Module[{eo},
           SourceVault`$SourceVaultInjectedRootHash = rhash;
           Quiet @ Check[SourceVault`SourceVaultMiningWireProductionHooks[], Null];
           SourceVault`WebJobChild`$Ready = True];
+        (* GuardChecked token の鍵を親から注入 (ディスクには書かない。A-4、2026-11-09) *)
+        SourceVault`WebIngestPrivate`$iWebGuardCheckedKey = gkey;
         iWebRunSearchJob[jid, inp]]],
     $Failed];
   If[Head[eo] === EvaluationObject,
@@ -770,9 +979,9 @@ SourceVaultWebFetch[url_String, OptionsPattern[]] := Module[
   store   = TrueQ[OptionValue["StoreEvidence"]];
   prov    = OptionValue["Provenance"];
   recGap  = TrueQ[OptionValue["RecordGap"]];
-  (* Web egress guard: URL を取る前に関所 (主体 = provenance の Actor、無ければ owner) *)
+  (* Web egress guard: URL を取る前に関所 (主体 = $SourceVaultPrincipal、provenance の Actor は申告として残す) *)
   guard = iWebGuardGate[<|"Kind" -> "Fetch", "Url" -> url,
-    "Actor" -> Lookup[If[AssociationQ[prov], prov, <||>], "Actor", <|"Type" -> "HumanUser"|>],
+    "Actor" -> iWebPrincipalActor[Lookup[If[AssociationQ[prov], prov, <||>], "Actor", Automatic]],
     "Channel" -> Lookup[If[AssociationQ[prov], prov, <||>], "RequestChannel", "Notebook"]|>];
   If[Lookup[guard, "Decision", "Deny"] =!= "Allow",
     Return[<|"Url" -> url,
@@ -844,6 +1053,11 @@ SourceVaultWebFetch[url_String, OptionsPattern[]] := Module[
     "SnapshotRef"    -> If[AssociationQ[snap], Lookup[snap, "Ref", Missing[]], Missing[]],
     "SnapshotStatus" -> If[AssociationQ[snap], Lookup[snap, "Status", Missing[]], Missing[]],
     "Priority"       -> If[AssociationQ[prRec], Lookup[prRec, "Priority", Missing[]], Missing[]]|>];
+  (* Inc2 (03 v0.4 §6.2、2026-11-10 第 4 週): 取り込んだ WebDocument を Ingest Activity + PrimarySource Entity として来歴台帳に記録
+     (URL は鍵付き digest、取得時刻、pre-scan、Taints ext:web、Actor は主体から)。snapshot に保存し抽出に成功したときだけ。失敗しても fetch は成功扱い *)
+  If[store && AssociationQ[snap] && StringQ[Lookup[snap, "Ref", Null]] && Lookup[ext, "ExtractionStatus", ""] === "Succeeded" &&
+     Length[DownValues[SourceVault`SourceVaultProvRecordWebIngest]] > 0,
+    Quiet @ Check[SourceVault`SourceVaultProvRecordWebIngest[result, "Guard" -> guard, "CleanText" -> cleanText], Null]];
   (* 取り込み後フック (mining の著者/タグ抽出など)。失敗しても fetch は成功扱い。観測のため戻り値に載せる。 *)
   Append[result, "IngestHooks" -> iWebRunIngestHooks[<|"Result" -> result, "Url" -> url|>]]];
 
@@ -1296,6 +1510,9 @@ SourceVaultWebHighlights[text_String, query_String, OptionsPattern[]] := Module[
 (* ---- minimal LM Studio (OpenAI 互換) クライアント (service-loadable) ---- *)
 If[! StringQ[SourceVault`$SourceVaultSummaryEndpoint],
   SourceVault`$SourceVaultSummaryEndpoint = "http://localhost:1234/v1/chat/completions"];
+(* A-4 (2026-11-09): 送り先の変数は方針変数。NBAccess が先にロード済みなら代入を承認対象に登録する (弱結合、既定表にも同じ名前がある) *)
+If[Length[DownValues[NBAccess`NBRegisterApprovalSetSymbols]] > 0,
+  Quiet @ NBAccess`NBRegisterApprovalSetSymbols[{"$SourceVaultSummaryEndpoint", "$SourceVaultSummaryAllowedEndpoints"}]];
 If[! StringQ[SourceVault`$SourceVaultSummaryModel],
   SourceVault`$SourceVaultSummaryModel = Automatic];
 If[! StringQ[SourceVault`$SourceVaultSummaryToken],
@@ -1389,6 +1606,9 @@ Options[iWebLLMComplete] = {"Endpoint" -> Automatic, "Model" -> Automatic,
 iWebLLMComplete[prompt_String, OptionsPattern[]] := Module[
   {endpoint, model, body, req, resp, status, rbody, json},
   endpoint = Replace[OptionValue["Endpoint"], Automatic -> SourceVault`$SourceVaultSummaryEndpoint];
+  (* A-4 (02 v1.2 §7.1, 2026-11-09): Bearer を付けて送る先は登録済み provider の URL だけ。モデル解決 (HTTP) より前に止める *)
+  If[! iWebEndpointAllowedQ[endpoint],
+    Return[Failure["EndpointNotRegistered", <|"Endpoint" -> endpoint, "Allowed" -> iWebAllowedEndpointBases[]|>]]];
   model = Replace[OptionValue["Model"], Automatic -> iWebLLMResolveModel[endpoint]];
   If[! StringQ[model], Return[Failure["LLMModelUnresolved", <|"Endpoint" -> endpoint|>]]];
   body = <|"model" -> model, "stream" -> False,
@@ -1506,6 +1726,9 @@ SourceVaultSummarizeText[text_String, OptionsPattern[]] := Module[
   r = If[OptionValue["LLMFn"] === Automatic,
     Module[{ep2, model2, ptok = Missing["NoToken"], wantTok},
       ep2 = Replace[OptionValue["Endpoint"], Automatic -> SourceVault`$SourceVaultSummaryEndpoint];
+      (* A-4 (2026-11-09): 登録済み provider の URL 以外は、モデル解決や token の mint より前に拒否する *)
+      If[! iWebEndpointAllowedQ[ep2],
+        Return[Failure["EndpointNotRegistered", <|"Endpoint" -> ep2, "Allowed" -> iWebAllowedEndpointBases[]|>], Module]];
       model2 = OptionValue["Model"];
       wantTok = Switch[OptionValue["PrepareToken"],
         True, True, False, False,
@@ -1648,9 +1871,14 @@ SourceVaultDerivedArtifactList[OptionsPattern[]] := Module[
   {cr = SourceVault`SourceVaultCoreRoot[], dir, files, recs, atype},
   If[! StringQ[cr], Return[{}]];
   dir = FileNameJoin[{cr, "snapshots", "DerivedArtifact"}];
-  files = If[DirectoryQ[dir], FileNames["*.json", dir, Infinity], {}];
+  (* 2026-11-14: DerivedArtifact は段 2 (鍵の組 derived) で暗号化されうる。core の読み手 (.sve を検証して復号) を使う *)
+  files = If[DirectoryQ[dir],
+    If[Length[DownValues[SourceVault`CorePrivate`iSVARFileNames]] > 0,
+      SourceVault`CorePrivate`iSVARFileNames["*.json", dir, Infinity], FileNames["*.json", dir, Infinity]], {}];
   recs = DeleteCases[(Function[f,
-    Module[{r = Quiet @ Check[ImportByteArray[ReadByteArray[f], "RawJSON"], $Failed]},
+    Module[{r = Quiet @ Check[ImportByteArray[
+        If[Length[DownValues[SourceVault`CorePrivate`iSVARReadBytes]] > 0,
+          SourceVault`CorePrivate`iSVARReadBytes[f], ReadByteArray[f]], "RawJSON"], $Failed]},
       If[AssociationQ[r], Join[r, <|"Ref" -> "snapshot:DerivedArtifact:" <> FileBaseName[f]|>], Null]]]) /@ files,
     Null];
   atype = OptionValue["ArtifactType"];
@@ -1697,6 +1925,700 @@ SourceVaultSwapWebSearchBackend[x_] := x;
 
 SourceVaultWebSearchIntegration[] :=
   SourceVaultSwapWebSearchBackend[{SourceVault`$SourceVaultExaFallbackIntegrationId}];
+
+(* ============================================================
+   SearXNG の健全性・版の確認・更新 (2026-11-12、文書 12 §6)
+
+   きっかけ (2026-11-12 の障害): SearXNG は動いていた (HTTP 200) が、先の検索エンジンがすべて応答しなかった
+   (duckduckgo・startpage は CAPTCHA、brave は回数制限、google は無言で 0 件)。SourceVault は Status Succeeded・
+   ResultCount 0 を返し、モデルには "Found 0 results" とだけ届いた。モデルは検索の障害と「情報が無い」を区別できず、
+   URL を推測し (実在しないホスト)、最後は記憶から答えた。原因は SearXNG が 5 か月前の版のままだったこと
+   (検索エンジンの読み取り部は相手のサイトの変更で頻繁に壊れる。イメージを最新にしたら直った)。
+
+   ここで行うこと:
+   - 検索のたびに裏側の状態を覚える (iSearXNGNoteHealth)。0 件と障害を分ける (BackendStatus)。
+   - 障害が続いたら診断イベントを出す (所有者には SystemDoctor / Issue で届く。6 時間に 1 回まで)。
+   - 動いている版が古いことを 1 日 1 回、検索のついでに確かめる (通信は SearXNG の /config だけ)。
+   - 版の確認 (SourceVaultSearXNGVersion、読み取りだけ) と更新 (SourceVaultSearXNGUpdate、所有者専用・戻し付き)。
+   更新を自動で行わないのは、外から取ってきた実行物の入れ替えは所有者が決める種類の変更だから (文書 12 §7 の「壁の上げ下げ」)。
+   ============================================================ *)
+If[! StringQ[$SourceVaultSearXNGComposeDirectory],
+  $SourceVaultSearXNGComposeDirectory = FileNameJoin[{$HomeDirectory, "searxng"}]];
+If[! StringQ[$SourceVaultSearXNGComposeService], $SourceVaultSearXNGComposeService = "core"];
+If[! NumericQ[$SourceVaultSearXNGMaxAgeDays], $SourceVaultSearXNGMaxAgeDays = 30];
+
+(* SearXNG・Docker Hub への HTTP の読み取りは 1 か所 (試験はここを差し替える)。Association | $Failed | $TimedOut *)
+iSearXNGRead[req_, timeout_] := TimeConstrained[
+  Quiet @ Check[URLRead[req, {"StatusCode", "Body"}], $Failed],
+  If[NumericQ[timeout], timeout, 20], $TimedOut];
+
+(* SearXNG の unresponsive_engines ({{engine, reason}, ...}) を <|"Engine", "Reason"|> の並びへ *)
+iSearXNGUnresponsive[list_List] := Cases[list,
+  {e_, r___} :> <|"Engine" -> ToString[e], "Reason" -> StringRiffle[ToString /@ {r}, " "]|>];
+iSearXNGUnresponsive[_] := {};
+
+iSearXNGBackendStatus[n_Integer, unresp_List] := Which[
+  n > 0 && unresp === {}, "OK",
+  n > 0, "Degraded",
+  unresp =!= {}, "EnginesUnresponsive",
+  True, "NoResults"];
+iSearXNGBackendStatus[___] := "NoResults";
+
+iSearXNGUnresponsiveText[unresp_List] := If[unresp === {}, "no engine reported a reason",
+  StringRiffle[(ToString[Lookup[#, "Engine", "?"]] <> ": " <> ToString[Lookup[#, "Reason", "?"]]) & /@
+    Take[Select[unresp, AssociationQ], UpTo[8]], "; "]];
+iSearXNGUnresponsiveText[_] := "no engine reported a reason";
+
+(* モデルに返す一言 (MCP の sourcevault_web_search が使う)。禁止や障害は、理由と、ここまではできるという範囲を短く伝える (文書 12 §3 の P3)。
+   V11 (文書 12 の 8.18 節): 検索エンジンだけに送った検索には、そのことと、結果のページを開くときの注意を添える (iWebSearchRouteNote) *)
+iWebSearchBackendNote[run_Association] := With[{b = iWebSearchStatusNote[run], r = iWebSearchRouteNote[run]},
+  Which[b === "", r, r === "", b, True, b <> " " <> r]];
+(* 検索エンジンだけに送った検索 (関所の SearchRoute "EnginesOnly")。検索語に機密の語があったとき ("PrivateTerms") は、
+   結果のページを開く注意を足す: 迷惑メールの中の固有の語で検索すると、送り主が用意したページが結果に出ることがある。
+   そのページを開くと、送り主に「メールが読まれて調べられた」と伝わる (web bug と同じ働き)。検索そのものは問題ない *)
+iWebSearchRouteNote[run_Association] := If[Lookup[run, "SearchRoute", "Open"] =!= "EnginesOnly", "",
+  "(This search was sent only to major search engines" <>
+    If[Lookup[run, "SearchRouteWhy", None] === "PrivateTerms",
+      ", because it contains words from private material. Using such words (a sender's name, phone number or company, a venue) " <>
+        "as search terms is fine. Be careful with the results, though: a page on a site you do not recognise may belong to the " <>
+        "person who wrote the material (for example the sender of a suspicious mail), and opening it can tell that person that " <>
+        "the material was read. Judge from the snippets where you can, and open pages on well-known sites.)",
+      ", because this conversation has read non-public data.)"]];
+iWebSearchRouteNote[_] := "";
+iWebSearchStatusNote[run_Association] := Module[{st, un},
+  st = ToString @ Lookup[run, "BackendStatus", "OK"];
+  un = iSearXNGUnresponsiveText[Lookup[run, "Unresponsive", {}]];
+  Switch[st,
+    "EnginesUnresponsive",
+      "WEB SEARCH IS TEMPORARILY UNAVAILABLE. The search service is running, but every search engine behind it failed (" <> un <> "). " <>
+      "This is a failure of the search service, NOT evidence that nothing exists on the web. " <>
+      "Do not repeat or rephrase the search now (it will fail the same way) and do not guess URLs. " <>
+      "Do not state facts from memory as if they had been checked: tell the user plainly that web search is unavailable right now, " <>
+      "give only what you can support from material you were actually given, and mark everything else as unverified. " <>
+      "The failure is recorded, and the owner is notified if it continues.",
+    "NoResults",
+      "The search engines answered but found nothing for this query. Try once or twice with different or fewer keywords " <>
+      "(for example the organisation's official name, or the exact term the user wrote). " <>
+      "If it still finds nothing, say so; do not fill the gap from memory.",
+    "Degraded",
+      "(Some search engines did not answer: " <> un <> ". The results below come from the others.)",
+    (* V5 (文書 12 §3.5): 通常の検索が使えず、予備の経路で調べた。範囲が狭いことを隠さない *)
+    "Fallback",
+      "FALLBACK SEARCH. The normal web search is unavailable right now, so these results come from a narrow fallback only (" <>
+      StringRiffle[DeleteDuplicates[ToString @ Lookup[#, "Route", "?"] & /@
+        Select[Replace[Lookup[run, "FallbackRoutes", {}], Except[_List] -> {}], AssociationQ[#] && Lookup[#, "Count", 0] > 0 &]], ", "] <>
+      "). They are real results and their pages can be opened with sourcevault_get_document, but the coverage is far smaller than a " <>
+      "web search: something that is not listed here may still exist. Do not repeat the search with other words more than once. " <>
+      "In the answer, say that the normal search was unavailable and that only these sources were checked; " <>
+      "do not fill what they do not cover from memory.",
+    _, ""]];
+iWebSearchStatusNote[_] := "";
+iWebSearchBackendNote[_] := "";
+(* SearXNG そのものに届かない・応答が読めないとき (SourceVaultSearXNGSearch が Failure を返す)。以前は "Search failed: Failure[...]" が
+   そのままモデルに返り、障害なのか・言い換えれば通るのかが分からなかった。上の「先のエンジンが応答しない」と同じ書き出しにする。 *)
+iWebSearchFailureNote[f_Failure] := With[{tag = ToString[First[f]]},
+  Which[
+    (* V11: 送ってよい検索エンジンが、検索サービスで 1 つも有効になっていない (検索サービスの障害ではない) *)
+    tag === "SearXNGNoAllowedEngine",
+      "This web search was not sent: this conversation has read non-public data, so searches go only to major search engines, " <>
+        "and none of them is enabled in the search service right now. Do not repeat the search. Say in the answer that the web " <>
+        "could not be searched here, and do not fill the facts in from memory. The owner can enable a search engine in SearXNG.",
+    StringStartsQ[tag, "SearXNG"],
+    "WEB SEARCH IS TEMPORARILY UNAVAILABLE. The search service did not answer (" <> tag <> "). " <>
+      "This is a failure of the search service, NOT evidence that nothing exists on the web. " <>
+      "Do not repeat or rephrase the search now (it will fail the same way) and do not guess URLs. " <>
+      "Do not state facts from memory as if they had been checked: tell the user plainly that web search is unavailable right now, " <>
+      "give only what you can support from material you were actually given, and mark everything else as unverified. " <>
+      "The failure is recorded, and the owner is notified if it continues.",
+    True, ""]];
+iWebSearchFailureNote[_] := "";
+
+(* ============================================================
+   V5 (文書 12 §3.5、2026-11-13): 予備の検索の経路
+   ------------------------------------------------------------
+   SearXNG に届かない・先の検索エンジンがすべて応答しないとき、検索ツールは「検索が使えない」と返すだけだった (V0)。
+   モデルは確かめられないと答えるしかなく、障害の間は調べものが止まる。ここでは、鍵の要らない公開の API と、
+   組織の公式サイトだけを使って、狭い範囲で調べる。
+   - 検索語は、通常の検索と同じ関所を既に通っている (SourceVaultWebSearch)。ここから公開の API (Wikipedia・Wikidata・arXiv・Crossref)
+     へ送るのは、その検索語だけである。
+   - 公式サイト: ホスト名はモデルに作らせない。Wikidata の「公式ウェブサイト」(P856) から引き、行き先の評価 (webguard の
+     SourceVaultWebReputation) が良好 (公知ホスト表・上位サイト表・実績・所有者の許可) のときだけ使う。Wikidata は誰でも書き換えられるので、
+     評価の無いホストには検索語を送らない。サイトの中を探す取得は、取得として関所に通す。
+   - 結果は検索結果と同じ形で返す (Title・Url・Snippet)。取得したページからは、リンクとその文字だけを取り出す。
+   - モデルには、予備の経路で調べたことと、範囲が狭いことを伝える (iWebSearchBackendNote の "Fallback")。
+   - 外部への問い合わせは iFBHTTPGet にまとめる (実際に送るのは iFBHTTPSend。試験ではこれを差し替える)。全体で 20 秒ほどで打ち切る。
+   - 相手の決まりを守る (実機 2026-11-13: 既定のクライアント名のまま 10 回ほど問い合わせたところで、Wikimedia が 429 を返した。
+     https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits によれば、名乗らないクライアントは 1 分 10 回まで、連絡先のある
+     クライアント名なら 1 分 200 回まで。429 には Retry-After が付き、無ければ 5 秒以上待つ)。
+     そのため: 問い合わせの数を減らす (1 回の検索で Wikimedia へ通常 4 回)・宛先の組ごとに 1 分あたりの上限を自分で守る・
+     429 / 503 が返ったら案内された時間は送らない・同じ問い合わせは 10 分覚えておく。
+     名乗る名前には、連絡先もこのシステムの名前も入れない (入れるかどうかは所有者が $SourceVaultFallbackSearchUserAgent で決める)。 *)
+If[! ListQ[$SourceVaultFallbackSearchRoutes],
+  $SourceVaultFallbackSearchRoutes = {"Wikipedia", "OfficialSite", "arXiv", "Crossref"}];
+If[! StringQ[$SourceVaultFallbackSearchUserAgent], $SourceVaultFallbackSearchUserAgent = Automatic];
+(* 名乗る名前は外部へそのまま送られる (提案コードが書き換えると、送信の経路になる)。経路の切替と、回数・記憶の状態も、
+   代入は承認の対象にする (状態を書き換えると、上限を外したり、検索結果を差し替えたりできる) *)
+If[Length[DownValues[NBAccess`NBRegisterApprovalSetSymbols]] > 0,
+  Quiet @ NBAccess`NBRegisterApprovalSetSymbols[{"$SourceVaultFallbackSearchUserAgent", "$SourceVaultFallbackSearchRoutes",
+    "$iFBDefaultUserAgent", "$iFBRate", "$iFBCache", "$iFBSiteDown", "$iFBEntityName"}]];
+$iFBAcademicCues = {"arxiv", "paper", "preprint", "doi", "journal", "proceedings", "survey", "theorem",
+  "\:8ad6\:6587", "\:30d7\:30ec\:30d7\:30ea\:30f3\:30c8", "\:67fb\:8aad", "\:6587\:732e"};
+iFBJapaneseQ[s_String] := StringContainsQ[s, RegularExpression["[\\x{3040}-\\x{30ff}\\x{4e00}-\\x{9fff}]"]];
+iFBTokens[q_String] := Select[StringSplit[q, (WhitespaceCharacter | "\:3000") ..], StringLength[#] > 0 &];
+(* ---- 外部への問い合わせ: 名乗り・回数の上限・429 の扱い・覚えておく ---- *)
+$iFBDefaultUserAgent = "FallbackSearch/1.0 (single-user research assistant; low volume)";
+iFBIdentifiedQ[] := StringQ[$SourceVaultFallbackSearchUserAgent] && StringLength[StringTrim[$SourceVaultFallbackSearchUserAgent]] >= 8;
+iFBUserAgent[] := If[iFBIdentifiedQ[],
+  StringTake[StringReplace[StringTrim[$SourceVaultFallbackSearchUserAgent], RegularExpression["[\\r\\n]+"] -> " "], UpTo[200]],
+  $iFBDefaultUserAgent];
+(* 同じ上限を分け合う宛先の組 (Wikimedia の上限は全サイト共通) *)
+iFBRateGroup[url_String] := With[{h = iFBHostNorm[url]}, Which[
+  StringMatchQ[h, RegularExpression["(.*\\.)?(wikipedia|wikidata|wikimedia)\\.org"]], "Wikimedia",
+  StringMatchQ[h, RegularExpression["(.*\\.)?arxiv\\.org"]], "arXiv",
+  StringMatchQ[h, RegularExpression["(.*\\.)?crossref\\.org"]], "Crossref",
+  True, "Site"]];
+(* 1 分あたりの上限 (相手の上限より少なめ)。arXiv は 3 秒に 1 回まで *)
+iFBRateLimit[group_String] := Switch[group, "Wikimedia", If[iFBIdentifiedQ[], 60, 8], "arXiv", 10, "Crossref", 20, _, 10];
+iFBMinInterval[group_String] := Switch[group, "arXiv", 3, _, 0];
+If[! AssociationQ[$iFBRate], $iFBRate = <||>];      (* 組 -> <|Sent -> 送った時刻 (直近 60 秒), Until -> 送らない期限|> *)
+If[! AssociationQ[$iFBCache], $iFBCache = <||>];    (* URL -> {時刻, 応答} (200 で 300 KB 以下のものだけ、10 分、最大 80 件) *)
+$iFBLimitedHit = False;                              (* 経路の実行中に、上限で送れなかった問い合わせがあったか *)
+(* いま送ってよいか。よければ None、だめなら待つ秒数 *)
+iFBRateWait[group_String] := Module[{now = AbsoluteTime[], st = Lookup[$iFBRate, group, <||>], sent, until},
+  until = Lookup[st, "Until", 0.];
+  sent = Select[Lookup[st, "Sent", {}], now - # < 60 &];
+  Which[
+    now < until, until - now,
+    Length[sent] >= iFBRateLimit[group], 60 - (now - Min[sent]),
+    sent =!= {} && now - Max[sent] < iFBMinInterval[group], iFBMinInterval[group] - (now - Max[sent]),
+    True, None]];
+iFBRateNoteSent[group_String] := With[{now = AbsoluteTime[], st = Lookup[$iFBRate, group, <||>]},
+  $iFBRate[group] = Append[st, "Sent" -> Append[Select[Lookup[st, "Sent", {}], now - # < 60 &], now]]];
+iFBRateNoteLimited[group_String, retryAfter_] := With[{st = Lookup[$iFBRate, group, <||>]},
+  $iFBRate[group] = Append[st, "Until" -> AbsoluteTime[] + Clip[If[NumericQ[retryAfter], retryAfter, 60], {5, 900}]]];
+(* 実際に送る (試験ではこれを差し替える)。戻り値 <|StatusCode, ContentType, BodyByteArray, RetryAfter|> か Failure *)
+iFBHTTPSend[url_String, timeout_, ua_String] := Module[{resp, ra},
+  resp = TimeConstrained[
+    Quiet @ Check[URLRead[HTTPRequest[url, <|"UserAgent" -> ua|>], {"StatusCode", "ContentType", "BodyByteArray", "Headers"}], $Failed],
+    If[NumericQ[timeout], timeout, 8], $TimedOut];
+  If[! AssociationQ[resp], Return[Failure[If[resp === $TimedOut, "FetchTimeout", "FetchFailed"], <|"Url" -> url|>], Module]];
+  ra = FirstCase[Replace[Lookup[resp, "Headers", {}], Except[_List] -> {}],
+    (k_String -> v_String) /; ToLowerCase[k] === "retry-after" :> StringTrim[v], None];
+  Append[KeyDrop[resp, "Headers"], "RetryAfter" -> If[StringQ[ra] && StringMatchQ[ra, DigitCharacter ..], FromDigits[ra], None]]];
+iFBHTTPGet[url_String, timeout_ : 6] := Module[{group = iFBRateGroup[url], now = AbsoluteTime[], hit, wait, r, st},
+  hit = Lookup[$iFBCache, url, None];
+  If[ListQ[hit] && now - First[hit] < 600, Return[Last[hit], Module]];
+  wait = iFBRateWait[group];
+  If[NumericQ[wait],
+    $iFBLimitedHit = True;
+    Return[Failure["FallbackRateLimited", <|"Group" -> group, "RetryAfterSeconds" -> Ceiling[wait], "Sent" -> False|>], Module]];
+  iFBRateNoteSent[group];
+  r = iFBHTTPSend[url, timeout, iFBUserAgent[]];
+  If[! AssociationQ[r], Return[r, Module]];
+  st = Lookup[r, "StatusCode", 0];
+  If[st === 429 || st === 503,
+    iFBRateNoteLimited[group, Lookup[r, "RetryAfter", None]];
+    $iFBLimitedHit = True;
+    Return[Failure["FallbackRateLimited", <|"Group" -> group, "StatusCode" -> st, "Sent" -> True|>], Module]];
+  If[st === 200 && ByteArrayQ[Lookup[r, "BodyByteArray", None]] && Length[r["BodyByteArray"]] <= 300000,
+    If[Length[$iFBCache] >= 80, $iFBCache = <||>];
+    $iFBCache[url] = {now, r}];
+  r];
+iFBBytes[url_String, timeout_ : 6] := Module[{r = Quiet @ Check[iFBHTTPGet[url, timeout], $Failed], b},
+  If[! AssociationQ[r] || Lookup[r, "StatusCode", 0] =!= 200, Return[$Failed, Module]];
+  b = Lookup[r, "BodyByteArray", None];
+  If[ByteArrayQ[b] && Length[b] <= 3*^6, b, $Failed]];
+iFBJSON[url_String, timeout_ : 6] := With[{b = iFBBytes[url, timeout]},
+  If[ByteArrayQ[b], Quiet @ Check[ImportByteArray[b, "RawJSON"], $Failed], $Failed]];
+iFBDecode[b_ByteArray] := Quiet @ Check[ByteArrayToString[b, "UTF-8"], Quiet @ Check[ByteArrayToString[b, "ISO8859-1"], $Failed]];
+iFBDecode[_] := $Failed;
+iFBText[url_String, timeout_ : 6] := With[{b = iFBBytes[url, timeout]}, If[ByteArrayQ[b], iFBDecode[b], $Failed]];
+(* HTML の断片 -> 1 行の文字 (タグを外し、よくある実体参照を戻し、空白を詰める)。
+   文中のタグ (span・b など) は空白を入れずに外す (日本語の抜粋で「例示 大学」のように語が割れないように)。ほかのタグは空白にする *)
+iFBPlain[s_String, max_ : 240] := Module[{t},
+  t = StringReplace[s, RegularExpression["(?is)</?(span|b|i|em|strong|mark|u|a|sup|sub|small|font)(\\s[^>]*)?>"] -> ""];
+  t = StringReplace[t, RegularExpression["(?s)<[^>]*>"] -> " "];
+  t = StringReplace[t, {"&quot;" -> "\"", "&amp;" -> "&", "&lt;" -> "<", "&gt;" -> ">", "&#039;" -> "'", "&#39;" -> "'", "&nbsp;" -> " "}];
+  t = StringTrim[StringReplace[t, WhitespaceCharacter .. -> " "]];
+  StringTake[t, UpTo[max]]];
+iFBPlain[_, ___] := "";
+iFBResult[title_, url_, snippet_, route_String] := <|"Title" -> iFBPlain[ToString[title], 160], "Url" -> ToString[url],
+  "Snippet" -> iFBPlain[ToString[snippet]], "Engine" -> "fallback:" <> route, "Route" -> route|>;
+
+(* ---- Wikipedia: MediaWiki の検索 API。日本語の検索語は ja、結果が無ければ en ---- *)
+(* name: 検索語が名指しした組織の名前 (公式サイトの経路が Wikidata で見つけたもの)。あれば、同じ 1 回の問い合わせで、題名がその名前で
+   始まる記事も取り、先頭に置く (実機 2026-11-13: "Kyoto University academic calendar" の全文検索は、すべての語を含む記事を探すので、
+   京都大学の記事が出ず、京都御所やヒンドゥー暦が並んだ) *)
+$iFBEntityName = None;
+iFBWikipediaLang[q_String, lang_String, n_Integer, name_ : None] := Module[
+  {j, qy, hits, pages, base = "https://" <> lang <> ".wikipedia.org/wiki/", mk},
+  j = iFBJSON[URLBuild["https://" <> lang <> ".wikipedia.org/w/api.php", Join[
+    {"action" -> "query", "list" -> "search", "srsearch" -> q, "format" -> "json", "formatversion" -> "2",
+     "srlimit" -> ToString[n], "utf8" -> "1"},
+    If[StringQ[name], {"generator" -> "prefixsearch", "gpssearch" -> name, "gpslimit" -> "1",
+      "prop" -> "extracts", "exintro" -> "1", "explaintext" -> "1", "exsentences" -> "2"}, {}]]]];
+  qy = If[AssociationQ[j], Replace[Lookup[j, "query", <||>], Except[_Association] -> <||>], <||>];
+  hits = Replace[Lookup[qy, "search", {}], Except[_List] -> {}];
+  pages = Replace[Lookup[qy, "pages", {}], Except[_List] -> {}];
+  mk = Function[{t, s}, iFBResult[t <> " - Wikipedia", base <> URLEncode[StringReplace[t, " " -> "_"]], s, "Wikipedia"]];
+  DeleteDuplicatesBy[Join[
+    mk[#["title"], Lookup[#, "extract", ""]] & /@ Select[pages, AssociationQ[#] && StringQ[Lookup[#, "title", None]] &],
+    mk[#["title"], Lookup[#, "snippet", ""]] & /@ Select[hits, AssociationQ[#] && StringQ[Lookup[#, "title", None]] &]],
+    #["Url"] &]];
+iFBWikipedia[q_String] := Module[{r, ja = iFBJapaneseQ[q], name = $iFBEntityName},
+  If[! StringQ[name] || iFBJapaneseQ[name] =!= ja, name = None];
+  r = iFBWikipediaLang[q, If[ja, "ja", "en"], 4, name];
+  If[r === {} && ja, r = iFBWikipediaLang[q, "en", 3]];
+  r];
+
+(* ---- 公式サイト: Wikidata から組織を引き、「公式ウェブサイト」(P856) を得る ---- *)
+(* 組織名を探すときの語: 空白で分ける。空白の無い日本語 (「京都大学の学年暦」) は、最初の「の」でも分ける *)
+iFBNameTokens[q_String] := With[{t = iFBTokens[q]},
+  If[Length[t] === 1 && iFBJapaneseQ[First[t]] && StringContainsQ[First[t], "\:306e"],
+    Select[StringSplit[First[t], "\:306e", 2], StringLength[#] > 0 &], t]];
+iFBNorm[s_String] := ToLowerCase[StringRiffle[iFBTokens[s], " "]];
+(* 名前らしい語か (大文字か、日本語などの非 ASCII を含む)。"how" のようなふつうの語 1 つで項目を引かないため *)
+iFBNameLikeQ[tok_String] := StringContainsQ[tok, RegularExpression["[A-Z]|[^\\x00-\\x7f]"]];
+(* Wikidata に問い合わせる名前: 検索語の先頭の 3 語・2 語・1 語 (長い順。Wikidata の検索は前方一致なので、4 語以上の名前も
+   3 語で引ける)。1 語での問い合わせは、検索語がその 1 語だけか、名前らしい語のときだけ *)
+iFBEntitySearchStrings[q_String] := Module[{t = iFBNameTokens[q], n},
+  n = Length[t];
+  If[n === 0, Return[{}, Module]];
+  StringRiffle[Take[t, #], " "] & /@
+    Select[DeleteDuplicates[{Min[n, 3], Min[n, 2], 1}], # > 1 || n === 1 || iFBNameLikeQ[First[t]] &]];
+(* 検索語の先頭の語の並び (1 語、2 語、…)。項目の名前がこのどれかとちょうど同じとき、検索語がその項目を名指ししたと見る *)
+iFBTokenPrefixes[q_String] := With[{t = iFBNameTokens[q]}, Table[ToLowerCase[StringRiffle[Take[t, k], " "]], {k, Length[t]}]];
+(* 採るのは、一致した名前 (ラベルか別名) が、検索語の先頭の語の並びとちょうど同じ項目だけ (実機 2026-11-13: 先頭の 1 語
+   "Kyoto" で引くと京都市が当たり、京都大学より先に採られた)。長い名前を先に *)
+iFBWikidataEntity[name_String, prefixes_List] := Module[{lang = If[iFBJapaneseQ[name], "ja", "en"], j, hits},
+  j = iFBJSON[URLBuild["https://www.wikidata.org/w/api.php",
+    {"action" -> "wbsearchentities", "search" -> name, "language" -> lang, "uselang" -> lang, "type" -> "item",
+     "format" -> "json", "limit" -> "7"}]];
+  hits = If[AssociationQ[j], Lookup[j, "search", {}], {}];
+  hits = Select[If[ListQ[hits], hits, {}], AssociationQ[#] && StringQ[Lookup[#, "id", None]] &];
+  hits = Append[#, "MatchText" -> ToString @ Lookup[Replace[Lookup[#, "match", <||>], Except[_Association] -> <||>], "text",
+      Lookup[#, "label", ""]]] & /@ hits;
+  SortBy[Select[hits, MemberQ[prefixes, iFBNorm[#["MatchText"]]] &], {-StringLength[#["MatchText"]] &}]];
+iFBWikidataSite[id_String] := Module[{j, claims, vals},
+  j = iFBJSON[URLBuild["https://www.wikidata.org/w/api.php",
+    {"action" -> "wbgetclaims", "entity" -> id, "property" -> "P856", "format" -> "json"}]];
+  claims = If[AssociationQ[j], Lookup[Lookup[j, "claims", <||>], "P856", {}], {}];
+  vals = Cases[If[ListQ[claims], claims, {}],
+    c_Association :> Lookup[Lookup[Lookup[c, "mainsnak", <||>], "datavalue", <||>], "value", None]];
+  SelectFirst[vals, StringQ[#] && StringStartsQ[#, "http://" | "https://", IgnoreCase -> True] &, None]];
+iFBSiteGoodQ[url_String] := Length[DownValues[SourceVault`SourceVaultWebReputation]] > 0 &&
+  With[{r = Quiet @ Check[SourceVault`SourceVaultWebReputation[url], $Failed]}, AssociationQ[r] && Lookup[r, "Rating", ""] === "Good"];
+iFBHostNorm[url_String] := With[{p = Quiet @ Check[URLParse[url], $Failed]},
+  If[AssociationQ[p] && StringQ[Lookup[p, "Domain", None]],
+    With[{h = ToLowerCase[p["Domain"]]}, If[StringStartsQ[h, "www."], StringDrop[h, 4], h]], ""]];
+(* サイトの中を探す: 多くのサイト (WordPress) が受ける ?s= で取得し、同じサイトへのリンクのうち、検索語を含むものを拾う。
+   取得は関所に通す (取得として記録され、止められたら何も取らない)。ページからはリンクと文字だけを取り出す *)
+If[! AssociationQ[$iFBSiteDown], $iFBSiteDown = <||>];   (* 応答しなかったサイト: ホスト -> 次に試してよい時刻 *)
+iFBSiteSearch[site_String, terms_List] := Module[{base, url, guard, resp, html, host = iFBHostNorm[site], links, scored},
+  If[terms === {} || host === "", Return[{}, Module]];
+  (* 応答しなかったサイトは、10 分は試さない (実機 2026-11-13: 応答しないサイトで、検索のたびに 8 秒待った)。関所にも通さない *)
+  If[AbsoluteTime[] < Lookup[$iFBSiteDown, host, 0.], Return[{}, Module]];
+  (* 探すのはサイトの根 (実機 2026-11-13: Wikidata の公式サイトが https://…/ja/index.html の形で、その後ろに ?s= を付けて時間切れになった) *)
+  base = StringReplace[site, RegularExpression["^(?i)(https?://[^/?#]+).*$"] -> "$1"] <> "/";
+  If[! StringStartsQ[base, "http://" | "https://", IgnoreCase -> True], Return[{}, Module]];
+  url = base <> "?s=" <> URLEncode[StringRiffle[terms, " "]];
+  guard = iWebGuardGate[<|"Kind" -> "Fetch", "Url" -> url, "Actor" -> iWebPrincipalActor[Automatic], "Channel" -> "Fallback:OfficialSite"|>];
+  If[Lookup[guard, "Decision", "Deny"] =!= "Allow", Return[{}, Module]];
+  resp = Quiet @ Check[iFBHTTPGet[url, 4], $Failed];
+  If[MatchQ[resp, Failure["FetchTimeout" | "FetchFailed", _]],
+    If[Length[$iFBSiteDown] >= 200, $iFBSiteDown = <||>];
+    $iFBSiteDown[host] = AbsoluteTime[] + 600];
+  html = If[AssociationQ[resp] && Lookup[resp, "StatusCode", 0] === 200 && ByteArrayQ[Lookup[resp, "BodyByteArray", None]] &&
+      Length[resp["BodyByteArray"]] <= 3*^6, iFBDecode[resp["BodyByteArray"]], $Failed];
+  If[! StringQ[html], Return[{}, Module]];
+  links = Take[StringCases[html,
+    RegularExpression["(?is)<a\\s[^>]*?href\\s*=\\s*[\"']([^\"'#\\s]+)[\"'][^>]*>(.*?)</a>"] :> {"$1", "$2"}], UpTo[1500]];
+  links = {Which[
+        StringStartsQ[#[[1]], "http://" | "https://", IgnoreCase -> True], #[[1]],
+        StringStartsQ[#[[1]], "//"], "https:" <> #[[1]],
+        StringStartsQ[#[[1]], "/"], StringReplace[base, RegularExpression["^(https?://[^/]+).*$"] -> "$1"] <> #[[1]],
+        True, ""], iFBPlain[#[[2]], 120]} & /@ links;
+  (* 同じサイト (その下のホストを含む) へのリンクで、文字があるもの。探した URL 自身は除く *)
+  links = Select[links, #[[1]] =!= "" && StringLength[#[[2]]] >= 2 && StringFreeQ[#[[1]], "?s="] &&
+    With[{h = iFBHostNorm[#[[1]]]}, h === host || StringEndsQ[h, "." <> host]] &];
+  scored = {Count[terms, t_ /; StringContainsQ[#[[2]], t, IgnoreCase -> True] ||
+        StringContainsQ[Quiet @ Check[URLDecode[#[[1]]], #[[1]]], t, IgnoreCase -> True]], #} & /@ DeleteDuplicatesBy[links, First];
+  scored = Select[scored, First[#] >= 1 &];
+  (* 当たった語の数の多い順。同じ数なら、ページに出た順 (= サイト自身の検索の順) を保つ: SortBy[.., {f}] は同点の順を変えない *)
+  iFBResult[#[[2, 2]], #[[2, 1]], "link on the official site (" <> host <> ")", "OfficialSite"] & /@
+    Take[SortBy[scored, {-First[#] &}], UpTo[5]]];
+iFBOfficialSite[q_String] := Module[{prefixes = iFBTokenPrefixes[q], found = None, ents, site, label, desc, terms, top},
+  Do[
+    ents = iFBWikidataEntity[s, prefixes];
+    (* 見つけた名前は Wikipedia の経路でも使う (公式サイトが使えないときも) *)
+    If[ents =!= {}, $iFBEntityName = First[ents]["MatchText"]];
+    Do[
+      site = iFBWikidataSite[e["id"]];
+      If[StringQ[site] && iFBSiteGoodQ[site],
+        found = <|"Name" -> e["MatchText"], "Site" -> site,
+          "Label" -> ToString @ Lookup[e, "label", e["MatchText"]], "Description" -> ToString @ Lookup[e, "description", ""]|>; Break[]],
+      {e, Take[ents, UpTo[2]]}];
+    (* 検索語が名指しした項目が見つかったら、そこで止める (公式サイトが使えなくても、短い名前で別の項目を探さない) *)
+    If[AssociationQ[found] || ents =!= {}, Break[]],
+    {s, iFBEntitySearchStrings[q]}];
+  If[! AssociationQ[found], Return[{}, Module]];
+  site = found["Site"]; label = found["Label"]; desc = found["Description"];
+  top = iFBResult[label <> " - official website (according to Wikidata)", site, desc, "OfficialSite"];
+  (* 組織名を除いた残りの語で、サイトの中を探す *)
+  terms = Drop[iFBNameTokens[q], UpTo[Length[iFBTokens[found["Name"]]]]];
+  (* V11: サイト内検索は、検索語の残りをそのサイトに送る (検索エンジンでない宛先)。検索エンジンだけに送る検索では行わない *)
+  Join[{top}, If[TrueQ[$iFBSiteSearch], Quiet @ Check[iFBSiteSearch[site, terms], {}], {}]]];
+
+(* ---- 論文: arXiv と Crossref。論文らしい検索語のときだけ、英数字の語で探す ---- *)
+iFBAcademicQ[q_String] := StringContainsQ[ToLowerCase[q], Alternatives @@ $iFBAcademicCues];
+iFBAsciiQuery[q_String] := StringRiffle[Select[iFBTokens[q],
+  StringMatchQ[#, RegularExpression["[\\x20-\\x7e]+"]] && ! MemberQ[$iFBAcademicCues, ToLowerCase[#]] &], " "];
+iFBArXiv[q_String] := Module[{aq = iFBAsciiQuery[q], xml, entries},
+  If[StringLength[aq] < 3, Return[{}, Module]];
+  xml = iFBText[URLBuild["https://export.arxiv.org/api/query", {"search_query" -> "all:" <> aq, "max_results" -> "3"}], 8];
+  If[! StringQ[xml], Return[{}, Module]];
+  entries = StringCases[xml, RegularExpression["(?s)<entry>(.*?)</entry>"] -> "$1"];
+  Function[e, With[{id = First[StringCases[e, RegularExpression["(?s)<id>\\s*(.*?)\\s*</id>"] -> "$1", 1], ""],
+      ti = First[StringCases[e, RegularExpression["(?s)<title>(.*?)</title>"] -> "$1", 1], ""],
+      su = First[StringCases[e, RegularExpression["(?s)<summary>(.*?)</summary>"] -> "$1", 1], ""]},
+    If[StringStartsQ[id, "http"], iFBResult[ti <> " - arXiv", StringReplace[id, StartOfString ~~ "http://" -> "https://"], su, "arXiv"], Nothing]]] /@ entries];
+iFBCrossref[q_String] := Module[{aq = iFBAsciiQuery[q], j, items},
+  If[StringLength[aq] < 3, Return[{}, Module]];
+  j = iFBJSON[URLBuild["https://api.crossref.org/works",
+    {"query" -> aq, "rows" -> "3", "select" -> "DOI,title,URL,container-title,issued"}], 8];
+  items = If[AssociationQ[j], Lookup[Lookup[j, "message", <||>], "items", {}], {}];
+  Function[it, With[{ti = First[Replace[Lookup[it, "title", {}], Except[_List] -> {}], ""],
+      ct = First[Replace[Lookup[it, "container-title", {}], Except[_List] -> {}], ""], u = Lookup[it, "URL", ""]},
+    If[StringQ[u] && StringStartsQ[u, "http"] && StringQ[ti] && ti =!= "",
+      iFBResult[ti <> If[StringQ[ct] && ct =!= "", " - " <> ct, ""], u, "DOI " <> ToString @ Lookup[it, "DOI", ""], "Crossref"], Nothing]]] /@
+    Select[If[ListQ[items], items, {}], AssociationQ]];
+
+Options[SourceVaultFallbackSearch] = {"MaxResults" -> 8, "BudgetSeconds" -> 20, "SiteSearch" -> True};
+If[! ValueQ[$iFBSiteSearch], $iFBSiteSearch = True];
+SourceVaultFallbackSearch[query_String, OptionsPattern[]] := Module[
+  {q = StringTrim[query], t0 = AbsoluteTime[], budget = OptionValue["BudgetSeconds"], maxR = OptionValue["MaxResults"],
+   routes = Replace[$SourceVaultFallbackSearchRoutes, Except[_List] -> {}], results = {}, info = {}, run},
+  If[! NumericQ[budget] || budget <= 0, budget = 20];
+  If[! IntegerQ[maxR] || maxR <= 0, maxR = 8];
+  If[q === "" || routes === {}, Return[<|"Status" -> "NoResults", "Query" -> query, "Results" -> {}, "Routes" -> {}|>]];
+  run = Function[{name, f}, Module[{t1 = AbsoluteTime[], r, limited = False},
+    Which[
+      ! MemberQ[routes, name], Null,
+      AbsoluteTime[] - t0 > budget, AppendTo[info, <|"Route" -> name, "Status" -> "SkippedBudget", "Count" -> 0|>],
+      True,
+        Block[{$iFBLimitedHit = False},
+          r = Quiet @ Check[TimeConstrained[f[q], Max[2, budget - (AbsoluteTime[] - t0)], $TimedOut], $Failed];
+          limited = TrueQ[$iFBLimitedHit]];
+        If[! ListQ[r], AppendTo[info, <|"Route" -> name, "Status" -> If[r === $TimedOut, "TimedOut", "Failed"], "Count" -> 0,
+            "Seconds" -> Round[AbsoluteTime[] - t1, 0.1]|>],
+          r = Select[r, AssociationQ[#] && StringStartsQ[ToString @ Lookup[#, "Url", ""], "http"] &];
+          results = Join[results, r];
+          (* 上限で送れなかった (または 429 が返った) ために結果が無いときは、「該当なし」と区別する *)
+          AppendTo[info, <|"Route" -> name, "Status" -> Which[r =!= {}, "OK", limited, "RateLimited", True, "NoResults"],
+            "Count" -> Length[r], "Seconds" -> Round[AbsoluteTime[] - t1, 0.1]|>]]]]];
+  (* 公式サイトを先に (固有の事実は公式サイトにあることが多い)、次に Wikipedia、論文らしければ arXiv と Crossref *)
+  Block[{$iFBEntityName = None, $iFBSiteSearch = OptionValue["SiteSearch"] =!= False},
+    run["OfficialSite", iFBOfficialSite];
+    run["Wikipedia", iFBWikipedia];
+    If[iFBAcademicQ[q], run["arXiv", iFBArXiv]; run["Crossref", iFBCrossref]]];
+  results = Take[DeleteDuplicatesBy[results, Lookup[#, "Url", ""] &], UpTo[maxR]];
+  results = MapIndexed[Append[#1, "Rank" -> First[#2]] &, results];
+  <|"Status" -> If[results === {}, "NoResults", "Succeeded"], "Query" -> query, "Results" -> results, "Routes" -> info,
+    "RateLimited" -> AnyTrue[info, Lookup[#, "Status", ""] === "RateLimited" &], "Seconds" -> Round[AbsoluteTime[] - t0, 0.1]|>];
+SourceVaultFallbackSearch[___] := <|"Status" -> "NoResults", "Results" -> {}, "Routes" -> {}, "RateLimited" -> False|>;
+
+(* 通常の検索の結果 (または失敗) を見て、予備の検索に切り替えるか。切り替えるのは、検索の裏側の障害のときだけ
+   (SearXNG に届かない・応答が読めない・先の検索エンジンがすべて応答しない)。「該当なし」では切り替えない *)
+iWebFallbackWantedQ[run_] := Replace[$SourceVaultFallbackSearchRoutes, Except[_List] -> {}] =!= {} &&
+  ((FailureQ[run] && StringStartsQ[ToString[First[run]], "SearXNG"]) ||
+   (AssociationQ[run] && Lookup[run, "BackendStatus", "OK"] === "EnginesUnresponsive"));
+(* 予備の検索の結果を、通常の検索の結果と同じ形にする。元の障害の内容は残す *)
+iWebFallbackRun[query_String, run_, fb_Association] := Join[
+  If[AssociationQ[run], KeyTake[run, {"Endpoint", "Language", "Unresponsive", "UnresponsiveEngines"}], <||>],
+  <|"Provider" -> "Fallback", "Query" -> query, "ResultCount" -> Length[fb["Results"]], "TotalAvailable" -> Length[fb["Results"]],
+    "Results" -> fb["Results"], "Suggestions" -> {}, "BackendStatus" -> "Fallback",
+    "PrimaryFailure" -> If[FailureQ[run], ToString[First[run]], "EnginesUnresponsive"],
+    "FallbackRoutes" -> fb["Routes"], "FetchedAt" -> iWebNowIso[], "Status" -> "Succeeded"|>];
+
+If[! AssociationQ[$iSearXNGHealth],
+  $iSearXNGHealth = <|"Status" -> Missing["NotObserved"], "ConsecutiveFailures" -> 0, "ConsecutiveEmpty" -> 0|>];
+If[! AssociationQ[$iSearXNGWarned], $iSearXNGWarned = <||>];
+$iSearXNGFailureStatuses = {"EnginesUnresponsive", "Unreachable"};
+$iSearXNGCanaryQuery = "wikipedia";   (* 試し検索の語。固定 (引数で渡せると関所を通らない検索の口になる) *)
+
+iSearXNGPublish[rc_String, health_String, summary_String, payload_Association] := Module[{now = AbsoluteTime[], prior},
+  prior = Lookup[$iSearXNGWarned, rc, None];
+  If[NumericQ[prior] && now - prior < 21600, Return[<|"Published" -> False, "Reason" -> "Suppressed"|>]];
+  $iSearXNGWarned[rc] = now;
+  If[Length[DownValues[SourceVault`SourceVaultDiagnosticsPublish]] === 0,
+    Return[<|"Published" -> False, "Reason" -> "DiagnosticsAbsent"|>]];
+  Quiet @ Check[
+    SourceVault`SourceVaultDiagnosticsPublish[<|"Type" -> "DiagnosticsEvent", "EventId" -> CreateUUID[],
+      "EventClass" -> "WebSearchBackend", "Producer" -> "webingest", "Component" -> "WebSearch",
+      "ReasonCode" -> rc, "Severity" -> "Medium", "Health" -> health, "IssueRequested" -> True,
+      "PrivacyLevel" -> 0.0, "Summary" -> summary, "Payload" -> payload|>],
+    <|"Published" -> False, "Reason" -> "PublishFailed"|>]];
+
+(* 検索のたびに呼ぶ。状態を覚え、障害が 2 回続いたら (または 0 件が 5 回続いたら) 所有者に知らせる。検索語は記録しない。 *)
+iSearXNGNoteHealth[status_String, unresp_List, n_, endpoint_] := Module[
+  {prev = $iSearXNGHealth, fails, empties, okQ = MemberQ[{"OK", "Degraded"}, status]},
+  If[! AssociationQ[prev], prev = <||>];
+  fails = Which[
+    MemberQ[$iSearXNGFailureStatuses, status], Lookup[prev, "ConsecutiveFailures", 0] + 1,
+    status === "NoResults", Lookup[prev, "ConsecutiveFailures", 0],   (* 0 件は障害とも回復とも言えない *)
+    True, 0];
+  empties = If[okQ, 0, Lookup[prev, "ConsecutiveEmpty", 0] + 1];
+  $iSearXNGHealth = <|"Status" -> status, "ResultCount" -> If[IntegerQ[n], n, 0], "Unresponsive" -> unresp,
+    "ConsecutiveFailures" -> fails, "ConsecutiveEmpty" -> empties, "AtUTC" -> iWebNowIso[], "AtAbs" -> AbsoluteTime[],
+    "LastOKAtUTC" -> If[okQ, iWebNowIso[], Lookup[prev, "LastOKAtUTC", Missing["Never"]]],
+    "Endpoint" -> endpoint|>;
+  Which[
+    fails >= 2,
+      iSearXNGPublish[If[status === "Unreachable", "SearXNGUnreachable", "SearchEnginesUnresponsive"], "Failing",
+        "Web search is failing: " <> If[status === "Unreachable", "SearXNG does not answer at " <> ToString[endpoint],
+          "every search engine behind SearXNG failed (" <> iSearXNGUnresponsiveText[unresp] <> ")"] <>
+        ". Check SourceVaultSearXNGVersion[] and, if the version is old, run SourceVaultIntegrityOwnerAction[SourceVaultSearXNGUpdate[]].",
+        <|"Status" -> status, "ConsecutiveFailures" -> fails, "Unresponsive" -> unresp|>],
+    empties >= 5,
+      iSearXNGPublish["SearchAlwaysEmpty", "Degraded",
+        "Web search returned no result " <> ToString[empties] <> " times in a row. The search engines may be silently blocked; " <>
+        "check SourceVaultSearXNGHealth[\"Probe\" -> True] and SourceVaultSearXNGVersion[].",
+        <|"Status" -> status, "ConsecutiveEmpty" -> empties|>]];
+  Quiet @ Check[iSearXNGDailyVersionCheck[endpoint], Null];
+  status];
+iSearXNGNoteHealth[___] := Null;
+
+Options[SourceVaultSearXNGHealth] = {"Probe" -> Automatic, "MaxAgeSeconds" -> 600, "Endpoint" -> Automatic, "TimeoutSeconds" -> 20};
+SourceVaultSearXNGHealth[OptionsPattern[]] := Module[{h = $iSearXNGHealth, probeQ, now = AbsoluteTime[], maxAge, endpoint},
+  endpoint = iSearXNGEndpoint[OptionValue["Endpoint"]];
+  maxAge = OptionValue["MaxAgeSeconds"]; If[! NumericQ[maxAge], maxAge = 600];
+  probeQ = Switch[OptionValue["Probe"],
+    True, True,
+    False, False,
+    _, ! (AssociationQ[h] && NumericQ[Lookup[h, "AtAbs", None]] && now - h["AtAbs"] <= maxAge &&
+          Lookup[h, "Endpoint", ""] === endpoint)];
+  If[probeQ,
+    Quiet @ SourceVaultSearXNGSearch[$iSearXNGCanaryQuery, "Endpoint" -> endpoint, "MaxResults" -> 3,
+      "Language" -> "en", "TimeoutSeconds" -> OptionValue["TimeoutSeconds"]]];
+  h = $iSearXNGHealth; If[! AssociationQ[h], h = <|"Status" -> Missing["NotObserved"]|>];
+  (* V6 (文書 12 の 6 章): 覚えた状態が何秒前のものか (投入前の検査が、通信せずに「いま障害中か」を見るのに使う) *)
+  Join[<|"Endpoint" -> endpoint|>, KeyDrop[h, "AtAbs"],
+    <|"AgeSeconds" -> If[NumericQ[Lookup[h, "AtAbs", None]], Round[AbsoluteTime[] - h["AtAbs"]], Missing["NotObserved"]],
+      "Probed" -> probeQ|>]];
+
+(* ---- 版 ---- *)
+iSearXNGRunningVersion[endpoint_String, timeout_ : 8] := Module[{resp, json, v},
+  resp = iSearXNGRead[HTTPRequest[endpoint <> "/config"], timeout];
+  If[! AssociationQ[resp] || resp["StatusCode"] =!= 200, Return[Missing["Unreachable"]]];
+  json = Quiet @ Check[ImportByteArray[StringToByteArray[ToString[resp["Body"]], "UTF-8"], "RawJSON"], $Failed];
+  v = If[AssociationQ[json], Lookup[json, "version", Missing["NotProvided"]], Missing["NotProvided"]];
+  If[StringQ[v], v, Missing["NotProvided"]]];
+iSearXNGRunningVersion[___] := Missing["Unreachable"];
+
+(* 版の文字列は日付で始まる (例 "2026.11.11+626105eec") *)
+iSearXNGVersionDate[v_String] := Module[{m},
+  m = StringCases[v, StartOfString ~~ y : Repeated[DigitCharacter, {4}] ~~ "." ~~ mo : Repeated[DigitCharacter, {1, 2}] ~~ "." ~~
+      d : Repeated[DigitCharacter, {1, 2}] :> {FromDigits[y], FromDigits[mo], FromDigits[d]}, 1];
+  If[m === {} || ! (1 <= m[[1, 2]] <= 12 && 1 <= m[[1, 3]] <= 31), Missing["Unparsed"], First[m]]];
+iSearXNGVersionDate[_] := Missing["Unparsed"];
+iSearXNGAgeDays[date_List] := Floor[(AbsoluteTime[] - AbsoluteTime[date])/86400];
+iSearXNGAgeDays[_] := Missing["Unknown"];
+
+(* 1 日 1 回、検索のついでに動いている版の古さだけを確かめる (docker も Docker Hub も呼ばない) *)
+If[! NumericQ[$iSearXNGVersionCheckedAt], $iSearXNGVersionCheckedAt = 0];
+iSearXNGDailyVersionCheck[endpoint_String] := Module[{now = AbsoluteTime[], v, age},
+  If[now - $iSearXNGVersionCheckedAt < 86400, Return[Null]];
+  $iSearXNGVersionCheckedAt = now;
+  v = iSearXNGRunningVersion[endpoint, 4];
+  age = iSearXNGAgeDays[iSearXNGVersionDate[v]];
+  If[IntegerQ[age] && age > $SourceVaultSearXNGMaxAgeDays,
+    iSearXNGPublish["SearXNGStale", "Degraded",
+      "SearXNG " <> ToString[v] <> " is " <> ToString[age] <> " days old. Its search-engine readers break as the engines change; " <>
+      "check SourceVaultSearXNGVersion[] and update with SourceVaultIntegrityOwnerAction[SourceVaultSearXNGUpdate[]].",
+      <|"Running" -> v, "AgeDays" -> age, "MaxAgeDays" -> $SourceVaultSearXNGMaxAgeDays|>]];
+  age];
+iSearXNGDailyVersionCheck[___] := Null;
+
+(* ---- docker ---- *)
+iSearXNGDockerExe[] := With[{c = "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"},
+  If[$OperatingSystem === "Windows" && FileExistsQ[c], c, "docker"]];
+iSearXNGDocker[args_List, timeout_ : 60] := Module[{r},
+  r = TimeConstrained[Quiet @ Check[RunProcess[Join[{iSearXNGDockerExe[]}, args]], $Failed], timeout, $TimedOut];
+  Which[
+    r === $TimedOut,
+      <|"ExitCode" -> -2, "StandardOutput" -> "", "StandardError" -> "timed out after " <> ToString[timeout] <> " s"|>,
+    ! AssociationQ[r],
+      <|"ExitCode" -> -1, "StandardOutput" -> "", "StandardError" -> "docker could not be started"|>,
+    True, r]];
+iSearXNGOut[r_Association] := StringTrim @ ToString @ Lookup[r, "StandardOutput", ""];
+iSearXNGOut[_] := "";
+iSearXNGOKQ[r_Association] := Lookup[r, "ExitCode", -1] === 0;
+iSearXNGOKQ[_] := False;
+iSearXNGStep[name_String, r_Association] := <|"Step" -> name, "ExitCode" -> Lookup[r, "ExitCode", -1],
+  "Error" -> StringTake[StringTrim @ ToString @ Lookup[r, "StandardError", ""], UpTo[300]]|>;
+
+iSearXNGComposeArgs[] := Module[{dir = $SourceVaultSearXNGComposeDirectory, f},
+  If[! StringQ[dir] || ! DirectoryQ[dir], Return[$Failed]];
+  f = SelectFirst[FileNameJoin[{dir, #}] & /@ {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"},
+    FileExistsQ, $Failed];
+  If[! StringQ[f], Return[$Failed]];
+  {"compose", "--project-directory", dir, "-f", f}];
+
+(* "docker.io/searxng/searxng:latest" -> {"searxng/searxng", "latest"}。Docker Hub 以外・不正な名前は $Failed *)
+iSearXNGImageRepoTag[image_String] := Module[{name, repo, tag, last},
+  name = StringReplace[image, StartOfString ~~ ("docker.io/" | "index.docker.io/") -> ""];
+  If[StringContainsQ[name, "@"], name = First[StringSplit[name, "@"]]];
+  last = Last[StringSplit[name, "/"]];
+  {repo, tag} = If[StringContainsQ[last, ":"],
+    {StringDrop[name, -(StringLength[Last[StringSplit[last, ":"]]] + 1)], Last[StringSplit[last, ":"]]},
+    {name, "latest"}];
+  If[! StringContainsQ[repo, "/"], repo = "library/" <> repo];
+  If[StringContainsQ[First[StringSplit[repo, "/"]], "."] ||
+      ! StringMatchQ[repo, RegularExpression["[a-z0-9][a-z0-9._/-]{0,200}"]] ||
+      ! StringMatchQ[tag, RegularExpression["[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}"]],
+    Return[$Failed]];
+  {repo, tag}];
+iSearXNGImageRepoTag[_] := $Failed;
+
+iSearXNGHubTag[image_, timeout_ : 12] := Module[{rt = iSearXNGImageRepoTag[image], resp, json},
+  If[! ListQ[rt], Return[Missing["NotDockerHub"]]];
+  resp = iSearXNGRead[HTTPRequest["https://hub.docker.com/v2/repositories/" <> rt[[1]] <> "/tags/" <> rt[[2]]], timeout];
+  If[! AssociationQ[resp] || resp["StatusCode"] =!= 200, Return[Missing["RegistryUnreachable"]]];
+  json = Quiet @ Check[ImportByteArray[StringToByteArray[ToString[resp["Body"]], "UTF-8"], "RawJSON"], $Failed];
+  If[! AssociationQ[json] || ! StringQ[Lookup[json, "digest", None]], Return[Missing["RegistryAnswerUnreadable"]]];
+  <|"Repository" -> rt[[1]], "Tag" -> rt[[2]], "Digest" -> json["digest"],
+    "LastUpdated" -> Lookup[json, "last_updated", Missing["NotProvided"]]|>];
+
+Options[SourceVaultSearXNGVersion] = {"CheckRemote" -> True, "Endpoint" -> Automatic};
+SourceVaultSearXNGVersion[OptionsPattern[]] := Module[
+  {endpoint, running, date, age, stale, compose, cid, cinfo, parts, iinfo, digests,
+   container = Missing["DockerUnavailable"], image = Missing["DockerUnavailable"],
+   latest = Missing["NotChecked"], upd = Missing["Unknown"], advice},
+  endpoint = iSearXNGEndpoint[OptionValue["Endpoint"]];
+  running = iSearXNGRunningVersion[endpoint];
+  date = iSearXNGVersionDate[running];
+  age = iSearXNGAgeDays[date];
+  stale = If[IntegerQ[age], age > $SourceVaultSearXNGMaxAgeDays, Missing["Unknown"]];
+  compose = iSearXNGComposeArgs[];
+  If[ListQ[compose],
+    cid = iSearXNGDocker[Join[compose, {"ps", "-q", $SourceVaultSearXNGComposeService}], 30];
+    Which[
+      ! iSearXNGOKQ[cid], Null,
+      iSearXNGOut[cid] === "", container = <|"State" -> "NotRunning"|>,
+      True,
+        cinfo = iSearXNGDocker[{"inspect", First[StringSplit[iSearXNGOut[cid]]], "--format",
+          "{{.Image}}|{{.Config.Image}}|{{.State.Status}}|{{.Created}}"}, 30];
+        parts = If[iSearXNGOKQ[cinfo], StringSplit[iSearXNGOut[cinfo], "|"], {}];
+        If[Length[parts] >= 4,
+          container = <|"ImageId" -> parts[[1]], "Image" -> parts[[2]], "State" -> parts[[3]], "Created" -> parts[[4]]|>;
+          iinfo = iSearXNGDocker[{"image", "inspect", parts[[1]], "--format",
+            "{{.Id}}|{{.Created}}|{{range .RepoDigests}}{{.}},{{end}}"}, 30];
+          parts = If[iSearXNGOKQ[iinfo], StringSplit[iSearXNGOut[iinfo], "|", All], {}];
+          If[Length[parts] >= 3,
+            digests = Select[StringSplit[parts[[3]], ","], # =!= "" &];
+            image = <|"Id" -> parts[[1]], "Created" -> parts[[2]], "RepoDigests" -> digests|>]]]];
+  If[TrueQ[OptionValue["CheckRemote"]] && AssociationQ[container] && StringQ[Lookup[container, "Image", None]],
+    latest = iSearXNGHubTag[container["Image"]];
+    If[AssociationQ[latest] && AssociationQ[image],
+      upd = ! MemberQ[
+        Join[{image["Id"]}, Last[StringSplit[#, "@"]] & /@ Lookup[image, "RepoDigests", {}]],
+        latest["Digest"]]]];
+  advice = Which[
+    MissingQ[running], "SearXNG does not answer at " <> endpoint <> ". Start it (docker compose up -d) before checking the version.",
+    TrueQ[upd] && TrueQ[stale],
+      "The running version is " <> ToString[age] <> " days old and a newer image exists. Update: SourceVaultIntegrityOwnerAction[SourceVaultSearXNGUpdate[]].",
+    TrueQ[upd], "A newer image exists. Update when convenient: SourceVaultIntegrityOwnerAction[SourceVaultSearXNGUpdate[]].",
+    upd === False, "The running image is the latest one.",
+    TrueQ[stale], "The running version is " <> ToString[age] <> " days old; the registry could not be checked from here.",
+    True, "The registry or docker could not be checked from here; the age of the running version is the only signal."];
+  <|"Running" -> running, "RunningDate" -> If[ListQ[date], DateString[date, {"Year", "-", "Month", "-", "Day"}], date],
+    "AgeDays" -> age, "Stale" -> stale, "MaxAgeDays" -> $SourceVaultSearXNGMaxAgeDays,
+    "Container" -> container, "LocalImage" -> image, "Latest" -> latest, "UpdateAvailable" -> upd,
+    "Advice" -> advice, "Endpoint" -> endpoint, "ComposeDirectory" -> $SourceVaultSearXNGComposeDirectory,
+    "CheckedAtUTC" -> iWebNowIso[]|>];
+
+(* ---- 更新 (所有者専用) ---- *)
+iSearXNGWaitUp[endpoint_String, seconds_ : 90] := Module[{t0 = AbsoluteTime[], ok = False},
+  While[! ok && AbsoluteTime[] - t0 < seconds,
+    ok = StringQ[iSearXNGRunningVersion[endpoint, 4]];
+    If[! ok, Pause[3]]];
+  ok];
+
+iSearXNGUpdateLog[rec_Association] := Module[{ls = iWebLocalStateDir[], line},
+  If[StringQ[ls],
+    line = Quiet @ Check[ByteArrayToString[
+      ExportByteArray[iWebJSONSafe[Join[<|"AtUTC" -> iWebNowIso[]|>, rec]], "RawJSON", "Compact" -> True], "UTF-8"], $Failed];
+    If[StringQ[line], Quiet @ iWebAppendLine[FileNameJoin[{ls, "searxng", "update-log.jsonl"}], line]]];
+  rec];
+
+Options[SourceVaultSearXNGUpdate] = {"Rollback" -> Automatic, "Force" -> False, "DryRun" -> False,
+  "Endpoint" -> Automatic, "PullTimeoutSeconds" -> 900};
+SourceVaultSearXNGUpdate[OptionsPattern[]] := Module[
+  {pk, compose, svc, endpoint, before, after, hBefore, hAfter, okBefore, okAfter, cont, image, imageId, rt, tag, steps = {}, r, up,
+   rollbackQ, status},
+  pk = iWebPrincipal[]["Kind"];
+  If[! MemberQ[{"OwnerFE", "OwnerCode"}, pk],
+    Return[Failure["SearXNGNotAuthorized", <|"Function" -> "SourceVaultSearXNGUpdate", "Principal" -> pk,
+      "MessageTemplate" -> "SourceVaultSearXNGUpdate may be called only by the owner; the current principal is `1`. From the front end use SourceVaultIntegrityOwnerAction[SourceVaultSearXNGUpdate[]].",
+      "MessageParameters" -> {pk}|>]]];
+  compose = iSearXNGComposeArgs[];
+  If[! ListQ[compose],
+    Return[Failure["SearXNGComposeNotFound", <|"Directory" -> $SourceVaultSearXNGComposeDirectory,
+      "MessageTemplate" -> "No docker-compose file was found in `1` ($SourceVaultSearXNGComposeDirectory).",
+      "MessageParameters" -> {ToString[$SourceVaultSearXNGComposeDirectory]}|>]]];
+  svc = $SourceVaultSearXNGComposeService;
+  endpoint = iSearXNGEndpoint[OptionValue["Endpoint"]];
+  before = SourceVaultSearXNGVersion["Endpoint" -> endpoint];
+  If[TrueQ[OptionValue["DryRun"]],
+    Return[<|"Status" -> "DryRun", "Before" -> before,
+      "Steps" -> {"tag the current image as <repository>:rollback-<date>", "docker compose pull " <> svc,
+        "docker compose up -d " <> svc, "wait until " <> endpoint <> " answers", "health probe (one fixed search)",
+        "roll back to the tagged image if the new one does not start, or if search worked before and does not work after"}|>]];
+  If[before["UpdateAvailable"] === False && ! TrueQ[OptionValue["Force"]],
+    Return[iSearXNGUpdateLog[<|"Status" -> "AlreadyLatest", "Before" -> KeyTake[before, {"Running", "AgeDays", "LocalImage"}]|>]]];
+  hBefore = SourceVaultSearXNGHealth["Probe" -> True, "Endpoint" -> endpoint];
+  okBefore = MemberQ[{"OK", "Degraded"}, Lookup[hBefore, "Status", ""]];
+  cont = Replace[before["Container"], Except[_Association] -> <||>];
+  image = Lookup[cont, "Image", Missing[]]; imageId = Lookup[cont, "ImageId", Missing[]];
+  (* 1. 今のイメージに戻し用の名前を付ける (pull で :latest が付け替わっても残る) *)
+  tag = Missing["NotTagged"];
+  rt = iSearXNGImageRepoTag[image];
+  If[ListQ[rt] && StringQ[imageId],
+    tag = rt[[1]] <> ":rollback-" <> DateString[{"Year", "Month", "Day"}];
+    r = iSearXNGDocker[{"image", "tag", imageId, tag}, 30]; AppendTo[steps, iSearXNGStep["TagRollback", r]];
+    If[! iSearXNGOKQ[r], tag = Missing["TagFailed"]]];
+  (* 2. pull *)
+  r = iSearXNGDocker[Join[compose, {"pull", svc}], OptionValue["PullTimeoutSeconds"]]; AppendTo[steps, iSearXNGStep["Pull", r]];
+  If[! iSearXNGOKQ[r],
+    Return[iSearXNGUpdateLog[<|"Status" -> "Failed", "FailedStep" -> "Pull", "Before" -> KeyTake[before, {"Running", "AgeDays"}],
+      "RollbackTag" -> tag, "Steps" -> steps|>]]];
+  (* 3. 作り直して起動を待つ *)
+  r = iSearXNGDocker[Join[compose, {"up", "-d", svc}], 180]; AppendTo[steps, iSearXNGStep["Up", r]];
+  up = iSearXNGWaitUp[endpoint, 90];
+  hAfter = If[up, SourceVaultSearXNGHealth["Probe" -> True, "Endpoint" -> endpoint], <|"Status" -> "Unreachable"|>];
+  okAfter = up && MemberQ[{"OK", "Degraded"}, Lookup[hAfter, "Status", ""]];
+  (* 4. 戻すのは、新しい版が起動しないとき・更新前は検索できていたのに更新後にできないとき *)
+  rollbackQ = OptionValue["Rollback"] =!= False && StringQ[tag] && StringQ[image] && (! up || (okBefore && ! okAfter));
+  If[rollbackQ,
+    r = iSearXNGDocker[{"image", "tag", tag, image}, 30]; AppendTo[steps, iSearXNGStep["RetagPrevious", r]];
+    r = iSearXNGDocker[Join[compose, {"up", "-d", "--pull", "never", svc}], 180]; AppendTo[steps, iSearXNGStep["UpPrevious", r]];
+    up = iSearXNGWaitUp[endpoint, 90];
+    status = "RolledBack",
+    status = If[up, "Updated", "Failed"]];
+  $iSearXNGVersionCheckedAt = 0;
+  after = SourceVaultSearXNGVersion["Endpoint" -> endpoint, "CheckRemote" -> False];
+  iSearXNGUpdateLog[<|"Status" -> status,
+    "Before" -> KeyTake[before, {"Running", "AgeDays", "LocalImage"}],
+    "After" -> KeyTake[after, {"Running", "AgeDays", "LocalImage"}],
+    "HealthBefore" -> KeyTake[hBefore, {"Status", "ResultCount", "Unresponsive"}],
+    "Health" -> KeyTake[hAfter, {"Status", "ResultCount", "Unresponsive"}],
+    "RollbackTag" -> tag, "Steps" -> steps|>]];
+
+(* 状態を変える関数と置き場の変数は NBAccess の承認対象 (提案コードから直接は呼べない・代入できない) *)
+If[Length[DownValues[NBAccess`NBRegisterApprovalHeads]] > 0,
+  Quiet @ NBAccess`NBRegisterApprovalHeads[{"SourceVaultSearXNGUpdate"}]];
+If[Length[DownValues[NBAccess`NBRegisterApprovalSetSymbols]] > 0,
+  Quiet @ NBAccess`NBRegisterApprovalSetSymbols[{"$SourceVaultSearXNGComposeDirectory", "$SourceVaultSearXNGComposeService"}]];
 
 End[]  (* `WebIngestPrivate` *)
 

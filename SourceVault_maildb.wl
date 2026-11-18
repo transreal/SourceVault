@@ -163,12 +163,14 @@ iSVUIReadableBody[s_String] :=
     If[iSVUILooksLikeHTML[t], iSVUIHtmlToText[t], t]];
 iSVUIReadableBody[_] := "";
 
+If[! ValueQ[$iSVMDRepairOnIngest], $iSVMDRepairOnIngest = True];
+
 Options[SourceVaultMailSnapshotFromMaildb] = {
   "PrivacyLevel" -> Automatic, "EncryptHeaders" -> False, "StoreBody" -> "Encrypted"};
 
 SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPattern[]] :=
   Module[{msgId, recId, pl, subject, from, to, cc, body, bodyStored, bodyWasHTML,
-     encHeaders, bodyRef, headerEnc, mdPrivacy, mailDelivery, snapshot},
+     encHeaders, bodyRef, headerEnc, mdPrivacy, mailDelivery, snapshot, bodyRepair = None, bodyDamage = None, payload},
     msgId = ToString[Lookup[record, "id", Lookup[record, "MessageID", "unknown"]]];
     recId = iSVMDRecordId[mbox, msgId];
     pl = OptionValue["PrivacyLevel"] /. Automatic -> $SourceVaultDefaultImportedMailPL;
@@ -178,6 +180,22 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
     to   = ToString[Lookup[record, "to", ""]];
     cc   = ToString[Lookup[record, "cc", ""]];
     body = Lookup[record, "body", Missing["NoBody"]];
+    (* 2026-11-17: a body whose 8th bit was lost on the way (7 bit text full of control characters) is restored here,
+       while the text still has its own line ends (a bare line feed / carriage return is a damaged byte, not a line
+       end). Only when the restoration explains the control characters and gives Japanese; the text as it arrived
+       is kept in the encrypted record (BodyBeforeRepair). $iSVMDRepairOnIngest = False switches it off. *)
+    If[StringQ[body] && $iSVMDRepairOnIngest =!= False,
+      Module[{a = Quiet @ Check[TimeConstrained[iSVMDHighBitAnalyze[body], 20, $Failed], $Failed], a2},
+        (* second try, unless the arrived form restores with nothing left over: the form the body is stored in (every
+           line end the same). Whatever a relay did to the line ends, this is the form SourceVaultMailBodyRepair
+           restores afterwards, so the ingest does at least as well. The one that leaves less unexplained is taken. *)
+        If[AssociationQ[a] && TrueQ[a["Signature"]] && ! (StringQ[a["Best"]] && iSVMDHighBitLeft[a] == 0),
+          a2 = Quiet @ Check[TimeConstrained[iSVMDHighBitAnalyze[iSVUINormalizeNewlines[body]], 20, $Failed], $Failed];
+          If[AssociationQ[a2] && StringQ[a2["Best"]] && (! StringQ[a["Best"]] || iSVMDHighBitLeft[a2] < iSVMDHighBitLeft[a]),
+            a = Join[a2, <|"LineEnds" -> Lookup[a, "LineEnds", Missing[]], "StoredFormUsed" -> True|>]]];
+        If[AssociationQ[a] && TrueQ[a["Signature"]], bodyDamage = iSVMDDamageNote[a]];
+        If[AssociationQ[a] && StringQ[a["Best"]] && StringQ[iSVMDHighBitText[a]],
+          bodyRepair = <|"Name" -> a["Best"], "Original" -> body|>; body = iSVMDHighBitText[a]]]];
     mdPrivacy = Lookup[record, "privacy", Missing["Unknown"]];
 
     (* \:672c\:6587\:3092 ingest \:6642\:306b\:300c\:8aad\:3081\:308b\:5e73\:6587\:300d\:3078\:3002HTML \:30e1\:30fc\:30eb\:306f\:3053\:3053\:3067\:30c6\:30ad\:30b9\:30c8\:5316\:3057\:3066\:683c\:7d0d\:3057\:3001
@@ -203,12 +221,12 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
     (* body: \:65e2\:5b9a\:3067\:6697\:53f7\:5316 (PL fail-safe)\:3002inline EncryptedPayload record\:3002
        Body=\:8aad\:3081\:308b\:5e73\:6587\:3002HTML \:3060\:3063\:305f\:5834\:5408\:306f\:539f\:6587\:3092 BodyRaw \:3068\:3057\:3066\:4f75\:305b\:3066\:6697\:53f7\:5316\:6e29\:5b58\:3002 *)
     bodyRef = If[StringQ[body] && OptionValue["StoreBody"] === "Encrypted",
-       With[{put = SourceVault`SourceVaultEncryptedPut[
-            If[TrueQ[bodyWasHTML],
-              <|"Body" -> bodyStored, "BodyRaw" -> body|>,
-              <|"Body" -> bodyStored|>],
-            "PrivacyLevel" -> pl, "ContentType" -> "MailBody", "Persist" -> False,
-            "SensitiveFields" -> If[TrueQ[bodyWasHTML], {"Body", "BodyRaw"}, {"Body"}]]},
+       With[{put = (payload = Join[<|"Body" -> bodyStored|>,
+               If[TrueQ[bodyWasHTML], <|"BodyRaw" -> body|>, <||>],
+               If[AssociationQ[bodyRepair], <|"BodyBeforeRepair" -> bodyRepair["Original"]|>, <||>]];
+             SourceVault`SourceVaultEncryptedPut[payload,
+               "PrivacyLevel" -> pl, "ContentType" -> "MailBody", "Persist" -> False,
+               "SensitiveFields" -> Keys[payload]])},
          If[Lookup[put, "Status", ""] === "Stored", put["Record"], Missing["EncryptFailed"]]],
        If[StringQ[body], Missing["NotStored"], Missing["NoBody"]]];
 
@@ -249,7 +267,11 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
          "HasBody" -> StringQ[body],
          (* \:672c\:6587\:304c HTML \:7531\:6765\:304b (ingest \:6642\:306b\:30c6\:30ad\:30b9\:30c8\:5316\:3057\:305f)\:3002\:539f\:6587\:306f PayloadRefs.Body \:306e
             BodyRaw \:306b\:6697\:53f7\:5316\:6e29\:5b58\:3002format \:30d5\:30e9\:30b0\:306a\:306e\:3067\:975e\:6a5f\:5bc6 (\:516c\:958b\:30e1\:30bf)\:3002 *)
-         "BodyWasHTML" -> TrueQ[bodyWasHTML]|>,
+         "BodyWasHTML" -> TrueQ[bodyWasHTML],
+         (* how the fetcher read the body: "<declared charset>><the reading that was used>" (names only; a format
+            flag like BodyWasHTML). Missing for the sources that do not say. *)
+         "BodyCharset" -> With[{cs = Lookup[record, "bodycharset", Missing[]]},
+            If[StringQ[cs] && cs =!= "", cs, Missing["NotRecorded"]]]|>,
       "AddressBookRefs" -> With[{
           fromIds = iSVMDIngestIds[from, mbox],
           toIds = iSVMDIngestIds[to, mbox],
@@ -291,6 +313,11 @@ SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, OptionsPatter
          "OriginalMaildbPrivacy" -> mdPrivacy,
          "BodyTruncatedByMaildb" -> (StringQ[body] && StringLength[body] >= 50000)|>
     |>;
+    If[AssociationQ[bodyRepair],
+      snapshot["MailMetadataPublic"] = Append[snapshot["MailMetadataPublic"], "BodyRepaired" -> bodyRepair["Name"]]];
+    (* a body with the signature of a lost 8th bit: what was seen when it arrived (numbers only), restored or not *)
+    If[AssociationQ[bodyDamage],
+      snapshot["MailMetadataPublic"] = Append[snapshot["MailMetadataPublic"], "BodyDamage" -> bodyDamage]];
     snapshot];
 
 SourceVaultMailSnapshotDecryptBody[snapshot_Association] :=
@@ -619,7 +646,7 @@ iSVMDAgendaResolutionMap[] :=
     KeyTake[res,
       Select[Keys[res],
         StringQ[#] && AssociationQ[res[#]] &&
-          MemberQ[{"Dismissed", "NotebookCreated"},
+          MemberQ[{"Dismissed", "NotebookCreated", "TodoCreated"},
             Lookup[res[#], "State", Missing[]]] &]]];
 
 iSVMDAgendaResolvedIds[] := AssociationMap[True &, Keys[iSVMDAgendaResolutionMap[]]];
@@ -653,6 +680,28 @@ iSVMDResolvedPassQ[None, _] := True;
 iSVMDResolvedPassQ[f_Association, rid_] :=
   TrueQ[f["Keep"]] === KeyExistsQ[f["Ids"], rid];
 
+(* "Work" -- filter by the work state of the mail's work item (document 15, SourceVault_series.wl; weak binding:
+   without that module nothing is filtered).
+     All | Automatic : no filter (default)
+     "Open"          : not finished yet (proposed, re-proposed, in progress, pending, unclassified)
+     "Untracked"     : not yet taken up by any workflow (proposed, re-proposed, unclassified)
+     "Closed", a state name ("Done", "Rejected", "NoAction", ...) or a list of these
+   "Resolved" looks at one mail (replied / dismissed / notebook / todo); "Work" looks at the whole matter (the thread
+   episode, the owner's decisions, the linked notebook or todo, mails that arrived later).
+   A mail whose state cannot be determined always passes: the filter never hides a mail silently. *)
+iSVMDWorkLayerQ[] := Length[DownValues[SourceVault`SourceVaultMailWorkStateMap]] > 0;
+iSVMDWorkFilter[spec_, dateFrom_] :=
+  If[spec === All || spec === Automatic || ! iSVMDWorkLayerQ[], None,
+    With[{df = iSVMDDayListOf[dateFrom]},
+      <|"States" -> Quiet@Check[SourceVault`SourceVaultMailWorkStatesFor[spec], {}],
+        "Map" -> Quiet@Check[SourceVault`SourceVaultMailWorkStateMap[All,
+          "Window" -> If[MatchQ[df, {_Integer, _Integer, _Integer}],
+            Ceiling[(AbsoluteTime[] - AbsoluteTime[df])/86400.] + 2, Automatic]], <||>]|>]];
+iSVMDWorkPassQ[None, _] := True;
+iSVMDWorkPassQ[f_Association, rid_] :=
+  With[{e = Lookup[f["Map"], rid, Missing[]]},
+    ! AssociationQ[e] || MemberQ[f["States"], Lookup[e, "State", ""]]];
+
 Options[SourceVaultSearchMailSnapshots] = {
   "FromContact" -> Automatic, "From" -> Automatic, "To" -> Automatic, "MBox" -> Automatic,
   "DateFrom" -> Automatic, "DateTo" -> Automatic, "HasAttachment" -> Automatic,
@@ -660,7 +709,7 @@ Options[SourceVaultSearchMailSnapshots] = {
   "DeadlineFrom" -> Automatic, "DeadlineTo" -> Automatic,
   "MinPriority" -> Automatic, "MaxPriority" -> Automatic,
   "MinPrivacy" -> Automatic, "MaxPrivacy" -> Automatic,
-  "ExcludeAgenda" -> False, "AgendaItems" -> Automatic, "Resolved" -> All,
+  "ExcludeAgenda" -> False, "AgendaItems" -> Automatic, "Resolved" -> All, "Work" -> All,
   "SortBy" -> Automatic, "SortOrder" -> "Desc", "Newest" -> True, "Limit" -> Automatic};
 
 iSVMDSnapDate[s_] := Lookup[s["MailMetadataPublic"], "Date", ""];
@@ -694,9 +743,10 @@ iSVMDSortKey[by_][s_] := Switch[by,
 
 SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
   Module[{q, fc, fr, toQ, mb, df, dt, ha, cat, hd, ddf, ddt, hits, lim,
-      minP, maxP, minPr, maxPr, by, ord, excl, resv},
+      minP, maxP, minPr, maxPr, by, ord, excl, resv, wrk},
     excl = iSVMDAgendaExcludeSet[OptionValue["ExcludeAgenda"], OptionValue["AgendaItems"]];
     resv = iSVMDResolvedFilter[OptionValue["Resolved"]];
+    wrk = iSVMDWorkFilter[OptionValue["Work"], OptionValue["DateFrom"]];
     q = StringTrim[query]; fc = OptionValue["FromContact"]; fr = OptionValue["From"];
     toQ = OptionValue["To"]; mb = OptionValue["MBox"];
     df = iSVMDDayListOf[OptionValue["DateFrom"]]; dt = iSVMDDayListOf[OptionValue["DateTo"]];
@@ -714,6 +764,7 @@ SourceVaultSearchMailSnapshots[query_String : "", OptionsPattern[]] :=
        And[
          iSVMDNotExcludedQ[excl, Lookup[s, "RecordId", Missing[]]],
          iSVMDResolvedPassQ[resv, Lookup[s, "RecordId", Missing[]]],
+         iSVMDWorkPassQ[wrk, Lookup[s, "RecordId", Missing[]]],
          q === "" ||
            AnyTrue[{Lookup[s["MailMetadataPublic"], "Subject", ""],
                     Lookup[s["Derived"], "Summary", ""]},
@@ -1016,13 +1067,24 @@ SourceVaultMailInteractionStats[] := (iSVMDInteractionLoad[]; $iSVMDInteraction)
 
 iSVMDIndexExt = ".svmailidx";
 
+(* A file of the store is named by its month (<yyyymm>, or "unknown" for mails without a date): letters, digits, _ and -.
+   A copy that a file-sync conflict leaves beside a month ("202611 (HOST conflicted copy 2026-11-14).svmail") is NOT a
+   month of the store.
+   Owner's store, 2026-11-18: three such copies lay beside the months of a mailbox. Every *.svmail was listed as a month,
+   so the period "Latest" (the default) resolved to the copy of 11-14 -- its name sorts after "202611" -- and a kernel
+   that loaded "Latest" and then saved the month wrote the month back as it was on 11-14, without the mails that came
+   later; the whole-store load put the older mails of a copy over the newer ones; the index listed the mails twice.
+   The copies are left where they are (they may hold what a conflict lost): they are only not read as months. *)
+iSVMDStoreFileQ[path_String] := StringMatchQ[FileBaseName[path], RegularExpression["[A-Za-z0-9_-]+"]];
+iSVMDStoreFileQ[_] := False;
+
 iSVMDIndexPath[shardKey_String] :=
   FileNameJoin[{SourceVaultMailStoreRoot[],
      Sequence @@ (StringSplit[shardKey, "/"] /. {m_, y_} :> {m, y <> iSVMDIndexExt})}];
 
 iSVMDIndexFiles[mbox_ : All] :=
   Module[{root = SourceVaultMailStoreRoot[], files},
-    files = If[DirectoryQ[root], FileNames["*" <> iSVMDIndexExt, root, 2], {}];
+    files = Select[If[DirectoryQ[root], FileNames["*" <> iSVMDIndexExt, root, 2], {}], iSVMDStoreFileQ];
     If[mbox === All, files, Select[files, FileNameTake[DirectoryName[#]] === mbox &]]];
 
 (* DateFrom/DateTo が指定された索引検索では、該当月の .svmailidx だけを読む。
@@ -1148,9 +1210,10 @@ iSVMDIxDeadlineInRange[row_, fromDay_, toDay_] :=
 Options[SourceVaultMailSearchIndex] = Options[SourceVaultSearchMailSnapshots];
 SourceVaultMailSearchIndex[query : (_String | {__String}) : "", OptionsPattern[]] :=
   Module[{q, fr, toQ, fc, mb, df, dt, ha, cat, hd, ddf, ddt, minP, maxP, minPr, maxPr,
-      by, ord, lim, rows, hits, excl, resv},
+      by, ord, lim, rows, hits, excl, resv, wrk},
     excl = iSVMDAgendaExcludeSet[OptionValue["ExcludeAgenda"], OptionValue["AgendaItems"]];
     resv = iSVMDResolvedFilter[OptionValue["Resolved"]];
+    wrk = iSVMDWorkFilter[OptionValue["Work"], OptionValue["DateFrom"]];
     (* query はリスト可 (いずれかに部分一致 = OR)。空要素を落とし、
        残りを Alternatives に畳む。以降の判定 (q === "" / StringContainsQ)
        は文字列と Alternatives のどちらでもそのまま動く。 *)
@@ -1176,6 +1239,7 @@ SourceVaultMailSearchIndex[query : (_String | {__String}) : "", OptionsPattern[]
        And[
          iSVMDNotExcludedQ[excl, Lookup[r, "RecordId", Missing[]]],
          iSVMDResolvedPassQ[resv, Lookup[r, "RecordId", Missing[]]],
+         iSVMDWorkPassQ[wrk, Lookup[r, "RecordId", Missing[]]],
          q === "" ||
            AnyTrue[{Lookup[r, "Subject", ""], Lookup[r, "Summary", ""]},
              StringQ[#] && StringContainsQ[#, q, IgnoreCase -> True] &],
@@ -1227,7 +1291,7 @@ SourceVaultMailStoreLoad[] :=
     $iSVMDStore = <||>; $iSVMDShardMembers = <||>; $iSVMDDirtyShards = <||>; $iSVMDLoadedShards = <||>;
     files = If[DirectoryQ[root], FileNames["*.svmail", root, 2], {}];
     (* \:30b7\:30e3\:30fc\:30c9\:306f root/mbox/<yyyymm>.svmail\:3002\:65e7\:5358\:4e00\:30d5\:30a1\:30a4\:30eb snapshots.svmail \:306f\:9664\:5916 (\:79fb\:884c\:5bfe\:8c61)\:3002 *)
-    files = Select[files, FileNameTake[#] =!= "snapshots.svmail" &];
+    files = Select[files, FileNameTake[#] =!= "snapshots.svmail" && iSVMDStoreFileQ[#] &];
     all = Join @@ (iSVMDReadShardFile /@ files);
     Scan[iSVMDIndexSnapshot, all];
     Scan[AssociateTo[$iSVMDLoadedShards, iSVMDPathToShardKey[#] -> True] &, files];
@@ -1245,7 +1309,7 @@ SourceVaultMailAvailableShards[mbox_ : All] :=
   Module[{root, files, parsed},
     root = SourceVaultMailStoreRoot[];
     files = If[DirectoryQ[root], FileNames["*.svmail", root, 2], {}];
-    files = Select[files, FileNameTake[#] =!= "snapshots.svmail" &];
+    files = Select[files, FileNameTake[#] =!= "snapshots.svmail" && iSVMDStoreFileQ[#] &];
     parsed = {FileNameTake[DirectoryName[#]],
        StringDrop[FileNameTake[#], -StringLength[".svmail"]]} & /@ files;
     If[mbox === All, parsed, Select[parsed, First[#] === mbox &]]];
@@ -1473,9 +1537,13 @@ EndPackage[];
 BeginPackage["SourceVault`", {"NBAccess`"}];
 
 SourceVaultMailFetchNew::usage =
-  "SourceVaultMailFetchNew[mbox, opts] \:306f IMAP \:304b\:3089\:65b0\:7740\:306e\:307f\:53d6\:5f97\:3057 snapshot \:5316\:3057\:3066 store \:306b\:4fdd\:5b58\:3059\:308b\:3002\:65e2\:5b9a\:306f LLM \:51e6\:7406\:306a\:3057\:3002opts: \"Period\"(\"Latest\"|n\:65e5|{from,to}|\"YYYYMM\"), \"Process\"(\:65e2\:5b9aFalse), \"MessageSource\"(\:65e2\:5b9a=\:5b9fIMAP, \:6ce8\:5165\:53ef), \"Inferencer\", \"Persist\"(\:65e2\:5b9aTrue), \"MaxEmails\"\:3002RecordId \:3067\:65e2\:5b58\:3068\:91cd\:8907\:6392\:9664\:3002";
+  "SourceVaultMailFetchNew[mbox, opts] \:306f IMAP \:304b\:3089\:65b0\:7740\:306e\:307f\:53d6\:5f97\:3057 snapshot \:5316\:3057\:3066 store \:306b\:4fdd\:5b58\:3059\:308b\:3002\:65e2\:5b9a\:306f LLM \:51e6\:7406\:306a\:3057\:3002opts: \"Period\"(\"Latest\"|n\:65e5|{from,to}|\"YYYYMM\"), \"Process\"(\:65e2\:5b9aFalse), \"MessageSource\"(\:65e2\:5b9a=\:5b9fIMAP, \:6ce8\:5165\:53ef), \"Inferencer\", \"Persist\"(\:65e2\:5b9aTrue), \"MaxEmails\"\:3002RecordId \:3067\:65e2\:5b58\:3068\:91cd\:8907\:6392\:9664\:3002 \"Overwrite\" -> True \:306f\:3001\:53d6\:5f97\:3057\:305f\:30e1\:30fc\:30eb\:3067\:65e2\:5b58\:306e\:8a18\:9332\:3082\:66f8\:304d\:76f4\:3059\:3002\"OverwriteFilter\" (\:65e2\:5b9a All) \:306b\:95a2\:6570\:3092\:6e21\:3059\:3068\:3001\:65e2\:5b58\:306e\:8a18\:9332\:306e\:3046\:3061\:305d\:308c\:304c True \:3092\:8fd4\:3059\:30e1\:30fc\:30eb\:3060\:3051\:3092\:66f8\:304d\:76f4\:3059 (\:4e00\:90e8\:306e\:5dee\:51fa\:4eba\:306e\:672c\:6587\:3060\:3051\:3092\:53d6\:308a\:76f4\:3059\:4fee\:5fa9\:7528\:3002\:95a2\:6570\:306f\:53d6\:5f97\:3057\:305f\:8a18\:9332 <|\"from\", \"subject\", \:2026|> \:3092\:53d7\:3051\:53d6\:308b)\:3002\:7d50\:679c\:306e \"BodyDecoding\" \:306f\:3001\:672c\:6587\:306e\:6587\:5b57\:30b3\:30fc\:30c9 (\:5ba3\:8a00 > \:5b9f\:969b\:306b\:4f7f\:3063\:305f\:3082\:306e) \:3054\:3068\:306e\:901a\:6570\:3002\"BodyDecodingStored\" \:306f\:3001\:305d\:306e\:3046\:3061\:66f8\:304d\:8fbc\:3093\:3060\:30e1\:30fc\:30eb\:3060\:3051\:306e\:5185\:8a33\:3002 \"SearchFrom\" -> \"example.jp\" \:306f\:3001\:5dee\:51fa\:4eba\:306b\:305d\:306e\:6587\:5b57\:5217\:3092\:542b\:3080\:30e1\:30fc\:30eb\:3060\:3051\:3092\:30b5\:30fc\:30d0\:3067\:63a2\:3057\:3066\:53d6\:308a\:8fbc\:3080 (\:3042\:308b\:5dee\:51fa\:4eba\:306e\:672c\:6587\:3060\:3051\:3092\:53d6\:308a\:76f4\:3059\:3068\:304d\:3001\:305d\:306e\:6708\:306e\:5168\:90e8\:3092\:8aad\:307e\:305a\:306b\:6e08\:3080\:3002\:4f7f\:3048\:308b\:6587\:5b57\:306f\:82f1\:6570\:5b57\:3068 @ . _ -)\:3002";
 SourceVaultMailDerivedPending::usage =
   "SourceVaultMailDerivedPending[opts] \:306f\:30ed\:30fc\:30c9\:6e08\:307f store \:306e\:4e2d\:3067\:6d3e\:751f (PL/\:512a\:5148\:5ea6/\:6982\:8981) \:672a\:51e6\:7406\:306e snapshot \:3092\:8fd4\:3059\:3002opts: \"MBox\"(\:65e2\:5b9a Automatic\:3002\:6587\:5b57\:5217\:3067\:305d\:306e mbox \:306b\:9650\:5b9a), \"DateFrom\"/\"DateTo\"(\:65e2\:5b9a Automatic\:3002DateObject/\:6587\:5b57\:5217/{y,m,d} \:3067\:65e5\:4ed8\:7bc4\:56f2\:306b\:9650\:5b9a\:3001\:65e5\:5358\:4f4d\:5305\:542b)\:3002";
+SourceVaultMailBodyProfile::usage =
+  "SourceVaultMailBodyProfile[recordId]\:3001[{recordId, \:2026}]\:3001[mbox, period, opts] \:306f\:3001\:4fdd\:5b58\:3055\:308c\:305f\:672c\:6587\:306e\:300c\:5f62\:300d\:3060\:3051\:3092\:8fd4\:3059\:3002\:672c\:6587\:306e\:6587\:5b57\:306f\:8fd4\:3055\:306a\:3044\:3002\:8fd4\:3059\:306e\:306f\:3001\:6587\:5b57\:306e\:7a2e\:985e\:3054\:3068\:306e\:6570 (\"Classes\")\:3001\:884c\:306e\:6570\:30fb\:9577\:3055\:30fb\:7a2e\:985e (\"LineLengths\"\:3001\"LineKinds\": J = \:65e5\:672c\:8a9e\:3001A = ASCII\:3001U = URL\:3001E = \:7a7a\:3001X = \:305d\:306e\:4ed6)\:3001\:5f62\:306e\:30e9\:30d9\:30eb (\"Shape\": Japanese / URLOnly / ASCII / Garbled:<\:76f4\:3057\:65b9> / Suspect:<\:7591\:3044> / Damaged / Empty / OtherScript / BodyUnavailable)\:3001\:624b\:304c\:304b\:308a (\"Hints\")\:3001\:5143\:306b\:623b\:305b\:308b\:6587\:5b57\:5316\:3051\:306e\:76f4\:3057\:65b9\:3068\:305d\:306e\:7d50\:679c\:306e\:6570 (\"Repairs\")\:3001\:6982\:8981\:306e\:72b6\:614b (\"Derived\")\:3002period \:306f \"YYYYMM\" \:306a\:3069 (SourceVaultMailEnsureLoaded \:3068\:540c\:3058)\:3002opts: \"From\"\:30fb\"Subject\" (\:542b\:3080\:6587\:5b57\:5217\:3067\:7d5e\:308b)\:3001\"Limit\" (\:65e2\:5b9a 200)\:3002\:672c\:6587\:304c\:6587\:5b57\:5316\:3051\:3057\:3066\:898b\:3048\:308b\:3068\:304d\:3001\:539f\:56e0\:3092\:672c\:6587\:3092\:898b\:305b\:305a\:306b\:8abf\:3079\:308b\:305f\:3081\:306e\:3082\:306e\:3002\"HighBit\" \:304c\:3042\:308b\:306e\:306f\:30018 \:30d3\:30c3\:30c8\:76ee\:304c\:843d\:3061\:305f\:672c\:6587 (7 \:30d3\:30c3\:30c8\:306e\:6587\:5b57\:3060\:3051\:3067\:5236\:5fa1\:6587\:5b57\:304c\:591a\:3044) \:306e\:5f62\:3092\:3057\:3066\:3044\:308b\:3068\:304d\:3067\:3001UTF-8 \:3068 Shift_JIS \:306e\:305d\:308c\:305e\:308c\:3068\:3057\:3066\:623b\:3057\:305f\:3068\:304d\:306e\:6570 (\:623b\:3063\:305f\:6587\:5b57\:30fb\:4eee\:540d\:30fb\:6f22\:5b57\:30fb\:3069\:3061\:3089\:3068\:3082\:8aad\:3081\:308b\:7b87\:6240\:30fb\:8aac\:660e\:306e\:4ed8\:304b\:306a\:3044\:5236\:5fa1\:6587\:5b57) \:3068\:3001\:63a1\:7528\:3067\:304d\:308b\:65b9 (\"Best\") \:3092\:793a\:3059\:3002";
+SourceVaultMailBodyRepair::usage =
+  "SourceVaultMailBodyRepair[mbox, period, opts] \:306f\:3001\:5143\:306b\:623b\:305b\:308b\:6587\:5b57\:5316\:3051 (\:9014\:4e2d\:3067\:9055\:3046\:6587\:5b57\:30b3\:30fc\:30c9\:3068\:3057\:3066\:8aad\:307e\:308c\:305f\:672c\:6587) \:3092\:3001\:4fdd\:5b58\:6e08\:307f\:306e\:672c\:6587\:306b\:5f53\:3066\:3066\:76f4\:3059\:3002\:65e2\:5b9a\:306f \"DryRun\" -> True \:3067\:3001\:76f4\:305b\:308b\:4ef6\:6570\:3068\:76f4\:3057\:65b9\:3060\:3051\:3092\:8fd4\:3059 (\:4fdd\:7ba1\:5148\:306f\:5909\:3048\:306a\:3044)\:3002\"DryRun\" -> False \:3067\:672c\:6587\:3092\:66f8\:304d\:76f4\:3059\:3002\:5143\:306e\:672c\:6587\:306f BodyBeforeRepair \:3068\:3057\:3066\:6697\:53f7\:5316\:3057\:305f\:307e\:307e\:8a18\:9332\:306b\:6b8b\:3057\:3001\:6982\:8981\:306f\:4f5c\:308a\:76f4\:3057\:306e\:5bfe\:8c61 (Pending) \:306b\:623b\:3059\:3002\:6982\:8981\:306e\:4f5c\:308a\:76f4\:3057\:306f LLM \:3092\:901a\:6570\:3076\:3093\:547c\:3076\:306e\:3067\:3001\:30d5\:30ed\:30f3\:30c8\:30a8\:30f3\:30c9\:306b\:3064\:306a\:304c\:3063\:305f\:30ab\:30fc\:30cd\:30eb\:3067\:306f ClaudeGenerateMailSummaries[mbox, Infinity, period] \:3067\:5225\:30d7\:30ed\:30bb\:30b9\:306b\:4efb\:305b\:308b (\:7d50\:679c\:306e \"Next\" \:306b\:305d\:306e\:5f0f\:304c\:5165\:308b)\:3002SourceVaultMailAddSummaries \:3092\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3067\:76f4\:63a5\:8a55\:4fa1\:3059\:308b\:3068\:3001\:7d42\:308f\:308b\:307e\:3067\:30d5\:30ed\:30f3\:30c8\:30a8\:30f3\:30c9\:3092\:585e\:3050\:3002opts: \"From\"\:30fb\"Subject\"\:30fb\"Limit\"\:3001\"Repair\" (\:76f4\:3057\:65b9\:306e\:540d\:524d\:3002\:65e2\:5b9a Automatic \:306f\:6700\:521d\:306b\:52b9\:304f\:3082\:306e)\:3002\:76f4\:3057\:65b9\:306e\:540d\:524d\:306f SourceVaultMailBodyProfile \:306e \"Repairs\" \:306b\:51fa\:308b\:30028 \:30d3\:30c3\:30c8\:76ee\:304c\:843d\:3061\:305f\:672c\:6587 (UTF8HighBitStripped\:30fbShiftJISHighBitStripped) \:306f\:3001\:3069\:3061\:3089\:3068\:3082\:8aad\:3081\:308b\:7b87\:6240\:3092 \:3014A|B\:3015\:3001\:8aac\:660e\:306e\:4ed8\:304b\:306a\:3044\:5236\:5fa1\:6587\:5b57\:3092 \:3013 \:3067\:793a\:3059\:3002";
 SourceVaultMailDerivedPendingQ::usage =
   "SourceVaultMailDerivedPendingQ[snapshot] \:306f\:6d3e\:751f\:304c\:672a\:51e6\:7406 (\"Pending\") \:306a\:3089 True\:3002";
 SourceVaultInferMailDerivedBatch::usage =
@@ -1483,7 +1551,7 @@ SourceVaultInferMailDerivedBatch::usage =
 SourceVaultMailInferDerived::usage =
   "SourceVaultMailInferDerived[mailspec] \:306f mailspec(date/subject/from/to/cc/body)\:304b\:3089\:30ed\:30fc\:30ab\:30eb LLM \:3067 <|WorkRequest, PrivacyLevel, Category, Deadline, Summary, Status|> \:3092\:8fd4\:3059(\:512a\:5148\:5ea6\:306f\:69cb\:9020\:7684\:306b\:5225\:8a08\:7b97)\:3002Category \:306f $SourceVaultMailCategories \:306e\:30c8\:30fc\:30af\:30f3\:3001Deadline \:306f ISO \:6587\:5b57\:5217\:307e\:305f\:306f Missing[\"None\"]\:3002";
 SourceVaultMailAddSummaries::usage =
-  "SourceVaultMailAddSummaries[mbox_String, period_:\"Latest\", opts] \:306f mbox \:306e\:6307\:5b9a\:671f\:9593\:306e\:30e1\:30fc\:30eb\:3092 SourceVaultMailEnsureLoaded \:3067\:30ed\:30fc\:30c9\:3057\:3066\:304b\:3089\:3001\:305d\:306e mbox \:306e\:672a\:51e6\:7406 snapshot \:306e\:6d3e\:751f(\:6982\:8981/\:30ab\:30c6\:30b4\:30ea/\:512a\:5148\:5ea6/\:3006\:5207)\:3092 SourceVaultInferMailDerivedBatch \:3067\:4e00\:62ec\:751f\:6210\:30fb\:4fdd\:5b58\:3059\:308b\:3002\:300c<mbox>\:306e\:65b0\:7740\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:8ffd\:52a0\:300d\:306e\:6b63\:6e96\:30a8\:30f3\:30c8\:30ea\:30dd\:30a4\:30f3\:30c8(EnsureLoaded \:3068\:30d0\:30c3\:30c1\:30921\:95a2\:6570\:306b\:5185\:5305\:3059\:308b\:306e\:3067\:3001\:5916\:90e8 WolframScript \:30b8\:30e7\:30d6\:3078\:9000\:907f\:3055\:308c\:3066\:3082\:30ed\:30fc\:30c9\:304b\:3089\:81ea\:5df1\:5b8c\:7d50\:3057\:3001\:7a7a\:30b9\:30c8\:30a2\:30670\:4ef6\:51e6\:7406\:306b\:306a\:308b\:5931\:6557\:3092\:9632\:3050)\:3002opts: \"Limit\"(\:65e2\:5b9a Infinity=\:65b0\:7740\:5168\:4ef6), \"Persist\"(\:65e2\:5b9a True), \"Refresh\"(\:65e2\:5b9a None=\:672a\:51e6\:7406\:306e\:307f\:3002\"MissingCategory\"=\:5206\:985e\:304c\:672a\:751f\:6210\:306e\:51e6\:7406\:6e08\:307f\:3082\:518d\:63a8\:8ad6\:3001\"Ungrounded\"=\:4fdd\:5b58\:6e08\:307f\:30b5\:30de\:30ea\:30fc\:304c\:305d\:306e\:30e1\:30fc\:30eb\:306b\:63a5\:5730\:3057\:3066\:3044\:306a\:3044\:51e6\:7406\:6e08\:307f\:3092\:518d\:63a8\:8ad6\:3001All=\:5168\:4ef6), \"DateFrom\"/\"DateTo\"(\:65e2\:5b9a Automatic=\:671f\:9593\:3067\:7d5e\:3089\:306a\:3044)\:3002\:8fd4\:308a\:5024 <|Status, MBox, Period, Loaded, Batch|>\:3002";
+  "SourceVaultMailAddSummaries[mbox_String, period_:\"Latest\", opts] \:306f mbox \:306e\:6307\:5b9a\:671f\:9593\:306e\:30e1\:30fc\:30eb\:3092 SourceVaultMailEnsureLoaded \:3067\:30ed\:30fc\:30c9\:3057\:3066\:304b\:3089\:3001\:305d\:306e mbox \:306e\:672a\:51e6\:7406 snapshot \:306e\:6d3e\:751f(\:6982\:8981/\:30ab\:30c6\:30b4\:30ea/\:512a\:5148\:5ea6/\:3006\:5207)\:3092 SourceVaultInferMailDerivedBatch \:3067\:4e00\:62ec\:751f\:6210\:30fb\:4fdd\:5b58\:3059\:308b\:3002\:300c<mbox>\:306e\:65b0\:7740\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:8ffd\:52a0\:300d\:306e\:6b63\:6e96\:30a8\:30f3\:30c8\:30ea\:30dd\:30a4\:30f3\:30c8(EnsureLoaded \:3068\:30d0\:30c3\:30c1\:30921\:95a2\:6570\:306b\:5185\:5305\:3059\:308b\:306e\:3067\:3001\:5916\:90e8 WolframScript \:30b8\:30e7\:30d6\:3078\:9000\:907f\:3055\:308c\:3066\:3082\:30ed\:30fc\:30c9\:304b\:3089\:81ea\:5df1\:5b8c\:7d50\:3057\:3001\:7a7a\:30b9\:30c8\:30a2\:30670\:4ef6\:51e6\:7406\:306b\:306a\:308b\:5931\:6557\:3092\:9632\:3050)\:3002opts: \"Limit\"(\:65e2\:5b9a Infinity=\:65b0\:7740\:5168\:4ef6), \"Persist\"(\:65e2\:5b9a True), \"Refresh\"(\:65e2\:5b9a None=\:672a\:51e6\:7406\:306e\:307f\:3002\"MissingCategory\"=\:5206\:985e\:304c\:672a\:751f\:6210\:306e\:51e6\:7406\:6e08\:307f\:3082\:518d\:63a8\:8ad6\:3001\"Ungrounded\"=\:4fdd\:5b58\:6e08\:307f\:30b5\:30de\:30ea\:30fc\:304c\:305d\:306e\:30e1\:30fc\:30eb\:306b\:63a5\:5730\:3057\:3066\:3044\:306a\:3044\:51e6\:7406\:6e08\:307f\:3092\:518d\:63a8\:8ad6\:3001All=\:5168\:4ef6), \"DateFrom\"/\"DateTo\"(\:65e2\:5b9a Automatic=\:671f\:9593\:3067\:7d5e\:3089\:306a\:3044)\:3002\:8fd4\:308a\:5024 <|Status, MBox, Period, Loaded, Batch|>\:3002 \"RepairBodiesFrom\" -> \"example.jp\" \:3092\:4ed8\:3051\:308b\:3068\:3001\:8981\:7d04\:306e\:524d\:306b\:3001\:305d\:306e\:5dee\:51fa\:4eba\:306e\:671f\:9593\:5185\:306e\:30e1\:30fc\:30eb\:306e\:3046\:3061 8 \:30d3\:30c3\:30c8\:76ee\:304c\:843d\:3061\:305f\:672c\:6587\:3092\:623b\:3059 (SourceVaultMailBodyRepair \:3068\:540c\:3058\:3002\:7d50\:679c\:306e \"Repair\" \:306b\:4ef6\:6570)\:3002\"Limit\" -> 0 \:306a\:3089\:672c\:6587\:306e\:4fee\:5fa9\:3060\:3051\:3092\:884c\:3046\:3002ClaudeGenerateMailSummaries[mbox, n, period, \"RepairBodiesFrom\" -> ...] \:3067\:3001\:4fee\:5fa9\:3068\:8981\:7d04\:306e\:4e21\:65b9\:304c\:5225\:30d7\:30ed\:30bb\:30b9\:3067\:8d70\:308b\:3002";
 SourceVaultRegisterMailspecEnricher::usage =
   "SourceVaultRegisterMailspecEnricher[name, f] \:306f\:6d3e\:751f(\:30b5\:30de\:30ea\:30fc\:4f5c\:6210)\:6642\:306b LLM \:3078\:6e21\:3059 mailspec \:3092\:62e1\:5f35\:3059\:308b enricher \:3092\:767b\:9332\:3059\:308b(Cerezo.wl \:7b49\:306e\:62e1\:5f35\:7528)\:3002f[mailspec, snapshot] \:304c\:5909\:66f4\:5f8c\:306e mailspec(Association)\:3092\:8fd4\:3059\:3068\:305d\:308c\:304c LLM \:5165\:529b\:306b\:4f7f\:308f\:308c\:3001Derived.DerivedEnrichment \:306b\:540d\:524d\:304c\:8a18\:9332\:3055\:308c\:308b\:3002\:975e\:8a72\:5f53/\:5931\:6557\:6642\:306f mailspec \:3092\:305d\:306e\:307e\:307e\:8fd4\:3059\:3002\:53d6\:308a\:8fbc\:307f\:30fb\:4fdd\:5b58\:30ec\:30b3\:30fc\:30c9\:5f62\:5f0f\:306b\:306f\:5f71\:97ff\:305b\:305a\:3001\:672a\:767b\:9332\:306a\:3089\:5b8c\:5168\:7d20\:901a\:3057\:3002";
 SourceVaultUnregisterMailspecEnricher::usage =
@@ -2720,6 +2788,417 @@ SourceVaultBackfillMailBodies[OptionsPattern[]] :=
       "Converted" -> done, "SkippedPlain" -> skipped,
       "FailedBodyDecrypt" -> failBody, "FailedEncrypt" -> failEnc, "DryRun" -> dry|>];
 
+(* ---- the shape of a stored body, without its content; repair of a garbled one (2026-11-17) ----
+   Owner's store, 2026-11-17: the bodies of a broadcast sender were fetched again with the corrected charset handling and
+   their summaries still said that the body is garbled. Every declared charset had been honoured, so the cause is not in
+   the declaration; what the stored text looks like has to be seen -- without showing it.
+   SourceVaultMailBodyProfile decrypts a body in the owner's kernel and returns only: counts of character classes, the
+   lengths and kinds of the lines, a label for the shape, hints, and which of the known reversible garblings (a text that
+   was read with the wrong encoding somewhere on the way) would turn it into Japanese. No character of the body is
+   returned. SourceVaultMailBodyRepair applies such a reversal to stored bodies (dry run by default; the text as it was is
+   kept, encrypted, as BodyBeforeRepair; the mail is derived again). *)
+iSVMDCountIn[c_List, lo_Integer, hi_Integer] := Count[c, _?(lo <= # <= hi &)];
+iSVMDTextClasses[s_String] := Module[{c = ToCharacterCode[s], a},
+  a = <|"Length" -> Length[c],
+    "ASCII" -> iSVMDCountIn[c, 33, 126],
+    "Whitespace" -> Count[c, 9 | 10 | 13 | 32 | 12288],
+    "Escape" -> Count[c, 27],
+    "Control" -> Count[c, _?((# < 32 && ! MemberQ[{9, 10, 13, 27}, #]) || # == 127 &)],
+    "C1" -> iSVMDCountIn[c, 128, 159],
+    "Latin1" -> iSVMDCountIn[c, 160, 255],
+    "Kana" -> iSVMDCountIn[c, 12352, 12543],
+    "Kanji" -> iSVMDCountIn[c, 19968, 40959],
+    "JapanesePunctuation" -> iSVMDCountIn[c, 12289, 12351] + iSVMDCountIn[c, 65281, 65376],
+    "HalfwidthKana" -> iSVMDCountIn[c, 65377, 65439],
+    "Replacement" -> Count[c, 65533],
+    "PrivateUse" -> iSVMDCountIn[c, 57344, 63743]|>;
+  Append[a, "Other" -> a["Length"] - Total[Values[KeyDrop[a, "Length"]]]]];
+iSVMDTextClasses[_] := <||>;
+
+(* text -> the bytes it would have in one encoding -> the text those bytes are in another. $Failed unless every character
+   has a byte form and every byte sequence is valid ("Western" = ISO-8859-1 with the Windows-1252 punctuation). *)
+$iSVMDCP1252Bytes = <|8364 -> 128, 8218 -> 130, 402 -> 131, 8222 -> 132, 8230 -> 133, 8224 -> 134, 8225 -> 135, 710 -> 136,
+  8240 -> 137, 352 -> 138, 8249 -> 139, 338 -> 140, 381 -> 142, 8216 -> 145, 8217 -> 146, 8220 -> 147, 8221 -> 148,
+  8226 -> 149, 8211 -> 150, 8212 -> 151, 732 -> 152, 8482 -> 153, 353 -> 154, 8250 -> 155, 339 -> 156, 382 -> 158, 376 -> 159|>;
+iSVMDBytesOf[s_String, "Western"] := Replace[ToCharacterCode[s], x_ /; x > 255 :> Lookup[$iSVMDCP1252Bytes, x, None], {1}];
+iSVMDBytesOf[s_String, enc_String] := Quiet @ Check[ToCharacterCode[s, enc], $Failed];
+iSVMDReencode[s_String, from_String, to_String] := Module[{b = iSVMDBytesOf[s, from], t},
+  If[! ListQ[b] || b === {} || ! VectorQ[b, IntegerQ] || Max[b] > 255, Return[$Failed]];
+  t = Quiet @ Check[FromCharacterCode[b, to], $Failed];
+  If[StringQ[t] && StringFreeQ[t, FromCharacterCode[65533]], t, $Failed]];
+iSVMDReencode[___] := $Failed;
+(* line by line: a line that does not convert stays as it is (a mail is often garbled only in part) *)
+iSVMDRepairLines[s_String, from_String, to_String] := Module[{n = 0, lines},
+  lines = Function[ln,
+     If[ln === "" || Max[ToCharacterCode[ln]] <= 127, ln,
+       With[{r = iSVMDReencode[ln, from, to]}, If[StringQ[r] && r =!= ln, n++; r, ln]]]] /@ StringSplit[s, "\n", All];
+  If[n > 0, StringRiffle[lines, "\n"], $Failed]];
+(* ISO-2022-JP whose escape characters were lost on the way ("$B...(B" in the text), or left in the text undecoded *)
+iSVMDJISPairsToText[str_String] := Module[{c = ToCharacterCode[str], sj, t},
+  If[c === {} || OddQ[Length[c]], Return[$Failed]];
+  sj = Flatten[Function[p, Module[{j1 = p[[1]], j2 = p[[2]], s1, s2},
+       s1 = Quotient[j1 - 33, 2] + 129; If[s1 > 159, s1 += 64];
+       s2 = If[OddQ[j1], With[{x = j2 + 31}, If[x >= 127, x + 1, x]], j2 + 126];
+       {s1, s2}]] /@ Partition[c, 2]];
+  t = Quiet @ Check[FromCharacterCode[sj, "ShiftJIS"], $Failed];
+  If[StringQ[t] && StringLength[t] === Length[c]/2 && StringFreeQ[t, FromCharacterCode[65533]], t, $Failed]];
+iSVMDRepairJISNoEscape[s_String] := Module[{n = 0, t},
+  t = StringReplace[StringDelete[s, FromCharacterCode[27]], {
+     m : RegularExpression["\\$[B@](?:[\\x21-\\x7e]{2})+?\\([BJ]"] :>
+       With[{r = iSVMDJISPairsToText[StringTake[m, {3, -3}]]}, If[StringQ[r], n++; r, m]],
+     m : RegularExpression["\\(I[\\x21-\\x5f]+?\\([BJ]"] :>
+       (n++; FromCharacterCode[ToCharacterCode[StringTake[m, {3, -3}]] + 65344])}];
+  If[n > 0, t, $Failed]];
+(* numeric character references left in a plain text *)
+iSVMDNCRChar[k_Integer, m_String] := If[32 <= k <= 1114111 && ! (55296 <= k <= 57343), FromCharacterCode[k], m];
+iSVMDRepairNCR[s_String] := Module[{n = 0, t},
+  t = StringReplace[s, {
+     m : RegularExpression["&#[0-9]{2,7};"] :> (n++; iSVMDNCRChar[FromDigits[StringTake[m, {3, -2}]], m]),
+     m : RegularExpression["&#[xX][0-9a-fA-F]{2,6};"] :> (n++; iSVMDNCRChar[FromDigits[ToLowerCase[StringTake[m, {4, -2}]], 16], m])}];
+  If[n >= 3, t, $Failed]];
+(* ---- a text whose 8th bit was lost on the way (2026-11-17) ----
+   Owner's store, 2026-11-17: the profile of the bodies of a broadcast sender: 7 bit characters only, a quarter of them
+   control characters (129 controls and 4 escapes in 503 characters), no Japanese character, the same in all 17 mails.
+   That is 8 bit Japanese text after every byte lost its top bit somewhere between the sender and the mailbox (an old
+   relay that passes 7 bits). It is not a reading with the wrong encoding, so no re-encoding gives it back.
+   What can be restored: UTF-8 exactly (a lead byte 0xE2-0xEF became a letter b-o, each continuation byte became its six
+   payload bits), Shift_JIS up to a choice (a lead byte 0x81-0x9F became a control character; a second byte below 0x7D may
+   or may not have had the bit). Two things stay open and are shown instead of guessed: (a) in a text whose line ends were
+   normalized, a line feed stands for the byte 0x8A or 0x8D or a real line end; (b) in Shift_JIS, two characters can fit.
+   Where two readings are equally good the text shows both: \:3014A|B\:3015. A control character that no reading
+   explains is shown as \:3013.
+   The parse is a shortest path over the characters (each is taken as itself, or as part of a restored character); the
+   costs say only how ordinary a character is (kana < common kanji < other kanji; a control character left over is dear). *)
+$iSVMDCommonKanjiText = "\:4e00\:53f3\:96e8\:5186\:738b\:97f3\:4e0b\:706b\:82b1\:8c9d\:5b66\:6c17\:4e5d\:4f11\:7389\:91d1\:7a7a\:6708\:72ac\:898b\:4e94\:53e3\:6821\:5de6\:4e09\:5c71\:5b50\:56db\:7cf8\:5b57\:8033\:4e03\:8eca\:624b\:5341\:51fa\:5973\:5c0f\:4e0a\:68ee\:4eba\:6c34\:6b63\:751f\:9752\:5915\:77f3\:8d64\:5343\:5ddd\:5148\:65e9\:8349\:8db3\:6751\:5927\:7537\:7af9\:4e2d\:866b\:753a\:5929\:7530\:571f\:4e8c\:65e5\:5165\:5e74\:767d\:516b\:767e\:6587\:6728\:672c\:540d\:76ee\:7acb\:529b\:6797\:516d\:5f15\:7fbd\:96f2\:5712\:9060\:4f55\:79d1\:590f\:5bb6\:6b4c\:753b\:56de\:4f1a\:6d77\:7d75\:5916\:89d2\:697d\:6d3b\:9593\:4e38\:5ca9\:9854\:6c7d\:8a18\:5e30\:5f13\:725b\:9b5a\:4eac\:5f37\:6559\:8fd1\:5144\:5f62\:8a08\:5143\:8a00\:539f\:6238\:53e4\:5348\:5f8c\:8a9e\:5de5\:516c\:5e83\:4ea4\:5149\:8003\:884c\:9ad8\:9ec4\:5408\:8c37\:56fd\:9ed2\:4eca\:624d\:7d30\:4f5c\:7b97\:6b62\:5e02\:77e2\:59c9\:601d\:7d19\:5bfa\:81ea\:6642\:5ba4\:793e\:5f31\:9996\:79cb\:9031\:6625\:66f8\:5c11\:5834\:8272\:98df\:5fc3\:65b0\:89aa\:56f3\:6570\:897f\:58f0\:661f\:6674\:5207\:96ea\:8239\:7dda\:524d\:7d44\:8d70\:591a\:592a\:4f53\:53f0\:5730\:6c60\:77e5\:8336\:663c\:9577\:9ce5\:671d\:76f4\:901a\:5f1f\:5e97\:70b9\:96fb\:5200\:51ac\:5f53\:6771\:7b54\:982d\:540c\:9053\:8aad\:5185\:5357\:8089\:99ac\:58f2\:8cb7\:9ea6\:534a\:756a\:7236\:98a8\:5206\:805e\:7c73\:6b69\:6bcd\:65b9\:5317\:6bce\:59b9\:4e07\:660e\:9cf4\:6bdb\:9580\:591c\:91ce\:53cb\:7528\:66dc\:6765\:91cc\:7406\:8a71\:60aa\:5b89\:6697\:533b\:59d4\:610f\:80b2\:54e1\:9662\:98f2\:904b\:6cf3\:99c5\:592e\:6a2a\:5c4b\:6e29\:5316\:8377\:754c\:958b\:968e\:5bd2\:611f\:6f22\:9928\:5cb8\:8d77\:671f\:5ba2\:7a76\:6025\:7d1a\:5bae\:7403\:53bb\:6a4b\:696d\:66f2\:5c40\:9280\:533a\:82e6\:5177\:541b\:4fc2\:8efd\:8840\:6c7a\:7814\:770c\:5eab\:6e56\:5411\:5e78\:6e2f\:53f7\:6839\:796d\:76bf\:4ed5\:6b7b\:4f7f\:59cb\:6307\:6b6f\:8a69\:6b21\:4e8b\:6301\:5f0f\:5b9f\:5199\:8005\:4e3b\:5b88\:53d6\:9152\:53d7\:5dde\:62fe\:7d42\:7fd2\:96c6\:4f4f\:91cd\:5bbf\:6240\:6691\:52a9\:662d\:6d88\:5546\:7ae0\:52dd\:4e57\:690d\:7533\:8eab\:795e\:771f\:6df1\:9032\:4e16\:6574\:6614\:5168\:76f8\:9001\:60f3\:606f\:901f\:65cf\:4ed6\:6253\:5bfe\:5f85\:4ee3\:7b2c\:984c\:70ad\:77ed\:8ac7\:7740\:6ce8\:67f1\:4e01\:5e33\:8abf\:8ffd\:5b9a\:5ead\:7b1b\:9244\:8ee2\:90fd\:5ea6\:6295\:8c46\:5cf6\:6e6f\:767b\:7b49\:52d5\:7ae5\:8fb2\:6ce2\:914d\:500d\:7bb1\:7551\:767a\:53cd\:5742\:677f\:76ae\:60b2\:7f8e\:9f3b\:7b46\:6c37\:8868\:79d2\:75c5\:54c1\:8ca0\:90e8\:670d\:798f\:7269\:5e73\:8fd4\:52c9\:653e\:5473\:547d\:9762\:554f\:5f79\:85ac\:7531\:6cb9\:6709\:904a\:4e88\:7f8a\:6d0b\:8449\:967d\:69d8\:843d\:6d41\:65c5\:4e21\:7dd1\:793c\:5217\:7df4\:8def\:548c\:611b\:6848\:4ee5\:8863\:4f4d\:8328\:5370\:82f1\:6804\:5a9b\:5869\:5ca1\:5104\:52a0\:679c\:8ca8\:8ab2\:82bd\:8cc0\:6539\:68b0\:5bb3\:8857\:5404\:899a\:6f5f\:5b8c\:5b98\:7ba1\:95a2\:89b3\:9858\:5c90\:5e0c\:5b63\:65d7\:5668\:6a5f\:8b70\:6c42\:6ce3\:7d66\:6319\:6f01\:5171\:5354\:93e1\:7af6\:6975\:718a\:8a13\:8ecd\:90e1\:7fa4\:5f84\:666f\:82b8\:6b20\:7d50\:5efa\:5065\:9a13\:56fa\:529f\:597d\:9999\:5019\:5eb7\:4f50\:5dee\:83dc\:6700\:57fc\:6750\:5d0e\:6628\:672d\:5237\:5bdf\:53c2\:7523\:6563\:6b8b\:6c0f\:53f8\:8a66\:5150\:6cbb\:6ecb\:8f9e\:9e7f\:5931\:501f\:7a2e\:5468\:795d\:9806\:521d\:677e\:7b11\:5531\:713c\:7167\:57ce\:7e04\:81e3\:4fe1\:4e95\:6210\:7701\:6e05\:9759\:5e2d\:7a4d\:6298\:7bc0\:8aac\:6d45\:6226\:9078\:7136\:4e89\:5009\:5de3\:675f\:5074\:7d9a\:5352\:5b6b\:5e2f\:968a\:9054\:5358\:7f6e\:4ef2\:6c96\:5146\:4f4e\:5e95\:7684\:5178\:4f1d\:5f92\:52aa\:706f\:50cd\:7279\:5fb3\:6803\:5948\:68a8\:71b1\:5ff5\:6557\:6885\:535a\:962a\:98ef\:98db\:5fc5\:7968\:6a19\:4e0d\:592b\:4ed8\:5e9c\:961c\:5bcc\:526f\:5175\:5225\:8fba\:5909\:4fbf\:5305\:6cd5\:671b\:7267\:672b\:6e80\:672a\:6c11\:7121\:7d04\:52c7\:8981\:990a\:6d74\:5229\:9678\:826f\:6599\:91cf\:8f2a\:985e\:4ee4\:51b7\:4f8b\:9023\:8001\:52b4\:9332\:5727\:56f2\:79fb\:56e0\:6c38\:55b6\:885b\:6613\:76ca\:6db2\:6f14\:5fdc\:5f80\:685c\:53ef\:4eee\:4fa1\:6cb3\:904e\:5feb\:89e3\:683c\:78ba\:984d\:520a\:5e79\:6163\:773c\:7d00\:57fa\:5bc4\:898f\:559c\:6280\:7fa9\:9006\:4e45\:65e7\:6551\:5c45\:8a31\:5883\:5747\:7981\:53e5\:578b\:7d4c\:6f54\:4ef6\:967a\:691c\:9650\:73fe\:6e1b\:6545\:500b\:8b77\:52b9\:539a\:8015\:822a\:9271\:69cb\:8208\:8b1b\:544a\:6df7\:67fb\:518d\:707d\:59bb\:63a1\:969b\:5728\:8ca1\:7f6a\:6bba\:96d1\:9178\:8cdb\:58eb\:652f\:53f2\:5fd7\:679d\:5e2b\:8cc7\:98fc\:793a\:4f3c\:8b58\:8cea\:820e\:8b1d\:6388\:4fee\:8ff0\:8853\:6e96\:5e8f\:62db\:8a3c\:8c61\:8cde\:6761\:72b6\:5e38\:60c5\:7e54\:8077\:5236\:6027\:653f\:52e2\:7cbe\:88fd\:7a0e\:8cac\:7e3e\:63a5\:8a2d\:7d76\:7956\:7d20\:7dcf\:9020\:50cf\:5897\:5247\:6e2c\:5c5e\:7387\:640d\:8cb8\:614b\:56e3\:65ad\:7bc9\:8caf\:5f35\:505c\:63d0\:7a0b\:9069\:7d71\:5802\:9285\:5c0e\:5f97\:6bd2\:72ec\:4efb\:71c3\:80fd\:7834\:72af\:5224\:7248\:6bd4\:80a5\:975e\:8cbb\:5099\:8a55\:8ca7\:5e03\:5a66\:6b66\:5fa9\:8907\:4ecf\:7c89\:7de8\:5f01\:4fdd\:5893\:5831\:8c4a\:9632\:8cbf\:66b4\:8108\:52d9\:5922\:8ff7\:7dbf\:8f38\:4f59\:5bb9\:7565\:7559\:9818\:6b74\:80c3\:7570\:907a\:57df\:5b87\:6620\:5ef6\:6cbf\:6069\:6211\:7070\:62e1\:9769\:95a3\:5272\:682a\:5e72\:5dfb\:770b\:7c21\:5371\:673a\:63ee\:8cb4\:7591\:5438\:4f9b\:80f8\:90f7\:52e4\:7b4b\:7cfb\:656c\:8b66\:5287\:6fc0\:7a74\:5238\:7d79\:6a29\:61b2\:6e90\:53b3\:5df1\:547c\:8aa4\:540e\:5b5d\:7687\:7d05\:964d\:92fc\:523b\:7a40\:9aa8\:56f0\:7802\:5ea7\:6e08\:88c1\:7b56\:518a\:8695\:81f3\:79c1\:59ff\:8996\:8a5e\:8a8c\:78c1\:5c04\:6368\:5c3a\:82e5\:6a39\:53ce\:5b97\:5c31\:8846\:5f93\:7e26\:7e2e\:719f\:7d14\:51e6\:7f72\:8af8\:9664\:627f\:5c06\:50b7\:969c\:84b8\:91dd\:4ec1\:5782\:63a8\:5bf8\:76db\:8056\:8aa0\:820c\:5ba3\:5c02\:6cc9\:6d17\:67d3\:92ad\:5584\:594f\:7a93\:5275\:88c5\:5c64\:64cd\:8535\:81d3\:5b58\:5c0a\:9000\:5b85\:62c5\:63a2\:8a95\:6bb5\:6696\:5024\:5b99\:5fe0\:8457\:5e81\:9802\:8178\:6f6e\:8cc3\:75db\:6575\:5c55\:8a0e\:515a\:7cd6\:5c4a\:96e3\:4e73\:8a8d\:7d0d\:8133\:6d3e\:62dd\:80cc\:80ba\:4ff3\:73ed\:6669\:5426\:6279\:79d8\:4ff5\:8179\:596e\:4e26\:965b\:9589\:7247\:88dc\:66ae\:5b9d\:8a2a\:4ea1\:5fd8\:68d2\:679a\:5e55\:5bc6\:76df\:6a21\:8a33\:90f5\:512a\:9810\:5e7c\:6b32\:7fcc\:4e71\:5375\:89a7\:88cf\:5f8b\:81e8\:6717\:8ad6\:63b2\:8f09\:5c65\:8a73\:7de0\:6dfb\:983c\:81f4\:5fa1\:9805\:968f\:65e2\:4f75\:6271\:822c\:7dca\:63f4\:52df\:5968\:52b1\:9694\:9045\:5c5e\:8fbc\:6255\:9803\:53c8\:4f46\:5c1a\:53ca\:70ba\:65bc\:5176\:6b64\:4e4b\:8fc4\:5b9b\:8a72\:8acb\:4e86\:4f9d\:66f4\:63db\:643a\:6982\:6cc1\:4f01\:8da3\:65e8\:7d99\:50ac\:4fc3\:524a\:8a02\:62bd\:629e\:7533\:8fbc\:7de0\:5207\:8fc5\:8d8a\:4f34\:4f3a\:62f6\:6328\:9802\:6234\:6050\:7e2e\:5e78\:751a\:62dd\:5553\:656c\:5177\:5f0a\:8cb4\:6bbf\:5fa1\:4e2d\:7686\:69d8\:5404\:4f4d\:4ed6\:4f75\:305b\:6dfb\:4ed8\:5dee\:623b\:632f\:66ff\:4f11\:6687\:52e4\:6020\:51fa\:6b20\:5e2d\:7c3f\:9060\:9694\:7aef\:672b\:74b0\:5883\:63a5\:7d9a\:969c\:5bb3\:5fa9\:65e7\:505c\:96fb\:70b9\:691c\:4fdd\:5b88\:7a3c\:50cd\:95b2\:89a7\:6a29\:9650\:4ed8\:4e0e";
+$iSVMDCommonKanji := $iSVMDCommonKanji =
+  Association[(# -> True) & /@ Select[Characters[$iSVMDCommonKanjiText], 19968 <= First[ToCharacterCode[#]] <= 40959 &]];
+(* how ordinary a character is in a Japanese mail (Infinity: not a character this restoration may produce) *)
+iSVMDCharCost[cp_Integer, mode_] := Which[
+  12353 <= cp <= 12438 || 12441 <= cp <= 12543, 0.1,
+  12288 <= cp <= 12351, 0.15,
+  19968 <= cp <= 40959, If[KeyExistsQ[$iSVMDCommonKanji, FromCharacterCode[cp]], 0.3, If[mode === "UTF-8", 2.5, 0.9]],
+  65281 <= cp <= 65376 || 65504 <= cp <= 65510, 0.4,
+  65377 <= cp <= 65439, 0.7,
+  9472 <= cp <= 9727, 0.5,
+  8208 <= cp <= 8251 || 8592 <= cp <= 8959 || 9312 <= cp <= 9839 || 12800 <= cp <= 13311, 0.8,
+  True, Infinity];
+(* Shift_JIS: {first byte, second byte} -> code point, for the pairs that are characters *)
+$iSVMDSJISTable := $iSVMDSJISTable = Module[{trails = Join[Range[64, 126], Range[128, 252]]},
+  Association[Flatten[Function[l, Module[{t = Quiet @ Check[FromCharacterCode[Flatten[{l, #} & /@ trails], "ShiftJIS"], $Failed], cps},
+      cps = If[StringQ[t] && StringLength[t] === Length[trails], ToCharacterCode[t],
+        (* a row with pairs that are no characters: one by one *)
+        Function[tr, With[{ch = Quiet @ Check[FromCharacterCode[{l, tr}, "ShiftJIS"], $Failed]},
+            If[StringQ[ch] && StringLength[ch] === 1, First[ToCharacterCode[ch]], 0]]] /@ trails];
+      MapThread[If[#2 > 127 && ! (57344 <= #2 <= 63743) && #2 =!= 65533, {l, #1} -> #2, Nothing] &, {trails, cps}]]] /@
+    Join[Range[129, 159], Range[224, 234]]]]];
+iSVMDSJISCost[l_Integer, cp_Integer] := With[{c = iSVMDCharCost[cp, "ShiftJIS"]},
+  If[19968 <= cp <= 40959 && l >= 152 && c > 0.3, 3., c]];
+
+iSVMDStripParse[s_String, mode_String, le_Association, nulGone_] := Module[{units, codes, n, img, lit, multi, rank, sj, f, ch, out, k = 0, i, letterQ, wordQ, afterLetter, digitQ, numQ,
+    restored = 0, kana = 0, kanji = 0, amb = 0, unexpl = 0, ctrl},
+  units = StringCases[s, "\r\n" | _];
+  n = Length[units];
+  If[n == 0, Return[<|"Text" -> "", "Cost" -> 0., "Restored" -> 0, "Kana" -> 0, "Kanji" -> 0, "Ambiguous" -> 0, "Unexplained" -> 0, "Controls" -> 0|>]];
+  codes = If[# === "\r\n", -1, First[ToCharacterCode[#]]] & /@ units;
+  ctrl = Count[codes, _?((0 <= # < 32 && # != 9 && # != 10 && # != 13) || # == 127 &)];
+  (* the bytes a character may have been before it lost the bit *)
+  img[c_] := Which[c == -1, le["CRLF"], c == 10, le["LF"], c == 13, le["CR"], True, {c + 128}];
+  (* the character taken as itself. A letter inside a word is ordinary; a letter alone between other things is what a
+     byte of a damaged character looks like. *)
+  letterQ = (65 <= # <= 90 || 97 <= # <= 122 &) /@ codes;
+  wordQ = MapThread[#1 && (#2 || #3) &, {letterQ, Prepend[Most[letterQ], False], Append[Rest[letterQ], False]}];
+  afterLetter = Prepend[Most[letterQ], False];
+  digitQ = (48 <= # <= 57 &) /@ codes;
+  numQ = With[{nb = (48 <= # <= 58 || 44 <= # <= 47 &) /@ codes},   (* a digit beside a digit or . , : / - *)
+    MapThread[#1 && (#2 || #3) &, {digitQ, Prepend[Most[nb], False], Append[Rest[nb], False]}]];
+  lit[j_] := With[{c = codes[[j]]}, Which[c == -1, le["LitCRLF"], c == 10, le["LitLF"], c == 13, le["LitCR"], c == 32, 0.3, digitQ[[j]], If[numQ[[j]], 0.5, 1.2],
+    letterQ[[j]], If[wordQ[[j]], 0.4, 1.5], 33 <= c <= 126, 0.8, c == 9, 2., True, 6.]];
+  (* the character as the start of a restored one: the ways it can be read, each {how many characters it takes,
+     {{cost, code point} ...} best first}. When the text has no NUL at all, a relay may have removed the NULs that the
+     bytes 0x80 became: then a character is one (or two) short -- most often the punctuation U+3000-303F, whose middle
+     byte is 0x80. Those readings cost a little more, the rare ones (the last byte was 0x80) more. *)
+  rank[c_List] := SortBy[DeleteDuplicatesBy[Select[c, First[#] < Infinity &], Last], First];
+  sj[l_, t_, pen_] := With[{cp = Lookup[$iSVMDSJISTable, Key[{l, t}], 0]}, {If[cp == 0, Infinity, iSVMDSJISCost[l, cp] + pen], cp}];
+  multi[j_] := Which[
+    mode === "UTF-8",
+      If[98 <= codes[[j]] <= 105 || codes[[j]] == 111,
+        With[{lead = (codes[[j]] - 96)*4096, pen = If[afterLetter[[j]], 1.5, 0.],   (* a letter after a letter: more likely a word *)
+            y1s = If[j + 1 <= n, Select[img[codes[[j + 1]]], 128 <= # <= 191 &] - 128, {}],
+            y2s = If[j + 2 <= n, Select[img[codes[[j + 2]]], 128 <= # <= 191 &] - 128, {}]},
+          DeleteCases[{
+            {3, rank[Flatten[Table[{iSVMDCharCost[lead + 64 a + b, mode] + pen, lead + 64 a + b}, {a, y1s}, {b, y2s}], 1]]},
+            If[TrueQ[nulGone],
+              {2, rank[Join[({iSVMDCharCost[lead + #, mode] + pen + 0.3, lead + #} &) /@ y1s,
+                 ({iSVMDCharCost[lead + 64 #, mode] + pen + 0.9, lead + 64 #} &) /@ y1s]]}, Nothing],
+            If[TrueQ[nulGone] && codes[[j]] == 99, {1, {{iSVMDCharCost[lead, mode] + pen + 0.6, lead}}}, Nothing]}, {_, {}}]],
+        {}],
+    True,
+      With[{ls = Join[Select[img[codes[[j]]], 129 <= # <= 159 &], If[96 <= codes[[j]] <= 106, {codes[[j]] + 128}, {}]],
+          (* the ordinary line end of the text is far more often a line end than a first byte; a letter after a letter is
+             more likely a word *)
+          pen = Which[MemberQ[le["LineEndCodes"], codes[[j]]], 0.8, codes[[j]] >= 96 && afterLetter[[j]], 1.5, True, 0.],
+          ts = If[j + 1 <= n, Join[If[64 <= codes[[j + 1]] <= 126, {codes[[j + 1]]}, {}], Select[img[codes[[j + 1]]], 128 <= # <= 252 &]], {}]},
+        If[ls === {}, {},
+          DeleteCases[{{2, rank[Flatten[Table[sj[l, t, pen], {l, ls}, {t, ts}], 1]]}}, {_, {}}]]]];
+  f = ConstantArray[0., n + 4]; ch = ConstantArray[{0, {}}, n];
+  Do[
+    Module[{best = lit[j] + f[[j + 1]], pick = {0, {}}},
+      Scan[Function[o, With[{c = o[[2, 1, 1]] + f[[j + o[[1]]]]}, If[c < best, best = c; pick = o]]], multi[j]];
+      f[[j]] = best; ch[[j]] = pick],
+    {j, n, 1, -1}];
+  out = ConstantArray["", n]; i = 1;
+  While[i <= n,
+    With[{p = ch[[i]], c = codes[[i]]},
+      If[p[[1]] == 0,
+        out[[++k]] = Which[c == -1 || c == 10, "\n", c == 13 && le["LitCR"] < 1., "\n",
+          c == 13 || (c < 32 && c != 9) || c == 127, unexpl++; "\:3013", True, units[[i]]];
+        i++,
+        With[{alts = Take[Select[p[[2]], First[#] <= p[[2, 1, 1]] + 0.25 &], UpTo[3]]},
+          restored++;
+          With[{cp = alts[[1, 2]]}, If[12352 <= cp <= 12543, kana++]; If[19968 <= cp <= 40959, kanji++]];
+          out[[++k]] = If[Length[alts] > 1, amb++; "\:3014" <> StringRiffle[FromCharacterCode[Last[#]] & /@ alts, "|"] <> "\:3015",
+            FromCharacterCode[alts[[1, 2]]]]];
+        i += p[[1]]]]];
+  <|"Text" -> StringJoin[Take[out, k]], "Cost" -> f[[1]], "Restored" -> restored, "Kana" -> kana, "Kanji" -> kanji,
+    "Ambiguous" -> amb, "Unexplained" -> unexpl, "Controls" -> ctrl|>];
+(* addresses are left as they are *)
+$iSVMDProtectRx = "https?://[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]+|[A-Za-z0-9._%+\\-]+@[A-Za-z0-9\\-]+(?:\\.[A-Za-z0-9\\-]+)+";
+(* the line ends of a damaged text. The byte 0x8A became a line feed and 0x8D a carriage return; a relay may then have
+   turned a bare one into CR LF, and a stored body has every line end as LF. What a line end may stand for is read from
+   what the text shows:
+     CR LF beside bare LF and bare CR   -> CR LF is the line end, the bare ones are bytes (the text restores exactly);
+     CR LF and bare CR, no bare LF      -> the bare LFs were turned into CR LF: a CR LF may be the byte 0x8A;
+     CR LF and bare LF, no bare CR      -> a CR LF may be the byte 0x8D;
+     one kind only (LF: a stored body)  -> a line end may be either byte.
+   Owner's store, 2026-11-17: the bodies were not restored when they were taken in although their stored form was: the
+   first version took every CR LF for a line end as soon as the text had one bare LF or CR. *)
+iSVMDLineEnds[s_String] := Module[{crlf = StringContainsQ[s, "\r\n"], rest = StringDelete[s, "\r\n"], lf, cr},
+  lf = StringContainsQ[rest, "\n"]; cr = StringContainsQ[rest, "\r"];
+  <|"CRLF" -> Which[lf && cr, {}, ! lf && ! cr, {138, 141}, ! lf, {138}, True, {141}],
+    "LF" -> If[! crlf && ! cr, {138, 141}, {138}],
+    "CR" -> If[! crlf && ! lf, {138, 141}, {141}],
+    "LitCRLF" -> If[lf && cr, 0.1, 0.3], "LitLF" -> If[crlf, 2., 0.3], "LitCR" -> If[crlf || lf, 3., 0.3],
+    (* the units that are the ordinary line end of this text *)
+    "LineEndCodes" -> Join[If[lf && cr, {}, {-1}], If[crlf, {}, {10}], If[crlf || lf, {}, {13}]],
+    "Counts" -> <|"CRLF" -> StringCount[s, "\r\n"], "LF" -> StringCount[rest, "\n"], "CR" -> StringCount[rest, "\r"],
+       "NUL" -> StringCount[s, FromCharacterCode[0]]|>|>];
+iSVMDStripRestore[s_String, mode_String] := Module[{le = iSVMDLineEnds[s], nulGone = StringFreeQ[s, FromCharacterCode[0]], parts, rs},
+  parts = StringSplit[s, x : RegularExpression[$iSVMDProtectRx] :> iSVMDKeep[x]];
+  rs = Function[p, If[Head[p] === iSVMDKeep,
+       <|"Text" -> First[p], "Cost" -> 0., "Restored" -> 0, "Kana" -> 0, "Kanji" -> 0, "Ambiguous" -> 0, "Unexplained" -> 0, "Controls" -> 0|>,
+       iSVMDStripParse[p, mode, le, nulGone]]] /@ parts;
+  Join[<|"Text" -> StringJoin[Lookup[rs, "Text"]]|>,
+    Association[(# -> Total[Lookup[rs, #]]) & /@ {"Cost", "Restored", "Kana", "Kanji", "Ambiguous", "Unexplained", "Controls"}]]];
+(* the signature: 7 bit only, and too many control characters for a text *)
+iSVMDStrippedSignatureQ[s_String] := Module[{c = ToCharacterCode[s], n},
+  n = Length[c];
+  20 <= n <= 30000 && Max[c] <= 127 &&
+    Count[c, _?((# < 32 && # != 9 && # != 10 && # != 13) || # == 127 &)] >= Max[5, 0.03 n]];
+iSVMDStrippedSignatureQ[_] := False;
+(* a restoration counts when it explains the control characters and gives Japanese *)
+(* (read with the wrong one of the two encodings, the control characters can all become first bytes of some kanji: the
+   share of kana tells a Japanese text from that) *)
+iSVMDStripAcceptedQ[r_Association] := r["Kana"] >= 8 && r["Restored"] >= 12 && r["Kana"] >= 0.2 r["Restored"] &&
+  r["Unexplained"] <= Max[1, Floor[0.03 r["Controls"]]];
+iSVMDStripAcceptedQ[_] := False;
+If[! AssociationQ[$iSVMDHighBitMemo], $iSVMDHighBitMemo = <||>];
+iSVMDHighBitAnalyze[s_String] := Module[{key = Hash[s, "SHA256", "HexString"], r, u, j, ok},
+  If[KeyExistsQ[$iSVMDHighBitMemo, key], Return[$iSVMDHighBitMemo[key]]];
+  r = If[! iSVMDStrippedSignatureQ[s], <|"Signature" -> False, "Best" -> None|>,
+    u = iSVMDStripRestore[s, "UTF-8"]; j = iSVMDStripRestore[s, "ShiftJIS"];
+    ok = Select[{"UTF8HighBitStripped" -> u, "ShiftJISHighBitStripped" -> j}, iSVMDStripAcceptedQ[Last[#]] &];
+    <|"Signature" -> True, "UTF-8" -> u, "ShiftJIS" -> j,
+      "Best" -> If[ok === {}, None, First[First[SortBy[ok, Last[#]["Cost"] &]]]],
+      "LineEnds" -> iSVMDLineEnds[s]["Counts"]|>];
+  (* only what one pass needs is kept (the restored text is in it) *)
+  If[Length[$iSVMDHighBitMemo] >= 4, $iSVMDHighBitMemo = <||>];
+  $iSVMDHighBitMemo[key] = r; r];
+iSVMDHighBitAnalyze[_] := <|"Signature" -> False, "Best" -> None|>;
+iSVMDHighBitText[a_Association] := Which[
+  a["Best"] === "UTF8HighBitStripped", a["UTF-8"]["Text"],
+  a["Best"] === "ShiftJISHighBitStripped", a["ShiftJIS"]["Text"],
+  True, $Failed];
+(* the control characters the chosen restoration leaves unexplained *)
+iSVMDHighBitLeft[a_Association] := Which[
+  a["Best"] === "UTF8HighBitStripped", a["UTF-8"]["Unexplained"],
+  a["Best"] === "ShiftJISHighBitStripped", a["ShiftJIS"]["Unexplained"],
+  True, Infinity];
+iSVMDHighBitLeft[_] := Infinity;
+iSVMDRepairHighBit[name_String][s_String] := With[{a = iSVMDHighBitAnalyze[s]}, If[a["Best"] === name, iSVMDHighBitText[a], $Failed]];
+iSVMDRepairHighBit[_][___] := $Failed;
+(* what the ingest keeps about a damaged body: numbers only (how its line ends arrived, what each restoration gave) *)
+iSVMDDamageNote[a_Association] := <|"LineEnds" -> Lookup[a, "LineEnds", Missing[]], "Best" -> Lookup[a, "Best", None],
+  "StoredFormUsed" -> TrueQ[Lookup[a, "StoredFormUsed", False]],
+  "UTF-8" -> KeyTake[Lookup[a, "UTF-8", <||>], {"Restored", "Kana", "Kanji", "Ambiguous", "Unexplained", "Controls"}],
+  "ShiftJIS" -> KeyTake[Lookup[a, "ShiftJIS", <||>], {"Restored", "Kana", "Kanji", "Ambiguous", "Unexplained", "Controls"}]|>;
+iSVMDDamageNote[_] := None;
+
+$iSVMDBodyRepairs = {
+  "UTF8HighBitStripped" -> iSVMDRepairHighBit["UTF8HighBitStripped"],
+  "ShiftJISHighBitStripped" -> iSVMDRepairHighBit["ShiftJISHighBitStripped"],
+  "JISWithoutEscape" -> iSVMDRepairJISNoEscape,
+  "UTF8ReadAsWestern" -> (iSVMDRepairLines[#, "Western", "UTF-8"] &),
+  "UTF8ReadAsShiftJIS" -> (iSVMDRepairLines[#, "ShiftJIS", "UTF-8"] &),
+  "UTF8ReadAsEUCJP" -> (iSVMDRepairLines[#, "EUC-JP", "UTF-8"] &),
+  "ShiftJISReadAsWestern" -> (iSVMDRepairLines[#, "Western", "ShiftJIS"] &),
+  "EUCJPReadAsWestern" -> (iSVMDRepairLines[#, "Western", "EUC-JP"] &),
+  "EUCJPReadAsShiftJIS" -> (iSVMDRepairLines[#, "ShiftJIS", "EUC-JP"] &),
+  "ShiftJISReadAsEUCJP" -> (iSVMDRepairLines[#, "EUC-JP", "ShiftJIS"] &),
+  "NumericCharacterReferences" -> iSVMDRepairNCR};
+(* a reversal counts only when its result is clean and clearly more Japanese (kana: a wrongly read text has few) *)
+iSVMDKanaRatio[cl_Association] := With[{n = Lookup[cl, "Length", 0] - Lookup[cl, "Whitespace", 0]}, If[n > 0, N[Lookup[cl, "Kana", 0]/n], 0.]];
+iSVMDRepairHelpsQ[before_Association, after_Association] :=
+  after["Replacement"] == 0 && after["C1"] == 0 && after["PrivateUse"] == 0 && after["Escape"] == 0 &&
+  after["Kana"] >= 3 && iSVMDKanaRatio[after] > iSVMDKanaRatio[before];
+iSVMDRepairHelpsQ[___] := False;
+iSVMDApplyRepair[name_String, t_String] := With[{f = Lookup[Association[$iSVMDBodyRepairs], name, Missing[]]},
+  If[MissingQ[f], $Failed, Quiet @ Check[TimeConstrained[f[t], 10, $Failed], $Failed]]];
+iSVMDApplyRepair[___] := $Failed;
+
+$iSVMDURLRx = "https?://[^\\s<>\"]+";
+iSVMDLineKind[ln_String] := Module[{c = ToCharacterCode[ln]},
+  Which[StringTrim[ln] === "", "E",
+    StringMatchQ[StringTrim[ln], RegularExpression[$iSVMDURLRx]], "U",
+    Count[c, _?(12352 <= # <= 12543 || 19968 <= # <= 40959 &)] > 0, "J",
+    Max[c] <= 127, "A",
+    True, "X"]];
+iSVMDBodyProfileText[s_String] := Module[{t = iSVUINormalizeNewlines[s], cl, reps, urls, rest, na, moji, dp, hints, sus, shape, lines, hb},
+  cl = iSVMDTextClasses[t];
+  hb = iSVMDHighBitAnalyze[t];
+  reps = Association[Function[r, With[{u = iSVMDApplyRepair[First[r], t]},
+       If[StringQ[u], With[{c2 = iSVMDTextClasses[u]},
+           If[iSVMDRepairHelpsQ[cl, c2], First[r] -> KeyTake[c2, {"Length", "ASCII", "Kana", "Kanji", "HalfwidthKana"}], Nothing]], Nothing]]] /@ $iSVMDBodyRepairs];
+  urls = StringCases[t, RegularExpression[$iSVMDURLRx]];
+  rest = StringLength[StringDelete[StringDelete[t, RegularExpression[$iSVMDURLRx]], WhitespaceCharacter]];
+  na = cl["Length"] - cl["ASCII"] - cl["Whitespace"] - cl["Escape"] - cl["Control"];
+  moji = StringCount[t, FromCharacterCode[16^^7e3a] | FromCharacterCode[16^^7e67] | FromCharacterCode[16^^7e5d]];
+  dp = StringCount[t, "$" | "%"];
+  lines = StringSplit[t, "\n", All];
+  hints = Join[
+    If[cl["HalfwidthKana"] > 0, {"HalfwidthKana"}, {}],
+    If[cl["Escape"] > 0, {"EscapeCharacters"}, {}],
+    (* a text does not have control characters: more than a few are what is left of damaged bytes *)
+    If[cl["Control"] + cl["Escape"] >= Max[3, 0.02 cl["Length"]], {"ControlCharacters"}, {}],
+    If[cl["Replacement"] > 0, {"ReplacementCharacters"}, {}],
+    If[cl["C1"] > 0, {"C1Controls"}, {}],
+    If[cl["PrivateUse"] > 0, {"PrivateUseCharacters"}, {}],
+    If[iSVUILooksLikeHTML[t], {"HTMLLeft"}, {}],
+    If[StringCount[t, RegularExpression["&#[xX]?[0-9a-fA-F]{2,7};"]] >= 3, {"NumericCharacterReferences"}, {}],
+    If[StringCount[t, RegularExpression["=[0-9A-F]{2}"]] >= 8, {"QuotedPrintableLike"}, {}],
+    If[StringCount[t, RegularExpression["%[0-9A-Fa-f]{2}"]] >= 8, {"PercentEncoding"}, {}],
+    If[StringContainsQ[t, RegularExpression["(?<![A-Za-z0-9+/=:.?&%_-])[A-Za-z0-9+/]{64,}={0,2}"]], {"Base64Like"}, {}],
+    If[moji >= 3 && moji >= 0.15 Max[cl["Kanji"], 1], {"UTF8ReadAsShiftJISLike"}, {}],
+    If[cl["Latin1"] >= 6 && StringCount[t, FromCharacterCode[227] | FromCharacterCode[195] | FromCharacterCode[194]] >= 3, {"UTF8ReadAsWesternLike"}, {}],
+    If[dp >= 10 && dp >= 0.12 Max[cl["ASCII"], 1], {"JISBytesAsASCIILike"}, {}]];
+  sus = Cases[hints, "UTF8ReadAsShiftJISLike" | "UTF8ReadAsWesternLike" | "JISBytesAsASCIILike"];
+  shape = Which[
+    cl["Length"] - cl["Whitespace"] <= 0, "Empty",
+    Length[reps] > 0, "Garbled:" <> First[Keys[reps]],
+    sus =!= {}, "Suspect:" <> First[sus],
+    cl["Replacement"] + cl["C1"] + cl["PrivateUse"] > 0 || MemberQ[hints, "ControlCharacters"], "Damaged",
+    na == 0 && Length[urls] > 0 && rest < 12, "URLOnly",
+    na == 0, "ASCII",
+    cl["Kana"] >= 3 || cl["Kana"] + cl["Kanji"] >= 0.3 na, "Japanese",
+    True, "OtherScript"];
+  <|"Shape" -> shape, "Hints" -> hints, "Classes" -> cl,
+    "Lines" -> Length[lines], "LineLengths" -> Take[StringLength /@ lines, UpTo[40]],
+    "LineKinds" -> StringJoin[Take[iSVMDLineKind /@ lines, UpTo[200]]],
+    "URLs" -> Length[urls], "CharactersOutsideURLs" -> rest,
+    "ASCIIWords" -> StringCount[StringDelete[t, RegularExpression[$iSVMDURLRx]], RegularExpression["[A-Za-z]{3,}"]],
+    (* a body with the signature of a lost 8th bit: what each restoration gives (numbers only, never the text) *)
+    "HighBit" -> If[TrueQ[hb["Signature"]],
+      <|"UTF-8" -> KeyDrop[hb["UTF-8"], "Text"], "ShiftJIS" -> KeyDrop[hb["ShiftJIS"], "Text"], "Best" -> hb["Best"]|>, None],
+    "Repairs" -> reps|>];
+iSVMDBodyProfileText[_] := <|"Shape" -> "BodyUnavailable"|>;
+
+iSVMDBodyPlain[snap_Association] := Module[{rec = Quiet @ Check[snap["PayloadRefs", "Body"], Missing[]], dec, pt},
+  If[! SourceVault`SourceVaultEncryptedRecordQ[rec], Return[Missing["NoEncryptedBody"]]];
+  dec = SourceVault`SourceVaultDecryptRecord[rec];
+  pt = If[Lookup[dec, "Status", ""] === "Ok", Quiet @ Check[dec["Plaintext"], Missing[]], Missing[]];
+  If[AssociationQ[pt] && StringQ[Lookup[pt, "Body", Missing[]]], pt,
+    Missing[ToString[Lookup[dec, "Reason", Lookup[dec, "Status", "DecryptFailed"]]]]]];
+iSVMDBodyPlain[_] := Missing["NoSnapshot"];
+iSVMDBodyProfileOne[snap_Association] := Module[{pt = iSVMDBodyPlain[snap], md = Lookup[snap, "MailMetadataPublic", <||>],
+    d = Lookup[snap, "Derived", <||>]},
+  Join[<|"RecordId" -> Lookup[snap, "RecordId", Missing[]], "Date" -> Lookup[md, "Date", Missing[]]|>,
+    If[AssociationQ[pt], iSVMDBodyProfileText[pt["Body"]], <|"Shape" -> "BodyUnavailable", "Reason" -> First[pt, "Unknown"]|>],
+    <|"WasHTML" -> TrueQ[Lookup[md, "BodyWasHTML", False]],
+      "Charset" -> Lookup[md, "BodyCharset", Missing["NotRecorded"]],
+      "Repaired" -> Lookup[md, "BodyRepaired", None],
+      "Damage" -> Lookup[md, "BodyDamage", None],
+      "Derived" -> <|"Status" -> Lookup[d, "DerivedStatus", Missing[]], "Grounding" -> Lookup[d, "DerivedGrounding", Missing[]],
+         "Attempts" -> Lookup[d, "DerivedAttempts", Missing[]], "LastReason" -> Lookup[d, "DerivedLastReason", Missing[]],
+         "SummaryLength" -> With[{sm = Lookup[d, "Summary", ""]}, If[StringQ[sm], StringLength[sm], 0]]|>|>]];
+iSVMDBodyProfileResult[snaps_List] := Module[{ps = iSVMDBodyProfileOne /@ snaps},
+  <|"Count" -> Length[ps], "Shapes" -> KeySort[Counts[ToString[Lookup[#, "Shape", "?"]] & /@ ps]],
+    "Repairable" -> Count[ps, _?(StringStartsQ[ToString[Lookup[#, "Shape", ""]], "Garbled:"] &)], "Mails" -> ps|>];
+
+iSVMDSelectSnapshots[mbox_String, period_, from_, subj_, lim_] := Module[{keys, rids, snaps, has},
+  Quiet @ Check[SourceVaultMailEnsureLoaded[mbox, period], Null];
+  keys = iSVMDResolvePeriod[SourceVaultMailAvailableShards[mbox], period];
+  rids = DeleteDuplicates[Join @@ (Lookup[$iSVMDShardMembers, #, {}] & /@ keys)];
+  snaps = Select[Lookup[$iSVMDStore, #, Missing[]] & /@ rids, AssociationQ];
+  has[snap_, key_, x_] := StringContainsQ[ToString[Lookup[Lookup[snap, "MailMetadataPublic", <||>], key, ""]], x, IgnoreCase -> True];
+  If[StringQ[from] && from =!= "", snaps = Select[snaps, has[#, "From", from] &]];
+  If[StringQ[subj] && subj =!= "", snaps = Select[snaps, has[#, "Subject", subj] &]];
+  snaps = SortBy[snaps, ToString[Lookup[Lookup[#, "MailMetadataPublic", <||>], "Date", ""]] &];
+  If[IntegerQ[lim] && lim >= 0, Take[snaps, UpTo[lim]], snaps]];
+
+Options[SourceVaultMailBodyProfile] = {"From" -> All, "Subject" -> All, "Limit" -> 200};
+SourceVaultMailBodyProfile[rid_String, OptionsPattern[]] := With[{snap = SourceVaultMailSnapshotGet[rid]},
+  If[AssociationQ[snap], iSVMDBodyProfileOne[snap], <|"RecordId" -> rid, "Shape" -> "BodyUnavailable", "Reason" -> "NotFound"|>]];
+SourceVaultMailBodyProfile[rids : {___String}, OptionsPattern[]] :=
+  iSVMDBodyProfileResult[Select[SourceVaultMailSnapshotGet /@ rids, AssociationQ]];
+SourceVaultMailBodyProfile[mbox_String, period : Except[_Rule | _RuleDelayed], OptionsPattern[]] :=
+  iSVMDBodyProfileResult[iSVMDSelectSnapshots[mbox, period, OptionValue["From"], OptionValue["Subject"], OptionValue["Limit"]]];
+
+Options[SourceVaultMailBodyRepair] = {"From" -> All, "Subject" -> All, "Limit" -> 200, "DryRun" -> True, "Repair" -> Automatic,
+  "Persist" -> True};
+SourceVaultMailBodyRepair[mbox_String, period : Except[_Rule | _RuleDelayed], OptionsPattern[]] :=
+  Module[{snaps, dry, only, persist, names = {}, repaired = 0, clean = 0, failBody = 0, failEnc = 0},
+    snaps = iSVMDSelectSnapshots[mbox, period, OptionValue["From"], OptionValue["Subject"], OptionValue["Limit"]];
+    dry = ! (OptionValue["DryRun"] === False);
+    only = OptionValue["Repair"]; persist = TrueQ[OptionValue["Persist"]];
+    Do[
+      Module[{pt = iSVMDBodyPlain[snap], raw, t, prof, name, fixed, pl, put, snap2, pr, md, d, plain2},
+        If[! AssociationQ[pt], failBody++; Continue[]];
+        raw = pt["Body"]; t = iSVUINormalizeNewlines[raw];
+        prof = iSVMDBodyProfileText[raw];
+        name = If[StringQ[only], If[KeyExistsQ[prof["Repairs"], only], only, Missing["NotApplicable"]],
+          First[Keys[prof["Repairs"]], Missing["NothingToRepair"]]];
+        If[! StringQ[name], clean++; Continue[]];
+        fixed = iSVMDApplyRepair[name, t];
+        If[! StringQ[fixed] || fixed === t, clean++; Continue[]];
+        AppendTo[names, name];
+        If[dry, Continue[]];
+        pl = With[{p = Lookup[Lookup[snap, "Derived", <||>], "PrivacyLevel", Automatic]},
+          If[NumericQ[p], p, $SourceVaultDefaultImportedMailPL]];
+        (* the text as it was stays in the record (encrypted); an earlier BodyBeforeRepair is not overwritten *)
+        plain2 = Join[pt, <|"Body" -> fixed|>, If[KeyExistsQ[pt, "BodyBeforeRepair"], <||>, <|"BodyBeforeRepair" -> raw|>]];
+        put = SourceVault`SourceVaultEncryptedPut[plain2,
+          "PrivacyLevel" -> pl, "ContentType" -> "MailBody", "Persist" -> False, "SensitiveFields" -> Keys[plain2]];
+        If[Lookup[put, "Status", ""] =!= "Stored", failEnc++; Continue[]];
+        snap2 = snap;
+        pr = snap2["PayloadRefs"]; pr["Body"] = put["Record"]; snap2["PayloadRefs"] = pr;
+        md = snap2["MailMetadataPublic"]; md["BodyRepaired"] = name; snap2["MailMetadataPublic"] = md;
+        (* what was derived from the garbled text (summary, category, deadline) is derived again *)
+        d = KeyDrop[Lookup[snap2, "Derived", <||>], {"DerivedGrounding", "DerivedGroundingScore", "DerivedAttempts",
+           "DerivedLastReason", "DerivedLastAttemptAt", "DerivedRejected", "DerivedForeignAnchors"}];
+        d["DerivedStatus"] = "Pending"; snap2["Derived"] = d;
+        SourceVaultMailSnapshotPut[snap2, "Persist" -> False];
+        repaired++],
+      {snap, snaps}];
+    If[! dry && persist && repaired > 0, SourceVaultMailStoreSave["All" -> False]];
+    Join[<|"Status" -> "Ok", "MBox" -> mbox, "Selected" -> Length[snaps], "Repairable" -> Length[names],
+        "Repairs" -> KeySort[Counts[names]], "Repaired" -> repaired, "NothingToRepair" -> clean,
+        "FailedBodyDecrypt" -> failBody, "FailedEncrypt" -> failEnc, "DryRun" -> dry|>,
+      (* 2026-11-17: the repaired mails wait to be derived again. That is one LLM call per mail: on a kernel with a front
+         end it belongs in the separate process (ClaudeGenerateMailSummaries), not in an evaluation of the notebook --
+         the owner's front end froze when the batch was evaluated directly. The expression is handed over, not run. *)
+      If[repaired > 0,
+        <|"Next" -> "ClaudeGenerateMailSummaries[" <> ToString[mbox, InputForm] <> ", Infinity, " <> ToString[period, InputForm] <> "]"|>,
+        <||>]]];
+
 (* \:300c<mbox>\:306e\:65b0\:7740\:30e1\:30fc\:30eb\:306b\:30b5\:30de\:30ea\:30fc\:3092\:8ffd\:52a0\:300d\:306e\:6b63\:6e961\:95a2\:6570\:3002EnsureLoaded(\:30b9\:30b3\:30fc\:30d7\:78ba\:5b9a)\[RightArrow]
    \:305d\:306e mbox \:306e\:672a\:51e6\:7406\:3060\:3051\:3092\:30d0\:30c3\:30c1\:8981\:7d04\:30fb\:6c38\:7d9a\:5316\:3001\:3092\:5185\:5305\:3059\:308b\:3002
    \:91cd\:8981: \:5916\:90e8 WolframScript \:30b8\:30e7\:30d6\:3078\:9000\:907f\:3055\:308c\:305f\:3068\:304d\:3001\:5b50\:30d7\:30ed\:30bb\:30b9\:306f\:30e1\:30fc\:30eb\:30b9\:30c8\:30a2\:304c\:7a7a
@@ -2729,11 +3208,20 @@ SourceVaultBackfillMailBodies[OptionsPattern[]] :=
    \:81ea\:5df1\:5b8c\:7d50\:3057\:3066\:30ed\:30fc\:30c9\[RightArrow]\:8981\:7d04\:307e\:3067\:8d70\:308b\:3002mbox \:7d5e\:308a\:306f\:6b63\:3057\:3044\:30d1\:30b9 #["MailSource"]["MBox"] \:3092\:4f7f\:3046\:3002 *)
 Options[SourceVaultMailAddSummaries] =
   {"Limit" -> Infinity, "Persist" -> True, "CheckpointEvery" -> 3,
-   "Refresh" -> None, "DateFrom" -> Automatic, "DateTo" -> Automatic};
+   "Refresh" -> None, "DateFrom" -> Automatic, "DateTo" -> Automatic, "RepairBodiesFrom" -> None};
 SourceVaultMailAddSummaries[mbox_String, period_ : "Latest",
     OptionsPattern[]] :=
-  Module[{ensured, result},
+  Module[{ensured, result, rfrom = OptionValue["RepairBodiesFrom"], repair = None},
     ensured = SourceVaultMailEnsureLoaded[mbox, period];
+    (* 2026-11-18 "RepairBodiesFrom" -> "example.jp": first restore the bodies of that sender in the period that lost
+       their 8th bit (SourceVaultMailBodyRepair), then make the summaries. This function is what the separate process
+       runs (ClaudeGenerateMailSummaries hands its options through), so a repair over many months and the LLM calls that
+       follow happen there and nothing long is evaluated on the kernel of the front end -- the owner's front end froze
+       when the summaries were evaluated in a notebook. "Limit" -> 0 makes it the repair alone. *)
+    If[StringQ[rfrom] && rfrom =!= "",
+      repair = Quiet[SourceVaultMailBodyRepair[mbox, period, "From" -> rfrom, "DryRun" -> False, "Limit" -> Infinity,
+         "Persist" -> OptionValue["Persist"]]];
+      If[! AssociationQ[repair], repair = <|"Status" -> "Error", "Reason" -> "RepairFailed"|>]];
     result = SourceVaultInferMailDerivedBatch[
       (* \:65e2\:5b9a Refresh=None (=Pending \:306e\:307f) \:3092 mbox \:3067\:7d5e\:308b\:3002MBox \:5f8c\:30d5\:30a3\:30eb\:30bf\:306f
          #["MailSource"]["MBox"] \:3067\:5224\:5b9a\:3057\:3001\:4ed6 mbox \:306e\:672a\:51e6\:7406\:3092\:5dfb\:304d\:8fbc\:307e\:306a\:3044\:3002 *)
@@ -2747,8 +3235,9 @@ SourceVaultMailAddSummaries[mbox_String, period_ : "Latest",
       "DateTo"   -> OptionValue["DateTo"],
       (* \:540c\:671f\:5b9f\:884c\:304c\:6253\:3061\:5207\:3089\:308c\:3066\:3082\:9032\:6357\:304c\:6b8b\:308b\:3088\:3046\:983b\:7e41\:306b\:4fdd\:5b58 (\:65e2\:5b9a 3 \:4ef6\:3054\:3068)\:3002 *)
       "CheckpointEvery" -> OptionValue["CheckpointEvery"]];
-    <|"Status" -> "Ok", "MBox" -> mbox, "Period" -> period,
-      "Loaded" -> ensured, "Batch" -> result|>];
+    Join[<|"Status" -> "Ok", "MBox" -> mbox, "Period" -> period,
+        "Loaded" -> ensured, "Batch" -> result|>,
+      If[AssociationQ[repair], <|"Repair" -> KeyDrop[repair, "Next"]|>, <||>]]];
 
 (* ---- \:5b9f IMAP source (Python imaplib \:7d4c\:7531) ---- *)
 (* Period \:53d7\:7406\:5f62\:5f0f:
@@ -2804,7 +3293,8 @@ iSVIMAPPythonSource[mbox_String, srcOpts_Association] :=
     If[Head[session] =!= ExternalSessionObject,
       Return[{<|"_error" -> "PythonSessionFailed: ExternalEvaluate[\"Python\"] \:4e0d\:53ef (Python \:767b\:9332\:8981\:78ba\:8a8d)"|>}]];
     code = iSVBuildPython[acct["Server"], acct["Port"], acct["User"], pw,
-       range[[1]], range[[2]], attBase, Lookup[srcOpts, "MaxEmails", Automatic]];
+       range[[1]], range[[2]], attBase, Lookup[srcOpts, "MaxEmails", Automatic],
+       Lookup[srcOpts, "SearchFrom", None]];
     res = Quiet@Check[ExternalEvaluate[session, code], $Failed];
     Quiet@DeleteObject[session];
     If[! ListQ[res], Return[{<|"_error" -> "PythonEvalFailed"|>}]];
@@ -2812,43 +3302,172 @@ iSVIMAPPythonSource[mbox_String, srcOpts_Association] :=
     (Association[#] & /@ Select[res, AssociationQ]) /.
        r_Association :> KeyMap[ToString, r]];
 
-iSVBuildPython[server_, port_, user_, pw_, since_, before_, attBase_, maxN_] :=
-  Module[{maxLine},
+(* ---- the text decoding of the IMAP fetcher (Python source) ----
+   2026-11-17: the fetcher decoded a body with the declared charset, or as UTF-8 when none was declared or Python did
+   not know the name, and dropped what did not decode. The reading is now chosen in this order:
+     1. ISO-2022-JP, when the bytes carry its escape sequences, whatever the header says. It is read through CP932 so
+        that the Microsoft extensions (NEC special characters, half-width katakana) survive;
+     2. the declared charset, when it decodes without an error and without C1 controls -- unless the bytes are 8 bit
+        and valid UTF-8 under another declaration (then UTF-8, a wrong declaration being far likelier than chance);
+     3. UTF-8, when the bytes are valid UTF-8; plain ASCII when they are 7 bit;
+     4. with no usable declaration, or one that is generic (us-ascii, iso-8859-1, windows-1252, utf-8) or the other
+        Japanese one: CP932 / EUC-JP, the reading with the more kana -- under a Western declaration only when it has
+        kana at all; otherwise Windows-1252 (ISO-8859-1 mails carry its punctuation);
+     5. the declared charset with replacement characters (the result then says "replace").
+   Charset names are normalized (x-sjis / windows-31j -> cp932, iso-2022-jp-ms / cp50220 -> ISO-2022-JP, gb2312 / gbk ->
+   gb18030, ...). info (a list) receives the declared charset and the reading that was used. The headers go the same
+   way (_dec). No backslash and no double quote in this code (it is embedded in WL strings).
+   The cases are in test codes/SourceVault_mailbodydecode_cases.py (run by SourceVault_mailbodydecode_test.wls).
+   (Second version, same day: the owner's repair fetch showed a body read with replacement characters under gb2312,
+   and the first version could prefer a wrong reading when a text was mostly half-width katakana.) *)
+iSVMDPyTextSource[] := StringJoin[{
+"import codecs\n",
+"from email.header import decode_header\n",
+"_CSMAP={'shift_jis':'cp932','shift-jis':'cp932','sjis':'cp932','x-sjis':'cp932','ms_kanji':'cp932','windows-31j':'cp932','cp932':'cp932','ms932':'cp932','csshiftjis':'cp932','x-ms-cp932':'cp932','euc-jp':'euc_jp','x-euc-jp':'euc_jp','eucjp':'euc_jp','euc_jp':'euc_jp','cseucpkdfmtjapanese':'euc_jp','utf8':'utf-8','utf-8':'utf-8','unicode-1-1-utf-8':'utf-8','gb2312':'gb18030','gb_2312-80':'gb18030','gbk':'gb18030','x-gbk':'gb18030','cp936':'gb18030','euc-cn':'gb18030','gb18030':'gb18030'}\n",
+"_JISNAMES=('iso-2022-jp','iso2022-jp','iso2022_jp','iso2022jp','iso-2022-jp-ms','iso-2022-jp-1','iso-2022-jp-2','iso-2022-jp-3','iso-2022-jp-ext','iso-2022-jp-2004','cp50220','cp50221','cp50222','csiso2022jp','x-iso-2022-jp')\n",
+"def _norm_cs(cs):\n",
+"    if not cs: return None\n",
+"    c=str(cs).strip().strip(chr(34)).strip(chr(39)).lower()\n",
+"    if c in _JISNAMES: return 'jis'\n",
+"    if c in _CSMAP: return _CSMAP[c]\n",
+"    try: return codecs.lookup(c).name\n",
+"    except Exception: return None\n",
+"def _jis2sjis(b):\n",
+"    out=bytearray(); mode='A'; i=0; n=len(b)\n",
+"    while i<n:\n",
+"        c=b[i]\n",
+"        if c==27 and i+2<n:\n",
+"            s=bytes(b[i+1:i+3])\n",
+"            if s in (b'$B',b'$@'): mode='K'; i+=3; continue\n",
+"            if s in (b'(B',b'(J'): mode='A'; i+=3; continue\n",
+"            if s==b'(I': mode='H'; i+=3; continue\n",
+"            if s==b'$(' and i+3<n: mode='X'; i+=4; continue\n",
+"        if mode=='K' and i+1<n and 33<=c<=126 and 33<=b[i+1]<=126:\n",
+"            j1=c; j2=b[i+1]\n",
+"            s1=((j1-33)>>1)+129\n",
+"            if s1>159: s1+=64\n",
+"            if j1&1:\n",
+"                s2=j2+31\n",
+"                if s2>=127: s2+=1\n",
+"            else:\n",
+"                s2=j2+126\n",
+"            out.append(s1); out.append(s2); i+=2; continue\n",
+"        if mode=='H' and 33<=c<=95: out.append(c|128); i+=1; continue\n",
+"        if mode=='X' and i+1<n and 33<=c<=126: out.append(63); i+=2; continue\n",
+"        out.append(c); i+=1\n",
+"    return bytes(out)\n",
+"def _bad(t):\n",
+"    k=0\n",
+"    for ch in t:\n",
+"        o=ord(ch)\n",
+"        if o==65533 or 128<=o<=159: k+=1\n",
+"    return k\n",
+"def _kana(t):\n",
+"    k=0\n",
+"    for ch in t:\n",
+"        if 12352<=ord(ch)<=12543: k+=1\n",
+"    return k\n",
+"def _score(t):\n",
+"    k=0; c=0; h=0\n",
+"    for ch in t:\n",
+"        o=ord(ch)\n",
+"        if 12352<=o<=12543: k+=1\n",
+"        elif 19968<=o<=40959: c+=1\n",
+"        elif 65377<=o<=65439: h+=1\n",
+"    return 2*k+c-h-3*_bad(t)\n",
+"def _txt(b,cs=None,info=None):\n",
+"    def _note(tag):\n",
+"        if info is not None: info.append(tag)\n",
+"    def _strict(name,data):\n",
+"        try: return data.decode(name)\n",
+"        except Exception: return None\n",
+"    if b is None: return ''\n",
+"    if isinstance(b,str): return b\n",
+"    b=bytes(b)\n",
+"    if not b: return ''\n",
+"    c=_norm_cs(cs)\n",
+"    if (b.find(bytes([27,36]))>=0) or (b.find(bytes([27,40]))>=0):\n",
+"        try: j=_jis2sjis(b).decode('cp932','replace')\n",
+"        except Exception: j=None\n",
+"        if j is not None and (_bad(j)==0 or _score(j)>0):\n",
+"            _note('iso-2022-jp'); return j\n",
+"    hi=0\n",
+"    for x in b:\n",
+"        if x>127: hi+=1\n",
+"    u=_strict('utf-8',b) if hi>0 else None\n",
+"    d=None\n",
+"    if c and c!='jis':\n",
+"        d=_strict(c,b)\n",
+"        if d is not None and _bad(d)>0: d=None\n",
+"    if d is not None:\n",
+"        if u is None or c=='utf-8' or _score(d)>2*_score(u)+2:\n",
+"            _note(c); return d\n",
+"        _note('utf-8'); return u\n",
+"    if u is not None:\n",
+"        _note('utf-8'); return u\n",
+"    if hi==0:\n",
+"        _note('ascii'); return b.decode('ascii','replace')\n",
+"    west=c in ('ascii','iso8859-1','cp1252')\n",
+"    if c is None or c=='jis' or west or c in ('utf-8','cp932','euc_jp'):\n",
+"        best=None; bs=0; bt=''\n",
+"        for nm in ('cp932','euc_jp'):\n",
+"            t=_strict(nm,b)\n",
+"            if t is not None and _bad(t)==0:\n",
+"                sc=_score(t)\n",
+"                if best is None or sc>bs: best=t; bs=sc; bt=nm\n",
+"        if best is not None and ((not west and bs>0) or _kana(best)>=2):\n",
+"            _note(bt); return best\n",
+"        if west or c is None or c=='jis':\n",
+"            t=_strict('cp1252',b)\n",
+"            if t is not None:\n",
+"                _note('cp1252'); return t\n",
+"            _note('iso8859-1'); return b.decode('latin-1')\n",
+"    _note('replace')\n",
+"    try: return b.decode(c if (c and c!='jis') else 'utf-8','replace')\n",
+"    except Exception: return b.decode('utf-8','replace')\n",
+"def _dec(s):\n",
+"    if s is None: return ''\n",
+"    out=''\n",
+"    try: parts=decode_header(s)\n",
+"    except Exception: return str(s)\n",
+"    for t,enc in parts:\n",
+"        if isinstance(t,bytes): out+=_txt(t,enc)\n",
+"        elif chr(27) in t: out+=_txt(t.encode('latin-1','ignore'))\n",
+"        else: out+=t\n",
+"    return out\n",
+"def _body(m,info=None):\n",
+"    def _one(p):\n",
+"        pl=p.get_payload(decode=True)\n",
+"        if not pl: return ''\n",
+"        if info is not None: info.append(str(p.get_content_charset()))\n",
+"        return _txt(pl,p.get_content_charset(),info)\n",
+"    if m.is_multipart():\n",
+"        for p in m.walk():\n",
+"            if p.get_content_type()=='text/plain' and 'attachment' not in str(p.get('Content-Disposition')):\n",
+"                t=_one(p)\n",
+"                if t: return t\n",
+"        return ''\n",
+"    return _one(m)\n"}];
+
+(* "SearchFrom": only letters, digits and @ . _ - go into the search command *)
+iSVMDSearchFromOKQ[x_] := StringQ[x] && StringMatchQ[x, RegularExpression["[A-Za-z0-9@._\\-]{1,100}"]];
+
+iSVBuildPython[server_, port_, user_, pw_, since_, before_, attBase_, maxN_, from_ : None] :=
+  Module[{maxLine, fromPart},
+    fromPart = If[iSVMDSearchFromOKQ[from], " FROM \"" <> from <> "\"", ""];
     (* try \:30d6\:30ed\:30c3\:30af\:5185 (4\:30b9\:30da\:30fc\:30b9) \:306b\:633f\:5165\:3055\:308c\:308b\:306e\:3067 4\:30b9\:30da\:30fc\:30b9\:5b57\:4e0b\:3052\:30028\:30b9\:30da\:30fc\:30b9\:3060\:3068 IndentationError \:3067 script \:5168\:4f53\:304c PythonEvalFailed \:306b\:306a\:308b *)
     maxLine = If[IntegerQ[maxN], "    email_ids = email_ids[-" <> ToString[maxN] <> ":]\n", ""];
     StringJoin[{
 "import imaplib, email, os, json, re\n",
 "from email.header import decode_header\n",
 "from email.utils import parsedate_to_datetime\n",
-"def _dec(s):\n",
-"    if s is None: return ''\n",
-"    out=''\n",
-"    for t,enc in decode_header(s):\n",
-"        if isinstance(t,bytes):\n",
-"            try: out+=t.decode(enc or 'utf-8','ignore')\n",
-"            except: out+=t.decode('utf-8','ignore')\n",
-"        else: out+=t\n",
-"    return out\n",
-"def _body(m):\n",
-"    if m.is_multipart():\n",
-"        for p in m.walk():\n",
-"            if p.get_content_type()=='text/plain' and 'attachment' not in str(p.get('Content-Disposition')):\n",
-"                pl=p.get_payload(decode=True)\n",
-"                if pl:\n",
-"                    try: return pl.decode(p.get_content_charset() or 'utf-8','ignore')\n",
-"                    except: return pl.decode('utf-8','ignore')\n",
-"        return ''\n",
-"    pl=m.get_payload(decode=True)\n",
-"    if pl:\n",
-"        try: return pl.decode(m.get_content_charset() or 'utf-8','ignore')\n",
-"        except: return pl.decode('utf-8','ignore')\n",
-"    return ''\n",
+iSVMDPyTextSource[],     (* _dec (headers) and _body (the text part), with the charset handling *)
 "_out=[]\n",
 "try:\n",
 "    c=imaplib.IMAP4_SSL('"<>server<>"',"<>ToString[port]<>")\n",
 "    c.login('"<>user<>"','"<>StringReplace[pw,{"\\"->"\\\\","'"->"\\'"}]<>"')\n",
 "    c.select('INBOX')\n",
-"    typ,data=c.search(None,'(SINCE \""<>iSVImapDate[since]<>"\" BEFORE \""<>iSVImapDate[before]<>"\")')\n",
+"    typ,data=c.search(None,'(SINCE \""<>iSVImapDate[since]<>"\" BEFORE \""<>iSVImapDate[before]<>"\""<>fromPart<>")')\n",
 "    email_ids=data[0].split()\n",
 maxLine,
 "    for eid in email_ids:\n",
@@ -2870,10 +3489,11 @@ maxLine,
 "                    os.makedirs(attdir,exist_ok=True)\n",
 "                    with open(os.path.join(attdir,fn),'wb') as fh: fh.write(p.get_payload(decode=True) or b'')\n",
 "                except: pass\n",
+"        _bi=[]\n",
 "        _out.append({'id':m.get('Message-ID') or _dec(m.get('Subject')),\n",
 "          'date':dt.isoformat() if dt else '','subject':_dec(m.get('Subject')),\n",
 "          'from':_dec(m.get('From')),'to':_dec(m.get('To')),'cc':_dec(m.get('Cc')) or '',\n",
-"          'body':_body(m),'attachment':','.join(names),'rawheader':_rh})\n",
+"          'body':_body(m,_bi),'bodycharset':'>'.join(_bi[-2:]),'attachment':','.join(names),'rawheader':_rh})\n",
 "    c.logout()\n",
 "except Exception as e:\n",
 "    _out=[{'_error':str(e)}]\n",
@@ -2904,10 +3524,10 @@ iSVMDResolveMessageSource[mbox_String] :=
 Options[SourceVaultMailFetchNew] = {
    "Period" -> "Latest", "Process" -> False, "MessageSource" -> Automatic,
    "Inferencer" -> Automatic, "Persist" -> True, "MaxEmails" -> Automatic,
-   "Overwrite" -> False};
+   "Overwrite" -> False, "OverwriteFilter" -> All, "SearchFrom" -> None};
 
 SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
-  Module[{src, msgs, errs, existsQ, newMsgs, toStore, infer, overwrite, result,
+  Module[{src, msgs, errs, existsQ, newMsgs, toStore, infer, overwrite, result, ofilter, sfrom,
       processed = 0, stored = 0, overwritten = 0},
     src = With[{ms = OptionValue["MessageSource"]},
       (* Automatic: dispatch on the account's AuthMethod via the provider
@@ -2915,7 +3535,14 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
          Note: an explicit If, not "/. Automatic -> ...", so an injected fake
          whose body happens to contain Automatic is never rewritten. *)
       If[ms === Automatic, iSVMDResolveMessageSource[mbox], ms]];
-    msgs = src[<|"Period" -> OptionValue["Period"], "MaxEmails" -> OptionValue["MaxEmails"], "Mbox" -> mbox|>];
+    (* 2026-11-17 "SearchFrom": only the mails whose sender contains this string are asked of the server (a repair of one
+       sender's mails without reading the whole month: a month of 608 mails took 18 minutes). The fetched mails are
+       filtered here as well, so that a source that does not know the key gives the same result. *)
+    sfrom = OptionValue["SearchFrom"];
+    If[StringQ[sfrom] && ! iSVMDSearchFromOKQ[sfrom],
+      Return[<|"Status" -> "Error", "Reason" -> "BadSearchFrom", "MBox" -> mbox|>]];
+    msgs = src[<|"Period" -> OptionValue["Period"], "MaxEmails" -> OptionValue["MaxEmails"], "Mbox" -> mbox,
+       "SearchFrom" -> If[StringQ[sfrom], sfrom, None]|>];
     If[! ListQ[msgs],
       Return[<|"Status" -> "Error", "Reason" -> "FetchFailed", "MBox" -> mbox|>]];
     errs = Select[msgs, AssociationQ[#] && KeyExistsQ[#, "_error"] &];
@@ -2923,6 +3550,7 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
       Return[<|"Status" -> "Error", "Reason" -> "IMAPError", "MBox" -> mbox,
         "Detail" -> Lookup[First[errs], "_error", ""]|>]];
     msgs = Select[msgs, AssociationQ];
+    If[StringQ[sfrom], msgs = Select[msgs, StringContainsQ[ToString[Lookup[#, "from", ""]], sfrom, IgnoreCase -> True] &]];
     iSVMDIdentityEnsureLoaded[];  (* \:8b58\:5225\:5b50\:3092\:4e0a\:66f8\:304d\:3057\:306a\:3044\:3088\:3046\:5148\:306b load *)
     (* \:53d6\:308a\:8fbc\:307f\:5bfe\:8c61\:6708\:306e\:65e2\:5b58\:30b7\:30e3\:30fc\:30c9\:3092\:5148\:306b\:30ed\:30fc\:30c9\:3059\:308b\:3002
        \:672a\:30ed\:30fc\:30c9\:306e\:307e\:307e put -> save \:3059\:308b\:3068 iSVMDWriteShard \:306f in-memory \:306e
@@ -2942,8 +3570,16 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
        iSVMDRecordId[mbox, ToString[Lookup[#, "id", "unknown"]]]]] &;
     newMsgs = Select[msgs, ! existsQ[#] &];
     (* Overwrite->True \:306a\:3089\:65e2\:5b58(\:540c\:4e00 RecordId)\:3082\:518d\:4fdd\:5b58\:3057\:3066\:4fee\:5fa9/\:66f4\:65b0\:3059\:308b *)
-    toStore = If[overwrite, msgs, newMsgs];
-    overwritten = If[overwrite, Length[msgs] - Length[newMsgs], 0];
+    (* 2026-11-17 "OverwriteFilter": with Overwrite, only the fetched messages the filter accepts replace their stored
+       snapshots -- a repair of some mails of a month (one sender whose bodies were decoded wrongly) without writing the
+       whole month again and losing its summaries. All (the default) = every fetched message, as before. The filter gets
+       the fetched record (keys "id", "date", "subject", "from", "to", "cc", "body", ...). *)
+    ofilter = OptionValue["OverwriteFilter"];
+    toStore = Which[
+      ! overwrite, newMsgs,
+      ofilter === All || ofilter === Automatic, msgs,
+      True, Select[msgs, ! existsQ[#] || TrueQ[Quiet @ Check[ofilter[#], False]] &]];
+    overwritten = If[overwrite, Length[toStore] - Length[newMsgs], 0];
     infer = OptionValue["Inferencer"] /. Automatic -> SourceVaultMailInferDerived;
     Do[
       Module[{snap = SourceVaultMailSnapshotFromMaildb[m, mbox], spec, res},
@@ -2960,9 +3596,13 @@ SourceVaultMailFetchNew[mbox_String, OptionsPattern[]] :=
     result = <|"Status" -> "Ok", "MBox" -> mbox, "Fetched" -> Length[msgs],
       "New" -> Length[newMsgs], "Stored" -> stored,
       "Overwritten" -> overwritten,
-      "Duplicates" -> If[overwrite, 0, Length[msgs] - Length[newMsgs]],
+      "Duplicates" -> Length[msgs] - Length[toStore],
       "Processed" -> processed,
-      "ProcessMode" -> If[TrueQ[OptionValue["Process"]], "Inline", "Deferred"]|>;
+      "ProcessMode" -> If[TrueQ[OptionValue["Process"]], "Inline", "Deferred"],
+      (* how the bodies were decoded: "<declared charset>><the one that was used>" -> number of mails (names only) *)
+      "BodyDecoding" -> KeySort[Counts[(ToString[Lookup[#, "bodycharset", "?"]] &) /@ msgs]],
+      (* the same for the mails that were written (with "OverwriteFilter": the mails that were repaired) *)
+      "BodyDecodingStored" -> KeySort[Counts[(ToString[Lookup[#, "bodycharset", "?"]] &) /@ toStore]]|>;
     (* \:53d6\:308a\:8fbc\:307f\:5b8c\:4e86\:5f8c\:30d5\:30c3\:30af (mining \:306e\:8457\:8005\:62bd\:51fa\:306a\:3069)\:3002\:5931\:6557\:3057\:3066\:3082 fetch \:306f\:6210\:529f\:6271\:3044\:3002
        \:7d50\:679c\:3092\:89b3\:6e2c\:3067\:304d\:308b\:3088\:3046 PostFetchHooks \:306b\:5404\:30d5\:30c3\:30af\:306e\:623b\:308a\:5024\:3092\:8f09\:305b\:308b (\:30d5\:30c3\:30af\:306f\:57fa\:5e95 result \:3092\:53d7\:3051\:53d6\:308b)\:3002 *)
     Append[result, "PostFetchHooks" -> iSVMDRunPostFetchHooks[mbox, result]]];
@@ -3043,7 +3683,7 @@ If[! AssociationQ[$SourceVaultMailViewColumnWidths],
        (iSVUIAttachCell のコメント参照)。幅を広げても直らない *)
     "Act" -> 10, "Opens" -> 3, "Replied" -> 3, "Resolved" -> 3, "Date" -> 13, "Pri" -> 4,
     "Sec" -> 4, "Cat" -> 5, "Deadline" -> 12, "Subject" -> 26, "From" -> 14,
-    "Summary" -> 40|>];
+    "Summary" -> 40, "Work" -> 4|>];
 
 iSVUILegacyRoot[] :=
   If[StringQ[$SourceVaultLegacyMailRoot], $SourceVaultLegacyMailRoot,
@@ -3249,7 +3889,7 @@ iSVUITrimBlankLines[s_String] :=
       If[pos === {}, "", StringRiffle[lines[[First[pos] ;; Last[pos]]], "\n"]]]];
 
 SourceVaultMailSend[spec_Association] :=
-  Module[{to, cc, bcc, subject, body, atts, mailSpec, result, sig, self, rawAtts},
+  Module[{to, cc, bcc, subject, body, atts, mailSpec, result, sig, self, rawAtts, pgate},
     to = StringTrim@ToString@Lookup[spec, "To", ""];
     If[to === "", Return[<|"Status" -> "Error", "Reason" -> "NoRecipient"|>]];
     cc = StringTrim@ToString@Lookup[spec, "Cc", ""];
@@ -3271,6 +3911,20 @@ SourceVaultMailSend[spec_Association] :=
       If[missing =!= {},
         Return[<|"Status" -> "Error", "Reason" -> "AttachmentNotFound",
           "Missing" -> missing|>]]];
+    (* 03 v0.4 §9.2 (2026-11-10 Inc4): 公開の関所。本文 (署名の前) と添付に隔離中・派生物の Unknown の版があれば送らない。
+       宛先は鍵付き digest で Publish Activity に残る。SourceVault_integrity.wl 未ロードなら素通り *)
+    (* 2026-11-11 (review 20261111 F03 / F04): the decision is SourceVaultIntegrityPublishBlockedQ, so a missing gate, an exception or a
+       Failure also stops the mail while $SourceVaultIntegrityPublishFailClosed is True (only an explicit Deny stopped it before).
+       The result of SendMail is recorded against the gate's intent with SourceVaultIntegrityPublishOutcome below. *)
+    pgate = If[Length[DownValues[SourceVault`SourceVaultIntegrityPublishGate]] > 0,
+      Quiet @ Catch[SourceVault`SourceVaultIntegrityPublishGate[
+        Join[{<|"Text" -> ToString @ Lookup[spec, "Body", ""]|>}, <|"Path" -> #|> & /@ atts], "mail:" <> to, "Channel" -> "Mail"]],
+      Missing["IntegrityAbsent"]];
+    If[If[Length[DownValues[SourceVault`SourceVaultIntegrityPublishBlockedQ]] > 0,
+        TrueQ[SourceVault`SourceVaultIntegrityPublishBlockedQ[pgate]], TrueQ[SourceVault`$SourceVaultIntegrityPublishFailClosed]],
+      Return[<|"Status" -> "Error", "Reason" -> "IntegrityPublishBlocked",
+        "Gate" -> If[AssociationQ[pgate], KeyTake[pgate, {"Decision", "Reasons", "Items"}],
+          <|"Decision" -> "Unavailable", "Detail" -> ToString[pgate, InputForm]|>]|>]];
     bcc = Lookup[spec, "Bcc", Automatic];
     self = iSVUIOwnerPrimaryEmail[];
     bcc = If[bcc === Automatic,
@@ -3281,6 +3935,11 @@ SourceVaultMailSend[spec_Association] :=
     If[StringQ[bcc] && bcc =!= "", mailSpec["Bcc"] = bcc];
     If[atts =!= {}, mailSpec["Attachments"] = atts];
     result = Quiet@Check[SendMail[mailSpec], $Failed];
+    (* record the actual outcome of the send against the gate's intent (2026-11-11, F04): a failed send is not a publication *)
+    If[AssociationQ[pgate] && StringQ[Lookup[pgate, "ActivityId", None]] &&
+        Length[DownValues[SourceVault`SourceVaultIntegrityPublishOutcome]] > 0,
+      Quiet @ Catch[SourceVault`SourceVaultIntegrityPublishOutcome[pgate["ActivityId"],
+        If[FailureQ[result] || result === $Failed, "Failed", "Succeeded"], "Channel" -> "Mail"]]];
     If[FailureQ[result] || result === $Failed,
       <|"Status" -> "Error", "Reason" -> "SendMailFailed",
         "Detail" -> ToString[result], "To" -> to, "Subject" -> subject|>,
@@ -3855,6 +4514,8 @@ $iSVUILabels = <|
   "Reply" -> <|"Japanese" -> "\:8fd4\:4fe1", "English" -> "Reply"|>,
   "Opens" -> <|"Japanese" -> "\:958b\:5c01", "English" -> "Opens"|>,
   "Replied" -> <|"Japanese" -> "\:8fd4\:4fe1\:6e08", "English" -> "Replied"|>,
+  "Work" -> <|"Japanese" -> "\:696d\:52d9", "English" -> "Work"|>,
+  "ResolvedTodo" -> <|"Japanese" -> "Todo \:3092\:4f5c\:6210\:3057\:3066\:7d99\:627f", "English" -> "Todo created"|>,
   "Resolved" -> <|"Japanese" -> "\:5bfe\:5fdc", "English" -> "Done"|>,
   "ResolvedDismissed" -> <|"Japanese" -> "\:78ba\:8a8d\:306e\:307f\:30fb\:5bfe\:5fdc\:6e08\:307f",
      "English" -> "Confirmed / done"|>,
@@ -4067,16 +4728,26 @@ iSVUIOpensCell[rid_, ff_] :=
    resMap は iSVMDAgendaResolutionMap[] を **一覧 1 回につき 1 度** 読んだもの
    (行ごとに agenda.json を読み直さない)。返信済みは返信列と重なるが、
    「対応済みかどうか」を 1 列で判断できることを優先する。 *)
+(* the work-state column of the index view (document 15): a short mark, the full label as a tooltip.
+   The state map is read once per list; without SourceVault_series.wl the column stays empty. *)
+iSVMDWorkMapFor[rows_List] :=
+  If[! iSVMDWorkLayerQ[] || rows === {}, <||>,
+    With[{m = Quiet@Check[SourceVault`SourceVaultMailWorkStateMap[rows], <||>]}, If[AssociationQ[m], m, <||>]]];
+iSVMDWorkCell[e_] :=
+  If[! AssociationQ[e] || Length[DownValues[SourceVault`SourceVaultMailWorkBadge]] === 0, "",
+    Quiet@Check[SourceVault`SourceVaultMailWorkBadge[e], ""]];
+
 iSVUIResolvedCell[rid_, resMap_, ff_] :=
   Module[{e = Lookup[resMap, rid, Missing[]], st, at, n},
     If[AssociationQ[e],
       st = Lookup[e, "State", ""];
       at = With[{a = Lookup[e, "At", ""]}, If[StringQ[a], a, ""]];
       Return[Tooltip[
-        Style[If[st === "NotebookCreated", "\|01f4d3", "\[Checkmark]"],
+        Style[Which[st === "NotebookCreated", "\|01f4d3", st === "TodoCreated", "\:2611", True, "\[Checkmark]"],
           Darker@Green, Bold, FontFamily -> ff, ShowStringCharacters -> False],
-        If[st === "NotebookCreated", iSVL["ResolvedNotebook"],
-           iSVL["ResolvedDismissed"]] <> If[at =!= "", ": " <> at, ""]]]];
+        Which[st === "NotebookCreated", iSVL["ResolvedNotebook"],
+           st === "TodoCreated", iSVL["ResolvedTodo"],
+           True, iSVL["ResolvedDismissed"]] <> If[at =!= "", ": " <> at, ""]]]];
     n = iSVMDRepliedCountOf[rid];
     If[IntegerQ[n] && n > 0,
       Tooltip[
@@ -4195,11 +4866,12 @@ SourceVaultMailSearchIndexView[query : (_String | {__String}) : "",
   iSVMDIxRowsView[SourceVaultMailSearchIndex[query, opts]];
 
 iSVMDIxRowsView[rows_List] :=
-  Module[{ff = iSVUIFont[], urows},
+  Module[{ff = iSVUIFont[], urows, wmap},
     If[rows === {}, Return[Style[iSVL["NoMail"], "Text"]]];
     (* core 呼び出しと別セルで表示された場合でも出力セルが機密マークされる
        よう、ここでも評価スコープの透かしを立てる (冪等)。 *)
     iSVMDNotePrivacyOf[rows];
+    wmap = iSVMDWorkMapFor[rows];
     urows = Function[r,
        With[{rid = ToString@Lookup[r, "RecordId", ""], sk = Lookup[r, "ShardKey", Missing[]]},
          <|(* action \:306b\:306f\:5c0f\:3055\:3044\:30bf\:30b0\:3060\:3051\:3092\:57cb\:3081\:8fbc\:307f\:3001\:2709 \:672c\:6587 / \:30b9\:30ec \:30b9\:30ec\:30c3\:30c9 \:306e
@@ -4207,6 +4879,7 @@ iSVMDIxRowsView[rows_List] :=
               \:306a\:308b\:56de\:907f\:3002iSVUIActDisplay \:306e\:30b3\:30e1\:30f3\:30c8\:53c2\:7167)\:3002
               2 \:5217\:76ee\:306b\:7f6e\:304f\:3068 ItemSize \:3068\:306e\:4f75\:7528\:3067\:62bc\:305b\:306a\:304f\:306a\:308b\:306e\:3067 1 \:5217\:76ee\:306b\:96c6\:3081\:308b *)
            "" -> iSVUIActIndex[rid, sk],
+           iSVL["Work"] -> iSVMDWorkCell[Lookup[wmap, rid, Missing[]]],
            iSVL["Date"] -> Style[iSVUIFormatDateJST[Lookup[r, "Date", Missing[]]], FontFamily -> ff],
            iSVL["Pri"] -> Style[iSVUINumCell[Lookup[r, "Priority", Missing[]]], FontFamily -> ff],
            iSVL["Sec"] -> Style[iSVUINumCell[Lookup[r, "PrivacyLevel", Missing[]]], FontFamily -> ff],
@@ -4224,7 +4897,7 @@ iSVMDIxRowsView[rows_List] :=
     iSVMDIxWrapConfidential[
       Pane[
         Dataset[urows,
-          ItemSize -> iSVUIItemSize[{"Act", "Date", "Pri", "Sec",
+          ItemSize -> iSVUIItemSize[{"Act", "Work", "Date", "Pri", "Sec",
              "Cat", "Deadline", "Subject", "From", "Summary"}],
           ItemDisplayFunction -> (iSVUIActDisplay[#] &),
           Alignment -> {Left, Center},

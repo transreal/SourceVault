@@ -41,6 +41,51 @@ storage class の絶対パスを返す。
 `class` の値: `"Raw"` (pv/raw/by-hash) / `"Meta"` (pv/raw/meta) / `"Parsed"` (pv/parsed) / `"Attachments"` (pv/attachments) / `"Compiled"` (pv/compiled/public) / `"LocalState"` (`SourceVaultRoot["LocalState"]`)。
 不明な class は `Failure["SourceVaultUnknownStorageClass", ...]`。
 
+## Machine / ID
+
+### SourceVaultMachineTag[] → String
+この機の正準 MachineTag を返す。`$MachineName` の英数字・`-`・`_` 以外を `-` に潰したもので、大小文字は保持する。診断 spool・正準診断ログ・issues の inbox/outbox・Writer 刻印はすべてこの表記を使う。
+### SourceVaultMachineTag[name] → String
+与えた名前を同じ規則で正規化する (純関数)。
+
+### SourceVaultULID[] → String
+ULID (48 bit の UNIX ミリ秒 + 80 bit の乱数を Crockford base32 で 26 文字、辞書順 = 時刻順) を返す。来歴台帳の EntityId (`"ent-" <> ULID`) / ActivityId (`"act-"`) / EventId の採番はこれに統一する。時刻は `UnixTime[]` 基準 (正しい UTC ミリ秒)。他モジュールの private 実装 (iTaintULID 等) は JST 機で 18 時間進むが、これは正しい。
+
+## Principal (主体)
+
+### $SourceVaultPrincipal
+型: Association | (未束縛), 初期値: 未束縛
+いま評価しているコードの主体を表す動的変数。値は `<|"Kind" -> "OwnerFE" | "OwnerCode" | "Service" | "Model" | "MCP", "Channel" -> _, "Ticket" -> _|>`。
+`Block` で束縛するのは次の 5 か所だけで、それ以外では束縛しない。
+(1) `SourceVaultOwnerTicketDialog` (FE の所有者操作) が OwnerFE。
+(2) `NBExecuteHeldExpr` (ノートで評価する提案コード) が OwnerCode。
+(3) `SourceVaultMCPCallTool` (MCP クライアント。`_mcpClient` の自己申告は ClaimedClient に記録するだけ) が MCP。
+(4) claudecode の tool loop (`iExecSourceVaultToolCall`) が Model。
+(5) service の hook (`iSMSafeHook` / issue forward) が Service。
+未束縛は最も制限的な Model として扱う。webguard の "Actor" / DeclareContext、MCP の authoredBy などの自己申告は、この変数から導く。同一カーネルのコードがこの変数を書き換えられる限界があり、代入は NBAccess の `$NBApprovalSetSymbols` で承認対象。
+
+### SourceVaultPrincipal[] → Association
+現在の主体を正規化した Association で返す。`$SourceVaultPrincipal` が未束縛か不正なら `<|"Kind" -> "Model", "Channel" -> Missing["Unbound"], "Ticket" -> Missing[], "Bound" -> False|>` (fail-closed)。
+### SourceVaultPrincipal["Kind"] → String
+Kind だけを返す。
+
+### SourceVaultPrincipalOwnerQ[] → True | False
+現在の主体が所有者 (Kind が OwnerFE か OwnerCode) のとき True。未束縛は False。
+
+## Security Profile
+
+### $SourceVaultSecurityProfile
+型: String, 初期値: `"production"`
+`"production"` (既定) か `"development"`。development は試験専用で、所有者 ticket の development 発行器 (`$SourceVaultOwnerTicketDevelopmentKeyRef`、SourceVault_autotrigger.wl) を有効にする。production でその鍵が設定されていると `SourceVaultSecurityProfileCheck[]` が Violations に出す。代入は NBAccess の承認対象。
+
+### SourceVaultSecurityProfileCheck[] → Association
+現在の profile と登録済みの検査を評価する。
+→ `<|"Profile", "Status" -> "OK" | "Violations", "Violations" -> {<|"Code", "Severity", "Message", "Check"|>, ...}, "Checks"|>`
+組み込みの検査: production で development 鍵が設定されている (Error)、production で所有者 ticket の鍵 (`$SourceVaultOwnerTicketKeyRef`) が未設定 (Warning)、profile の値が不正 (Error)。
+
+### SourceVaultRegisterSecurityProfileCheck[name, f]
+検査 `f[profile] -> {<|"Code", "Severity" -> "Error" | "Warning", "Message"|>, ...}` を name で登録する (冪等。モジュールがロード時に呼ぶ)。`SourceVaultSecurityProfileCheck[]` が評価する。
+
 ## File Handles (Dropbox 競合対策)
 
 実測: WL のメッセージ系失敗は評価を止めないので Close まで到達するが、Abort / Throw / TimeConstrained 打ち切りが Open〜Close の間に当たると stream がカーネル終了まで残る。開いた write ハンドルは Dropbox 同期を止め、複数マシンが同じ shard を書く mail store 等で conflicted copy を生む (kernel kill で一斉同期する現象の正体)。
@@ -76,7 +121,7 @@ Options: `"DropFields" -> {}` (`SourceVaultCanonicalizeForDigest` と同じ)
 ## Immutable Snapshot Store (§8.2a)
 
 ### SourceVaultSaveImmutableSnapshot[class, assoc, opts]
-assoc を immutable snapshot として content-addressed store に保存する。同一内容の再保存は idempotent。
+assoc を immutable snapshot として content-addressed store に保存する。同一内容の再保存は idempotent。保存時に `SnapshotClass` / `Digest` / `StoredAtUTC` が付与される (digest 計算対象外)。分類の鍵の組が強制されている class は暗号化 (`.sve`) して書き、平文は書かない。
 → `<|"Status" -> "OK", "Ref" -> "snapshot:class:hex", "Digest" -> "sha256:...", "Path" -> path, "Class" -> class, "Existed" -> True|False|>` | Failure
 Options: `"Alias" -> None` (文字列を指定すると alias も同時に割り当てる), `"AliasOverwrite" -> False` (`True` で既存 alias を新 ref に張り替える＝同 alias で内容更新する rebuildable snapshot 用。既定は create-only で別 ref なら `NameCollision`)
 例: `SourceVaultSaveImmutableSnapshot["parsed", <|"Title" -> "foo", "Body" -> "bar"|>, "Alias" -> "latest"]`
@@ -98,7 +143,7 @@ alias → ref の割り当てを行う。同 alias に異なる ref を割り当
 Options: `"Overwrite" -> False` (`True` で既存 alias を新 ref に張り替える。immutable blob は残し alias ポインタのみ更新)
 
 ### SourceVaultImmutableSnapshotExistsQ[ref] → True | False
-不変スナップショット本体がストアに存在するか判定する。
+不変スナップショット本体がストアに存在するか判定する (暗号化 `.sve` も含む)。
 ref 形式: `"snapshot:class:hex"` / `"class/alias"` / `"sv://snapshot/class/hex"`。
 
 ## Privacy (privacy invariant phase 1)
@@ -113,7 +158,7 @@ privacy 未指定オブジェクトの既定 privacy level。クラウド閾値 
 ### SourceVaultSnapshotPrivacyRecord[ref] → Association
 不変スナップショットの privacy サイドレコードを返す。
 キー: `Level` / `Source` / `Present` / `Class` / `Hex` / `Ref` / `Encrypted`。
-サイドレコード未設定でも既定値 (`Level -> 0.85`, `Present -> False`) で返す。
+サイドレコード未設定でも既定値 (`Level -> 0.85`, `Source -> "Default"`, `Present -> False`) で返す。`Encrypted` は記録の値でなく、本体が `.sve` で置かれているかで決まる。
 
 ### SourceVaultSetImmutableSnapshotPrivacyLevel[ref, level] → Association
 不変スナップショットの privacy サイドレコードを設定する (本体は不変なので別ファイル)。
@@ -158,19 +203,19 @@ Options: `"Limit" -> 100` (取得上限; `All` で全件), `"EventClass" -> All`
 ## Blob store (§17.12.6)
 
 ### SourceVaultCommitBlob[data, opts]
-`ByteArray` または `String` (UTF-8) を content-addressed blob として create-only で保存する。同一内容の再保存は idempotent。hash 不一致の既存 blob は `Failure["BlobCorruption", ...]` で fail-closed。
+`ByteArray` または `String` (UTF-8) を content-addressed blob として create-only で保存する。同一内容の再保存は idempotent。hash 不一致の既存 blob は `Failure["BlobCorruption", ...]` で fail-closed。"Blob" の鍵の組が強制されていれば本体と `.meta.json` を暗号化して書く (平文は書かない)。
 → `<|"Status" -> "OK", "Hash" -> hex, "BlobRef" -> "blob:sha256:hex", "Path" -> path, "Existed" -> True|False|>` | Failure
 Options: `"Meta" -> <||>` (meta.json に保存するメタデータ Association)
 
 ### SourceVaultReadBlob[hashOrRef] → Association
-`SourceVaultCommitBlob` の読み出し対。content-addressed blob を読み、読み出し時に hash を再計算して検証した bytes を返す。不一致は `"BlobCorruption"` で fail-closed。main kernel 用 storage primitive であり MCP / 低trust へは公開しない。
+`SourceVaultCommitBlob` の読み出し対。content-addressed blob を読み、読み出し時に hash を再計算して検証した bytes を返す。不一致は `"BlobCorruption"` で fail-closed。暗号化 blob (`.sve`) は atrest で検証・復号する。main kernel 用 storage primitive であり MCP / 低trust へは公開しない。
 `hashOrRef` 形式: `"blob:sha256:<hex>"` / `"sha256:<hex>"` / `<hex64>` / `"sv://hash/sha256/<hex>"`。
-→ `<|"Status" -> "OK", "Hash" -> hex, "Bytes" -> ByteArray, "Path" -> path, "Meta" -> assoc|>` | `<|"Status" -> "Error", "Reason" -> "BadHash"|"BlobNotFound"|"BlobReadFailed"|"BlobCorruption", ...|>`
+→ `<|"Status" -> "OK", "Hash" -> hex, "Bytes" -> ByteArray, "Path" -> path, "Encrypted" -> True|False, "Meta" -> assoc|>` | `<|"Status" -> "Error", "Reason" -> "BadHash"|"BlobNotFound"|"BlobReadFailed"|"BlobCorruption"|(atrest の tag), ...|>`
 
 ### SourceVaultBlobRefs[hash, opts] → Association
-blob hash を参照する snapshot / event を走査して参照元を返す。
+blob hash を参照する snapshot / event を走査して参照元を返す。暗号化 snapshot (`.json.sve`) も復号して見る。読めなかったファイルは `Unreadable` に数え、`Complete -> False` になる。
 `hash` 形式: hex / `"sha256:hex"` / `"blob:sha256:hex"`。
-→ `<|"Hash" -> hex, "RefCount" -> n, "Refs" -> {path, ...}|>`
+→ `<|"Hash" -> hex, "RefCount" -> n, "Refs" -> {path, ...}, "Unreadable" -> n, "Complete" -> True|False|>`
 
 ## Artifact content resolve (sanctioned reader)
 
@@ -179,6 +224,7 @@ deposit 済み artifact の内容を PrivacyLevel 付きで解決する main-ker
 → `<|"Status" -> "OK"|"Error", "ArtifactId" -> id|Missing, "Ref" -> ref, "MediaKind" -> "Image"|"Video"|"Text"|"Binary", "MediaType" -> mt, "PrivacyLevel" -> level, "Bytes" -> ByteArray | "Text" -> str, "File" -> path|Missing, "Filename" -> name|Missing|>`
 Options: `"Materialize" -> Automatic` (`Automatic` は Video/Binary のみ vault 内 `materialized/` へ content-addressed にファイル化。`True` で常にファイル化、`False` でしない)
 MediaKind 判定: `image/gif` は Video 扱い、`image/*` → Image、`video/*` → Video、`text/*` / `application/json` → Text、他は Binary。
+元の blob が暗号化されている場合、ファイル化は Dropbox 下ではなく atrest の表示用置き場 (`SourceVaultAtRestViewFile`、期限切れで削除) に置く。atrest が無ければ `Missing["MaterializeFailed"]`。
 
 ## Rate limit (過剰実行対策)
 
@@ -215,8 +261,9 @@ in-flight blob 保護の既定 grace period (秒) を返す。既定値 86400 (2
 削除せずに GC 候補 blob を報告する。`SourceVaultRunGC["ConfirmDelete" -> False, opts]` と同じ。
 
 ### SourceVaultRunGC[opts]
-未参照かつ retention 期限切れの blob を回収する。grace period 内の blob / in-flight write / replay 失敗 vault は削除しない (fail-closed)。実削除前に `SourceVaultCheckVaultConsistency["Quick" -> True]` を実行し、不健全な vault では GC しない。
+未参照かつ retention 期限切れの blob を回収する。grace period 内の blob / in-flight write / replay 失敗 vault は削除しない (fail-closed)。実削除前に `SourceVaultCheckVaultConsistency["Quick" -> True]` を実行し、不健全な vault では GC しない。暗号化した snapshot / blob (`.sve`) が 1 つでもある間は GC を止める (参照走査が暗号文を取りこぼして、暗号化 snapshot からしか参照されない blob を消すのを防ぐため)。
 → `<|"Status" -> "DryRun"|"Deleted"|"Skipped", "Candidates" -> [...], "Deleted" -> [hex, ...], "ProtectedByInFlightWrite" -> [...], "GraceSeconds" -> n, "Confirmed" -> True|False|>`
+→ Skipped: `<|"Status" -> "Skipped", "Reason" -> "VaultNotHealthy"|"AtRestGCPaused", ...|>` (VaultNotHealthy では `"Consistency"` を含む)
 Options: `"ConfirmDelete" -> False` (True にしないと実削除しない), `"GraceSeconds" -> Automatic` (Automatic は `SourceVaultGCGracePeriod[]` の値)
 
 ### SourceVaultRetentionPlan[scope, opts] → Association
@@ -243,6 +290,7 @@ Options: `"Processes" -> 2` (仮想プロセス数), `"PerProcessEvents" -> 100`
 | blob ref | `"blob:sha256:" <> hex` |
 | snapshot ref | `"snapshot:" <> class <> ":" <> hex` |
 | digest | `"sha256:" <> hex` |
+| ULID | `SourceVaultULID[]` (26 文字 Crockford base32。EntityId は `"ent-" <> ULID`、ActivityId は `"act-" <> ULID`) |
 
 ## 設計上の注意点
 
@@ -254,3 +302,5 @@ Options: `"Processes" -> 2` (仮想プロセス数), `"PerProcessEvents" -> 100`
 - root が未解決な場合、core API は fail-closed する (推測 fallback しない)。
 - blob 読み出し (`SourceVaultReadBlob`) / artifact 内容解決 (`SourceVaultResolveArtifactContent`) は main-kernel sanctioned reader であり、MCP / 低trust projection へは公開しない。生データは必ず PrivacyLevel を伴わせ、欠落時は既定 0.85 に fail-closed する。
 - 開いたままの write stream は Dropbox 同期を止め conflicted copy を生む。top-level / tick 境界で `SourceVaultReleaseFileStreams[]` を呼べる状態を保つこと (書込み操作の途中では呼ばない)。ScheduledTask / polling tick から呼ぶ場合は `"MinAgeSeconds"` を指定し、使用中の stream を閉じてカーネルを落とさないこと。
+- 主体 (`$SourceVaultPrincipal`) は未束縛なら最も制限的な Model 扱い (fail-closed)。自己申告ではなくこの変数から権限を導く。
+- 暗号化 (`.sve`) 済みの snapshot / blob がある間は `SourceVaultRunGC` が停止する (`AtRestGCPaused`)。

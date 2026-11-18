@@ -64,6 +64,71 @@ SourceVaultRoot::usage =
   "SourceVaultRoot[key] は root key (\"PrivateVault\"/\"Tmp\"/\"LocalState\" 等) のパスを返す。\n" <>
   "未解決なら Missing[\"NotResolved\", key]。";
 
+SourceVaultMachineTag::usage =
+  "SourceVaultMachineTag[] はこの機の正準 MachineTag ($MachineName の英数字・-・_ 以外を - に潰したもの、大小文字は保持)。\n" <>
+  "診断 spool・正準診断ログ・issues の inbox/outbox・Writer 刻印はすべてこの表記を使う (03 v0.4 §2.1 Inc0-b、2026-11-09)。\n" <>
+  "SourceVaultMachineTag[name] は与えた名前を同じ規則で正規化する (純関数)。";
+
+SourceVaultULID::usage =
+  "SourceVaultULID[] は ULID (48 bit の UNIX ミリ秒 + 80 bit の乱数を Crockford base32 で 26 文字に、辞書順 = 時刻順) を返す。\n" <>
+  "来歴台帳の EntityId (\"ent-\" <> ULID) / ActivityId (\"act-\") / EventId の採番はこれ 1 つに統一する (03 v0.4 §4.1、レビュー 07 D-21、2026-11-09)。\n" <>
+  "taint / anomaly / knowledgehome / routine の private 実装 (iTaintULID / iAnomULID / iKHULID / iSVRtnULID) は同じ形式だが、時刻を\n" <>
+  "AbsoluteTime[] - AbsoluteTime[{1970,1,1,0,0,0}, TimeZone -> 0] で取るため JST 機では 18 時間進んでいる。ここは UnixTime[] 基準 (正しい UTC ミリ秒)。";
+
+(* ---- principal (主体) の束縛 (03 v0.4 §6.1 / §11.6、レビュー 07 I-01、2026-11-09) ---- *)
+$SourceVaultPrincipal::usage =
+  "$SourceVaultPrincipal は、いま評価しているコードの主体 (Principal) を表す動的変数。値は
+" <>
+  "  <|\"Kind\" -> \"OwnerFE\" | \"OwnerCode\" | \"Service\" | \"Model\" | \"MCP\", \"Channel\" -> _, \"Ticket\" -> _|>。
+" <>
+  "Block で束縛するのは次の 5 か所だけで、それ以外では束縛しない:
+" <>
+  "  (1) SourceVaultOwnerTicketDialog (FE の所有者操作) が OwnerFE、(2) NBExecuteHeldExpr (ノートで評価する提案コード) が OwnerCode、
+" <>
+  "  (3) SourceVaultMCPCallTool (MCP クライアント。_mcpClient の自己申告は ClaimedClient に記録するだけ) が MCP、
+" <>
+  "  (4) claudecode の tool loop (iExecSourceVaultToolCall) が Model、(5) service の hook (iSMSafeHook / issue forward) が Service。
+" <>
+  "未束縛 (値なし) は最も制限的な Model として扱う (SourceVaultPrincipal[])。webguard の \"Actor\" / DeclareContext、MCP の
+" <>
+  "authoredBy などの自己申告は、この変数から導く (02 v1.2 P0-12)。同一カーネルのコードがこの変数を書き換えられる限界は
+" <>
+  "03 表 1.1 の 4 行目のとおり (代入は NBAccess の $NBApprovalSetSymbols で承認対象)。";
+
+SourceVaultPrincipal::usage =
+  "SourceVaultPrincipal[] は現在の主体を正規化した Association で返す。$SourceVaultPrincipal が未束縛か不正なら
+" <>
+  "<|\"Kind\" -> \"Model\", \"Channel\" -> Missing[\"Unbound\"], \"Ticket\" -> Missing[], \"Bound\" -> False|> (fail-closed)。
+" <>
+  "SourceVaultPrincipal[\"Kind\"] は Kind だけを返す。";
+
+SourceVaultPrincipalOwnerQ::usage =
+  "SourceVaultPrincipalOwnerQ[] は現在の主体が所有者 (Kind が OwnerFE か OwnerCode) のとき True。未束縛は False。";
+
+(* ---- security profile (03 v0.4 §5.4 / 7 章 SecurityProfile の最小形、レビュー 07 I-08、2026-11-09) ---- *)
+$SourceVaultSecurityProfile::usage =
+  "$SourceVaultSecurityProfile は \"production\" (既定) か \"development\"。development は試験専用で、所有者 ticket の
+" <>
+  "development 発行器 ($SourceVaultOwnerTicketDevelopmentKeyRef、SourceVault_autotrigger.wl) を有効にする。
+" <>
+  "production でその鍵が設定されていると SourceVaultSecurityProfileCheck[] が Violations に出す。代入は NBAccess の承認対象。";
+
+SourceVaultSecurityProfileCheck::usage =
+  "SourceVaultSecurityProfileCheck[] は現在の profile と登録済みの検査 (SourceVaultRegisterSecurityProfileCheck) を評価し、
+" <>
+  "<|\"Profile\", \"Status\" -> \"OK\" | \"Violations\", \"Violations\" -> {<|\"Code\", \"Severity\", \"Message\", \"Check\"|>..}, \"Checks\"|> を返す。
+" <>
+  "組み込みの検査: production で development 鍵 ($SourceVaultOwnerTicketDevelopmentKeyRef) が設定されている (Error)、
+" <>
+  "production で所有者 ticket の鍵 ($SourceVaultOwnerTicketKeyRef) が未設定 (Warning)、profile の値が不正 (Error)。
+" <>
+  "03 v0.4 7 章の SecurityProfile 部品の前身 (最小形、2026-11-09)。";
+
+SourceVaultRegisterSecurityProfileCheck::usage =
+  "SourceVaultRegisterSecurityProfileCheck[name, f] は検査 f[profile] -> {<|\"Code\", \"Severity\" -> \"Error\" | \"Warning\", \"Message\"|>..} を
+" <>
+  "name で登録する (冪等。モジュールがロード時に呼ぶ)。SourceVaultSecurityProfileCheck[] が評価する。";
+
 SourceVaultSetRoot::usage =
   "SourceVaultSetRoot[key, path] は root 設定を変更する (SourceVault`$SourceVaultRoots を更新)。\n" <>
   "設定変更のみで既存データの移動は行わない (spec v6 §3.9)。移行は別 migration command を使う。";
@@ -276,8 +341,17 @@ iWriteStringUTF8[path_String, str_String] := Module[{strm},
   path
 ];
 
+(* 2026-11-14: 毎回新しく開いたストリームで読む。ReadByteArray[パス] は、同じファイルを開いたままのストリームが
+   カーネルにあると、それを使い回して今の位置から読み、欠けた内容を返す。大きさが FileByteCount と一致しなければ $Failed。 *)
+iReadFileFresh[path_String] := Module[{s, b},
+  s = Quiet @ Check[OpenRead[path, BinaryFormat -> True], $Failed];
+  If[Head[s] =!= InputStream, Return[$Failed]];
+  b = WithCleanup[Quiet @ ReadByteArray[s], Close[s]];
+  If[b === EndOfFile, b = StringToByteArray["", "UTF-8"]];
+  If[ByteArrayQ[b] && Length[b] === Quiet @ Check[FileByteCount[path], -1], b, $Failed]];
+
 iReadStringUTF8[path_String] := Module[{b},
-  b = Quiet @ ReadByteArray[path];
+  b = iReadFileFresh[path];
   If[ByteArrayQ[b], ByteArrayToString[b, "UTF-8"], $Failed]
 ];
 
@@ -352,6 +426,64 @@ SourceVaultResolveRoots[] := SourceVaultRootAssociation[];
 
 SourceVaultRoot[key_String] :=
   Lookup[SourceVaultRootAssociation[], key, Missing["NotResolved", key]];
+
+(* Inc0-b (03 v0.4 §2.1, 2026-11-09): MachineTag の表記を 1 か所に。以前は claudecode の spool が
+   小文字、diagnostics / issues が大小文字保持で、同じ機が 2 つの名前で記録されていた。
+   各モジュールの private 実装 (iSVDiagMachineTag / iSVISMachineTag / iClaudeDiagMachineTag) は
+   core がロード済みならここへ委譲し、単体ロード時だけ同じ式を自前で持つ。 *)
+SourceVaultMachineTag[name_String] := StringReplace[name,
+  Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"];
+SourceVaultMachineTag[] := SourceVaultMachineTag[ToString[$MachineName]];
+
+(* ULID (03 v0.4 §4.1、2026-11-09 第 3 週): 48 bit の UNIX ミリ秒 + 80 bit の乱数、Crockford base32 26 文字。
+   ミリ秒は UnixTime[] (整数秒、UTC) + AbsoluteTime[] の小数部。同じミリ秒内の単調性は保証しない (ULID 仕様の任意項目)。 *)
+$iSVCrockford = Characters["0123456789ABCDEFGHJKMNPQRSTVWXYZ"];
+iSVCrockford[n_Integer, len_Integer] := StringJoin @ $iSVCrockford[[IntegerDigits[Max[n, 0], 32, len] + 1]];
+SourceVaultULID[] := iSVCrockford[UnixTime[]*1000 + Floor[1000*FractionalPart[AbsoluteTime[]]], 10] <>
+  iSVCrockford[RandomInteger[{0, 2^80 - 1}], 16];
+
+(* ---- principal (I-01, 2026-11-09): 読み出しだけ。束縛は 5 つの束縛点が Block で行う。 ---- *)
+$iSVPrincipalKinds = {"OwnerFE", "OwnerCode", "Service", "Model", "MCP"};
+iSVPrincipalDefault[] := <|"Kind" -> "Model", "Channel" -> Missing["Unbound"], "Ticket" -> Missing[], "Bound" -> False|>;
+SourceVaultPrincipal[] := Module[{p},
+  p = If[ValueQ[$SourceVaultPrincipal], $SourceVaultPrincipal, Missing["Unbound"]];
+  If[! AssociationQ[p] || ! MemberQ[$iSVPrincipalKinds, Lookup[p, "Kind", None]],
+    Return[iSVPrincipalDefault[]]];
+  Join[<|"Channel" -> Missing["Unknown"], "Ticket" -> Missing[]|>, p, <|"Bound" -> True|>]];
+SourceVaultPrincipal["Kind"] := Lookup[SourceVaultPrincipal[], "Kind", "Model"];
+SourceVaultPrincipal[key_String] := Lookup[SourceVaultPrincipal[], key, Missing["KeyAbsent", key]];
+SourceVaultPrincipalOwnerQ[] := MemberQ[{"OwnerFE", "OwnerCode"}, SourceVaultPrincipal["Kind"]];
+
+(* ---- security profile (I-08, 2026-11-09): 最小形 ---- *)
+If[! StringQ[$SourceVaultSecurityProfile], $SourceVaultSecurityProfile = "production"];
+If[! AssociationQ[$iSVSecurityProfileChecks], $iSVSecurityProfileChecks = <||>];
+SourceVaultRegisterSecurityProfileCheck[name_String, f_] := ($iSVSecurityProfileChecks[name] = f; name);
+SourceVaultRegisterSecurityProfileCheck[___] := $Failed;
+iSVSecurityProfileValue[] :=
+  If[MemberQ[{"production", "development"}, $SourceVaultSecurityProfile], $SourceVaultSecurityProfile, "production"];
+(* 組み込みの検査。所有者 ticket の鍵変数は SourceVault_autotrigger.wl が定義する公開記号 (ここでは名前を参照するだけ)。 *)
+iSVBuiltinSecurityProfileChecks[prof_String] := Join[
+  If[! MemberQ[{"production", "development"}, $SourceVaultSecurityProfile],
+    {<|"Code" -> "InvalidSecurityProfile", "Severity" -> "Error",
+       "Message" -> "$SourceVaultSecurityProfile must be \"production\" or \"development\" (treated as production)."|>}, {}],
+  If[prof === "production" && StringQ[SourceVault`$SourceVaultOwnerTicketDevelopmentKeyRef] &&
+      SourceVault`$SourceVaultOwnerTicketDevelopmentKeyRef =!= "",
+    {<|"Code" -> "DevelopmentTicketKeyInProduction", "Severity" -> "Error",
+       "Message" -> "$SourceVaultOwnerTicketDevelopmentKeyRef is set while the security profile is production; the development ticket issuer must not exist in production (03 v0.4 5.4, review 07 I-08)."|>}, {}],
+  If[prof === "production" && ! (StringQ[SourceVault`$SourceVaultOwnerTicketKeyRef] && SourceVault`$SourceVaultOwnerTicketKeyRef =!= ""),
+    {<|"Code" -> "OwnerTicketKeyUnset", "Severity" -> "Warning",
+       "Message" -> "$SourceVaultOwnerTicketKeyRef is not set; owner tickets cannot be issued until the owner registers the HMAC key (SourceVaultOwnerTicketDialog)."|>}, {}]];
+SourceVaultSecurityProfileCheck[] := Module[{prof = iSVSecurityProfileValue[], v},
+  v = Join[
+    Append[#, "Check" -> "Builtin"] & /@ iSVBuiltinSecurityProfileChecks[prof],
+    Flatten[KeyValueMap[Function[{nm, f}, Module[{r = Quiet @ Check[f[prof], $Failed]},
+        If[ListQ[r], Append[#, "Check" -> nm] & /@ Select[r, AssociationQ],
+          {<|"Code" -> "CheckFailed", "Severity" -> "Error",
+             "Message" -> "security profile check " <> nm <> " failed to evaluate", "Check" -> nm|>}]]],
+      $iSVSecurityProfileChecks]]];
+  <|"Profile" -> prof,
+    "Status" -> If[AnyTrue[v, Lookup[#, "Severity", "Error"] === "Error" &], "Violations", "OK"],
+    "Violations" -> v, "Checks" -> 1 + Length[$iSVSecurityProfileChecks]|>];
 
 (* 設定変更のみ。データ移行は行わない (spec v6 §3.9)。注入値がある service kernel では
    restart / reload まで反映されない点に注意 (spec v6 §3.8)。 *)
@@ -469,6 +601,34 @@ iCommitCreateOnly[tmp_String, target_String] := Module[{r},
   ]
 ];
 
+(* ---- 保存時の暗号化 (SourceVault_atrest.wl) への弱結合 (2026-11-14) ----
+   暗号化したファイルは「元の名前 + .sve」。読み手は .sve があれば atrest で検証して復号し、平文に黙って戻らない。
+   書き手は $SourceVaultAtRestEnforce に入った鍵の組の分類だけを暗号化する (atrest が無ければ平文のまま = 従来どおり)。 *)
+iSVARAvailable[] := Length[DownValues[SourceVault`SourceVaultAtRestReadBytes]] > 0;
+iSVARShould[path_String, class_String] :=
+  iSVARAvailable[] && TrueQ[Quiet @ SourceVault`SourceVaultAtRestShouldEncryptQ[path, class]];
+iSVAREncQ[path_String] := FileExistsQ[path <> ".sve"];
+iSVARAnyQ[path_String] := FileExistsQ[path] || FileExistsQ[path <> ".sve"];
+iSVARNotLoaded[] := Failure["AtRestNotLoaded", <|"MessageTemplate" ->
+  "暗号化したファイル (.sve) を読むには SourceVault_atrest.wl が要ります。"|>];
+(* ByteArray | Missing["NotFound"] | Failure | $Failed *)
+iSVARReadBytes[path_String] := Which[
+  iSVAREncQ[path], If[iSVARAvailable[], SourceVault`SourceVaultAtRestReadBytes[path], iSVARNotLoaded[]],
+  FileExistsQ[path], iReadFileFresh[path],
+  True, Missing["NotFound"]];
+(* String | Failure | $Failed (平文だけなら従来の iReadStringUTF8 と同じ) *)
+iSVARReadString[path_String] := Module[{b},
+  If[! iSVAREncQ[path], Return[iReadStringUTF8[path]]];
+  b = iSVARReadBytes[path];
+  If[ByteArrayQ[b], ByteArrayToString[b, "UTF-8"], b]];
+(* 暗号化して書く。Failure なら平文には戻らない。 *)
+iSVARWrite[path_String, bytes_ByteArray, class_String, pl_ : Automatic] :=
+  SourceVault`SourceVaultAtRestWriteBytes[path, bytes, class, "PL" -> pl];
+(* dir 以下の論理名 (平文と .sve を 1 つに、.sve を外した名前) *)
+iSVARFileNames[pat_String, dir_String, lv_ : Infinity] :=
+  DeleteDuplicates[StringReplace[#, RegularExpression["\\.sve$"] -> ""] & /@
+    Select[Join[FileNames[pat, dir, lv], FileNames[pat <> ".sve", dir, lv]], ! StringContainsQ[FileNameTake[#], ".tmp."] &]];
+
 $pid := $ProcessID;
 $host := $MachineName;
 
@@ -527,7 +687,7 @@ iAliasPath[class_String, alias_String] :=
 
 Options[SourceVaultSaveImmutableSnapshot] = {"Alias" -> None, "AliasOverwrite" -> False};
 SourceVaultSaveImmutableSnapshot[class_String, assoc_Association, OptionsPattern[]] := Module[
-  {digest, hex, path, ref, stored, json, status, aliasName, aliasRes},
+  {digest, hex, path, ref, stored, json, status, aliasName, aliasRes, arWrite},
   digest = SourceVaultSnapshotDigest[assoc];
   If[FailureQ[digest], Return[digest]];
   hex = iBareDigest[digest];
@@ -541,8 +701,18 @@ SourceVaultSaveImmutableSnapshot[class_String, assoc_Association, OptionsPattern
     "SnapshotClass" -> class,
     "Digest" -> digest,
     "StoredAtUTC" -> iUTCNow[]|>];
-  If[FileExistsQ[path],
+  Which[
+    iSVARAnyQ[path],
     status = "Existed",
+    (* 2026-11-14: 分類の鍵の組が強制されていれば暗号化して書く (平文は書かない) *)
+    iSVARShould[path, class],
+    json = iToJSON[stored];
+    If[! StringQ[json], Return[Failure["JSONEncodeFailed", <|"Class" -> class|>]]];
+    arWrite = iSVARWrite[path, StringToByteArray[json, "UTF-8"], class,
+      With[{p = Lookup[assoc, "PrivacyLevel", Automatic]}, If[NumericQ[p], p, Automatic]]];
+    If[FailureQ[arWrite], Return[arWrite]];
+    status = "Created",
+    True,
     json = iToJSON[stored];
     If[! StringQ[json], Return[Failure["JSONEncodeFailed", <|"Class" -> class|>]]];
     Module[{tmp = iTmpName[path], c},
@@ -618,8 +788,10 @@ SourceVaultLoadImmutableSnapshot[ref_String, opts___] := Module[{r, class, hex, 
   {class, hex} = r;
   path = iSnapshotPath[class, hex];
   If[FailureQ[path], Return[path]];
-  If[! FileExistsQ[path], Return[Failure["SnapshotNotFound", <|"Ref" -> ref, "Path" -> path|>]]];
-  str = iReadStringUTF8[path];
+  If[! iSVARAnyQ[path], Return[Failure["SnapshotNotFound", <|"Ref" -> ref, "Path" -> path|>]]];
+  str = iSVARReadString[path];
+  (* 暗号文の検証に失敗したときは atrest の Failure (理由つき) をそのまま返す *)
+  If[FailureQ[str], Return[str]];
   rec = iFromJSON[str];
   If[! AssociationQ[rec], Return[Failure["SnapshotCorrupt", <|"Ref" -> ref|>]]];
   rec
@@ -674,11 +846,11 @@ SourceVaultImmutableSnapshotExistsQ[ref_String] := Module[{ch, class, hex, path}
   {class, hex} = ch;
   path = iSnapshotPath[class, hex];
   If[FailureQ[path], Return[False]];
-  TrueQ[FileExistsQ[path]]
+  TrueQ[iSVARAnyQ[path]]
 ];
 
 SourceVaultSnapshotPrivacyRecord[ref_String] := Module[
-  {ch, class, hex, path, rec, default},
+  {ch, class, hex, path, rec, default, enc},
   default[c_, h_] := <|"Level" -> $SourceVaultDefaultObjectPrivacyLevel,
     "Source" -> "Default", "Present" -> False, "Encrypted" -> False,
     "Class" -> c, "Hex" -> h,
@@ -686,12 +858,14 @@ SourceVaultSnapshotPrivacyRecord[ref_String] := Module[
   ch = iSVResolveSnapshotClassHex[ref];
   If[ch === $Failed, Return[default[Missing[], Missing[]]]];
   {class, hex} = ch;
+  (* 2026-11-14: "Encrypted" は記録の値でなく、本体が .sve で置かれているかで決める *)
+  enc = With[{sp = iSnapshotPath[class, hex]}, StringQ[sp] && iSVAREncQ[sp]];
   path = iSnapshotPrivacyPath[class, hex];
-  If[FailureQ[path] || ! FileExistsQ[path], Return[default[class, hex]]];
+  If[FailureQ[path] || ! FileExistsQ[path], Return[Join[default[class, hex], <|"Encrypted" -> enc|>]]];
   rec = Quiet @ iFromJSON[iReadStringUTF8[path]];
-  If[! AssociationQ[rec], Return[default[class, hex]]];
-  Join[<|"Present" -> True, "Encrypted" -> False, "Class" -> class, "Hex" -> hex,
-    "Ref" -> "snapshot:" <> class <> ":" <> hex|>, rec]
+  If[! AssociationQ[rec], Return[Join[default[class, hex], <|"Encrypted" -> enc|>]]];
+  Join[<|"Present" -> True, "Class" -> class, "Hex" -> hex,
+    "Ref" -> "snapshot:" <> class <> ":" <> hex|>, rec, <|"Encrypted" -> enc|>]
 ];
 
 SourceVaultSnapshotPrivacyLevel[ref_String] := Module[{lv},
@@ -984,7 +1158,7 @@ iToBytes[_] := $Failed;
 
 Options[SourceVaultCommitBlob] = {"Meta" -> <||>};
 SourceVaultCommitBlob[data_, OptionsPattern[]] := Module[
-  {bytes, hex, path, metaPath, existed, tmp, commit, existingHex, meta},
+  {bytes, hex, path, metaPath, existed, tmp, commit, existingHex, meta, enc},
   bytes = iToBytes[data];
   If[bytes === $Failed,
     Return[Failure["UnsupportedBlobData", <|
@@ -993,15 +1167,24 @@ SourceVaultCommitBlob[data_, OptionsPattern[]] := Module[
   path = iBlobPath[hex];
   If[FailureQ[path], Return[path]];
   metaPath = StringReplace[path, ".blob" -> ".meta.json"];
-  If[FileExistsQ[path],
-    (* hash 整合確認 (§17.12.6-4,5) *)
-    existingHex = iSHA256Hex[ReadByteArray[path]];
+  enc = iSVARShould[path, "Blob"];
+  Which[
+    iSVARAnyQ[path],
+    (* hash 整合確認 (§17.12.6-4,5)。2026-11-14: .sve なら atrest で検証・復号してから比べる *)
+    With[{eb = iSVARReadBytes[path]},
+      If[FailureQ[eb], Return[eb]];
+      existingHex = If[ByteArrayQ[eb], iSHA256Hex[eb], ""]];
     If[existingHex =!= hex,
       Return[Failure["BlobCorruption", <|
         "MessageTemplate" -> "既存 blob の hash が path と一致しません (vault corruption)。",
         "Path" -> path|>]]];
     existed = True,
+    (* 新規・暗号化 (2026-11-14: "Blob" の鍵の組が強制されているとき。平文は書かない) *)
+    enc,
+    With[{w = iSVARWrite[path, bytes, "Blob"]}, If[FailureQ[w], Return[w]]];
+    existed = False,
     (* 新規 *)
+    True,
     tmp = iTmpName[path];
     iEnsureDir[DirectoryName[path]];
     Module[{strm = Quiet @ OpenWrite[tmp, BinaryFormat -> True]},
@@ -1014,22 +1197,29 @@ SourceVaultCommitBlob[data_, OptionsPattern[]] := Module[
   ];
   meta = Join[<|"Hash" -> hex, "Bytes" -> Length[bytes], "CreatedAtUTC" -> iUTCNow[]|>,
     OptionValue["Meta"]];
-  If[! FileExistsQ[metaPath], iWriteStringUTF8[metaPath, iToJSON[meta]]];
+  (* .meta.json にはファイル名などが入るので、本体と同じく暗号化する *)
+  If[! iSVARAnyQ[metaPath],
+    If[enc,
+      With[{w = iSVARWrite[metaPath, StringToByteArray[iToJSON[meta], "UTF-8"], "Blob"]}, If[FailureQ[w], Return[w]]],
+      iWriteStringUTF8[metaPath, iToJSON[meta]]]];
   <|"Status" -> "OK", "Hash" -> hex, "BlobRef" -> "blob:sha256:" <> hex,
     "Path" -> path, "Existed" -> existed|>
 ];
 
-SourceVaultBlobRefs[hash_String, opts___] := Module[{hex, refs = {}, files, str},
+SourceVaultBlobRefs[hash_String, opts___] := Module[{hex, refs = {}, files, str, unreadable = 0},
   hex = iBareDigest[StringReplace[hash, "blob:sha256:" -> ""]];
-  (* snapshot / event JSON 中に hash 文字列が現れる箇所を参照とみなす (保守的) *)
+  (* snapshot / event JSON 中に hash 文字列が現れる箇所を参照とみなす (保守的)。
+     2026-11-14: 暗号化した snapshot (.json.sve) も復号して見る。読めないものは Unreadable に数え、Complete -> False。 *)
   files = Join[
-    Module[{d = iSub["snapshots"]}, If[DirectoryQ[d], FileNames["*.json", d, Infinity], {}]],
+    Module[{d = iSub["snapshots"]}, If[DirectoryQ[d], iSVARFileNames["*.json", d, Infinity], {}]],
     iAllEventFiles[]];
   Do[
-    str = iReadStringUTF8[f];
+    str = iSVARReadString[f];
+    If[! StringQ[str], unreadable++];
     If[StringQ[str] && StringContainsQ[str, hex], AppendTo[refs, f]],
     {f, files}];
-  <|"Hash" -> hex, "RefCount" -> Length[refs], "Refs" -> refs|>
+  <|"Hash" -> hex, "RefCount" -> Length[refs], "Refs" -> refs, "Unreadable" -> unreadable,
+    "Complete" -> (unreadable === 0)|>
 ];
 
 (* ============================================================
@@ -1051,16 +1241,20 @@ SourceVaultReadBlob[hashOrRef_String, ___] := Module[{hex, path, bytes, metaPath
   hex = iBlobHexFrom[hashOrRef];
   If[hex === $Failed, Return[<|"Status" -> "Error", "Reason" -> "BadHash"|>]];
   path = iBlobPath[hex];
-  If[FailureQ[path] || ! FileExistsQ[path],
+  If[FailureQ[path] || ! iSVARAnyQ[path],
     Return[<|"Status" -> "Error", "Reason" -> "BlobNotFound", "Hash" -> hex|>]];
-  bytes = Quiet @ Check[ReadByteArray[path], $Failed];
+  (* 2026-11-14: .sve なら atrest で検証・復号 (失敗の理由は Reason に atrest の tag) *)
+  bytes = iSVARReadBytes[path];
+  If[FailureQ[bytes],
+    Return[<|"Status" -> "Error", "Reason" -> bytes[[1]], "Path" -> path, "Encrypted" -> True|>]];
   If[Head[bytes] =!= ByteArray,
     Return[<|"Status" -> "Error", "Reason" -> "BlobReadFailed", "Path" -> path|>]];
   If[iSHA256Hex[bytes] =!= hex,
     Return[<|"Status" -> "Error", "Reason" -> "BlobCorruption", "Path" -> path|>]];
   metaPath = StringReplace[path, ".blob" -> ".meta.json"];
-  meta = If[FileExistsQ[metaPath], iFromJSON[iReadStringUTF8[metaPath]], <||>];
+  meta = If[iSVARAnyQ[metaPath], iFromJSON[iSVARReadString[metaPath]], <||>];
   <|"Status" -> "OK", "Hash" -> hex, "Bytes" -> bytes, "Path" -> path,
+    "Encrypted" -> iSVAREncQ[path],
     "Meta" -> If[AssociationQ[meta], meta, <||>]|>];
 
 (* MediaType -> 表示種別。image/gif はアニメーションとしてファイルリンク側 (Video 扱い)。 *)
@@ -1086,9 +1280,16 @@ iArtifactShouldMaterialize[_, m_] := TrueQ[m];
 
 (* bytes を vault 内 materialized/ へ content-addressed にファイル化 (temp や
    $packageDirectory には置かない。PL 統制下のディレクトリに閉じる)。 *)
-iMaterializeArtifactBytes[hex_String, bytes_ByteArray, mt_, fname_] := Module[{ext, path, strm},
+iMaterializeArtifactBytes[hex_String, bytes_ByteArray, mt_, fname_] := Module[{ext, path, strm, v},
   ext = iArtifactExtFor[mt, fname];
   path = iSub["materialized", hex <> "." <> ext];
+  (* 2026-11-14: 元の blob が暗号化されていれば、平文のファイルを Dropbox 下に残さず、atrest の表示用の置き場
+     (LocalState/atrest/view、期限を過ぎたら消す) に置く。段 1 の平文を LocalState に残し続けない。
+     atrest が無ければファイル化しない。 *)
+  If[With[{bp = iBlobPath[hex]}, StringQ[bp] && iSVAREncQ[bp]],
+    If[! iSVARAvailable[] || Length[DownValues[SourceVault`SourceVaultAtRestViewFile]] === 0, Return[Missing["MaterializeFailed"]]];
+    v = SourceVault`SourceVaultAtRestViewFile[bytes, hex <> "." <> ext];
+    Return[If[StringQ[v], v, Missing["MaterializeFailed"]]]];
   If[FailureQ[path], Return[Missing["MaterializeFailed"]]];
   If[! FileExistsQ[path],
     iEnsureDir[DirectoryName[path]];
@@ -1105,9 +1306,9 @@ iFindDerivedArtifactById[artId_String] := Module[{cached, dir, files, rec, found
   If[AssociationQ[cached], Return[cached]];
   dir = iSub["snapshots", "DerivedArtifact"];
   If[FailureQ[dir] || ! DirectoryQ[dir], Return[Missing["NotFound"]]];
-  files = FileNames["*.json", dir, Infinity];
+  files = iSVARFileNames["*.json", dir, Infinity];
   Do[
-    rec = iFromJSON[iReadStringUTF8[f]];
+    rec = With[{s = iSVARReadString[f]}, If[StringQ[s], iFromJSON[s], $Failed]];
     If[AssociationQ[rec] && Lookup[rec, "ArtifactId", ""] === artId,
       found = Join[rec, <|"Ref" -> "snapshot:DerivedArtifact:" <> FileBaseName[f]|>];
       $iArtifactIdRecCache[artId] = found;
@@ -1305,6 +1506,14 @@ SourceVaultRunGC[OptionsPattern[]] := Module[
   If[! TrueQ[Lookup[consistency, "Healthy"]],
     Return[<|"Status" -> "Skipped", "Reason" -> "VaultNotHealthy",
       "Consistency" -> consistency|>]];
+  (* 2026-11-14 (保存時の暗号化の計画 段 4): 暗号化した snapshot / blob が 1 つでもある間は GC を止める。
+     参照の走査が暗号文を取りこぼすと、暗号化した snapshot からしか参照されない blob を消してしまうため。
+     再開は移行の完了と、参照の走査の試験の後 (段 6 以降)。 *)
+  If[Module[{sd = iSub["snapshots"], bd = iSub["blobs"]},
+      (StringQ[sd] && DirectoryQ[sd] && FileNames["*.sve", sd, Infinity] =!= {}) ||
+      (StringQ[bd] && DirectoryQ[bd] && FileNames["*.sve", bd, Infinity] =!= {})],
+    Return[<|"Status" -> "Skipped", "Reason" -> "AtRestGCPaused",
+      "MessageTemplate" -> "暗号化した snapshot / blob がある間は GC を止めています。"|>]];
   blobs = iAllBlobFiles[];
   now = AbsoluteTime[];
   Do[
@@ -1387,7 +1596,7 @@ SourceVaultCheckVaultConsistency[OptionsPattern[]] := Module[
   If[! quick,
     blobs = iAllBlobFiles[];
     Do[hexExp = FileBaseName[bf];
-      If[iSHA256Hex[ReadByteArray[bf]] =!= hexExp, AppendTo[blobMismatches, bf]],
+      If[With[{bb = iReadFileFresh[bf]}, ! ByteArrayQ[bb] || iSHA256Hex[bb] =!= hexExp], AppendTo[blobMismatches, bf]],
       {bf, blobs}]];
 
   (* 7: orphan tmp (grace 超過) *)

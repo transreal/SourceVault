@@ -56,23 +56,24 @@ slug の実フォルダ（root / testing / production を横断解決）にあ�
 生成ワークフローの launch を FRONT END をブロックせずに走らせる薄い配線。新しい非同期基盤は作らず、既存の External executor（[ClaudeRuntime_externalrunner](https://github.com/transreal/ClaudeRuntime_externalrunner) + `ClaudeOrchestrator\`Workflow\`ClaudeSubmitExternalHeldExprJob`）に子カーネル評価として投げる。安全性のため完了時はノートへ summary のみ書き（single committer）、本体（View 等）は `output.wxf` に保存し `SourceVaultRunWorkflowResult` で明示取得する。
 
 ### SourceVaultRunWorkflowAsync[slug, form:"run"] → Association
-外部 executor を稼働（冪等）させ、子カーネルで `SourceVaultRunWorkflowChild[slug, form, $Language]` を held 式として投入する。即座に返る（FE 非ブロック）。base SourceVault はエンジンは載せるが外部ランナーは載せないため、未定義なら先に `ClaudeRuntime_externalrunner.wl` を `Get` してから activate する。`$Language` は FE から引き継ぐ。ユーザー操作起点（FE 対話の代理実行）として `"SeatPriority" -> 90` で投入するため、FE+常駐で空きが Reserve 分のみのトポロジーでも恒久 `NoSeat` にならない。投入成功時は内部レジストリに登録し、`ClaudeProcessList` 等に実行中ワークフローとして出す。
+外部 executor を稼働（冪等）させ、子カーネルで `SourceVaultRunWorkflowChild[slug, form, $Language]` を held 式として投入する。即座に返る（FE 非ブロック）。base SourceVault はエンジンは載せるが外部ランナーは載せないため、未定義なら先に `ClaudeRuntime_externalrunner.wl` を `Get` してから `ClaudeActivateExternalExecutor[]` で activate する。`$Language` は FE から引き継ぐ。
+投入時に `ClaudeSubmitExternalHeldExprJob` へ渡す内部オプション: `"BootstrapFiles" -> {<root>/SourceVault.wl}`, `"NotifyNotebook" -> InputNotebook[]`（取得不可なら `None`）, `"ResultRetriever" -> "SourceVault`SourceVaultRunWorkflowResult"`, `"SeatPriority" -> 90`。ユーザー操作起点（FE 対話の代理実行）として優先度 90 で投入するため、FE+常駐で空きが Reserve 分のみのトポロジーでも恒久 `NoSeat` にならない。投入成功（`"Status" -> "Submitted"`）時は内部レジストリに登録し、`ClaudeProcessList` 等に実行中ワークフローとして出す。
 → 投入結果 Association（`"Status" -> "Submitted"`, `"JobID"`, `"JobDir"`, `"WorkflowId"` 等）。基盤ロード失敗時は `<|"Status" -> "RuntimeUnavailable", "Message" -> ...|>`。
 完了時、呼出元ノートに評価可能な結果取得 Input セル（`SourceVaultRunWorkflowResult["job-..."]`）が書き込まれる。
 例: `SourceVault`SourceVaultRunWorkflowAsync["spec-review", "run"]`
 
 ### SourceVaultRunWorkflowChild[slug, form:"run", lang:Automatic] → expr
-子カーネル本体。`BootstrapFiles` で SourceVault.wl をロード済みの外部プロセスで評価される。`$Language` を lang で上書きし、ワークフローをロードして `WorkflowInfo[]["Launch"]` の起動関数を form で呼ぶ。戻り値（View 等）は最終アクションが `output.wxf` に保存する。通常は直接呼ばず `SourceVaultRunWorkflowAsync` 経由。ロード/起動失敗時は `<|"Status" -> "LoadFailed" | "NoLaunch", ...|>`。
+子カーネル本体。`BootstrapFiles` で SourceVault.wl をロード済みの外部プロセスで評価される。`lang` が文字列または文字列リストなら `$Language` を上書き（`Automatic` 等ならそのまま）し、ワークフローをロードして `WorkflowInfo[]["Launch"]` の起動関数を form で呼ぶ。戻り値（View 等）は最終アクションが `output.wxf` に保存する。通常は直接呼ばず `SourceVaultRunWorkflowAsync` 経由。ロード失敗時は `<|"Status" -> "LoadFailed", "Slug", "LoadResult"|>`、`Launch` 未定義時は `<|"Status" -> "NoLaunch", "Slug", "Context"|>`。
 
 ### SourceVaultRunWorkflowAsyncJobs[] → List
-実行中（`output.wxf` 未生成・起動失敗でない）の async ジョブ一覧を返す。プロセス一覧 UI が読む。各要素は登録情報に `"JobID"` と `"Elapsed"`（経過秒）を加えた Association。呼び出し時に死亡/消滅ジョブを prune する（死亡判定は `status.json` を第一根拠とし、`"Failed"`/`"Expired"` なら死亡、`"Running"` なら生存、`status.json` 未生成でも投入から 120 秒以内は誤判定を避け生存扱いとする）。
+実行中（`output.wxf` 未生成・起動失敗でない）の async ジョブ一覧を返す。プロセス一覧 UI が読む。各要素は登録情報（`"Slug"`, `"Form"`, `"JobDir"`, `"WorkflowId"`, `"SubmittedAt"`）に `"JobID"` と `"Elapsed"`（経過秒）を加えた Association。呼び出し時に死亡/消滅ジョブを prune する（死亡判定は `status.json` を第一根拠とし、`"Failed"`/`"Expired"` なら死亡、`"Running"` なら生存、`status.json` 未生成でも投入から 120 秒以内は誤判定を避け生存扱いとする。`pid.json` の PID は生存判定に使わない）。完了ジョブ（`output.wxf` あり）はレジストリに残るが本一覧には含まれない。
 
 ### SourceVaultRunWorkflowResult[arg] → expr | Missing
 async ジョブの結果本体（`output.wxf` 内 `"Result"`、無ければ全体）を取得する。多相:
 - `SourceVaultRunWorkflowResult[jobDirOrId_String]`: 既存ディレクトリなら JobDir として、レジストリにある JobID ならそこから、`"job-"` 始まりなら durable job root（`ClaudeExternalJobRoot/<jobId>`）から解決（セッション跨ぎ/prune 後も完了通知セルが効く）。
 - `SourceVaultRunWorkflowResult[submit_Association]`: `SourceVaultRunWorkflowAsync` の返り値（`"JobDir"` を含む）から取得。
 - `SourceVaultRunWorkflowResult[]`: 最後に投入したジョブの結果（パレット「▶ 実行」後の既定取得）。
-→ 結果 expr、または `Missing["NotReady", jobDir]`（未完了）/ `Missing["Unreadable", f]` / `Missing["NoJobDir"]` / `Missing["NoRecentJob"]` / `Missing["BadArgument"]`。
+→ 結果 expr、または `Missing["NotReady", jobDir]`（未完了）/ `Missing["Unreadable", f]` / `Missing["BadJobDir"]` / `Missing["NoJobDir"]` / `Missing["NoRecentJob"]` / `Missing["BadArgument"]`。
 
 ## ワークフロー側の規約 (WorkflowInfo)
 

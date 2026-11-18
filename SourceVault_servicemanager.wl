@@ -297,6 +297,15 @@ SourceVaultRollbackServiceVersion::usage =
 SourceVaultCompareServiceVersions::usage =
   "SourceVaultCompareServiceVersions[serviceId, v1, v2] は二つの service version snapshot の主要 ref 差分を返す。";
 
+SourceVaultPruneServiceCommands::usage =
+  "SourceVaultPruneServiceCommands[serviceId, opts] は処理済みの命令 (runtime の commands/done) のうち、" <>
+  "$SourceVaultCommandRetentionDays 日 (既定 3) より古いものと、1 時間より古い書きかけの一時ファイルを消し、件数を返す。" <>
+  "opts: \"RetentionDays\" -> Automatic, \"MaxSeconds\" -> 20 (1 回の作業の上限), \"DryRun\" -> False。" <>
+  "service のループが $SourceVaultCommandPruneIntervalSeconds 秒 (既定 600) ごとに同じ処理を行う (2026-11-16)。";
+$SourceVaultCommandRetentionDays::usage =
+  "$SourceVaultCommandRetentionDays は処理済みの命令を残す日数 (既定 3)。";
+$SourceVaultCommandPruneIntervalSeconds::usage =
+  "$SourceVaultCommandPruneIntervalSeconds は service のループが処理済みの命令を片づける間隔の秒数 (既定 600)。";
 $SourceVaultStreamSweepIntervalSeconds::usage =
   "$SourceVaultStreamSweepIntervalSeconds は service loop が SourceVaultReleaseFileStreams[] で\n" <>
   "vault 配下の開きっぱなし stream (Abort/TimeConstrained 打ち切りのリーク) を強制 Close する間隔秒\n" <>
@@ -675,6 +684,35 @@ iRuntimeMachineRoot[root_String] := FileNameJoin[{root, "runtime", iRuntimeMachi
 iServiceRuntimeDir[serviceId_String] := Module[{root = SourceVault`SourceVaultCoreRoot[]},
   If[FailureQ[root], root, FileNameJoin[{iRuntimeMachineRoot[root], "services", serviceId}]]];
 SourceVaultServiceRuntimeDir[serviceId_String] := iServiceRuntimeDir[serviceId];
+
+(* ---- 心拍と標準出力は Dropbox の外 (2026-11-15) ----
+   常駐プロセスの標準出力 (stdout.log) は Dropbox の中で開きっぱなしになり、心拍 (heartbeat.json) は毎秒
+   書き換わって Dropbox の同期の負担になっていた。自機の service / proxy では、両方を
+   LocalState/runtime/<core の根の印>/(services|proxies)/<id>/ に置く。Dropbox 側の heartbeat.json は他の機から
+   見るための写しで、$SourceVaultHeartbeatSyncSeconds (既定 10) ごとにだけ書く。読む側は、自機の置き場なら
+   2 つのうち新しい方 (更新時刻) を読む (古いコードの service が Dropbox 側だけに書いている間も正しく見える)。
+   LocalState が解決できない (-noinit の試験など) ときと、他の機の置き場は、従来どおり Dropbox 側だけを使う。 *)
+If[! NumericQ[$SourceVaultHeartbeatSyncSeconds], $SourceVaultHeartbeatSyncSeconds = 10];
+iSMLocalRuntimeDir[dir_String] := Module[{ls, core, mroot, nd, parts},
+  ls = Quiet @ Check[SourceVault`SourceVaultRoot["LocalState"], $Failed];
+  core = Quiet @ Check[SourceVault`SourceVaultCoreRoot[], $Failed];
+  If[! StringQ[ls] || ls === "" || ! StringQ[core], Return[dir]];
+  mroot = ToLowerCase[StringReplace[iRuntimeMachineRoot[core], "/" -> FromCharacterCode[92]]];
+  nd = ToLowerCase[StringReplace[dir, "/" -> FromCharacterCode[92]]];
+  If[! StringStartsQ[nd, mroot <> FromCharacterCode[92]], Return[dir]];
+  parts = FileNameSplit[dir];
+  If[Length[parts] < 2 || ! MemberQ[{"services", "proxies"}, ToLowerCase[parts[[-2]]]], Return[dir]];
+  FileNameJoin[{ls, "runtime", StringTake[Hash[mroot, "SHA256", "HexString"], 8], parts[[-2]], parts[[-1]]}]];
+iSMNewerFile[a_String, b_String] := Which[
+  ! FileExistsQ[a], b,
+  ! FileExistsQ[b], a,
+  True, If[TrueQ[Quiet @ Check[
+      AbsoluteTime[FileDate[a, "Modification"]] >= AbsoluteTime[FileDate[b, "Modification"]], True]], a, b]];
+iSMHeartbeatReadPath[dir_String] := Module[{remote = FileNameJoin[{dir, "heartbeat.json"}], loc = iSMLocalRuntimeDir[dir]},
+  If[loc === dir, remote, iSMNewerFile[FileNameJoin[{loc, "heartbeat.json"}], remote]]];
+iSMStdoutPath[dir_String] := Module[{loc = iSMLocalRuntimeDir[dir]},
+  If[loc =!= dir, iSMEnsureDir[loc]];
+  FileNameJoin[{loc, "stdout.log"}]];
 
 (* ---- 対話 lease (2026-09-04) --------------------------------------------
    service loop は単一スレッドで、保守フックは TimeConstrained で「暴走は止める」
@@ -2008,10 +2046,52 @@ iDispatchServiceCommand[cmd_Association] := Switch[Lookup[cmd, "Command"],
    発火位置が TimeConstrained の外になると、ループ全体を包む CheckAbort[While[…], stop=True]
    がそれを拾い、サービスが自滅する (実測: Cane tick の 300s 到達と同時刻に ServiceStopped。
    tick 自身のログすら残らない)。ここで Abort を吸収し、失敗をフック単位に閉じ込める。 *)
+(* I-01 (03 v0.4 §6.1、2026-11-09): 主体の束縛点 (5) Service。service ループの hook はすべて iSMSafeHook か
+   下の issue forward を通るので、ここで $SourceVaultPrincipal を Service に束縛する。command queue の MCP
+   dispatch は SourceVaultMCPCallTool が MCP に束縛し直す (service の権限を MCP クライアントに渡さない)。 *)
+iSMServicePrincipal[] := <|"Kind" -> "Service", "Channel" -> "SourceVaultServiceMain",
+  "Pid" -> $ProcessID, "Ticket" -> Missing[]|>;
 SetAttributes[iSMSafeHook, HoldFirst];
 iSMSafeHook[expr_, secs_, fallback_] := iSMSafeHook[expr, secs, fallback, fallback];
 iSMSafeHook[expr_, secs_, timeoutVal_, errVal_] := Quiet @ CheckAbort[
-  TimeConstrained[Check[expr, errVal], secs, timeoutVal], timeoutVal];
+  Block[{SourceVault`$SourceVaultPrincipal = iSMServicePrincipal[]},
+    TimeConstrained[Check[expr, errVal], secs, timeoutVal]], timeoutVal];
+
+(* ---- 処理済みの命令の片づけ (2026-11-16) ----
+   done/ に結果つきで置いた命令は、要求した側が数秒〜数分で読みに来るだけで、消す仕組みが無かった
+   (strixhalo128 で 6 月から 37,779 件・212 MB、Dropbox が 1 件ずつ同期していた)。
+   保持日数より古いものと、1 時間より古い書きかけの一時ファイル (.tmp-<pid>) を消す。1 回の作業は MaxSeconds まで
+   (溜まった数万件を一度に消すと心拍が止まり、見張りが再起動してしまう)。名前の順に見て、時間切れなら次回に続ける。 *)
+If[! NumericQ[$SourceVaultCommandRetentionDays], $SourceVaultCommandRetentionDays = 3];
+If[! NumericQ[$SourceVaultCommandPruneIntervalSeconds], $SourceVaultCommandPruneIntervalSeconds = 600];
+iSMPruneDoneCommands[dir_String, retentionDays_?NumericQ, maxSec_?NumericQ, dry_ : False] := Module[
+  {doneDir = FileNameJoin[{dir, "commands", "done"}], files, now = AbsoluteTime[], t0 = AbsoluteTime[],
+   cutoff, tmpCutoff, deleted = 0, failed = 0, kept = 0, seen = 0, timedOut = False},
+  If[! DirectoryQ[doneDir], Return[<|"Status" -> "NoDoneDir", "Deleted" -> 0|>]];
+  cutoff = now - 86400 * retentionDays; tmpCutoff = now - 3600;
+  files = Select[FileNames["*", doneDir], ! DirectoryQ[#] &];
+  Do[
+    If[AbsoluteTime[] - t0 >= maxSec, timedOut = True; Break[]];
+    seen++;
+    Module[{name = FileNameTake[f], age, isTmp},
+      isTmp = StringContainsQ[name, ".tmp-"];
+      If[! (StringEndsQ[name, ".json"] || isTmp), kept++; Continue[]];
+      age = Quiet @ Check[AbsoluteTime[FileDate[f, "Modification"]], now];
+      If[age < If[isTmp, tmpCutoff, cutoff],
+        If[TrueQ[dry], deleted++,
+          If[TrueQ[Quiet @ Check[DeleteFile[f]; True, False]], deleted++, failed++]],
+        kept++]],
+    {f, files}];
+  <|"Status" -> If[timedOut, "Partial", "OK"], "Deleted" -> deleted, "Failed" -> failed, "Kept" -> kept,
+    "Remaining" -> Length[files] - deleted, "Seen" -> seen, "DryRun" -> TrueQ[dry],
+    "RetentionDays" -> retentionDays, "Seconds" -> Round[AbsoluteTime[] - t0, 0.1]|>];
+
+Options[SourceVaultPruneServiceCommands] = {"RetentionDays" -> Automatic, "MaxSeconds" -> 20, "DryRun" -> False};
+SourceVaultPruneServiceCommands[serviceId_String, OptionsPattern[]] := Module[{dir = iServiceRuntimeDir[serviceId], rd},
+  If[FailureQ[dir], Return[dir]];
+  rd = Replace[OptionValue["RetentionDays"], Automatic :> $SourceVaultCommandRetentionDays];
+  If[! NumericQ[rd] || rd < 1, Return[Failure["BadRetention", <|"MessageTemplate" -> "RetentionDays は 1 以上にしてください。"|>]]];
+  iSMPruneDoneCommands[dir, rd, OptionValue["MaxSeconds"], OptionValue["DryRun"]]];
 
 (* pending command を処理。done/ へ結果付きで移し、Stop 要求の有無を返す。
    WLMCP command だけは deferred: サブカーネルへ submit して done を書かずに
@@ -2040,13 +2120,17 @@ Options[SourceVaultServiceMain] = {"HeartbeatIntervalSeconds" -> 1, "MaxSeconds"
 SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Module[
   {dir, interval, maxSec, counter = 0, stop = False, startAbs, statusPath, hbPath,
    leased = False, leaseHeld = False,
-   lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs,
+   lastRollupAbs, lastCCIngestAbs, lastDiagIngestAbs, lastIssueForwardAbs = 0,
    lastDispatchAbs = 0, dispatchCounter = 0, dispatchState = None,
    lastCaneAnomalyAbs = 0, lastCapPruneAbs = 0, lastStreamSweepAbs = 0,
-   lastTurnWikiAbs = 0, turnWikiState = None},
+   lastTurnWikiAbs = 0, turnWikiState = None, lastProvTickAbs = 0,
+   hbLocal = None, lastHbSync = 0, hbRec, lastCmdPruneAbs = 0},
   dir = iServiceRuntimeDir[serviceId];
   If[FailureQ[dir], Return[dir]];
   iSMEnsureDir[dir];
+  (* Inc0-c (03 v0.4 §2.1, 2026-11-09): この service kernel だけが正準診断ログを直接書く。
+     他のカーネル (FE 等) の SourceVaultDiagnosticsLog は spool へ行き、下の ingest hook が転記する。 *)
+  SourceVault`$SourceVaultDiagnosticsCanonicalWriter = True;
   (* spec v6 §7.4: 起動時に stale な Running/Queued job を Failed に掃く (webingest があれば) *)
   If[Length[DownValues[SourceVault`SourceVaultWebRecoverStaleJobs]] > 0,
     Quiet @ Check[SourceVault`SourceVaultWebRecoverStaleJobs[], Null]];
@@ -2086,12 +2170,16 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
   lastCaneAnomalyAbs = AbsoluteTime[];
   lastCapPruneAbs = AbsoluteTime[];
   lastStreamSweepAbs = AbsoluteTime[];
+  (* 処理済みの命令の片づけは、起動の 2 分後から (起動直後の負荷を避ける) *)
+  lastCmdPruneAbs = AbsoluteTime[] - Max[0, If[NumericQ[$SourceVaultCommandPruneIntervalSeconds], $SourceVaultCommandPruneIntervalSeconds, 600] - 120];
   (* TurnWiki 維持 tick は LLM を叩くので、同じ理由で初回発火を 1 周期遅らせる。 *)
   lastTurnWikiAbs = AbsoluteTime[];
   interval = OptionValue["HeartbeatIntervalSeconds"];
   maxSec = OptionValue["MaxSeconds"];  (* 安全弁: Automatic なら無制限 *)
   statusPath = FileNameJoin[{dir, "status.json"}];
   hbPath = FileNameJoin[{dir, "heartbeat.json"}];
+  (* 2026-11-15: 毎回の心拍は LocalState、Dropbox 側は $SourceVaultHeartbeatSyncSeconds ごとの写し *)
+  hbLocal = With[{loc = iSMLocalRuntimeDir[dir]}, If[loc === dir, None, FileNameJoin[{loc, "heartbeat.json"}]]];
   startAbs = AbsoluteTime[];
   (* runner が自身の PID を pid.json に self-report (detached 起動のため launcher は PID を知らない) *)
   iSMWriteJSON[FileNameJoin[{dir, "pid.json"}],
@@ -2109,11 +2197,14 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
       (* liveness: 配車専用モードの tick 記録を heartbeat に同乗させる (要件:
          「配車が死んだ」を health で検知可能に)。Dispatch.LastTickAtUTC の
          鮮度を SourceVaultServiceStatus が判定する。 *)
-      iSMWriteJSON[hbPath, Join[
+      hbRec = Join[
         <|"Counter" -> counter, "UpdatedAtUTC" -> iSMUTCNow[], "PID" -> $ProcessID|>,
         If[AssociationQ[dispatchState], <|"Dispatch" -> dispatchState|>, <||>],
         If[AssociationQ[turnWikiState], <|"TurnWiki" -> turnWikiState|>, <||>],
-        <|"WLMCP" -> iSMWLMCPHeartbeatField[serviceId]|>]];
+        <|"WLMCP" -> iSMWLMCPHeartbeatField[serviceId]|>];
+      If[StringQ[hbLocal], iSMWriteJSON[hbLocal, hbRec]];
+      If[! StringQ[hbLocal] || AbsoluteTime[] - lastHbSync >= $SourceVaultHeartbeatSyncSeconds,
+        iSMWriteJSON[hbPath, hbRec]; lastHbSync = AbsoluteTime[]];
       stop = iProcessServiceCommands[dir];
       If[stop, Break[]];
       (* 対話 lease (2026-09-04): 音声ブリッジのような「60 秒で諦める」クライアントが
@@ -2164,6 +2255,43 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
              SourceVault`$SourceVaultDiagIngestIntervalSeconds, 60],
         iSMSafeHook[SourceVault`SourceVaultDiagnosticsIngestSpool[], 30, Null];
         lastDiagIngestAbs = AbsoluteTime[]];
+      (* 03 v0.4 Inc1a (2026-11-09 第 3 週): 来歴台帳の service tick (spool 取込 → adapter → 日次 checkpoint を予算 20 秒で)。
+         診断 ingest と同じ周期で、その直後。SourceVault_integrity.wl の SourceVaultIntegrityServiceTick が実行口 (§3.2)。
+         取り込みがあったとき・持ち越し・失敗のときだけ service.log.jsonl に残す。 *)
+      If[! leased &&
+         Length[DownValues[SourceVault`SourceVaultIntegrityServiceTick]] > 0 &&
+         (AbsoluteTime[] - lastProvTickAbs) >
+           If[NumericQ[SourceVault`$SourceVaultDiagIngestIntervalSeconds],
+             SourceVault`$SourceVaultDiagIngestIntervalSeconds, 60],
+        Module[{pvR, ing, adp},
+          pvR = iSMSafeHook[SourceVault`SourceVaultIntegrityServiceTick["BudgetSeconds" -> 20], 40,
+            <|"Status" -> "TimedOut"|>, <|"Status" -> "Error"|>];
+          lastProvTickAbs = AbsoluteTime[];
+          ing = If[AssociationQ[pvR] && AssociationQ[Lookup[pvR, "Ingest", None]], pvR["Ingest"], <||>];
+          adp = If[AssociationQ[pvR] && AssociationQ[Lookup[pvR, "Adapters", None]], pvR["Adapters"], <||>];
+          If[AssociationQ[pvR] &&
+             (MemberQ[{"CarriedOver", "IngestFailed", "TimedOut", "Error"}, Lookup[pvR, "Status", ""]] ||
+              Lookup[ing, "Ingested", 0] > 0 || Lookup[ing, "Corrupt", 0] > 0 || Lookup[adp, "Adapter", 0] > 0),
+            iServiceLog[dir, "ProvenanceServiceTick",
+              <|"Result" -> Lookup[pvR, "Status", "?"],
+                (* 2026-11-10: 失敗の理由 (Failure の tag。ProvMacKeyUnavailable / ProvChainDamaged / ProvNotAuthorized) を残す。
+                   Result だけでは鍵が無いのか連鎖が壊れたのか分からなかった *)
+                "Reason" -> With[{ig = Lookup[pvR, "Ingest", None]},
+                  Which[FailureQ[ig] && StringQ[First[ig]], First[ig],
+                        FailureQ[ig], ToString[First[ig]],
+                        True, Null]],
+                "Ingested" -> Lookup[ing, "Ingested", 0], "Corrupt" -> Lookup[ing, "Corrupt", 0],
+                "Pending" -> Lookup[ing, "Pending", 0], "Adapter" -> Lookup[adp, "Adapter", 0],
+                "LastSeq" -> Lookup[ing, "LastSeq", Null], "Seconds" -> Lookup[pvR, "Seconds", Null]|>]]]];
+      (* Inc0-a (03 v0.4 §2.1, 2026-11-09): doctor の起票 (machine-local issue-outbox) を shared inbox へ
+         転送する。SourceVaultIssueForwardOutbox には呼び出し元が無く、Escalate -> outbox で止まっていた。
+         ingest と同じ周期。本体は iSMIssueForwardHook (単体テスト可)。 *)
+      If[! leased &&
+         (AbsoluteTime[] - lastIssueForwardAbs) >
+           If[NumericQ[SourceVault`$SourceVaultDiagIngestIntervalSeconds],
+             SourceVault`$SourceVaultDiagIngestIntervalSeconds, 60],
+        Block[{SourceVault`$SourceVaultPrincipal = iSMServicePrincipal[]}, iSMIssueForwardHook[dir]];
+        lastIssueForwardAbs = AbsoluteTime[]];
       (* Cane 1H-A: anomaly ワークフローの schedule tick (owner 登録の ScheduleSpec が
          Enabled のときだけ実行。observe-only・冪等・enforcement なし=I-16。
          due 判定は tick 内 (profile の IntervalSeconds)。ここの間隔は判定周期のみ。 *)
@@ -2282,6 +2410,15 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
             iServiceLog[dir, "VaultStreamsReleased",
               <|"Released" -> Lookup[swR, "Released", 0],
                 "Files" -> Lookup[swR, "Files", {}]|>]]]];
+      (* 2026-11-16: 処理済みの命令 (commands/done) の片づけ。1 回 20 秒まで、残りは次回 *)
+      If[(AbsoluteTime[] - lastCmdPruneAbs) >
+           If[NumericQ[$SourceVaultCommandPruneIntervalSeconds], $SourceVaultCommandPruneIntervalSeconds, 600],
+        Module[{pr},
+          pr = Quiet @ Check[iSMPruneDoneCommands[dir,
+            If[NumericQ[$SourceVaultCommandRetentionDays] && $SourceVaultCommandRetentionDays >= 1, $SourceVaultCommandRetentionDays, 3], 20], <||>];
+          lastCmdPruneAbs = AbsoluteTime[];
+          If[AssociationQ[pr] && (Lookup[pr, "Deleted", 0] > 0 || Lookup[pr, "Failed", 0] > 0),
+            iServiceLog[dir, "ServiceCommandsPruned", KeyTake[pr, {"Status", "Deleted", "Failed", "Remaining", "Seconds"}]]]]];
       If[NumericQ[maxSec] && (AbsoluteTime[] - startAbs) > maxSec, stop = True; Break[]];
       (* tick 間の待ちは「ただ寝る」のではなく commands/ を短周期で覗く。
          音声ブリッジ (VRCRealtime -> LocalVoiceSearch) の取り込み遅延が
@@ -2299,6 +2436,9 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
           If[stop, Break[]]],
         Pause[interval]]],
     stop = True];
+  (* 03 v0.4 Inc1a (2026-11-09): service 停止時の checkpoint (最終 LineHash と Seq 範囲、§4.8 / §12.1)。provenance 未ロードなら skip *)
+  If[Length[DownValues[SourceVault`SourceVaultProvCheckpoint]] > 0,
+    iSMSafeHook[SourceVault`SourceVaultProvCheckpoint["Reason" -> "ServiceStop"], 20, Null]];
   iSMWriteJSON[statusPath, <|"ServiceId" -> serviceId, "Kind" -> kind,
     "State" -> "Stopped", "PID" -> $ProcessID, "StoppedAtUTC" -> iSMUTCNow[],
     "HeartbeatCounter" -> counter|>];
@@ -2308,6 +2448,22 @@ SourceVaultServiceMain[kind_String, serviceId_String, OptionsPattern[]] := Modul
 (* ============================================================
    管理 API (親 = メインカーネル側)
    ============================================================ *)
+
+(* Inc0-a (03 v0.4 §2.1, 2026-11-09): issue-outbox -> shared inbox の転送 hook。issues 未ロードなら
+   NotLoaded。TimeConstrained 30s。転送・衝突・失敗があったときだけ service.log.jsonl に残す
+   (空の outbox は毎分なので書かない)。戻り値は SourceVaultIssueForwardOutbox の結果。 *)
+iSMIssueForwardHook[dir_String] := Module[{fwR},
+  If[Length[DownValues[SourceVault`SourceVaultIssueForwardOutbox]] === 0,
+    Return[<|"Status" -> "NotLoaded"|>]];
+  fwR = iSMSafeHook[SourceVault`SourceVaultIssueForwardOutbox[], 30,
+    <|"Status" -> "TimedOut"|>, <|"Status" -> "Error"|>];
+  If[! AssociationQ[fwR], fwR = <|"Status" -> "Error"|>];
+  If[Lookup[fwR, "Forwarded", 0] > 0 || Lookup[fwR, "Conflicts", 0] > 0 ||
+     Lookup[fwR, "Errors", 0] > 0 ||
+     MemberQ[{"TimedOut", "Error"}, Lookup[fwR, "Status", ""]],
+    Quiet @ iServiceLog[dir, "IssueOutboxForwarded",
+      KeyTake[fwR, {"Status", "Forwarded", "Conflicts", "Errors"}]]];
+  fwR];
 
 iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_String,
    interval_, prelude_String] :=
@@ -2322,19 +2478,32 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
     iSMWriteJSON[FileNameJoin[{dir, "manifest.resolved.wl"}],
       <|"ServiceId" -> serviceId, "Kind" -> kind, "PackageRoot" -> pkgRoot,
         "CoreRoot" -> root, "HeartbeatIntervalSeconds" -> interval,
-        "Packages" -> {"SourceVault_core.wl", "SourceVault_crypto.wl",
+        "Packages" -> {"NBAccess_crypto.wl", "SourceVault_core.wl", "SourceVault_crypto.wl", "SourceVault_atrest.wl",
           "SourceVault_lexical.wl", "SourceVault_searchindex.wl", "SourceVault_kb.wl",
-          "SourceVault_diagnostics.wl", "SourceVault_issues.wl",
+          "SourceVault_diagnostics.wl", "SourceVault_issues.wl", "SourceVault_anomaly.wl",
           "SourceVault_slidedeck.wl",
           "SourceVault_servicemanager.wl", "SourceVault_webingest.wl", "SourceVault_webguard.wl",
           "SourceVault_contracts.wl", "SourceVault_packageapi.wl", "SourceVault_mcp.wl",
-          "SourceVault_llmlog.wl", "SourceVault_autotrigger.wl",
+          "SourceVault_llmlog.wl", "SourceVault_autotrigger.wl", "SourceVault_provenance.wl", "SourceVault_integrity.wl",
           "SourceVault_mining.wl", "ClaudeOrchestrator_turnwiki.wl"},
         "InjectedRootHash" -> rootHash,
-        "HasPrelude" -> (StringLength[prelude] > 0), "CreatedAtUTC" -> iSMUTCNow[]|>];
+        "HasPrelude" -> (StringLength[prelude] > 0),
+        (* 2026-11-11: SourceVaultRestartService が prelude を引き継げるよう本文も残す (run.wls と同じフォルダ・同じ内容) *)
+        "PreludeCode" -> prelude|>];
+    (* 2026-11-11 (レビュー 20261111 F08): 起動ごとに変わる作成時刻は manifest に入れない。manifest は Instruction 系 (RunnerManifest) として
+       内容のハッシュで監視されるので、同じ設定の再起動でも差分になり Instructions が Failing になっていた。時刻は監視しない run-info.json へ *)
+    iSMWriteJSON[FileNameJoin[{dir, "run-info.json"}], <|"ServiceId" -> serviceId, "CreatedAtUTC" -> iSMUTCNow[]|>];
     Module[{strm = OpenWrite[path, BinaryFormat -> True], text},
       text = StringJoin[
         "Block[{$CharacterEncoding = \"UTF-8\"},\n",
+        (* NBAccess の鍵ストア層 (2026-11-11、03 v0.4 Inc1a の台帳 MAC と用途別の鍵付き digest)。service kernel は
+           NBAccess.wl を読まないので、来歴の取込が NBAccess`NBMacWithKeyRef を呼べず毎分 ProvMacKeyUnavailable で止まっていた。
+           NBAccess_crypto.wl は単独で完結する (NBAccess.wl に依存しない) ので、それだけを FE と同じ順 (SourceVault より前) に読む。
+           鍵の保存先は FE (localInit) と同じ OS の資格情報 (SystemCredential)。既定の Memory では FE が置いた鍵が見えない。
+           service の経路で鍵を新しく作るものは無い (異常検知の鍵の生成は所有者の初期化と profile 変更だけ)。
+           MCP の grant 検証は SourceVault_crypto.wl の HMAC と別の鍵ファイルなので、この読込で動きは変わらない。存在ガードで fail-soft。 *)
+        "  NBAccess`$NBCredentialBackend = \"SystemCredential\";\n",
+        "  With[{kpath = FileNameJoin[{", q[pkgRoot], ", \"NBAccess_crypto.wl\"}]}, If[FileExistsQ[kpath], Get[kpath]]];\n",
         "  Get[FileNameJoin[{", q[pkgRoot], ", \"SourceVault_core.wl\"}]];\n",
         (* crypto は grant 検証 (sourcevault_get / D3 本文解放) に必要。core 後・他より前に
            load。存在ガードで fail-soft (欠落時 grant 検証は CryptoUnavailable で安全側)。 *)
@@ -2351,6 +2520,10 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
            fail-soft。issueanalysis は常時ロードしない (分析 worker のみ)。 *)
         "  With[{dpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_diagnostics.wl\"}]}, If[FileExistsQ[dpath], Get[dpath]]];\n",
         "  With[{ipath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_issues.wl\"}]}, If[FileExistsQ[ipath], Get[ipath]]];\n",
+        (* anomaly (Cane): service hook の SourceVaultCaneAnomalyScheduleTick の所有パッケージ。これまで
+           run.wls に無く、hook の DownValues 判定で毎回 skip されていた (03 v0.4 §2.1 Inc0-e, 2026-11-09)。
+           core・crypto・diagnostics の後。観察のみ・強制措置なし (I-16)。存在ガードで fail-soft。 *)
+        "  With[{anpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_anomaly.wl\"}]}, If[FileExistsQ[anpath], Get[anpath]]];\n",
         (* slidedeck (発表登録簿): 音声ブリッジの SlideDeckLookup / MCP tool が
            service kernel で答えられるようにする。core の root 解決だけに依存。
            存在ガードで fail-soft。 *)
@@ -2375,6 +2548,12 @@ iGenRunWls[dir_String, kind_String, serviceId_String, root_String, pkgRoot_Strin
            の FE ガード側にあり service kernel では走らない)。存在ガードで fail-soft。
            実行 stack (workflowregistry/engine) は opt-in マシンでのみ遅延ロードされる。 *)
         "  With[{tpath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_autotrigger.wl\"}]}, If[FileExistsQ[tpath], Get[tpath]]];\n",
+        (* provenance (03 v0.4 Inc1a 来歴台帳の中核、2026-11-09 第 3 週): service が単一書き手として spool を台帳へ取り込む。
+           core・crypto・autotrigger の後、integrity (service tick) の前。存在ガードで fail-soft。 *)
+        "  With[{ppath = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_provenance.wl\"}]}, If[FileExistsQ[ppath], Get[ppath]]];\n",
+        (* integrity (03 v0.4 §11.5 の所有者専用関数の stub と NBAccess 承認 head の登録、2026-11-09): autotrigger
+           (所有者 ticket) の後。service kernel には NBAccess が無いので登録は no-op。存在ガードで fail-soft。 *)
+        "  With[{gpath2 = FileNameJoin[{", q[pkgRoot], ", \"SourceVault_integrity.wl\"}]}, If[FileExistsQ[gpath2], Get[gpath2]]];\n",
         (* mining: TurnWiki 維持 tick の既定 LLM (SourceVaultQueryLocalLLM, local LM Studio)
            と安価な可用性プローブ (iSVMResolveLocalLLM) の所有パッケージ。core のみ依存。
            存在ガードで fail-soft。 *)
@@ -2420,12 +2599,13 @@ iRotateLog[logPath_String, keep_Integer] := (
 (* 起動用 .bat を生成。Task Scheduler が detachment 境界になるので start は不要。
    stdout/stderr は runtime dir のログへ redirect。path の空白は二重引用符で囲う。
    #1: 既存 stdout.log は launch 前に世代退避し、前回実行のログを残す。 *)
-iGenLaunchBat[dir_String, exe_String, runWls_String] := Module[{path, text, q, strm},
+iGenLaunchBat[dir_String, exe_String, runWls_String] := Module[{path, text, q, strm, so},
   q[s_] := "\"" <> s <> "\"";
-  iRotateLog[FileNameJoin[{dir, "stdout.log"}]];
+  so = iSMStdoutPath[dir];  (* 2026-11-15: 標準出力は Dropbox の外 (LocalState) *)
+  iRotateLog[so];
   path = FileNameJoin[{dir, "launch.bat"}];
   text = "@echo off\r\n" <> q[exe] <> " -file " <> q[runWls] <>
-    " > " <> q[FileNameJoin[{dir, "stdout.log"}]] <> " 2>&1\r\n";
+    " > " <> q[so] <> " 2>&1\r\n";
   strm = OpenWrite[path, BinaryFormat -> True];
   BinaryWrite[strm, StringToByteArray[text, "UTF-8"]]; Close[strm];
   path];
@@ -2462,7 +2642,9 @@ iSMRotateBootFiles[dir_String] := Module[{pidRec, oldPid},
   oldPid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing[]];
   <|"PreviousPID" -> oldPid,
     "PidRotated" -> iSMRotateStateFile[FileNameJoin[{dir, "pid.json"}]],
-    "HeartbeatRotated" -> iSMRotateStateFile[FileNameJoin[{dir, "heartbeat.json"}]]|>];
+    "HeartbeatRotated" -> iSMRotateStateFile[FileNameJoin[{dir, "heartbeat.json"}]],
+    "LocalHeartbeatRotated" -> With[{loc = iSMLocalRuntimeDir[dir]},
+      If[loc === dir, Missing["NoLocal"], iSMRotateStateFile[FileNameJoin[{loc, "heartbeat.json"}]]]]|>];
 
 (* 新 runner の self-report (整数 PID を持つ pid.json) を待つ。temp-rename 書きなら
    FileExistsQ 成立時点で完全だが、fallback 直接書きの途中を読む可能性もあるため
@@ -2478,9 +2660,9 @@ iSMAwaitPidSelfReport[dir_String, timeoutSec_?NumericQ] := Module[
    ServiceStatus が旧/欠損 heartbeat でなく新 kernel の鼓動を映すため。 *)
 iSMAwaitHeartbeatOf[dir_String, pid_Integer, timeoutSec_?NumericQ] := Module[
   {hbPath = FileNameJoin[{dir, "heartbeat.json"}], deadline = AbsoluteTime[] + timeoutSec, hb},
-  hb = iSMReadJSON[hbPath];
+  hb = iSMReadJSON[iSMHeartbeatReadPath[dir]];
   While[! (AssociationQ[hb] && Lookup[hb, "PID"] === pid) && AbsoluteTime[] < deadline,
-    Pause[0.25]; hb = iSMReadJSON[hbPath]];
+    Pause[0.25]; hb = iSMReadJSON[iSMHeartbeatReadPath[dir]]];
   AssociationQ[hb] && Lookup[hb, "PID"] === pid];
 
 Options[SourceVaultStartService] = {
@@ -2566,7 +2748,7 @@ SourceVaultStartService[serviceId_String, OptionsPattern[]] := Module[
     "PreviousPID" -> Lookup[rotated, "PreviousPID"], "HeartbeatFresh" -> hbFresh,
     "RuntimeDir" -> dir, "Task" -> task|>];
 
-iHeartbeatAgeSeconds[dir_String] := Module[{hb = iSMReadJSON[FileNameJoin[{dir, "heartbeat.json"}]], t},
+iHeartbeatAgeSeconds[dir_String] := Module[{hb = iSMReadJSON[iSMHeartbeatReadPath[dir]], t},
   If[! AssociationQ[hb], Return[Missing["NoHeartbeat"]]];
   t = Quiet @ DateObject[Lookup[hb, "UpdatedAtUTC", ""], TimeZone -> 0];
   If[Head[t] =!= DateObject, Return[Missing["BadTimestamp"]]];
@@ -2579,7 +2761,7 @@ SourceVaultServiceStatus[serviceId_String, opts___] := Module[
   If[FailureQ[dir], Return[dir]];
   If[! DirectoryQ[dir], Return[<|"ServiceId" -> serviceId, "State" -> "Unknown", "Exists" -> False|>]];
   status = iSMReadJSON[FileNameJoin[{dir, "status.json"}]];
-  hb = iSMReadJSON[FileNameJoin[{dir, "heartbeat.json"}]];
+  hb = iSMReadJSON[iSMHeartbeatReadPath[dir]];
   pidRec = iSMReadJSON[FileNameJoin[{dir, "pid.json"}]];
   pid = If[AssociationQ[pidRec], Lookup[pidRec, "PID"], Missing[]];
   alive = If[IntegerQ[pid], iPidAlive[pid], False];
@@ -2771,14 +2953,36 @@ SourceVaultStopService[serviceId_String, OptionsPattern[]] := Module[
   <|"Status" -> "Stopped", "ServiceId" -> serviceId, "Killed" -> killed,
     "FinalState" -> Lookup[SourceVaultServiceStatus[serviceId], "State"]|>];
 
-SourceVaultRestartService[serviceId_String, opts___] := Module[{stopRes, manifest, dir, kind, interval},
+(* 2026-11-11: 再起動の起動オプションを manifest から作る。以前は Kind と間隔だけで、StartService の
+   "PreludeCode" が再起動で失われていた (manifest には HasPrelude しか無かった)。 *)
+(* 2026-11-11 (レビュー 20261111 F08): 引き継ぐ prelude はコードなので、manifest が所有者の受け入れた基準と一致する (LoadVerify が Allow)
+   ときだけ渡す。照合の結果 lv が無い (このカーネルに integrity が無い) ときは以前どおり渡す。ただし厳格な設定
+   ($SourceVaultIntegrityLoadVerifyEnforce True かつ $SourceVaultIntegrityBaselineAsAuthorization False) なら渡さない。 *)
+iSMPreludeTrustedQ[lv_] := If[AssociationQ[lv], Lookup[lv, "Decision", None] === "Allow",
+  ! (TrueQ[SourceVault`$SourceVaultIntegrityLoadVerifyEnforce] && SourceVault`$SourceVaultIntegrityBaselineAsAuthorization === False)];
+iSMRestartOptions[manifest_] := iSMRestartOptions[manifest, None];
+iSMRestartOptions[manifest_, lv_] := If[AssociationQ[manifest],
+  {"Kind" -> Lookup[manifest, "Kind", "heartbeat"],
+   "HeartbeatIntervalSeconds" -> Lookup[manifest, "HeartbeatIntervalSeconds", 1],
+   "PreludeCode" -> With[{pc = Lookup[manifest, "PreludeCode", ""]}, If[StringQ[pc] && (pc === "" || iSMPreludeTrustedQ[lv]), pc, ""]]},
+  {"Kind" -> "heartbeat", "HeartbeatIntervalSeconds" -> 1, "PreludeCode" -> ""}];
+SourceVaultRestartService[serviceId_String, opts___] := Module[{stopRes, manifest, dir, mpath, lv = None, ropts, res, hasPrelude, dropped},
   dir = iServiceRuntimeDir[serviceId];
-  manifest = iSMReadJSON[FileNameJoin[{dir, "manifest.resolved.wl"}]];
-  kind = If[AssociationQ[manifest], Lookup[manifest, "Kind", "heartbeat"], "heartbeat"];
-  interval = If[AssociationQ[manifest], Lookup[manifest, "HeartbeatIntervalSeconds", 1], 1];
+  mpath = FileNameJoin[{dir, "manifest.resolved.wl"}];
+  manifest = iSMReadJSON[mpath];
+  hasPrelude = AssociationQ[manifest] && StringQ[Lookup[manifest, "PreludeCode", None]] && manifest["PreludeCode"] =!= "";
+  (* prelude があるときだけ照合する (無ければ manifest から実行の内容は引き継がない) *)
+  If[hasPrelude && Length[DownValues[SourceVault`SourceVaultIntegrityLoadVerify]] > 0,
+    lv = Quiet @ Catch[SourceVault`SourceVaultIntegrityLoadVerify[mpath, "RunnerManifest"]];
+    If[! (AssociationQ[lv] && StringQ[Lookup[lv, "Decision", None]]), lv = <|"Decision" -> "Deny", "Reason" -> "VerifyError"|>]];
+  ropts = iSMRestartOptions[manifest, lv];
+  dropped = hasPrelude && Lookup[Association[ropts], "PreludeCode", ""] === "";
   stopRes = SourceVaultStopService[serviceId];
   Pause[0.5];
-  SourceVaultStartService[serviceId, "Kind" -> kind, "HeartbeatIntervalSeconds" -> interval]];
+  res = SourceVaultStartService[serviceId, Sequence @@ ropts];
+  If[dropped, Quiet @ iServiceLog[dir, "ServicePreludeDropped", <|"Reason" -> If[AssociationQ[lv], Lookup[lv, "Reason", "?"], "StrictUnverified"]|>]];
+  If[AssociationQ[res] && hasPrelude,
+    Join[res, <|"PreludeDropped" -> dropped, "ManifestVerify" -> If[AssociationQ[lv], KeyTake[lv, {"Decision", "Reason"}], Null]|>], res]];
 
 (* ============================================================
    ウォッチドッグ (軽量 PowerShell。wedge/crash 検知 → 既存 run.wls 再利用で自動再起動)
@@ -2806,6 +3010,7 @@ iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJo
   "param([switch]$Once)\n",   (* hardening 02 Inc2: 単発実行 (テスト/運用診断用) *)
   "$ErrorActionPreference = 'SilentlyContinue'\n",
   "$svc = '", svcDir, "'\n",
+  "$svcLocal = '", iSMLocalRuntimeDir[svcDir], "'\n",   (* 2026-11-15: 心拍・標準出力の Dropbox の外の置き場 *)
   "$task = '", svcTask, "'\n",
   "$staleSec = ", ToString[staleSec], "\n",
   "$intervalSec = ", ToString[intervalSec], "\n",
@@ -2823,6 +3028,7 @@ iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJo
   (* 自 PID を記録 (uninstall が確実に止められるように)。 *)
   "try{ [IO.File]::WriteAllText($pidFile, ('{\"PID\":' + $PID + ',\"StartedAtUTC\":\"' + ([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) + '\"}')) }catch{}\n",
   "function RJ($p){ if(Test-Path $p){ try{ Get-Content -Raw -Encoding UTF8 $p | ConvertFrom-Json }catch{ $null } } else { $null } }\n",
+  "function HbPath { $a = Join-Path $svcLocal 'heartbeat.json'; $b = Join-Path $svc 'heartbeat.json'; if((Test-Path $a) -and ((-not (Test-Path $b)) -or ((Get-Item $a).LastWriteTimeUtc -ge (Get-Item $b).LastWriteTimeUtc))){ $a } else { $b } }\n",
   (* hardening 02 Inc2: restart 状態 (backoff/GivenUp) とログのヘルパ。 *)
   "function RState { $s = RJ $stateFile; if($null -eq $s){ [pscustomobject]@{ ConsecutiveFailures=0; LastRestartAtUTC=$null; GivenUp=$false } } else { $s } }\n",
   "function WState($f,$l,$g){ try{ [IO.File]::WriteAllText($stateFile, (([ordered]@{ConsecutiveFailures=$f;LastRestartAtUTC=$l;GivenUp=$g}) | ConvertTo-Json -Compress)) }catch{} }\n",
@@ -2834,7 +3040,7 @@ iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJo
   "function Invoke-WatchdogCheck {\n",
   "$status = RJ (Join-Path $svc 'status.json')\n",
   "if($null -eq $status -or $status.State -ne 'Running'){ return 'idle' }\n",
-  "$hb = RJ (Join-Path $svc 'heartbeat.json')\n",
+  "$hb = RJ (HbPath)\n",
   "$c1 = if($hb){ $hb.Counter } else { $null }\n",
   "$age = $null\n",
   "if($hb -and $hb.UpdatedAtUTC){ try{ $dto=[DateTimeOffset]::Parse([string]$hb.UpdatedAtUTC,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal); $age=([DateTimeOffset]::UtcNow-$dto).TotalSeconds }catch{ $age=$null } }\n",
@@ -2848,7 +3054,7 @@ iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJo
      (5s 二重読み) だけを生存証拠とする。c1 が null でも c2 が読めれば
      『いま書き始めた』ので ok (起動直後: status=Running 直後〜初回 heartbeat
      の隙間で誤 restart しないため)。二重読みでも読めない/凍結なら restart へ。 *)
-  "if($alive){ Start-Sleep -Seconds 5; $hb2 = RJ (Join-Path $svc 'heartbeat.json'); $c2 = if($hb2){ $hb2.Counter } else { $null }; if(($null -ne $c2) -and (($null -eq $c1) -or ($c1 -ne $c2))){ MarkOk; return 'ok' } }\n",
+  "if($alive){ Start-Sleep -Seconds 5; $hb2 = RJ (HbPath); $c2 = if($hb2){ $hb2.Counter } else { $null }; if(($null -ne $c2) -and (($null -eq $c1) -or ($c1 -ne $c2))){ MarkOk; return 'ok' } }\n",
   (* hardening 02 Inc2 (P0-8): restart storm 抑制。
      GivenUp なら再起動しない (人手で service を直せば MarkOk が解除)。
      直近の restart から指数バックオフ (interval*2^failures, 上限 3600s)
@@ -2857,8 +3063,8 @@ iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJo
   "if([bool]$state.GivenUp){ return 'givenup' }\n",
   "$backoff = [math]::Min($intervalSec * [math]::Pow(2, [int]$state.ConsecutiveFailures), 3600)\n",
   "if($state.LastRestartAtUTC){ try{ $lr=[DateTimeOffset]::Parse([string]$state.LastRestartAtUTC,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal); if((([DateTimeOffset]::UtcNow)-$lr).TotalSeconds -lt $backoff){ return 'backoff' } }catch{} }\n",
-  "$stdout = Join-Path $svc 'stdout.log'\n",
-  "if(Test-Path $stdout){ $st=[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'); Copy-Item $stdout (Join-Path $svc ('stdout.wedge-'+$st+'.log')) -Force }\n",
+  "$stdout = Join-Path $svcLocal 'stdout.log'; if(-not (Test-Path $stdout)){ $stdout = Join-Path $svc 'stdout.log' }\n",
+  "if(Test-Path $stdout){ $st=[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'); Copy-Item $stdout (Join-Path (Split-Path $stdout) ('stdout.wedge-'+$st+'.log')) -Force }\n",
   "if($alive){ Stop-Process -Id $svpid -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }\n",
   (* hardening 02 Inc2: /Run の exit code を捨てず、成功判定は実体で行う:
      60s 以内に「新 PID の heartbeat」が書かれ始めたら成功
@@ -2866,7 +3072,7 @@ iWatchdogPS1[svcDir_String, svcTask_String, staleSec_, intervalSec_] := StringJo
   "schtasks /Run /TN $task | Out-Null\n",
   "$rc = $LASTEXITCODE\n",
   "$ok2 = $false; $newpid = 0\n",
-  "for($i=0; $i -lt 30; $i++){ Start-Sleep -Seconds 2; $pr2 = RJ (Join-Path $svc 'pid.json'); $newpid = if($pr2){ [int]$pr2.PID } else { 0 }; if(($newpid -gt 0) -and ($newpid -ne $svpid)){ $p2 = Get-Process -Id $newpid -ErrorAction SilentlyContinue; if($null -ne $p2){ $hb3 = RJ (Join-Path $svc 'heartbeat.json'); if($hb3 -and ([int]$hb3.PID -eq $newpid)){ $ok2 = $true; break } } } }\n",
+  "for($i=0; $i -lt 30; $i++){ Start-Sleep -Seconds 2; $pr2 = RJ (Join-Path $svc 'pid.json'); $newpid = if($pr2){ [int]$pr2.PID } else { 0 }; if(($newpid -gt 0) -and ($newpid -ne $svpid)){ $p2 = Get-Process -Id $newpid -ErrorAction SilentlyContinue; if($null -ne $p2){ $hb3 = RJ (HbPath); if($hb3 -and ([int]$hb3.PID -eq $newpid)){ $ok2 = $true; break } } } }\n",
   "if($ok2){ WState 0 (NowUTC) $false } else { $nf = [int]$state.ConsecutiveFailures + 1; $gu = ($nf -ge 5); WState $nf (NowUTC) $gu; if($gu){ WLog ([ordered]@{ Type='DiagnosticsEvent'; EventId=[guid]::NewGuid().ToString(); EventClass='ServiceRestartGivenUp'; AtUTC=(NowUTC); Producer='watchdog'; Severity='critical'; Payload=@{ Failures=$nf; Task=$task } }) } }\n",
   "WLog ([ordered]@{ Type='DiagnosticsEvent'; EventId=[guid]::NewGuid().ToString(); EventClass='ServiceRestarted'; AtUTC=(NowUTC); Producer='watchdog'; Severity=$(if($ok2){'warn'}else{'error'}); Payload=@{ Success=$ok2; NewPid=$newpid; OldPid=$svpid; SchtasksExit=$rc; HeartbeatAgeSeconds=$age; PidWasAlive=$alive; ConsecutiveFailures=$(if($ok2){0}else{[int]$state.ConsecutiveFailures + 1}) } })\n",
   "if($ok2){ return 'restarted' } else { return 'restartfailed' }\n",
@@ -3191,6 +3397,7 @@ from urllib.parse import urlparse
 
 CFG = json.load(open(sys.argv[1], encoding='utf-8'))
 SVC = CFG['svcDir']
+SVCL = CFG.get('svcLocalDir') or SVC
 PREFIX = CFG.get('routePrefix', '/sv')
 RC = CFG.get('releaseContext')
 PROFILE = CFG.get('pdfIndexProfile')
@@ -3239,9 +3446,17 @@ def queue_ping():
                           if _ping_cache['ok'] else None)
     return _ping_cache
 
+def newer(a, b):
+    try:
+        if os.path.exists(a) and ((not os.path.exists(b)) or os.path.getmtime(a) >= os.path.getmtime(b)):
+            return a
+    except Exception:
+        pass
+    return b
+
 def health():
     st = rj(os.path.join(SVC, 'status.json'))
-    hb = rj(os.path.join(SVC, 'heartbeat.json'))
+    hb = rj(newer(os.path.join(SVCL, 'heartbeat.json'), os.path.join(SVC, 'heartbeat.json')))
     age = None
     ts = hb.get('UpdatedAtUTC')
     if ts:
@@ -3548,7 +3763,7 @@ SourceVaultStartHTTPProxy[serviceId_String, OptionsPattern[]] := Module[
      公開バインド (127.0.0.1/::1/localhost 以外) ではオーナー宛でもサブスクを使わない。 *)
   subscriptionAllowed = TrueQ[OptionValue["AllowOwnerSubscription"]] &&
     MemberQ[{"127.0.0.1", "::1", "localhost"}, bind];
-  iSMWriteJSON[cfgPath, <|"svcDir" -> svcDir, "port" -> port, "routePrefix" -> prefix,
+  iSMWriteJSON[cfgPath, <|"svcDir" -> svcDir, "svcLocalDir" -> iSMLocalRuntimeDir[svcDir], "port" -> port, "routePrefix" -> prefix,
     "ownerIPs" -> ownerIPs, "billingAllowed" -> billingAllowed,
     "subscriptionAllowed" -> subscriptionAllowed,
     "bind" -> bind, "releaseContext" -> releaseCtx, "pdfIndexProfile" -> pdfProfile,
@@ -3566,12 +3781,12 @@ SourceVaultStartHTTPProxy[serviceId_String, OptionsPattern[]] := Module[
     "requireL2" -> TrueQ[$SourceVaultHealthRequireL2]|>];
   py = iResolvePython[];
   batPath = FileNameJoin[{proxyDir, "launch.bat"}];
-  iRotateLog[FileNameJoin[{proxyDir, "stdout.log"}]];  (* #1: proxy ログも世代退避 *)
+  iRotateLog[iSMStdoutPath[proxyDir]];  (* #1: proxy ログも世代退避。2026-11-15: Dropbox の外 (LocalState) *)
   Module[{strm = OpenWrite[batPath, BinaryFormat -> True], q},
     q[s_] := "\"" <> s <> "\"";
     BinaryWrite[strm, StringToByteArray[
       "@echo off\r\n" <> q[py] <> " " <> q[FileNameJoin[{proxyDir, "proxy.py"}]] <>
-        " " <> q[cfgPath] <> " > " <> q[FileNameJoin[{proxyDir, "stdout.log"}]] <> " 2>&1\r\n",
+        " " <> q[cfgPath] <> " > " <> q[iSMStdoutPath[proxyDir]] <> " 2>&1\r\n",
       "UTF-8"]]; Close[strm]];
   task = iProxyTaskName[serviceId];
   (* 【窓非表示】service と同じく wscript hidden launcher 経由で起動し、python の
@@ -4223,7 +4438,11 @@ iSMRegisterPrivacyContracts[] :=
       Scan[SourceVault`SourceVaultRegisterPrivacyContract[First[#],
           <|"Class" -> "Internal", "Module" -> "SourceVault_servicemanager.wl", "NoDataFlow" -> Last[#]|>] &,
         {{"SourceVaultRefreshCLIMCP", "Re-registers the headless CLI's MCP server configuration; returns its registration status only."},
-         {"$SourceVaultServiceExtraPackages", "Setting (package file names loaded by the service kernel)."}}]];
+         {"$SourceVaultServiceExtraPackages", "Setting (package file names loaded by the service kernel)."},
+         (* 2026-11-16 additions (cleanup of processed service commands) *)
+         {"SourceVaultPruneServiceCommands", "Deletes old processed command files under the service runtime folder (commands/done); looks at file names and dates only, never reads a command or its result; returns counts, status and timing."},
+         {"$SourceVaultCommandRetentionDays", "Setting (days to keep processed service commands)."},
+         {"$SourceVaultCommandPruneIntervalSeconds", "Setting (seconds between cleanups of processed service commands)."}}]];
     Null, Null];
 iSMRegisterPrivacyContracts[];
 

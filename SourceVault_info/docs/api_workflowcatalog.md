@@ -16,7 +16,7 @@ GitHub: https://github.com/transreal/SourceVault_workflowcatalog
 - ローカル LM Studio: `{"lmstudio", "model-name", "http://127.0.0.1:1234"}` (第3要素省略可)
 - クラウド: NBAccess 経由のモデルID文字列
 
-両モデルがローカル (`lmstudio`) のときはローカル LLM で要約。それ以外は `ClaudeQueryBg` (クラウド) → ローカル既定 → 機械抽出の順でフォールバック。
+両モデルがローカル (`lmstudio`) のときはローカル LLM で要約。それ以外は `ClaudeQueryBg` (クラウド) → ローカル既定 → 機械抽出の順でフォールバック。LLM がエラー/利用制限本文を返した場合も機械抽出へ退避し、要約として保存しない。
 
 ## stage 取得・切替
 
@@ -25,7 +25,7 @@ slug のフォルダ位置から現在 stage を返す。戻り値: `"system"` |
 
 ### SourceVaultSetWorkflowStatus[slug, stage] → Association
 slug を指定 stage のフォルダへ移動し、束ねレコードの Status を更新する。`stage` は `"testing"` | `"production"` | `"archive"` のいずれか。システムワークフロー (root) は移動しない。archive は通常一覧・横断検索に表示されない。
-戻り値キー: `Status` (`"Moved"` | `"Unchanged"` | `"SystemWorkflow"` | `"NotFound"` | `"BadStage"` | `"DestExists"` | `"MoveFailed"`), `Slug`, `Stage`, `From`, `To`。BadStage 時は `Requested`, `Allowed` を、SystemWorkflow 時は `Detail` を、Unchanged/DestExists 時は `Path` を含む。
+戻り値キー: `Status` (`"Moved"` | `"Unchanged"` | `"SystemWorkflow"` | `"NotFound"` | `"BadStage"` | `"DestExists"` | `"MoveFailed"`), `Slug`, `Stage`, `From`, `To`。BadStage 時は `Requested`, `Allowed` を、SystemWorkflow 時は `Detail` を、Unchanged/DestExists 時は `Path` を含む。MoveFailed 時は `From`, `To` を含む。
 
 ### SourceVaultPromoteWorkflow[slug] → Association
 `SourceVaultSetWorkflowStatus[slug, "production"]` の短縮形。
@@ -36,7 +36,7 @@ slug を指定 stage のフォルダへ移動し、束ねレコードの Status 
 ## カタログレコード CRUD
 
 ### SourceVaultWorkflowCatalogRecord[slug] → Association | Missing
-slug の束ねレコードを返す。pointer `workflow/<slug>/catalog` を `SourceVaultPointerReplay` で解決し immutable snapshot をロードする。無ければ `Missing["NoCatalog"]`。`SnapshotClass`/`Digest`/`StoredAtUTC` は除去され、`Version` は pointer の Sequence で上書きされる。
+slug の束ねレコードを返す。pointer `workflow/<slug>/catalog` を `SourceVaultPointerReplay` で解決し immutable snapshot をロードする。無ければ `Missing["NoCatalog"]`。`SnapshotClass`/`Digest`/`StoredAtUTC`/`Version` は除去され、`Version` は pointer の Sequence で再設定される。
 戻り値キー例: `Slug`, `Name`, `Summary`, `Keywords`, `Project`, `SpecURI`, `SpecModels`, `ImplModels`, `SummaryMethod`, `SourceNotebookURI`, `Status`, `CreatedAtUTC`, `UpdatedAtUTC`, `Version` (pointer Sequence 由来)。
 
 ### SourceVaultRegisterWorkflowCatalog[slug, assoc] → Association
@@ -46,14 +46,14 @@ slug の束ねレコードを assoc で更新 (既存レコードとマージ) �
 ## カタログ一覧
 
 ### SourceVaultWorkflowCatalog[] → Dataset
-生成ワークフロー (testing/production) の束ねカタログ一覧を Dataset で返す。system ワークフローは含まない。
+生成ワークフロー (testing/production/archive; system 以外) の束ねカタログ一覧を Dataset で返す。system ワークフローは含まない。
 列: `Slug`, `LaunchCount`, `ErrorCount`, `Stage`, `Name`, `Summary`, `Keywords`, `Project`, `SpecURI`, `SpecModels`, `ImplModels`, `SummaryMethod`, `SourceNotebookURI`, `Loaded`, `Context`, `Path`, `UpdatedAtUTC`。`LaunchCount`/`ErrorCount` は共有サイドカーの起動統計 (id = `"wf:"<>slug`) 由来。
 
 ## 要約生成
 
 ### SourceVaultWorkflowSummarize[slug, opts]
-slug の仕様 (SpecURI snapshot 優先、無ければ `example.md` + コード冒頭) から Summary + Keywords を LLM 生成し束ねレコードへ保存する。モデルペアは `ImplModels` > `SpecModels` > ローカル既定の順で決定。
-→ Association `<|"Status" -> "Done"|"NoSpec", "Slug", "Method", "Summary", "Keywords"|>`
+slug の仕様 (SpecURI snapshot 優先、無ければ `example.md` + コード冒頭) から Summary + Keywords を LLM 生成し束ねレコードへ保存する。モデルペアは `ImplModels` > `SpecModels` > ローカル既定 (`{"lmstudio","","http://127.0.0.1:1234"}`) の順で決定。
+→ Association `<|"Status" -> "Done"|"NoSpec", "Slug", "Method", "Summary", "Keywords"|>` (NoSpec 時は `Status`, `Slug` のみ)
 Options: `"Language" -> Automatic` (Automatic で `$Language` を使用、未設定なら `"Japanese"`), `"Timeout" -> 180` (秒)
 
 ### SourceVaultWorkflowSummarizeText[specText, claudeModel, advisaryModel, opts]
@@ -65,21 +65,21 @@ Options: `"Language" -> Automatic`, `"Timeout" -> 180`
 ## 元ノートブック登録・解決
 
 ### SourceVaultRegisterSourceNotebook[path] → String
-notebook の絶対パスをシンボリックパスに変換し `"WorkflowSourceNotebook"` snapshot として保存、URI 文字列 (`"sv://snapshot/..."`) を返す。保存不可 (未保存等) のとき `""` を返す。仕様/カタログオブジェクトにはパスでなくこの URI を記録する。
+notebook の絶対パスをシンボリックパスに変換し `"WorkflowSourceNotebook"` snapshot として保存、URI 文字列 (`"sv://snapshot/..."`) を返す。保存不可 (未保存・ファイル不在等) のとき `""` を返す。仕様/カタログオブジェクトにはパスでなくこの URI を記録する。
 
 ### SourceVaultSourceNotebookPath[uri] → String | Missing
 `SourceVaultRegisterSourceNotebook` が返した URI を現 PC の絶対パスへ解決する。解決不可なら `Missing["Unresolved"]`、URI 未指定なら `Missing["NoURI"]`。
 
 ### SourceVaultOpenSourceNotebook[uri] → NotebookObject | $Failed
-URI が指す元 notebook を開く (既に開いていれば前面化)。解決不可・ファイル不在/移動の場合は `MessageDialog` で通知し `$Failed` を返す。
+URI が指す元 notebook を開く (既に開いていれば前面化)。パスは `AbsoluteFileName` による `\` 区切りで開く。解決不可・ファイル不在/移動の場合は `MessageDialog` で通知し `$Failed` を返す。
 
 ## UI
 
 ### SourceVaultWorkflowPanel[] → Panel
-archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (2ボタン)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)、自動起動 ([SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger) ロード時のみ表示; 未ロードは "—")。
-起動列2ボタン: 「▶ 実行」= 選択中の「実行PC」でワークフローを実行 (自機なら `SourceVaultRunWorkflowAsync[slug, "run"]` で非同期実行しFEをブロックしない・実行結果は `SourceVaultRunWorkflowResult` で取得; 他PCなら `SourceVaultEnqueueWorkflowRun[slug, runMachine]` でそのPC宛にキュー投入し、そのPCのスケジューラ `SourceVaultAutoTriggerStartScheduler` が拾って実行、完了/失敗は `SourceVaultAutoTriggerWatchRemoteRun` 経由で呼出元ノートに結果取得セル `SourceVaultRemoteWorkflowResult[...]` またはエラーレポートが書き戻される)。前提は [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)/[ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) ロード済みかつ launch に `"run"` 形があること。「使用例」= `example.md` を実行可能セルとして新規ノートに展開 ([claudecode](https://github.com/transreal/claudecode) ロード時は `ClaudeCode`MarkdownToCells` に委譲し見出し/箇条書き/mermaid 図も変換; 未ロード時は従来フォールバック)。
+archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (2ボタン)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)、自動起動 ([SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger) ロード時のみ `SourceVaultAutoTriggerStatusCell["Workflow", slug]` を表示; 未ロードは "—")。
+起動列2ボタン: 「▶ 実行」= 選択中の「実行PC」でワークフローを実行 (自機なら `SourceVaultRunWorkflowAsync[slug, "run"]` で非同期実行しFEをブロックしない・実行結果は `SourceVaultRunWorkflowResult` で取得; 他PCなら `SourceVaultEnqueueWorkflowRun[slug, runMachine]` でそのPC宛にキュー投入し、そのPCのスケジューラ `SourceVaultAutoTriggerStartScheduler` が拾って実行、完了/失敗は `SourceVaultAutoTriggerWatchRemoteRun` 経由で呼出元ノートに結果取得セル `SourceVaultRemoteWorkflowResult[...]` またはエラーレポートが書き戻される)。前提は [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)/[ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) ロード済みかつ launch に `"run"` 形があること。「使用例」= `example.md` を実行可能セルとして新規ノートに展開 ([claudecode](https://github.com/transreal/claudecode) ロード時は `ClaudeCode`MarkdownToCells` に委譲し見出し/箇条書き/mermaid 図も変換; 未ロード時は従来フォールバック。example.md が無ければ引数なし launch の報告ダイアログに退避)。「▶ 実行」「使用例」とも起動回数を加算し、失敗時はエラー回数も加算する。
 検索行に「実行PC:」PopupMenu (既定=自機 `$MachineName` サニタイズ tag、候補は `SourceVaultListRuntimeMachines` 由来の vault 共有 PC 一覧)。自機実行時はプロセスライセンス枠 (`SourceVaultDiagnosticsLicenseProbe` の `ProcessSlotsFree`) が 0 なら子プロセスが落ちるため事前に MessageDialog で警告し実行を止める (診断未ロードならガードしない)。
-行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。
+行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索はキーワード/サマリー/Slug/Name の部分一致 (大文字小文字無視)。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。行の算出は 60 秒の TimeConstrained で上限付けされ、失敗時は空リスト。
 
 ### SourceVaultWorkflowArchivePanel[] → Panel
 archive ステージのワークフローのみを一覧する UI。`SourceVaultWorkflowPanel` と同体裁。切替列は「testingへ戻す」ボタン (`SourceVaultSetWorkflowStatus[slug, "testing"]`)。
@@ -87,7 +87,7 @@ archive ステージのワークフローのみを一覧する UI。`SourceVault
 ## 移行ユーティリティ
 
 ### SourceVaultMigrateWorkflowsToStages[opts]
-`SourceVault_workflows/` ルート直下の生成ワークフロー (システムワークフローを除く) を testing/production サブフォルダへ一括移行する (冪等)。slug 比較は Unicode 結合濁点 (U+3099/U+309A) を除去して行う。ルート不在時は `<|"Status" -> "NoRoot", "Path" -> root|>`。
+`SourceVault_workflows/` ルート直下の生成ワークフロー (システムワークフローを除く) を testing/production サブフォルダへ一括移行する (冪等)。slug 比較は Unicode 結合濁点 (U+3099/U+309A) を除去して行う。ルート不在時は `<|"Status" -> "NoRoot", "Path" -> root|>` (Association)。
 → Dataset (列: `Slug`, `Stage`, `Status` (`"Moved"` | `"DestExists"` | `"MoveFailed"`))
 Options:
 - `"Production" -> {}` (production に移すスラッグリスト)

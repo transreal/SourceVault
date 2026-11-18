@@ -257,13 +257,21 @@ iPSyncScope[] :=
       $svPScopeKey = k; $svPMax = 0.];
     k];
 
-SourceVault`SourceVaultEvaluationPrivacy[] := N[$svPMax];
+(* 2026-11-12 (文書 12 の P7): 読むときにも評価セルの切り替わりを見る。以前は $svPMax をそのまま返していたので、
+   リセット (iPSyncScope) は次に SourceVaultNotePrivacy が呼ばれるまで起きなかった。機密の View (PL 1.0) を表示したセルの後で、
+   別のセルから ClaudeEval / ClaudeQuery を始めると、関所への申告 (claudecode の iWebGuardContextPL) が前のセルの 1.0 を読み、
+   何も読んでいない会話が「機密を読んだ会話」として始まった (外部検索が外れる)。透かしの範囲は「今の評価セル」なので、
+   別のセルから読んだら 0 から始める。FE の無いカーネルでは評価セルが無く、従来どおり累積する。 *)
+SourceVault`SourceVaultEvaluationPrivacy[] := (iPSyncScope[]; N[$svPMax]);
 
 SourceVault`SourceVaultResetEvaluationPrivacy[] := ($svPMax = 0.; $svPScopeKey = Null; 0.);
 
 SetAttributes[SourceVault`SourceVaultWithPrivacyScope, HoldFirst];
 SourceVault`SourceVaultWithPrivacyScope[expr_] :=
   Module[{val, inner},
+    (* 2026-11-12: 外側の範囲を、先に今の評価セルに合わせる。合わせないと、新しいセルの最初の操作がこの関数のとき、
+       中で切り替わった範囲の鍵が Block の終わりで前のセルに戻り、外側への Max が前のセルの値と混ざる。 *)
+    iPSyncScope[];
     inner = Block[{$svPMax = 0., $svPScopeKey = $svPScopeKey},
       val = expr;
       N[$svPMax]];
@@ -1019,6 +1027,9 @@ iPDeclareMany["Internal",
   "\:53d6\:8fbc\:307f/\:6d3e\:751f\:751f\:6210\:30d1\:30a4\:30d7\:30e9\:30a4\:30f3\:3002\:672c\:6587\:3092\:8aad\:3080\:304c\:8fd4\:308a\:5024\:306f <|Status, Count|> \:7b49\:306e\:96c6\:8a08\:306e\:307f\:3002", {
   {"SourceVaultMailFetchNew", "SourceVault_maildb.wl"},
   {"SourceVaultBackfillMailBodies", "SourceVault_maildb.wl"},
+  (* 2026-11-17: the shape of a stored body (counts and labels, no character of it) and its repair (counts) *)
+  {"SourceVaultMailBodyProfile", "SourceVault_maildb.wl"},
+  {"SourceVaultMailBodyRepair", "SourceVault_maildb.wl"},
   {"SourceVaultMailAddSummaries", "SourceVault_maildb.wl"},
   {"SourceVaultInferMailDerivedBatch", "SourceVault_maildb.wl"},
   {"SourceVaultMailRecomputePriorities", "SourceVault_maildb.wl"},

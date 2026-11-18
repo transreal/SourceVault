@@ -137,7 +137,7 @@ SourceVaultEagleSummaries::usage = "SourceVaultEagleSummaries[query, opts] は�
 SourceVaultEagleSummariesView::usage = "SourceVaultEagleSummariesView[query, opts] は保存済みサマリー一覧をノートブックリスト風の表 (Grid) で返す View 関数。「▶ 開く」クリックで原本ファイルを SystemOpen、ファイル名クリックでサマリー全文をウインドウ表示 (Current/Stale 状態付き)。SourceVaultEagleSummariesView[rows] で core の戻り値 (自前 Select で絞った行リストも可) をそのまま表示できる (素の Dataset/Grid を手組みしない)。opts: SourceVaultEagleSummaries と同じ + \"MaxRows\" -> Automatic ($SourceVaultCatalogViewMaxRows 行で描画を打ち切る。All で全行)。";
 SourceVaultEagleExtractBibMeta::usage = "SourceVaultEagleExtractBibMeta[item, opts] は要約済み item の書誌情報 (Title/Authors/Published) を本文先頭から LLM で抽出し summary record に追記する (旧 record の backfill 用。新規要約は SourceVaultEagleSummarize が同時抽出)。PDF は埋め込みメタデータをフォールバックに使う。既に Title を持つ record はスキップ (\"ForceRefresh\"->True で再抽出)。Method 解決は Summarize と同じ fail-safe (Cloud-Publishable タグ無しはローカル LLM)。opts: \"Method\", \"MaxChars\"(2500), \"MaxPages\"(2), \"Timeout\", \"ForceRefresh\"。";
 SourceVaultEagleExtractBibMetaBatch::usage = "SourceVaultEagleExtractBibMetaBatch[query, opts] は保存済みサマリー record のうち書誌情報が無いものへ一括で SourceVaultEagleExtractBibMeta を適用し統計を返す。query は SourceVaultEagleSummaries と同じ部分一致 (\"\" で全件)。opts: \"Ext\"->\"pdf\" 等の絞り込み, \"Limit\", ほか SourceVaultEagleExtractBibMeta と同じ。例: SourceVaultEagleExtractBibMetaBatch[\"\", \"Ext\"->\"pdf\", \"Limit\"->20]。";
-SourceVaultEagleSummarizeBatch::usage = "SourceVaultEagleSummarizeBatch[items, opts] は item リスト (または検索 query 文字列) を一括要約し統計を返す。生成済み (Current) はスキップ。検索オプション (\"Folder\", \"Ext\", \"Tags\", \"DateFrom\" 等 SourceVaultEagleSearch と同じ) を併用でき、\"Limit\" は要約件数の上限。PDF・画像・動画が混在するフォルダでも Kind ごとに dispatch して全件処理する (1 件の失敗で全体を止めない)。\"Frames\" / \"FrameMaxLength\" など SourceVaultEagleSummarize の option も継承する (動画はフレーム数ぶん vision 呼び出しが増えるためコスト・時間に注意)。例: SourceVaultEagleSummarizeBatch[\"\", \"Folder\"->\"自然計算関連\", \"Ext\"->\"pdf\", \"Limit\"->2]。\"Method\"->Automatic では item ごとに判定: Cloud-Publishable タグ付きはクラウド ($ClaudeModel)、それ以外はローカル ($ClaudePrivateModel)。";
+SourceVaultEagleSummarizeBatch::usage = "SourceVaultEagleSummarizeBatch[items, opts] は item リスト (または検索 query 文字列) を一括要約し統計を返す。生成済み (Current) はスキップ。検索オプション (\"Folder\", \"Ext\", \"Tags\", \"DateFrom\" 等 SourceVaultEagleSearch と同じ) を併用でき、\"Limit\" は要約件数の上限。PDF・画像・動画が混在するフォルダでも Kind ごとに dispatch して全件処理する (1 件の失敗で全体を止めない)。\"Frames\" / \"FrameMaxLength\" など SourceVaultEagleSummarize の option も継承する (動画はフレーム数ぶん vision 呼び出しが増えるためコスト・時間に注意)。例: SourceVaultEagleSummarizeBatch[\"\", \"Folder\"->\"自然計算関連\", \"Ext\"->\"pdf\", \"Limit\"->2]。\"Method\"->Automatic では item ごとに判定: Cloud-Publishable タグ付きはクラウド ($ClaudeModel)、それ以外はローカル ($ClaudePrivateModel)。返り値の \"Failures\" は失敗した item ごとの <|\"Id\",\"Name\",\"Reason\",\"Detail\"|> (Reason \"LLMTimeout\" は \"Timeout\" 秒以内に答えが来なかったもの。\"Timeout\"->600 などで再実行する)。";
 $SourceVaultEagleCloudPublishableTag::usage = "$SourceVaultEagleCloudPublishableTag はクラウド要約を許可するタグ名 (既定 \"Cloud-Publishable\"、大文字小文字無視)。このタグが付いた item は \"Method\"->Automatic の要約でローカル LLM ではなくクラウド経路を使い、summary record に PrivacyLevel 0.0 が記録される。また summary record に PrivacyLevel が無くても実効 PL に $SourceVaultEagleCloudPublishablePL (既定 0.45) の上限が適用され、MCP release gate (sourcevault_get 等) でクラウド開示可になる。クラウド経路は $ClaudeModel の provider 準拠 (claudecode→Claude Code CLI、codex→Codex CLI。課金 API は anthropic/openai 明示時のみ)。また、このタグ付き item のサマリーノート (notes/*.nb) では NBMarkCellConfidential で秘匿マークされたセル (confidential=True または privacyLevel>0.5) を検索インデックス/メタ情報 (Note フィールド) から除外する — サマリー等のメタ情報を Cloud-Publishable な PL に保つため。タグ無し item のノートは全文がローカル検索対象 (メタ情報はライブラリ既定 PL の fail-safe マーキングが前提)。";
 
 (* ---- インデックス (Eagle 情報 + Exif) と AND/OR 検索 ---- *)
@@ -1956,36 +1956,149 @@ iSVEGResolveLocalLLM[] :=
     <|"URL" -> url, "Model" -> model, "Provider" -> iSVLocalProviderOf[pm]|>];
 
 If[! ValueQ[$iSVEGLastAccessDenial], $iSVEGLastAccessDenial = None];
+(* 直前のローカル LLM 呼び出しが答えを返さなかった理由 (None = 答えあり)。
+   <|"Kind" -> "Timeout"|"HTTPError"|"Unreachable"|"BadJSON"|"EmptyAnswer"|"EncodeFailed", ...|> *)
+If[! ValueQ[$iSVEGLastLocalLLMFailure], $iSVEGLastLocalLLMFailure = None];
 
-(* OpenAI 互換 chat.completions (テキスト/vision 共通)。messages は最終形を受け取る。 *)
+(* ---- 思考を止める先読み (2026-11-11) ----
+   LM Studio + qwen3.8-27b は chat の enable_thinking:false も reasoning_effort "none" も
+   "/no_think" も効かず、要約 1 件ごとに推論 1,000〜3,900 トークン (1〜4 分、約 17 tok/s) を出し、
+   "Timeout" 240 s で本文 0 文字のまま切れていた (ScanSnap の PDF 10 件中 2〜4 件)。
+   11-11 の実測 (試験用の文章): effort "none" は 300 s を超え、/no_think は推論 2,044 トークン・141 s。
+   ChatML を自分で組み、/v1/completions に空の <think></think> を先読みとして渡すと
+   思考なしで答える: 同じ文章で 8.4 s・151 トークン。maildb (iSVMDChatMLNoThink) と同じ方式。
+   Automatic = 文字だけの messages で、モデル名に qwen を含む (または不明) とき。
+   画像を送る vision は /v1/completions に載らないので chat のまま (思考は止まらない)。 *)
+If[! ValueQ[$iSVEGLLMNoThinkPrefill], $iSVEGLLMNoThinkPrefill = Automatic];
+If[! ValueQ[$iSVEGLLMMaxTokens], $iSVEGLLMMaxTokens = 2048];
+
+iSVEGTextOnlyMessagesQ[messages_List] :=
+  messages =!= {} &&
+    AllTrue[messages, AssociationQ[#] && StringQ[Lookup[#, "content", Missing[]]] &];
+iSVEGTextOnlyMessagesQ[_] := False;
+
+iSVEGPrefillApplicableQ[model_String, messages_] :=
+  iSVEGTextOnlyMessagesQ[messages] &&
+    Switch[$iSVEGLLMNoThinkPrefill,
+      True, True,
+      False, False,
+      _, model === "" || StringContainsQ[model, "qwen", IgnoreCase -> True]];
+
+(* 文書の本文に ChatML の区切り (<|im_start|> 等) が入っていると、生の prompt では
+   ターンの境界として読まれ、文書側から指示を差し込める。区切りの形の文字列は消す。 *)
+iSVEGChatMLSafe[s_String] :=
+  StringReplace[s, RegularExpression["<\\|[A-Za-z_]+\\|>"] -> ""];
+
+iSVEGChatMLNoThink[messages_List] :=
+  StringJoin[
+    Function[m,
+      "<|im_start|>" <> iSVEGChatMLSafe[ToString@Lookup[m, "role", "user"]] <> "\n" <>
+        iSVEGChatMLSafe[Lookup[m, "content", ""]] <> "<|im_end|>\n"] /@ messages,
+    "<|im_start|>assistant\n<think>\n\n</think>\n\n"];
+
+iSVEGCompletionsURL[url_String] :=
+  StringReplace[url, "/v1/chat/completions" ~~ EndOfString -> "/v1/completions"];
+
+(* 送る中身と送り先の種類。"Endpoint" -> Automatic は先読みが使えれば completions。 *)
+Options[iSVEGBuildLocalLLMRequest] = {"Endpoint" -> Automatic};
+iSVEGBuildLocalLLMRequest[messages_List, model_String, OptionsPattern[]] :=
+  Module[{ep = OptionValue["Endpoint"], modelPart},
+    If[ep === Automatic,
+      ep = If[iSVEGPrefillApplicableQ[model, messages], "completions", "chat"]];
+    modelPart = If[model =!= "", <|"model" -> model|>, <||>];
+    <|"Endpoint" -> ep,
+      "Request" -> If[ep === "completions",
+        Join[<|"prompt" -> iSVEGChatMLNoThink[messages],
+          "max_tokens" -> If[IntegerQ[$iSVEGLLMMaxTokens] && $iSVEGLLMMaxTokens > 0,
+            $iSVEGLLMMaxTokens, 2048],
+          "stop" -> {"<|im_end|>"}, "temperature" -> 0.2, "stream" -> False|>, modelPart],
+        Join[<|"messages" -> messages, "temperature" -> 0.2, "stream" -> False,
+          "chat_template_kwargs" -> <|"enable_thinking" -> False|>|>, modelPart]]|>];
+
+(* URLRead の結果と経過秒から、答えが来なかった理由を決める (None = 200)。
+   TimeConstraint 切れは URLRead が $Failed / Failure を返すだけで種類を言わないので、
+   経過が上限の 95% 以上なら Timeout とみなす。 *)
+iSVEGLocalLLMFailureOf[resp_, elapsed_?NumericQ, timeout_] :=
+  Which[
+    MatchQ[resp, _HTTPResponse] && resp["StatusCode"] === 200, None,
+    MatchQ[resp, _HTTPResponse],
+      <|"Kind" -> "HTTPError", "StatusCode" -> resp["StatusCode"],
+        "Seconds" -> Round[elapsed, 0.1]|>,
+    NumericQ[timeout] && timeout > 0 && elapsed >= 0.95 timeout,
+      <|"Kind" -> "Timeout", "Timeout" -> timeout, "Seconds" -> Round[elapsed, 0.1]|>,
+    True, <|"Kind" -> "Unreachable", "Seconds" -> Round[elapsed, 0.1]|>];
+
+(* 答えに混じった思考タグを落とす (先読みのあとで模型がまた考え始めた場合の保険) *)
+iSVEGStripThinking[s_String] :=
+  Module[{t},
+    t = StringReplace[s, RegularExpression["(?is)<think>.*?</think>"] -> ""];
+    If[StringContainsQ[t, "</think>"],
+      t = Last[StringSplit[t, "</think>", All]]];
+    StringTrim[t]];
+
+iSVEGAnswerText[json_Association, endpoint_String] :=
+  Module[{content},
+    content = If[endpoint === "completions",
+      Quiet@Check[json["choices"][[1]]["text"], ""],
+      Quiet@Check[json["choices"][[1]]["message"]["content"], ""]];
+    (* chat: thinking モデルが content を空にして reasoning_content に出した場合の保険 (従来どおり) *)
+    If[endpoint =!= "completions" && ! (StringQ[content] && StringTrim[content] =!= ""),
+      content = Quiet@Check[json["choices"][[1]]["message"]["reasoning_content"], ""]];
+    If[StringQ[content], iSVEGStripThinking[content], ""]];
+
+(* 1 回の HTTP 往復。返り値 <|"Text" -> 答え ("" = なし), "Failure" -> None | <|"Kind", ...|>|> *)
+iSVEGLocalLLMPost[url_String, reqData_Association, endpoint_String, timeout_] :=
+  Module[{bodyBytes, t0, resp, elapsed, fail, json, text},
+    bodyBytes = iSVEGJSONBytes[reqData];
+    If[bodyBytes === $Failed,
+      Return[<|"Text" -> "", "Failure" -> <|"Kind" -> "EncodeFailed"|>|>]];
+    t0 = AbsoluteTime[];
+    resp = Quiet@Check[URLRead[HTTPRequest[url, <|
+        "Method" -> "POST",
+        "Headers" -> {"Content-Type" -> "application/json; charset=utf-8",
+          "Authorization" -> "Bearer " <> iSVEGLocalLLMKey[url]},
+        "Body" -> bodyBytes|>], TimeConstraint -> timeout], $Failed];
+    elapsed = AbsoluteTime[] - t0;
+    fail = iSVEGLocalLLMFailureOf[resp, elapsed, timeout];
+    If[fail =!= None, Return[<|"Text" -> "", "Failure" -> fail|>]];
+    json = iSVEGParseJSONBytes[Quiet@Check[resp["BodyByteArray"], $Failed]];
+    If[! AssociationQ[json],
+      Return[<|"Text" -> "",
+        "Failure" -> <|"Kind" -> "BadJSON", "Seconds" -> Round[elapsed, 0.1]|>|>]];
+    text = iSVEGAnswerText[json, endpoint];
+    If[StringTrim[text] === "",
+      <|"Text" -> "", "Failure" -> <|"Kind" -> "EmptyAnswer", "Seconds" -> Round[elapsed, 0.1],
+        "FinishReason" -> Quiet@Check[json["choices"][[1]]["finish_reason"], Missing[]]|>|>,
+      <|"Text" -> text, "Failure" -> None|>]];
+
+(* OpenAI 互換のローカル LLM (テキスト/vision 共通)。messages は最終形を受け取る。
+   文字だけなら /v1/completions + 思考なしの先読み、画像を含めば chat.completions。
+   答えが無かった理由は $iSVEGLastLocalLLMFailure に残す (要約の Reason に出す)。 *)
 iSVEGQueryLocalLLMMessages[messages_List, timeout_] :=
-  Module[{llm = iSVEGResolveLocalLLM[], reqData, bodyBytes, resp, json, content},
+  Module[{llm = iSVEGResolveLocalLLM[], built, r},
+    $iSVEGLastLocalLLMFailure = None;
     (* rule 107 (2026-11-06): Local は Cloud-Publishable でない (= 機密) 項目の経路なので PL 1.0 で
        送信先の上限を確かめる。止めた理由は $iSVEGLastAccessDenial に残し、要約の Reason に出す。 *)
     $iSVEGLastAccessDenial = iSVLocalLLMAccessDenial[llm, 1.0];
     If[FailureQ[$iSVEGLastAccessDenial], Return[""]];
-    reqData = <|"messages" -> messages, "temperature" -> 0.2, "stream" -> False,
-      "chat_template_kwargs" -> <|"enable_thinking" -> False|>|> ~Join~
-      If[llm["Model"] =!= "", <|"model" -> llm["Model"]|>, <||>];
-    bodyBytes = iSVEGJSONBytes[reqData];
-    If[bodyBytes === $Failed, Return[""]];
+    built = iSVEGBuildLocalLLMRequest[messages, llm["Model"]];
     (* 1H-S boundary gate(text/vision 共通の最終境界。capbroker 不在は fail-open) *)
     If[TrueQ[SourceVault`SourceVaultLLMBoundarySelfGateRefusedQ["eagle:iSVEGQueryLocalLLMMessages",
         <|"Provider" -> "openai-compat", "Model" -> llm["Model"], "Deployment" -> llm["URL"],
           "Messages" -> messages|>]],
       Return[""]];
-    resp = Quiet@Check[URLRead[HTTPRequest[llm["URL"], <|
-        "Method" -> "POST",
-        "Headers" -> {"Content-Type" -> "application/json; charset=utf-8",
-          "Authorization" -> "Bearer " <> iSVEGLocalLLMKey[llm["URL"]]},
-        "Body" -> bodyBytes|>], TimeConstraint -> timeout], $Failed];
-    If[! MatchQ[resp, _HTTPResponse] || resp["StatusCode"] =!= 200, Return[""]];
-    json = iSVEGParseJSONBytes[Quiet@Check[resp["BodyByteArray"], $Failed]];
-    If[! AssociationQ[json], Return[""]];
-    content = Quiet@Check[json["choices"][[1]]["message"]["content"], ""];
-    If[! (StringQ[content] && StringTrim[content] =!= ""),
-      content = Quiet@Check[json["choices"][[1]]["message"]["reasoning_content"], ""]];
-    If[StringQ[content], content, ""]];
+    r = If[built["Endpoint"] === "completions",
+      iSVEGLocalLLMPost[iSVEGCompletionsURL[llm["URL"]], built["Request"], "completions", timeout],
+      iSVEGLocalLLMPost[llm["URL"], built["Request"], "chat", timeout]];
+    (* 先読みが通らない (/v1/completions が無いサーバー・空の答え) ときは chat で 1 回やり直す。
+       時間切れはやり直さない (待ち時間を倍にしない)。 *)
+    If[built["Endpoint"] === "completions" && r["Text"] === "" &&
+       Lookup[Replace[r["Failure"], Except[_Association] -> <||>], "Kind", ""] =!= "Timeout",
+      built = iSVEGBuildLocalLLMRequest[messages, llm["Model"], "Endpoint" -> "chat"];
+      r = iSVEGLocalLLMPost[llm["URL"], built["Request"], "chat", timeout]];
+    $iSVEGLastLocalLLMFailure = If[AssociationQ[r["Failure"]],
+      Append[r["Failure"], "Endpoint" -> built["Endpoint"]], None];
+    r["Text"]];
 
 iSVEGQueryLocalLLMText[prompt_String, timeout_] :=
   iSVEGQueryLocalLLMMessages[{<|"role" -> "user", "content" -> prompt|>}, timeout];
@@ -2459,6 +2572,27 @@ iSVEGServeCurrentQ[rec_Association, kind_, requested_Integer, framesExplicit_] :
       StringQ[Lookup[rec, "Summary", ""]] &&
       StringTrim[Lookup[rec, "Summary", ""]] =!= ""];
 
+(* LLM の答えが空だったときの Error。ローカル LLM は止まった理由を分ける:
+   送信先の上限 (AccessLevelExceeded) / 時間切れ (LLMTimeout) / それ以外 (LLMUnavailableOrEmpty)。
+   2026-11-11: 思考が長く Timeout で切れたのに「LM Studio が応答しません」と出て原因を誤らせたので分けた。 *)
+iSVEGEmptyAnswerError[method_, id_, timeout_] :=
+  Module[{fail = $iSVEGLastLocalLLMFailure},
+    Which[
+      method === "Local" && FailureQ[$iSVEGLastAccessDenial],
+        <|"Status" -> "Error", "Reason" -> "AccessLevelExceeded", "Id" -> id,
+          "Detail" -> $iSVEGLastAccessDenial["Text"],
+          "Hint" -> "ローカル LLM の送信先が機密度の上限を超えるので送りませんでした。"|>,
+      method === "Local" && AssociationQ[fail] && Lookup[fail, "Kind", ""] === "Timeout",
+        <|"Status" -> "Error", "Reason" -> "LLMTimeout", "Id" -> id, "Detail" -> fail,
+          "Hint" -> "ローカル LLM が \"Timeout\" (" <> ToString[timeout] <>
+            " 秒) 以内に答えを返しませんでした。\"Timeout\" -> 600 などに延ばして再実行してください。"|>,
+      True,
+        <|"Status" -> "Error", "Reason" -> "LLMUnavailableOrEmpty", "Id" -> id,
+          "Detail" -> If[method === "Local" && AssociationQ[fail], fail, Missing["None"]],
+          "Hint" -> If[method === "Local",
+            "ローカル LLM (LM Studio) が応答しません。起動を確認するか \"Method\"->\"Claude\" (クラウド送信に注意) を指定してください。",
+            "Claude 経由の要約に失敗しました。"]|>]];
+
 Options[SourceVaultEagleSummarize] = {
   "Library" -> Automatic, "Method" -> Automatic,
   "MaxLength" -> 400, "MaxChars" -> 8000, "MaxPages" -> 15,
@@ -2477,6 +2611,7 @@ SourceVaultEagleSummarize[itemSpec_, opts : OptionsPattern[]] :=
       fractions, reuseFrames = {}, missingFracs = {}, newImgs = {}, newFrames = {},
       allFrames = {}},
     If[lib === $Failed, Return[iSVEGNoLib[]]];
+    $iSVEGLastLocalLLMFailure = None;   (* 前の item の失敗理由を持ち越さない *)
     item = iSVEGItemOf[lib, itemSpec];
     If[item === $Failed, Return[<|"Status" -> "Error", "Reason" -> "ItemNotFound"|>]];
     id = iSVEGItemId[item];
@@ -2570,11 +2705,7 @@ SourceVaultEagleSummarize[itemSpec_, opts : OptionsPattern[]] :=
       StringQ[raw] && iSVEGLooksLikeLLMError[raw],
         Return[<|"Status" -> "Error", "Reason" -> raw, "Id" -> id|>],
       ! StringQ[raw] || StringTrim[raw] === "",
-        Return[<|"Status" -> "Error", "Reason" -> If[method === "Local" && FailureQ[$iSVEGLastAccessDenial], "AccessLevelExceeded", "LLMUnavailableOrEmpty"], "Id" -> id,
-          "Detail" -> If[method === "Local" && FailureQ[$iSVEGLastAccessDenial], $iSVEGLastAccessDenial["Text"], Missing["None"]],
-          "Hint" -> If[method === "Local",
-            "ローカル LLM (LM Studio) が応答しません。起動を確認するか \"Method\"->\"Claude\" (クラウド送信に注意) を指定してください。",
-            "Claude 経由の要約に失敗しました。"]|>]];
+        Return[iSVEGEmptyAnswerError[method, id, timeout]]];
     (* 書誌情報: 文書系は LLM 応答末尾の TITLE/AUTHORS/DATE 行を分離。
        PDF で LLM がタイトルを返さなかった場合は埋め込みメタデータで補完。 *)
     If[MemberQ[{"PDF", "Word", "PowerPoint", "Sheet", "Text", "Other"}, kind],
@@ -2616,14 +2747,41 @@ SourceVaultEagleSummarize[itemSpec_, opts : OptionsPattern[]] :=
         SourceVaultEagleSetAnnotation[item, summaryText, "Library" -> lib], Null]];
     Append[rec, "Status" -> "OK"]];
 
+(* 要約結果の Status。Failure (動画のフレーム 0 枚など) は Association でないので ""。 *)
+iSVEGResultStatus[r_Association] := ToString@Lookup[r, "Status", ""];
+iSVEGResultStatus[_] := "";
+
+(* 一括要約の失敗 1 件の行: <|"Id", "Name", "Reason", "Detail"|>。
+   Reason が LLM のエラー本文そのままのときは長いので 200 文字で切る。 *)
+iSVEGBatchFailureRow[lib_, it_, r_] :=
+  Module[{item, id, name, reason, detail},
+    item = Which[
+      AssociationQ[it], it,
+      True, Quiet@Check[iSVEGItemOf[lib, it], $Failed]];
+    id = Which[
+      AssociationQ[r] && StringQ[Lookup[r, "Id", Missing[]]], r["Id"],
+      AssociationQ[item], ToString@Lookup[item, "id", ""],
+      StringQ[it], it,
+      True, ToString[it, InputForm]];
+    name = If[AssociationQ[item], ToString@Lookup[item, "name", ""], ""];
+    {reason, detail} = Which[
+      FailureQ[r],
+        {ToString@First[r], Quiet@Check[r["Message"], Missing["None"]]},
+      AssociationQ[r],
+        {ToString@Lookup[r, "Reason", "Unknown"], Lookup[r, "Detail", Missing["None"]]},
+      True, {"UnexpectedResult", Missing["None"]}];
+    If[StringLength[reason] > 200, reason = StringTake[reason, 200] <> "…"];
+    <|"Id" -> id, "Name" -> name, "Reason" -> reason, "Detail" -> detail|>];
+
 (* 検索オプション ("Folder"/"Ext"/"Tags"/"DateFrom" 等) も受け取り Search へ転送する。
-   "Limit" は「要約する件数の上限」(検索結果の上位から)。 *)
+   "Limit" は「要約する件数の上限」(検索結果の上位から)。
+   返り値の "Failures" は失敗した item ごとの <|"Id","Name","Reason","Detail"|>。 *)
 Options[SourceVaultEagleSummarizeBatch] = DeleteDuplicatesBy[Join[
   Options[SourceVaultEagleSummarize], Options[SourceVaultEagleSearch],
   {"Limit" -> Automatic}], First];
 SourceVaultEagleSummarizeBatch[spec_, opts : OptionsPattern[]] :=
   Module[{lib = iSVEGLib[OptionValue["Library"]], items, lim,
-      done = 0, current = 0, failed = 0, searchOpts, sumOpts},
+      done = 0, current = 0, failed = 0, failures = {}, searchOpts, sumOpts},
     If[lib === $Failed, Return[iSVEGNoLib[]]];
     searchOpts = DeleteCases[
       FilterRules[Flatten[{opts}], Options[SourceVaultEagleSearch]],
@@ -2639,11 +2797,14 @@ SourceVaultEagleSummarizeBatch[spec_, opts : OptionsPattern[]] :=
     Scan[
       Function[it,
         With[{r = SourceVaultEagleSummarize[it, Sequence @@ sumOpts, "Library" -> lib]},
-          Switch[Lookup[r, "Status", ""],
-            "OK", done++, "Current", current++, _, failed++]]],
+          Switch[iSVEGResultStatus[r],
+            "OK", done++, "Current", current++,
+            _, (failed++; AppendTo[failures, iSVEGBatchFailureRow[lib, it, r]])]]],
       items];
+    (* 2026-11-11: 1 件ごとの失敗理由を "Failures" に残す (件数だけでは原因を追えなかった) *)
     <|"Status" -> "Done", "Selected" -> Length[items],
-      "Generated" -> done, "AlreadyCurrent" -> current, "Failed" -> failed|>];
+      "Generated" -> done, "AlreadyCurrent" -> current, "Failed" -> failed,
+      "Failures" -> failures|>];
 
 (* ============================================================
    既存サマリー record への書誌情報の後追い抽出

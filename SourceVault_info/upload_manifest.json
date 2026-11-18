@@ -55,7 +55,13 @@
 		"SourceVault_knowledgegraph.wl",
 		"SourceVault_papernb.wl",
 		"SourceVault_oapdf.wl",
-		"SourceVault_webguard.wl"
+		"SourceVault_webguard.wl",
+		"SourceVault_atrest.wl",
+		"SourceVault_integrityview.wl",
+		"SourceVault_integrity.wl",
+		"SourceVault_provenance.wl",
+		"SourceVault_seriesview.wl",
+		"SourceVault_series.wl"
 	],
 	"directories":[
 		"SourceVault_info",

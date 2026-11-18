@@ -122,7 +122,8 @@ ShowSystemDoctorPalette::usage =
   "ShowSystemDoctorPalette[] は SystemDoctor のパレットを開く (ShowClaudePalette / ShowDocPalette と同じ浮動パレット)。\n" <>
   "診断の実行と結果表示、診断ログ・SIEM spool・イシュー・プロセス・ライセンス・シャドウ検査のウインドウ、\n" <>
   "NBAccess 分離検査の [検査…] [全体検査] [修正…] [実行一覧] [検出一覧…] (claudecode の ClaudeSeparationRunStart /\n" <>
-  "ClaudeSeparationRunsView)、定期診断とシャドウ監視の開始・停止を置く。常駐の自動更新はしない (表示はボタンで更新)。";
+  "ClaudeSeparationRunsView)、Web アクセスの集計 (SourceVaultWebAccessSummaryView、関所が読み込まれているとき)、\n" <>
+  "定期診断とシャドウ監視の開始・停止を置く。常駐の自動更新はしない (表示はボタンで更新)。";
 
 SourceVaultSystemDoctorView::usage =
   "SourceVaultSystemDoctorView[] は SourceVaultSystemDoctor の結果を表で表示する: 全体の状態、部品ごとの状態・理由・\n" <>
@@ -156,6 +157,12 @@ $SourceVaultDiagIngestIntervalSeconds::usage =
 $SourceVaultDiagSpoolRoot::usage =
   "$SourceVaultDiagSpoolRoot は producer spool directory の上書き (既定 Automatic = \
 $UserBaseDirectory/ApplicationData/ClaudeRuntime/diag-spool)。テストシーム。";
+
+$SourceVaultDiagnosticsCanonicalWriter::usage =
+  "$SourceVaultDiagnosticsCanonicalWriter が True のカーネル (service kernel が起動時に立てる) だけが正準診断ログ \
+<CoreRoot>/diagnostics/machines/<tag>/diagnostics-log.jsonl に直接書く。それ以外 (FE・headless、既定 Automatic) の \
+SourceVaultDiagnosticsLog は自機 spool (diagnostics-<pid>-<yyyymmdd>.jsonl) に書き、service の SourceVaultDiagnosticsIngestSpool が \
+転記と issue fan-out を行う (03 v0.4 §2.1 Inc0-c / SIEM 仕様 05 Inc5、2026-11-09)。";
 
 SourceVaultDiagnosticsPublish::usage =
   "SourceVaultDiagnosticsPublish[event] は診断 event の bus 入口 (issues spec v0.4 §4.2): \
@@ -472,9 +479,13 @@ iSVDiagUTCNow[] :=
        ":", "Second", "Z"}, TimeZone -> 0],
     "unknown"];
 
+(* Inc0-b (03 v0.4 §2.1, 2026-11-09): 正準表記は core の SourceVaultMachineTag[] (大小文字保持)。
+   単体ロード時だけ同じ式を自前で持つ。 *)
 iSVDiagMachineTag[] :=
-  StringReplace[ToString[$MachineName],
-    Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"];
+  If[Length[DownValues[SourceVault`SourceVaultMachineTag]] > 0,
+    SourceVault`SourceVaultMachineTag[],
+    StringReplace[ToString[$MachineName],
+      Except[LetterCharacter | DigitCharacter | "-" | "_"] .. -> "-"]];
 
 (* vault root via the SourceVault core accessor, guarded so this file
    still loads / probes when run standalone. *)
@@ -1692,7 +1703,59 @@ iSVDiagLogPath[] :=
     If[dir === $Failed, $Failed,
       FileNameJoin[{dir, "diagnostics-log.jsonl"}]]];
 
+(* Inc0-c (03 v0.4 §2.1 / SIEM 仕様 05 Inc5, 2026-11-09): 正準診断ログの書き手は service kernel だけ。
+   service 以外 (FE・headless script) からの SourceVaultDiagnosticsLog は自機の spool に 1 行書き、
+   service の SourceVaultDiagnosticsIngestSpool が転記する (EventId で冪等)。service は起動時に
+   $SourceVaultDiagnosticsCanonicalWriter = True を立てる (SourceVaultServiceMain)。ingest 自身は
+   iSVDiagLogCanonicalAppend を直接呼ぶ (spool へ戻さない)。以前は FE も直接 append していて、
+   Dropbox 上の同じファイルを 2 つのカーネルが書いていた。 *)
+If[!ValueQ[SourceVault`$SourceVaultDiagnosticsCanonicalWriter],
+  SourceVault`$SourceVaultDiagnosticsCanonicalWriter = Automatic];
+iSVDiagCanonicalWriterQ[] := TrueQ[SourceVault`$SourceVaultDiagnosticsCanonicalWriter];
+
 SourceVaultDiagnosticsLog[record_Association] :=
+  Module[{enriched},
+    enriched = Join[<|"AtUTC" -> iSVDiagUTCNow[], "MachineTag" -> iSVDiagMachineTag[]|>, record];
+    If[iSVDiagCanonicalWriterQ[],
+      iSVDiagLogCanonicalAppend[enriched],
+      iSVDiagSpoolAppend[enriched]]];
+
+(* record -> JSON bytes (単一エンコード。失敗時は JSON-safe 化 -> 自前 JSON -> "{}") *)
+iSVDiagRecordBytes[enriched_Association] := Module[{json},
+  json = Quiet @ Check[ExportByteArray[enriched, "RawJSON", "Compact" -> True], $Failed];
+  If[! ByteArrayQ[json],
+    json = Quiet @ Check[
+      ExportByteArray[iSVDiagJSONSafe[enriched], "RawJSON", "Compact" -> True], $Failed]];
+  If[! ByteArrayQ[json],
+    json = Quiet @ Check[StringToByteArray[iSVDiagToJSON[enriched], "ISO8859-1"], $Failed]];
+  If[! ByteArrayQ[json], json = StringToByteArray["{}", "UTF-8"]];
+  json];
+
+(* producer 側: 自機 spool (<spool>/diagnostics-<pid>-<yyyymmdd>.jsonl、claudecode の
+   iClaudeDiagSpoolAppend と同じ命名で ingest の prune 規則に乗る) へ 1 行 append。EventId が
+   無ければ採番する (ingest の重複抑止に要る)。戻り値は record (+"Route" -> "Spool") / Failure。 *)
+iSVDiagSpoolAppend[record_Association] :=
+  Module[{dir = iSVDiagSpoolDir[], rec = record, path, json, strm},
+    If[! StringQ[Lookup[rec, "EventId", Null]], rec["EventId"] = CreateUUID[]];
+    If[Quiet @ Check[
+        If[! DirectoryQ[dir], CreateDirectory[dir, CreateIntermediateDirectories -> True]]; True,
+        False] =!= True,
+      Return[Failure["SpoolDirUnwritable",
+        <|"MessageTemplate" -> "Cannot create the diagnostics spool directory."|>]]];
+    path = FileNameJoin[{dir, "diagnostics-" <> ToString[$ProcessID] <> "-" <>
+      DateString[TimeZoneConvert[Now, 0], {"Year", "Month", "Day"}] <> ".jsonl"}];
+    json = iSVDiagRecordBytes[rec];
+    strm = Quiet @ Check[OpenAppend[path, BinaryFormat -> True], $Failed];
+    If[strm === $Failed,
+      Return[Failure["SpoolOpenFailed", <|"MessageTemplate" -> "Cannot open the diagnostics spool."|>]]];
+    Quiet @ Check[
+      BinaryWrite[strm, json];
+      BinaryWrite[strm, StringToByteArray["\n", "UTF-8"]];
+      Close[strm], Close[strm]];
+    Append[rec, "Route" -> "Spool"]];
+
+(* 正準ログへの直接 append。呼ぶのは SourceVaultDiagnosticsLog (writer のとき) と ingest だけ。 *)
+iSVDiagLogCanonicalAppend[record_Association] :=
   Module[{path = iSVDiagLogPath[], enriched, json, strm},
     If[path === $Failed,
       Return[Failure["VaultRootUnresolved",
@@ -2222,7 +2285,38 @@ If[!ListQ[$iSVDiagWatchedComponents],
    runs the doctor without topology, so duplicate kernels alone do not warn here. *)
 If[!MemberQ[$iSVDiagWatchedComponents, "MCPKernels"],
   AppendTo[$iSVDiagWatchedComponents, "MCPKernels"]];
+(* 03 v0.4 §7 / §9.1 Inc2 (2026-11-10 第 4 週): 来歴台帳 (Provenance = Coverage / Chain / Ingest) と監視自身 (MonitorSelf = Heartbeat) を
+   watched に。probe は SourceVault_integrity.wl が登録し state.json を読むだけ。他の 9 部品 (Instructions・Policy・…) は Inc3 以降 (レビュー 07 D-19) *)
+Scan[If[!MemberQ[$iSVDiagWatchedComponents, #], AppendTo[$iSVDiagWatchedComponents, #]] &, {"Provenance", "MonitorSelf"}];
+(* 03 v0.4 §7 Inc3 (2026-11-10): Instructions (drift・命令使用の認可・Registry) と Policy (SecurityProfile の digest) を watched に *)
+Scan[If[!MemberQ[$iSVDiagWatchedComponents, #], AppendTo[$iSVDiagWatchedComponents, #]] &, {"Instructions", "Policy"}];
+(* 03 v0.4 §7 Inc5 (2026-11-10): 残りの部品 (Integrity・Models・Egress・KnowledgeHealth) を watched に。Workspace / Consistency / Series は部品ができる Inc7 / Inc8 で *)
+Scan[If[!MemberQ[$iSVDiagWatchedComponents, #], AppendTo[$iSVDiagWatchedComponents, #]] &, {"Integrity", "Models", "Egress", "KnowledgeHealth"}];
 If[!AssociationQ[$iSVDiagWarnState], $iSVDiagWarnState = <||>];
+(* Inc0-d (03 v0.4 §2.1, 2026-11-09): 24 時間の重複抑止状態 (comp|ReasonCode -> 最終警告の AbsoluteTime)
+   を LocalState/diagnostics/warn-state.json に永続化する。以前はメモリだけで、FE を再起動するたびに
+   同じ警告 (Escalate + Print) が出直していた。LocalState が未解決ならメモリだけ (従来どおり)。
+   7 日より古い項目は保存時に落とす。disk と memory は新しい方を採る。 *)
+If[!TrueQ[$iSVDiagWarnStateLoaded], $iSVDiagWarnStateLoaded = False];
+iSVDiagWarnStatePath[] :=
+  Module[{ls = Quiet @ Check[SourceVault`SourceVaultRoot["LocalState"], $Failed]},
+    If[StringQ[ls] && ls =!= "", FileNameJoin[{ls, "diagnostics", "warn-state.json"}], $Failed]];
+iSVDiagWarnStateLoad[] :=
+  Module[{path, a},
+    If[TrueQ[$iSVDiagWarnStateLoaded], Return[$iSVDiagWarnState]];
+    $iSVDiagWarnStateLoaded = True;
+    path = iSVDiagWarnStatePath[];
+    If[! StringQ[path] || ! FileExistsQ[path], Return[$iSVDiagWarnState]];
+    a = Quiet @ Check[Import[path, "RawJSON"], $Failed];
+    If[AssociationQ[a],
+      $iSVDiagWarnState = Merge[{Select[KeySelect[a, StringQ], NumericQ], $iSVDiagWarnState}, Max]];
+    $iSVDiagWarnState];
+iSVDiagWarnStateSave[] :=
+  Module[{path = iSVDiagWarnStatePath[], now = AbsoluteTime[], keep},
+    If[! StringQ[path], Return[$Failed]];
+    keep = Select[$iSVDiagWarnState, NumericQ[#] && now - # < 7 86400 &];
+    If[iSVDiagEnsureDir[DirectoryName[path]] === $Failed, Return[$Failed]];
+    iSVDiagAtomicWriteJSON[path, keep]];
 
 iSVDiagFENotice[comp_String, health_String, msg_String] :=
   If[TrueQ[$Notebooks],
@@ -2257,8 +2351,10 @@ iSVDiagProbeFaultMessage[c_String, rc_String, d_Association] :=
         ""]];
 
 iSVDiagWarnFromDoctor[doctor_Association] :=
-  Module[{comps = Lookup[doctor, "ComponentHealth", <||>], now = AbsoluteTime[], out = {}},
+  Module[{comps = Lookup[doctor, "ComponentHealth", <||>], now = AbsoluteTime[], out = {}, before},
     If[!AssociationQ[comps], Return[{}]];
+    iSVDiagWarnStateLoad[];   (* Inc0-d: 再起動後も抑止が続く *)
+    before = $iSVDiagWarnState;
     Scan[
       Function[c,
         Module[{v = Lookup[comps, c, <||>], h, d, rc, key, msg, prior, fault},
@@ -2289,6 +2385,7 @@ iSVDiagWarnFromDoctor[doctor_Association] :=
             $iSVDiagWarnState = KeySelect[$iSVDiagWarnState,
               !StringStartsQ[#, c <> "|"] &]]]],
       $iSVDiagWatchedComponents];
+    If[$iSVDiagWarnState =!= before, Quiet @ iSVDiagWarnStateSave[]];
     out];
 
 Options[SourceVaultDiagnosticsTick] = {"IntervalSeconds" -> 60, "Force" -> False};
@@ -2537,7 +2634,14 @@ iSVDiagIssueFanOut[event_Association] := Module[{comp, payload, e, r, sink},
     "MachineTag" -> Lookup[event, "MachineTag", Missing["NotProvided"]],
     "Escalate" -> Lookup[event, "Escalate", Missing["NotProvided"]],
     "SignalKind" -> Lookup[event, "SignalKind", Missing["NotProvided"]],
-    "Correlation" -> Lookup[event, "Correlation", Missing["NotProvided"]]|>;
+    "Correlation" -> Lookup[event, "Correlation", Missing["NotProvided"]],
+    (* Inc2 (03 v0.4 §9.1): producer integrity の IntegrityFinding は IssueClass security と対象の版の PL を運ぶ (adapter の floor と Max) *)
+    "IssueRequested" -> Lookup[event, "IssueRequested", Missing["NotProvided"]],
+    "IssueClass" -> Lookup[event, "IssueClass", Missing["NotProvided"]],
+    "PrivacyLevel" -> Lookup[event, "PrivacyLevel", Missing["NotProvided"]],
+    (* Inc5 (03 v0.4 §9.3): Entity の Finding は Finding ごとの Issue (SubjectRef) と根拠の参照 (FindingId・影響範囲の要約) を運ぶ *)
+    "SubjectRef" -> Lookup[event, "SubjectRef", Missing["NotProvided"]],
+    "EvidenceRefs" -> Lookup[event, "EvidenceRefs", Missing["NotProvided"]]|>;
   e = DeleteCases[e, _Missing];
   r = Quiet @ Check[sink[e], $Failed];
   Which[
@@ -2556,8 +2660,11 @@ SourceVaultDiagnosticsPublish[event_Association] :=
     If[! KeyExistsQ[enriched, "Type"],
       enriched = Append[enriched, "Type" -> "DiagnosticsEvent"]];
     logged = Quiet @ Check[SourceVaultDiagnosticsLog[enriched], $Failed];
-    issue = iSVDiagIssueFanOut[enriched];
+    (* Inc0-c: service 以外では issue fan-out も service に任せる (spool の 1 行から 1 回だけ) *)
+    issue = If[iSVDiagCanonicalWriterQ[], iSVDiagIssueFanOut[enriched],
+      <|"Queued" -> False, "Reason" -> "DeferredToService"|>];
     <|"Logged" -> (logged =!= $Failed && ! FailureQ[logged]),
+      "Route" -> If[iSVDiagCanonicalWriterQ[], "Canonical", "Spool"],
       "IssueSignalQueued" -> TrueQ[Lookup[issue, "Queued", False]],
       "IssueSignal" -> issue|>];
 
@@ -2575,7 +2682,9 @@ SourceVaultDiagnosticsEscalate[event_Association] :=
         "Type" -> "DiagnosticsEscalation"]], Null];
     (* issue DB fan-out (弱結合・enqueue のみ)。durable 化の成否は
        IssueSignalQueued として呼び手/監査へ返す (V3-B1)。 *)
-    issueQ = iSVDiagIssueFanOut[enriched];
+    (* Inc0-c: service 以外では fan-out を service に任せる (上の record が spool 経由で届く) *)
+    issueQ = If[iSVDiagCanonicalWriterQ[], iSVDiagIssueFanOut[enriched],
+      <|"Queued" -> False, "Reason" -> "DeferredToService"|>];
     (* dedup by (component, reasonCode) within the window *)
     key = {ToString @ Lookup[event, "Component", ""],
            ToString @ Lookup[event, "ReasonCode", ""]};
@@ -2770,7 +2879,7 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
                           True, False];
                         If[! logDone,
                           logDone = (Quiet @ Check[
-                            SourceVaultDiagnosticsLog[Join[rec,
+                            iSVDiagLogCanonicalAppend[Join[rec,
                               <|"IngestedAtUTC" -> iSVDiagUTCNow[]|>]],
                             $Failed]) =!= $Failed;
                           If[logDone, ingested++]];
@@ -2816,7 +2925,7 @@ SourceVaultDiagnosticsIngestSpool[] := Module[
           If[AssociationQ[v], Lookup[v, "t", 0], v]]]], -20000]];
   If[StringQ[seenPath], iSVDiagAtomicWriteJSON[seenPath, seen]];
   If[corrupt > 0,
-    Quiet @ Check[SourceVaultDiagnosticsLog[<|
+    Quiet @ Check[iSVDiagLogCanonicalAppend[<|
       "Type" -> "DiagnosticsEvent", "EventId" -> CreateUUID[],
       "EventClass" -> "SpoolLineCorrupt", "Producer" -> "servicemanager",
       "ProducerPid" -> $ProcessID, "Severity" -> "warn",
@@ -3472,6 +3581,13 @@ iSVDocOpenShadow[] := iSVDocOpenWindow["shadow", iSVDocL["シャドウ検査", "
       True, s]]];
 iSVDocOpenRepos[] := iSVDocOpenWindow["repos", iSVDocL["リポジトリの状況", "Repository status"],
   SourceVaultRepositoryStatusView[]];
+(* 2026-11-14 (所有者の依頼): Web アクセスの関所の月次の集計 (SourceVault_webguard の SourceVaultWebAccessSummaryView、既定 30 日)。
+   検索・取得の数、検索の送り先と記録の語で止めた数・機密の語で見つけたページの取得 (文書 12 の 12 章の 17・18 の再評価の材料)、
+   所有者の判断の見直しの入口、「レビュー済みにする」がある。関所は別のモジュールなので、読み込まれていなければ知らせるだけ *)
+iSVDocOpenWebAccess[] := If[Length[DownValues[SourceVault`SourceVaultWebAccessSummaryView]] > 0,
+  iSVDocOpenWindow["webaccess", iSVDocL["Web アクセスの集計", "Web access summary"], SourceVault`SourceVaultWebAccessSummaryView[]],
+  Quiet @ MessageDialog[iSVDocL["Web アクセスの関所 (SourceVault_webguard) が読み込まれていません。",
+    "The web access guard (SourceVault_webguard) is not loaded."]]];
 iSVDocOpenSeparationRuns[] := With[{f = iSVDocClaude["ClaudeSeparationRunsView"]},
   If[f =!= None, f["OpenWindow" -> True]]];
 iSVDocStartSeparation[kind_String, target_] :=
@@ -3583,6 +3699,10 @@ ShowSystemDoctorPalette[] := (
           iSVDocSection[" リポジトリ", " Repositories"],
           iSVDocButton[iSVDocL["リポジトリ状況", "Repo status"], RGBColor[0.3, 0.5, 0.42], iSVDocOpenRepos[]],
 
+          (* -- web access: the monthly summary of the web guard (2026-11-14) -- *)
+          iSVDocSection[" Web アクセス", " Web access"],
+          iSVDocButton[iSVDocL["Web アクセス集計", "Web access"], RGBColor[0.3, 0.42, 0.58], iSVDocOpenWebAccess[]],
+
           (* -- watch -- *)
           iSVDocSection[" 監視", " Watch"],
           Dynamic[
@@ -3643,7 +3763,11 @@ If[TrueQ[$Notebooks] && !TrueQ[Global`$SourceVaultDiagnosticsDisableAutoTick],
   Quiet @ Check[SourceVault`SourceVaultDiagnosticsStartTick["IntervalSeconds" -> 300], Null]];
 
 (* 2026-11-01: "System Doctor" in the Palettes menu (same registration as claudecode /
-   documentation / SlideWorkflow). Front-end kernels only; the palette is not shown on load. *)
+   documentation / SlideWorkflow). Front-end kernels only; the palette is not shown on load.
+   2026-11-16: "Routine Work" (ShowRoutineWorkPalette, SourceVault_seriesview.wl: the mail-work /
+   series / business layer of document 15) is registered here too, in the same call -- a second
+   registration of its own would reset the menus once more. The item resolves the function when
+   it is chosen (SourceVault_seriesview.wl loads after this file). *)
 If[TrueQ[$Notebooks],
   Quiet @ Check[
     Module[{itemList, dummyFunction, tempFunction, temp},
@@ -3653,6 +3777,10 @@ If[TrueQ[$Notebooks],
         Item["System Doctor",
           FrontEnd`KernelExecute[{EvaluatePacket[
             dummyFunction["Needs[\"SourceVault`\"]; SourceVault`ShowSystemDoctorPalette[]"]]}],
+          FrontEnd`MenuEvaluator -> Automatic],
+        Item["Routine Work",
+          FrontEnd`KernelExecute[{EvaluatePacket[
+            dummyFunction["Needs[\"SourceVault`\"]; SourceVault`ShowRoutineWorkPalette[]"]]}],
           FrontEnd`MenuEvaluator -> Automatic]};
       temp = Function[x,
         tempFunction[{FrontEnd`AddMenuCommands["MenuListPalettesMenu",

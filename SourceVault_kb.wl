@@ -1543,6 +1543,9 @@ SourceVaultKBAnswer[kbId_String, question_String, OptionsPattern[]] := Module[
     "DeadlineMs" -> OptionValue["DeadlineMs"], "SourceId" -> sourceId,
     "MaxCharactersPerResult" -> OptionValue["MaxCharactersPerResult"]];
   If[FailureQ[results], Return[results]];
+  (* 03 v0.4 §9.2 (2026-11-10 Inc3): 文脈を組み立てる前に検索フィルタ (隔離中・派生物の Unknown を除く。Purpose は主体から、Model / MCP は RAG) *)
+  results = iKBIntegrityFilter[results, kbId];
+  If[FailureQ[results], Return[results]];
   If[! ListQ[results] || results === {},
     Return[<|"Status" -> "OK", "Route" -> "NoResults", "KBId" -> kbId,
       "Question" -> question, "ContextText" -> "", "AnswerText" -> "",
@@ -1570,12 +1573,38 @@ SourceVaultKBAnswer[kbId_String, question_String, OptionsPattern[]] := Module[
     "SourceId" -> Lookup[r, "SourceId", ""], "SlideIndex" -> Lookup[r, "SlideIndex", 0],
     "ObjectURI" -> Lookup[r, "ObjectURI", ""]|>], results];
   maxPL = Max[iNum[Lookup[#, "PrivacyLevel", 1.0], 1.0] & /@ results];
+  (* Inc2 (03 v0.4 §6.2 供給点): 文脈へ渡した passage を ServedToContext (Role Context) として記録。失敗しても回答は返す *)
+  iKBProvServed[results, kbId];
   <|"Status" -> "OK", "Route" -> "KB", "KBId" -> kbId, "Question" -> question,
    "ResolvedSourceId" -> sourceId,
     "ContextText" -> ctx, "AnswerText" -> answer, "Citations" -> cites,
     "Results" -> results, "Count" -> Length[results], "MaxPrivacyLevel" -> maxPL,
     "TopBM25" -> iNum[Lookup[First[results], "TopBM25", 0.], 0.],
     "ElapsedMs" -> Round[(AbsoluteTime[] - t0)*1000.]|>];
+
+(* 03 v0.4 §6.2 (2026-11-10 第 4 週 Inc2): KB の供給点。passage の本文が内容 (BlobId)、資料は ObjectURI / SourceId で LogicalRef。
+   SourceVault_provenance.wl 未ロードなら何もしない。 *)
+iKBProvServed[results_List, kbId_] := Quiet @ Check[
+  If[Length[DownValues[SourceVault`SourceVaultProvServed]] > 0 && results =!= {},
+    SourceVault`SourceVaultProvServed[
+      Function[r, Module[{uri = Lookup[r, "ObjectURI", None], sid = Lookup[r, "SourceId", None], text = Lookup[r, "Text", None]},
+        Join[<|"Kind" -> "PrimarySource",
+          "LogicalRef" -> Which[StringQ[uri] && uri =!= "", uri, StringQ[sid] && sid =!= "", "kb:" <> ToString[kbId] <> ":" <> sid, True, Null],
+          "Refs" -> DeleteCases[<|"SourceId" -> If[StringQ[sid], sid, Null], "SlideIndex" -> With[{s = Lookup[r, "SlideIndex", Null]}, If[IntegerQ[s], ToString[s], Null]],
+            "KBId" -> ToString[kbId]|>, Null],
+          "PrivacyLevel" -> Lookup[r, "PrivacyLevel", Automatic], "Context" -> <|"KBId" -> ToString[kbId]|>|>,
+          If[StringQ[text] && text =!= "", <|"Content" -> text, "ContentKind" -> "Text"|>, <|"ClaimedContentHash" -> ""|>]]]] /@ Select[results, AssociationQ[#] && Lookup[#, "IntegrityPurpose", ""] =!= "AuditView" && Lookup[#, "IntegrityUsability", ""] =!= "Quarantined" &],
+      "SupplyPoint" -> "SourceVaultKBAnswer", "Role" -> "Context", "Channel" -> "KB"]], Null];
+iKBProvServed[___] := Null;
+
+(* 03 v0.4 §9.2 (2026-11-10 Inc3): KB の検索フィルタ。LogicalRef は供給点の記録と同じ規則 (ObjectURI、無ければ kb:<kbId>:<SourceId>)。
+   SourceVault_integrity.wl 未ロードならそのまま返す *)
+iKBIntegrityFilter[results_List, kbId_] := If[results =!= {} && Length[DownValues[SourceVault`SourceVaultIntegrityRetrievalFilter]] > 0,
+  Quiet @ Check[SourceVault`SourceVaultIntegrityRetrievalFilter[results, "SupplyPoint" -> "SourceVaultKBAnswer",
+    "KeyFunction" -> Function[r, With[{uri = Lookup[r, "ObjectURI", None], sid = Lookup[r, "SourceId", None]},
+      <|"LogicalRefs" -> Which[StringQ[uri] && uri =!= "", {uri}, StringQ[sid] && sid =!= "", {"kb:" <> ToString[kbId] <> ":" <> sid}, True, {}]|>]]], results],
+  results];
+iKBIntegrityFilter[results_, _] := results;
 
 (* ============================================================
    View 層 (core/View 分離: 上は全部 Association を返す純関数)

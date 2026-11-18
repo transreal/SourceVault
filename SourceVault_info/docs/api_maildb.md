@@ -6,10 +6,12 @@
 
 旧 maildb (https://github.com/transreal/maildb_legacy) 月次 .wl record を SourceVaultMailSnapshot に正規化するアダプタ。RecordId は `sourcevault:mailid:mac:v1` keyed HMAC、body は SourceVaultEncryptedPut で暗号化、From/To/Cc は AddressBook に照合する。本文は ingest 時に「読める平文」へ正規化する (改行 LF 統一 + HTML メールはテキスト化、原文 HTML は BodyRaw に暗号化温存し MailMetadataPublic["BodyWasHTML"]->True)。取込元 record に "rawheader" (生ヘッダ) があり SourceVault_mining の配送特徴抽出器がロード済みなら、配送 coarse feature も SnapshotFeatures として併せて解析する (無ければ Missing、生ヘッダ自体は snapshot に保存しない)。
 
+本文の 8 ビット目が途中で落ちた (制御文字だらけの 7 ビットテキスト) record は、ingest 時に元の文字コードへ復元する (行末が生きている間に処理。復元で制御文字が説明でき日本語になる場合のみ採用。到着時の本文は暗号化 record の BodyBeforeRepair に温存)。内部フラグ `$iSVMDRepairOnIngest = False` で無効化できる。
+
 ## スナップショット変換・永続化
 
 ### SourceVaultMailSnapshotFromMaildb[record_Association, mbox_String, opts]
-旧 maildb record を SourceVaultMailSnapshot に変換する。body を読める平文化してから暗号化し PL を fail-safe で設定する。
+旧 maildb record を SourceVaultMailSnapshot に変換する。body を読める平文化 (8 ビット欠落の復元を含む) してから暗号化し PL を fail-safe で設定する。
 → Association (MailSnapshot)
 Options: "PrivacyLevel" -> Automatic (本文 PL。Automatic は $SourceVaultDefaultImportedMailPL=0.85 に解決), "EncryptHeaders" -> False (True で subject/from/to/cc も暗号化), "StoreBody" -> "Encrypted" ("Encrypted" 以外なら本文を暗号化せず Missing 参照)
 
@@ -43,6 +45,10 @@ snapshot の暗号化 body を復号して返す (MAC 検証経由)。
 ヘッダ文字列からメールアドレス文字列のリストを抽出する。
 → List[String]
 
+### SourceVaultMailBodyProfile[recordId] / [{recordId, ...}] / [mbox, period, opts]
+保存された本文の「形」だけを返す診断関数。本文の文字は返さない。文字化け・復元の調査用。period は "YYYYMM" など (SourceVaultMailEnsureLoaded と同じ)。opts は "From"・"Subject" 等の絞り込み (詳細は usage 参照)。
+→ 以下を含む Association: "Classes" (文字の種類ごとの数), "LineLengths", "LineKinds" (行の種類: J=日本語, A=ASCII, U=URL, E=空, X=その他), "Shape" (形のラベル: Japanese / URLOnly / ASCII / Garbled:<直し方> / Suspect:<疑い> / Damaged / Empty / OtherScript / BodyUnavailable), "Hints" (手がかり), "Repairs" (元に戻せる文字化けの直し方とその結果の数), "Derived" (概要の状態)
+
 ## ストア操作
 
 ### SourceVaultMailStoreRoot[]
@@ -63,7 +69,7 @@ snapshot の暗号化 body を復号して返す (MAC 検証経由)。
 → Association `<|Status, Shards, ...|>`
 
 ### SourceVaultMailAvailableShards[mbox_:All]
-ディスク上のシャード `{mbox, yyyymm}` の一覧をロードせずに返す。
+ディスク上のシャード `{mbox, yyyymm}` の一覧をロードせずに返す。ファイル同期の競合コピー (`202611 (HOST conflicted copy ...).svmail` のように月名が英数字・_・- 以外を含むもの) は月として扱わない (残すが読まない)。
 → List[{String, String}]
 
 ### SourceVaultMailEnsureLoaded[mbox_String, period_:Automatic]
@@ -162,7 +168,7 @@ agenda.json の Dismissed/NotebookCreated、または返信送信済み (`Source
 → Dataset
 
 ### SourceVaultMailSearchIndex[query:""|{kw1,kw2,...}, opts]
-ディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。年単位の全メールをロードし続けなくても検索できる。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。query は文字列 (件名/要約への部分一致) のほか文字列リストも可で、リストはいずれかに部分一致する OR 検索になる (例 `{"科研","KAKENHI","学振"}`)。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担。一覧をユーザーに提示するときは戻り値を手組みの Dataset にせず View 版を使うこと）。
+ディスク上の軽量メタデータ索引 (各 shard の .svmailidx sidecar) のみを走査し、snapshot 本体 (本文暗号文) をメモリへロードせずに低漏洩メタ/サマリー行を返す。To/Cc/FromContact 等 index 非保持の項目は無視される。年単位の全メールをロードし続けなくても検索できる。DateFrom/DateTo 指定時は該当月の sidecar だけを読む。索引は SourceVaultMailStoreSave 時に自動更新され、既存データには SourceVaultMailRebuildMetadataIndex で一括生成する。opts は SourceVaultSearchMailSnapshots と同じ ("ExcludeAgenda"/"AgendaItems"/"Resolved" も共有)。query は文字列 (件名/要約への部分一致) のほか文字列リストも可で、リストはいずれかに部分一致する OR 検索になる (例 `{"科研","KAKENHI","学振"}`)。**ノートブックに表示するときは View 版 `SourceVaultMailSearchIndexView` を使う**（core=連想を返す純データ関数／View=Dataset+UI+表示件数制限、の役割分担。一覧をユーザーに提示するときは戻り値を手組みの Dataset にせず View 版を使うこと）。
 → List[Association] (SummaryRow 形 + Summary + AccessTags/FromRaw/ToRaw/FromContact/AttachmentCount/ShardKey/IndexSchemaVersion(=2))
 索引行の実体は 1 行 = `BaseEncode[BinarySerialize[row]]`。PayloadRefs (本文・ヘッダ暗号文) は一切含まない。`AccessTags` は Derived.AccessTags を surface したもので (既定 `{}` = untagged)、本文を読まずに MCP の scope gate に使える。
 例: `SourceVaultMailSearchIndex["報告", "MBox"->"imai", "Limit"->50]`
@@ -197,8 +203,9 @@ agenda.json の Dismissed/NotebookCreated、または返信送信済み (`Source
 
 ### SourceVaultMailFetchNew[mbox_String, opts]
 IMAP から新着のみ取得し snapshot 化して store に保存する。RecordId で既存と重複排除する (Overwrite->True なら同一 RecordId も再取得・上書き)。既定は LLM 処理なし。取込完了後 PostFetchHooks を実行し各フックの戻り値を結果に載せる (フック失敗は fetch を壊さない)。
-→ Association `<|Status, MBox, Fetched, New, Stored, Overwritten, Duplicates, Processed, ProcessMode, PostFetchHooks|>`
-Options: "Period" -> "Latest" ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> Automatic (Automatic はアカウントの "AuthMethod" を $SourceVaultMailSourceProviders で解決して使う。未登録/該当プロバイダ無しなら実IMAP=Python imaplib。関数を直接渡せば注入・headless テsmoke 可), "Inferencer" -> Automatic (実LLM=LM Studio, 注入可), "Persist" -> True, "MaxEmails" -> Automatic, "Overwrite" -> False (True で同一 RecordId の既存メールも再取得し上書き)
+→ Association `<|Status, MBox, Fetched, New, Stored, Overwritten, Duplicates, Processed, ProcessMode, PostFetchHooks, BodyDecoding, BodyDecodingStored|>` (BodyDecoding=本文の文字コード (宣言 > 実際に使ったもの) ごとの通数, BodyDecodingStored=そのうち書き込んだメールだけの内訳)
+Options: "Period" -> "Latest" ("Latest"|n日|{from,to}|"YYYYMM"), "Process" -> False (True で取込時に LLM 派生処理), "MessageSource" -> Automatic (Automatic はアカウントの "AuthMethod" を $SourceVaultMailSourceProviders で解決して使う。未登録/該当プロバイダ無しなら実IMAP=Python imaplib。関数を直接渡せば注入・headless テスト可), "Inferencer" -> Automatic (実LLM=LM Studio, 注入可), "Persist" -> True, "MaxEmails" -> Automatic, "Overwrite" -> False (True で同一 RecordId の既存メールも再取得し上書き), "OverwriteFilter" -> All (関数を渡すと、既存の記録のうちその関数が True を返すメールだけを書き直す。一部の差出人の本文だけを取り直す修復用。関数は取得した記録 `<|"from", "subject", …|>` を受け取る), "SearchFrom" -> (未指定) (文字列を渡すと、差出人にその文字列を含むメールだけをサーバで探して取り込む。ある差出人の本文だけを取り直すとき、その月の全部を読まずに済む。使える文字は英数字と @ . _ -)
+例: `SourceVaultMailFetchNew["univ", "Period"->"202611", "Overwrite"->True, "SearchFrom"->"example.jp"]`
 
 ### SourceVaultRegisterPostFetchHook[name_String, f]
 SourceVaultMailFetchNew の取り込み完了時に呼ぶフック `f[mbox, fetchResult]` を登録する。フック失敗は fetch を壊さない。

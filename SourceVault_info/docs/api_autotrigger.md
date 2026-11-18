@@ -8,7 +8,7 @@ TargetType | 実行系 | AutoEligible
 `"PromptRoute"` | メインカーネル・手動起動のみ（`SourceVaultAutoTriggerDispatchJobs` から手動呼び出し時のみゲート付き実行、ティックからは自動起動しない） | False
 `"CatalogWorkflow"` | 外部プロセス（`SourceVaultRunWorkflowAsync`）・`SpecificMachine` 配置限定。FE main kernel のスケジューラ、または FE なしコンピュートノードのヘッドレスディスパッチ（下記）のどちらでも拾われる | True
 
-**TriggerSpec 主要キー**: `TriggerId`(String), `Name`(String), `Enabled`(Bool), `Type`(String), `Owner`(Association), `Schedule`(Association), `Condition`(Association), `Target`(Association), `ExecutionPlacement`(Association), `DiagnosticsPolicy`(Association), `RunPolicy`(Association), `CreatedBy`(String), `ExpiresAt`(String|Missing, AT-1), `EnabledAudit`(Association|Missing, AT-1)
+TriggerSpec 主要キー: `TriggerId`(String), `Name`(String), `Enabled`(Bool), `Type`(String), `Owner`(Association), `Schedule`(Association), `Condition`(Association), `Target`(Association), `ExecutionPlacement`(Association), `DiagnosticsPolicy`(Association), `RunPolicy`(Association), `CreatedBy`(String), `ExpiresAt`(String|Missing, AT-1), `EnabledAudit`(Association|Missing, AT-1)
 
 ## バージョン / 定数
 
@@ -30,9 +30,9 @@ TriggerSpec を構造的にバリデートする（必須キー・Type / TargetT
 → `<|"Valid" -> Bool, "Issues" -> {...}, "Warnings" -> {...}, "TriggerId" -> _|>`
 
 ### SourceVaultAutoTriggerKnownMachineTags[] → List
-このバルトが認識するマシンタグを返す。内訳（すべて弱参照・union）: 自マシンのタグ + **`SourceVaultListRuntimeMachines[]`（権威=実際に vault を共有している PC。`runtime/` ツリー由来）** + `SourceVault_diagnostics` の machine registry の全 `MachineTag`（任意・古いテストエントリを含みうるので正本にしない）。servicemanager/diagnostics 不在時は自マシンのみ。`SpecificMachine` 配置バリデーションの未知タグ警告と `SourceVaultParseAutoTriggerPrompt` のプロンプト内マシン名検出に使う。
+このバルトが認識するマシンタグを返す。内訳（すべて弱参照・union）: 自マシンのタグ + `SourceVaultListRuntimeMachines[]`（権威=実際に vault を共有している PC。`runtime/` ツリー由来）+ `SourceVault_diagnostics` の machine registry の全 `MachineTag`（任意・古いテストエントリを含みうるので正本にしない）。servicemanager/diagnostics 不在時は自マシンのみ。`SpecificMachine` 配置バリデーションの未知タグ警告と `SourceVaultParseAutoTriggerPrompt` のプロンプト内マシン名検出に使う。
 
-**共有 PC 一覧の正本は `SourceVaultListRuntimeMachines[]`（`SourceVault_servicemanager.wl`）**: `runtime/<machineTag>/` サブディレクトリのうち共有/レガシー予約名（`locks`/`proxies`/`services`）を除いたもの + 自機。手動レジストリ（`diagnostics/machines`）は健全性・heartbeat 用の別レイヤーで、登録漏れ（例: rapterlake4t）や実在しないテストエントリ（例: ProArtPX13-test）を含みうるため PC 一覧の権威にはしない。`"Details" -> True` で `<|MachineTag, IsSelf, HasServices, HasProxies|>` の一覧を返す。
+共有 PC 一覧の正本は `SourceVaultListRuntimeMachines[]`（`SourceVault_servicemanager.wl`）: `runtime/<machineTag>/` サブディレクトリのうち共有/レガシー予約名（`locks`/`proxies`/`services`）を除いたもの + 自機。手動レジストリ（`diagnostics/machines`）は健全性・heartbeat 用の別レイヤーで、登録漏れ（例: (redacted)）や実在しないテストエントリ（例: ProArtPX13-test）を含みうるため PC 一覧の権威にはしない。`"Details" -> True` で `<|MachineTag, IsSelf, HasServices, HasProxies|>` の一覧を返す。
 
 ### SourceVaultRegisterAutoTrigger[spec_Association, opts]
 TriggerSpec をバリデートし、`"DryRun" -> False` のときのみ `compiled/auto-triggers/<TriggerId>.wxf` にアトミック書き込みする。`$SourceVaultAutoTriggerEnforcePermit -> True` のとき、`"DryRun" -> False` での書き込みには有効な一発パーミット（Option `"Permit"`。`SourceVaultAutoTriggerMintPermit`/`Verify`/`Consume` 参照）が必須で、さらに `Enabled -> True` で登録・更新する場合は非空の `EnabledAudit` も必須になる（AT-1、spec v0.4 8.3 / P0-6）。`$SourceVaultAutoTriggerEnforcePermit` が既定の False のままなら従来どおりゲートなしで動作する。
@@ -47,7 +47,7 @@ Options: `"DryRun" -> True` (True のときバリデートと対象パス報告�
 
 ## 実行許可（AT-1: 一発パーミット + ExpiresAt + EnabledAudit）
 
-routine spec v0.4 8.3 / P0-6 に対応する追加レイヤー。既定オフ（`$SourceVaultAutoTriggerEnforcePermit -> False`）で、有効化しない限り既存の登録/有効化フローに影響しない。オーナー（人間）が署名する一発パーミットを `SourceVaultAutoTriggerMintPermit` で発行し、`SourceVaultRegisterAutoTrigger` の書き込み境界がそれを検証・消費する。LLM/外部コンテンツはパーミット発行経路に到達できない（オーナー専用）。
+routine spec v0.4 8.3 / P0-6 に対応する追加レイヤー。既定オフ（`$SourceVaultAutoTriggerEnforcePermit -> False`）で、有効化しない限り既存の登録/有効化フローに影響しない。オーナー（人間）が署名する一発パーミットを `SourceVaultAutoTriggerMintPermit` で発行し、`SourceVaultRegisterAutoTrigger` の書き込み境界がそれを検証・消費する。LLM/外部コンテンツはパーミット発行経路に到達できない（オーナー専用）。AutoTrigger の permit は下記オーナーチケット核の 1 用途（Action = `"Trigger"`、KeyId = `"autotrigger-permit"`）であり、公開 API と戻り値の形は変わらない。
 
 ### $SourceVaultAutoTriggerEnforcePermit
 型: Bool, 初期値: `False`
@@ -79,6 +79,51 @@ HMAC署名・`ExpiresAtAbs > now`・`Action === action`・`SpecHash === specHash
 
 ### SourceVaultAutoTriggerExpiredQ[spec_Association, now_] → Bool
 spec の `ExpiresAt` が過去のタイムスタンプなら True（`Missing`/`None` は「無期限」で常に False）。`iSVATLoadEnabledSpecs`（`SourceVaultAutoTriggerTick` が使う登録読み込み層）はこれが True の spec を除外するため、`Enabled -> True` のままでも期限切れトリガーはディスパッチされない（AC-031）。`ExpiresAt` を持たない従来のトリガー（AT-1導入前の既定）には影響しない。
+
+## オーナーチケット（AT-1 permit の一般化）
+
+03 v0.4 §5.4 / §11.5、04 v0.4 §12.5、レビュー 07 I-02 / I-08。HMAC・nonce 消費記録・KeyRef・偽造/期限切れ/再利用/不一致の拒否は permit と共有し、SpecHash の束縛を `Bind`（digest の Association）に広げたもの。
+
+### $SourceVaultOwnerTicketKeyRef
+型: `Missing["None"] | String`, 初期値: `Missing["None"]`
+オーナーチケット署名（KeyId `"owner"`）の HMAC 鍵を指す NBAccess 資格情報名（`NBGetCredential` / SystemCredential）。AT-1 permit と異なり無鍵フォールバックなし: 鍵が無いと mint/verify は fail closed（`OwnerTicketKeyUnavailable`）。代入は NBAccess の承認ゲート（`$NBApprovalSetSymbols`）対象。
+
+### $SourceVaultOwnerTicketDevelopmentKeyRef
+型: `Missing["None"] | String`, 初期値: `Missing["None"]`
+テスト専用発行鍵（KeyId `"development"`）。`$SourceVaultSecurityProfile === "development"`（SourceVault_core.wl）のときのみ有効。解決順: `NBAccess`NBGetCredential[ref]` が文字列を返せばそれ、無ければ `"literal:<key>"` 形式の ref の `<key>` を鍵素材とする（テスト用）。本番での存在は `SourceVaultSecurityProfileCheck[]` が Violation として報告する（I-08）。代入は NBAccess 承認ゲート対象。
+
+### $SourceVaultOwnerTicketStore
+型: `Automatic | String`, 初期値: `Automatic`
+消費済み Nonce の追記専用ストア（1 行 1 Nonce のテキスト）。`Automatic` は `<LocalState>/owner-tickets/consumed.jsonl`（マシン別）。以前の共有 `<registry>/tickets/consumed.jsonl` も読み取り対象で（そこで消費済みなら消費済みのまま）、LocalState が解決できないときのみ使われる。テストでは一時ファイルを指す。検証と消費は 1 つのロック（`<store>.lock`、アトミックなディレクトリ作成）内で実行される。
+
+### $SourceVaultOwnerTicketDefaultTTLSeconds
+型: Number, 初期値: `1800`（30 分）
+mint spec に `ExpiresInSeconds` が無いときのチケット有効期間。
+
+### SourceVaultOwnerTicketDigest[expr] → String
+`"sha256:<hex>"` を返す（String はそのまま、それ以外は `ToString[expr, InputForm]` をハッシュ）。Bind エントリの構築と、Verify/Consume 前の再計算に使う。
+
+### SourceVaultOwnerTicketMint[spec_Association] → Association | Failure
+署名付き一発オーナーチケット `<|"Type" -> "SourceVaultOwnerTicket", "Version", "Action", "Principal", "Subject", "Bind", "Nonce", "KeyId", "IssuedAtUTC", "ExpiresAtUTC", "Signature"|>` を発行する。Bind は digest の非空 Association で `"Display"`（オーナーが見た内容の digest）を必ず含む。発行者は `SourceVaultOwnerTicketDialog`（FE、KeyId owner、Principal OwnerFE）か、development セキュリティプロファイル時のみ development 鍵（KeyId development、Principal Development）。それ以外は `Failure["OwnerTicketIssuerUnavailable"]`。NBAccess の承認ヘッドでもある。
+spec キー: `"Action"`(例 `"ResolveFinding"`), `"Subject"`(Association), `"Bind"`(Association), `"ExpiresInSeconds"`(既定 1800)
+
+### SourceVaultOwnerTicketVerify[ticket, bind, opts] → Association
+チケットを検証する（消費しない）。bind は呼び出し側が現状態から再計算した digest の Association で、チケットの Bind と完全一致が必要（差異・欠落・余剰は拒否）。Type `SourceVaultOwnerTicket` かつ KeyId `owner`|`development` のみ受理し、AutoTrigger permit / MCP AccessGrant / Issue 承認署名などは `BadTicket`。
+→ `<|"Valid" -> Bool, "Reason" -> "OK" | "BadTicket" | "KeyUnavailable" | "BadSignature" | "Expired" | "ActionMismatch" | "SubjectMismatch" | "BindMismatch" | "AlreadyConsumed"|>`
+Options: `"Action" -> Automatic` (String 指定で一致必須), `"Subject" -> Automatic` (Association 指定で全エントリ一致必須)
+
+### SourceVaultOwnerTicketConsume[ticket, bind, opts] → Association
+Verify と同じ検証（同オプション）を行い Nonce を消費済みに記録する。両者を 1 つの排他区間（ストアロック）内で行うため、並行呼び出しでも最大 1 回しか償還されない。`SourceVaultOwnerTicketConsume[ticket]`（1 引数）は署名・期限・リプレイのみ検査（Bind/Action/Subject は比較しない）。
+→ `<|"Consumed" -> Bool, "Reason" -> _|>`（`"LockUnavailable"`/`"StoreUnavailable"` は fail-closed）
+Options: `"Action" -> Automatic`, `"Subject" -> Automatic`
+
+### SourceVaultOwnerTicketDialog[spec_Association] → Association | Failure
+オーナーチケットの唯一の本番発行経路。Action・Subject・Display テキストを ChoiceDialog で提示し、確認時に `Bind["Display"] = SourceVaultOwnerTicketDigest[表示テキスト]` で mint する（`$SourceVaultPrincipal` を OwnerFE に Block 束縛。03 v0.4 6.1 の 5 束縛点の第 1）。FE なし（`$Notebooks` False・-script・サービスカーネル）は `Failure["NoFrontEnd"]`、キャンセルは `Failure["OwnerCancelled"]`。NBAccess 承認ヘッド。
+spec キー: `"Action"`, `"Subject"`, `"Display"`(text | {text..}), `"Bind"`(任意・追加 digest), `"ExpiresInSeconds"`
+
+### SourceVaultOwnerTicketCheckRecord[ticket, action, bind] → Association
+台帳レコードが持つオーナーチケットを事後に読み取り専用で再検査する（03 v0.4 7.1 Registry）。消費しない。期限は検査しない（消費＝償還時に有効だった証拠）。
+→ `<|"Type" -> Bool, "Action" -> Bool, "Bind" -> Bool (bind の全キーがチケットの Bind と一致・Display は再計算しない), "Consumed" -> Bool | Missing["StoreUnavailable"], "Signature" -> "OK" | "Bad" | "KeyUnavailable", "Issuer" -> OwnerFE | Development, "Nonce" -> _|>`
 
 ## スケジュール照合
 
@@ -162,25 +207,25 @@ Options: `"Status" -> All` (例: `"Completed"` でフィルタ)
 
 ## カタログワークフローを特定 PC で実行（CatalogWorkflow）
 
-ワークフロー一覧パネルの slug（生成カタログワークフロー）を**選択した PC 上で**実行する経路。パネルの実行ボタンは自機なら即時 `SourceVaultRunWorkflowAsync`（外部プロセス・ローカル）、他 PC なら下記でキュー投入し、対象 PC のスケジューラが placement gate で拾って `SourceVaultRunWorkflowAsync` をそのローカルで実行する。WorkflowRoute/WorkflowTemplate（ClaudeRunWorkflow 経路）とは**別 executor**（カタログ slug は生成 Launch entry で走るため）。TargetType は `"CatalogWorkflow"`（`Target` は `<|"TargetType","TargetId"(=slug),"Form"(既定"run")|>`）。他ディスパッチャは target-type フィルタで CatalogWorkflow を無視し、`SourceVaultAutoTriggerDispatchCatalogRuns` だけが実行する。
+ワークフロー一覧パネルの slug（生成カタログワークフロー）を選択した PC 上で実行する経路。パネルの実行ボタンは自機なら即時 `SourceVaultRunWorkflowAsync`（外部プロセス・ローカル）、他 PC なら下記でキュー投入し、対象 PC のスケジューラが placement gate で拾って `SourceVaultRunWorkflowAsync` をそのローカルで実行する。WorkflowRoute/WorkflowTemplate（ClaudeRunWorkflow 経路）とは別 executor（カタログ slug は生成 Launch entry で走るため）。TargetType は `"CatalogWorkflow"`（`Target` は `<|"TargetType","TargetId"(=slug),"Form"(既定"run")|>`）。他ディスパッチャは target-type フィルタで CatalogWorkflow を無視し、`SourceVaultAutoTriggerDispatchCatalogRuns` だけが実行する。
 
 ### SourceVaultEnqueueWorkflowRun[slug_String, machineTag_String, opts] → Association
-「slug を machineTag で実行」の一発ジョブを共有ジョブログに投入する（自己完結・登録トリガー不要・SpecificMachine placement）。パネルの実行ボタンが**非自機**選択時に呼ぶ。
+「slug を machineTag で実行」の一発ジョブを共有ジョブログに投入する（自己完結・登録トリガー不要・SpecificMachine placement）。パネルの実行ボタンが非自機選択時に呼ぶ。
 → `<|"Status" -> "Enqueued" | "EnqueueFailed", "Slug", "MachineTag", "DispatchSlotKey", "EligibleHere", "Note"|>`
 Options: `"Form" -> "run"`
-**前提**: 対象 PC で `SourceVaultAutoTriggerStartScheduler[]` が稼働しているか、下記のヘッドレスディスパッチが有効になっていること（どちらも無ければジョブは拾われず待機）。
+前提: 対象 PC で `SourceVaultAutoTriggerStartScheduler[]` が稼働しているか、下記のヘッドレスディスパッチ（`SourceVaultEnableHeadlessDispatch[machineTag]`）が有効になっていること（どちらも無ければジョブは拾われず待機）。
 
 ### SourceVaultRemoteWorkflowResult[dispatchSlotKey_String] → 結果 | Failure | Missing
 リモート実行(他PCで実行された CatalogWorkflow)の結果を取り出す。実行PC側は外部ジョブ完了時に output.wxf を共有 `autotrigger/results/<safe-slot>-result.wxf` へ publish し(`iSVATPollCatalogRuns`、tick/Poll 結線)、per-machine runs に `CatalogRunCompleted` / `CatalogRunFailed`(Reason 付き。status.json Failed/Expired・起動後180s status 未出現・TTL 7200s 超)を記録する。本関数はどのPCからでも共有結果を import して返す。失敗時は `Failure["CatalogRunFailed", <|Reason, MachineTag, Slug, FinishedAtUTC|>]`、未完了は `Missing["StillRunning"|"ResultSyncing"|"NotFinished"|"NotFound", slot]`。
 
 ### SourceVaultAutoTriggerWatchRemoteRun[dispatchSlotKey, meta] → Association
-依頼元PCでリモート実行を監視登録する(ワークフロー一覧パネルがリモート「実行」時に自動登録)。スケジューラ tick(`iSVATPollRemoteWatches`)が統合 runs から終端記録を検出すると、**NBAccess final action queue(WriteNotebookCell + TargetNotebook)経由**で発行元ノートブックへ書き込む: 完了=評価可能な `SourceVaultRemoteWorkflowResult["<slot>"]` セル、失敗/タイムアウト(`$iSVATRemoteWatchTTLSeconds` 既定 7200s)=赤の Text レポート。tick から生 `NotebookWrite` はしない(externalrunner と同じ single-committer 経路)。meta: `"Notebook"`(NotebookObject)/`"Slug"`/`"MachineTag"`。watch はセッションローカル(FE 再起動で消えるが、結果は Retriever でいつでも取得可)。
+依頼元PCでリモート実行を監視登録する(ワークフロー一覧パネルがリモート「実行」時に自動登録)。スケジューラ tick(`iSVATPollRemoteWatches`)が統合 runs から終端記録を検出すると、NBAccess final action queue(WriteNotebookCell + TargetNotebook)経由で発行元ノートブックへ書き込む: 完了=評価可能な `SourceVaultRemoteWorkflowResult["<slot>"]` セル、失敗/タイムアウト(`$iSVATRemoteWatchTTLSeconds` 既定 7200s)=赤の Text レポート。tick から生 `NotebookWrite` はしない(externalrunner と同じ single-committer 経路)。meta: `"Notebook"`(NotebookObject)/`"Slug"`/`"MachineTag"`。watch はセッションローカル(FE 再起動で消えるが、結果は Retriever でいつでも取得可)。
 
 ### SourceVaultAutoTriggerDispatchCatalogRuns[opts]
 このマシンが実行を許可された（placement gate: `RequiredMachineTags` に自機を含む）CatalogWorkflow ジョブを `SourceVaultRunWorkflowAsync` で非ブロッキング起動し、`autotrigger/runs.jsonl` に `CatalogRunSubmitted`（spoken-for な終端 status＝再ディスパッチ抑止）として記録する。オーケストレータ非依存。スケジューラ tick に結線済み（スケジューラ稼働 PC は自機宛の run を自動で拾う）。同一マシン上で FE スケジューラとヘッドレスディスパッチ（下記）が並走しても、per-slot のアトミッククレーム（`autotrigger/claims/<slot>/` ディレクトリのアトミック作成、既存なら失敗＝二重実行しない。TTL 超過時のみスチール可）で二重実行を防ぐ。
 Options: `"MaxRuns" -> 4`
 
-**プロセス枠ガード**: 外部エグゼキュータは独立 wolframscript プロセス＝**プロセスライセンス枠**を消費する（サブカーネル枠ではない）。枠が満杯（`SourceVaultDiagnosticsLicenseProbe[]["ProcessSlotsFree"] == 0`）だと子プロセスが起動直後に落ち、`status.json`/`output.wxf` を書けず**無言の NotReady**になる。これを防ぐため、dispatch は claim/実行の前に空き枠を確認し、0 なら **claim も run 記録もせず defer**（結果に `DeferredLicenseSeatUnavailable` を返し、ジョブは Built のまま＝枠が空いた次の tick で自動再試行、ログもスパムしない）。`iSVATExecuteCatalogWorkflow` にも同じ二重ガードあり。パネルのローカル実行ボタンも実行前に枠 0 を検出してダイアログで停止する。診断未ロード時（`Missing["Unknown"]`）はガードしない（不明で止めない）。
+プロセス枠ガード: 外部エグゼキュータは独立 wolframscript プロセス＝プロセスライセンス枠を消費する（サブカーネル枠ではない）。枠が満杯（`SourceVaultDiagnosticsLicenseProbe[]["ProcessSlotsFree"] == 0`）だと子プロセスが起動直後に落ち、`status.json`/`output.wxf` を書けず無言の NotReady になる。これを防ぐため、dispatch は claim/実行の前に空き枠を確認し、0 なら claim も run 記録もせず defer（結果に `DeferredLicenseSeatUnavailable` を返し、ジョブは Built のまま＝枠が空いた次の tick で自動再試行、ログもスパムしない）。`iSVATExecuteCatalogWorkflow` にも同じ二重ガードあり。パネルのローカル実行ボタンも実行前に枠 0 を検出してダイアログで停止する。診断未ロード時（`Missing["Unknown"]`）はガードしない（不明で止めない）。
 
 ### SourceVaultAutoTriggerPublishCatalogRuns[opts]
 このマシンで投入した CatalogWorkflow 実行のための、ステートレスな回収用パブリッシャ。統合実行ログを走査し、終端記録が無く、かつこのカーネルのインメモリ pending マップにも含まれない `CatalogRunSubmitted` スロット（＝ディスパッチ元カーネルが投入後に死亡/再起動した孤児）を検出し、各ジョブディレクトリ（`output.wxf`/`status.json`）を調べて結果を共有バルトへ publish し、終端 `CatalogRunCompleted`/`CatalogRunFailed` レコードを追記する（インメモリのファイナライザ `iSVATPollCatalogRuns` と同じロジックを共有）。実行マシン上のどのカーネルから呼んでも安全。
@@ -189,23 +234,23 @@ Options: `"MinAgeSeconds" -> 600` (この秒数未満の新しい submit は対�
 
 ## ディスパッチ
 
-**ジョブ/実行ログの多重マシン安全化（phase1.3、spec 3.1.1）**: 旧実装の単一共有 `jobs.jsonl`/`runs.jsonl` は複数PCの同時追記で **Dropbox 競合コピー→リモート追記の消失**を起こした（2026-07-07 実測）。現在は heartbeat と同じ**単一ライター原則**: 各PCは自分専用の `autotrigger/jobs/<machineTag>.jsonl`（`runs/<machineTag>.jsonl`）にのみ追記し、読み側は全マシンのファイル+旧共有ファイル（読み取り専用の履歴）を統合して読む。ファイル間の順序は問わない（dedup は DispatchSlotKey キー）。
+ジョブ/実行ログの多重マシン安全化（phase1.3、spec 3.1.1）: 旧実装の単一共有 `jobs.jsonl`/`runs.jsonl` は複数PCの同時追記で Dropbox 競合コピー→リモート追記の消失を起こした（2026-07-07 実測）。現在は heartbeat と同じ単一ライター原則: 各PCは自分専用の `autotrigger/jobs/<machineTag>.jsonl`（`runs/<machineTag>.jsonl`）にのみ追記し、読み側は全マシンのファイル+旧共有ファイル（読み取り専用の履歴）を統合して読む。ファイル間の順序は問わない（dedup は DispatchSlotKey キー）。
 
-**実行PCゲート（spec 7.2.1）**: ジョブログは共有バルトルート上にあり全PCのディスパッチャが全 Built ジョブを見る。`PlacementMode -> "SpecificMachine"` のジョブは `RequiredMachineTags` に自マシンのタグを含むPCだけが実行する（大文字小文字無視）。他PCはスキップ（`DispatchJobs` は `"NotEligibleMachine:SpecificMachine"`、`DispatchAsync`/`DispatchWorkflows` は Select で除外）し、ジョブは対象PCのディスパッチャのために Built のまま残る。タグ無しの `SpecificMachine` はどのPCでも実行不可（フェイルセーフ・バリデーションが拒否）。旧バージョンのジョブレコードには `RequiredMachineTags` フィールドが無いため、その場合は trigger spec の `ExecutionPlacement` にフォールバックする。`EnvironmentIndependent` / `WorkerPool` は全PSで実行可能（WorkerPool の負荷分散・failover は未実装）。
+実行PCゲート（spec 7.2.1）: ジョブログは共有バルトルート上にあり全PCのディスパッチャが全 Built ジョブを見る。`PlacementMode -> "SpecificMachine"` のジョブは `RequiredMachineTags` に自マシンのタグを含むPCだけが実行する（大文字小文字無視）。他PCはスキップ（`DispatchJobs` は `"NotEligibleMachine:SpecificMachine"`、`DispatchAsync`/`DispatchWorkflows` は Select で除外）し、ジョブは対象PCのディスパッチャのために Built のまま残る。タグ無しの `SpecificMachine` はどのPCでも実行不可（フェイルセーフ・バリデーションが拒否）。旧バージョンのジョブレコードには `RequiredMachineTags` フィールドが無いため、その場合は trigger spec の `ExecutionPlacement` にフォールバックする。`EnvironmentIndependent` / `WorkerPool` は全PCで実行可能（WorkerPool の負荷分散・failover は未実装）。
 
 ### SourceVaultAutoTriggerDispatchJobs[opts]
-完了していない Built ジョブ（**TargetType によるフィルタなし・全種を対象**）を DispatchSlotKey で実行ログデデュープ後にディスパッチする。各ジョブに対して診断ゲートと**サブプロセス**シート残量（`iSVATSubprocessSlotsFree`、TargetType に関わらず一律チェック）を再確認し、スロットを確保して実行する。TargetType 別の実際の実行方式:
-- `"PureComputation"`: **サブカーネル**（サブプロセスプール、メインカーネル外）でタイムコンストレイント付き実行し、サブカーネルの `$ProcessID` を返してアウトオブプロセス実行を証明する（有界純粋計算のみ）。
-- `"PromptRoute"`: SourceVault_promptrouter の既存ゲート済み安全機構（ルート取得 → `iSVPRRouteAutoExecutableQ` による EnvironmentIndependent + head allowlist チェック → 暗号化ペイロードなら復号 → `ReplaySafety` 再検証）を通してから**メインカーネル**で `ReleaseHold` をタイムコンストレイント付き実行する（Backend `"MainKernelGated"`）。ゲート拒否は `"Blocked"`(Reason `"NotAutoExecutable"`/`"HeadOrSafetyRejected"`)。結果はメタデータのみ記録（Head/Length/ByteCount、内容は保存しない・プライバシー）。promptrouter 未ロード時は `"Skipped"`(Reason `"PromptRouterUnavailable"`)。
+完了していない Built ジョブ（TargetType によるフィルタなし・全種を対象）を DispatchSlotKey で実行ログデデュープ後にディスパッチする。各ジョブに対して診断ゲートとサブプロセスシート残量（`iSVATSubprocessSlotsFree`、TargetType に関わらず一律チェック）を再確認し、スロットを確保して実行する。TargetType 別の実際の実行方式:
+- `"PureComputation"`: サブカーネル（サブプロセスプール、メインカーネル外）でタイムコンストレイント付き実行し、サブカーネルの `$ProcessID` を返してアウトオブプロセス実行を証明する（有界純粋計算のみ）。
+- `"PromptRoute"`: SourceVault_promptrouter の既存ゲート済み安全機構（ルート取得 → `iSVPRRouteAutoExecutableQ` による EnvironmentIndependent + head allowlist チェック → 暗号化ペイロードなら復号 → `ReplaySafety` 再検証）を通してからメインカーネルで `ReleaseHold` をタイムコンストレイント付き実行する（Backend `"MainKernelGated"`）。ゲート拒否は `"Blocked"`(Reason `"NotAutoExecutable"`/`"HeadOrSafetyRejected"`)。結果はメタデータのみ記録（Head/Length/ByteCount、内容は保存しない・プライバシー）。promptrouter 未ロード時は `"Skipped"`(Reason `"PromptRouterUnavailable"`)。
 - `"WorkflowRoute"`/`"WorkflowTemplate"`: `ClaudeRunWorkflow Async` で非ブロッキングに起動する（`SourceVaultAutoTriggerDispatchWorkflows` と同じ実行経路）。FE 必須ターゲットは `"Deferred"`(Reason `"FrontendRequired"`)。
 - それ以外（`"CatalogWorkflow"` 等）: `"ExecutorNotWired:<TargetType>"` として記録するのみ（実行しない・`SourceVaultAutoTriggerDispatchCatalogRuns` 等の専用ディスパッチャを使うこと）。
 
-No LLM / FrontEnd / network / dangerous side effects（PromptRoute はローカル読み取り専用ゲートを通過したものだけを実行）。Placement gate: `ExecutionPlacement` が `"SpecificMachine"` のジョブは `RequiredMachineTags` に自マシンのタグを含むPCのみ実行し（大文字小文字無視）、他マシンはスキップする（`"NotEligibleMachine:SpecificMachine"`、jobs は共有バルトルート経由で全PCに見える）。**注意**: この関数はスケジューラ tick からは呼ばれない（tick は Poll → Tick → DispatchAsync → DispatchWorkflows → DispatchCatalogRuns の順で、DispatchJobs は含まれない）ため、`"PromptRoute"` の実行にはこの関数の手動呼び出しが必要。
+No LLM / FrontEnd / network / dangerous side effects（PromptRoute はローカル読み取り専用ゲートを通過したものだけを実行）。Placement gate: `ExecutionPlacement` が `"SpecificMachine"` のジョブは `RequiredMachineTags` に自マシンのタグを含むPCのみ実行し（大文字小文字無視）、他マシンはスキップする（`"NotEligibleMachine:SpecificMachine"`、jobs は共有バルトルート経由で全PCに見える）。注意: この関数はスケジューラ tick からは呼ばれない（tick は Poll → Tick → DispatchAsync → DispatchWorkflows → DispatchCatalogRuns の順で、DispatchJobs は含まれない）ため、`"PromptRoute"` の実行にはこの関数の手動呼び出しが必要。
 → ディスパッチサマリー Association
 Options: `"DryRun" -> False`, `"MaxJobs" -> 1` (1呼び出しあたりジョブ上限), `"TimeConstraintSeconds" -> 30`
 
 ### SourceVaultAutoTriggerDispatchAsync[opts]
-非同期対応の Built ジョブをメインカーネルをブロックせずにディスパッチする。各ジョブを持続的クリーンサブカーネル（`ParallelSubmit`、サブプロセスプール）に投入してバックグラウンド実行させ結果ファイルに書き込む。呼び出しは即時リターン。`TargetType "PureComputation"` のみ非同期対応（PromptRoute はメインカーネルゲート・手動のみ）。完了確認は `SourceVaultAutoTriggerPoll[]` で行う。
+非同期対応の Built ジョブをメインカーネルをブロックせずにディスパッチする。各ジョブを持続的クリーンサブカーネル（`ParallelSubmit`、サブプロセスプール）に投入してバックグラウンド実行させ結果ファイルに書き込む。呼び出しは即時リターン。`TargetType "PureComputation"` のみ非同期対応（PromptRoute はメインカーネルゲート・手動のみ）。`SpecificMachine` で `RequiredMachineTags` に自機を含まないジョブは拾わない。完了確認は `SourceVaultAutoTriggerPoll[]` で行う。
 → サブミットサマリー Association
 Options: `"MaxConcurrent" -> 1`, `"TimeConstraintSeconds" -> 120`
 
@@ -234,7 +279,7 @@ Options: `"IntervalSeconds" -> 60`
 
 ## ヘッドレスディスパッチモード（FEなしコンピュートノード向け）
 
-上記スケジューラは FE メインカーネル限定（SourceVault.wl のロードガード）なので、FE を持たないコンピュートノード（例: rapterlake4t）宛に `SourceVaultEnqueueWorkflowRun` でキューされたジョブは、そのままでは永遠に拾われなかった（2026-07-08 実測: strixhalo128 → rapterlake4t の sim-mandelbrot-cuda / turtle-tiling-cuda）。本レイヤーは SourceVault サービスカーネル（または任意のヘッドレスカーネル）がそれらを安全に拾えるようにする: サブカーネルプール保持なし・登録トリガー評価なし・独自 `ScheduledTask` 登録なし（呼び出し側がペーシング）。実行は `SourceVaultRunWorkflowAsync`（外部プロセス、SeatPriority 90）に委譲し FE 経路と同じ。並走する FE スケジューラとの二重ディスパッチは `SourceVaultAutoTriggerDispatchCatalogRuns` 内の per-slot アトミッククレームで防止する。per-machine オプトイン（既定 off）で、プレーンなサービスカーネルには影響しない。実行スタック（workflowregistry + ClaudeOrchestrator workflow engine、claudecode を連鎖ロード）は該当ジョブが実際に pending のときだけ遅延ロードする。
+上記スケジューラは FE メインカーネル限定（SourceVault.wl のロードガード）なので、FE を持たないコンピュートノード（例: (redacted)）宛に `SourceVaultEnqueueWorkflowRun` でキューされたジョブは、そのままでは永遠に拾われなかった（2026-07-08 実測: (redacted) → (redacted) の sim-mandelbrot-cuda / turtle-tiling-cuda）。本レイヤーは SourceVault サービスカーネル（または任意のヘッドレスカーネル）がそれらを安全に拾えるようにする: サブカーネルプール保持なし・登録トリガー評価なし・独自 `ScheduledTask` 登録なし（呼び出し側がペーシング）。実行は `SourceVaultRunWorkflowAsync`（外部プロセス、SeatPriority 90）に委譲し FE 経路と同じ。並走する FE スケジューラとの二重ディスパッチは `SourceVaultAutoTriggerDispatchCatalogRuns` 内の per-slot アトミッククレームで防止する。per-machine オプトイン（既定 off）で、プレーンなサービスカーネルには影響しない。実行スタック（workflowregistry + ClaudeOrchestrator workflow engine、claudecode を連鎖ロード）は該当ジョブが実際に pending のときだけ遅延ロードする。
 
 ### SourceVaultAutoTriggerHeadlessDispatchTick[opts]
 FEなしカーネル（SourceVault サービス／wolframscript）向けのディスパッチ専用ティック。このマシン宛にキューされた CatalogWorkflow ジョブ（`SourceVaultEnqueueWorkflowRun` 経由）を拾って `SourceVaultRunWorkflowAsync` に委譲し、完了済み実行のファイナライズ/publish も行う。`SourceVaultHeadlessDispatchEnabledQ[]` でゲートされる（`"Force" -> True` でテスト用に上書き可）。該当ジョブが無ければ実行スタックはロードしない（軽量アイドル）。エグゼキュータが登録する外部ジョブ poll のバックグラウンドティックはディスパッチ後に登録解除する（このティック自身が poll を回すため、サービスカーネルに余計な `ScheduledTask` を残さない）。各内部フェーズは個別に `TimeConstrained` される（非中断I/Oでフェーズがハングした場合の事後解析用に、活動中のみ `autotrigger/headless/<machineTag>.stage.json` へ最終到達フェーズを記録する）。
@@ -245,7 +290,7 @@ Options: `"MaxRuns" -> 4`, `"Force" -> False` (`SourceVaultHeadlessDispatchEnabl
 このマシンでヘッドレスディスパッチが有効かを返す。優先順位: セッションオーバーライド `$SourceVaultHeadlessDispatch`（True/False）> 共有バルトの per-machine opt-in ファイル `autotrigger/headless/<machineTag>.json`（`SourceVaultEnableHeadlessDispatch` が書き込み、他PCから対象マシンを有効化できる）> False。
 
 ### SourceVaultEnableHeadlessDispatch[machineTag_String] / SourceVaultEnableHeadlessDispatch[]
-指定マシン（引数省略時は自マシン）をヘッドレスディスパッチにオプトインし、共有バルトに `autotrigger/headless/<machineTag>.json` を書き込む。対象マシンの SourceVault サービスは次回ディスパッチティックでフラグを検知するが、実行スタックはサービス**起動時**ロードが望ましいため、初回有効化後は対象マシンのサービスを再起動する（`SourceVaultRestartService`）ことを推奨する。
+指定マシン（引数省略時は自マシン）をヘッドレスディスパッチにオプトインし、共有バルトに `autotrigger/headless/<machineTag>.json` を書き込む。対象マシンの SourceVault サービスは次回ディスパッチティックでフラグを検知するが、実行スタックはサービス起動時ロードが望ましいため、初回有効化後は対象マシンのサービスを再起動する（`SourceVaultRestartService`）ことを推奨する。
 → ステータス Association
 
 ### SourceVaultDisableHeadlessDispatch[machineTag_String] / SourceVaultDisableHeadlessDispatch[]
@@ -288,18 +333,18 @@ Options: `"TimeZone" -> "Asia/Tokyo"`, `"KnownMachineTags" -> Automatic`（Autom
 `target` は UI 行から渡す（`<|"TargetType" -> "WorkflowTemplate", "TargetId" -> slug|>` 等）。TargetType/TargetId が無い場合は Question `"TargetMissing"` を積む。
 
 決定論レイヤーが解釈する形式:
-- **スケジュール**: `毎週<曜日>HH:MM`・`隔週`/`2週間おき`（anchor 必要・無ければ Question）・`毎日`・`毎朝`(07:00 と仮定・確認 Question)・`毎月D日`・`N時間ごと`・`N分ごと`・ISO datetime/`YYYY年M月D日`（Alarm）・`N時間後`(Timer, anchor=パース時刻)・weekly/daily/every N hours
-- **条件**: プロンプト内の `sv://` URI（+ `更新`/updated）→ `SourceVaultEvent` Updated 条件（複数 URI は `AnyOf`）
-- **配置**: 既知マシンタグがプロンプト内に出現、または `<tag>で実行`/`<tag>上で`/`run on <tag>` → `ExecutionPlacement` `SpecificMachine` + `RequiredMachineTags`。sv:// URI の一部であるトークンは除外
-- **RunPolicy**: 優先度語（最優先/critical→Critical、高優先/重要→High、低優先→Low）、`1回だけ`/only once → `MaxRunsPerWindow` 1/Day
+- スケジュール: `毎週<曜日>HH:MM`・`隔週`/`2週間おき`（anchor 必要・無ければ Question）・`毎日`・`毎朝`(07:00 と仮定・確認 Question)・`毎月D日`・`N時間ごと`・`N分ごと`・ISO datetime/`YYYY年M月D日`（Alarm）・`N時間後`(Timer, anchor=パース時刻)・weekly/daily/every N hours
+- 条件: プロンプト内の `sv://` URI（+ `更新`/updated）→ `SourceVaultEvent` Updated 条件（複数 URI は `AnyOf`）
+- 配置: 既知マシンタグがプロンプト内に出現、または `<tag>で実行`/`<tag>上で`/`run on <tag>` → `ExecutionPlacement` `SpecificMachine` + `RequiredMachineTags`。sv:// URI の一部であるトークンは除外
+- RunPolicy: 優先度語（最優先/critical→Critical、高優先/重要→High、低優先→Low）、`1回だけ`/only once → `MaxRunsPerWindow` 1/Day
 
 スケジュールが解釈できず LLM フックがある場合（Option `"LLMFunction" -> fn` またはフック `SourceVaultAutoTriggerPromptLLM`）のみ、LLM が欠けたスロットだけを埋める。LLM 出力は JSON（spec 10.2）で、RawJSON パース + キーホワイトリスト + `SourceVaultValidateAutoTrigger` を通す（`ToExpression` は絶対に使わない）。
 
-`Status` 判定: TriggerSpec が invalid かスケジュール未解決 → Question があれば `NeedsClarification`、無ければ `Failed`。Question があれば `NeedsClarification`。それ以外 `OK`。
+Status 判定: TriggerSpec が invalid かスケジュール未解決 → Question があれば `NeedsClarification`、無ければ `Failed`。Question があれば `NeedsClarification`。それ以外 `OK`。
 
 ### SourceVaultAutoTriggerPromptLLM
 型: `Automatic | (String -> String)`, 初期値: `Automatic`
-設定可能フック。決定論レイヤーがスケジュールを解釈できない時に `SourceVaultParseAutoTriggerPrompt` が使う `fullPrompt -> jsonString` 関数。プライバシー: プロンプトは private な sv:// URI を含みうるため、クラウドセーフと分かっている場合を除きローカルモデルに配線すること（spec 10.2）。
+設定可能フック（リロードで ClearAll されない）。決定論レイヤーがスケジュールを解釈できない時に `SourceVaultParseAutoTriggerPrompt` が使う `fullPrompt -> jsonString` 関数。プライバシー: プロンプトは private な sv:// URI を含みうるため、クラウドセーフと分かっている場合を除きローカルモデルに配線すること（spec 10.2）。
 
 例:
 ```
@@ -330,7 +375,7 @@ TargetType | AutoRunCapability | ExecutionMode | AutoEligible
 各行キー: `TriggerId`, `Name`, `Enabled`, `TargetType`, `TargetId`, `ExecutionMode`, `Placement`（実行PCラベル: `環境非依存` | `pool: <name>` | `固定: <tags>` | `未判定`）, `AutoRunCapability`, `AutoToggle`(ON|OFF|不可), `Priority`, `NextFire`, `LastRunStatus`, `HasError`, `ErrorSummary`（クラウドセーフなメタデータのみ・ルール 90）
 
 ### SourceVaultAutoTriggerForTarget[targetType, targetId] → Association | Missing
-ターゲットが一致する登録済みトリガーの `SourceVaultAutoTriggerListData` 行を返す（例: カタログスラッグに対する WorkflowTemplate トリガー）。一致するトリガーがない場合は `Missing["NoTrigger"]`。既存のワークフロー / 保存プロンプトリストが per-row で自動実行ステータスを表示するために使用する。**NextFire は常に `Missing["NotComputed"]`**（`SourceVaultAutoTriggerNextFire` はスケジュールホライズンスキャンで1トリガーあたり~3.5秒かかり、リスト行 × Dynamic 経由で呼ぶと FE 評価予算を超えて `$Aborted` になるため、意図的にスキップしている）。
+ターゲットが一致する登録済みトリガーの `SourceVaultAutoTriggerListData` 行を返す（例: カタログスラッグに対する WorkflowTemplate トリガー）。一致するトリガーがない場合は `Missing["NoTrigger"]`。既存のワークフロー / 保存プロンプトリストが per-row で自動実行ステータスを表示するために使用する。NextFire は常に `Missing["NotComputed"]`（`SourceVaultAutoTriggerNextFire` はスケジュールホライズンスキャンで1トリガーあたり~3.5秒かかり、リスト行 × Dynamic 経由で呼ぶと FE 評価予算を超えて `$Aborted` になるため、意図的にスキップしている）。
 
 ### SourceVaultAutoTriggerStatusCell[targetType, targetId] → 表示式
 そのターゲットのトリガーのコンパクトセル（自動トグルバッジ + 優先度 + 警告アイコン）を描画する。トリガーが登録されていない場合はグレーのダッシュを返す。既存リスト Grid に埋め込む用途向け。`targetType -> "Workflow"` は複合タイプとして扱い、`WorkflowTemplate` → `WorkflowRoute` の順で最初に一致したトリガーを使う（カタログ slug がどちらの TargetType で登録されているか不定なため）。

@@ -16237,7 +16237,11 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
     Scan[
       Function[f, Module[{p = FileNameJoin[{svDir, f}]},
         Quiet @ Check[Get[If[StringLength[svDir] > 0 && FileExistsQ[p], p, f]], $Failed]]],
-      {"SourceVault_core.wl", "SourceVault_simrun.wl",
+      {"SourceVault_core.wl",
+       (* 保存時の暗号化 (2026-11-14、学生・成績の段 1 / 段 2)。NBAccess_crypto と SourceVault_crypto (上の promptrouter の段で
+          ロード済み) に依存し、core の読み書きから弱結合で呼ばれるので core の直後。 *)
+       "SourceVault_atrest.wl",
+       "SourceVault_simrun.wl",
        (* ローカル資産の解決層 (音声 / 視覚)。core の root 解決にすら依存せず
           $packageDirectory と LOCALAPPDATA だけを見るので、どの位置でもよい。
           利用側 (VRCRealtime の private TTS / 追尾) が起動時に問い合わせる。 *)
@@ -16272,7 +16276,19 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
        "SourceVault_servicemanager.wl", "SourceVault_webingest.wl", "SourceVault_webguard.wl",
        "SourceVault_mcp.wl", "SourceVault_llmlog.wl", "SourceVault_workflowregistry.wl",
        "SourceVault_workflowcatalog.wl", "SourceVault_course.wl",
-       "SourceVault_issues.wl"}]]];
+       "SourceVault_issues.wl",
+       (* 来歴台帳の中核 (03 v0.4 §13.1 Inc1a、2026-11-09 第 3 週): emit / spool / 正準化 / 索引の読取。core と crypto
+          (HMAC)・autotrigger (ChainRestart の ticket) に弱結合。integrity (service tick) より前。 *)
+       "SourceVault_provenance.wl",
+       (* 03 v0.4 §11.5 の所有者専用関数の stub と NBAccess 承認 head の先行登録 (02 v1.2 A-4、2026-11-09)。
+          autotrigger (所有者 ticket) と NBAccess に弱結合で、最後でよい。 *)
+       "SourceVault_integrity.wl",
+       (* 03 v0.4 10 章 (2026-11-10 Inc5): 健全性監視の View。FE 専用 (service の読込一覧には入れない)、integrity の後 *)
+       "SourceVault_integrityview.wl",
+       (* 04 v0.4 (定型業務) の最初の増分 + 文書 15 (メール起点の作業項目、2026-11-16): 系列の検出・作業項目の状態・
+          所有者の判断の台帳。maildb / mailagenda / todo / core (主体) / privacy / NBAccess (承認 head) に弱結合なので最後でよい。
+          seriesview は View (提案タスクの一覧・系列の候補)。 *)
+       "SourceVault_series.wl", "SourceVault_seriesview.wl"}]]];
 
 (* ============================================================
    mining 本番フック結線: maildb / mining が両方ロードされた後に、mining が

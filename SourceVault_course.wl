@@ -414,7 +414,22 @@ iEXEnsureDir[dir_String] := (If[!DirectoryQ[dir], Quiet @ CreateDirectory[dir, C
 (* 圧縮 WXF (BinarySerialize PerformanceGoal->"Size")。画像問題の held 式は
    RasterBox 展開で数 MB になるため、非圧縮 Export["WXF"] は使わない。
    stream は必ず Close する (Dropbox 競合コピー対策)。 *)
-iEXWriteWXF[path_String, expr_] := Module[{st},
+(* 2026-11-14 (保存時の暗号化): 学生・成績の WXF (採点・名簿・履修者・成績表・レポートの manifest) は、
+   分類の鍵の組が強制されているか、既に .sve があれば暗号化して書く (SourceVault_atrest.wl)。
+   暗号化が要るのに atrest が無い・準備が無いときは $Failed (平文には戻らない)。
+   既にある暗号文が検証できないときと、平文の方が新しいとき (SplitBrain) も atrest が書き込みを断る。 *)
+iEXARAvailable[] := Length[DownValues[SourceVault`SourceVaultAtRestWriteBytes]] > 0;
+iEXARClass[path_String] := If[iEXARAvailable[],
+  With[{c = Quiet @ SourceVault`SourceVaultAtRestClassOfPath[path]}, If[StringQ[c], c, None]], None];
+iEXARNeedQ[path_String] := FileExistsQ[path <> ".sve"] ||
+  With[{c = iEXARClass[path]}, StringQ[c] && TrueQ[Quiet @ SourceVault`SourceVaultAtRestShouldEncryptQ[path, c]]];
+
+iEXWriteWXF[path_String, expr_] := Module[{st, cls, w},
+  If[iEXARNeedQ[path],
+    cls = iEXARClass[path];
+    If[! StringQ[cls], Return[$Failed]];
+    w = SourceVault`SourceVaultAtRestWriteBytes[path, BinarySerialize[expr, PerformanceGoal -> "Size"], cls];
+    Return[If[FailureQ[w], $Failed, path]]];
   iEXEnsureDir[DirectoryName[path]];
   st = OpenWrite[path, BinaryFormat -> True];
   If[st === $Failed, Return[$Failed]];
@@ -422,12 +437,37 @@ iEXWriteWXF[path_String, expr_] := Module[{st},
   path];
 
 iEXReadWXF[path_String] := Module[{st, bytes},
+  If[FileExistsQ[path <> ".sve"],
+    bytes = If[iEXARAvailable[], SourceVault`SourceVaultAtRestReadBytes[path], $Failed];
+    If[! ByteArrayQ[bytes], Return[Missing["Unreadable", path]]];
+    Return[Quiet @ Check[BinaryDeserialize[bytes], Missing["Corrupt", path]]]];
   If[!FileExistsQ[path], Return[Missing["NotFound", path]]];
   st = OpenRead[path, BinaryFormat -> True];
   If[st === $Failed, Return[Missing["Unreadable", path]]];
   bytes = WithCleanup[ReadByteArray[st], Close[st]];
   If[!ByteArrayQ[bytes], Return[Missing["Empty", path]]];
   Quiet @ Check[BinaryDeserialize[bytes], Missing["Corrupt", path]]];
+
+(* WXF 以外のファイル (答案スキャンの PNG・レポートの PDF) と一覧も同じ規則で (2026-11-14) *)
+iEXARExistsQ[path_String] := FileExistsQ[path] || FileExistsQ[path <> ".sve"];
+iEXARReadBytes[path_String] := Which[
+  FileExistsQ[path <> ".sve"], If[iEXARAvailable[], SourceVault`SourceVaultAtRestReadBytes[path], $Failed],
+  FileExistsQ[path], Quiet @ Check[ReadByteArray[path], $Failed],
+  True, $Failed];
+iEXARWriteBytes[path_String, bytes_ByteArray] := Module[{cls, w, st},
+  If[iEXARNeedQ[path],
+    cls = iEXARClass[path];
+    If[! StringQ[cls], Return[$Failed]];
+    w = SourceVault`SourceVaultAtRestWriteBytes[path, bytes, cls];
+    Return[If[FailureQ[w], $Failed, path]]];
+  iEXEnsureDir[DirectoryName[path]];
+  st = OpenWrite[path, BinaryFormat -> True];
+  If[st === $Failed, Return[$Failed]];
+  WithCleanup[BinaryWrite[st, bytes], Close[st]];
+  path];
+(* 論理名 (.sve を外した名前) の一覧。一時ファイルは含めない。 *)
+iEXARFileNames[pat_String, d_String] := If[iEXARAvailable[],
+  SourceVault`SourceVaultAtRestFileNames[pat, d, 1], FileNames[pat, d]];
 
 iEXFail[reason_String, extra___Rule] := Failure["ExerciseStore", <|"MessageTemplate" -> reason, extra|>];
 
@@ -2173,7 +2213,8 @@ SourceVaultExamSheetIngest[examId_String, source_, OptionsPattern[]] := Module[
   dir = iEXEnsureDir[iEXScanDir[examId]];
   files = MapIndexed[Function[{img, ix}, Module[{f = FileNameJoin[{dir,
       "scan-" <> IntegerString[First[ix], 10, 3] <> ".png"}]},
-    Export[f, img]; f]], imgs];
+    (* 2026-11-14: 答案のスキャンは採点 (段 1) と同じ扱い。強制されていれば暗号化して書く *)
+    iEXARWriteBytes[f, ExportByteArray[img, "PNG"]]; f]], imgs];
   g = iEXGrading[examId];
   g["Scans"] = files;
   g["ScanCount"] = Length[files];
@@ -2465,7 +2506,11 @@ SourceVaultExamSheetIdentify[source_, opts : OptionsPattern[]] := Module[{imgs, 
       tbl["Expected"]], #["Score"] &]];
 
 iEXScanImage[g_Association, i_Integer] := Module[{files = Lookup[g, "Scans", {}]},
-  If[1 <= i <= Length[files], Quiet @ Import[files[[i]]], $Failed]];
+  If[1 <= i <= Length[files],
+    If[FileExistsQ[files[[i]] <> ".sve"],
+      With[{b = iEXARReadBytes[files[[i]]]}, If[ByteArrayQ[b], Quiet @ ImportByteArray[b, "PNG"], $Failed]],
+      Quiet @ Import[files[[i]]]],
+    $Failed]];
 
 (* layout 矩形 (pt, y 上向き基準は上から) を画像 pixel 範囲へ変換して切り出す *)
 iEXCropRect[img_Image, layout_Association, rect_, diffx_, diffy_] := Module[
@@ -5832,7 +5877,7 @@ SourceVaultCourseRoster[lecture_String] := Module[{enr = iCWREnrollmentRoster[le
 
 SourceVaultCourseRosters[] := Module[{r = iCWRStoreRoot[], legacy = {}, enr},
   If[StringQ[r] && DirectoryQ[FileNameJoin[{r, "rosters"}]],
-    legacy = FileBaseName /@ FileNames["*.wxf", FileNameJoin[{r, "rosters"}]]];
+    legacy = FileBaseName /@ iEXARFileNames["*.wxf", FileNameJoin[{r, "rosters"}]]];
   enr = Map[Lookup[#, "Lecture", ""] &, SourceVaultCourseEnrollments[]];
   Sort @ DeleteDuplicates @ Select[Join[enr, legacy], StringQ[#] && # =!= "" &]];
 
@@ -5957,9 +6002,10 @@ iCWRLocalStamp[iso_] := Quiet @ Check[
 iCWRCommitFile[folder_String, fentry_Association, sid_String] := Module[
   {path, bytes, meta, saved, stored},
   path = FileNameJoin[{folder, Lookup[fentry, "RelativePath", ""]}];
-  If[!FileExistsQ[path],
+  If[!iEXARExistsQ[path],
     Return[<|"Status" -> "Error", "Reason" -> "FileMissing", "Path" -> path|>]];
-  bytes = Quiet @ Check[ReadByteArray[path], $Failed];
+  (* 2026-11-14: レポートの PDF は暗号化されうる (WebReport、段 1) *)
+  bytes = iEXARReadBytes[path];
   If[!ByteArrayQ[bytes],
     Return[<|"Status" -> "Error", "Reason" -> "ReadFailed", "Path" -> path|>]];
   meta = <|"ObjectClass" -> "CerezoCollectionSubmissionFile",
@@ -6595,7 +6641,7 @@ SourceVaultCourseEnrollmentHistoryView[lecture_String] := Module[
 
 SourceVaultCourseEnrollments[] := Module[{d = iCWREnrollmentDir[], files},
   If[!StringQ[d] || !DirectoryQ[d], Return[{}]];
-  files = FileNames["*.wxf", d];
+  files = iEXARFileNames["*.wxf", d];
   SortBy[Map[Function[f, Module[{rec = iEXReadWXF[f], students},
     students = If[AssociationQ[rec], Lookup[rec, "Students", <||>], <||>];
     <|"Lecture" -> FileBaseName[f],
@@ -7584,12 +7630,18 @@ SourceVaultCourseWebReportOpenSubmission[lecture_String, desc_String, studentID_
   read = Quiet @ Check[SourceVault`SourceVaultReadBlob[f["BlobRef"]], $Failed];
   If[!AssociationQ[read] || Lookup[read, "Status", ""] =!= "OK",
     Return[iEXFail["BlobReadFailed", "StudentID" -> ToString[studentID]]]];
-  dir = iEXEnsureDir[FileNameJoin[{$TemporaryDirectory, "svcourse-submissions"}]];
-  path = FileNameJoin[{dir, lecture <> "-" <> desc <> "-" <>
-    ToString @ Lookup[Lookup[row, "Top", <||>], "StudentID", "x"] <> ".pdf"}];
-  Module[{st = OpenWrite[path, BinaryFormat -> True]},
-    If[st === $Failed, Return[iEXFail["TempWriteFailed", "Path" -> path]]];
-    WithCleanup[BinaryWrite[st, Lookup[read, "Bytes"]], Close[st]]];
+  (* 2026-11-14: 提出 PDF (学籍番号を名前に含む) は atrest の表示用の置き場 (LocalState/atrest/view、期限を過ぎたら消す) に
+     置く。%TEMP%\svcourse-submissions に残し続けない。atrest が無いときだけ従来どおり。 *)
+  If[iEXARAvailable[] && Length[DownValues[SourceVault`SourceVaultAtRestViewFile]] > 0,
+    path = SourceVault`SourceVaultAtRestViewFile[Lookup[read, "Bytes"], lecture <> "-" <> desc <> "-" <>
+      ToString @ Lookup[Lookup[row, "Top", <||>], "StudentID", "x"] <> ".pdf"];
+    If[! StringQ[path], Return[iEXFail["TempWriteFailed"]]],
+    dir = iEXEnsureDir[FileNameJoin[{$TemporaryDirectory, "svcourse-submissions"}]];
+    path = FileNameJoin[{dir, lecture <> "-" <> desc <> "-" <>
+      ToString @ Lookup[Lookup[row, "Top", <||>], "StudentID", "x"] <> ".pdf"}];
+    Module[{st = OpenWrite[path, BinaryFormat -> True]},
+      If[st === $Failed, Return[iEXFail["TempWriteFailed", "Path" -> path]]];
+      WithCleanup[BinaryWrite[st, Lookup[read, "Bytes"]], Close[st]]]];
   If[TrueQ[OptionValue["Open"]], SystemOpen[path]];
   path];
 

@@ -37,13 +37,13 @@ data (Association / 行リスト / snapshot 群) から PrivacyLevel を収集�
 → 記録した最大 PL
 
 ### SourceVaultEvaluationPrivacy[] → Real
-現在の評価スコープの透かしを読み出す。
+現在の評価スコープの透かしを読み出す。読む前に評価セルの切り替わりを見て (スコープ同期)、別セルからの読み出しなら 0.0 から始める (2026-11-12)。FE の無いカーネルでは評価セルが無く従来どおり累積する。
 
 ### SourceVaultResetEvaluationPrivacy[] → 0.
 透かしを 0.0 にリセットし、スコープ鍵も初期化する (テスト用)。
 
 ### SourceVaultWithPrivacyScope[expr]  (HoldFirst) → Association
-透かしを Block して expr を評価する。
+透かしを Block して expr を評価する。評価前に外側のスコープを現在の評価セルへ同期する (2026-11-12)。
 → `<|"Value" -> 結果, "Privacy" -> スコープ内の最大 PL|>` 。外側の透かしは Max で更新される。適合テストの計測はこれで行う。
 
 ### SourceVaultMarkEvaluationPrivacyCells[nb] / SourceVaultMarkEvaluationPrivacyCells[] → List
@@ -217,3 +217,9 @@ Source モード監査で `mailbrowse` / `crosslink` / `oopsseed` の public 関
 ## 2026-10-06 の追補 (ScheduledTask ポーリング抑止)
 
 長い評価 (初期化で 10 秒超) の最中、0.4 秒 tick ごとに `Cells[nb]`/`CurrentValue` の FE 往復が走って本評価と取り合い、「実行中のまま終わらない」症状になった。そのため `SourceVaultNotePrivacy` は `CellEpilog` を張れたとき (`iPArmEpilog` が True) は ScheduledTask の flush を動かさず、張れない環境だけ従来の遅延タスクに戻す。加えて `NotePrivacy` の呼び出しごとに、他セルの未処理要求を 2 秒に 1 回までに絞って流す (stale flush)。
+
+## 2026-11-12 の追補 (読み出し時のスコープ同期)
+
+以前の `SourceVaultEvaluationPrivacy[]` は `$svPMax` をそのまま返しており、リセットは次の `SourceVaultNotePrivacy` 呼び出しまで起きなかった。機密 View (PL 1.0) を表示したセルの後、別セルから ClaudeEval / ClaudeQuery を始めると、claudecode の関所への申告 (`iWebGuardContextPL`) が前セルの 1.0 を読み、何も読んでいない会話が「機密を読んだ会話」として始まった (外部検索が外れる)。対処として、`SourceVaultEvaluationPrivacy[]` は読む前に評価セルの切り替わりを見て (`iPSyncScope`)、別セルなら 0 から始める。`SourceVaultWithPrivacyScope` も評価前に外側スコープを現在のセルへ同期する (同期しないと、新セルの最初の操作がこの関数のとき、Block 終了時に前セルの鍵へ戻り外側への Max が前セルの値と混ざる)。FE の無いカーネルでは評価セルが無いため従来どおり単調累積する。
+
+2026-11-17: §7b の Internal 表に `SourceVaultMailBodyProfile` (保存本文の形状 = 件数とラベルのみ) と `SourceVaultMailBodyRepair` (修復 = 件数のみ) を追加 (いずれも `SourceVault_maildb.wl`、NoDataFlow 理由付き)。

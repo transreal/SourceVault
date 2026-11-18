@@ -541,6 +541,82 @@ timestamp in the past (Missing/None = never expires). iSVATLoadEnabledSpecs excl
 expired specs so an expired trigger is not dispatched even with Enabled->True \
 (AC-031); the pre-AT-1 default (no ExpiresAt) is unaffected.";
 
+(* === Owner ticket (所有者 ticket): AT-1 permit の一般化 (03 v0.4 §5.4 / §11.5、04 v0.4 §12.5、
+   レビュー 07 I-02 / I-08、2026-11-09 に所有者が「AutoTrigger permit を基にする」と確定)。
+   HMAC・nonce の消費記録・KeyRef・偽造 / 期限切れ / 再利用 / 不一致の拒否は permit と共有し、
+   SpecHash の束縛を Bind (digest の Association) に広げた。AutoTrigger の permit はこの核の
+   1 用途 (Action = "Trigger"、KeyId = "autotrigger-permit") で、公開 API と戻り値の形は変えていない。 === *)
+
+$SourceVaultOwnerTicketKeyRef::usage =
+  "$SourceVaultOwnerTicketKeyRef is the NBAccess credential name (NBGetCredential / SystemCredential) of the \
+HMAC key that signs owner tickets (KeyId \"owner\"). Default Missing[\"None\"]. Unlike the AT-1 permit there is \
+NO unkeyed fallback: without the key, minting and verifying owner tickets fail closed (OwnerTicketKeyUnavailable). \
+Assignment is approval-gated by NBAccess ($NBApprovalSetSymbols).";
+
+$SourceVaultOwnerTicketDevelopmentKeyRef::usage =
+  "$SourceVaultOwnerTicketDevelopmentKeyRef is the test-only issuer key (KeyId \"development\"), honoured ONLY \
+while $SourceVaultSecurityProfile === \"development\" (SourceVault_core.wl). Resolution: NBAccess`NBGetCredential[ref] \
+when it yields a string, else a ref of the form \"literal:<key>\" uses <key> as the key material (tests). \
+Default Missing[\"None\"]. SourceVaultSecurityProfileCheck[] reports its presence in production as a Violation \
+(review 07 I-08). Assignment is approval-gated by NBAccess.";
+
+$SourceVaultOwnerTicketStore::usage =
+  "$SourceVaultOwnerTicketStore is the consumed-nonce store (append-only text file, one Nonce per line) that makes \
+owner tickets one-shot. Default Automatic -> <LocalState>/owner-tickets/consumed.jsonl (per machine, 2026-11-11; \
+the earlier shared <registry>/tickets/consumed.jsonl is still read so that a ticket consumed there stays consumed, \
+and is used only when LocalState is not resolved). Tests point it at a temp file. \
+Verification and consumption run inside one lock (<store>.lock, atomic directory creation).";
+
+$SourceVaultOwnerTicketDefaultTTLSeconds::usage =
+  "$SourceVaultOwnerTicketDefaultTTLSeconds (default 1800 = 30 minutes) is the ticket lifetime used when the mint spec \
+has no ExpiresInSeconds.";
+
+SourceVaultOwnerTicketDigest::usage =
+  "SourceVaultOwnerTicketDigest[expr] returns \"sha256:<hex>\" of expr (a String is hashed as is, anything else as \
+ToString[expr, InputForm]). Use it to build Bind entries and to recompute them before Verify / Consume.";
+
+SourceVaultOwnerTicketMint::usage =
+  "SourceVaultOwnerTicketMint[<|\"Action\" -> \"ResolveFinding\" | ..., \"Subject\" -> <|...|>, \
+\"Bind\" -> <|\"Display\" -> digest, name -> digest, ...|>, \"ExpiresInSeconds\" -> 1800|>] mints a signed one-shot \
+owner ticket <|\"Type\" -> \"SourceVaultOwnerTicket\", \"Version\", \"Action\", \"Principal\", \"Subject\", \"Bind\", \
+\"Nonce\", \"KeyId\", \"IssuedAtUTC\", \"ExpiresAtUTC\", \"Signature\"|>. Bind must be a non-empty Association of \
+digests (SourceVaultOwnerTicketDigest) and must contain \"Display\" (the digest of what the owner saw). Issuers: \
+SourceVaultOwnerTicketDialog (front end; KeyId owner, Principal OwnerFE) or, only in the development security profile, \
+the development key (KeyId development, Principal Development). Any other caller gets \
+Failure[\"OwnerTicketIssuerUnavailable\"]. Minting is also an NBAccess approval head.";
+
+SourceVaultOwnerTicketVerify::usage =
+  "SourceVaultOwnerTicketVerify[ticket, bind, opts] returns <|\"Valid\" -> True | False, \"Reason\" -> \"OK\" | \
+\"BadTicket\" | \"KeyUnavailable\" | \"BadSignature\" | \"Expired\" | \"ActionMismatch\" | \"SubjectMismatch\" | \
+\"BindMismatch\" | \"AlreadyConsumed\"|>. bind is the Association of digests recomputed by the caller from the current \
+state; it must equal the ticket's Bind exactly (one differing, missing or extra entry rejects). Options: \"Action\" -> \
+Automatic | String (must match), \"Subject\" -> Automatic | Association (every given entry must match). Only Type \
+SourceVaultOwnerTicket with KeyId owner | development is accepted: an AutoTrigger permit, an MCP AccessGrant, an \
+Issue approval signature or any other token is BadTicket. Does NOT consume.";
+
+SourceVaultOwnerTicketConsume::usage =
+  "SourceVaultOwnerTicketConsume[ticket, bind, opts] re-verifies the ticket (same checks and options as \
+SourceVaultOwnerTicketVerify) and records its Nonce as consumed, both inside ONE exclusive section (the store lock), \
+so a ticket can be redeemed at most once even by concurrent callers. Returns <|\"Consumed\" -> True | False, \
+\"Reason\"|> (\"LockUnavailable\" / \"StoreUnavailable\" are fail-closed). SourceVaultOwnerTicketConsume[ticket] \
+checks signature, expiry and replay only (no Bind / Action / Subject comparison).";
+
+SourceVaultOwnerTicketDialog::usage =
+  "SourceVaultOwnerTicketDialog[<|\"Action\", \"Subject\", \"Display\" -> text | {text..}, \"Bind\" -> <|...|> \
+(optional, extra digests), \"ExpiresInSeconds\"|>] is the ONLY production issuer of owner tickets: it shows the owner a \
+ChoiceDialog with the Action, the Subject and the Display text, and on confirmation mints the ticket with \
+Bind[\"Display\"] = SourceVaultOwnerTicketDigest[displayed text] while $SourceVaultPrincipal is Block-bound to OwnerFE \
+(the first of the five binding points, 03 v0.4 6.1). Without a front end ($Notebooks False, -script, service kernel) it \
+returns Failure[\"NoFrontEnd\"]; a cancelled dialog returns Failure[\"OwnerCancelled\"]. NBAccess approval head.";
+
+SourceVaultOwnerTicketCheckRecord::usage =
+  "SourceVaultOwnerTicketCheckRecord[ticket, action, bind] re-checks, after the fact and read-only, an owner ticket \
+that a ledger record carries (03 v0.4 7.1 Registry, Inc3 2026-11-10). Returns <|\"Type\" -> True | False, \
+\"Action\" -> True | False, \"Bind\" -> True | False (every key of bind equals the ticket's Bind entry; Display is not \
+recomputed), \"Consumed\" -> True | False | Missing[\"StoreUnavailable\"], \"Signature\" -> \"OK\" | \"Bad\" | \
+\"KeyUnavailable\", \"Issuer\" -> the ticket Principal (OwnerFE | Development), \"Nonce\"|>. Expiry is not checked \
+(consumption proves the ticket was valid when it was redeemed). Never consumes.";
+
 Begin["`Private`"];
 
 (* ---- local helpers ---- *)
@@ -716,7 +792,7 @@ iSVATHMAC[key_String, msg_String] := Module[{b = 64, kb, k0, ipad, opad, inner},
   opad = BitXor[k0, ConstantArray[16^^5C, b]];
   inner = Normal[Hash[ByteArray[Join[ipad, Normal[StringToByteArray[msg, "UTF-8"]]]],
     "SHA256", "ByteArray"]];
-  IntegerString[Hash[ByteArray[Join[opad, inner]], "SHA256"], 16]];
+  IntegerString[Hash[ByteArray[Join[opad, inner]], "SHA256"], 16, 64]];
 
 iSVATPermitKey[] := Module[
   {ref = $SourceVaultAutoTriggerPermitKeyRef, cred},
@@ -726,30 +802,280 @@ iSVATPermitKey[] := Module[
   cred = Quiet @ Check[NBAccess`NBGetCredential[ref], $Failed];
   If[StringQ[cred] && cred =!= "", cred, "unkeyed-at-permit-key"]];
 
-iSVATPermitPayload[p_] := StringRiffle[{
-  ToString[Lookup[p, "SpecHash", ""]], ToString[Lookup[p, "ProposalId", ""]],
-  ToString[Lookup[p, "Action", ""]], ToString[Lookup[p, "ExpiresAtAbs", ""]],
-  ToString[Lookup[p, "Nonce", ""]]}, "\n"];
-iSVATPermitSig[p_] := iSVATHMAC[iSVATPermitKey[], iSVATPermitPayload[p]];
-
 iSVATPermitStoreFile[] := Module[{s = $SourceVaultAutoTriggerPermitStore, dir},
   If[StringQ[s] && s =!= "", Return[s]];
   dir = iSVATRegistryDir[];
   If[dir === $Failed, $Failed, FileNameJoin[{dir, "permits", "consumed.jsonl"}]]];
 
-iSVATConsumedNonces[] := Module[{f = iSVATPermitStoreFile[], txt},
-  If[f === $Failed || !FileExistsQ[f], Return[{}]];
-  txt = Quiet @ Check[ByteArrayToString[ReadByteArray[f], "UTF-8"], ""];
+(* ---- shared one-shot token core (owner ticket + AT-1 permit), 2026-11-09 ----
+   A token is an Association with Type, Action, Principal, Subject, Bind, Nonce, KeyId, IssuedAtUTC,
+   ExpiresAtUTC and Signature = HMAC-SHA256(key(KeyId), canonical payload). Keys are resolved by KeyId
+   (owner / development / autotrigger-permit) and never leave this module. The consumed-nonce store
+   is a per-kind append-only text file guarded by an atomic-directory lock. *)
+
+iSVOTCanon[x_] := ToString[x, InputForm];
+iSVOTCanonAssoc[a_Association] :=
+  StringRiffle[KeyValueMap[iSVOTCanon[#1] <> "=" <> iSVOTCanon[#2] &, KeySort[a]], ";"];
+iSVOTCanonAssoc[_] := "";
+iSVOTPayload[t_Association] := StringRiffle[{
+  "SourceVaultOwnerTicket/1",
+  ToString[Lookup[t, "Type", ""]], ToString[Lookup[t, "Action", ""]], ToString[Lookup[t, "Principal", ""]],
+  iSVOTCanonAssoc[Lookup[t, "Subject", <||>]], iSVOTCanonAssoc[Lookup[t, "Bind", <||>]],
+  ToString[Lookup[t, "Nonce", ""]], ToString[Lookup[t, "KeyId", ""]],
+  ToString[Lookup[t, "IssuedAtUTC", ""]], ToString[Lookup[t, "ExpiresAtUTC", ""]]}, "\n"];
+
+(* "yyyy-mm-ddThh:mm:ssZ" -> AbsoluteTime (UTC). Parsed by hand: AbsoluteTime[{str, fmt}, TimeZone -> 0]
+   applies the kernel time zone a second time (observed +18 h on a UTC+9 machine). *)
+iSVOTIsoToAbs[iso_String] := Module[{m},
+  m = StringCases[iso, RegularExpression["^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"] :>
+    (FromDigits /@ {"$1", "$2", "$3", "$4", "$5", "$6"})];
+  If[m === {}, $Failed, Quiet @ Check[AbsoluteTime[DateObject[First[m], TimeZone -> 0]], $Failed]]];
+iSVOTIsoToAbs[_] := $Failed;
+iSVOTAbsToIso[abs_?NumericQ] := DateString[abs, {"Year", "-", "Month", "-", "Day", "T", "Hour", ":", "Minute",
+  ":", "Second", "Z"}, TimeZone -> 0];
+
+iSVOTConstEq[a_String, b_String] := StringLength[a] === StringLength[b] &&
+  (BitOr @@ MapThread[BitXor, {ToCharacterCode[a], ToCharacterCode[b]}]) === 0;
+iSVOTConstEq[___] := False;
+
+iSVOTProfile[] := With[{p = SourceVault`$SourceVaultSecurityProfile},
+  If[MemberQ[{"production", "development"}, p], p, "production"]];
+
+iSVOTCredential[ref_String] :=
+  If[Length[DownValues[NBAccess`NBGetCredential]] > 0,
+    Quiet @ Check[NBAccess`NBGetCredential[ref], $Failed], $Failed];
+
+(* key material by KeyId; $Failed when unavailable (fail-closed for owner tickets) *)
+iSVOTKeyMaterial["autotrigger-permit"] := iSVATPermitKey[];
+iSVOTKeyMaterial["owner"] := Module[{ref = $SourceVaultOwnerTicketKeyRef, cred},
+  If[! StringQ[ref] || ref === "", Return[$Failed]];
+  cred = iSVOTCredential[ref];
+  If[StringQ[cred] && cred =!= "", cred, $Failed]];
+iSVOTKeyMaterial["development"] := Module[{ref = $SourceVaultOwnerTicketDevelopmentKeyRef, cred},
+  If[iSVOTProfile[] =!= "development", Return[$Failed]];
+  If[! StringQ[ref] || ref === "", Return[$Failed]];
+  cred = iSVOTCredential[ref];
+  Which[
+    StringQ[cred] && cred =!= "", cred,
+    StringStartsQ[ref, "literal:"] && StringLength[ref] > 8, StringDrop[ref, 8],
+    True, $Failed]];
+iSVOTKeyMaterial[_] := $Failed;
+
+iSVOTSign[t_Association] := Module[{key = iSVOTKeyMaterial[ToString[Lookup[t, "KeyId", ""]]]},
+  If[key === $Failed, $Failed, iSVATHMAC[key, iSVOTPayload[t]]]];
+
+(* consumed-nonce stores: owner tickets vs AT-1 permits are separate files *)
+(* 2026-11-11: the consumed-nonce store of owner tickets is per machine (LocalState). A ticket is signed with the key of the
+   machine that issued it, so it never verifies on another machine and the store has no reason to be shared. The earlier
+   default under the shared CoreRoot (<registry>/tickets/consumed.jsonl, synced by Dropbox) made the lock directory travel
+   between machines (LockUnavailable on the other machine, 2026-11-11), and two machines appending to one file can make
+   Dropbox conflict copies. The earlier shared file is still read, never written, so a ticket consumed there stays consumed;
+   it is the store only when LocalState is not resolved. *)
+iSVOTLegacyStoreFile[] := With[{dir = iSVATRegistryDir[]}, If[dir === $Failed, $Failed, FileNameJoin[{dir, "tickets", "consumed.jsonl"}]]];
+iSVOTStoreFile[] := Module[{s = $SourceVaultOwnerTicketStore, ls},
+  If[StringQ[s] && s =!= "", Return[s]];
+  ls = If[Length[DownValues[SourceVault`SourceVaultRoot]] > 0, Quiet @ Check[SourceVault`SourceVaultRoot["LocalState"], $Failed], $Failed];
+  If[StringQ[ls] && ls =!= "", FileNameJoin[{ls, "owner-tickets", "consumed.jsonl"}], iSVOTLegacyStoreFile[]]];
+iSVOTReadNonces[file_String] := Module[{txt},
+  If[! FileExistsQ[file], Return[{}]];
+  txt = Quiet @ Check[ByteArrayToString[ReadByteArray[file], "UTF-8"], ""];
+  If[! StringQ[txt], txt = ""];
   Select[StringTrim /@ StringSplit[txt, "\n"], # =!= "" &]];
+iSVOTReadNonces[_] := {};
+iSVOTConsumedNonces[store_String] := Union[iSVOTReadNonces[store],
+  (* the default store also honours the earlier shared file (read only) *)
+  If[! (StringQ[$SourceVaultOwnerTicketStore] && $SourceVaultOwnerTicketStore =!= ""),
+    With[{l = iSVOTLegacyStoreFile[]}, If[StringQ[l] && l =!= store, iSVOTReadNonces[l], {}]], {}]];
+iSVOTConsumedNonces[_] := {};
+iSVOTNonceConsumedQ[store_, nonce_] := MemberQ[iSVOTConsumedNonces[store], nonce];
+iSVOTRecordConsumed[store_String, nonce_String] := (
+  iSVATEnsureDir[DirectoryName[store]];
+  Module[{st = OpenAppend[store, BinaryFormat -> True]},
+    BinaryWrite[st, StringToByteArray[nonce <> "\n", "UTF-8"]]; Close[st]];
+  nonce);
+iSVOTRecordConsumed[___] := $Failed;
 
-iSVATNonceConsumedQ[nonce_] := MemberQ[iSVATConsumedNonces[], nonce];
+(* one exclusive section per store: atomic directory creation, 40 x 50 ms wait, stale lock (> 30 s) broken *)
+SetAttributes[iSVOTWithLock, HoldRest];
+iSVOTWithLock[store_String, body_] := Module[{lock = store <> ".lock", got = False, i = 0, r},
+  iSVATEnsureDir[DirectoryName[store]];
+  While[! got && i < 40,
+    got = Quiet @ Check[CreateDirectory[lock]; True, False];
+    If[! got,
+      With[{age = Quiet @ Check[AbsoluteTime[] - AbsoluteTime[FileDate[lock, "Modification"]], 0]},
+        If[NumericQ[age] && age > 30, Quiet @ DeleteDirectory[lock]]];
+      Pause[0.05]; i++]];
+  If[! got, Return[$Failed]];
+  r = CheckAbort[Quiet @ Check[body, $Failed], $Aborted];
+  Quiet @ DeleteDirectory[lock];
+  If[r === $Aborted, Abort[]];
+  r];
+iSVOTWithLock[___] := $Failed;
 
-iSVATRecordConsumed[nonce_String] := Module[{f = iSVATPermitStoreFile[]},
-  If[f === $Failed, Return[$Failed]];
-  iSVATEnsureDir[DirectoryName[f]];
-  Module[{s = OpenAppend[f, BinaryFormat -> True]},
-    BinaryWrite[s, StringToByteArray[nonce <> "\n", "UTF-8"]]; Close[s]];
-  nonce];
+(* verification core. requireBind = False skips the Bind comparison (Consume[ticket] form). *)
+iSVOTVerifyCore[ticket_, bind_, action_, subject_, store_, requireBind_] := Module[
+  {nonce, sig, expected, expAbs, tSubject, okSubject},
+  If[! AssociationQ[ticket], Return[<|"Valid" -> False, "Reason" -> "BadTicket"|>]];
+  nonce = Lookup[ticket, "Nonce", ""]; sig = Lookup[ticket, "Signature", Missing[]];
+  If[! StringQ[nonce] || nonce === "" || ! StringQ[sig] || sig === "" ||
+      ! StringQ[Lookup[ticket, "KeyId", Missing[]]] || ! StringQ[Lookup[ticket, "ExpiresAtUTC", Missing[]]],
+    Return[<|"Valid" -> False, "Reason" -> "BadTicket"|>]];
+  expected = iSVOTSign[KeyDrop[ticket, "Signature"]];
+  If[expected === $Failed, Return[<|"Valid" -> False, "Reason" -> "KeyUnavailable"|>]];
+  If[! iSVOTConstEq[sig, expected], Return[<|"Valid" -> False, "Reason" -> "BadSignature"|>]];
+  expAbs = iSVOTIsoToAbs[ticket["ExpiresAtUTC"]];
+  If[! NumericQ[expAbs] || expAbs <= AbsoluteTime[], Return[<|"Valid" -> False, "Reason" -> "Expired"|>]];
+  If[action =!= Automatic && ToString[Lookup[ticket, "Action", ""]] =!= ToString[action],
+    Return[<|"Valid" -> False, "Reason" -> "ActionMismatch"|>]];
+  If[AssociationQ[subject] && subject =!= <||>,
+    tSubject = Lookup[ticket, "Subject", <||>];
+    okSubject = AssociationQ[tSubject] && AllTrue[Normal[subject],
+      KeyExistsQ[tSubject, First[#]] && iSVOTCanon[tSubject[First[#]]] === iSVOTCanon[Last[#]] &];
+    If[! okSubject, Return[<|"Valid" -> False, "Reason" -> "SubjectMismatch"|>]]];
+  If[TrueQ[requireBind],
+    If[! AssociationQ[bind] || ! AssociationQ[Lookup[ticket, "Bind", Missing[]]] ||
+        iSVOTCanonAssoc[bind] =!= iSVOTCanonAssoc[ticket["Bind"]],
+      Return[<|"Valid" -> False, "Reason" -> "BindMismatch"|>]]];
+  If[iSVOTNonceConsumedQ[store, nonce], Return[<|"Valid" -> False, "Reason" -> "AlreadyConsumed"|>]];
+  <|"Valid" -> True, "Reason" -> "OK"|>];
+
+iSVOTConsumeCore[ticket_, bind_, action_, subject_, store_, requireBind_] := Module[{r},
+  If[! StringQ[store], Return[<|"Consumed" -> False, "Reason" -> "StoreUnavailable"|>]];
+  r = iSVOTWithLock[store,
+    Module[{v = iSVOTVerifyCore[ticket, bind, action, subject, store, requireBind]},
+      If[TrueQ[v["Valid"]],
+        If[iSVOTRecordConsumed[store, ticket["Nonce"]] === $Failed,
+          <|"Consumed" -> False, "Reason" -> "StoreWriteFailed"|>,
+          <|"Consumed" -> True, "Reason" -> "OK"|>],
+        <|"Consumed" -> False, "Reason" -> v["Reason"]|>]]];
+  If[AssociationQ[r], r, <|"Consumed" -> False, "Reason" -> "LockUnavailable"|>]];
+
+(* ---- owner ticket public API ---- *)
+If[! MatchQ[$SourceVaultOwnerTicketKeyRef, _String], $SourceVaultOwnerTicketKeyRef = Missing["None"]];
+If[! MatchQ[$SourceVaultOwnerTicketDevelopmentKeyRef, _String],
+  $SourceVaultOwnerTicketDevelopmentKeyRef = Missing["None"]];
+If[! MatchQ[$SourceVaultOwnerTicketStore, _String], $SourceVaultOwnerTicketStore = Automatic];
+If[! NumberQ[$SourceVaultOwnerTicketDefaultTTLSeconds], $SourceVaultOwnerTicketDefaultTTLSeconds = 1800];
+If[! ValueQ[$iSVOTDialogIssuing], $iSVOTDialogIssuing = False];
+$iSVOTAcceptedKeyIds = {"owner", "development"};
+
+SourceVaultOwnerTicketDigest[s_String] := "sha256:" <> Hash[StringToByteArray[s, "UTF-8"], "SHA256", "HexString"];
+SourceVaultOwnerTicketDigest[x_] := SourceVaultOwnerTicketDigest[ToString[x, InputForm]];
+
+iSVOTBadSpec[msg_String] := Failure["OwnerTicketBadSpec", <|"MessageTemplate" -> msg|>];
+
+SourceVaultOwnerTicketMint[spec_Association] := Module[
+  {action, subject, bind, keyId, principal, ttl, now, t, sig},
+  action = Lookup[spec, "Action", Missing[]];
+  If[! StringQ[action] || action === "", Return[iSVOTBadSpec["Action (String) is required."]]];
+  subject = Lookup[spec, "Subject", <||>];
+  If[! AssociationQ[subject], Return[iSVOTBadSpec["Subject must be an Association."]]];
+  bind = Lookup[spec, "Bind", <||>];
+  If[! AssociationQ[bind] || bind === <||> || ! KeyExistsQ[bind, "Display"] || ! AllTrue[Values[bind], StringQ],
+    Return[iSVOTBadSpec["Bind must be a non-empty Association of digest strings and include \"Display\"."]]];
+  Which[
+    TrueQ[$iSVOTDialogIssuing], keyId = "owner"; principal = "OwnerFE",
+    iSVOTProfile[] === "development" && StringQ[$SourceVaultOwnerTicketDevelopmentKeyRef] &&
+      $SourceVaultOwnerTicketDevelopmentKeyRef =!= "",
+      keyId = "development"; principal = "Development",
+    True,
+      Return[Failure["OwnerTicketIssuerUnavailable", <|"MessageTemplate" ->
+        "Owner tickets are issued only by SourceVaultOwnerTicketDialog (front end) or, in the development security profile, by the development key.",
+        "Profile" -> iSVOTProfile[]|>]]];
+  ttl = Lookup[spec, "ExpiresInSeconds", $SourceVaultOwnerTicketDefaultTTLSeconds];
+  If[! NumberQ[ttl], ttl = $SourceVaultOwnerTicketDefaultTTLSeconds];
+  now = AbsoluteTime[];
+  t = <|"Type" -> "SourceVaultOwnerTicket", "Version" -> 1, "Action" -> action, "Principal" -> principal,
+    "Subject" -> subject, "Bind" -> bind, "Nonce" -> iSVATNonce[], "KeyId" -> keyId,
+    "IssuedAtUTC" -> iSVOTAbsToIso[now], "ExpiresAtUTC" -> iSVOTAbsToIso[now + ttl]|>;
+  sig = iSVOTSign[t];
+  If[sig === $Failed,
+    Return[Failure["OwnerTicketKeyUnavailable", <|"KeyId" -> keyId, "MessageTemplate" ->
+      "The HMAC key for KeyId `1` is not available (set $SourceVaultOwnerTicketKeyRef to an NBAccess credential name).",
+      "MessageParameters" -> {keyId}|>]]];
+  Append[t, "Signature" -> sig]];
+SourceVaultOwnerTicketMint[___] := iSVOTBadSpec["spec must be an Association."];
+
+iSVOTOwnerTicketQ[t_] := AssociationQ[t] && Lookup[t, "Type", ""] === "SourceVaultOwnerTicket" &&
+  MemberQ[$iSVOTAcceptedKeyIds, Lookup[t, "KeyId", ""]];
+
+Options[SourceVaultOwnerTicketVerify] = {"Action" -> Automatic, "Subject" -> Automatic};
+SourceVaultOwnerTicketVerify[ticket_, bind_, OptionsPattern[]] :=
+  If[! iSVOTOwnerTicketQ[ticket], <|"Valid" -> False, "Reason" -> "BadTicket"|>,
+    iSVOTVerifyCore[ticket, bind, OptionValue["Action"], OptionValue["Subject"], iSVOTStoreFile[], True]];
+SourceVaultOwnerTicketVerify[___] := <|"Valid" -> False, "Reason" -> "BadArguments"|>;
+
+Options[SourceVaultOwnerTicketConsume] = {"Action" -> Automatic, "Subject" -> Automatic};
+SourceVaultOwnerTicketConsume[ticket_, bind_Association, OptionsPattern[]] :=
+  If[! iSVOTOwnerTicketQ[ticket], <|"Consumed" -> False, "Reason" -> "BadTicket"|>,
+    iSVOTConsumeCore[ticket, bind, OptionValue["Action"], OptionValue["Subject"], iSVOTStoreFile[], True]];
+SourceVaultOwnerTicketConsume[ticket_, OptionsPattern[]] :=
+  If[! iSVOTOwnerTicketQ[ticket], <|"Consumed" -> False, "Reason" -> "BadTicket"|>,
+    iSVOTConsumeCore[ticket, <||>, OptionValue["Action"], OptionValue["Subject"], iSVOTStoreFile[], False]];
+SourceVaultOwnerTicketConsume[___] := <|"Consumed" -> False, "Reason" -> "BadArguments"|>;
+
+(* Inc3 (2026-11-10): read-only re-check of a ticket kept in a ledger record (Registry, 03 v0.4 7.1). *)
+SourceVaultOwnerTicketCheckRecord[ticket_Association, action_String, bind_Association] := Module[
+  {typeQ = iSVOTOwnerTicketQ[ticket], sig = Lookup[ticket, "Signature", Missing[]], expected, store = iSVOTStoreFile[], tb, nonce},
+  expected = If[typeQ, iSVOTSign[KeyDrop[ticket, "Signature"]], $Failed];
+  tb = Lookup[ticket, "Bind", None];
+  nonce = Lookup[ticket, "Nonce", None];
+  <|"Type" -> typeQ,
+    "Action" -> ToString[Lookup[ticket, "Action", ""]] === action,
+    "Bind" -> AssociationQ[tb] && AllTrue[Normal[bind], KeyExistsQ[tb, First[#]] && iSVOTCanon[tb[First[#]]] === iSVOTCanon[Last[#]] &],
+    "Consumed" -> If[StringQ[store] && StringQ[nonce] && nonce =!= "", iSVOTNonceConsumedQ[store, nonce], Missing["StoreUnavailable"]],
+    "Signature" -> Which[! typeQ, "Bad", expected === $Failed, "KeyUnavailable", StringQ[sig] && iSVOTConstEq[sig, expected], "OK", True, "Bad"],
+    "Issuer" -> ToString[Lookup[ticket, "Principal", ""]], "Nonce" -> If[StringQ[nonce], nonce, Null]|>];
+SourceVaultOwnerTicketCheckRecord[___] := <|"Type" -> False, "Action" -> False, "Bind" -> False, "Consumed" -> False,
+  "Signature" -> "Bad", "Issuer" -> "", "Nonce" -> Null|>;
+
+(* FE-only issuer: binding point (1) of 03 v0.4 6.1 (OwnerFE). *)
+SourceVaultOwnerTicketDialog[spec_Association] := Module[
+  {display, displayStr, action, subject, ttl, bind, items, res},
+  If[! TrueQ[$Notebooks],
+    Return[Failure["NoFrontEnd", <|"MessageTemplate" ->
+      "SourceVaultOwnerTicketDialog needs a front end; owner tickets cannot be issued from -script or a service kernel."|>]]];
+  action = Lookup[spec, "Action", Missing[]];
+  If[! StringQ[action] || action === "", Return[iSVOTBadSpec["Action (String) is required."]]];
+  subject = Lookup[spec, "Subject", <||>];
+  If[! AssociationQ[subject], Return[iSVOTBadSpec["Subject must be an Association."]]];
+  display = Lookup[spec, "Display", Missing[]];
+  displayStr = Which[StringQ[display], display, MatchQ[display, {__String}], StringRiffle[display, "\n"],
+    True, Return[iSVOTBadSpec["Display (String or list of Strings) is required."], Module]];
+  ttl = Lookup[spec, "ExpiresInSeconds", $SourceVaultOwnerTicketDefaultTTLSeconds];
+  If[! NumberQ[ttl], ttl = $SourceVaultOwnerTicketDefaultTTLSeconds];
+  bind = Lookup[spec, "Bind", <||>]; If[! AssociationQ[bind], bind = <||>];
+  bind = Append[bind, "Display" -> SourceVaultOwnerTicketDigest[displayStr]];
+  items = {
+    Style["所有者の確認 (SourceVault owner ticket)", Bold, 13, RGBColor[0.75, 0.3, 0.1]],
+    Row[{"操作: ", Style[action, Bold]}],
+    Row[{"対象: ", Style[ToString[subject, InputForm], 10]}],
+    Pane[Style[displayStr, 10, LineBreakWithin -> True], {560, UpTo[380]}, Scrollbars -> Automatic],
+    Row[{"有効期限: ", ToString[Round[ttl]], " 秒 / 1 回限り。表示内容の digest に束縛されます。"}]};
+  res = Quiet @ Check[ChoiceDialog[Column[items, Spacings -> 0.8],
+    {"承認して ticket を発行" -> True, "取消" -> False}, WindowTitle -> "SourceVault owner ticket"], $Canceled];
+  If[res =!= True, Return[Failure["OwnerCancelled", <|"Action" -> action|>]]];
+  Block[{SourceVault`$SourceVaultPrincipal = <|"Kind" -> "OwnerFE", "Channel" -> "SourceVaultOwnerTicketDialog",
+      "Ticket" -> Missing[]|>, $iSVOTDialogIssuing = True},
+    SourceVaultOwnerTicketMint[Join[spec, <|"Bind" -> bind, "ExpiresInSeconds" -> ttl|>]]]];
+SourceVaultOwnerTicketDialog[___] := iSVOTBadSpec["spec must be an Association."];
+
+(* ---- AT-1 permit as a thin wrapper over the core (Action Trigger, KeyId autotrigger-permit) ----
+   Public API, option and return shape unchanged (SpecHash / ProposalId / Action / ExpiresAtAbs / Nonce / Sig);
+   IssuedAtUTC / ExpiresAtUTC are added and the signature now covers the canonical ticket view, so tampering
+   with any legacy field still breaks it. The legacy unkeyed fallback of iSVATPermitKey is kept (AT-1 behaviour). *)
+iSVATPermitTicketView[permit_Association] := <|
+  "Type" -> "SourceVaultAutoTriggerPermit", "Version" -> 1, "Action" -> "Trigger", "Principal" -> "OwnerFE",
+  "Subject" -> <|"TriggerAction" -> ToString[Lookup[permit, "Action", ""]],
+    "ProposalId" -> ToString[Lookup[permit, "ProposalId", ""]]|>,
+  "Bind" -> <|"SpecHash" -> ToString[Lookup[permit, "SpecHash", ""]]|>,
+  "Nonce" -> ToString[Lookup[permit, "Nonce", ""]], "KeyId" -> "autotrigger-permit",
+  "IssuedAtUTC" -> ToString[Lookup[permit, "IssuedAtUTC", ""]],
+  "ExpiresAtUTC" -> ToString[Lookup[permit, "ExpiresAtUTC", ""]],
+  "Signature" -> Lookup[permit, "Sig", Missing[]]|>;
+iSVATPermitSig[p_Association] := iSVOTSign[KeyDrop[iSVATPermitTicketView[p], "Signature"]];
+iSVATPermitReason[r_String] := Replace[r, {"SubjectMismatch" -> "ActionMismatch", "BindMismatch" -> "SpecHashMismatch",
+  "BadTicket" -> "BadSignature", "KeyUnavailable" -> "BadSignature"}];
 
 iSVATCrock = Characters["0123456789ABCDEFGHJKMNPQRSTVWXYZ"];
 iSVATNonce[] := StringJoin[iSVATCrock[[RandomInteger[{1, 32}, 26]]]];
@@ -761,46 +1087,34 @@ SourceVaultAutoTriggerSpecHash[___] := Missing["BadSpec"];
 
 Options[SourceVaultAutoTriggerMintPermit] = {"OwnerAuthorization" -> False};
 SourceVaultAutoTriggerMintPermit[req_Association, OptionsPattern[]] := Module[
-  {p, exp},
+  {p, exp, now, sig},
   If[!TrueQ[OptionValue["OwnerAuthorization"]],
     Return[Failure["NBATOwnerAuthRequired",
       <|"MessageTemplate" -> "OwnerAuthorization->True is required to mint a permit."|>]]];
   exp = With[{e = Lookup[req, "ExpiresInSeconds", 300]}, If[NumberQ[e], e, 300]];
+  now = AbsoluteTime[];
   p = <|"SpecHash" -> ToString[Lookup[req, "SpecHash", ""]],
     "ProposalId" -> ToString[Lookup[req, "ProposalId", ""]],
     "Action" -> ToString[Lookup[req, "Action", "Register"]],
-    "ExpiresAtAbs" -> N[AbsoluteTime[] + exp], "Nonce" -> iSVATNonce[]|>;
-  Append[p, "Sig" -> iSVATPermitSig[p]]];
+    "ExpiresAtAbs" -> N[now + exp], "Nonce" -> iSVATNonce[],
+    "IssuedAtUTC" -> iSVOTAbsToIso[now], "ExpiresAtUTC" -> iSVOTAbsToIso[now + exp]|>;
+  sig = iSVATPermitSig[p];
+  If[! StringQ[sig], Return[Failure["NBATPermitKeyUnavailable", <|"MessageTemplate" -> "permit key unavailable"|>]]];
+  Append[p, "Sig" -> sig]];
 SourceVaultAutoTriggerMintPermit[___] :=
   Failure["NBATBadArgs", <|"MessageTemplate" -> "req must be an Association."|>];
 
-SourceVaultAutoTriggerVerifyPermit[permit_Association, action_String, specHash_] := Module[
-  {sigOk, notExpired, actionOk, hashOk, notConsumed, expAbs},
-  sigOk = StringQ[Lookup[permit, "Sig", Missing[]]] &&
-    permit["Sig"] === iSVATPermitSig[KeyDrop[permit, "Sig"]];
-  expAbs = Lookup[permit, "ExpiresAtAbs", 0];
-  notExpired = NumberQ[expAbs] && expAbs > AbsoluteTime[];
-  actionOk = ToString[Lookup[permit, "Action", ""]] === action;
-  hashOk = ToString[Lookup[permit, "SpecHash", ""]] === ToString[specHash];
-  notConsumed = !iSVATNonceConsumedQ[Lookup[permit, "Nonce", ""]];
-  Which[
-    !sigOk, <|"Valid" -> False, "Reason" -> "BadSignature"|>,
-    !notExpired, <|"Valid" -> False, "Reason" -> "Expired"|>,
-    !actionOk, <|"Valid" -> False, "Reason" -> "ActionMismatch"|>,
-    !hashOk, <|"Valid" -> False, "Reason" -> "SpecHashMismatch"|>,
-    !notConsumed, <|"Valid" -> False, "Reason" -> "AlreadyConsumed"|>,
-    True, <|"Valid" -> True, "Reason" -> "OK"|>]];
+SourceVaultAutoTriggerVerifyPermit[permit_Association, action_String, specHash_] := Module[{v},
+  v = iSVOTVerifyCore[iSVATPermitTicketView[permit], <|"SpecHash" -> ToString[specHash]|>, "Trigger",
+    <|"TriggerAction" -> action|>, iSVATPermitStoreFile[], True];
+  <|"Valid" -> TrueQ[v["Valid"]], "Reason" -> iSVATPermitReason[ToString[v["Reason"]]]|>];
 SourceVaultAutoTriggerVerifyPermit[___] :=
   <|"Valid" -> False, "Reason" -> "BadArguments"|>;
 
-SourceVaultAutoTriggerConsumePermit[permit_Association] := Module[
-  {sigOk, nonce = Lookup[permit, "Nonce", ""]},
-  sigOk = StringQ[Lookup[permit, "Sig", Missing[]]] &&
-    permit["Sig"] === iSVATPermitSig[KeyDrop[permit, "Sig"]];
-  Which[
-    !sigOk || !StringQ[nonce] || nonce === "", False,
-    iSVATNonceConsumedQ[nonce], False,
-    True, iSVATRecordConsumed[nonce]; True]];
+SourceVaultAutoTriggerConsumePermit[permit_Association] := Module[{store = iSVATPermitStoreFile[], r},
+  If[! StringQ[store], Return[False]];
+  r = iSVOTConsumeCore[iSVATPermitTicketView[permit], <||>, "Trigger", Automatic, store, False];
+  TrueQ[Lookup[r, "Consumed", False]]];
 SourceVaultAutoTriggerConsumePermit[___] := False;
 
 SourceVaultAutoTriggerExpiredQ[spec_Association, now_] := Module[

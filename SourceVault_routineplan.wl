@@ -722,7 +722,7 @@ iSVRPTaskName[t_] := Module[
     True, "(untitled)"]];
 
 iSVRPAllDayRank[item_] := Switch[Lookup[item, "Kind", ""],
-  "Deadline", 1, "MailDeadline", 2, "Todo", 2, "Review", 3,
+  "Deadline", 1, "MailDeadline", 2, "SeriesMail", 2, "Todo", 2, "Review", 3,
   "AllDayEvent", 4, _, 5];
 
 (* --- open-todo disclosure for OVERDUE notebook rows (2026-07-28) ---
@@ -760,7 +760,8 @@ Options[SourceVaultRoutineAgendaData] = {
   "OnWorkTasks" -> Automatic, "ModifiedWithinDays" -> 120, "IncludeOverdue" -> True,
   "TimeZone" -> Automatic, "IncludeMail" -> Automatic, "MailItems" -> Automatic,
   "MailMaxPrivacyLevel" -> 1.0,
-  "IncludeTodos" -> Automatic, "TodoItems" -> Automatic};
+  "IncludeTodos" -> Automatic, "TodoItems" -> Automatic,
+  "IncludeSeries" -> Automatic, "SeriesItems" -> Automatic};
 
 SourceVaultRoutineAgendaData[dur_Quantity, opts : OptionsPattern[]] :=
   SourceVaultRoutineAgendaData[N[AbsoluteTime[]],
@@ -774,7 +775,7 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
   If[!NumberQ[fromAbs] || !NumberQ[toAbs],
     Return[<|"From" -> from, "To" -> to, "TimeZone" -> tz, "Overdue" -> {},
       "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}, "Todos" -> {},
-      "MaxPrivacyLevel" -> 0.|>]];
+      "Series" -> {}, "MaxPrivacyLevel" -> 0.|>]];
   fromDay = iSVRPDayStart[fromAbs, tz];
   toDayEnd = iSVRPDayStart[toAbs, tz] + $svRPDay;
 
@@ -901,7 +902,7 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
      hiding the band wholesale. An explicit option can lower but never raise
      the ceiling above the caller's AccessLevel. *)
   Module[{includeMail = OptionValue["IncludeMail"], mailRes, mailItems = {},
-      mailPending = 0, level, effMpl},
+      mailPending = 0, level, effMpl, seriesItems = {}, seriesNote = None},
     level = Which[
       AssociationQ[ps] && NumberQ[Lookup[ps, "AccessLevel", Missing[]]],
         N[ps["AccessLevel"]],
@@ -926,6 +927,50 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
       (* privacy ceiling also on injected items *)
       mailItems = Select[mailItems, iSVRPMailPL[#] <= effMpl &]];
 
+    (* --- new mails of the CONFIRMED series (document 15, 2026-11-16; weak
+       binding to SourceVault_series) ---
+       A routine business the owner confirmed: a new mail of it is an
+       instruction for the schedule ("look at it; make the task notebook when
+       there is none"), whatever the mail's own classification says. Items
+       with a due time (the mail's deadline, else the lag of the last
+       occurrence) join the day list as Kind "SeriesMail"; all of them form the
+       band "Series". Runtime Symbol[] resolution (orphan-symbol trap). *)
+    With[{incS = OptionValue["IncludeSeries"], so = OptionValue["SeriesItems"]},
+      If[incS === Automatic || TrueQ[incS],
+        seriesItems = If[so === Automatic,
+          If[Names["SourceVault`SourceVaultSeriesAgendaItems"] =!= {} &&
+              With[{sym = Symbol[Identity["SourceVault`SourceVaultSeriesAgendaItems"]]},
+                Length[DownValues[sym]] > 0],
+            (* under a time limit: on a large mail store the series layer can take
+               long, and the daily agenda must neither hang on it nor drop the band
+               without a word (the view shows the note) *)
+            With[{r = TimeConstrained[
+                Quiet[Symbol[Identity["SourceVault`SourceVaultSeriesAgendaItems"]][
+                  "MaxPrivacyLevel" -> effMpl]],
+                If[NumberQ[$svRPSeriesTimeLimit], $svRPSeriesTimeLimit, 60], $TimedOut]},
+              Which[r === $TimedOut, seriesNote = "TimedOut"; {},
+                AssociationQ[r], Lookup[r, "Items", {}], True, {}]], {}],
+          so]]];
+    If[!ListQ[seriesItems], seriesItems = {}];
+    seriesItems = Select[Select[seriesItems, AssociationQ], iSVRPItemPL[#] <= effMpl &];
+    (* a mail that the series band shows is not listed a second time in the mail band *)
+    With[{srids = Select[Map[Lookup[#, "RecordId", Missing[]] &, seriesItems], StringQ]},
+      If[srids =!= {},
+        mailItems = Select[mailItems,
+          !MemberQ[srids, Lookup[#, "RecordId", ""]] &&
+            !IntersectingQ[Select[Flatten[{Lookup[#, "ThreadRecordIds", {}]}], StringQ], srids] &]]];
+    Do[Module[{due = Lookup[si, "DueT", Missing[]], d},
+      If[NumberQ[due],
+        d = iSVRPDayStart[due, tz];
+        If[NumberQ[d] && fromDay <= d < toDayEnd,
+          AppendTo[items, <|"Kind" -> "SeriesMail", "DueT" -> N[due],
+            "Label" -> iSVRPSeriesLabel[si],
+            "MailRecordId" -> Lookup[si, "RecordId", Missing[]],
+            "Path" -> With[{np = Lookup[si, "NotebookPath", Missing[]]}, If[StringQ[np], np, Missing[]]],
+            "PrivacyLevel" -> iSVRPItemPL[si],
+            "DayAbs" -> d|>]]]],
+      {si, seriesItems}];
+
     (* mails with a definite deadline join the day calendar: an all-day item on
        the deadline day, clickable through to the mail action window *)
     Do[Module[{dl = iSVRPAbs[Lookup[mi, "Deadline", Missing[]]], d},
@@ -946,7 +991,7 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
       <|"DayAbs" -> N[dk], "DayKey" -> iSVRPDayKey[dk, tz],
         "Weekday" -> iSVRPWeekdayJP[dk],
         "AllDay" -> SortBy[Select[grp, MemberQ[
-            {"Deadline", "MailDeadline", "Todo", "Review", "AllDayEvent"},
+            {"Deadline", "MailDeadline", "SeriesMail", "Todo", "Review", "AllDayEvent"},
             #["Kind"]] &],
           {iSVRPAllDayRank[#], Lookup[#, "Label", ""]} &],
         "Timed" -> SortBy[Select[grp, #["Kind"] === "Event" &],
@@ -956,19 +1001,32 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
        failure in any part degrades to 1.0, never to an unlabelled output *)
     <|"From" -> fromAbs, "To" -> toAbs, "TimeZone" -> tz, "Overdue" -> overdue,
       "Mail" -> mailItems, "MailPendingCount" -> mailPending, "Days" -> days,
-      "Todos" -> todosNoDue,
+      "Todos" -> todosNoDue, "Series" -> seriesItems, "SeriesNote" -> seriesNote,
       "MaxPrivacyLevel" -> Quiet@Check[
         Max[0., iSVRPMaxPL[items], iSVRPMaxPL[overdue], iSVRPMaxPL[mailItems],
-          iSVRPMaxPL[todosNoDue]],
+          iSVRPMaxPL[todosNoDue], iSVRPMaxPL[seriesItems]],
         1.0]|>]];
 SourceVaultRoutineAgendaData[] :=
   SourceVaultRoutineAgendaData[Quantity[7, "Days"]];
 SourceVaultRoutineAgendaData[___] :=
   <|"From" -> Missing[], "To" -> Missing[], "TimeZone" -> 0, "Overdue" -> {},
     "Mail" -> {}, "MailPendingCount" -> 0, "Days" -> {}, "Todos" -> {},
-    "MaxPrivacyLevel" -> 0.|>;
+    "Series" -> {}, "MaxPrivacyLevel" -> 0.|>;
+
+(* seconds the agenda waits for the series layer (SourceVaultSeriesAgendaItems) *)
+If[!NumberQ[$svRPSeriesTimeLimit], $svRPSeriesTimeLimit = 60];
+
+(* ---- the new mails of the confirmed series: texts (data layer needs the day-list label) ---- *)
+iSVRPSeriesNeedText[si_] := Switch[Lookup[si, "Need", ""],
+  "CreateNotebook", "\:65b0\:7740\:3092\:78ba\:8a8d (\:30bf\:30b9\:30af\:306e\:30ce\:30fc\:30c8\:304c\:672a\:4f5c\:6210)",
+  "ReviewNewMail", "\:9032\:884c\:4e2d\:306e\:56de\:306b\:65b0\:7740 (\:78ba\:8a8d\:3059\:308b)",
+  _, "\:65b0\:7740\:3092\:78ba\:8a8d"];
+iSVRPSeriesLabel[si_] := ToString[Lookup[si, "SeriesName", Lookup[si, "Subject", "?"]]] <>
+  " \[Dash] " <> iSVRPSeriesNeedText[si];
 
 (* ---- view ---- *)
+iSVRPAgendaColor["SeriesMail"] = RGBColor[0.5, 0.2, 0.6];
+iSVRPAgendaKindTag["SeriesMail"] = "\:5b9a\:578b";
 iSVRPAgendaColor["Deadline"] = RGBColor[0.85, 0.2, 0.2];
 iSVRPAgendaColor["MailDeadline"] = RGBColor[0.8, 0.3, 0.15];
 iSVRPAgendaColor["Todo"] = RGBColor[0.55, 0.3, 0.7];
@@ -1276,6 +1334,71 @@ iSVRPMailBandRows[mail_List, nowAbs_, tz_] := Module[
     out = Join[out, Map[iSVRPMailRow[#, nowAbs, tz] &, none]]];
   out];
 
+(* one row of the series band: the series, the new mail (click -> the mail
+   window), when it is due, what is asked of the owner, and the buttons that do
+   it. The buttons resolve the series functions at CLICK time (weak binding). *)
+iSVRPWeakQ[name_String] := Names["SourceVault`" <> name] =!= {} &&
+  With[{sym = Symbol[Identity["SourceVault`" <> name]]}, Length[DownValues[sym]] > 0];
+iSVRPSeriesRow[item_Association, nowAbs_, tz_ : Automatic] := Module[
+  {rid = Lookup[item, "RecordId", ""], subject = Lookup[item, "Subject", "?"],
+   name = Lookup[item, "SeriesName", ""], need = Lookup[item, "Need", ""],
+   due = Lookup[item, "DueT", Missing[]], basis = Lookup[item, "DueBasis", None],
+   dateAbs = Lookup[item, "Date", Missing[]], nbp = Lookup[item, "NotebookPath", Missing[]],
+   col = RGBColor[0.5, 0.2, 0.6], tzv, subjCell, nameCell, recvStr, dueCell, buttons = {}},
+  tzv = If[tz === Automatic, $TimeZone, tz];
+  If[!StringQ[subject], subject = ToString[subject]];
+  If[!StringQ[name] || name === "", name = subject];
+  subjCell = If[StringQ[rid] && rid =!= "" &&
+      Length[DownValues[SourceVaultMailAgendaOpen]] > 0,
+    With[{r = rid, lbl = subject},
+      Tooltip[Button[
+        Mouseover[Style[lbl, GrayLevel[0.1], 12], Style[lbl, GrayLevel[0.1], 12, Underlined]],
+        SourceVaultMailAgendaOpen[r], Appearance -> None, Method -> "Queued"],
+        "\:958b\:304f: \:30e1\:30fc\:30eb\:672c\:6587"]],
+    Style[subject, GrayLevel[0.1], 12]];
+  (* 2026-11-17: when the name of the series IS the subject, the subject is not shown a second
+     time -- and the row then had no way to open the mail (owner: "I cannot even tell what mail
+     it is"). The name itself is the link in that case. *)
+  nameCell = If[name === subject && StringQ[rid] && rid =!= "" &&
+      Length[DownValues[SourceVaultMailAgendaOpen]] > 0,
+    With[{r = rid, lbl = name, c = col},
+      Tooltip[Button[
+        Mouseover[Style[lbl, c, Bold, 12], Style[lbl, c, Bold, 12, Underlined]],
+        SourceVaultMailAgendaOpen[r], Appearance -> None, Method -> "Queued"],
+        "\:958b\:304f: \:30e1\:30fc\:30eb\:672c\:6587"]],
+    Style[name, col, Bold, 12]];
+  recvStr = If[NumberQ[dateAbs], iSVRPShortDate[dateAbs] <> " \:53d7\:4fe1", ""];
+  dueCell = If[NumberQ[due],
+    Style["\:3000" <> If[basis === "MailDeadline", "\:3006\:5207", "\:76ee\:5b89"] <> "\[FilledRightTriangle]" <> iSVRPShortDate[due],
+      iSVRPDueColor[due, nowAbs, tzv], Bold, 10], Nothing];
+  If[need === "CreateNotebook" && StringQ[rid] && rid =!= "" && iSVRPWeakQ["SourceVaultMailWorkAccept"],
+    With[{r = rid},
+      AppendTo[buttons, Tooltip[Button[Style["\:30ce\:30fc\:30c8\:3092\:4f5c\:308b", 10],
+        Symbol[Identity["SourceVault`SourceVaultMailWorkAccept"]][r, "Notebook"],
+        Method -> "Queued", ImageSize -> Automatic],
+        "\:30bf\:30b9\:30af\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:4f5c\:308b (\:904e\:53bb\:306e\:56de\:3068\:95a2\:9023\:30d5\:30a1\:30a4\:30eb\:306e\:4e00\:89a7\:3064\:304d)"]]]];
+  If[StringQ[nbp],
+    With[{np = nbp},
+      AppendTo[buttons, Tooltip[Button[Style["\:30ce\:30fc\:30c8\:3092\:958b\:304f", 10], SystemOpen[np], ImageSize -> Automatic],
+        "\:958b\:304f: " <> np]]]];
+  If[need === "ReviewNewMail" && StringQ[rid] && rid =!= "" && iSVRPWeakQ["SourceVaultMailWorkAct"],
+    With[{r = rid},
+      AppendTo[buttons, Tooltip[Button[Style["\:65b0\:7740\:3092\:78ba\:8a8d\:6e08\:307f", 10],
+        Symbol[Identity["SourceVault`SourceVaultMailWorkAct"]][r, "Seen"],
+        Method -> "Queued", ImageSize -> Automatic],
+        "\:65b0\:7740\:30e1\:30fc\:30eb\:3092\:78ba\:8a8d\:3057\:305f (\:696d\:52d9\:306f\:9032\:884c\:4e2d\:306e\:307e\:307e\:3001\:3053\:306e\:884c\:306f\:6b21\:306e\:65b0\:7740\:307e\:3067\:51fa\:306a\:3044)"]]]];
+  Column[{
+    Row[{Style["\:3010\:5b9a\:578b\:3011", col, Bold, 10], " ", nameCell,
+      If[Lookup[item, "PatternStatus", ""] === "Proposed",
+        Style["\:3000(\:672a\:78ba\:8a8d\:306e\:4ef6\:540d\:306e\:578b)", RGBColor[0.85, 0.5, 0.1], 9], Nothing],
+      If[name =!= subject, Row[{Style["\:3000\[Dash] ", GrayLevel[0.45], 10], subjCell}], Nothing],
+      If[recvStr =!= "", Style["\:3000(" <> recvStr <> ")", GrayLevel[0.55], 9], Nothing],
+      dueCell}],
+    Row[Join[{Pane["", 14], Style[iSVRPSeriesNeedText[item] <> "\:3000", GrayLevel[0.3], 10]},
+      Riffle[buttons, " "]]]},
+    Spacings -> 0.15, Alignment -> Left]];
+iSVRPSeriesRow[x_, ___] := Style[ToString[x], 11];
+
 (* one row of the standalone-todo band; click -> the todo note window *)
 iSVRPTodoRow[item_Association] := Module[
   {label = Lookup[item, "Label", "?"],
@@ -1303,14 +1426,16 @@ SourceVaultRoutineAgendaView[dur_Quantity, opts : OptionsPattern[]] :=
 SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
   {data = SourceVaultRoutineAgendaData[from, to,
      Sequence @@ FilterRules[{opts}, Options[SourceVaultRoutineAgendaData]]],
-   tz, overdue, days, mail, mailPending, todos, sections = {}},
+   tz, overdue, days, mail, mailPending, todos, series, seriesNote, sections = {}},
   tz = Lookup[data, "TimeZone", 0];
   overdue = Lookup[data, "Overdue", {}];
   days = Lookup[data, "Days", {}];
   mail = Lookup[data, "Mail", {}];
   mailPending = Lookup[data, "MailPendingCount", 0];
   todos = With[{t = Lookup[data, "Todos", {}]}, If[ListQ[t], t, {}]];
-  If[overdue === {} && days === {} && mail === {} && todos === {},
+  series = With[{t = Lookup[data, "Series", {}]}, If[ListQ[t], Select[t, AssociationQ], {}]];
+  seriesNote = Lookup[data, "SeriesNote", None];
+  If[overdue === {} && days === {} && mail === {} && todos === {} && series === {} && seriesNote =!= "TimedOut",
     Return[Style["\:4e88\:5b9a\:30fb\:3006\:5207\:30fb\:8981\:5bfe\:5fdc\:30e1\:30fc\:30eb\:306f\:3042\:308a\:307e\:305b\:3093\:3002",
       Italic, Gray]]];
   (* order: day-by-day calendar FIRST, then overdue, then actionable mails *)
@@ -1333,6 +1458,22 @@ SourceVaultRoutineAgendaView[from_, to_, opts : OptionsPattern[]] := Module[
           Bold, 12]], Alignment -> Left, Spacings -> 0.35],
       Background -> RGBColor[1, 0.95, 0.95], FrameStyle -> RGBColor[0.85, 0.55, 0.55],
       RoundingRadius -> 5, FrameMargins -> 8]]];
+  (* document 15: the new mails of the confirmed series (routine businesses) *)
+  If[seriesNote === "TimedOut",
+    AppendTo[sections, Framed[Style[
+        "\:25a3 \:5b9a\:578b\:696d\:52d9\:306e\:65b0\:7740: \:6642\:9593\:5185\:306b\:8a08\:7b97\:3067\:304d\:307e\:305b\:3093\:3067\:3057\:305f\:3002SourceVaultSeriesAgendaItems[] \:304b SourceVaultMailTaskProposalsView[] \:3067\:898b\:3066\:304f\:3060\:3055\:3044\:3002",
+        RGBColor[0.5, 0.2, 0.6], 11],
+      Background -> RGBColor[0.98, 0.95, 1], FrameStyle -> RGBColor[0.72, 0.6, 0.82],
+      RoundingRadius -> 5, FrameMargins -> 8]]];
+  If[series =!= {},
+    With[{nowAbs = N[AbsoluteTime[]]},
+      AppendTo[sections, Framed[Column[Prepend[
+          Map[iSVRPSeriesRow[#, nowAbs, tz] &, series],
+          Style["\:25a3 \:5b9a\:578b\:696d\:52d9\:306e\:65b0\:7740 (" <> ToString[Length[series]] <> ")",
+            RGBColor[0.5, 0.2, 0.6], Bold, 12]],
+          Alignment -> Left, Spacings -> 0.45],
+        Background -> RGBColor[0.98, 0.95, 1], FrameStyle -> RGBColor[0.72, 0.6, 0.82],
+        RoundingRadius -> 5, FrameMargins -> 8]]]];
   (* R9: actionable mails needing reply / owner-directed requests *)
   If[mail =!= {} || mailPending > 0,
     Module[{nowAbs = N[AbsoluteTime[]], rows},

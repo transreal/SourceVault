@@ -5,23 +5,72 @@ GitHub: https://github.com/transreal/SourceVault_webingest
 コンテキスト: `SourceVault`` コンテキスト内に定義される service-loadable な Web ingest / SearXNG 層。FrontEnd/Notebook/UI 依存なし。main kernel・service kernel 両方で動作する。
 
 依存: [SourceVault_core](https://github.com/transreal/SourceVault_core) (`SourceVaultRoot`, `SourceVaultCoreRoot`, `SourceVaultStorageDir`, `SourceVaultCommitBlob`, `SourceVaultSaveImmutableSnapshot`, `SourceVaultLoadImmutableSnapshot`)
-任意連携: [SourceVault_webguard](https://github.com/transreal/SourceVault_webguard) (Web egress guard。サブカーネル子でも読み込まれる), [SourceVault_mining](https://github.com/transreal/SourceVault_mining) (`SourceVaultSecurityPreScan`, `SourceVaultMiningWireProductionHooks`。子で hook を結線), [SourceVault_crypto](https://github.com/transreal/SourceVault_crypto)
+任意連携: [SourceVault_webguard](https://github.com/transreal/SourceVault_webguard) (Web egress guard。サブカーネル子でも読み込まれる。公式サイト取得の行き先評価 `SourceVaultWebReputation` にも使用), [SourceVault_mining](https://github.com/transreal/SourceVault_mining) (`SourceVaultSecurityPreScan`, `SourceVaultMiningWireProductionHooks`。子で hook を結線), [SourceVault_crypto](https://github.com/transreal/SourceVault_crypto), [NBAccess](https://github.com/transreal/NBAccess) (承認対象シンボル登録 `NBRegisterApprovalSetSymbols`)
 
 ## 検索
 
 ### SourceVaultSearXNGSearch[query_String, opts]
-SearXNG JSON API を叩き、候補 URL を正規化した Association を返す。
-→ `<|"Provider","Endpoint","Query","Language","ResultCount","TotalAvailable","Results","Suggestions","UnresponsiveEngines","FetchedAt","Status"|>` または `Failure`
+SearXNG JSON API を叩き、候補 URL を正規化した Association を返す。検索のたびに裏側の状態を覚え (`SourceVaultSearXNGHealth` が参照)、0 件と障害を `"BackendStatus"` で区別する。
+→ `<|"Provider","Endpoint","Query","Language","ResultCount","TotalAvailable","Results","Suggestions","UnresponsiveEngines","FetchedAt","Status"|>` または `Failure` (SearXNG 不達・応答不能時は `Failure["SearXNG..."]`)
 Results 各要素: `<|"Title","Url","Snippet","Engine","Category","Score","Rank","PublishedDate"|>`
 Options: "Endpoint" -> Automatic (未指定時は `$SourceVaultSearXNGEndpoint`), "MaxResults" -> 10, "Language" -> "ja", "SafeSearch" -> 1, "TimeoutSeconds" -> 20, "Categories" -> Automatic, "PageNo" -> Automatic
 
 ### SourceVaultWebSearch[query_String, opts]
-`SourceVaultSearXNGSearch` に最小 provenance と RunId を付加した SearchRun Association を返す。`"StoreSearchRun" -> True` 時に WebSearchRun 不変 snapshot と参照イベント (Searched) を自動保存する。
+`SourceVaultSearXNGSearch` に最小 provenance と RunId を付加した SearchRun Association を返す。`"StoreSearchRun" -> True` 時に WebSearchRun 不変 snapshot と参照イベント (Searched) を自動保存する。SearXNG に届かない・先の検索エンジンが全て応答しないときは `SourceVaultFallbackSearch` による予備検索へ自動で切り替える (`"BackendStatus" -> "Fallback"`)。
 → `<|"Provider","Endpoint","Query","ResultCount","Results","RunId","IngestProvenance","FetchPages","SearchRunRef",...|>` または `Failure`
+追加キー (状況により付与): `"BackendStatus"` ("OK"/"Degraded"/"EnginesUnresponsive"/"NoResults"/"Fallback"), `"Unresponsive"` (`{<|"Engine","Reason"|>..}`), `"FallbackRoutes"` (予備経路ごとの結果), `"SearchRoute"` ("Open"/"EnginesOnly"; 非公開データを読んだ会話や機密語を含む検索語は検索エンジンのみへ送る関所の結果), `"SearchRouteWhy"` ("PrivateTerms" 等)
 Options: `SourceVaultSearXNGSearch` の全オプション に加え、"FetchPages" -> False (True で本文取得; job 経由では上位 MaxFetch 件を per-result provenance 付きで `SourceVaultWebFetch` し `"Documents"`/`"FetchedPageCount"` を付加), "MaxFetch" -> 3, "StoreSearchRun" -> True, "RequestChannel" -> "Notebook", "InitiationType" -> "UserPromptSearch", "Actor" -> Automatic, "PromptRef" -> None
 
 ### SourceVaultWebSearchRunList[] → List
 保存済み WebSearchRun (検索監査記録) の Association リストを返す。
+
+## 予備の検索 (V5)
+
+### SourceVaultFallbackSearch[query_String] → Association
+通常の検索 (SearXNG) が使えないときの狭い範囲の予備検索。鍵不要の公開 API と組織の公式サイトのみを使う。検索語を関所に通すのは呼び出し側 (`SourceVaultWebSearch`)。公式サイト内の取得はこの関数が関所に通す (行き先評価が良好のホストのみ。ホスト名は Wikidata の公式ウェブサイト P856 から引く)。
+→ `<|"Status" -> "Succeeded"|"NoResults","Query","Results","Routes","RateLimited"|>`
+Results 各件: `<|"Title","Url","Snippet","Route"|>`
+Routes 各件: `<|"Route","Status" -> "OK"|"NoResults"|"RateLimited"|"Failed"|"TimedOut"|"SkippedBudget","Count","Seconds"|>`
+経路: "Wikipedia" (MediaWiki 検索 API), "OfficialSite" (Wikidata から公式サイトを引き、その中を探す), "arXiv"・"Crossref" (論文らしい検索語のときだけ)。全体で約 20 秒で打ち切る。
+外部 API の上限を自己管理する: 宛先の組 (Wikimedia / arXiv / Crossref / Site) ごとに 1 分あたりの上限 (Wikimedia は名乗り無し 8 回・連絡先付き UA で 60 回, arXiv 10 回かつ 3 秒間隔, Crossref 20 回, その他 10 回)。上限に近い経路は送らず飛ばし `"RateLimited"`、429/503 は Retry-After (無ければ 5 秒以上) の間送らない。同じ URL の応答は 10 分キャッシュ (200 かつ 300 KB 以下、最大 80 件)。
+
+### $SourceVaultFallbackSearchRoutes
+型: List, 初期値: {"Wikipedia", "OfficialSite", "arXiv", "Crossref"}
+予備検索に使う経路。{} で予備検索を使わない。代入は NBAccess の承認対象。
+
+### $SourceVaultFallbackSearchUserAgent
+型: String|Automatic, 初期値: Automatic
+予備検索が外部 API に名乗る User-Agent。Automatic は連絡先もシステム名も含まない一般的な名前 (`FallbackSearch/1.0 (...)`) を送る。8 文字以上の文字列 (URL かメールアドレスの連絡先を含めるのが望ましい) を設定すると Wikimedia の規約に沿ったクライアントとして扱われ枠が広がる (自己上限も 1 分 60 回)。設定値はそのまま外部に送られる。代入は NBAccess の承認対象。
+
+## SearXNG の健全性・版・更新
+
+### SourceVaultSearXNGHealth[opts]
+検索の裏側 (SearXNG と先の検索エンジン) の状態を返す。ふだんは `SourceVaultSearXNGSearch` が検索ごとに覚えた状態を返すだけで通信しない。覚えた状態が無い・古い ("MaxAgeSeconds") ときと "Probe" -> True のときだけ固定の検索語 1 つで試す (検索語は指定不可)。EnginesUnresponsive = SearXNG は動いているが先のエンジンが全て応答しない (CAPTCHA・回数制限等)。「0 件」(NoResults) とは別で、MCP の `sourcevault_web_search` はモデルに検索障害として返す。
+→ `<|"Status" -> "OK"|"Degraded"|"EnginesUnresponsive"|"NoResults"|"Unreachable"|Missing["NotObserved"],"ResultCount","Unresponsive" -> {<|"Engine","Reason"|>..},"ConsecutiveFailures","AtUTC","AgeSeconds","LastOKAtUTC","Probed","Endpoint"|>`
+Options: "MaxAgeSeconds" -> 600, "Probe" -> False
+
+### SourceVaultSearXNGVersion[opts]
+SearXNG の版を調べて返す。読み取りだけで何も変えない。docker が使えない機では Container / LocalImage は Missing。古い版は検索 0 件の主因になる。
+→ `<|"Running","RunningDate","AgeDays","Stale" (AgeDays > $SourceVaultSearXNGMaxAgeDays),"Container","LocalImage" (Id/Created/RepoDigests),"Latest" (Docker Hub 最新タグの digest と更新日時),"UpdateAvailable" (True|False|Missing),"Advice"|>`
+Options: "CheckRemote" -> True (False で Docker Hub 照会を省く)
+
+### SourceVaultSearXNGUpdate[opts]
+SearXNG イメージを最新に更新する (所有者専用)。現イメージに `rollback-<日付>` タグを付けて残し、docker compose pull → up -d → 起動確認 → `SourceVaultSearXNGHealth` の試し検索の順に行う。新版が起動しない/更新後に検索できないなら元のイメージに戻す。既に最新なら何もしない。カーネルは pull の間 (数分) 止まる。記録は `LocalState/searxng/update-log.jsonl`。主体が所有者 (OwnerFE / OwnerCode) でなければ `Failure["SearXNGNotAuthorized"]`。NBAccess の承認 head。
+→ `<|"Status" -> "Updated"|"AlreadyLatest"|"RolledBack"|"Failed","Before","After","Health","RollbackTag","Steps"|>`
+Options: "Rollback" -> True (False で戻さない), "Force" -> False (True で最新でも作り直す), "DryRun" -> False (True は実行する手順だけ返す)
+例: FE からは `SourceVaultIntegrityOwnerAction[SourceVaultSearXNGUpdate[]]`
+
+### $SourceVaultSearXNGComposeDirectory
+型: String, 初期値: `FileNameJoin[{$HomeDirectory, "searxng"}]`
+SearXNG の docker-compose.yml があるフォルダ。代入は NBAccess の承認対象。
+
+### $SourceVaultSearXNGComposeService
+型: String, 初期値: "core"
+docker-compose.yml 内の SearXNG 本体の service 名。代入は NBAccess の承認対象。
+
+### $SourceVaultSearXNGMaxAgeDays
+型: Integer, 初期値: 30
+動いている SearXNG の版がこの日数より古いと Stale とみなす。
 
 ## ジョブ管理 (command/job 二層)
 
@@ -182,6 +231,8 @@ Options: "MaxHighlights" -> 5, "MinChars" -> 20
 → `<|"Summary","Model","Status"|>` または `Failure`; Persist 時は `"ArtifactRef"` を追加
 Options: "Instruction" -> (モデル既定), "MaxTokens" -> (モデル既定), "Temperature" -> (モデル既定), "Endpoint" -> Automatic, "Model" -> Automatic, "TimeoutSeconds" -> (既定), "Persist" -> False, "SourceRefs" -> {}, "SourceUrls" -> {}, "Query" -> None, "Provenance" -> `<||>`, "QuarantinePolicy" -> "Block", "TrustedOrigin" -> Missing[], "LLMFn" -> Automatic, "PrepareToken" -> Automatic, "RunRef" -> Automatic
 
+Endpoint 制限 (02 v1.2 §7.1 A-4, 2026-11-09): `"Endpoint"` に `$SourceVaultSummaryEndpoint` と `$SourceVaultSummaryAllowedEndpoints` に無い URL を渡すと、ネットワークに出る前に `Failure["EndpointNotRegistered"]` で拒否する (Bearer token の送り先を限定)。
+
 **1H-S token 配線(パイロット・2026-07-14)**: `"PrepareToken"`(Automatic=LLM boundary が active(`SourceVaultLLMBoundaryActiveQ["webingest:iWebLLMComplete"]`)のときのみ、最終 envelope(model 先解決済み)を `SourceVaultPrepareLLMInput` で mint して境界へ渡す / True=常に / False=しない)。`"RunRef"`(Automatic="svrun:webingest:SummarizeText")。boundary を Enforce に昇格した場合、token 無し送信は `Failure["LLMBoundaryRefused"]`。
 
 **1H-S security (v0.5 P0-01/03/05)**: 入力が pre-scan で quarantined のとき `"QuarantinePolicy"`(既定 `"Block"`)で raw を LLM に渡さない — `"Block"`=Failure、`"MetadataOnly"`=本文を渡さず metadata のみ返す、`"SafeInspection"`=続行するが出力を `Tainted->True` にし永続しない。pre-scan 不達(mining 未ロード等)は `"PreScanUnavailable"/"NeedsSecurityScan"` を付与し永続保留(fail-open にしない)。`"UntrustedInput" -> False`(untrusted 境界の無効化)は `"TrustedOrigin"`(OwnerTypedInstruction|SystemPolicy|VerifiedDirective)が無ければ Failure(I-14)。`"LLMFn"` は依存注入シーム(既定 Automatic=`iWebLLMComplete`)。
@@ -207,7 +258,7 @@ artifact 必須キー: `"ArtifactType"` (既定 "Generic"), `"Text"` (`"Summary"
 DerivedArtifact snapshot を ref から読み出す薄いロードラッパー (`SourceVaultLoadImmutableSnapshot`)。
 
 ### SourceVaultDerivedArtifactList[opts] → List
-保存済み DerivedArtifact の一覧 (各 assoc に `"Ref"` を付与) を返す。
+保存済み DerivedArtifact の一覧 (各 assoc に `"Ref"` を付与) を返す。段 2 (鍵の組 derived) で暗号化された snapshot は core の読み手で復号して読む。
 Options: "ArtifactType" -> All
 
 ### SourceVaultDerivedArtifactsForSource[recordId_String] → List
@@ -218,6 +269,10 @@ Options: "ArtifactType" -> All
 ### $SourceVaultSummaryEndpoint
 型: String, 初期値: "http://localhost:1234/v1/chat/completions"
 要約に使う LLM の chat completions エンドポイント (LM Studio OpenAI 互換)。
+
+### $SourceVaultSummaryAllowedEndpoints
+型: List, 初期値: {}
+要約 LLM クライアントが Bearer token を付けて送ってよい送り先 (`scheme://host[:port]` か完全な URL) のリスト。`$SourceVaultSummaryEndpoint` は常に含まれる。代入は NBAccess の承認対象 (`$NBApprovalSetSymbols`)。
 
 ### $SourceVaultSummaryModel
 型: String|Automatic, 初期値: Automatic
@@ -263,7 +318,11 @@ SearXNG 不可時の後方互換 integration ID。
 | 関数 | 重要キー |
 |---|---|
 | SourceVaultSearXNGSearch | Provider / Results[]{Title,Url,Snippet,Rank} / Status |
-| SourceVaultWebSearch | RunId / IngestProvenance / SearchRunRef / Results |
+| SourceVaultWebSearch | RunId / IngestProvenance / SearchRunRef / Results / BackendStatus / FallbackRoutes |
+| SourceVaultFallbackSearch | Status / Results[]{Title,Url,Snippet,Route} / Routes / RateLimited |
+| SourceVaultSearXNGHealth | Status / ResultCount / Unresponsive / ConsecutiveFailures / AgeSeconds |
+| SourceVaultSearXNGVersion | Running / AgeDays / Stale / UpdateAvailable / Advice |
+| SourceVaultSearXNGUpdate | Status / Before / After / Health / RollbackTag / Steps |
 | SourceVaultWebSearchSubmit | JobId / Status / Async / Executor |
 | SourceVaultWebJobResult | Ready / Result / FailureReason |
 | SourceVaultWebJobPump | Pending / Reaped |

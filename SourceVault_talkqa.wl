@@ -125,9 +125,10 @@ SourceVaultTalkQANeighbors::usage =
   "opts: \"PackId\", \"Hops\" (既定 2), \"Limit\" (既定 5), \"Mode\"。";
 
 SourceVaultTalkQAWebAnswer::usage =
-  "SourceVaultTalkQAWebAnswer[question, opts] は承諾を得たあとの web 検索で回答を作り、\n" <>
-  "結果を KB へ取り込んで次回から即答できるようにする。\n" <>
-  "opts: \"PackId\", \"KBId\", \"Limit\" (既定 5), \"Ingest\" (既定 True), \"Rebuild\" (既定 True)。";
+  "SourceVaultTalkQAWebAnswer[question, opts] は承諾を得たあとの web 検索で回答を作る。\n" <>
+  "\"Ingest\" -> True のときだけ結果を KB へ取り込む (既定 False: web snippet は UNTRUSTED な外部文で、\n" <>
+  "KB に入れると以後の回答の根拠になるため、取り込みは所有者の明示に限る。02 v1.2 A-5 / P1-15、2026-11-09)。\n" <>
+  "opts: \"PackId\", \"KBId\", \"Limit\" (既定 5), \"Ingest\" (既定 False), \"Rebuild\" (既定 True)。";
 
 SourceVaultTalkQAQuestions::usage =
   "SourceVaultTalkQAQuestions[slide] はそのスライドの想定質問と回答候補を返す。";
@@ -1226,8 +1227,11 @@ SourceVaultTalkQANeighbors[slideIn : (_Integer | Automatic) : Automatic,
 
 (* ---- web への逃がし ---- *)
 
+(* A-5 (02 v1.2 / P1-15, 2026-11-09): web snippet は UNTRUSTED な外部文。KB へ入れると以後の回答の
+   根拠になり (R-05 / R-12)、文中の指示も残る。既定では取り込まず、所有者が "Ingest" -> True を
+   明示したときだけ入れる。 *)
 Options[SourceVaultTalkQAWebAnswer] = {"PackId" -> Automatic, "KBId" -> Automatic,
-  "Limit" -> 5, "Ingest" -> True, "Rebuild" -> True, "Slide" -> Automatic,
+  "Limit" -> 5, "Ingest" -> False, "Rebuild" -> True, "Slide" -> Automatic,
   "Verbose" -> False};
 
 SourceVaultTalkQAWebAnswer[question_String, OptionsPattern[]] := Module[
@@ -1285,7 +1289,7 @@ SourceVaultTalkQAWebAnswer[question_String, OptionsPattern[]] := Module[
       "Source" -> "Web", "PrivacyLevel" -> 0.,
       "ElapsedMs" -> Round[(AbsoluteTime[] - t0) 1000.]|>]];
   text = iTQWebSummary[question, items, terms];
-  (* 次回から即答できるように KB へ入れる *)
+  (* "Ingest" -> True のときだけ KB へ入れる (既定 False、A-5: web snippet は UNTRUSTED) *)
   sourceId = "web-" <> StringTake[Hash[question, "SHA256", "HexString"], 10];
   If[TrueQ[OptionValue["Ingest"]] &&
       Length[DownValues[SourceVault`SourceVaultKBIngestTexts]] > 0,

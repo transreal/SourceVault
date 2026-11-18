@@ -260,7 +260,7 @@ item 本文テキストを抽出する。PDF は原本から直接ページ抽�
 Options: "MaxPages" -> 15 (整数 | All | Infinity), "MaxChars" -> 8000 (全文が要るときは明示的に大きく指定), "Library" -> Automatic
 
 ### SourceVaultEagleSummarize[item, opts]
-item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約し書誌情報 (Title/Authors/Published) も同時抽出する (PDF は埋め込みメタデータをフォールバック)。画像はサムネイル優先 (原本フォールバック) で vision 要約する。動画は 2 段 pipeline: Stage 1 で n フレーム ("Frames" 個、nested dyadic 位置) を各 "FrameMaxLength" 文字で個別 vision 記述し record の `"Frames"[*]."Text"` に保存、Stage 2 でフレーム説明を時刻順統合して最終 summary を生成する。既定はローカル LLM (`$ClaudePrivateModel`)。`$SourceVaultEagleCloudPublishableTag` タグ付き item は Automatic でもクラウドへ切り替わる。"Local" 経路 (Cloud-Publishable でない = 機密扱いの item) は送る前に送信先の上限を PL 1.0 で確かめ (rule 107。`ClaudeCode`ClaudeLocalLLMAccessCheck`、claudecode 未ロードなら確認しない)、Subnet を信用していない同じ LAN の別機 (上限 0.25) などで止まると送らずに `<|"Status" -> "Error", "Reason" -> "AccessLevelExceeded", "Detail" -> 理由の文, "Id", "Hint"|>` を返す (ほかの空応答は従来どおり `"Reason" -> "LLMUnavailableOrEmpty"`。動画で再利用できるフレーム説明も無ければ、統合の前に `Failure["SourceVaultEagleVideoFramesUnavailable", ..]` で止まる)。PDF・画像・動画が混在するフォルダでも batch/summaries/search が一貫動作する (動画は vision 呼び出しが n 回になるためコスト増)。summary は `PrivateVault/eagle/summaries/<id>.json` に保存。
+item のサマリーを LLM で生成・保存する。PDF/Word/PowerPoint/テキストは本文抽出後に要約し書誌情報 (Title/Authors/Published) も同時抽出する (PDF は埋め込みメタデータをフォールバック)。画像はサムネイル優先 (原本フォールバック) で vision 要約する。動画は 2 段 pipeline: Stage 1 で n フレーム ("Frames" 個、nested dyadic 位置) を各 "FrameMaxLength" 文字で個別 vision 記述し record の `"Frames"[*]."Text"` に保存、Stage 2 でフレーム説明を時刻順統合して最終 summary を生成する。既定はローカル LLM (`$ClaudePrivateModel`)。`$SourceVaultEagleCloudPublishableTag` タグ付き item は Automatic でもクラウドへ切り替わる。"Local" 経路 (Cloud-Publishable でない = 機密扱いの item) は送る前に送信先の上限を PL 1.0 で確かめ (rule 107。`ClaudeCode`ClaudeLocalLLMAccessCheck`、claudecode 未ロードなら確認しない)、Subnet を信用していない同じ LAN の別機 (上限 0.25) などで止まると送らずに `<|"Status" -> "Error", "Reason" -> "AccessLevelExceeded", "Detail" -> 理由の文, "Id", "Hint"|>` を返す (ほかの空応答は従来どおり `"Reason" -> "LLMUnavailableOrEmpty"`。ローカル LLM がタイムアウトした場合は `"Reason" -> "LLMTimeout"`。動画で再利用できるフレーム説明も無ければ、統合の前に `Failure["SourceVaultEagleVideoFramesUnavailable", ..]` で止まる)。PDF・画像・動画が混在するフォルダでも batch/summaries/search が一貫動作する (動画は vision 呼び出しが n 回になるためコスト増)。summary は `PrivateVault/eagle/summaries/<id>.json` に保存。
 → Association
 Options:
 "Method" -> Automatic ("Local"|"Claude"),
@@ -307,7 +307,7 @@ Options: "Ext" -> Automatic, "Limit" -> Automatic, + SourceVaultEagleExtractBibM
 例: `SourceVaultEagleExtractBibMetaBatch["", "Ext"->"pdf", "Limit"->20]`
 
 ### SourceVaultEagleSummarizeBatch[items, opts]
-item リスト (または検索 query 文字列) を一括要約し統計を返す。生成済み (Current) はスキップ。Kind (PDF/Word/PowerPoint/Sheet/Text/Image/Video) ごとに自動 dispatch するため、種別が混在するフォルダでも一括処理できる (動画はフレーム数ぶん vision 呼び出しが増えるためコスト・時間に注意)。1 件の失敗で全体を止めない。"Method"->Automatic では item ごとに判定: Cloud-Publishable タグ付きはクラウド (`$ClaudeModel`)、それ以外はローカル (`$ClaudePrivateModel`)。
+item リスト (または検索 query 文字列) を一括要約し統計を返す。生成済み (Current) はスキップ。Kind (PDF/Word/PowerPoint/Sheet/Text/Image/Video) ごとに自動 dispatch するため、種別が混在するフォルダでも一括処理できる (動画はフレーム数ぶん vision 呼び出しが増えるためコスト・時間に注意)。1 件の失敗で全体を止めない。"Method"->Automatic では item ごとに判定: Cloud-Publishable タグ付きはクラウド (`$ClaudeModel`)、それ以外はローカル (`$ClaudePrivateModel`)。返り値の "Failures" は失敗した item ごとの `<|"Id","Name","Reason","Detail"|>` (Reason "LLMTimeout" は "Timeout" 秒以内に答えが来なかったもの。"Timeout"->600 などで再実行する)。
 → Association
 Options: SourceVaultEagleSummarize と同じ全オプション (Method, MaxLength(400), MaxChars(8000), MaxPages(15), Frames(5), FrameMaxLength(200), Language, Timeout(240), ForceRefresh(False), Ingest(True), Copy(False), WriteAnnotation(False), Persist(True)) + SourceVaultEagleSearch と同じ絞り込みオプション (Tags, TagMode("Any"), Folder, Recursive(True), Ext, DateFrom, DateTo, DateBy("btime"), IncludeDeleted(False), HasAnnotation, IncludeSummary(True), SortBy, SortOrder("Desc"), Newest(True)) + "Limit" -> Automatic (要約件数の上限), "Library" -> Automatic
 例: `SourceVaultEagleSummarizeBatch["", "Folder"->"自然計算関連", "Ext"->"pdf", "Limit"->2]`
@@ -403,7 +403,7 @@ Eagle View/Dataset/Search/GeoView の生出力セルを、表示 item の最大 
 ## オブジェクトビュー (sv:// URI)
 
 ### SourceVaultObjectToCell[uri, opts]
-sv:// オブジェクトの内容/プロパティをノートブックのセルに出力し、そのセルの PrivacyLevel をオブジェクトの privacy level に継承する (level > 0.5 なら confidential マーク)。ノートブックが無い (headless) 場合は `Status->"NoNotebook"` で値だけ返す。
+sv:// オブジェクトの内容/プロパティをノートブックのセルに出力し、そのセルの PrivacyLevel をオブジェクトの privacy level に継承する (level > 0.5 なら confidential マーク)。ノートブックが無い (headless) 場合は `Status->"NoNotebook"` で値だけ返す (Data/Properties も含む)。
 → Association `<|Status, URI, PrivacyLevel, Confidential, Cells|>`
 Options: "Notebook" -> Automatic (省略時 `InputNotebook[]`), "Show" -> "Both" ("Data"|"Properties"|"Both")
 

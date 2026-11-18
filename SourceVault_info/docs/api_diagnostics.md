@@ -29,8 +29,12 @@ Phase 0 スコープ: シンク可用性の弱検出 / 構造化 append-only 診
 
 ## 診断ログ
 
+### $SourceVaultDiagnosticsCanonicalWriter
+型: True | Automatic, 初期値: Automatic
+True のカーネル（service kernel が起動時に立てる）だけが正準診断ログ `<CoreRoot>/diagnostics/machines/<tag>/diagnostics-log.jsonl` に直接書く。それ以外（FE・headless、既定 Automatic）の SourceVaultDiagnosticsLog は自機 spool（`diagnostics-<pid>-<yyyymmdd>.jsonl`）に書き、service の SourceVaultDiagnosticsIngestSpool が転記と issue fan-out を行う（03 v0.4 §2.1 Inc0-c / SIEM 仕様 05 Inc5, 2026-11-09）。
+
 ### SourceVaultDiagnosticsLog[record_Association] → Association | Failure
-構造化診断レコード（reason code / component / severity / health / machine tag）を machine-local append-only 診断ログに追記する（AtUTC / MachineTag を付加）。格納したレコードを返す。vault root が解決できない場合は Failure["VaultRootUnresolved"]、ディレクトリ作成不可は Failure["LogDirUnwritable"]、open 失敗は Failure["LogOpenFailed"]。非 JSON 値（Missing 等）を含むレコードは JSON-safe コピーで再書き込みする。
+構造化診断レコード（reason code / component / severity / health / machine tag）を machine-local append-only 診断ログに追記する（AtUTC / MachineTag を付加）。非 canonical writer のカーネルでは自機 spool に書く（上記変数参照）。格納したレコードを返す。vault root が解決できない場合は Failure["VaultRootUnresolved"]、ディレクトリ作成不可は Failure["LogDirUnwritable"]、open 失敗は Failure["LogOpenFailed"]。非 JSON 値（Missing 等）を含むレコードは JSON-safe コピーで再書き込みする。
 
 ### SourceVaultDiagnosticsPublish[event_Association] → Association
 診断 event の bus 入口（issues spec v0.4 §4.2）。canonical diagnostics-log へ記録し、issue DB へ弱結合 fan-out（machine-local outbox への enqueue のみ・登録/分析は writer 側 reconciler が担当）する。mail/FE escalation は行わない（それは SourceVaultDiagnosticsEscalate = Publish + mail policy）。返り値は "IssueSignalQueued" を含む。issues 層自身の障害 event は再投入しない（reentrancy guard）。
@@ -157,6 +161,7 @@ SystemDoctor のパレットを開く（ShowClaudePalette / ShowDocPalette と�
 - 状態: 全体の健康状態と時刻（開いた時点では直近の定期診断の結果。[診断を実行] で更新）。
 - 診断: [診断を実行]（軽量診断を実行して状態を更新し、SourceVaultSystemDoctorView のウインドウを開く）、[完全診断]（プロセス構成込み）、[診断ログ]（SourceVaultDiagnosticsLogView）、[SIEM]（ClaudeCode`ClaudeDiagEvents）、[イシュー]（SourceVaultIssuePanel）、[プロセス]（ClaudeCode`ClaudeProcessList）、[ライセンス]（SourceVaultDiagnosticsPanel）。
 - 分離検査: [検査…]（対象をダイアログで選ぶ）、[全体検査]、[修正…]（ファイルを選んで確認）、[実行一覧]（ClaudeCode`ClaudeSeparationRunsView のウインドウ）、[検出一覧…]（パッケージを選んで ClaudePackageManager`ClaudeSeparationView）。実行は ClaudeCode`ClaudeSeparationRunStart (Caller "SystemDoctor") で記録され、開始すると実行一覧を開く。
+- Web アクセス: 関所（webguard）が読み込まれているとき、Web アクセスの集計（SourceVaultWebAccessSummaryView）を開く。
 - リポジトリ: [リポジトリ状況]（SourceVaultRepositoryStatusView のウインドウ）。
 - 監視: [定期診断: 稼働中/停止中]（SourceVaultDiagnosticsStartTick (300 秒) / StopTick の切替）、[シャドウ監視]（SourceVaultShadowWatchStart / Stop の切替）、[シャドウ検査]（SourceVaultShadowedSystemSymbols の結果）。
 常駐の自動更新はしない（状態はパレット内の DynamicModule 変数をボタンが更新する）。ボタンの処理は ClaudeCode`ClaudeHoldFrontEnd で包み、その間は claudecode の共有 polling tick がフロントエンドに触れない。ウインドウは種類ごとに 1 つで、開き直すと前のものは閉じる。claudecode / ClaudePackageManager / SourceVault_issues が無い機能はダイアログで知らせる。
@@ -238,7 +243,7 @@ shadow watch を無効化し、（自分がインストールしたものであ�
 ## Polling Tick
 
 ### SourceVaultDiagnosticsTick[opts] → String | Association
-共有 polling tick から呼ばれる軽量 body。throttle あり（default 60s; 期間内は <|"Status"->"Throttled", "SinceLastSeconds"->..|>）。各実行で軽量 machine heartbeat（topology なし）を書き、heartbeat の doctor 結果から監視対象コンポーネント（log coverage, Codex, WebAccessReview, MCPKernels。MCPKernels は既定一覧と別に追加されるので、稼働中のカーネルで読み直しても入る。tick の doctor はプロセス構成を見ないので、重複 MCP カーネルだけではここから警告しない）を warning へ escalate し（(component, reason) ごとに 24h に 1 回、issue DB signal・status band/mail・FE 通知。回復でキーを忘れ再発時は再警告。プローブ自身の異常は ProbeFault として別文言）、aborted write により開いたままの stray vault file stream を解放し（SourceVaultReleaseFileStreams の "MinAgeSeconds" 指定: 10 分アイドルのストリームのみ。tick は main evaluation を interrupt するため使用中ストリームを閉じると kernel がクラッシュする; 開いたハンドルは Dropbox sync をブロックし conflicted copy を招くため。解放時は StrayStreamsReleased を記録）、comprehensive doctor が freshness window（90000 秒 = 24h+1h grace）内に走っていなければ DoctorStale を emit する（ログは 1 日 1 回まで）。kernel を spawn せず Front End にも触れない。短い status を返す。手動呼び出しも安全。
+共有 polling tick から呼ばれる軽量 body。throttle あり（default 60s; 期間内は <|"Status"->"Throttled", "SinceLastSeconds"->..|>）。各実行で軽量 machine heartbeat（topology なし）を書き、heartbeat の doctor 結果から監視対象コンポーネント（`$iSVDiagWatchedComponents`: log coverage, Codex, WebAccessReview, MCPKernels, Provenance, MonitorSelf, Instructions, Policy。MCPKernels 以降は既定一覧と別に追加されるので、稼働中のカーネルで読み直しても入る。Provenance / MonitorSelf / Instructions / Policy のプローブは SourceVault_integrity が登録し state.json を読むだけ（03 v0.4 §7）。tick の doctor はプロセス構成を見ないので、重複 MCP カーネルだけではここから警告しない）を warning へ escalate し（(component, reason) ごとに 24h に 1 回、issue DB signal・status band/mail・FE 通知。回復でキーを忘れ再発時は再警告。プローブ自身の異常は ProbeFault として別文言）、aborted write により開いたままの stray vault file stream を解放し（SourceVaultReleaseFileStreams の "MinAgeSeconds" 指定: 10 分アイドルのストリームのみ。tick は main evaluation を interrupt するため使用中ストリームを閉じると kernel がクラッシュする; 開いたハンドルは Dropbox sync をブロックし conflicted copy を招くため。解放時は StrayStreamsReleased を記録）、comprehensive doctor が freshness window（90000 秒 = 24h+1h grace）内に走っていなければ DoctorStale を emit する（ログは 1 日 1 回まで）。kernel を spawn せず Front End にも触れない。短い status を返す。手動呼び出しも安全。
 Options: "IntervalSeconds" -> 60 (body の throttle 秒数), "Force" -> False (True で throttle を無視)
 
 ### SourceVaultDiagnosticsStartTick[opts] → Association

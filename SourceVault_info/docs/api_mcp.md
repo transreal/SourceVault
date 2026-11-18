@@ -6,10 +6,20 @@
 `<|"name" -> "sourcevault", "version" -> "0.1.0"|>` を返す。
 
 ### SourceVaultMCPTools[] → List
-MCP tool 定義 (name/description/inputSchema) のリストを返す (組み込み 26 tool + `SourceVaultMCPRegisterTools` で外部登録された tool)。一覧は次節「MCP tool 一覧」参照。
+MCP tool 定義 (name/description/inputSchema) のリストを返す (組み込み tool + `SourceVaultMCPRegisterTools` で外部登録された tool)。全クライアントで無効なツール (`$iSVMCPDisabledTools`、2026-11-09 時点 `sourcevault_workflow_write`) は含まない (02 v1.2 A-1)。一覧は次節「MCP tool 一覧」参照。
 
 ### SourceVaultMCPCallTool[name, args] → Association
 tool を実行し MCP result `<|"content", "isError"|>` を返す。内部は `Switch[name, ...]` dispatch で各 tool を対応する内部関数に委譲、組み込み tool に無ければ `$SourceVaultMCPExternalTools` の登録 Handler を試す。未知 tool は Failure ではなく `isError:true` の text ("Unknown tool: ...")。`args["_mcpClient"]` から `iMCPProvenance` (Actor/RequestChannel/InitiationType) を組み立て検索・deposit 系呼び出しの provenance に付与する。読み取り系 tool は `iSVRecordToolCall` で observed-read-max 用の監査ログを書く (§13.3/§13.4 の入力になる)。`sourcevault_deposit`/`sourcevault_workflow_write` は自前の append-only 監査ログを持つため対象外。mail/OOPS 系 tool は "CloudSafe"->True を下位関数に渡し私的コンテンツを除外する。
+主体の束縛点 (3): `$SourceVaultPrincipal` が未束縛なら MCP (Channel = 接続経路、ClaimedClient = `_mcpClient` の自己申告) に Block で束縛する。Model / OwnerCode / OwnerFE が既に束縛されたカーネル内呼び出しはそのまま (03 v0.4 §6.1、2026-11-09)。
+無効ツールの呼び出しは `SourceVaultRecordMCPCall` に Decision "Denied" で記録される。
+
+### $SourceVaultMCPCallReport
+型: Association (Block で束縛して使う), 初期値: 未束縛
+tools/call 1 回の放出 PL の返し口 (W1、文書 11 §5.1)。呼び出し元 (claudecode のツールループ) が Block で `<||>` にしておくと、`SourceVaultMCPCallTool` が `<|Tool, ObservedPL, MaxReleasedPrivacy, SelfPL, FloorPL, Empty, Error|>` を入れる。ObservedPL はモデルに渡した中身の PL の見積もりで、Max[結果に付いた PL (MaxReleasedPrivacy)、結果そのものの PL (fs_read の PrivacyLevel・kb_answer の MaxPrivacyLevel)、ツールごとの下限]。エラーの応答は 0、0 件・見つからないときは下限を使わない。Block していなければ何も書かない (MCP の dispatch など)。
+
+### $SourceVaultMCPToolReadFloorPL
+型: Association (tool -> pl)
+ツールごとの放出 PL の下限 (W1)。件ごとの PL を返さないメール・OOPS の読取に使う (既定: mail_thread / mail_search_threads 0.7、oops_thread / oops_search_threads 0.5)。表に無い組み込みツールは 0、組み込みでないツール (外部登録) は 0.5。代入は NBAccess の承認対象 (下限を下げると機密を読んだ後も外部検索が残る)。
 
 ### SourceVaultMCPRegisterTools[id, spec] → Association
 外部パッケージが MCP tool 群を登録する package-neutral な拡張点 (2026-09-22 追加)。`SourceVaultMCPTools[]`/`SourceVaultMCPCallTool` は組み込み tool の後に登録簿 `$SourceVaultMCPExternalTools` (id -> spec) を参照する。SourceVault より先にロードされるパッケージはこの連想へ直接書いてもよい (ロード時に保持される)。
@@ -31,7 +41,7 @@ MCP JSON-RPC の method (initialize/tools/list/tools/call/ping/notifications/ini
 - `sourcevault_fs_read` {path, maxBytes?} — allow-list root 配下の UTF-8 text file を読む。実体 `iSVFSReadFile`。`.env`/`*secret*`/`*credential*`/鍵・証明書ファイル/`.ssh` 等は拒否、size は既定 512 KiB (`$svFSMaxBytes`) を上限に clamp (`maxBytes` で更に小さくは指定可)。戻り値の `PrivacyLevel` はファイルの宣言 PL (行頭スタンプ `:CodePrivacyLevel:` / .md の frontmatter `privacyLevel`、無ければ 0.0) で、固定 0.0 ではない。この tool は principal を見ないので、`*_private` ディレクトリ配下と宣言 PL >= 0.5 のファイルは `"Reason" -> "PrivateFileDenied"` で拒否する (2026-11-07)。宣言 PL の判定は `ClaudeDirectives`ClaudeDirectivePrivacyLevel` が読み込まれていればそれを使い、無ければ同じ規則の自前実装 (`iSVFSDeclaredPL`)。
 - `sourcevault_directives` {kind:"rules"|"skills"|"root"|"all" = "all"} — Claude Directives (rules/skills/CLAUDE.md) を name/description/tier/models/相対 `path`/宣言 `privacyLevel`/`sv://directive/<id>` URI で一覧。実体 `iSVFSDirectivesList`。CLI/API クライアントが同一 directive set を共有できるようにする。一覧は PrivacyLevel 0.0 なので絶対パスを含めない (表示名は `RootName`。kind が all/root のとき `Root` は CLAUDE.md 項目のリスト)。宣言 PL > 0 のファイルは description を伏せる。全文取得は `sourcevault_directive_body` か `sourcevault_get` (directive adapter)。
 - `sourcevault_directive_body` {name, kind?, maxChars?} — 正準 directive ルートの rule/skill/CLAUDE.md 1 本の全文を PrivacyLevel 0.0 で返す。実体 `iSVFSDirectiveBody`。cloud モデルのクライアント側ツールループに渡る 2 本のうちの 1 本。宣言 PL > 0 のファイルは本文を返さず `Status -> "PrivacyRestricted"` と `Uri` (`sv://directive/<id>`) だけを返す (2026-11-07)。
-- `sourcevault_workflow_write` {path, content} — allow-list root の `SourceVault_workflows/` サブツリーへ UTF-8 text を書き込む (上書き・親ディレクトリ自動作成・1 MiB 上限 `$svFSMaxWriteBytes`)。実体 `iSVFSWriteFile`。file 編集不可な API/LM Studio クライアント向け (Claude Code/Codex には不要)。write のため `iSVRecordToolCall` の観測ログ対象外。
+- `sourcevault_workflow_write` {path, content} — allow-list root の `SourceVault_workflows/` サブツリーへ UTF-8 text を書き込む (上書き・親ディレクトリ自動作成・1 MiB 上限 `$svFSMaxWriteBytes`)。実体 `iSVFSWriteFile`。file 編集不可な API/LM Studio クライアント向け (Claude Code/Codex には不要)。write のため `iSVRecordToolCall` の観測ログ対象外。2026-11-09 時点で `$iSVMCPDisabledTools` により全クライアントで無効 (`SourceVaultMCPTools[]` に出ない)。
 
 ### Orchestrator feedback 便利 tool (SourceVaultMCPSubmitFeedback の薄い wrapper)
 - `sourcevault_orchestrator_help` {text, goal?, evidenceRefs?, sessionId?} — `Kind->"HelpRequest"` で記録するだけ。orchestrator を直接動かさない。
@@ -124,7 +134,7 @@ sv:// オブジェクトの全プロパティを返す。共通 key: URI/Namespa
 
 ### SourceVaultRegisterMCPDataAdapter[name, spec] → Association|Failure
 data adapter を登録する。spec 必須: "Kinds" ({_String..})。
-任意 spec key: "Capabilities" (<|cap->bool|>)、"Search"/"Resolve"/"Read"/"SummaryRow"/"Metadata"/"Authorize"/"URIForObject"/"OwnsURIQ" 関数 (OwnsURIQ は `Function[parsedURI]->True|False` で `sourcevault_get` の URI 所有 adapter 選定に使う)、"Available" (bool)、"AvailableProbe" (Function[])、"RequireGrantFor" ({_String..})、"UnavailableReason"、"BodyGrantRequired" (bool、既定 True。False で view=body を grant なしで解放 — PublicDoc adapter 用、release gate は通す。R-spec §5.6)、"ExtraViews" (<|viewName -> Function[parsed, accessRequest]|>、adapter 固有 view。packageapi: contract/scaffolded/guided)、"FilterKeys"/"FilterExamples" ({_String..}、catalog に露出する adapter 固有 filter discovery。packageapi の packages 等)、"SearchWarnings" (Function[spec]->{<|Code,...|>..}、adapter 固有の非致命的検索警告。0 件時に LLM へヒントを返す)、"Description" (String、catalog 表示用の説明文)。
+任意 spec key: "Capabilities" (<|cap->bool|>)、"Search"/"Resolve"/"Read"/"SummaryRow"/"Metadata"/"Authorize"/"URIForObject"/"OwnsURIQ" 関数 (OwnsURIQ は `Function[parsedURI]->True|False` で `sourcevault_get` の URI 所有 adapter 選定に使う)、"Available" (bool)、"AvailableProbe" (Function[])、"RequireGrantFor" ({_String..})、"UnavailableReason"、"BodyGrantRequired" (bool、既定 True。False で view=body を grant なしで解放 — PublicDoc adapter 用、release gate は通す。R-spec §5.6)、"ExtraViews" (<|viewName -> Function[parsed, accessRequest]|>、adapter 固有 view。packageapi: contract/scaffolded/guided)、"FilterKeys"/"FilterExamples" ({_String..}、catalog に露出する adapter 固有 filter discovery。packageapi の packages 等)、"SearchWarnings" (Function[spec]->{<|Code,...|>..}、adapter 固有の非致命的検索警告。0 件時に LLM へヒントを返す)、"Description" (String、catalog 表示用の説明文)、"SchemaDisclosure" ("TypeOnly"|"None"、`SourceVaultMCPGet` が関所で止めたとき返す「形」の水準を自分の対象について下げる。§V10)。
 Capabilities key: Search / ReadMetadata / ReadSummary / ReadContext / ReadBody / DepositArtifact / ResolveObjectURI / SemanticSearch / MetadataFilter。未指定 key は False で補完する。
 返値: `<|"Status"->"OK", "Name", "Kinds", "Capabilities"|>`。Kinds 不正は `Failure["AdapterMissingKinds"]`、spec 非 Association は `Failure["AdapterSpecNotAssociation"]`。
 
@@ -170,7 +180,7 @@ Options: "Default" -> 0.5 (cloud 安全境界)
 ### SourceVaultMCPCatalog[opts]
 登録済み adapter の catalog を JSON 安全な連想で返す。各 adapter record: name/kinds/available/capabilities/requiresGrantFor、adapter 固有の description/filterKeys/filterExamples があれば付加、unavailable なら unavailableReason を付加。capabilities は内部 Capability key を短縮名で返す: Search->search, ReadMetadata->metadata, ReadSummary->summary, ReadContext->context, ReadBody->body, DepositArtifact->deposit, ResolveObjectURI->resolve_uri, SemanticSearch->semantic, MetadataFilter->metadataFilter。トップに defaultReturnFormats ({"compactText","structuredJson","referencesOnly"})。可用性は spec "AvailableProbe" (Function[]) があれば動的評価、無ければ静的 "Available"。`sourcevault_catalog` tool の実体。
 → Association
-Options: "IncludeUnavailable" -> True
+Options: "IncludeUnavailable" -> True (False で unavailable adapter を除外)
 
 ## AccessProfile / model 別アクセス設定 (spec §2.5)
 
@@ -194,7 +204,7 @@ request key: Provider / ModelId / ModelIntent / TrustDomain
 ## Prompt delivery profile (spec §2.5a)
 
 ### SourceVaultResolvePromptDeliveryProfile[request, opts]
-model/実行環境/MCP 可否から PromptDeliveryProfile (spec §2.5a) を返す。TrustDomain/TrustCeiling は opts "Trusted" と provider 級 cap (NBGetProviderMaxAccessLevel, guarded) から server 側で決め、自己申告では緩めない。provider の trust domain 分類は既知クラウド provider (anthropic/openai/gemini/azure/bedrock/cohere/mistral/zai/glm/kimi/moonshot/deepseek/groq/together/fireworks/openrouter/perplexity/xai 等) と既知ローカル推論 (lmstudio/ollama/llamacpp/vllm/koboldcpp/localai/freetoken 等) を判別し、どちらにも合致しなければ "Unknown" (Cloud と同じ安全側上限 0.49 を適用)。
+model/実行環境/MCP 可否から PromptDeliveryProfile (spec §2.5a) を返す。TrustDomain/TrustCeiling は opts "Trusted" と provider 級 cap (NBGetProviderMaxAccessLevel, guarded) から server 側で決め、自己申告では緩めない。provider の trust domain 分類は既知クラウド provider (anthropic/openai/gemini/azure/bedrock/cohere/mistral/zai/glm/kimi/moonshot/deepseek/groq/together/fireworks/openrouter/perplexity/xai 等) と既知ローカル推論 (lmstudio/ollama/llamacpp/vllm/koboldcpp/localai/freetoken 等) を判別し、どちらにも合致しなければ "Unknown" (Cloud と同じ安全側上限 0.49 を適用)。route / model 解決は prompt router に委譲する薄い planning layer (re-implement しない)。
 → Association
 Options: "Trusted" -> <||>, "ResolveAccessProfile" -> True
 request key (すべて advisory): provider / modelId / clientKind / mcpToolsVisible / sourcevaultMcpEnabled / canCallMcpDuringInference / localFolderReadableByTool / localPackageDirectoryReadable
@@ -215,7 +225,7 @@ trace 用 opaque correlation id を生成する。引数なしは "trace"。kind
 ### SourceVaultNormalizeMCPCallRecord[spec] → Association
 MCP call 監査 record (spec §13.3) を既定補完して正規化する。
 spec/返値 key: CallId / BatchId / JobId / TraceToken / SessionId / Tool / ArgumentURIs / ReleasedURIs / ReleasedProjection / MaxReleasedPrivacy / ProjectionPrivacyBasis / AccessGrantId / Decision / LinkConfidence / StartedAtUTC / FinishedAtUTC
-MaxReleasedPrivacy は released projection 自身の privacy (§4.1)。ProjectionPrivacyBasis: "Recomputed" | "SourcePrivacyFallback"。LinkConfidence: "Explicit" | "Metadata" | "Heuristic" | "Unlinked"。
+MaxReleasedPrivacy は released projection 自身の privacy (§4.1)。ProjectionPrivacyBasis: "Recomputed" | "SourcePrivacyFallback"。LinkConfidence: "Explicit" | "Metadata" | "Heuristic" | "Unlinked"。Decision: "Permit" | "Redacted" | "Denied" (Denied は無効ツールの呼び出し)。
 
 ### SourceVaultObservedReadMax[records, opts]
 privacy 会計の安全側 observed-read 上限 (Max) を返す。heuristic link も過小評価回避のため Max の上側に含める (spec §13.4 / P3 / P4)。numeric 皆無なら opts "Default"。
@@ -223,7 +233,7 @@ privacy 会計の安全側 observed-read 上限 (Max) を返す。heuristic link
 Options: "BatchId" -> Missing[] (trusted grouping filter), "SessionId" -> Missing[], "Default" -> 0.0
 
 ### SourceVaultEstimateOutputPrivacy[jobSpec, opts]
-LLM 出力の OutputPrivacyEstimate (spec §13.4) を純関数で返す。PrivacyLevel は観測入力の Max (監視外 channel 時は UnknownInputFloor へ引き上げ)。TrustCeiling では削らない (T1: sink/env は egress 時の NBAuthorize で加える)。declassification ではない。
+LLM 出力の OutputPrivacyEstimate (spec §13.4) を純関数で返す。PrivacyLevel は観測入力の Max (監視外 channel 時は UnknownInputFloor へ引き上げ)。TrustCeiling では削らない (T1: sink/env は egress 時の NBAuthorize で加える)。NBAccess EffectiveRiskScore の ObservedInputRisk 項に相当。declassification ではない (egress で再 gate)。
 → Association
 Options: "Records" -> {} (MCPCall record リスト)
 jobSpec key: DeliveryProfile / PromptPrivacyMax / BatchObservedReadMax / SessionObservedReadMax / LocalToolReadPrivacyMax / UserUploadPrivacyMax / ExplicitUserPromptPrivacyMax / InputsFullyMediatedBySourceVault / UnknownInputFloor / TrustCeiling / TrustDomain
@@ -238,7 +248,7 @@ spec key: SessionId / Title / DeliveryProfileId / ExpectedJobCount
 返値: `<|BatchId, SessionId, Status->"Running", StartedAtUTC, MintAuthority->"TrustedHost"|>`
 
 ### SourceVaultRecordMCPCall[spec] → Association
-MCP call 監査 record を正規化し LocalState/hotlog/mcp_calls/YYYY-MM.jsonl へ append-only 記録する (spec §13.3)。best-effort (LocalState 未解決や書込失敗でも応答を壊さない)。単一書き手は service kernel。
+MCP call 監査 record を正規化し LocalState/hotlog/mcp_calls/YYYY-MM.jsonl へ append-only 記録する (spec §13.3)。best-effort (LocalState 未解決や書込失敗でも応答を壊さない)。単一書き手は service kernel。spec に "Reason" があれば record に付く。Decision は Permit | Redacted | Denied。
 返値: `<|CallId, Recorded(bool), MaxReleasedPrivacy|>`
 
 ### SourceVaultMCPCallsRecent[opts]
@@ -285,9 +295,14 @@ OpenAI と接続された worker に PL>=0.5 の本文を返さないための�
 単一の sv:// URI を解決し、所有 adapter (`OwnsURIQ` で選定) の Resolve で低漏洩メタ/サマリー projection を取り、SourceVaultMCPReleaseGate で出口 gate して返す (spec §11.2)。既定 View="summary" は body/raw/attachment を含めず requiresGrant を示す。`sourcevault_get` tool の実体。
 View="body"|"raw"|"context" は `iSVMCPGetBody` に委譲し AccessGrant による本文解放を試みる (Phase D)。`iSVGrantPermitsView` が Grant の Valid、AllowedFields/AllowedActions("ReadBody")、AllowedKinds、AllowedObjectRefs を確認し、cloud sink への body 送出は有効な Grant があっても常に拒否 (Why->"CloudSinkBlockedForBody")、PrivacyLevel<=Grant.MaxAccessLevel も要る。Grant 未指定/不足時は `Why->"GrantRequired"` 等 + `HowToProceed` ヒントを返す。
 例外 (F6): (1) adapter が "BodyGrantRequired"->False を宣言する PublicDoc 系 (packageapi) は view=body を Grant なしで解放。(2) "BodyGrantRequired" 判定関数が公開と判定した URI (pdfindex で privacy 0.0 / storageType public と宣言済みドキュメントの sv://chunk/) も同様に解放。いずれも `Access.Why -> {"GrantFreePublicDoc"}` で release gate は通す。adapter の "ExtraViews" に登録された view (packageapi: contract=機械可読契約+AuditStatus / scaffolded / guided=粒度 tier 描画) はその projection を返す。
+関所で止めたとき (Released -> False、V10 / 文書 12 の 5.3 節): 判定に加えて "Schema" (あること・型・欄の名前と大きさ・件数・更新日。値は入れない) と "Refusal" (理由と次に取れる手段) を返す。水準は `$SourceVaultMCPSchemaDisclosure` と adapter の "SchemaDisclosure"。
 → Association (View/判定枝で形が可変)
 Options: "Principal" -> Automatic, "Trusted" -> <||>, "AccessLevel" -> Automatic (この呼び出し限定の access ceiling)、"ReleaseContext" -> None (`SourceVaultReleaseContextSpec` で MaxPrivacyLevel を解決し実効上限に反映)、"Grant" -> None (body/raw/context view のみ検証される AccessGrant)、"View" -> Automatic ("summary"(既定)|"body"|"raw"|"context"|adapter ExtraViews)、"AccessProfile" -> Automatic (Search と同じ §2.6 scope 合成)
-返値 key (共通): URI / Found / Released。無効 URI は `Why->{"InvalidURI"}` + Reason。summary 系はさらに Adapter / Result(Permit時) / Access / RequiresGrantFor / Why / EffectiveAccessLevel / AccessRequest。body/raw/context/ExtraViews はさらに Adapter / View / Result / Access / GrantId / Why(失敗時) / HowToProceed(Grant不足時)。
+返値 key (共通): URI / Found / Released。無効 URI は `Why->{"InvalidURI"}` + Reason。summary 系はさらに Adapter / Result(Permit時) / Access / RequiresGrantFor / Why / EffectiveAccessLevel / AccessRequest。body/raw/context/ExtraViews はさらに Adapter / View / Result / Access / GrantId / Why(失敗時) / HowToProceed(Grant不足時)。止めたときは Schema / Refusal が加わる。
+
+### $SourceVaultMCPSchemaDisclosure
+型: Association, 初期値: `<|"Enabled" -> True, "TypeOnlyPL" -> 0.9|>`
+`SourceVaultMCPGet` が関所で止めた対象について返す「形」の設定。Enabled が False なら形を返さない (判定だけ)。PL が TypeOnlyPL 以上の対象は欄の名前や件数を返さず、型と見るための手続きだけを返す (欄の名前や件数そのものが機密になりうるため)。PL 不明の対象・AccessTags の範囲で止めた対象・受け手がクラウドの LLM (ProviderClass CloudLLM) のときも型だけ (Unknown では型だけにしない)。adapter は "SchemaDisclosure" -> "TypeOnly" | "None" で自分の対象の水準を下げられる。値 (題名・要約・本文・メタデータの値) はどの水準でも返さない。欄の名前は識別子の形 (英字と _ だけ、40 字まで) のものに限る。代入は NBAccess の承認対象 (TypeOnlyPL を上げると機密の高い対象の欄の名前が出る)。
 
 ### SourceVaultMCPReleaseGate[result, accessRequest] → Association
 正規化済み SearchResult を返却してよいか判定する (spec §11, §2.4)。Decision は "Permit" | "Screen" | "Deny" の3種。
@@ -339,7 +354,7 @@ Options: "MaxAccessLevel" -> Automatic, "AllowedActions" -> Automatic, "AllowedK
 ## Feedback bridge (Phase F / §12)
 
 ### SourceVaultMCPSubmitFeedback[spec] → Association
-§12.3 FeedbackEnvelope を LocalState/hotlog/mcp_feedback へ append-only 記録する (service)。PrivacyLevel は自己申告だけでなく同一 Session/Batch の observed-read max (`SourceVaultObservedReadMax[SourceVaultMCPCallsRecent[...]]`) を継承し Max 合成する (§12.3)。effective PrivacyLevel >= 0.5 は RequireReview=True。MVP は記録のみ (Orchestrator 側 queue/accept/subtask 昇格は将来)。
+§12.3 FeedbackEnvelope を LocalState/hotlog/mcp_feedback へ append-only 記録する (service)。PrivacyLevel は自己申告だけでなく同一 Session/Batch の observed-read max (`SourceVaultObservedReadMax[SourceVaultMCPCallsRecent[...]]`) を継承し Max 合成する (§12.3)。effective PrivacyLevel >= 0.5 は RequireReview=True (cloud participant 再送前 review が要る)。MVP は記録のみ (Orchestrator 側 queue/accept/subtask 昇格は将来)。
 spec key: Kind("HelpRequest"|"SubtaskProposal"|"AccessRequest"|"Critique"|"Correction"|"SessionNote"、既定"SessionNote") / Principal / Payload(Text/Goal/SuggestedRole/SuggestedCapabilities/RequestedData/EvidenceRefs) / SessionId(既定"Unknown") / BatchId / PrivacyLevel(自己申告、既定0.5) / RequireApproval(既定False)
 未知 Kind は `Failure["InvalidFeedbackKind"]`。LocalState 未解決/書込失敗はそれぞれ `Failure["LocalStateUnresolved"|"FeedbackWriteFailed"]`。
 返値: `<|EventId, Status->"Queued", Kind, PrivacyLevel, RequireReview|>`

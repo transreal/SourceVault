@@ -155,14 +155,15 @@ NBCalendarFreeBusy、free/busy メタデータのみで AccessLevel 0.5 で動�
 Options: CapacityModel -> Automatic (=SourceVaultRoutineDefaultCapacityModel[]), FreeBusy -> Automatic
 (live 読み取り。注入可), AwayDays -> {}, TimeZone -> 0
 
-## 日次アジェンダ統合(calendar events + $onWork deadlines/reviews + 要対応メール + 未処理 todo)
+## 日次アジェンダ統合(calendar events + $onWork deadlines/reviews + 要対応メール + 未処理 todo + 確認済み series の新着メール)
 
 ### SourceVaultRoutineAgendaData[from, to, opts] / [Quantity[n,"Days"], opts] / [] → agenda
 オーナーの calendar events(NBAccess`NBCalendarEvents)と $onWork の notebook 締切/NextReviews
 (NBAccess`NBOnWorkTasks)、要対応メール([SourceVault_mailagenda](https://github.com/transreal/SourceVault_mailagenda)
 に弱結合)、ノートブックに属さない未処理 todo([SourceVault_todo](https://github.com/transreal/SourceVault_todo)
+に弱結合)、確認済み series の新着メール([SourceVault_series](https://github.com/transreal/SourceVault_series)
 に弱結合)を日ごとにグループ化した統合アジェンダ。各 notebook item は "Path" を持ち、view から
-ワンクリックで開ける。引数なし呼び出しは `Quantity[7,"Days"]` 既定。NBAccess/mailagenda/todo 未ロード時は
+ワンクリックで開ける。引数なし呼び出しは `Quantity[7,"Days"]` 既定。NBAccess/mailagenda/todo/series 未ロード時は
 それぞれ空。
 **Deadline と NextReview は独立した2件として配置**(NBOnWorkTasks の `"DeadlineDue"` /
 `"ReviewDue"` を使用): 〆切は〆切の日、レビューはレビューの日に出る。同じ日に両方来る場合は
@@ -174,40 +175,49 @@ State が `Done`/`Pass`/`Keep` のタスクは日リストにも overdue バン�
 締切のあるメールは `"MailDeadline"` として該当日の AllDay にも合流(クリックで対応ウィンドウを開く)。
 締切のある standalone todo(ノートブックに属さない todo)は `"Todo"` として該当日の AllDay に、
 過去日なら Overdue に合流する(締切のない todo は day/Overdue に出ず、別バンド="Todos" に集計)。
-AllDay 内の並びは Deadline→{MailDeadline,Todo}→NextReview→all-day event→その他 のランク順
+series 新着メールは Kind `"SeriesMail"` の item として扱われ、結果キー `"Series"` に集計される(view では専用 series バンド)。
+AllDay 内の並びは Deadline→{MailDeadline,SeriesMail,Todo}→NextReview→all-day event→その他 のランク順
 (同ランク内は Label)。
 → `<|"From","To","TimeZone","Overdue"->{期限超過の deadline/review/Todo item、各 item は "OpenTodos"->
 {open (not Done/Pass) todo Associations} を付加(注入 "Todos" フィールド優先、なければ弱結合
 SourceVaultExtractNotebookTodos 読み取り、path なし item は {} = 開示なし)},
 "Mail"->{mail agenda item...}, "MailPendingCount",
 "Days"->{<|"DayAbs","DayKey","Weekday","AllDay"->{deadline/review/all-day-event/MailDeadline/Todo item...},
-"Timed"->{timed event...}|>...}, "Todos"->{締切のない standalone todo item...}, "MaxPrivacyLevel"->Real|>`
+"Timed"->{timed event...}|>...}, "Todos"->{締切のない standalone todo item...},
+"Series"->{series 新着メール item...}, "MaxPrivacyLevel"->Real|>`
 (各 item は "PrivacyLevel" を運ぶ。"MaxPrivacyLevel" = day items/Overdue/Mail/Todos 全開示成分の max、
-空 0.0/失敗 1.0)。Mail item(mailagenda 由来): `<|"RecordId","Subject","From","Summary","Date","Deadline",
+空 0.0/失敗 1.0。from/to が数値化できない場合は空の agenda(MaxPrivacyLevel 0.0)を返す)。
+Mail item(mailagenda 由来): `<|"RecordId","Subject","From","Summary","Date","Deadline",
 "Category","ThreadCount","PrivacyLevel"|>`。standalone todo item: `<|"Kind"->"Todo","DueT"(あれば),
-"Label","TodoId","State","PrivacyLevel",("DayAbs")|>`。
+"Label","TodoId","State","PrivacyLevel",("DayAbs")|>`。series item(view が参照するキー): `"RecordId","Subject",
+"SeriesName","Need"("CreateNotebook" 等),"DueT","DueBasis"("MailDeadline" 等),"Date","NotebookPath"`。
 Options: PrivacySpec -> `<|"AccessLevel"->1.0|>`, CalendarEvents -> Automatic, OnWorkTasks -> Automatic,
 ModifiedWithinDays -> 120 (task スキャン窓), IncludeOverdue -> True, TimeZone -> Automatic (=$TimeZone),
 IncludeMail -> Automatic (=True。要対応メールバンドを含めるか), MailItems -> Automatic
 (live SourceVaultMailAgendaItems 読み取り。テスト時はリスト注入可), MailMaxPrivacyLevel -> 1.0
 (Min[この値, AccessLevel] が実効上限。上限超のメールは Mail リストから除外=非表示ではなく除外),
 IncludeTodos -> Automatic (=True。standalone todo を含めるか), TodoItems -> Automatic
-(live SourceVault`SourceVaultTodoAgendaItems 読み取り。未ロードなら {}。テスト時はリスト注入可)
+(live SourceVault`SourceVaultTodoAgendaItems 読み取り。未ロードなら {}。テスト時はリスト注入可),
+IncludeSeries -> Automatic (series 新着メールバンドを含めるか), SeriesItems -> Automatic
+(live 読み取り。テスト時はリスト注入可)
 
 ### SourceVaultRoutineAgendaView[from, to, opts] / [Quantity[n,"Days"], opts] / []
 SourceVaultRoutineAgendaData を縦型タイムラインとして描画: 日毎に all-day band(notebook Deadline=赤・
 MailDeadline=赤褐色・締切付き standalone Todo=紫(タグ"Todo")・NextReview=青・all-day event=緑)→timed
 event、続いて overdue バナー(期限超過・赤枠。notebook/mail 由来に加え締切付き standalone todo も対象)、
-続いて要対応メールバンド(締切超過→今後の締切→締切なし の3グループ、件数見出し付き)、最後に締切のない
+続いて要対応メールバンド(締切超過→今後の締切→締切なし の3グループ、件数見出し付き)、続いて series バンド
+(series 名・新着メール(クリックで本文)・受信日・〆切/目安日・必要な対応ボタン。Need が CreateNotebook なら
+「ノートを作る」ボタン=SourceVaultMailWorkAccept[rid,"Notebook"]、弱結合でクリック時に解決)、最後に締切のない
 standalone todo バンド(紫枠・件数見出し・クリックで todo ノート/サマリーウィンドウ=
 SourceVaultTodoShowSummary、弱結合)。
 notebook 行/メール行/todo 行はクリック可能(notebook=SystemOpen — Dropbox online-only ファイルもダウンロードして
 開く。行末のフォルダアイコンは格納ディレクトリを SystemOpen する。mail=SourceVaultMailAgendaOpen で
 対応ウィンドウ)。overdue 行は時刻列に missed date を赤表示し、
-notebook の open (not Done/Pass) todo items をインデント箇条書きで列挙する。全セクション空なら
+notebook の open (not Done/Pass) todo items をインデント箇条書きで列挙する。メール期限色は
+過去=赤・今日/明日=青・それ以降=黒。全セクション空なら
 「予定・締切・要対応メールはありません」を返す。要 FE。
 → column layout (Framed/Column)
-Options: SourceVaultRoutineAgendaData と同一(PrivacySpec, CalendarEvents, OnWorkTasks, ModifiedWithinDays, IncludeOverdue, TimeZone, IncludeMail, MailItems, MailMaxPrivacyLevel, IncludeTodos, TodoItems。内部で FilterRules して Data に転送)
+Options: SourceVaultRoutineAgendaData と同一(PrivacySpec, CalendarEvents, OnWorkTasks, ModifiedWithinDays, IncludeOverdue, TimeZone, IncludeMail, MailItems, MailMaxPrivacyLevel, IncludeTodos, TodoItems, IncludeSeries, SeriesItems。内部で FilterRules して Data に転送)
 
 ## 未実装(次以降)
 

@@ -978,7 +978,8 @@ SourceVaultSearch[query_String, OptionsPattern[]] := Module[
   (* native projection index 指定時はそちらを使う (PDFIndex 非依存) *)
   indexId = OptionValue["Index"];
   If[StringQ[indexId],
-    Return[iNativeSearch[query, ctxName, indexId, OptionValue["Limit"]]]];
+    Return[With[{nr = iSVSearchIntegrity[iNativeSearch[query, ctxName, indexId, OptionValue["Limit"]], ctxSpec, indexId]},
+      If[ListQ[nr], iSVSearchProvServed[nr, ctxName, indexId]]; nr]]];
   collection = OptionValue["Collection"];
   (* profile 指定時は CollectionRoot を解決 (fail-closed) *)
   If[StringQ[profileName],
@@ -1002,8 +1003,44 @@ SourceVaultSearch[query_String, OptionsPattern[]] := Module[
         "Why" -> Lookup[gate, "Why", {}]|>]]],
     rawRows];
   (* Permit のみ返す。raw path は元から含まれない。 *)
-  Select[results, Lookup[#, "ReleaseDecision"] === "Permit" &]
+  With[{permitted = iSVSearchIntegrity[Select[results, Lookup[#, "ReleaseDecision"] === "Permit" &], ctxSpec, profileName]},
+    (* Inc2 (03 v0.4 §6.2 供給点): 文脈へ渡した結果を ServedToContext (Role Context) として記録。失敗しても検索は返す *)
+    If[ListQ[permitted], iSVSearchProvServed[permitted, ctxName, profileName]];
+    permitted]
 ];
+
+(* 03 v0.4 §9.2 (2026-11-10 Inc3): 検索フィルタ。候補選択の直後、供給点の記録の前。Purpose は ReleaseContext の "Purpose" (無ければ主体から:
+   Model / MCP は RAG に固定)。隔離中・派生物の Unknown を自動の利用から除く。フィルタが使えず fail-closed のときは Failure を返す。
+   SourceVault_integrity.wl 未ロードならそのまま返す。 *)
+iSVSearchIntegrity[results_, ctxSpec_, profile_] := If[ListQ[results] && results =!= {} && Length[DownValues[SourceVault`SourceVaultIntegrityRetrievalFilter]] > 0,
+  Quiet @ Check[SourceVault`SourceVaultIntegrityRetrievalFilter[results,
+    "Purpose" -> Lookup[If[AssociationQ[ctxSpec], ctxSpec, <||>], "Purpose", Automatic], "SupplyPoint" -> "SourceVaultSearch",
+    "KeyFunction" -> Function[r, Module[{cit = Lookup[r, "Citation", <||>], docId},
+      If[! AssociationQ[cit], cit = <||>];
+      docId = ToString @ Lookup[cit, "DocId", Lookup[r, "DocId", ""]];
+      <|"LogicalRefs" -> If[docId =!= "", {"pdfindex:" <> ToString[profile] <> ":" <> docId}, {}]|>]]], results],
+  results];
+
+(* 03 v0.4 §6.2 (2026-11-10 第 4 週 Inc2): 供給点の記録。渡した snippet が内容 (BlobId)、資料は Citation の DocId / ObjectURI で LogicalRef。
+   SourceVault_provenance.wl 未ロードなら何もしない。どの主体からも記録する (記録点は認可の対象外、表 11.1)。 *)
+iSVSearchProvServed[results_List, ctxName_, profile_] := Quiet @ Check[
+  If[Length[DownValues[SourceVault`SourceVaultProvServed]] > 0 && results =!= {},
+    SourceVault`SourceVaultProvServed[
+      Function[r, Module[{cit = Lookup[r, "Citation", <||>], docId, uri, snippet},
+        If[! AssociationQ[cit], cit = <||>];
+        docId = ToString @ Lookup[cit, "DocId", Lookup[r, "DocId", ""]];
+        uri = SelectFirst[{Lookup[r, "ObjectURI", None], Lookup[r, "URI", None], Lookup[r, "SourceId", None], Lookup[r, "SourceVaultObjectId", None]},
+          StringQ[#] && # =!= "" &, None];
+        snippet = SelectFirst[{Lookup[r, "Snippet", None], Lookup[r, "Text", None], Lookup[r, "Summary", None]}, StringQ[#] && # =!= "" &, None];
+        Join[<|"Kind" -> "PrimarySource",
+          "LogicalRef" -> If[StringQ[uri], uri, If[docId =!= "", "pdfindex:" <> ToString[profile] <> ":" <> docId, Null]],
+          "Refs" -> DeleteCases[<|"DocId" -> If[docId =!= "", docId, Null], "ChunkId" -> Lookup[r, "ChunkId", Null], "EvidenceRef" -> Lookup[r, "EvidenceRef", Null],
+            "ResultId" -> Lookup[r, "ResultId", Null]|>, Null],
+          "PrivacyLevel" -> Lookup[r, "PrivacyLevel", Automatic],
+          "Context" -> <|"ReleaseContext" -> ToString[ctxName], "Page" -> ToString @ Lookup[cit, "Page", ""]|>|>,
+          If[StringQ[snippet], <|"Content" -> snippet, "ContentKind" -> "Text"|>, <|"ClaimedContentHash" -> ""|>]]]] /@ Select[results, AssociationQ[#] && Lookup[#, "IntegrityPurpose", ""] =!= "AuditView" && Lookup[#, "IntegrityUsability", ""] =!= "Quarantined" &],
+      "SupplyPoint" -> "SourceVaultSearch", "Role" -> "Context", "Channel" -> "Search"]], Null];
+iSVSearchProvServed[___] := Null;
 
 Options[SourceVaultPreviewPDFIndexMigration] = {"SampleResults" -> {}, "ReleaseContext" -> None};
 SourceVaultPreviewPDFIndexMigration[profile_String, OptionsPattern[]] := Module[
@@ -1258,6 +1295,8 @@ iGateBuildResults[top_List, ctxName_String, revSet_Association, query_String, re
         "Citation" -> <|"Title" -> Lookup[Lookup[ch, "SourceRef", <||>], "Title",
             Lookup[ch, "SourceVaultObjectId", ""]], "Page" -> Lookup[ch, "Page", Missing["Unknown"]]|>,
         "SourceVaultObjectId" -> objId,
+        (* 2026-11-10 (03 v0.4 Inc2): legacy 経路と同じく割り当て済みの PL を結果に持たせる (供給点の記録と下流の privacy router が読む) *)
+        "PrivacyLevel" -> Lookup[ch, "PrivacyLevel", 1.0],
         "ReleaseDecision" -> If[revoked, "Deny", Lookup[gate, "Decision", "Deny"]],
         "Revoked" -> revoked,
         "RequestTimeGateReevaluated" -> True,

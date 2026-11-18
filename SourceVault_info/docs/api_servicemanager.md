@@ -118,7 +118,7 @@ heartbeat の鮮度から `"OK"` / `"Degraded"` / `"Failing"` を返す。閾値
 ### SourceVaultServiceHealthDetail[serviceId] → Association
 health 判定の内訳を返す (hardening 02 Inc3)。
 → `<|"Health", "Layer" -> "L2"|"L3"|"L1", "Ping" -> <|"L2", "RTTms", ...|>, "Base", "WLMCP"|>`
-L2 = command queue が実際に応答(真の生存証明)。L3 = heartbeat 進行のみ。L1 = base health のみ。ping は `PingIntervalSeconds` キャッシュ (health 連打で queue を叩かない)。`WLMCP` は `SourceVaultServiceStatus` と同じ値で、`SourceVaultSystemDoctor` の `MCPKernels` が読む。
+L2 = command queue が実際に応答(真の生存証明)。L3 = heartbeat 進行のみ。L1 = base health のみ。ping は `PingIntervalSeconds` キャッシュ (health 連打で queue を叩かない)。`WLMCP` は `SourceVaultServiceStatus` と同じ値(未報告なら `Missing["NotReported"]`)で、`SourceVaultSystemDoctor` の `MCPKernels` が読む。
 
 ### $SourceVaultHealthRequireL2
 型: True | False, 初期値: False
@@ -150,7 +150,7 @@ Ping command を送り、command queue 経由で Pong を待つ。
 `runtime/services` 配下の service とその状態を返す。
 
 ### SourceVaultListRuntimeMachines[opts] → List
-この共有 vault を実際に使っている PC の machine tag 一覧を返す。根拠は `runtime/` ツリー: 各 PC は services/proxies を `runtime/<machineTag>/` 配下に namespacing するため、`runtime/` 直下のサブディレクトリのうち共有/レガシー予約名(`locks` / `proxies` / `services`)を除いたものが実 PC。自機 tag は runtime dir が未生成でも必ず含める。手動レジストリ(diagnostics/machines)ではなく実在の runtime を正本とするので、登録漏れや古いテストエントリを返さない。
+この共有 vault を実際に使っている PC の machine tag 一覧を返す。根拠は `runtime/` ツリー: 各 PC は services/proxies を `runtime/<machineTag>/` 配下に namespacing するため、`runtime/` 直下のサブディレクトリのうち共有/レガシー予約名(`locks` / `proxies` / `services`)を除いたものが実 PC。自機 tag は runtime dir が未生成でも必ず含める。手動レジストリ(diagnostics/machines)ではなく実在の runtime を正本とするので、登録漏れや古いテストエントリ(実在しない PC 名)を返さない。
 → List(既定は machine tag の文字列リスト)
 Options: "Details" -> False (True で `<|MachineTag, IsSelf, HasServices, HasProxies|>` の一覧を返す)
 
@@ -167,6 +167,18 @@ command(Association、`"Command"` キー必須)を queue に書く。
 
 ### SourceVaultServiceCommandResult[serviceId, commandId] → Association
 処理済み command の結果を返す。未処理なら `"Pending"`。
+
+### SourceVaultPruneServiceCommands[serviceId, opts]
+処理済みの命令(runtime の `commands/done`)のうち `$SourceVaultCommandRetentionDays` 日より古いものと、1 時間より古い書きかけの一時ファイルを消し、件数を返す。service のループが `$SourceVaultCommandPruneIntervalSeconds` 秒ごとに同じ処理を自動で行う(2026-11-16)。
+Options: "RetentionDays" -> Automatic (Automatic で `$SourceVaultCommandRetentionDays`), "MaxSeconds" -> 20 (1 回の作業の上限秒), "DryRun" -> False (True で削除せず件数のみ)
+
+### $SourceVaultCommandRetentionDays
+型: Number, 初期値: 3
+処理済みの命令を残す日数。
+
+### $SourceVaultCommandPruneIntervalSeconds
+型: Number, 初期値: 600
+service のループが処理済みの命令を片づける間隔の秒数。
 
 ### SourceVaultRecoverServices[opts]
 status が Running だが pid が死んでいる孤児 service を Crashed に更新する。

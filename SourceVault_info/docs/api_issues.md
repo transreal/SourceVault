@@ -14,7 +14,7 @@ Safety pipeline: code verification always runs a 4-point deterministic guard (co
 
 Service-loadable constraint (spec v6 §3.4) is satisfied except for View/Notebook functions: root resolution goes through core's `SourceVaultRoot`; other module references are runtime fail-soft (guarded via `DownValues`/`Names` checks).
 
-Privacy: the module self-registers a privacy source `"issues"` (Level 0.5) and privacy contracts for its public functions (fail-soft when the privacy module is unloaded). Result/View exits: `SourceVaultIssues`/`Get`/`Top`/`SafetyAssess`/`VerifyCode`/`NotifyGitHub`/`NotifyGitHubAll`/`ProposeVerification` = Result, `SourceVaultIssuesView`/`Panel`/`ArchivePanel` = View, notebook-launch functions = Head, the rest Internal.
+Privacy: the module self-registers a privacy source `"issues"` (Level 0.5) and privacy contracts for its public functions (fail-soft when the privacy module is unloaded). Result/View exits: `SourceVaultIssues`/`Get`/`Top`/`SafetyAssess`/`VerifyCode`/`NotifyGitHub`/`NotifyGitHubAll`/`ProposeVerification` = Result, `SourceVaultIssuesView`/`Panel`/`ArchivePanel` = View, notebook-launch functions (`Notebook`/`ForNotebook`/`CreateSpec`/`StartImpl`/`VerifyFromNotebook`/`EmitResumeControls`/`ResumeImpl`) = Head, the rest Internal.
 
 ## Data Model (spec v0.4)
 Record schema version 2. Read normalizes v1 records into a v2 view without touching disk (`Revision -> 0`, nested containers defaulted, unknown legacy fields preserved); the first mutation materializes it.
@@ -23,7 +23,7 @@ Reserved (internal-only) fields — rejected by `SourceVaultIssueUpdate` / `Sour
 Commit path (single serialized writer): journal `Prepared` → index dirty marker → atomic record write (`Revision`+1, `Writer -> <|MachineTag, Epoch|>`, `UpdatedAt`) → `RecordCommitted` → index row update → `IndexCommitted` → marker clear → journal `Completed` (failure → `Failed` with `FailureClass`/`LastError`). All writes are tmp→rename atomic. Index write failure still leaves the record commit valid; the dirty marker forces a later rebuild. Index file is `index.wxf` v2 (`IndexSchemaVersion = 3`, `<|"IndexSchemaVersion", "BuiltAtUTC", "AppliedOperationId", "Rows"|>`); legacy flat indexes are rebuilt on first commit.
 Index row fields (projection used by list/panel/view): `IssueId`, `SourceKey`, `Title`, `Status`, `Class`, `RecordRevision`, `ResolutionSummary` (≤90 chars), `MachineTag`, `Component`, `ReasonCode`, `IncidentKey`, `EpisodeId`, `OccurrenceCount`, `LastSeenAt`, `LastObservedHealth`, `ParentIssueId`, `SubIssueCount`, `ArchiveAt`, `Risk`, `Importance`, `RegisteredAt`, `UpdatedAt`, `OriginKind`, `OriginURL`, `Package`, `PartLabel`, `AuthorLogin`, `NotebookPath`, `NotebookFileName` (可搬キー。絶対パスは PC ごとに違うため、ノート実体解決はこちらを基準にする), `FixAppliedAt`, `FixDiagnose`, `NotifiedAt`, `NotifiedSHA`, `ImplTestGate`, `ImplCommitReady`, `GroupNotifiedAt`, `CommitCheckFound`, `PrivacyLevel`.
 Reducer field domains (each reducer may only touch its own fields): `Event -> {Evidence, DoctorState, Importance, UpdatedAt}`, `Observation -> {DoctorState, UpdatedAt}`, `Transition -> {Status, Resolution, ResolutionHistory, Archive, ArchiveHistory, ReopenCount, LastTransition, UpdatedAt}`, `Relation -> {Relations, UpdatedAt}`, `Remediation -> {Remediations, UpdatedAt}`, `Analysis -> {AnalysisJobRef, UpdatedAt}`. Violations return `Failure["InvariantViolation"]`.
-Writer-side internal helpers (not public): `iSVISWriterGate[]` returns `Failure["NotWriter", <|"Writer", "SelfMachineTag"|>]` on a non-writer machine (also publishes a once-per-kernel `WriterFenced` diagnostics event, Component `IssueDB`); canonical JSON (sorted keys, Missing removed, `None -> Null`, UTF-8) is used for digests/signatures.
+Writer-side internal helpers (not public): `iSVISWriterGate[]` returns `Failure["NotWriter", <|"Writer", "SelfMachineTag"|>]` on a non-writer machine (also publishes a once-per-kernel `WriterFenced` diagnostics event, Component `IssueDB`, Producer `issues`); canonical JSON (sorted keys, Missing removed, `None -> Null`, UTF-8) is used for digests/signatures.
 
 ## Configuration
 ### $SourceVaultIssueRoot
@@ -92,6 +92,9 @@ Debounce interval (seconds) for `SourceVaultIssueSyncNow`.
 ### $SourceVaultIssueRiskReviewLeadDays
 型: Integer, 初期値: 7
 How many days before an `AcceptedRisk` `ReviewBy` date the re-review issue is generated.
+### $SourceVaultIssueResolveGuards
+型: List of Function[record, meta], 初期値: {} (SourceVault_integrity.wl が検査を登録)
+Resolved への遷移の前に呼ぶ検査 `f[record, meta]` の一覧。`True` で通し、`Failure` で遷移を止める。SourceVault_integrity.wl (03 v0.4 §9.3) が「対応する Finding がすべて解決するまで閉じない」検査を登録する。代入は NBAccess の承認対象。
 
 ## Core Registry
 ### SourceVaultIssueRoot[] → String
@@ -119,7 +122,7 @@ CAS update: commits `fn[record]`'s return value with `Revision`+1.
 → record Association; `Failure["Conflict", ...]` when `"ExpectedRevision"` differs from the current `Revision`, `Failure["ReservedIssueField", ...]` when `fn` mutated an internal-only field.
 Options: `"ExpectedRevision" -> Automatic` (integer to enforce CAS)
 ### SourceVaultIssueTransition[issueId, to, meta] → Association | Failure
-Canonical Status API, enforcing the transition matrix (spec v0.4 §7.1): `Open -> Quarantined|Resolved`; `Resolved -> Open` (reopen: current `Resolution` is pushed onto `ResolutionHistory`, `ReopenCount`++); `Resolved -> Archived`; `Archived -> Archive.PreviousStatus` (unarchive); `Quarantined -> Open|Resolved` (requires `meta` `"OwnerReview" -> True`). Legacy statuses can be normalized into `Open|Resolved|Quarantined`. `Quarantined -> Archived` is always refused.
+Canonical Status API, enforcing the transition matrix (spec v0.4 §7.1): `Open -> Quarantined|Resolved`; `Resolved -> Open` (reopen: current `Resolution` is pushed onto `ResolutionHistory`, `ReopenCount`++); `Resolved -> Archived`; `Archived -> Archive.PreviousStatus` (unarchive); `Quarantined -> Open|Resolved` (requires `meta` `"OwnerReview" -> True`). Legacy statuses can be normalized into `Open|Resolved|Quarantined`. `Quarantined -> Archived` is always refused. Transitions to `Resolved` first run the checks in `$SourceVaultIssueResolveGuards` (a `Failure` from any guard stops the transition).
 meta keys: `"Resolution" -> <|"Summary" -> .., ..|>` (required, with `Summary`, when `to` is `"Resolved"`), `"Reason"`, `"OwnerReview"`.
 ### SourceVaultIssueClass[record | issueId] → String
 Derives the origin class from `Origin.Kind`: `"github"` | `"manual"` (`manual`/`url`) | `"doctor"` | `"security"` | `"workflow"` | `"unknown"`. `unknown` is never folded into `manual`.
@@ -129,7 +132,7 @@ Sugar for manual issue creation: `Register` + issue-notebook creation + (when `"
 Options: `"Notebook" -> Automatic` (`False` skips notebook creation)
 Use the `SourceKey` baked into the generated template cell so re-evaluation is idempotent.
 ### SourceVaultIssueLinkChild[parentId, childId] → Association | Failure
-Canonical bidirectional parent/child link (idempotent). Rejects self-link (`Failure["SelfLink"]`), cycles (`"CycleDetected"`, ancestors traced to depth 10), and an existing different parent (`"HasParent"`); partial failure returns `Failure["LinkFailed", <|"Side"|>]` (re-run repairs).
+Canonical bidirectional parent/child link (idempotent). Rejects self-link (`Failure["SelfLink"]`), cycles (`"CycleDetected"`, ancestors traced to depth 10), and an existing different parent (`"HasParent"`); partial failure returns `Failure["LinkFailed", <|"Side"|>]` (re-run repairs). `Missing["NotFound", id]` when either issue is absent.
 → `<|"Status" -> "Linked"|"NoChange", "ParentIssueId", "ChildIssueId"|>`
 ### SourceVaultIssueUnlinkChild[parentId, childId] → Association | Failure
 Removes the parent/child link from both sides (idempotent). → `<|"Status" -> "Unlinked", ...|>`
@@ -278,7 +281,7 @@ Scans all issues and bulk-posts fix-completed comments to those that are Resolve
 → `<|"Checked", "Notified", "AwaitingCommit", "GroupCompleted", "Errors"|>`
 Options: `"Confirm" -> Automatic`
 ### SourceVaultIssueAttachResolution[issueId, summary, opts] → Association
-Appends a resolution summary to the record and sets `Status -> "Resolved"` (through the canonical transition, so the previous `Resolution` is preserved in `ResolutionHistory` on later reopen).
+Appends a resolution summary to the record and sets `Status -> "Resolved"` (through the canonical transition, so the previous `Resolution` is preserved in `ResolutionHistory` on later reopen; `$SourceVaultIssueResolveGuards` apply).
 Options: `"SpecRef" -> Automatic`, `"TestResult" -> Automatic` (an empty/Automatic value preserves the existing stored value rather than clearing it — so `ApplyFix`'s auto-recorded values survive).
 ### SourceVaultIssueAttachResolution[nb]
 Notebook-button variant: prompts for the summary via dialog. Submitting empty auto-generates a summary from the implementation trail (applied fix / safety assessment / verification attempts), preserving any existing summary. Canceling aborts without change.

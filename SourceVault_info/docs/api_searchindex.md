@@ -97,7 +97,7 @@ OCR backend を解決する。未登録なら fail-closed。
 source（object/chunk Association）が release context で公開可能か評価する。
 Unlisted gate（§15.1）: `SourceVault_anonymize` がロード済みで `SourceVaultAnonymizeUnlistedClassQ[source]` が True の場合（匿名化成果物などを検索/カタログ/一覧から外す discoverability 制御）、context 解決より前に判定を打ち切り `<|"Decision" -> "Deny", "Why" -> {"UnlistedDiscoverability"}, "PolicyDigest" -> Missing["Unlisted"], "Context" -> contextName|>` を返す。`SourceVault_anonymize` 未ロード時はこのチェックは no-op（弱結合）。
 通常判定: `PrivacyLevel <= MaxPrivacyLevel` かつ `RequiredTags ⊆ Tags` かつ `Tags ∩ DenyTags = {}` かつ `State ∈ {Approved, Published, Released}` かつ NotExpired（ValidFrom/ValidUntil を Now で評価）。
-戻り値: `<|"Decision" -> "Permit"|"Deny", "Why" -> {String...}, "PolicyDigest" -> _, "Context" -> contextName|>`
+戻り値: `<|"Decision" -> "Permit"|"Deny", "Why" -> {String...}, "PolicyDigest" -> _, "Context" -> contextName|>`（usage 上は `"NeedsReview"` も予約値）
 contextName 未登録の場合は Failure を返す（fail-closed）。
 
 ## Object Revocation / Tombstone (§6.3.1)
@@ -112,7 +112,7 @@ revocation 系 event（ObjectRevoked / ObjectStateChanged / RevocationTombstoneC
 Epoch = revocation 系 event 数（high-water mark、単調増加）。
 **count-keyed cache**: 全 event ファイル数（append-only ゆえ追加/compaction で必ず変化、read/parse せず FileNames のみで安価）を freshness token にして結果を memoize する。event 数が不変なら全 event の再 replay を避ける（毎検索の全 log 読み = 数秒を回避）。append があれば必ず無効化されるので revocation を取りこぼさない（cross-process correct）。Options: `"NoCache" -> False`（True で強制再構築）。
 
-### SourceVaultObjectRevocationStatus[objectId] → Association
+### SourceVaultObjectRevocationStatus[objectId, opts] → Association
 object の revocation 状態を返す。
 revoked: `<|"Revoked" -> True, "State", "Reason", "EffectiveAtUTC", "Epoch"|>`
 未 revoked: `<|"Revoked" -> False, "State" -> Missing["NotRevoked"], "Epoch"|>`
@@ -282,6 +282,7 @@ SourceVaultRegisterHTTPEmbeddingProvider["LMStudio"]   (* URL/Model は大域変
 
 ### SourceVaultRegisterEmbeddingProvider[name, fn] → Association
 低レベル: embedding provider を関数で直接登録する。`fn[{text..}]` は数値ベクトルのリストを返す（L2 正規化推奨、次元は全 text で一定）。HTTP エンドポイントを叩くなら上の `SourceVaultRegisterHTTPEmbeddingProvider` を使うこと（encoding の落とし穴を回避）。ローカルの決定論 embedder 等はこちらで差し込む。
+戻り値: `<|"Status" -> "OK", "Provider" -> name|>`
 
 ### SourceVaultListEmbeddingProviders[] → {String...}
 登録済み provider 名。既定は `{"HashingNGramV1"}`。
