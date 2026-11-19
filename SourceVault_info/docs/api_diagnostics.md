@@ -172,14 +172,14 @@ Options: "IncludeTopology" -> False
 
 ### SourceVaultRepositoryStatus[opts] → List | Failure
 $packageDirectory にソース (`<pkg>.wl` または Paclet) があり github.wl が管理する (GitHubREST`GitHubManagedRepositories) パッケージごとに (ほかのパッケージの upload_manifest.json の files に `<そのパッケージ>_*.wl` として入っている補助モジュールと、名前に空白を含む競合コピーは除く。補助モジュールの変更はその親パッケージの行に入る)、ドキュメントの鮮度 (GitHubREST`PackageDocsFreshnessGate) と前回コミットからの変更 (GitHubREST`PackageCommitDiff、GithubRepositories のミラーとの差) を返す。読み取りだけで、ネットワークは使わない (30 件で約 6 秒)。要対応 (古いドキュメント・変更あり・ミラーなし・判定失敗) の行が先。
-各行: "Package", "Repository", "Owner", "DocsStatus" ("OK"|"Stale"|"NoDocs"|"Failed"), "StaleDocs" (古いドキュメント名), "StaleDetail" (<|Doc, Wl, DocDate, WlDate|>), "TooLargeDocs" (ClaudeCode`$ClaudeDocApiMaxBytes を超えて自動更新されない古いドキュメント), "DocsDir", "DocUpdateActive" (ClaudeUpdateDocumentation が進行中), "DiffStatus", "SnapshotExists", "Added", "Changed", "Removed", "ChangeCount", "NeedsAttention"
+各行: "Package", "Repository", "Owner", "DocsStatus" ("OK"|"Stale"|"NoDocs"|"Failed"), "StaleDocs" (古いドキュメント名), "StaleDetail" (<|Doc, Wl, DocDate, WlDate|>), "TooLargeDocs" (ClaudeCode`$ClaudeDocApiMaxBytes を超え、差分更新もできない古いドキュメント = 手で直すもの), "PatchDocs" ($ClaudeDocApiMaxBytes を超えるが差分更新できる古いドキュメント: ClaudeDocApiPatchableQ), "DocsDir", "DocUpdateActive" (ClaudeUpdateDocumentation が進行中), "DiffStatus", "SnapshotExists", "Added", "Changed", "Removed", "ChangeCount", "NeedsAttention"
 Options: "Packages" -> All (名前のリストで絞る)
 github.wl が読み込まれていなければ Failure["GitHubUnavailable", ...]。
 
 ### SourceVaultRepositoryStatusView[opts] → DynamicModule | Style
 SourceVaultRepositoryStatus を表で表示する。既定は要対応の行だけ ([すべて表示] で全件)。列: パッケージ (ツールチップにリポジトリ名)、ドキュメント (OK / 古い n (大きすぎるものがあれば「大」) / docs なし / 更新中)、前回コミットからの変更 (件数と追加・変更・削除の内訳 / なし / 未コミット)。行のボタン:
 - [詳細]: 古いドキュメントと対応するソース、追加・変更・削除のファイル名。
-- [ドキュメント更新]: 確認ダイアログのあと、新しいノートブック「ドキュメント更新: <pkg>」を開き、そこで `ClaudeUpdateDocumentation["<pkg>", TargetFiles -> {古いドキュメント}]` を評価する (NBAccess`NBInsertAndEvaluateInput。進捗はそのノートブックに出る)。古いドキュメントが無いときは自動判定 (TargetFiles なし)。128 KB ($ClaudeDocApiMaxBytes) を超えるものは対象から外す。それしか無いときは再生成せず「大きすぎて自動では更新できません」のダイアログを出す: 各ドキュメントの大きさ・ドキュメントとソースの更新時刻 (ソースより後に書き換えられていれば緑で「そのまま記録できます」) と、ボタン「手で直した」(GitHubREST`PackageDocsMarkCurrent でいまのソースを最新として記録し、その行を計算し直す) / 「ファイルを開く」/ 「やめる」(2026-11-08。鮮度は内容ハッシュ基準なので、手で直しただけでは「古い」が消えずコミットも止まったままだった)。更新中なら始めない。
+- [ドキュメント更新]: 確認ダイアログのあと、新しいノートブック「ドキュメント更新: <pkg>」を開き、そこで `ClaudeUpdateDocumentation["<pkg>", TargetFiles -> {古いドキュメント}]` を評価する (NBAccess`NBInsertAndEvaluateInput。進捗はそのノートブックに出る)。古いドキュメントが無いときは自動判定 (TargetFiles なし)。128 KB ($ClaudeDocApiMaxBytes) を超えるものは、差分更新できるもの (PatchDocs) を除き対象から外す。それしか無いときは再生成せず「大きすぎて自動では更新できません」のダイアログを出す: 各ドキュメントの大きさ・ドキュメントとソースの更新時刻 (ソースより後に書き換えられていれば緑で「そのまま記録できます」) と、ボタン「手で直した」(GitHubREST`PackageDocsMarkCurrent でいまのソースを最新として記録し、その行を計算し直す) / 「ファイルを開く」/ 「やめる」(2026-11-08。鮮度は内容ハッシュ基準なので、手で直しただけでは「古い」が消えずコミットも止まったままだった)。更新中なら始めない。
 - [コミット…] (変更があるか、ミラーが無いとき): GitHubREST`PackageCommitPlan でメッセージ案・ポリシー検査を作り (1 分ほどかかる)、ダイアログで変更ファイル・増えた検出・メッセージ (直せる) を確認してから `PackageCommit[pkg, "DryRun" -> False, "MessageGenerator" -> メッセージ]`。ドキュメントが古くて止められたら、その場でドキュメント更新に回せる。変更が無ければそう知らせる。
 - [履歴]: 新しいノートブックで `GitHubCommitDataset["<pkg>"]` を評価する (ネットワーク)。
 一覧は開いたときと [更新] のときに計算し、表示の描き直しでは計算しない。コミットの後はその行だけ計算し直す。ボタンの処理は ClaudeCode`ClaudeHoldFrontEnd で包む。

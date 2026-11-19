@@ -140,7 +140,8 @@ SourceVaultRepositoryStatus::usage =
   "SourceVaultRepositoryStatus[] は $packageDirectory にソースがあり github.wl が管理する (GitHubManagedRepositories) パッケージごとに、\n" <>
   "ドキュメントの鮮度 (PackageDocsFreshnessGate) と前回コミットからの変更 (PackageCommitDiff) を返す。読み取りだけでネットワークは使わない。\n" <>
   "各行: \"Package\", \"Repository\", \"Owner\", \"DocsStatus\" (\"OK\"|\"Stale\"|\"NoDocs\"|\"Failed\"), \"StaleDocs\", \"StaleDetail\",\n" <>
-  "  \"TooLargeDocs\" ($ClaudeDocApiMaxBytes を超えて自動更新しない古いドキュメント), \"DocsDir\", \"DocUpdateActive\",\n" <>
+  "  \"TooLargeDocs\" ($ClaudeDocApiMaxBytes を超え、差分更新もできない古いドキュメント = 手で直すもの),\n" <>
+  "  \"PatchDocs\" ($ClaudeDocApiMaxBytes を超えるが差分更新できる古いドキュメント: ClaudeDocApiPatchableQ), \"DocsDir\", \"DocUpdateActive\",\n" <>
   "  \"DiffStatus\", \"SnapshotExists\", \"Added\", \"Changed\", \"Removed\", \"ChangeCount\", \"NeedsAttention\"。要対応の行が先。\n" <>
   "Options: \"Packages\" -> All (名前のリストで絞る)。github.wl が無ければ Failure[\"GitHubUnavailable\", ...]。";
 
@@ -3206,8 +3207,8 @@ iSVRepoAuxModules[] :=
 iSVRepoDocMaxBytes[] := With[{v = iSVDiagWeakValue["ClaudeCode`$ClaudeDocApiMaxBytes"]},
   If[NumericQ[v] || v === Infinity, v, Infinity]];
 
-iSVRepoRow[r_Association, gate_, diff_, active_, max_] :=
-  Module[{p = r["Package"], g, d, staleA, stale, docsDir, big, docs, act, n},
+iSVRepoRow[r_Association, gate_, diff_, active_, max_, patchQ_ : None] :=
+  Module[{p = r["Package"], g, d, staleA, stale, docsDir, big, patch = {}, docs, act, n},
     (* judged by the result (AssociationQ below), not by messages: github.wl quiets benign ones itself *)
     g = Quiet @ gate[p];
     d = Quiet @ diff[p];
@@ -3216,6 +3217,11 @@ iSVRepoRow[r_Association, gate_, diff_, active_, max_] :=
     docsDir = If[AssociationQ[g], Lookup[g, "DocsDir", None], None];
     big = If[StringQ[docsDir],
       Select[stale, With[{f = FileNameJoin[{docsDir, #}]}, FileExistsQ[f] && FileByteCount[f] > max] &], {}];
+    (* 2026-11-19: 大きくても、doc を最後に記録したときのソースが見つかれば claudecode が差分更新する
+       (ClaudeDocApiPatchableQ)。そういう doc は手で直す対象から外し、[ドキュメント更新] に含める *)
+    If[big =!= {} && iSVRepoFnQ[patchQ],
+      patch = Select[big, TrueQ[Quiet @ patchQ[p, #]] &];
+      big = Complement[big, patch]];
     docs = Which[
       !AssociationQ[g], "Failed",
       Lookup[g, "Status", ""] === "NoDocs", "NoDocs",
@@ -3225,7 +3231,7 @@ iSVRepoRow[r_Association, gate_, diff_, active_, max_] :=
     act = If[iSVRepoFnQ[active], TrueQ[Quiet @ active[p]], False];
     n = If[AssociationQ[d], Lookup[d, "ChangeCount", Missing[]], Missing[]];
     <|"Package" -> p, "Repository" -> Lookup[r, "Repository", p], "Owner" -> Lookup[r, "Owner", Automatic],
-      "DocsStatus" -> docs, "StaleDocs" -> stale, "StaleDetail" -> staleA, "TooLargeDocs" -> big,
+      "DocsStatus" -> docs, "StaleDocs" -> stale, "StaleDetail" -> staleA, "TooLargeDocs" -> big, "PatchDocs" -> patch,
       "DocsDir" -> docsDir, "DocUpdateActive" -> act,
       "DiffStatus" -> If[AssociationQ[d], Lookup[d, "Status", "Failed"], "Failed"],
       "SnapshotExists" -> AssociationQ[d] && TrueQ[Lookup[d, "SnapshotExists", False]],
@@ -3239,7 +3245,7 @@ iSVRepoRow[r_Association, gate_, diff_, active_, max_] :=
 Options[SourceVaultRepositoryStatus] = {"Packages" -> All};
 SourceVaultRepositoryStatus[opts : OptionsPattern[]] :=
   Module[{list = iSVRepoFn["GitHubManagedRepositories"], gate = iSVRepoFn["PackageDocsFreshnessGate"],
-          diff = iSVRepoFn["PackageCommitDiff"], active, max, repos, want = OptionValue["Packages"]},
+          diff = iSVRepoFn["PackageCommitDiff"], active, patchQ, max, repos, want = OptionValue["Packages"]},
     If[!iSVRepoFnQ[list] || !iSVRepoFnQ[gate] || !iSVRepoFnQ[diff],
       Return[Failure["GitHubUnavailable", <|"MessageTemplate" ->
         iSVDocL["github.wl (GitHubREST) が読み込まれていません。", "github.wl (GitHubREST) is not loaded."]|>], Module]];
@@ -3248,8 +3254,9 @@ SourceVaultRepositoryStatus[opts : OptionsPattern[]] :=
     With[{aux = iSVRepoAuxModules[]}, repos = Select[repos, !MemberQ[aux, #Package] &]];
     If[want =!= All, repos = Select[repos, MemberQ[Flatten[{want}], #Package] &]];
     active = iSVDiagWeakFunction["ClaudeCode`iDocUpdateActiveQ"];
+    patchQ = iSVDiagWeakFunction["ClaudeCode`ClaudeDocApiPatchableQ"];
     max = iSVRepoDocMaxBytes[];
-    SortBy[iSVRepoRow[#, gate, diff, active, max] & /@ repos, {!TrueQ[#NeedsAttention] &, #Package &}]];
+    SortBy[iSVRepoRow[#, gate, diff, active, max, patchQ] & /@ repos, {!TrueQ[#NeedsAttention] &, #Package &}]];
 
 (* boxes for a call typed into a notebook (no symbol is created in this file) *)
 iSVRepoStrBox[s_String] := "\"" <> StringReplace[s, {"\\" -> "\\\\", "\"" -> "\\\""}] <> "\"";
@@ -3344,6 +3351,9 @@ iSVRepoDocUpdate[row_Association] :=
           StringRiffle[targets, ", "]],
         If[big =!= {}, Style[iSVDocL["大きすぎて対象外 (手で更新): ", "Too large, left out (update by hand): "] <>
           StringRiffle[big, ", "], RGBColor[0.8, 0.35, 0.]], Nothing],
+        If[Replace[Lookup[row, "PatchDocs", {}], Except[_List] -> {}] =!= {},
+          Style[iSVDocL["大きいので変更点だけを書き直します (差分更新): ", "Large: only the changes are rewritten (patch update): "] <>
+            StringRiffle[row["PatchDocs"], ", "], GrayLevel[0.35]], Nothing],
         iSVDocL["LLM を使い、外部プロセスで数分かかります。進捗は新しいノートブックに出ます。",
           "Uses the LLM in an external process (a few minutes). Progress goes to a new notebook."]}, Spacings -> 0.6],
       {iSVDocL["更新する", "Update"] -> True, iSVDocL["やめる", "Cancel"] -> False},
@@ -3449,7 +3459,9 @@ iSVRepoDocsCell[r_Association, ff_] := Which[
   r["DocsStatus"] === "NoDocs", Style[iSVDocL["docs なし", "no docs"], 10, GrayLevel[0.5], FontFamily -> ff],
   r["DocsStatus"] === "Stale",
     Tooltip[Row[{iSVRepoChip[iSVDocL["古い ", "stale "] <> ToString[Length[r["StaleDocs"]]], RGBColor[0.85, 0.5, 0.]],
-        If[r["TooLargeDocs"] =!= {}, Style[iSVDocL[" (大)", " (large)"], 10, RGBColor[0.8, 0.35, 0.]], ""]}],
+        If[r["TooLargeDocs"] =!= {}, Style[iSVDocL[" (大)", " (large)"], 10, RGBColor[0.8, 0.35, 0.]], ""],
+        If[r["TooLargeDocs"] === {} && Replace[Lookup[r, "PatchDocs", {}], Except[_List] -> {}] =!= {},
+          Style[iSVDocL[" (差分)", " (patch)"], 10, GrayLevel[0.45]], ""]}],
       StringRiffle[r["StaleDocs"], ", "]],
   True, iSVRepoChip[iSVDocL["失敗", "failed"], RGBColor[0.8, 0.15, 0.15]]];
 
@@ -3502,9 +3514,14 @@ iSVRepoDetail[rows_List, sel_, ff_] :=
         If[r["StaleDetail"] =!= {},
           Column[Style[ToString[Lookup[#, "Doc", "?"]] <> iSVDocL["  がソース  ", "  older than  "] <>
               ToString[Lookup[#, "Wl", "?"]] <> iSVDocL["  より古い", ""] <>
-              If[MemberQ[r["TooLargeDocs"], ToString[Lookup[#, "Doc", ""]]],
-                iSVDocL["  (大きすぎて自動更新しない: 手で直して [ドキュメント更新] →「手で直した」)",
-                  "  (too large to regenerate: edit by hand, then [Update docs] -> \"Edited by hand\")"], ""],
+              Which[
+                MemberQ[r["TooLargeDocs"], ToString[Lookup[#, "Doc", ""]]],
+                  iSVDocL["  (大きすぎて自動更新しない: 手で直して [ドキュメント更新] →「手で直した」)",
+                    "  (too large to regenerate: edit by hand, then [Update docs] -> \"Edited by hand\")"],
+                MemberQ[Replace[Lookup[r, "PatchDocs", {}], Except[_List] -> {}], ToString[Lookup[#, "Doc", ""]]],
+                  iSVDocL["  (大きいので [ドキュメント更新] は変更点だけを書き直す)",
+                    "  (large: [Update docs] rewrites only the changes)"],
+                True, ""],
               10, FontFamily -> ff] & /@ r["StaleDetail"]], Nothing],
         iSVRepoFileList[iSVDocL["追加", "Added"], r["Added"]],
         iSVRepoFileList[iSVDocL["変更", "Changed"], r["Changed"]],
