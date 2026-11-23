@@ -715,10 +715,11 @@ iSVWFCodeLangInputQ[lang_String] :=
    claudecode 未ロード環境 (headless service 等) でのみ従来実装に fallback。
    既定 (bare ``` -> Program, # -> Subsection, ## -> Subsubsection) は
    従来挙動と互換。 *)
-iSVWFMarkdownToCells[md_String] := If[
-  Length[Names["ClaudeCode`MarkdownToCells"]] > 0,
-  ClaudeCode`MarkdownToCells[md],
-  iSVWFMarkdownToCellsFallback[md]];
+(* 2026-11-20: Names では判定できない (この行の ClaudeCode`MarkdownToCells が読み込み時に記号を作るので常に真になり、
+   claudecode が無いと未評価の式が返っていた)。定義があるかで見て、リストでなければ fallback *)
+iSVWFMarkdownToCells[md_String] := With[
+  {r = If[Length[DownValues[ClaudeCode`MarkdownToCells]] > 0, Quiet @ Check[ClaudeCode`MarkdownToCells[md], $Failed], $Failed]},
+  If[ListQ[r], r, iSVWFMarkdownToCellsFallback[md]]];
 
 (* 従来実装 (fallback 専用): 見出し->Subsection/Subsubsection、
    ```wl/wolfram/mathematica``` -> Input セル (実行可能・自動評価しない)、
@@ -759,17 +760,24 @@ iSVWFLaunchAndCount[slug_String] := Module[{r},
   iSVWFStatsBump[slug, r === $Failed || r === $Aborted];
   r];
 
-iSVWFInsertExample[slug_String] := Module[{exf, md, cells},
-  Quiet @ Check[SourceVaultLoadWorkflow[slug], $Failed];
+iSVWFInsertExample[slug_String] := Module[{exf, md, cells, load, denied},
+  load = Quiet @ Check[SourceVaultLoadWorkflow[slug], $Failed];
+  (* 2026-11-20: 読み込み検査で止まったら (未受け入れの版など)、使用例のセルを評価しても動かないので、
+     使用例の先頭に理由と次の手段の式を置く (セルは workflowregistry の iSVWFDenialCells、評価はしない) *)
+  denied = If[AssociationQ[load] && Lookup[load, "Status", ""] === "LoadDenied" &&
+      Length[DownValues[SourceVault`WorkflowRegistryPrivate`iSVWFDenialCells]] > 0,
+    Quiet @ Check[SourceVault`WorkflowRegistryPrivate`iSVWFDenialCells[load], {}], {}];
+  If[! ListQ[denied], denied = {}];
   exf = iSVWFExampleFile[slug];
-  (* 使用例が無ければ従来の引数なし報告にフォールバック *)
-  If[MissingQ[exf], Return[iSVWFLaunchDialog[slug]]];
-  md = iSVWFReadUTF8[exf];
-  If[! StringQ[md] || StringTrim[md] === "", Return[iSVWFLaunchDialog[slug]]];
-  cells = iSVWFMarkdownToCells[md];
-  CreateDocument[
-    Prepend[cells, Cell["SourceVault ワークフロー使用例: " <> slug, "Subsection"]],
-    WindowTitle -> "Workflow example: " <> slug]];
+  md = If[MissingQ[exf], Missing["NoExample"], iSVWFReadUTF8[exf]];
+  cells = If[StringQ[md] && StringTrim[md] =!= "", iSVWFMarkdownToCells[md], None];
+  Which[
+    (* 使用例が無く止まってもいなければ従来の引数なし報告にフォールバック *)
+    cells === None && denied === {}, iSVWFLaunchDialog[slug],
+    True,
+      CreateDocument[
+        Join[{Cell["SourceVault ワークフロー使用例: " <> slug, "Subsection"]}, denied, Replace[cells, None -> {}]],
+        WindowTitle -> "Workflow example: " <> slug]]];
 
 iSVWFToggle[slug_String, cur_String] :=
   SourceVaultSetWorkflowStatus[slug, If[cur === "testing", "production", "testing"]];

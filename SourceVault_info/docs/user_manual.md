@@ -2560,15 +2560,15 @@ SourceVaultRealtimeStop[]
 | API | 対象モデル | 特徴 |
 |---|---|---|
 | **Realtime** | `gpt-realtime-2.1` (既定) / `gpt-realtime-2.1-mini` | 1 つのモデルが聞いて考えて話し、`show_slide` / `ask_sourcevault` を関数呼び出しで直接呼ぶ |
-| **Live (GPT-Live)** | `gpt-live-1` | 全二重 (聞きながら話す)。作業はクライアント側に委譲される: モデルは `session.delegation.created` を発行するだけで、worker が直近の書き起こしから依頼を読み取り、同じハンドラ (スライド操作・SourceVault 問い合わせ) で処理する。音声セッションは秒単位課金 ($0.05/分) |
+| **Live (GPT-Live)** | `gpt-live-1.1` / `gpt-live-1` | 全二重 (聞きながら話す)。gpt-live-1 では harema の声の高さが不安定なので、1.1 を勧める (SlideWorkflow と VRCRealtime の既定も 1.1、2026-11-21 から)。作業はクライアント側に委譲される: モデルは `session.delegation.created` を発行するだけで、worker が直近の書き起こしから依頼を読み取り、同じハンドラ (スライド操作・SourceVault 問い合わせ) で処理する。音声セッションは秒単位課金 ($0.05/分) |
 
 ```mathematica
 (* モデル登録簿を確認 *)
 SourceVaultRealtimeModels[]                 (* model -> <|"Provider","API","Label","Description"|> *)
 SourceVaultRealtimeModels["ByProvider"]     (* <|"OpenAI" -> {"gpt-realtime-2.1", ...}|> *)
-SourceVaultRealtimeModelAPI["gpt-live-1"]   (* "Live" *)
+SourceVaultRealtimeModelAPI["gpt-live-1.1"]   (* "Live" *)
 
-SourceVaultRealtimeStart["Model" -> "gpt-live-1"]   (* API は Automatic でモデルから自動決定 *)
+SourceVaultRealtimeStart["Model" -> "gpt-live-1.1"]   (* API は Automatic でモデルから自動決定 *)
 ```
 
 `$SourceVaultRealtimeModels` (既定 `<||>`) でユーザー独自のモデルを登録簿に追加/上書きできます。`SourceVaultRealtimeInstall` に `"Vosk" -> True` を渡すと、後述の許可ワード割り込みに使う `vosk` パッケージも併せてインストールされます (既定ではインストールされません)。

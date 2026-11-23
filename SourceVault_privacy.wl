@@ -223,6 +223,33 @@ iPEvalNotebook[] :=
 iPEvalCell[] :=
   If[iPFrontEndQ[], Quiet @ Check[EvaluationCell[], $Failed], $Failed];
 
+(* FE と続けて往復する区間 (セルの印付け・出力セルの flush) の間は、claudecode の共有 tick に
+   FE を触らせない (2026-11-20)。tick は ScheduledTask でメインの評価に割り込み、handler の前に
+   FE probe (CurrentValue[$FrontEnd, "MachineID"]) を送る。評価が FE と往復している最中に
+   それが重なると、FE とカーネルが互いを待って止まる (TimeConstrained ではリンク待ちを切れない)。
+   strixhalo128 で Zelkova取得 の入口 (Zelkova の iZKNotePrivacy → ここの SourceVaultNotePrivacy)
+   がこれで止まった: freeze log は tick の区切りで途切れ、FE とカーネルはどちらも CPU 0 のまま、
+   Zelkova の記録・lock・chromedriver はどれも無かった (取得に入る前)。そのノートは約 1,800 セルで、
+   未処理の印 1 件ごとに全セルの様式を 1 つずつ問い合わせていた (下の iPFlushEntry、同日に直した)。
+   claudecode が読み込まれていれば ClaudeHoldFrontEnd (パレットのボタンと同じ数) で包み、
+   無ければそのまま評価する。名前は引数で渡して毎回引き直す (直書きの Symbol["Ctx`x"] は
+   一度未評価で返ると固まる、WL 15.0)。NameQ で見るのは記号を作らないため *)
+SetAttributes[iPHoldFE, HoldAll];
+iPHoldFE[expr_] :=
+  With[{h = iPHoldFEHead["ClaudeCode`ClaudeHoldFrontEnd"]},
+    If[h === None, expr, h[expr]]];
+iPHoldFEHead[name_String] :=
+  If[NameQ[name] && Length[DownValues @@ {Symbol[name]}] > 0, Symbol[name], None];
+
+(* セル 1 つの様式 (FE 往復 1 回)。NBAccess`NBCellStyle と同じ読み方 (リストなら先頭)。 *)
+iPCellStyleOf[c_CellObject] :=
+  With[{s = Quiet @ Check[CurrentValue[c, CellStyle], ""]},
+    Which[
+      StringQ[s], s,
+      ListQ[s] && Length[s] > 0 && StringQ[First[s]], First[s],
+      True, ""]];
+iPCellStyleOf[_] := "";
+
 (* パレット型ノートブックはコントロール置き場でありコンテンツを持たないので、
    セル機密マークの対象にしない。パレットのボタンから機密 View を開くと
    EvaluationNotebook[]/EvaluationCell[] がパレット自身に解決され、パレット全体が
@@ -294,7 +321,8 @@ SourceVault`SourceVaultNotePrivacy[pl_] :=
     iPSyncScope[];
     $svPMax = Max[N[$svPMax], lv];
     iPBridgeToNBAccess[lv];
-    If[lv >= iPThreshold[],
+    (* FE と往復する区間は iPHoldFE で包む (claudecode の tick の FE probe と重ねない。上の注) *)
+    If[lv >= iPThreshold[] && iPFrontEndQ[], iPHoldFE[
       cell = iPEvalCell[]; nb = iPEvalNotebook[];
       If[MatchQ[cell, _CellObject] && MatchQ[nb, _NotebookObject] &&
           iPMarkableNotebookQ[nb],
@@ -309,7 +337,7 @@ SourceVault`SourceVaultNotePrivacy[pl_] :=
            走って本評価と取り合い、「実行中のまま終わらない」症状になっていた
            (2026-10-06 実機報告)。epilog を張れない環境だけ従来の遅延タスクに戻す。 *)
         If[! TrueQ[Quiet @ Check[iPArmEpilog[nb, cell], False]],
-          Quiet @ Check[iPScheduleFlush[], Null]]]];
+          Quiet @ Check[iPScheduleFlush[], Null]]]]];
     lv];
 SourceVault`SourceVaultNotePrivacy[___] :=
   SourceVault`SourceVaultNotePrivacy[SourceVault`$SourceVaultPrivacyDefaultLevel];
@@ -357,11 +385,16 @@ If[! BooleanQ[$svPFlushScheduled], $svPFlushScheduled = False];
 
 (* CellObject -> Cells[nb] 上の index。見つからなければ 0。 *)
 iPCellIndex[nb_NotebookObject, cell_CellObject] :=
-  Module[{cells = Quiet @ Check[Cells[nb], $Failed], pos},
+  Module[{cells = Quiet @ Check[Cells[nb], $Failed]},
     If[! ListQ[cells], Return[0]];
-    pos = FirstPosition[cells, cell, {0}, {1}];
-    If[MatchQ[pos, {_Integer}], First[pos], 0]];
+    iPIndexIn[cells, cell]];
 iPCellIndex[___] := 0;
+
+(* Cells[nb] で取った一覧の中の位置。無ければ 0。 *)
+iPIndexIn[cells_List, cell_CellObject] :=
+  With[{pos = FirstPosition[cells, cell, Missing["NotFound"], {1}]},
+    If[MatchQ[pos, {_Integer?Positive}], First[pos], 0]];
+iPIndexIn[___] := 0;
 
 (* セルの現在 PL (タグ由来)。取れなければ 0。 *)
 iPCellCurrentLevel[nb_NotebookObject, idx_Integer] :=
@@ -409,26 +442,32 @@ SourceVault`SourceVaultPendingPrivacyMarks[] := $svPPending;
 (* 入力セルに属する出力セル群 (次の Input/Code/ClaudeInput セルの手前まで) をマークする。
    マークできた出力セル数を返す。 *)
 iPFlushEntry[entry_Association] :=
-  Module[{nb, cell, lv, idx, n, marked = 0, style},
+  Module[{nb, cell, lv, cells, idx, marked = 0, style},
     nb = Lookup[entry, "Notebook", Null];
     cell = Lookup[entry, "Cell", Null];
     lv = Lookup[entry, "Level", SourceVault`$SourceVaultPrivacyDefaultLevel];
     If[! MatchQ[nb, _NotebookObject] || ! MatchQ[cell, _CellObject], Return[0]];
     Quiet @ Check[NBAccess`NBInvalidateCellsCache[nb], Null];
-    idx = iPCellIndex[nb, cell];
+    cells = Quiet @ Check[Cells[nb], $Failed];
+    If[! ListQ[cells], Return[0]];
+    idx = iPIndexIn[cells, cell];
     If[idx < 1, Return[0]];
     (* 入力セル自身も念のため (同期マークが落ちていた場合の保険) *)
     iPMarkCellIndex[nb, idx, lv];
-    n = Quiet @ Check[NBAccess`NBCellCount[nb], 0];
-    If[! IntegerQ[n], Return[0]];
     (* 評価セルの出力は必ず直後に連続する。Output/Print/Message 以外が現れたら
-       そこで打ち切る (無関係なセルを巻き込んで機密化しないため)。 *)
+       そこで打ち切る (無関係なセルを巻き込んで機密化しないため)。
+       2026-11-20: 様式は直後のセルから 1 つずつ読む (iPCellStyleOf)。以前は NBAccess`NBCellStyle
+       を使い、これは初回に全セルの様式を 1 つずつ FE に問い合わせてキャッシュする。flush の前に
+       キャッシュを捨てるので、約 1,800 セルのノートでは要求 1 件ごとに 1,800 回 FE と往復していた
+       (評価の終わりの CellEpilog で毎回、未処理が残っていれば次の評価の入口でも)。
+       隠れた FE の合成ノート (1,800 セル) で、入口が 0.14 秒 → 他のセルの未処理 1 件で 1.4〜2.1 秒。
+       その往復の最中に claudecode の tick の FE probe が重なって FE が止まった (iPHoldFE の注) *)
     Do[
-      style = Quiet @ Check[NBAccess`NBCellStyle[nb, i], ""];
+      style = iPCellStyleOf[cells[[i]]];
       If[MemberQ[{"Output", "Print", "Message", "MSG"}, style],
         If[iPMarkCellIndex[nb, i, lv], marked++],
         Break[]],
-      {i, idx + 1, n}];
+      {i, idx + 1, Length[cells]}];
     marked];
 iPFlushEntry[_] := 0;
 
@@ -511,8 +550,9 @@ iPFlushTick[] :=
          $svPFlushScheduled = False]]),
     $svPFlushScheduled = False];
 
-SourceVault`SourceVaultMarkEvaluationPrivacyCells[nb_NotebookObject] := iPFlushPending[];
-SourceVault`SourceVaultMarkEvaluationPrivacyCells[] := iPFlushPending[];
+(* CellEpilog から呼ばれる flush も FE と往復するので iPHoldFE で包む (2026-11-20) *)
+SourceVault`SourceVaultMarkEvaluationPrivacyCells[nb_NotebookObject] := iPHoldFE[iPFlushPending[]];
+SourceVault`SourceVaultMarkEvaluationPrivacyCells[] := iPHoldFE[iPFlushPending[]];
 
 (* ============================================================
    3. 正準 exit

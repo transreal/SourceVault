@@ -722,7 +722,7 @@ iSVRPTaskName[t_] := Module[
     True, "(untitled)"]];
 
 iSVRPAllDayRank[item_] := Switch[Lookup[item, "Kind", ""],
-  "Deadline", 1, "MailDeadline", 2, "SeriesMail", 2, "Todo", 2, "Review", 3,
+  "NoteEvent", 0, "Deadline", 1, "MailDeadline", 2, "SeriesMail", 2, "Todo", 2, "Review", 3,
   "AllDayEvent", 4, _, 5];
 
 (* --- open-todo disclosure for OVERDUE notebook rows (2026-07-28) ---
@@ -820,29 +820,40 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
      falls inside the window (the notebook list shows both columns, so the
      agenda has to agree). Place one item per date; when both land on the same
      day the deadline supersedes, so no duplicate row appears. *)
-  Do[Module[{state = Lookup[t, "State", "Open"], dlAbs, nrAbs, dlDay, occ},
+  (* The event the note is about ("Eventdate", NBOnWorkTasks "EventDue"; owner 2026-11-20) is a third occurrence,
+     Kind "NoteEvent" (an all-day band item; "Event" is the timed calendar item). On the day of the event a deadline of
+     the same day is not listed twice: the event item carries "AlsoDeadline" -> True. A review on the day of the
+     event or of the deadline is not listed either. *)
+  Do[Module[{state = Lookup[t, "State", "Open"], dlAbs, nrAbs, evAbs, dlDay, evDay, occ},
     (* Keep = intentionally parked: no reminders, so neither the day list nor
        the overdue band should nag about it *)
     If[!MemberQ[{"Done", "Pass", "Keep"}, state],
       dlAbs = iSVRPAbs[Lookup[t, "DeadlineDue", Missing[]]];
       nrAbs = iSVRPAbs[Lookup[t, "ReviewDue", Missing[]]];
+      evAbs = iSVRPAbs[Lookup[t, "EventDue", Missing[]]];
       (* legacy / injected records expose only Due+DueKind *)
-      If[!NumberQ[dlAbs] && !NumberQ[nrAbs],
+      If[!NumberQ[dlAbs] && !NumberQ[nrAbs] && !NumberQ[evAbs],
         With[{d0 = iSVRPAbs[Lookup[t, "Due", Missing[]]]},
           If[NumberQ[d0],
-            If[Lookup[t, "DueKind", Missing[]] === "NextReview",
-              nrAbs = d0, dlAbs = d0]]]];
+            Switch[Lookup[t, "DueKind", Missing[]],
+              "NextReview", nrAbs = d0,
+              "Eventdate", evAbs = d0,
+              _, dlAbs = d0]]]];
       dlDay = If[NumberQ[dlAbs], iSVRPDayStart[dlAbs, tz], Missing[]];
+      evDay = If[NumberQ[evAbs], iSVRPDayStart[evAbs, tz], Missing[]];
       occ = {};
-      If[NumberQ[dlAbs], AppendTo[occ, {"Deadline", dlAbs}]];
+      If[NumberQ[evAbs], AppendTo[occ, {"NoteEvent", evAbs}]];
+      If[NumberQ[dlAbs] && ! (NumberQ[evDay] && dlDay == evDay), AppendTo[occ, {"Deadline", dlAbs}]];
       If[NumberQ[nrAbs] &&
-          ! (NumberQ[dlDay] && iSVRPDayStart[nrAbs, tz] == dlDay),
+          ! (NumberQ[dlDay] && iSVRPDayStart[nrAbs, tz] == dlDay) &&
+          ! (NumberQ[evDay] && iSVRPDayStart[nrAbs, tz] == evDay),
         AppendTo[occ, {"Review", nrAbs}]];
       Do[Module[{kind = o[[1]], due = o[[2]], item, d},
         d = iSVRPDayStart[due, tz];
         item = <|"Kind" -> kind, "DueT" -> due, "Label" -> iSVRPTaskName[t],
           "Path" -> Lookup[t, "Path", Missing[]], "State" -> state,
           "PrivacyLevel" -> iSVRPItemPL[t], "DayAbs" -> d|>;
+        If[kind === "NoteEvent" && NumberQ[dlDay] && dlDay == evDay, item["AlsoDeadline"] = True];
         (* injected todo items (test seam / enriched callers) travel with the
            item so the overdue post-pass below can use them without re-reading
            the notebook *)
@@ -991,7 +1002,7 @@ SourceVaultRoutineAgendaData[from_, to_, OptionsPattern[]] := Module[
       <|"DayAbs" -> N[dk], "DayKey" -> iSVRPDayKey[dk, tz],
         "Weekday" -> iSVRPWeekdayJP[dk],
         "AllDay" -> SortBy[Select[grp, MemberQ[
-            {"Deadline", "MailDeadline", "SeriesMail", "Todo", "Review", "AllDayEvent"},
+            {"NoteEvent", "Deadline", "MailDeadline", "SeriesMail", "Todo", "Review", "AllDayEvent"},
             #["Kind"]] &],
           {iSVRPAllDayRank[#], Lookup[#, "Label", ""]} &],
         "Timed" -> SortBy[Select[grp, #["Kind"] === "Event" &],
@@ -1028,6 +1039,9 @@ iSVRPSeriesLabel[si_] := ToString[Lookup[si, "SeriesName", Lookup[si, "Subject",
 iSVRPAgendaColor["SeriesMail"] = RGBColor[0.5, 0.2, 0.6];
 iSVRPAgendaKindTag["SeriesMail"] = "\:5b9a\:578b";
 iSVRPAgendaColor["Deadline"] = RGBColor[0.85, 0.2, 0.2];
+(* the event a note is about (its "Eventdate"); the tag says "開催", with "〆" when the deadline is the same day *)
+iSVRPAgendaColor["NoteEvent"] = RGBColor[0.05, 0.5, 0.55];
+iSVRPAgendaKindTag["NoteEvent"] = "\:958b\:50ac";
 iSVRPAgendaColor["MailDeadline"] = RGBColor[0.8, 0.3, 0.15];
 iSVRPAgendaColor["Todo"] = RGBColor[0.55, 0.3, 0.7];
 iSVRPAgendaColor["Review"] = RGBColor[0.2, 0.45, 0.8];
@@ -1050,6 +1064,8 @@ iSVRPAgendaItemRow[item_, tz_, showDue_] := Module[
    dirCell, mainRow, todoRows},
   col = iSVRPAgendaColor[kind];
   tag = iSVRPAgendaKindTag[kind];
+  (* the event of a note whose deadline is the same day: "開催・〆" *)
+  If[kind === "NoteEvent" && TrueQ[Lookup[item, "AlsoDeadline", False]], tag = tag <> "\:30fb\:3006"];
   mand = TrueQ[Lookup[item, "Mandatory", False]];
   timepart = Switch[kind,
     "Event", iSVRPHM[Lookup[item, "StartT", 0], tz] <> "\:2013" <>

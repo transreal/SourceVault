@@ -46,7 +46,9 @@ SourceVaultMailWorkAct::usage =
 
 SourceVaultMailWorkAccept::usage =
   "SourceVaultMailWorkAccept[ref, via] \:306f\:63d0\:6848\:3092\:63a1\:7528\:3057\:3066\:5b9f\:969b\:306e\:4f5c\:696d\:306e\:5165\:308c\:7269\:3092\:4f5c\:308b\:3002via \"Notebook\" \:306f\:7d99\:627f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af (\:904e\:53bb\:306e\:56de\:306e\:95a2\:9023\:8cc7\:6599\:306e\:4e00\:89a7\:3064\:304d\:3002\:6dfb\:4ed8\:306e\:3042\:308b\:30e1\:30fc\:30eb\:3068\:7e70\:308a\:8fd4\:3059\:696d\:52d9\:306e\:9805\:76ee\:306f <\:65e5\:4ed8>-<\:984c\:540d> \:306e\:30d5\:30a9\:30eb\:30c0\:3092\:4f5c\:3063\:3066\:305d\:306e\:4e2d\:306b\:7f6e\:304f) \:3092 \
-$onWork \:306b\:4f5c\:308a\:3001\"Todo\" \:306f\:5358\:72ec todo \:3092\:4f5c\:308a\:3001\"Reply\" \:306f\:8fd4\:4fe1\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:958b\:304f\:3002\:3069\:308c\:3082\:53f0\:5e33\:306b Accept \:3092\:8a18\:9332\:3057\:3001\:9805\:76ee\:306f\:300c\:51e6\:7406\:4e2d\:300d\:306b\:306a\:308b\:3002";
+$onWork \:306b\:4f5c\:308a\:3001\"Todo\" \:306f\:5358\:72ec todo \:3092\:4f5c\:308a\:3001\"Reply\" \:306f\:8fd4\:4fe1\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3092\:958b\:304f\:3002\:3069\:308c\:3082\:53f0\:5e33\:306b Accept \:3092\:8a18\:9332\:3057\:3001\:9805\:76ee\:306f\:300c\:51e6\:7406\:4e2d\:300d\:306b\:306a\:308b\:3002\
+\:4f1a\:8b70\:306e\:3088\:3046\:306b\:5e74\:306b\:4f55\:5ea6\:3082\:958b\:304b\:308c\:308b\:696d\:52d9 (\:4ef6\:540d\:306b\:958b\:50ac\:65e5\:304c\:66f8\:304b\:308c\:308b\:3002$SourceVaultSeriesEventMinPerYear) \:306f\:3001\:30a4\:30d9\:30f3\:30c8\:3054\:3068\:306e\:30d5\:30a9\:30eb\:30c0 <\:958b\:50ac\:65e5>-<\:540d\:524d> (\:4f8b 20261120-\:5168\:5b66\:6559\:6388\:4f1a) \:306b\:7f6e\:304d\:3001\
+\:540c\:3058\:30a4\:30d9\:30f3\:30c8\:306e\:30e1\:30fc\:30eb (\:518d\:9001\:30fb\:8cc7\:6599) \:3060\:3051\:304c\:540c\:3058\:30d5\:30a9\:30eb\:30c0\:3092\:4f7f\:3046\:3002\:5225\:306e\:65e5\:306e\:30a4\:30d9\:30f3\:30c8\:306e\:30d5\:30a9\:30eb\:30c0\:306f\:4f7f\:308f\:306a\:3044\:3002";
 
 SourceVaultMailWorkEvents::usage =
   "SourceVaultMailWorkEvents[] \:306f\:53f0\:5e33\:306e\:51fa\:6765\:4e8b (\:5168\:6a5f\:68b0\:5206) \:3092\:6642\:523b\:9806\:306b\:8fd4\:3059\:3002";
@@ -62,7 +64,23 @@ SourceVaultSeriesDiscover::usage =
 
 SourceVaultSeriesRelated::usage =
   "SourceVaultSeriesRelated[ref, opts] \:306f\:3001\:4f5c\:696d\:9805\:76ee (RecordId \:304b WorkId) \:306b\:5bfe\:5fdc\:3059\:308b\:904e\:53bb\:306e\:56de\:3068\:3001\:305d\:306e\:56de\:306e\:5bfe\:5fdc (\:8fd4\:4fe1\:30fb\:30ce\:30fc\:30c8\:30fbtodo\:30fb\:78ba\:8a8d\:306e\:307f)\:3001\
-\:984c\:540d\:306e\:8fd1\:3044\:4f5c\:696d\:30ce\:30fc\:30c8\:3092\:8fd4\:3059 (\:6587\:66f8 04 6.1 \:7bc0)\:3002\:78ba\:8a8d\:3057\:3066\:3044\:306a\:3044\:7cfb\:5217\:306b\:3088\:308b\:5bfe\:5fdc\:306b\:306f \"MatchStatus\" -> \"Proposed\" \:304c\:4ed8\:304f\:3002";
+\:984c\:540d\:306e\:8fd1\:3044\:4f5c\:696d\:30ce\:30fc\:30c8\:3092\:8fd4\:3059 (\:6587\:66f8 04 6.1 \:7bc0)\:3002\:78ba\:8a8d\:3057\:3066\:3044\:306a\:3044\:7cfb\:5217\:306b\:3088\:308b\:5bfe\:5fdc\:306b\:306f \"MatchStatus\" -> \"Proposed\" \:304c\:4ed8\:304f\:3002\
+\"Event\" \:306f\:3001\:3053\:306e\:30e1\:30fc\:30eb\:306e\:30a4\:30d9\:30f3\:30c8 (\:4ef6\:540d\:306e\:958b\:50ac\:65e5\:3068\:540d\:524d\:3067\:6c7a\:307e\:308b): <|\"Kind\" -> \"Dated\" | \"Year\", \"Name\", \"Date\", \"Key\", \"Events\"|>\:3002\
+\"Dated\" (\:5e74\:306b\:4f55\:5ea6\:3082\:958b\:304b\:308c\:308b\:4f1a\:8b70\:306a\:3069) \:3067\:306f \"Events\" \:306b\:540c\:3058\:540d\:524d\:306e\:30a4\:30d9\:30f3\:30c8\:3092\:65b0\:3057\:3044\:9806\:306b\:4e26\:3079\:3001\:305d\:308c\:305e\:308c\:306e\:958b\:50ac\:65e5\:30fb\:30e1\:30fc\:30eb\:30fb\:30d5\:30a9\:30eb\:30c0 ($onWork \:304b $offWork \:306e\:5e74\:5ea6\:306e\:30d5\:30a9\:30eb\:30c0) \:3092\:6301\:3064\:3002\
+\:305d\:306e\:3068\:304d \"OccurrenceKey\" \:3068 \"Previous\" \:306e \"Key\" \:306f\:958b\:50ac\:65e5 (\:4f8b \"2026-11-20\")\:3002";
+
+SourceVaultWorkPathResolve::usage =
+  "SourceVaultWorkPathResolve[path] \:306f\:3001\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:3084\:53f0\:5e33\:306b\:66f8\:304b\:308c\:305f\:30d1\:30b9 (\:30d5\:30a1\:30a4\:30eb\:304b\:30d5\:30a9\:30eb\:30c0) \:304c\:4eca\:3069\:3053\:306b\:3042\:308b\:304b\:3092\:8fd4\:3059 (\:898b\:3064\:304b\:3089\:306a\:3051\:308c\:3070 Missing[\"NotFound\"])\:3002\
+$onWork \:306f\:672a\:51e6\:7406\:306e\:30ce\:30fc\:30c8\:3084 Todo \:304c\:6b8b\:3063\:3066\:3044\:308b\:3042\:3044\:3060\:306e\:7f6e\:304d\:5834\:3067\:3001\:6e08\:3093\:3060\:3082\:306e\:306f $offWork \:306e\:5e74\:5ea6\:306e\:30d5\:30a9\:30eb\:30c0 (\:540d\:524d\:306e\:5148\:982d\:306e\:65e5\:4ed8\:306e\:5e74\:5ea6\:30014 \:6708\:59cb\:307e\:308a) \:3078\:79fb\:308b\:3002\
+\:66f8\:304b\:308c\:305f\:5834\:6240\:306b\:7121\:3051\:308c\:3070\:3001$onWork\:3001$offWork \:306e\:305d\:306e\:5e74\:5ea6\:3001\:307b\:304b\:306e\:5e74\:5ea6\:306e\:9806\:306b\:540c\:3058\:76f8\:5bfe\:30d1\:30b9\:3092\:63a2\:3057\:3001\:6700\:5f8c\:306b\:30d5\:30a1\:30a4\:30eb\:540d\:3067 $onWork \:3068 $offWork \:3092\:63a2\:3059 (\:30d5\:30a9\:30eb\:30c0\:3078\:79fb\:3057\:305f\:30ce\:30fc\:30c8)\:3002\
+\:307b\:304b\:306e\:30b3\:30f3\:30d4\:30e5\:30fc\:30bf\:306e\:30d1\:30b9 (\:5225\:306e\:30c9\:30e9\:30a4\:30d6) \:306f\:3001\:6839\:306e\:30d5\:30a9\:30eb\:30c0\:306e\:540d\:524d (On Work / Off Work) \:3067\:8aad\:307f\:66ff\:3048\:308b\:3002";
+SourceVaultWorkPathOpen::usage =
+  "SourceVaultWorkPathOpen[path] \:306f path \:3092\:958b\:304f\:3002\:66f8\:304b\:308c\:305f\:5834\:6240\:306b\:7121\:3051\:308c\:3070 SourceVaultWorkPathResolve \:3067\:4eca\:306e\:5834\:6240\:3092\:63a2\:3057\:3066\:958b\:304d\:3001\:898b\:3064\:304b\:3089\:306a\:3051\:308c\:3070\:305d\:3046\:77e5\:3089\:305b\:308b\:3002\
+\:30bf\:30b9\:30af\:306e\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:306e\:300c\:30a4\:30d9\:30f3\:30c8\:300d\:300c\:95a2\:9023\:8cc7\:6599\:300d\:300c\:95a2\:9023\:30d5\:30a1\:30a4\:30eb\:300d\:306e\:30dc\:30bf\:30f3\:306f\:3053\:308c\:3092\:547c\:3076\:306e\:3067\:3001\:30d5\:30a9\:30eb\:30c0\:304c $offWork \:3078\:79fb\:3063\:3066\:3082\:30ea\:30f3\:30af\:306f\:5207\:308c\:306a\:3044\:3002";
+$SourceVaultSeriesEventMinPerYear::usage =
+  "$SourceVaultSeriesEventMinPerYear: \:696d\:52d9\:306e\:540c\:3058\:540d\:524d\:306e\:30e1\:30fc\:30eb\:306e\:4ef6\:540d\:304c\:30011 \:3064\:306e\:5e74\:5ea6\:306b\:3053\:306e\:6570\:4ee5\:4e0a\:306e\:9055\:3046\:65e5\:4ed8 (\:958b\:50ac\:65e5) \:3092\:66f8\:3044\:3066\:3044\:308c\:3070\:3001\:305d\:306e\:696d\:52d9\:3092\:300c\:65e5\:4ed8\:306e\:3042\:308b\:30a4\:30d9\:30f3\:30c8\:300d\
+(\:4f1a\:8b70\:306e\:3088\:3046\:306b\:5e74\:306b\:4f55\:5ea6\:3082\:958b\:304b\:308c\:308b\:3082\:306e) \:3068\:3057\:3066\:6271\:3044\:3001\:30d5\:30a9\:30eb\:30c0\:3092\:30a4\:30d9\:30f3\:30c8\:3054\:3068 (<\:958b\:50ac\:65e5>-<\:540d\:524d>) \:306b\:4f5c\:308b (\:65e2\:5b9a 3)\:3002\
+\:305d\:308c\:3088\:308a\:5c11\:306a\:3044\:696d\:52d9 (\:5e74\:306b 1 \:5ea6\:306e\:5171\:901a\:30c6\:30b9\:30c8\:306a\:3069) \:306f\:3001\:5e74\:5ea6\:3054\:3068\:306b 1 \:3064\:306e\:30d5\:30a9\:30eb\:30c0\:3092\:4f7f\:3046\:3002";
 
 SourceVaultSeriesConfirm::usage =
   "SourceVaultSeriesConfirm[seriesId] \:306f\:7cfb\:5217\:306e\:5019\:88dc\:3092\:6240\:6709\:8005\:304c\:78ba\:5b9a\:3059\:308b (L0 \:306e\:8a18\:9332)\:3002";
@@ -1008,28 +1026,96 @@ iSVSRTodoRows[opt_] := Module[{rows},
 iSVSRGlobalDir[name_String] := With[{v = Quiet @ Check[Symbol[Identity["Global`" <> name]], $Failed]},
   If[StringQ[v] && DirectoryQ[v], v, Missing["NoDirectory"]]];
 
-iSVSRNotebookStatus[path_String] := Module[{off, cand, on},
-  (* not where it was recorded: the owner moved it into a project folder under $onWork (the file name stays) *)
-  If[! FileExistsQ[path],
-    on = iSVSRGlobalDir["$onWork"];
-    If[StringQ[on],
-      cand = Quiet @ Check[FileNames[FileNameTake[path], on, 4], {}];
-      If[ListQ[cand] && cand =!= {},
-        Return[<|"Status" -> "Open", "ModAbs" -> Quiet @ Check[N[AbsoluteTime[FileDate[First[cand], "Modification"]]], 0.],
-          "Path" -> First[cand]|>]]]];
-  If[FileExistsQ[path],
-    off = iSVSRGlobalDir["$offWork"];
-    Return[<|"Status" -> If[StringQ[off] && StringStartsQ[ToLowerCase[StringReplace[path, "\\" -> "/"]],
-          ToLowerCase[StringReplace[off, "\\" -> "/"]]], "Done", "Open"],
-      "ModAbs" -> Quiet @ Check[N[AbsoluteTime[FileDate[path, "Modification"]]], 0.], "Path" -> path|>]];
-  off = iSVSRGlobalDir["$offWork"];
-  If[StringQ[off],
-    cand = Quiet @ Check[FileNames[FileNameTake[path], off, 2], {}];
-    If[ListQ[cand] && cand =!= {},
-      Return[<|"Status" -> "Done", "ModAbs" -> Quiet @ Check[N[AbsoluteTime[FileDate[First[cand], "Modification"]]], 0.],
-        "Path" -> First[cand]|>]]];
-  <|"Status" -> "Missing", "ModAbs" -> 0., "Path" -> path|>];
+(* ---------------- paths that moved: $onWork -> $offWork/<academic year> ----------------
+   $onWork holds the matters that still have notes or todos left; a finished matter moves to $offWork/<academic year>/
+   (the year of the date its name begins with, from April: NotebookExtensions archiveTaskFiles moves the whole top-level
+   folder or file). A path written into a notebook or into the ledger is resolved again when it is no longer where it was
+   written: the same relative path under $onWork, under $offWork in the year of its name, in the other years of $offWork
+   (nearest first), and last the file name under $onWork and in $offWork (a notebook the owner moved into a folder).
+   A path of another computer (another drive, the Mac) is read by the name of its root folder ("On Work" / "Off Work").
+   (2026-11-20: the archived notebook sits in $offWork/<year>/<folder>/<file>, three levels down; the search of two levels
+   did not find it, and the buttons of the notebooks held the old absolute path.) *)
+iSVSRSegs[p_String] := Select[StringSplit[StringReplace[p, "\\" -> "/"], "/"], # =!= "" &];
+(* the segments of p below root (this computer's root, else a folder of the root's name in p), or Missing *)
+iSVSRRelUnder[p_String, root_String] := Module[{ps = ToLowerCase /@ iSVSRSegs[p], rs = ToLowerCase /@ iSVSRSegs[root], k},
+  If[rs === {} || Length[ps] <= 1, Return[Missing["NotUnder"]]];
+  If[Length[ps] > Length[rs] && Take[ps, Length[rs]] === rs, Return[Drop[iSVSRSegs[p], Length[rs]]]];
+  k = Flatten[Position[Most[ps], Last[rs], {1}, Heads -> False]];
+  If[k =!= {}, Drop[iSVSRSegs[p], Last[k]], Missing["NotUnder"]]];
+iSVSRRelUnder[___] := Missing["NotUnder"];
+iSVSRUnderQ[p_String, root_String] := With[{a = iSVSRNormPath[p], b = iSVSRNormPath[root]},
+  b =!= "" && StringStartsQ[a, b <> "/"]];
+iSVSRUnderQ[___] := False;
+(* the academic year a name is archived under: the yyyymm it begins with, April to March (as archiveTaskFiles) *)
+iSVSRArchiveYear[name_String] := With[{m = StringCases[name, RegularExpression["^(\\d{4})(\\d{2})"] :> {"$1", "$2"}, 1]},
+  If[m === {}, Missing["NoDate"],
+    With[{y = FromDigits[m[[1, 1]]], mo = FromDigits[m[[1, 2]]]}, If[1 <= mo <= 12, If[mo <= 3, y - 1, y], Missing["NoDate"]]]]];
+iSVSRArchiveYear[_] := Missing["NoDate"];
+(* the year folders of $offWork, the year of the name first, then the nearest *)
+iSVSROffYears[off_String, y_] := Module[{ys},
+  ys = Select[FileNameTake /@ Select[Quiet @ Check[FileNames["*", off, 1], {}], DirectoryQ], StringMatchQ[#, RegularExpression["\\d{4}"]] &];
+  If[IntegerQ[y], SortBy[ys, {Abs[FromDigits[#] - y] &, -FromDigits[#] &}], Reverse[Sort[ys]]]];
+If[! AssociationQ[$iSVSRResolveCache], $iSVSRResolveCache = <||>];
+iSVSRResolveWorkPath[p_String] := Module[{c = Lookup[$iSVSRResolveCache, p, Missing[]], r},
+  If[FileExistsQ[p], Return[p]];
+  If[ListQ[c] && AbsoluteTime[] - c[[1]] < 120. && (MissingQ[c[[2]]] || FileExistsQ[c[[2]]]), Return[c[[2]]]];
+  r = iSVSRResolveWorkPath0[p];
+  If[Length[$iSVSRResolveCache] > 2000, $iSVSRResolveCache = <||>];
+  $iSVSRResolveCache[p] = {AbsoluteTime[], r};
+  r];
+iSVSRResolveWorkPath[_] := Missing["NotFound"];
+iSVSRResolveWorkPath0[p_String] := Module[{on = iSVSRGlobalDir["$onWork"], off = iSVSRGlobalDir["$offWork"], rel, cands = {}, hit = Missing[], name},
+  rel = If[StringQ[on], iSVSRRelUnder[p, on], Missing[]];
+  Which[
+    ListQ[rel] && rel =!= {},
+      (* written under $onWork: this computer's $onWork, then archived in $offWork (the year of the top-level name first) *)
+      cands = {FileNameJoin[Prepend[rel, on]]};
+      If[StringQ[off], cands = Join[cands, FileNameJoin[Join[{off, #}, rel]] & /@ iSVSROffYears[off, iSVSRArchiveYear[First[rel]]]]],
+    StringQ[off] && ListQ[rel = iSVSRRelUnder[p, off]] && Length[rel] >= 2,
+      (* written under $offWork/<year>: this computer's $offWork, back in $onWork, another year *)
+      cands = {FileNameJoin[Prepend[rel, off]]};
+      If[StringQ[on], AppendTo[cands, FileNameJoin[Prepend[Rest[rel], on]]]];
+      cands = Join[cands, FileNameJoin[Join[{off, #}, Rest[rel]]] & /@ iSVSROffYears[off, iSVSRArchiveYear[rel[[2]]]]],
+    True, Null];
+  hit = SelectFirst[DeleteDuplicates[cands], FileExistsQ, Missing[]];
+  If[StringQ[hit], Return[hit]];
+  (* a file renamed to a LONGER name of the same beginning (2026-11-20: the mail-inherit notebooks were named after the
+     subject cut at 24 characters and were renamed to the subject of 48): in the folder where it should be, the one file
+     whose name begins with the old name (same extension). More than one: not decided. *)
+  hit = SelectFirst[DeleteDuplicates[Join[{p}, cands]], Function[c, With[{dir = DirectoryName[c], b = FileBaseName[c], ext = FileExtension[c]},
+      StringQ[dir] && dir =!= "" && DirectoryQ[dir] && StringLength[b] >= 8 && ext =!= "" &&
+        Length[Select[FileNames["*." <> ext, dir], StringStartsQ[FileBaseName[#], b] && StringLength[FileBaseName[#]] > StringLength[b] &]] === 1]], Missing[]];
+  If[StringQ[hit],
+    Return[First[Select[FileNames["*." <> FileExtension[hit], DirectoryName[hit]],
+      StringStartsQ[FileBaseName[#], FileBaseName[hit]] && StringLength[FileBaseName[#]] > StringLength[FileBaseName[hit]] &]]]];
+  (* a file the owner moved into a folder: its name, under $onWork, then in $offWork (year / folder / ... / file). In
+     $offWork only the year of the date the name begins with and the years next to it are searched (the whole of
+     $offWork took 1.9 s on the owner's disk for a file that is nowhere; a name without a date searches every year) *)
+  name = FileNameTake[p];
+  If[StringQ[name] && name =!= "" && FileExtension[name] =!= "" && ! StringContainsQ[name, "*" | "?" | "@"],
+    If[StringQ[on], hit = First[Quiet @ Check[FileNames[name, on, 4], {}], Missing[]]];
+    If[! StringQ[hit] && StringQ[off],
+      hit = First[Flatten[Function[yy, Quiet @ Check[FileNames[name, FileNameJoin[{off, yy}], 4], {}]] /@
+        With[{y = iSVSRArchiveYear[name], ys = iSVSROffYears[off, iSVSRArchiveYear[name]]},
+          If[IntegerQ[y], Select[ys, Abs[FromDigits[#] - y] <= 1 &], ys]]], Missing[]]]];
+  If[StringQ[hit], hit, Missing["NotFound"]]];
+
+(* the state of a notebook by where it is: under $offWork it is done (archived), elsewhere open *)
+iSVSRNotebookStatus[path_String] := Module[{p = iSVSRResolveWorkPath[path], off = iSVSRGlobalDir["$offWork"]},
+  If[! StringQ[p], Return[<|"Status" -> "Missing", "ModAbs" -> 0., "Path" -> path|>]];
+  <|"Status" -> If[StringQ[off] && iSVSRUnderQ[p, off], "Done", "Open"],
+    "ModAbs" -> Quiet @ Check[N[AbsoluteTime[FileDate[p, "Modification"]]], 0.], "Path" -> p|>];
 iSVSRNotebookStatus[_] := <|"Status" -> "Missing", "ModAbs" -> 0.|>;
+
+(* Open a path written into a notebook (a button of the task notebook). Public, so that the buttons of a saved notebook
+   call a symbol that exists in the next session too. *)
+SourceVault`SourceVaultWorkPathResolve[path_String] := iSVSRResolveWorkPath[path];
+SourceVault`SourceVaultWorkPathResolve[___] := Missing["NotFound"];
+SourceVault`SourceVaultWorkPathOpen[path_String] := With[{p = iSVSRResolveWorkPath[path]},
+  If[StringQ[p], SystemOpen[p]; p,
+    If[TrueQ[$Notebooks], Quiet @ MessageDialog["\:898b\:3064\:304b\:308a\:307e\:305b\:3093 (\:66f8\:304b\:308c\:305f\:5834\:6240\:306b\:3082\:3001$onWork \:3068 $offWork \:306e\:5e74\:5ea6\:306e\:30d5\:30a9\:30eb\:30c0\:306b\:3082\:3042\:308a\:307e\:305b\:3093): " <> path]];
+    Missing["NotFound"]]];
+SourceVault`SourceVaultWorkPathOpen[___] := Missing["NotFound"];
 
 iSVSRSeriesDecisions[events_List] := Module[{d = <||>},
   Scan[Function[e, Switch[Lookup[e, "Type", ""],
@@ -1834,10 +1920,12 @@ iSVSRContentList[cores_List] := If[cores === {}, {},
 iSVSRTitleContents[titles_List] := If[titles === {}, {},
   iSVSRContentList[iSVSRStemCoreList[iSVSRStemList[iSVSRNormList[iSVSRLowList[titles]]]]]];
 
-If[! AssociationQ[$iSVSRNbCache], $iSVSRNbCache = <|"At" -> 0., "V" -> 2, "Rows" -> {}|>];
+(* the notebooks of $onWork (folder / notebook: two levels) and of $offWork (year / folder / notebook: three levels;
+   2026-11-20: two levels saw only the single notebooks archived in a year folder, not the archived project folders) *)
+If[! AssociationQ[$iSVSRNbCache], $iSVSRNbCache = <|"At" -> 0., "V" -> 3, "Rows" -> {}|>];
 iSVSRNotebookRows[] := Module[{rows},
-  If[AbsoluteTime[] - $iSVSRNbCache["At"] < 300. && Lookup[$iSVSRNbCache, "V", 0] === 2, Return[$iSVSRNbCache["Rows"]]];
-  rows = Flatten[Function[{name, where}, With[{dir = iSVSRGlobalDir[name]},
+  If[AbsoluteTime[] - $iSVSRNbCache["At"] < 300. && Lookup[$iSVSRNbCache, "V", 0] === 3, Return[$iSVSRNbCache["Rows"]]];
+  rows = Flatten[Function[{name, where, depth}, With[{dir = iSVSRGlobalDir[name]},
       If[! StringQ[dir], {},
         Function[p, Module[{base = FileBaseName[p], m, title, abs},
           m = StringCases[base, RegularExpression["^(\\d{4})(\\d{2})(\\d{2})[-_ ]?(.*)$"] :> {"$1", "$2", "$3", "$4"}, 1];
@@ -1845,10 +1933,10 @@ iSVSRNotebookRows[] := Module[{rows},
           abs = If[m === {}, Quiet @ Check[N[AbsoluteTime[FileDate[p, "Modification"]]], 0.],
             Quiet @ Check[N[AbsoluteTime[FromDigits /@ First[m][[;; 3]]]], 0.]];
           <|"Path" -> p, "Title" -> title, "DateAbs" -> abs, "Where" -> where|>]] /@
-          Quiet @ Check[FileNames["*.nb", dir, 2], {}]]]] @@@ {{"$onWork", "OnWork"}, {"$offWork", "OffWork"}}];
+          Quiet @ Check[FileNames["*.nb", dir, depth], {}]]]] @@@ {{"$onWork", "OnWork", 2}, {"$offWork", "OffWork", 3}}];
   If[rows =!= {},
     rows = MapThread[Append[#1, "Content" -> #2] &, {rows, iSVSRTitleContents[#["Title"] & /@ rows]}]];
-  $iSVSRNbCache = <|"At" -> AbsoluteTime[], "V" -> 2, "Rows" -> rows|>;
+  $iSVSRNbCache = <|"At" -> AbsoluteTime[], "V" -> 3, "Rows" -> rows|>;
   rows];
 
 (* how much of the shorter content string is shared, as up to three common pieces. A piece counts from 3 characters when it
@@ -2086,6 +2174,156 @@ iSVSRTopicOf[i_Integer, prep_Association] := Module[{st = prep["Structure"], bm 
   Join[t, <|"BusinessId" -> iSVSRBusinessId[t["Phrase"]], "Confirmed" -> False|>]];
 iSVSRTopicOf[___] := Missing["NoTitle"];
 
+(* ---------------- the events of a routine business ----------------
+   Owner, 2026-11-20: the mail "\:3010\:901a\:77e5\:301111\:670820\:65e5(\:91d1)\:300c\:5168\:5b66\:6559\:6388\:4f1a\:300d\:306e\:958b\:50ac\:306b\:3064\:3044\:3066" was put into the folder 20260909-\:5168\:5b66\:6559\:6388\:4f1a, which
+   holds the files of the meeting of 9 September (the folder of the business in this academic year was reused). Every
+   meeting is an event of its own: $onWork gets one folder per event (<date of the event>-<name>, e.g. 20261120-\:5168\:5b66\:6559\:6388\:4f1a),
+   and the routine business holds its events, this year's and the earlier ones (in $offWork/<year> once archived).
+   The event of a mail is read from its title, deterministically:
+     Date : the date the title names ("11\:670820\:65e5", "(20260909)", "2026\:5e7411\:670820\:65e5", "\:4ee4\:548c8\:5e7411\:670820\:65e5", "11/20(\:91d1)"); a date
+            without a year takes the year that puts it nearest to the mail.
+     Name : the name of the business as it stands in the title -- the run of kanji / katakana / letters around the word of
+            the business, cut at the stock words: "\:5168\:5b66\:6559\:6388\:4f1a" of the business "\:6559\:6388\:4f1a".
+   A business whose mails of the same name give $SourceVaultSeriesEventMinPerYear (3) or more different dates in one
+   academic year is a business of dated events (a meeting). A business that comes once a year (the common test) keeps one
+   folder for the academic year, as before. *)
+If[! IntegerQ[$SourceVaultSeriesEventMinPerYear], $SourceVaultSeriesEventMinPerYear = 3];
+$iSVSREventMaxListed = 12;      (* events listed per academic year in the notebook *)
+iSVSRDaysIn[y_Integer, m_Integer] := Switch[m, 2, If[Mod[y, 4] == 0 && (Mod[y, 100] != 0 || Mod[y, 400] == 0), 29, 28],
+  4 | 6 | 9 | 11, 30, _, 31];
+iSVSRYMDQ[{y_Integer, m_Integer, d_Integer}] := 1990 <= y <= 2100 && 1 <= m <= 12 && 1 <= d <= iSVSRDaysIn[y, m];
+iSVSRYMDQ[_] := False;
+(* a month and a day without a year: the year that puts the date nearest to the mail *)
+iSVSRNearestYMD[m_Integer, d_Integer, mailAbs_?NumberQ] := Module[{y0 = First[DateList[mailAbs]], cands},
+  cands = Select[{{y0, m, d}, {y0 + 1, m, d}, {y0 - 1, m, d}}, iSVSRYMDQ];
+  If[cands === {}, Missing["NoDate"], First[SortBy[cands, Abs[AbsoluteTime[#] - mailAbs] &]]]];
+iSVSRNearestYMD[___] := Missing["NoDate"];
+iSVSRTitleDate[title_String, mailAbs_?NumberQ] := Module[{t = iSVSRNFKC[title], ymd = Missing[], m},
+  (* 1. eight digits that make a date: "(20260909)" *)
+  m = StringCases[t, RegularExpression["(?<!\\d)(\\d{4})(\\d{2})(\\d{2})(?!\\d)"] :> {"$1", "$2", "$3"}];
+  ymd = SelectFirst[Map[FromDigits, m, {2}], iSVSRYMDQ, Missing[]];
+  (* 2. year, month and day: "2026\:5e7411\:670820\:65e5", "2026/11/20", "2026.11.20", "2026-11-20" *)
+  If[MissingQ[ymd],
+    m = StringCases[t, RegularExpression["(?<!\\d)(\\d{4})\\s*[\:5e74/.\\-]\\s*(\\d{1,2})\\s*[\:6708/.\\-]\\s*(\\d{1,2})(?!\\d)"] :> {"$1", "$2", "$3"}];
+    ymd = SelectFirst[Map[FromDigits, m, {2}], iSVSRYMDQ, Missing[]]];
+  (* 3. the era: "\:4ee4\:548c8\:5e7411\:670820\:65e5" *)
+  If[MissingQ[ymd],
+    m = StringCases[t, RegularExpression["\:4ee4\:548c\\s*(\\d{1,2}|\:5143)\\s*\:5e74\\s*(\\d{1,2})\\s*\:6708\\s*(\\d{1,2})\\s*\:65e5"] :> {"$1", "$2", "$3"}];
+    ymd = SelectFirst[{2018 + If[#[[1]] === "\:5143", 1, FromDigits[#[[1]]]], FromDigits[#[[2]]], FromDigits[#[[3]]]} & /@ m, iSVSRYMDQ, Missing[]]];
+  (* 4. a month and a day: "11\:670820\:65e5"; 5. "11/20(\:91d1)" *)
+  If[MissingQ[ymd],
+    m = Join[StringCases[t, RegularExpression["(?<!\\d)(\\d{1,2})\\s*\:6708\\s*(\\d{1,2})\\s*\:65e5"] :> {"$1", "$2"}],
+      StringCases[t, RegularExpression["(?<![\\d/])(\\d{1,2})/(\\d{1,2})\\s*\\([\:6708\:706b\:6c34\:6728\:91d1\:571f\:65e5]"] :> {"$1", "$2"}]];
+    ymd = SelectFirst[iSVSRNearestYMD[FromDigits[#[[1]]], FromDigits[#[[2]]], mailAbs] & /@ m, iSVSRYMDQ, Missing[]]];
+  If[ListQ[ymd], N[AbsoluteTime[ymd]], Missing["NoDate"]]];
+iSVSRTitleDate[___] := Missing["NoDate"];
+iSVSRDayKey[a_?NumberQ] := DateString[a, {"Year", "-", "Month", "-", "Day"}];
+iSVSRDayStamp[a_?NumberQ] := DateString[a, {"Year", "Month", "Day"}];
+
+(* the name of the event as it stands in the title: the run of kanji / katakana / letters that holds a word of the
+   business, widened to the LEFT up to a stock word ("\:901a\:77e5", "\:958b\:50ac"). The head of a compound stands last, so what stands
+   before the word tells whose meeting it is ("\:5168\:5b66\:6559\:6388\:4f1a", "\:5de5\:5b66\:90e8\:6559\:6388\:4f1a"); what follows it tells which step of it is meant
+   ("\:2026\:62c5\:5f53", "\:2026\:8b70\:4e8b\:9332", "\:2026\:8cc7\:6599") and is not a part of the name. *)
+$iSVSREventRunRx = RegularExpression["[\\x{3400}-\\x{4dbf}\\x{4e00}-\\x{9fff}\\x{30a0}-\\x{30ff}A-Za-z0-9]+"];
+iSVSRNameAround[run_String, x_String] := Module[{pos = StringPosition[run, x, 1, IgnoreCase -> True], blocked = iSVSRTopicBlocked[run], a, b},
+  If[pos === {}, Return[x]];
+  {a, b} = First[pos];
+  While[a > 1 && ! MemberQ[blocked, a - 1], a--];
+  StringTake[run, {a, b}]];
+(* two names of a business that may stand for the same body: one ends with the other ("\:5927\:5b66\:5165\:5b66\:5171\:901a\:30c6\:30b9\:30c8" / "\:5171\:901a\:30c6\:30b9\:30c8");
+   "\:5168\:5b66\:6559\:6388\:4f1a" / "\:5de5\:5b66\:90e8\:6559\:6388\:4f1a" do not *)
+iSVSRNamesCompatibleQ[a_String, b_String] := With[{x = iSVSRBusinessNorm[a], y = iSVSRBusinessNorm[b]}, StringEndsQ[x, y] || StringEndsQ[y, x]];
+iSVSRNamesCompatibleQ[___] := True;
+iSVSREventName[title_String, words_List] := Module[{t, runs, ws},
+  t = StringReplace[iSVSRNFKC[title], $iSVSRTopicNumberRx];
+  runs = StringCases[t, $iSVSREventRunRx];
+  ws = Select[words, StringQ[#] && StringLength[#] >= 2 &];
+  Catch[
+    Scan[Function[x, With[{run = SelectFirst[runs, StringContainsQ[#, x, IgnoreCase -> True] &, Missing[]]},
+      If[StringQ[run], Throw[iSVSRNameAround[run, x], $iSVSREventNameTag]]]], ws];
+    Missing["NoName"], $iSVSREventNameTag]];
+iSVSREventName[___] := Missing["NoName"];
+
+iSVSREpSubject[ep_Association] := ToString[Lookup[iSVSRLeadRow[ep], "Subject", ""]];
+
+(* the folders directly in a directory, for a short time (the folders of $onWork and of the year folders of $offWork) *)
+If[! AssociationQ[$iSVSRDirCache], $iSVSRDirCache = <||>];
+iSVSRDirFolders[dir_String] := Module[{c = Lookup[$iSVSRDirCache, dir, Missing[]], r},
+  If[ListQ[c] && AbsoluteTime[] - c[[1]] < 60., Return[c[[2]]]];
+  r = Sort[Select[Quiet @ Check[FileNames["*", dir, 1], {}], DirectoryQ]];
+  If[Length[$iSVSRDirCache] > 200, $iSVSRDirCache = <||>];
+  $iSVSRDirCache[dir] = {AbsoluteTime[], r};
+  r];
+(* a folder of the event: its name begins with the date (yyyymmdd) and holds the name of the event *)
+iSVSREventFolderQ[p_String, stamp_String, nm_String] := With[{n = FileNameTake[p]},
+  StringStartsQ[n, stamp] && StringContainsQ[iSVSRBusinessNorm[n], nm]];
+(* the folder of an event: in $onWork, else in $offWork in the year of its date (then the next year, the year before) *)
+iSVSREventFolder[name_String, d_?NumberQ] := Module[{on = iSVSRGlobalDir["$onWork"], off = iSVSRGlobalDir["$offWork"],
+    stamp = iSVSRDayStamp[d], nm = iSVSRBusinessNorm[name], hit = Missing[], y},
+  If[StringQ[on], hit = SelectFirst[iSVSRDirFolders[on], iSVSREventFolderQ[#, stamp, nm] &, Missing[]]];
+  If[StringQ[hit], Return[<|"Path" -> hit, "Where" -> "OnWork"|>]];
+  If[StringQ[off],
+    y = iSVSRAcademicYear[d];
+    hit = SelectFirst[Flatten[Function[yy, Select[iSVSRDirFolders[FileNameJoin[{off, yy}]], iSVSREventFolderQ[#, stamp, nm] &]] /@
+      Select[ToString /@ {y, y + 1, y - 1}, DirectoryQ[FileNameJoin[{off, #}]] &]], StringQ, Missing[]]];
+  If[StringQ[hit], <|"Path" -> hit, "Where" -> "OffWork"|>, Missing["NoFolder"]]];
+iSVSREventFolder[___] := Missing["NoFolder"];
+
+(* The event of mail i of a larger business (topic from iSVSRTopicOf); factsOf gives the handling of each mail.
+   <|"Kind" -> "Dated" | "Year", "Name", "Date", "DateFrom", "Key", "Year", "DatesPerYear", "Events"|>. For a dated
+   business, Events are the events of the same name, newest first: <|"Key", "Date", "Name", "Indices", "Current",
+   "Mails", "Folder"|> (the folder of this academic year's and last year's events only). *)
+iSVSREventOf[i_Integer, topic_Association, prep_Association, factsOf_ : (<||> &)] := Module[
+  {eps = prep["Structure"]["Episodes"], words, name, nameN, idx, info, dated, perYear, kind, date, src = "Title", start, near,
+   byDate, events, y0},
+  words = Select[DeleteDuplicates[{Lookup[topic, "Match", Missing[]], Lookup[topic, "Phrase", Missing[]]}], StringQ];
+  If[words === {} || ! (1 <= i <= Length[eps]), Return[Missing["NoEvent"]]];
+  name = iSVSREventName[iSVSREpSubject[eps[[i]]], words];
+  If[! StringQ[name], Return[Missing["NoEventName"]]];
+  nameN = iSVSRBusinessNorm[name];
+  idx = Union[Select[Lookup[topic, "Indices", {}], IntegerQ[#] && 1 <= # <= Length[eps] &], {i}];
+  (* the mails of the business that carry the same name, with the date each title names *)
+  info = Function[j, With[{s = iSVSREpSubject[eps[[j]]]}, With[{n = iSVSREventName[s, words]},
+      If[StringQ[n] && iSVSRBusinessNorm[n] === nameN, {j, iSVSRTitleDate[s, eps[[j]]["Start"]]}, Nothing]]]] /@ idx;
+  dated = Select[info, NumberQ[#[[2]]] &];
+  perYear = If[dated === {}, 0,
+    Max[Length[Union[#]] & /@ Values[GroupBy[dated, (iSVSRAcademicYear[#[[2]]] &) -> (Floor[#[[2]]/86400.] &)]]]];
+  kind = If[perYear >= $SourceVaultSeriesEventMinPerYear, "Dated", "Year"];
+  start = eps[[i]]["Start"];
+  If[kind === "Year",
+    Return[<|"Kind" -> "Year", "Name" -> name, "Date" -> Missing["Yearly"], "DateFrom" -> None, "Year" -> iSVSRAcademicYear[start],
+      "Key" -> ToString[iSVSRAcademicYear[start]] <> "\:5e74\:5ea6", "DatesPerYear" -> perYear, "Events" -> {}|>]];
+  date = iSVSRTitleDate[iSVSREpSubject[eps[[i]]], start];
+  (* a mail of a dated business that names no date ("\:8cc7\:6599\:306e\:9001\:4ed8"): the event of the same name nearest to it (up to 30 days
+     later or 3 days earlier), else the day of the mail itself *)
+  If[! NumberQ[date],
+    near = Select[dated[[All, 2]], start - 3*86400. <= # <= start + 30*86400. &];
+    {date, src} = If[near =!= {}, {First[SortBy[near, Abs[# - start] &]], "Nearest"},
+      {N[AbsoluteTime[Take[DateList[start], 3]]], "MailDate"}]];
+  y0 = iSVSRAcademicYear[date];
+  byDate = GroupBy[Append[dated, {i, date}], (Floor[#[[2]]/86400.] &) -> First];
+  events = Reverse[SortBy[KeyValueMap[Function[{day, js}, With[{d = N[day*86400.], ix = Union[js]},
+      <|"Key" -> iSVSRDayKey[d], "Date" -> d, "Name" -> name, "Indices" -> ix, "Current" -> (day === Floor[date/86400.]),
+        "Mails" -> (With[{lead = iSVSRLeadRow[eps[[#]]]}, <|"RecordId" -> lead["RecordId"], "Subject" -> lead["Subject"],
+          "Date" -> eps[[#]]["Start"], "Handling" -> Quiet @ Check[iSVSRHandling[factsOf[#]], Missing[]]|>] & /@ Reverse[ix])|>]], byDate],
+    #["Date"] &]];
+  (* the folder: the one named for the event; else the folder of a notebook made for one of its mails *)
+  events = Function[e, Append[e, "Folder" -> If[iSVSRAcademicYear[e["Date"]] < y0 - 1, Missing["NotLooked"],
+      With[{f = iSVSREventFolder[name, e["Date"]]}, If[AssociationQ[f], f, iSVSREventMailFolder[e["Mails"]]]]]]] /@ events;
+  <|"Kind" -> "Dated", "Name" -> name, "Date" -> date, "DateFrom" -> src, "Key" -> iSVSRDayKey[date], "Year" -> y0,
+    "DatesPerYear" -> perYear, "Events" -> events|>];
+iSVSREventOf[___] := Missing["NoEvent"];
+(* the folder of a notebook that was made for one of the mails of an event (wherever the notebook is now) *)
+iSVSREventMailFolder[mails_List] := Module[{on = iSVSRGlobalDir["$onWork"], off = iSVSRGlobalDir["$offWork"], roots},
+  roots = Select[{on, off}, StringQ];
+  SelectFirst[Function[m, Module[{h = Lookup[m, "Handling", <||>], np, dir},
+      np = If[AssociationQ[h], Lookup[h, "NotebookPath", Missing[]], Missing[]];
+      dir = If[StringQ[np], iSVSRProjectDir[iSVSRResolveWorkPath[np], roots], Missing[]];
+      If[StringQ[dir], dir = StringReplace[dir, ("/" | "\\") .. ~~ EndOfString -> ""]];
+      If[StringQ[dir], <|"Path" -> dir, "Where" -> If[StringQ[off] && iSVSRUnderQ[dir, off], "OffWork", "OnWork"], "Basis" -> "Notebook"|>,
+        Nothing]]] /@ mails, AssociationQ, Missing["NoFolder"]]];
+iSVSREventMailFolder[___] := Missing["NoFolder"];
+
 (* the suggested handling: as the last occurrence of this very title was handled; when there is none, as the corresponding
    step of the business was handled last year (alt); else from the classification *)
 iSVSRPlan[item_Association, previous_List, alt_ : Missing[]] := Module[{h, act, basis, due = Missing[], hq, from = "SameAsLast"},
@@ -2162,7 +2400,7 @@ SourceVault`SourceVaultMailTaskProposals[opts : OptionsPattern[]] := Module[
 SourceVault`SourceVaultMailTaskProposals[___] := <|"Items" -> {}, "Counts" -> <||>, "Total" -> 0, "MaxPrivacyLevel" -> 0.|>;
 
 Options[SourceVault`SourceVaultSeriesRelated] = Join[iSVSRWorkOptions, {"Notebooks" -> Automatic, "MaxPrevious" -> 3}];
-SourceVault`SourceVaultSeriesRelated[ref_String, opts : OptionsPattern[]] := Module[{o, prep, ev, it, i, eps, topic, ts, pl},
+SourceVault`SourceVaultSeriesRelated[ref_String, opts : OptionsPattern[]] := Module[{o, prep, ev, it, i, eps, topic, ts, pl, evt, rel},
   o = iSVSROpts[SourceVault`SourceVaultSeriesRelated, {opts}];
   prep = iSVSRPrepare[o];
   i = Lookup[prep["Structure"]["RidIndex"], If[StringStartsQ[ref, "wrk-"], StringDrop[ref, 4], ref], Missing[]];
@@ -2179,11 +2417,19 @@ SourceVault`SourceVaultSeriesRelated[ref_String, opts : OptionsPattern[]] := Mod
      its own -- its rows have; reading it from the episode gave a non-number and the result went out unmarked) *)
   pl = Max[Flatten[{it["PrivacyLevel"], If[AssociationQ[topic], iSVSRMaxPL[eps[[topic["Indices"]]]], {}]}]];
   If[! NumberQ[pl], pl = 1.0];
+  (* the event of the mail (owner, 2026-11-20): a meeting held several times a year is one event per date. Its events are
+     mails of the business, so the level above covers them *)
+  evt = If[AssociationQ[topic], iSVSREventOf[i, topic, prep, ev["FactsOf"]], Missing["NoBusinessName"]];
+  rel = iSVSRRelatedFor[it, prep, ev["FactsOf"], iSVSRNbRowsOpt[o["Notebooks"], prep["Context"]], o["MaxPrevious"]];
+  (* the occurrences of a dated business are its events: "2026-11-20", not the term "2026\:5f8c\:671f" that holds two meetings *)
+  If[AssociationQ[evt] && evt["Kind"] === "Dated",
+    rel["OccurrenceKey"] = evt["Key"];
+    rel["Previous"] = Function[p, With[{d = iSVSRTitleDate[ToString[Lookup[p, "Subject", ""]], Lookup[p, "Date", Missing[]]]},
+      If[NumberQ[d], Append[p, "Key" -> iSVSRDayKey[d]], p]]] /@ Lookup[rel, "Previous", {}]];
   iSVSRExit[Join[<|"Status" -> "OK", "RecordId" -> it["RecordId"], "WorkId" -> it["WorkId"], "State" -> it["State"],
       "PrivacyLevel" -> pl, "Subject" -> it["Subject"], "Date" -> it["FirstDate"], "Attachments" -> Lookup[it, "Attachments", 0],
       "Business" -> Lookup[it, "Business", Missing["NoBusiness"]]|>,
-    iSVSRRelatedFor[it, prep, ev["FactsOf"], iSVSRNbRowsOpt[o["Notebooks"], prep["Context"]], o["MaxPrevious"]],
-    <|"Topic" -> ts|>], pl]];
+    rel, <|"Topic" -> ts, "Event" -> evt|>], pl]];
 SourceVault`SourceVaultSeriesRelated[___] := <|"Status" -> "Failed", "Reason" -> "expects [recordIdOrWorkId_String, opts]"|>;
 
 (* ---------------- the agenda ("\:4e88\:5b9a"): new mails of the confirmed series as instructions ----------------
@@ -2274,12 +2520,17 @@ iSVSRListFiles[dir_String] := Select[Quiet @ Check[FileNames["*", dir, 2], {}],
     ! StringEndsQ[ToLowerCase[#], ".tmp"] &];
 iSVSRFileRow[path_String] := <|"Name" -> FileNameTake[path], "Path" -> path, "Kind" -> "File",
   "Date" -> Quiet @ Check[N[AbsoluteTime[FileDate[path, "Modification"]]], Missing["NoDate"]]|>;
-(* the folder a notebook sits in, when that is a folder of its own (not $onWork / $offWork themselves) *)
-iSVSRProjectDir[nbPath_, roots_List] := Module[{dir},
+(* the folder a notebook sits in, when that is a folder of its own (not $onWork / $offWork themselves, and not a year
+   folder of $offWork: a single notebook archived there sits in $offWork/<year>/ among all the matters of that year) *)
+iSVSRProjectDir[nbPath_, roots_List] := Module[{dir, d0, nr = iSVSRNormPath /@ roots},
   If[! StringQ[nbPath], Return[Missing["NoPath"]]];
   dir = Quiet @ Check[DirectoryName[nbPath], ""];
   If[! StringQ[dir] || dir === "" || ! DirectoryQ[dir], Return[Missing["NoDirectory"]]];
-  If[MemberQ[iSVSRNormPath /@ roots, iSVSRNormPath[dir]], Missing["NotAProjectFolder"], dir]];
+  d0 = StringReplace[dir, ("/" | "\\") .. ~~ EndOfString -> ""];   (* DirectoryName ends with a separator *)
+  Which[
+    MemberQ[nr, iSVSRNormPath[dir]], Missing["NotAProjectFolder"],
+    StringMatchQ[FileNameTake[d0], RegularExpression["\\d{4}"]] && MemberQ[nr, iSVSRNormPath[DirectoryName[d0]]], Missing["NotAProjectFolder"],
+    True, dir]];
 
 (* the entries directly under $onWork (folders and files; notebooks are matched by their titles elsewhere), with the content
    characters of their names. No file is opened. *)
@@ -2352,7 +2603,7 @@ Options[SourceVault`SourceVaultSeriesRelatedFiles] = Join[iSVSRWorkOptions,
   {"MaxPrevious" -> 6, "NotebookPath" -> Automatic, "OnWorkRoot" -> Automatic, "EagleRows" -> Automatic}];
 SourceVault`SourceVaultSeriesRelatedFiles[ref_String, opts : OptionsPattern[]] := Module[
   {o, prep, st, sm, ev, it, i, rel, root, roots, nbPath, ownDir, max = $SourceVaultSeriesRelatedMaxFiles, groups = {}, notes = {},
-   listed = {}, cut, prevDirs = {}, key, mkeys, stems, entries, cands, erows, seriesTexts, ecands, pl, topic, q = None, eps},
+   listed = {}, cut, prevDirs = {}, key, mkeys, stems, entries, cands, erows, seriesTexts, ecands, pl, topic, q = None, eps, evt},
   o = iSVSROpts[SourceVault`SourceVaultSeriesRelatedFiles, {opts}];
   prep = iSVSRPrepare[o]; st = prep["Structure"]; sm = prep["Series"];
   i = Lookup[st["RidIndex"], If[StringStartsQ[ref, "wrk-"], StringDrop[ref, 4], ref], Missing[]];
@@ -2371,22 +2622,34 @@ SourceVault`SourceVaultSeriesRelatedFiles[ref_String, opts : OptionsPattern[]] :
     With[{files = iSVSRFileRow /@ Select[iSVSRListFiles[ownDir], iSVSRNormPath[#] =!= iSVSRNormPath[nbPath] &]},
       AppendTo[groups, <|"Group" -> "Own", "Confirmed" -> True, "Folder" -> ownDir, "Files" -> cut[files], "Total" -> Length[files]|>];
       listed = Join[listed, iSVSRNormPath /@ Lookup[files, "Path", {}], {iSVSRNormPath[ownDir]}]]];
-  (* 2. the folders of the earlier occurrences (through the notebook that is linked to the mail of that occurrence) *)
+  (* 2. the folders of the earlier occurrences (through the notebook that is linked to the mail of that occurrence;
+        where the notebook is now, also after the matter moved to $offWork) *)
   Scan[Function[p, Module[{np = Lookup[Lookup[p, "Handling", <||>], "NotebookPath", Missing[]], dir, files},
-      dir = iSVSRProjectDir[np, roots];
+      dir = iSVSRProjectDir[If[StringQ[np], iSVSRResolveWorkPath[np], np], roots];
       If[StringQ[dir] && ! MemberQ[listed, iSVSRNormPath[dir]],
         files = iSVSRFileRow /@ iSVSRListFiles[dir];
         AppendTo[groups, <|"Group" -> "Previous", "Confirmed" -> True, "Key" -> p["Key"], "Date" -> p["Date"], "Folder" -> dir,
           "Files" -> cut[files], "Total" -> Length[files]|>];
         listed = Join[listed, iSVSRNormPath /@ Lookup[files, "Path", {}], {iSVSRNormPath[dir]}]]]], Lookup[rel, "Previous", {}]];
-  (* 2b. the larger business the mail is a part of: the folders of the notebooks that belong to its mails, this year and last *)
   eps = st["Episodes"];
   topic = iSVSRTopicOf[i, prep];
+  (* 2a. the earlier events of a dated business (a meeting): the folder of each event, named <date>-<name>, in $onWork or
+         archived in $offWork/<year> (owner, 2026-11-20: every meeting is an event of its own) *)
+  evt = If[AssociationQ[topic], iSVSREventOf[i, topic, prep, ev["FactsOf"]], Missing["NoBusinessName"]];
+  If[AssociationQ[evt] && evt["Kind"] === "Dated",
+    Scan[Function[e, Module[{dir = Lookup[e["Folder"], "Path", Missing[]], files},
+        If[StringQ[dir] && DirectoryQ[dir] && ! MemberQ[listed, iSVSRNormPath[dir]],
+          files = iSVSRFileRow /@ iSVSRListFiles[dir];
+          AppendTo[groups, <|"Group" -> "Event", "Confirmed" -> True, "Key" -> e["Key"], "Date" -> e["Date"], "Name" -> e["Name"],
+            "Where" -> Lookup[e["Folder"], "Where", "OnWork"], "Folder" -> dir, "Files" -> cut[files], "Total" -> Length[files]|>];
+          listed = Join[listed, iSVSRNormPath /@ Lookup[files, "Path", {}], {iSVSRNormPath[dir]}]]]],
+      Take[Select[evt["Events"], #["Date"] < evt["Date"] - 43200. && AssociationQ[#["Folder"]] &], UpTo[3]]]];
+  (* 2b. the larger business the mail is a part of: the folders of the notebooks that belong to its mails, this year and last *)
   If[AssociationQ[topic],
     q = topic["Match"];
     With[{y = iSVSRAcademicYear[eps[[i]]["Start"]]},
       Scan[Function[j, Module[{h = iSVSRHandling[ev["FactsOf"][j]], dir, files},
-          dir = iSVSRProjectDir[Lookup[h, "NotebookPath", Missing[]], roots];
+          dir = iSVSRProjectDir[With[{np = Lookup[h, "NotebookPath", Missing[]]}, If[StringQ[np], iSVSRResolveWorkPath[np], np]], roots];
           If[StringQ[dir] && ! MemberQ[listed, iSVSRNormPath[dir]],
             files = iSVSRFileRow /@ iSVSRListFiles[dir];
             AppendTo[groups, <|"Group" -> "Business", "Confirmed" -> False, "Phrase" -> topic["Phrase"],
@@ -2806,7 +3069,7 @@ iSVSRTopicMailRow[m_Association, star_] := Module[{rid = m["RecordId"], lbl, np 
   With[{r = rid, l = lbl},
     If[StringQ[np],
       With[{path = np}, Row[{Button[l, SourceVault`SourceVaultMailAgendaOpen[r], Method -> "Queued"], " ",
-        Button["\|01f4d3 \:30ce\:30fc\:30c8", SystemOpen[path], Method -> "Queued"]}]],
+        Button["\|01f4d3 \:30ce\:30fc\:30c8", SourceVault`SourceVaultWorkPathOpen[path], Method -> "Queued"]}]],
       Button[l, SourceVault`SourceVaultMailAgendaOpen[r], Method -> "Queued"]]]];
 iSVSRBoxString[x_] := "\"" <> StringDelete[ToString[x], "\\" | "\""] <> "\"";
 iSVSRTopicCells[ts_Association] := Module[{cells = {}, y0 = Lookup[ts, "ThisYear", 0], other = Lookup[ts, "OtherYears", <||>],
@@ -2839,9 +3102,50 @@ iSVSRTopicCells[ts_Association] := Module[{cells = {}, y0 = Lookup[ts, "ThisYear
     AppendTo[cells, Cell["\:307b\:304b\:306e\:5e74\:5ea6: " <> StringRiffle[KeyValueMap[ToString[#1] <> "\:5e74\:5ea6 " <> ToString[#2] <> " \:901a" &, KeySort[other]], "\:3001"], "Text"]]];
   cells];
 
+(* The events of a dated business (owner, 2026-11-20): this event and the earlier ones, each with its date, its folder
+   ($onWork, or archived in $offWork/<year>) and its mails. Static cells; the buttons carry literal strings, and the
+   folder buttons find a folder again after it moved (SourceVaultWorkPathOpen). *)
+iSVSREventFolderButton[f_] := If[AssociationQ[f] && StringQ[Lookup[f, "Path", Missing[]]],
+  With[{p = f["Path"], l = "\|01f4c1 " <> FileNameTake[f["Path"]] <> If[Lookup[f, "Where", ""] === "OffWork", "  ($offWork)", ""]},
+    Button[l, SourceVault`SourceVaultWorkPathOpen[p], Method -> "Queued"]],
+  Style["\:30d5\:30a9\:30eb\:30c0\:306a\:3057", GrayLevel[0.5]]];
+iSVSREventMailButton[m_Association] := With[{r = m["RecordId"], l = "\:2709 " <> iSVSRDateText[m["Date"]] <>
+    With[{h = Lookup[m, "Handling", Missing[]]}, If[AssociationQ[h] && Lookup[h, "Kind", "None"] =!= "None", " (" <> iSVSRHandlingText[h] <> ")", ""]]},
+  Button[l, SourceVault`SourceVaultMailAgendaOpen[r], Method -> "Queued"]];
+iSVSREventRow[e_Association] := Row[Join[{Style[iSVSRDateText[e["Date"]], Bold], "  ", iSVSREventFolderButton[Lookup[e, "Folder", Missing[]]], "  "},
+  Riffle[iSVSREventMailButton /@ Take[Lookup[e, "Mails", {}], UpTo[3]], " "]]];
+iSVSREventCells[evt_Association] := Module[{cells = {}, cur, past, y0 = evt["Year"], name = ToString[evt["Name"]], byYear, older},
+  If[evt["Kind"] =!= "Dated", Return[{}]];
+  cur = SelectFirst[evt["Events"], TrueQ[#["Current"]] &, Missing[]];
+  past = Select[evt["Events"], #["Date"] < evt["Date"] - 43200. &];
+  AppendTo[cells, Cell["\:5b9a\:578b\:696d\:52d9\:306e\:30a4\:30d9\:30f3\:30c8: " <> name, "Section"]];
+  AppendTo[cells, Cell["\:300c" <> name <> "\:300d\:306f\:958b\:50ac\:65e5\:3054\:3068\:306e\:30a4\:30d9\:30f3\:30c8\:3068\:3057\:3066\:6271\:3044\:307e\:3059 (\:4ef6\:540d\:306b\:66f8\:304b\:308c\:305f\:65e5\:4ed8\:3067\:6c7a\:3081\:305f\:3082\:306e\:30021 \:3064\:306e\:5e74\:5ea6\:306b " <>
+    ToString[evt["DatesPerYear"]] <> " \:56de\:306e\:65e5\:4ed8\:304c\:3042\:308a\:307e\:3059)\:3002$onWork \:306b\:306f\:30a4\:30d9\:30f3\:30c8\:3054\:3068\:306b <\:958b\:50ac\:65e5>-" <> name <>
+    " \:306e\:30d5\:30a9\:30eb\:30c0\:3092\:4f5c\:308a\:3001\:6e08\:3093\:3060\:30a4\:30d9\:30f3\:30c8\:306e\:30d5\:30a9\:30eb\:30c0\:306f $offWork \:306e\:5e74\:5ea6\:306e\:30d5\:30a9\:30eb\:30c0\:3078\:79fb\:308a\:307e\:3059\:3002\:79fb\:3063\:305f\:5f8c\:3082\:30dc\:30bf\:30f3\:306f\:79fb\:52d5\:5148\:3092\:63a2\:3057\:3066\:958b\:304d\:307e\:3059\:3002", "Text"]];
+  AppendTo[cells, Cell["\:4eca\:56de: " <> iSVSRDateText[evt["Date"]] <> "  " <> name <> Switch[evt["DateFrom"],
+      "Nearest", "  (\:4ef6\:540d\:306b\:65e5\:4ed8\:304c\:7121\:3044\:306e\:3067\:3001\:8fd1\:3044\:30a4\:30d9\:30f3\:30c8\:306e\:65e5\:4ed8)", "MailDate", "  (\:4ef6\:540d\:306b\:65e5\:4ed8\:304c\:7121\:3044\:306e\:3067\:3001\:30e1\:30fc\:30eb\:306e\:65e5\:4ed8)", _, ""],
+    "Text", FontWeight -> "Bold"]];
+  (* Input cells (as the other button cells); the dates and spaces of a row are text, shown without the quotes *)
+  If[AssociationQ[cur], AppendTo[cells, Cell[BoxData[ToBoxes[iSVSREventRow[cur]]], "Input", ShowStringCharacters -> False]]];
+  byYear = GroupBy[past, iSVSRAcademicYear[#["Date"]] &];
+  Scan[Function[y, With[{es = Lookup[byYear, y, {}]},
+      If[es =!= {},
+        AppendTo[cells, Cell[ToString[y] <> "\:5e74\:5ea6" <> If[y === y0, " (\:4eca\:5e74\:5ea6\:306e\:3053\:308c\:307e\:3067\:306e\:30a4\:30d9\:30f3\:30c8)", If[y === y0 - 1, " (\:6628\:5e74\:5ea6)", ""]] <> " \:2015 " <>
+          ToString[Length[es]] <> " \:56de" <> If[Length[es] > $iSVSREventMaxListed, " (\:3046\:3061\:65b0\:3057\:3044 " <> ToString[$iSVSREventMaxListed] <> " \:56de\:3092\:8868\:793a)", ""],
+          "Text", FontWeight -> "Bold"]];
+        AppendTo[cells, Cell[BoxData[ToBoxes[Column[iSVSREventRow /@ Take[es, UpTo[$iSVSREventMaxListed]], Spacings -> 0.3]]], "Input",
+          ShowStringCharacters -> False]]]]],
+    {y0, y0 - 1}];
+  older = KeyDrop[Length /@ byYear, {y0, y0 - 1}];
+  If[Length[older] > 0,
+    AppendTo[cells, Cell["\:307b\:304b\:306e\:5e74\:5ea6: " <> StringRiffle[KeyValueMap[ToString[#1] <> "\:5e74\:5ea6 " <> ToString[#2] <> " \:56de" &, Reverse[KeySort[older]]], "\:3001"], "Text"]]];
+  cells];
+iSVSREventCells[___] := {};
+
 iSVSRRelatedCells[rel_Association] := Module[{prev = Lookup[rel, "Previous", {}], nbs = Lookup[rel, "Notebooks", {}], series, cells = {}, tcells},
   series = Lookup[rel, "Series", Missing[]];
-  tcells = With[{t = Lookup[rel, "Topic", Missing[]]}, If[AssociationQ[t], iSVSRTopicCells[t], {}]];
+  tcells = Join[With[{t = Lookup[rel, "Topic", Missing[]]}, If[AssociationQ[t], iSVSRTopicCells[t], {}]],
+    With[{e = Lookup[rel, "Event", Missing[]]}, If[AssociationQ[e], iSVSREventCells[e], {}]]];
   If[prev === {} && nbs === {}, Return[tcells]];
   cells = tcells;
   AppendTo[cells, Cell["\:95a2\:9023\:8cc7\:6599 (\:904e\:53bb\:306e\:56de)" <> If[Lookup[rel, "MatchStatus", ""] === "Proposed", " \:2015 \:672a\:78ba\:8a8d\:306e\:5bfe\:5fdc\:3092\:542b\:3080", ""], "Section"]];
@@ -2855,11 +3159,11 @@ iSVSRRelatedCells[rel_Association] := Module[{prev = Lookup[rel, "Previous", {}]
       AppendTo[cells, Cell[BoxData[ToBoxes[Button[lbl, SourceVault`SourceVaultMailAgendaOpen[rid], Method -> "Queued"]]], "Input"]]];
     If[StringQ[Lookup[p["Handling"], "NotebookPath", Missing[]]],
       With[{path = p["Handling"]["NotebookPath"], lbl = "\|01f4d3 " <> FileBaseName[p["Handling"]["NotebookPath"]]},
-        AppendTo[cells, Cell[BoxData[ToBoxes[Button[lbl, SystemOpen[path], Method -> "Queued"]]], "Input"]]]]], prev];
+        AppendTo[cells, Cell[BoxData[ToBoxes[Button[lbl, SourceVault`SourceVaultWorkPathOpen[path], Method -> "Queued"]]], "Input"]]]]], prev];
   If[nbs =!= {},
     AppendTo[cells, Cell["\:984c\:540d\:306e\:8fd1\:3044\:4f5c\:696d\:30ce\:30fc\:30c8 (\:672a\:78ba\:8a8d)", "Text"]];
-    Scan[Function[n, With[{path = n["Path"], lbl = "\|01f4d3 " <> FileBaseName[n["Path"]]},
-      AppendTo[cells, Cell[BoxData[ToBoxes[Button[lbl, SystemOpen[path], Method -> "Queued"]]], "Input"]]]], nbs]];
+    Scan[Function[n, With[{path = n["Path"], lbl = "\|01f4d3 " <> FileBaseName[n["Path"]] <> If[Lookup[n, "Where", ""] === "OffWork", "  ($offWork)", ""]},
+      AppendTo[cells, Cell[BoxData[ToBoxes[Button[lbl, SourceVault`SourceVaultWorkPathOpen[path], Method -> "Queued"]]], "Input"]]]], nbs]];
   cells];
 
 (* the "related files" part of the task notebook. Static cells; the buttons carry literal strings only. Every cell has the
@@ -2867,6 +3171,8 @@ iSVSRRelatedCells[rel_Association] := Module[{prev = Lookup[rel, "Previous", {}]
 iSVSRRelGroupTitle[g_Association] := Switch[g["Group"],
   "Own", "\:3053\:306e\:696d\:52d9\:306e\:30d5\:30a9\:30eb\:30c0",
   "Previous", "\:904e\:53bb\:306e\:56de\:306e\:30d5\:30a9\:30eb\:30c0 (" <> ToString[Lookup[g, "Key", ""]] <> ")",
+  "Event", "\:904e\:53bb\:306e\:30a4\:30d9\:30f3\:30c8\:306e\:30d5\:30a9\:30eb\:30c0 (" <> iSVSRDateText[Lookup[g, "Date", Missing[]]] <> " " <> ToString[Lookup[g, "Name", ""]] <>
+    If[Lookup[g, "Where", ""] === "OffWork", "\:3001$offWork", ""] <> ")",
   "Business", "\:540c\:3058\:696d\:52d9\:300c" <> ToString[Lookup[g, "Phrase", ""]] <> "\:300d\:306e\:30ce\:30fc\:30c8\:306e\:30d5\:30a9\:30eb\:30c0 (" <> ToString[Lookup[g, "Key", ""]] <> "\:3001\:4ef6\:540d\:306e\:8a9e\:3067\:6c7a\:3081\:305f\:5019\:88dc)",
   "OnWork", "$onWork \:3067\:696d\:52d9\:306e\:540d\:524d\:3092\:542b\:3080\:3082\:306e\:30fb\:540d\:524d\:306e\:8fd1\:3044\:3082\:306e (\:672a\:78ba\:8a8d\:306e\:5019\:88dc)",
   "Eagle", "Eagle \:306e " <> StringRiffle[Lookup[g, "Folders", {"ScanSnap"}], "\:30fb"] <> " \:3067\:696d\:52d9\:306e\:540d\:524d\:3092\:542b\:3080\:3082\:306e\:30fb\:5185\:5bb9\:306e\:8fd1\:3044\:3082\:306e (\:672a\:78ba\:8a8d\:306e\:5019\:88dc)",
@@ -2883,7 +3189,7 @@ iSVSRRelFileButton[f_Association] := Module[{path = Lookup[f, "Path", Missing[]]
   lbl = Which[Lookup[f, "Kind", ""] === "Folder", "\|01f4c1 ", Lookup[f, "Kind", ""] === "Eagle", "\|01f5a8 ", True, "\|01f4c4 "] <> ToString[f["Name"]] <>
     If[NumberQ[Lookup[f, "Date", Missing[]]] && f["Date"] > 0, "  (" <> iSVSRDateText[f["Date"]] <> ")", ""] <> iSVSRRelBasisText[f];
   Which[
-    StringQ[path], With[{p = path, l = lbl}, Button[l, SystemOpen[p], Method -> "Queued"]],
+    StringQ[path], With[{p = path, l = lbl}, Button[l, SourceVault`SourceVaultWorkPathOpen[p], Method -> "Queued"]],
     StringQ[Lookup[f, "Id", Missing[]]],
       With[{id = f["Id"], l = lbl}, Button[l, SourceVault`SourceVaultEagleShowInApp[id], Method -> "Queued"]],
     True, lbl]];
@@ -2904,7 +3210,7 @@ iSVSRRelatedFileCells[rf_Association, rid_String] := Module[{groups = Lookup[rf,
         If[Lookup[g, "Total", 0] > Length[g["Files"]], "  \:2015 \:65b0\:3057\:3044 " <> ToString[Length[g["Files"]]] <> " \:4ef6 (\:5168 " <> ToString[g["Total"]] <> " \:4ef6)", ""],
         "Text", FontWeight -> "Bold", CellTags -> {tag}]];
       If[StringQ[Lookup[g, "Folder", Missing[]]] && g["Group"] =!= "OnWork",
-        With[{d = g["Folder"]}, AppendTo[cells, Cell[BoxData[ToBoxes[Button["\|01f4c1 \:30d5\:30a9\:30eb\:30c0\:3092\:958b\:304f", SystemOpen[d], Method -> "Queued"]]],
+        With[{d = g["Folder"]}, AppendTo[cells, Cell[BoxData[ToBoxes[Button["\|01f4c1 \:30d5\:30a9\:30eb\:30c0\:3092\:958b\:304f", SourceVault`SourceVaultWorkPathOpen[d], Method -> "Queued"]]],
           "Input", CellTags -> {tag}]]]];
       AppendTo[cells, Cell[BoxData[ToBoxes[Column[iSVSRRelFileButton /@ g["Files"], Spacings -> 0.3]]], "Input", CellTags -> {tag}]]]], groups];
   cells];
@@ -2925,7 +3231,8 @@ iSVSRAppendCellsToNotebook[path_String, cells_List] :=
     iSVSRFileWriteOKQ[Quiet @ Check[NBAccess`NBFileAppendCells[path, cells,
       "AccessSpec" -> iSVSRFileWriteSpec[], "DryRun" -> False], $Failed]];
 
-(* a file-system safe name, as SourceVaultMailAgendaInherit names its notebook (same characters, same length) *)
+(* a file-system safe name for a FOLDER (the same characters as SourceVaultMailAgendaInherit uses for its notebook;
+   the notebook name takes 48 characters since 2026-11-20, the folder name stays at 24) *)
 iSVSRSafeName[t_String] := StringTrim[StringTake[StringReplace[t, {"/" -> "-", "\\" -> "-", ":" -> "-", "*" -> "-", "?" -> "-",
   "\"" -> "'", "<" -> "(", ">" -> ")", "|" -> "-", "\n" -> " ", "\r" -> ""}], UpTo[24]]];
 
@@ -2941,21 +3248,40 @@ iSVSRFolderAbs[path_String] := With[{m = StringCases[FileNameTake[path], Regular
    A mail that is a part of a larger business ("the common test") goes into the folder of that business for this academic
    year: an existing folder under $onWork whose name carries the name of the business. When there is none yet, the new
    folder is named after the business (not after this one mail), so that the next part of the business finds it. *)
-iSVSRProjectFolder[rel_Association, o_Association] := Module[{base, want, dir, plain, topic = Lookup[rel, "Topic", Missing[]], year, hit, name},
+(* A dated business (a meeting, owner 2026-11-20): the folder of THIS event, <date of the event>-<name>. Only a folder of
+   the same date and name is used again (the reminder, the materials of the same meeting); the folder of another meeting
+   of the year is not. *)
+iSVSRProjectFolder[rel_Association, o_Association] := Module[{base, want, dir, plain, topic = Lookup[rel, "Topic", Missing[]], year, hit, name,
+    evt = Lookup[rel, "Event", Missing[]], stamp, nm},
   want = Switch[Lookup[o, "Folder", Automatic], True, True, False, False,
     _, Lookup[rel, "Attachments", 0] > 0 || MemberQ[{"Routine", "Recurring"}, Lookup[rel, "WorkKind", ""]] ||
-      (AssociationQ[topic] && TrueQ[Lookup[topic, "Recurring", False]])];
+      (AssociationQ[topic] && TrueQ[Lookup[topic, "Recurring", False]]) || (AssociationQ[evt] && evt["Kind"] === "Dated")];
   base = With[{d = Lookup[o, "Directory", Automatic]}, If[StringQ[d], d, iSVSRGlobalDir["$onWork"]]];
   plain = If[StringQ[Lookup[o, "Directory", Automatic]], o["Directory"], Automatic];
   If[! TrueQ[want] || ! StringQ[base] || ! DirectoryQ[base], Return[{plain, False, False}]];
+  If[AssociationQ[evt] && evt["Kind"] === "Dated" && NumberQ[evt["Date"]] && StringQ[evt["Name"]],
+    stamp = iSVSRDayStamp[evt["Date"]]; nm = iSVSRBusinessNorm[evt["Name"]];
+    hit = Select[Quiet @ Check[Select[FileNames["*", base, 1], DirectoryQ], {}], iSVSREventFolderQ[#, stamp, nm] &];
+    If[hit =!= {}, Return[{First[Sort[hit]], False, True}]];
+    dir = FileNameJoin[{base, stamp <> "-" <> iSVSRSafeName[evt["Name"]]}];
+    If[! DirectoryQ[dir], Quiet @ CreateDirectory[dir, CreateIntermediateDirectories -> True]];
+    $iSVSRDirCache = <||>;
+    Return[If[DirectoryQ[dir], {dir, True, False}, {plain, False, False}]]];
   name = ToString[Lookup[rel, "Subject", "mail task"]];
   If[AssociationQ[topic] && TrueQ[Lookup[topic, "Recurring", False]] && StringQ[Lookup[topic, "Match", Missing[]]],
     year = iSVSRAcademicYear[With[{d = Lookup[rel, "Date", Missing[]]}, If[NumberQ[d], d, iSVSRNow[]]]];
+    (* the folder carries the word of the business, and the name it writes the business with is that of this title or a
+       shorter / longer form of it: "\:5de5\:5b66\:90e8\:6559\:6388\:4f1a" does not take the folder of "\:5168\:5b66\:6559\:6388\:4f1a" because both carry "\:6559\:6388\:4f1a";
+       "\:5171\:901a\:30c6\:30b9\:30c8" takes the folder of "\:5927\:5b66\:5165\:5b66\:5171\:901a\:30c6\:30b9\:30c8" *)
+    nm = If[AssociationQ[evt] && StringQ[evt["Name"]], evt["Name"], Missing[]];
     hit = Select[Select[Quiet @ Check[FileNames["*", base, 1], {}], DirectoryQ],
-      StringContainsQ[First[iSVSRLowList[{FileNameTake[#]}]], topic["Match"]] && iSVSRAcademicYear[iSVSRFolderAbs[#]] === year &];
+      StringContainsQ[First[iSVSRLowList[{FileNameTake[#]}]], topic["Match"]] && iSVSRAcademicYear[iSVSRFolderAbs[#]] === year &&
+        (! StringQ[nm] || iSVSRNamesCompatibleQ[nm, iSVSREventName[FileNameTake[#], {topic["Match"], topic["Phrase"]}]]) &];
     If[hit =!= {}, Return[{Last[SortBy[hit, iSVSRFolderAbs]], False, True}]];
-    (* the name of the business as it is written in the subject *)
-    name = First[StringCases[iSVSRNFKC[name], topic["Phrase"], 1, IgnoreCase -> True], topic["Phrase"]]];
+    (* the name of the business as it is written in the subject; the name this title writes when that is a longer form
+       of it ("\:5de5\:5b66\:90e8\:6559\:6388\:4f1a" of the business "\:6559\:6388\:4f1a") *)
+    name = First[StringCases[iSVSRNFKC[name], topic["Phrase"], 1, IgnoreCase -> True], topic["Phrase"]];
+    If[StringQ[nm] && StringEndsQ[iSVSRBusinessNorm[nm], iSVSRBusinessNorm[name]], name = nm]];
   dir = FileNameJoin[{base, DateString[With[{n = iSVSRAbs[Lookup[o, "Now", Automatic]]}, If[NumberQ[n], n, iSVSRNow[]]],
     {"Year", "Month", "Day"}] <> "-" <> iSVSRSafeName[name]}];
   If[! DirectoryQ[dir], Quiet @ CreateDirectory[dir, CreateIntermediateDirectories -> True]];
@@ -2978,8 +3304,12 @@ SourceVault`SourceVaultMailWorkAccept[ref_String, via : ("Notebook" | "Todo" | "
       rel = Quiet @ Check[SourceVault`SourceVaultSeriesRelated[rid, "Notebooks" -> o["Notebooks"], Sequence @@ wopts], <||>];
       If[! AssociationQ[rel], rel = <||>];
       {dir, made, reused} = iSVSRProjectFolder[rel, o];
-      res = If[StringQ[dir], SourceVault`SourceVaultMailAgendaInherit[rid, "Open" -> False, "Directory" -> dir],
-        SourceVault`SourceVaultMailAgendaInherit[rid, "Open" -> False]];
+      (* the date of the meeting goes into the header as its "Eventdate" (owner, 2026-11-20: Deadline / Eventdate /
+         NextReview are what the agenda works from); the mail-agenda layer reads the rest from the subject and summary *)
+      res = With[{evd = With[{e = Lookup[rel, "Event", Missing[]]},
+            If[AssociationQ[e] && e["Kind"] === "Dated" && NumberQ[e["Date"]], DateObject[Take[DateList[e["Date"]], 3]], Automatic]]},
+        If[StringQ[dir], SourceVault`SourceVaultMailAgendaInherit[rid, "Open" -> False, "Directory" -> dir, "Eventdate" -> evd],
+          SourceVault`SourceVaultMailAgendaInherit[rid, "Open" -> False, "Eventdate" -> evd]]];
       If[! (AssociationQ[res] && Lookup[res, "Status", ""] === "OK"),
         Return[<|"Status" -> "Failed", "Reason" -> "InheritFailed", "Result" -> res|>]];
       (* the related files ($onWork, Eagle ScanSnap): found now, written into the notebook, refreshed later from inside it *)
@@ -2997,7 +3327,9 @@ SourceVault`SourceVaultMailWorkAccept[ref_String, via : ("Notebook" | "Todo" | "
       iSVSRExit[<|"Status" -> "OK", "Via" -> via, "RecordId" -> rid, "NotebookPath" -> res["NotebookPath"], "RelatedCellsAdded" -> added,
         "RelatedFiles" -> If[AssociationQ[rf], Lookup[rf, "Count", 0], 0],
         "Business" -> With[{t = Lookup[rel, "Topic", Missing[]]}, If[AssociationQ[t], t["Phrase"], Missing["NoBusinessName"]]],
-        "Folder" -> If[TrueQ[made] || TrueQ[reused], dir, None], "FolderReused" -> TrueQ[reused]|>,
+        "Folder" -> If[TrueQ[made] || TrueQ[reused], dir, None], "FolderReused" -> TrueQ[reused],
+        (* the event the folder is for: "2026-11-20" of a dated business, "2026\:5e74\:5ea6" of a yearly one *)
+        "Event" -> With[{e = Lookup[rel, "Event", Missing[]]}, If[AssociationQ[e], e["Key"], Missing["NoEvent"]]]|>,
         With[{p = Lookup[rel, "PrivacyLevel", 1.0]}, If[NumberQ[p], N[p], 1.0]]],
     "Todo",
       If[Length[DownValues[SourceVault`SourceVaultMailAgendaInheritTodo]] === 0,
@@ -3047,7 +3379,13 @@ iSVSRRegisterPrivacyContracts[] := Quiet @ Check[
        "SourceVaultSeriesAddMail", "SourceVaultSeriesRemoveMail", "SourceVaultSeriesEmbedRefresh",
        "SourceVaultSeriesEmbedStatus", "SourceVaultSeriesLabelRefresh", "SourceVaultSeriesLabelStatus",
        (* the name of a business is the owner's own word for it; no subject, sender or body *)
-       "SourceVaultBusinessConfirm", "SourceVaultBusinessReject", "SourceVaultBusinessAddMail", "SourceVaultBusinessRemoveMail"}]], Null];
+       "SourceVaultBusinessConfirm", "SourceVaultBusinessReject", "SourceVaultBusinessAddMail", "SourceVaultBusinessRemoveMail"}];
+    (* the path the caller gives (a button of a notebook), looked up again under $onWork / $offWork; the result is that
+       path or the same file name in another folder. No mail is read. *)
+    Scan[SourceVault`SourceVaultRegisterPrivacyContract[#,
+        <|"Class" -> "Internal", "Exit" -> "None", "Sources" -> {}, "Module" -> "SourceVault_series.wl",
+          "Note" -> "a path given by the caller, found again on the file system (no mail content)"|>] &,
+      {"SourceVaultWorkPathResolve", "SourceVaultWorkPathOpen"}]], Null];
 iSVSRRegisterPrivacyContracts[];
 
 End[];

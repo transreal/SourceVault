@@ -70,32 +70,35 @@ maildb の UI 層(SourceVaultMailShowBody)が未ロードのとき、または�
 
 ## 継承ノートブック (R9-6)
 
-### SourceVaultMailAgendaInherit[recordId, opts] → <|Status, NotebookPath, RecordId|>
+### SourceVaultMailAgendaInherit[recordId, opts] → <|Status, NotebookPath, RecordId, Deadline, Eventdate, NextReview|>
 $onWork に作業ノートを作成しメールを**継承**する: Templates/SourceVault notebook template.nb
 準拠のレイアウトで先頭に "NotebookStatus" スタイルセル(InputForm 生テキスト、非評価往復可能)
-`<|Keywords→{"mail"}, Deadline(推定〆切があれば DateObject[{y,m,d}]), NextReview→
-Quantity[1,"Weeks"], Status→"Todo", Title(件名), MailRecordId|>` + Title セル +
+`<|Keywords→{"mail"}, Deadline, Eventdate, NextReview, Status→"Todo", Title(オプション "Title" 明示時のみ), MailRecordId|>` + Title セル(件名) +
 「✉ 元メール・返信を開く」ボタンセル(ButtonNotebook[] でクリック時に自ノートのパスを動的解決、
-シリアライズされたパス変数に依存しない)。ファイル名 = `<日付>-<件名先頭24字>.nb`(既存なら UnixTime 付与)。NotebookCreated を記録(アジェンダから消える)し、
+シリアライズされたパス変数に依存しない)。ヘッダの Title はオーナーのものであり、自動生成の件名はファイル名に入る(2026-11-20)。
+ファイル名 = `<日付>-<件名先頭48字>.nb`(既存なら UnixTime 付与)。
+3 つの日付は SourceVaultTaskDates(SourceVault_taskdates、弱結合)由来(2026-11-20): Deadline = 分類の〆切、なければ件名/要約が述べる〆切(「…までに」)、なければ開催日; Eventdate = オプション、なければ件名/要約が述べる開催(「…開催」); NextReview = 両者の近い方の前日(どちらもなければ 1 週間)。SourceVault_taskdates 不在時は Deadline=索引の Deadline、NextReview=Quantity[1,"Weeks"] の従来ヘッダ。
+NotebookCreated を記録(アジェンダから消える)し、
 $SourceVaultMailAgendaEventSink へ継承イベント
 <|Type→"MailInheritedByNotebook",RecordId,NotebookPath,At|> を emit(マイニング層 seam、
 rule 11)。**プライバシー継承**: 作成ノートはメール内容(件名+本文導線)を含むため
 TaggingRules→{"SourceVault"→{"CloudPublishable"→False}} を明示宣言して書き出す(宣言なしでも
 PL 1.0 fail-safe だが原則を明示)。スタイルシートは "SourceVault default.nb"。
-失敗時は <|Status→"Failed", Reason→"NoDirectory"|"ExportFailed"|...|>。
+失敗時は <|Status→"Failed", Reason→"NoDirectory"|"ExportFailed"|...|>。引数不正時は Reason→"expects [recordId_String, opts]"。
 Options: "Directory"(Automatic→Global`$onWork; Symbol[Identity[...]] で実行時解決し WL 15 の literal lookup 問題を回避), "Open"(True→SystemOpen),
-"Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject)。
+"Deadline"(Automatic→索引の Deadline), "Title"(Automatic→明示時のみヘッダ Title かつ Title セル/ファイル名に使用; Automatic は索引の Subject), "Eventdate"(Automatic→件名/要約から推定; 呼び出し側が開催日を知っている場合に渡す)。
 
 ### SourceVaultMailAgendaInheritTodo[recordId, opts] → <|Status, TodoId, RecordId|>
 本文/プロジェクトノートを作るほどではない小タスク用に、SourceVault_todo 層へ**スタンドアロン
 TODO**を作成してメールを継承する(Inherit の軽量版)。件名+推定 Deadline を引き継ぎ、
 Source->"mail" + MailRecordId(逆参照)+メールの派生 PrivacyLevel を TODO に持たせる。
+Deadline / EventDate は Inherit と同様 SourceVaultTaskDates で求め、TODO に "Deadline" と "EventDate" を持たせる。
 SourceVault_todo が未ロード(SourceVaultNewTodo 未定義)なら Status->"Failed",
 Reason->"TodoLayerUnavailable" を返す(弱結合、mailagenda は SourceVault_todo より先にロード
 されるため Symbol[] 経由の実行時解決で orphan symbol を避ける)。NewTodo 失敗時は Reason->"NewTodoFailed"。成功時は agenda.json に
 TodoCreated を記録(アジェンダから消える)し、$SourceVaultMailAgendaEventSink へ
-<|Type→"MailInheritedByTodo",RecordId,TodoId,At|> を emit。
-Options: "Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject)。
+<|Type→"MailInheritedByTodo",RecordId,TodoId,At|> を emit。引数不正時は Reason→"expects [recordId_String, opts]"。
+Options: "Deadline"(Automatic→索引の Deadline), "Title"(Automatic→索引の Subject), "Eventdate"(Automatic→件名/要約から推定)。
 
 ### SourceVaultMailForNotebook[nbPath | NotebookObject] → recordId | Missing[...]
 継承ノートのメタデータ MailRecordId を**非評価**で読み(NBAccess`NBFindCellByPredicate でセル取得、影監視メッセージ耐性; NotebookStatus セル優先、なければ旧形式の init/input セルへフォールバック → HoldComplete 解析 → NBAccess`NBOnWorkTaskSafeExtract の safe extractor、whitelist に MailRecordId 追加済み)、SourceVaultMailThreadNotebook で
@@ -123,7 +126,6 @@ SourceVaultMarkConfidentialViewCells を遅延実行)= maildb View と同じ機�
 maildb の検索/一覧/View 関数 (`SourceVaultSearchMailSnapshots` / `MailSearchSummary` /
 `MailDataset` / `MailView` / `MailSearchIndex` / `MailSearchIndexView`) は
 `"ExcludeAgenda"->True` で**このアジェンダが拾っているメール(とそのスレッド)を除外**する。
-アジェンダで対応する要対応メールと、一覧で見る「それ以外のメール」を重複なく分けられる。
 `"Item"` で代表のみ除外 / `{rid,..}` で明示指定、`"AgendaItems"` に
 `SourceVaultMailAgendaItems[]` や `SourceVaultRoutineAgendaData[]` の戻り値を注入すれば
 再計算しない (既定 `Automatic` はライブ計算+`$SourceVaultMailAgendaExcludeCacheTTL` 秒キャッシュ)。

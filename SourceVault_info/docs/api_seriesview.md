@@ -72,7 +72,7 @@ Options: "Match" -> Automatic, Options[SourceVaultBusinessDiscover] 全て
 ### SourceVaultSeriesRelatedFilesRefresh[nb, opts] / [nb, recordId, opts]
 タスクのノートブックの「関連ファイル」の部分を作り直す。所有者の操作である。
 → <|"Status", "RecordId", "Count", "Groups", "Notes", "Where"|>
-nb は NotebookObject またはノートブックのパス (文字列)。
+nb は NotebookObject またはノートブックのパス (文字列)。recordId は String | Automatic (既定 Automatic)。
 SourceVaultSeriesRelatedFiles で $onWork と Eagle (ScanSnap) を探し直し、前の「関連ファイル」のセル (CellTags SVSeriesRelatedFiles) を外して新しいものを末尾に書く。関連メール (上位の業務・過去の回) もファイルと一緒に書き直す (CellTags SeriesRelatedMail 相当)。
 開いているノートブックは FE を通して書き換え、開いていないものはファイルを書き換える。
 recordId を省くと (Automatic)、ノートブックの状態セルの MailRecordId を使う。
@@ -87,7 +87,7 @@ Options: Options[SourceVaultSeriesRelatedFiles] を継承。"NotebookPath" は�
 
 ### ShowRoutineWorkPalette[] → NotebookObject
 メールを起点にした定型業務の機能 (文書 15) を並べた浮動パレットを開く (ShowClaudePalette / ShowSystemDoctorPalette と同じ形)。
-既に開いていれば閉じて作り直す。WindowTitle "Routine Work", WindowSize {105, All}, WindowFloating -> True, Saveable -> False, WindowMargins -> {{Automatic, 331}, {Automatic, 4}}。メニューの パレット > Routine Work からも開ける。
+既に開いていれば閉じて作り直す。WindowTitle "Routine Work", WindowSize {105, All}, WindowFloating -> True, WindowClickSelect -> False, Saveable -> False, WindowMargins -> {{Automatic, 331}, {Automatic, 4}}。メニューの パレット > Routine Work からも開ける。
 パレットの項目:
 - 一覧: 提案タスク ("proposals")、予定 ("agenda", SourceVaultRoutineAgendaView)、系列の候補 ("series")、上位の業務 ("business")
 - メールの一覧: 業務に未反映 ("mail-untracked", SourceVaultMailSearchIndexView "Work" -> "Untracked")、未処理 ("mail-open", "Work" -> "Open")。どちらも "DateFrom" は $SourceVaultMailWorkWindow 日前から。
@@ -107,6 +107,22 @@ Options: Options[SourceVaultSeriesRelatedFiles] を継承。"NotebookPath" は�
 ### $iSVSVStore
 型: Association, 初期値: <||>
 ビュー id → <|"Kind", "Opts", "Data", "Tick", "At", "Seconds"|>。
+
+### $iSVSVStoreMax / $iSVSVMaxRows / $iSVSVMaxOccLines
+型: Integer, 初期値: 6 / 200 / 12
+ストアに残すビュー数 / 1 一覧の描画行数 / 1 系列内の描画過去回数。
+
+### $iSVSVViewNow / $iSVSVFrom
+型: String | None, 初期値: None
+描画中のビュー id (作られたボタンが保持する) / ボタン実行中の操作元ビュー id。
+
+### $iSVSVLoadedAt / $iSVSVPackageDir
+型: Real / String | None
+読み込み時刻 (AbsoluteTime) / ソースのあるディレクトリ。状態ビューが「ディスク上のコードと同じか」の判定に使う。
+
+### $iSVSPPalette / $iSVSPWindows
+型: NotebookObject | None / Association, 初期値: None / <||>
+開いているパレット / パレットが開いた窓 (キーごとに 1 窓)。
 
 ### $iSVSPCreateWindow
 型: Automatic | Function, 初期値: Automatic

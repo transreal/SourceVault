@@ -16,7 +16,7 @@ GitHub: https://github.com/transreal/SourceVault_workflowcatalog
 - ローカル LM Studio: `{"lmstudio", "model-name", "http://127.0.0.1:1234"}` (第3要素省略可)
 - クラウド: NBAccess 経由のモデルID文字列
 
-両モデルがローカル (`lmstudio`) のときはローカル LLM で要約。それ以外は `ClaudeQueryBg` (クラウド) → ローカル既定 → 機械抽出の順でフォールバック。LLM がエラー/利用制限本文を返した場合も機械抽出へ退避し、要約として保存しない。
+両モデルがローカル (`lmstudio`) のときはローカル LLM で要約。それ以外は `ClaudeQueryBg` (クラウド) → ローカル既定 → 機械抽出の順でフォールバック。LLM がエラー/利用制限本文を返した場合も機械抽出へ退避し、要約として保存しない。ローカル/クラウド各問い合わせは送信前に `SourceVaultLLMBoundarySelfGateRefusedQ` の boundary gate を通り、拒否されたらクラウド試行は跳ばしてローカル既定へ退避する (ローカルが拒否されれば空応答 → 機械抽出)。
 
 ## stage 取得・切替
 
@@ -77,7 +77,7 @@ URI が指す元 notebook を開く (既に開いていれば前面化)。パス
 
 ### SourceVaultWorkflowPanel[] → Panel
 archive を除く testing/production ワークフローの一覧 UI を返す。列: stage バッジ、名前/サマリー (名前クリックで元ノートブックを開く)、起動 (2ボタン)、切替/保管 (testing↔production + アーカイブ送り)、要約更新、フォルダ、起動回数、エラー回数 (>0 は赤)、自動起動 ([SourceVault_autotrigger](https://github.com/transreal/SourceVault_autotrigger) ロード時のみ `SourceVaultAutoTriggerStatusCell["Workflow", slug]` を表示; 未ロードは "—")。
-起動列2ボタン: 「▶ 実行」= 選択中の「実行PC」でワークフローを実行 (自機なら `SourceVaultRunWorkflowAsync[slug, "run"]` で非同期実行しFEをブロックしない・実行結果は `SourceVaultRunWorkflowResult` で取得; 他PCなら `SourceVaultEnqueueWorkflowRun[slug, runMachine]` でそのPC宛にキュー投入し、そのPCのスケジューラ `SourceVaultAutoTriggerStartScheduler` が拾って実行、完了/失敗は `SourceVaultAutoTriggerWatchRemoteRun` 経由で呼出元ノートに結果取得セル `SourceVaultRemoteWorkflowResult[...]` またはエラーレポートが書き戻される)。前提は [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)/[ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) ロード済みかつ launch に `"run"` 形があること。「使用例」= `example.md` を実行可能セルとして新規ノートに展開 ([claudecode](https://github.com/transreal/claudecode) ロード時は `ClaudeCode`MarkdownToCells` に委譲し見出し/箇条書き/mermaid 図も変換; 未ロード時は従来フォールバック。example.md が無ければ引数なし launch の報告ダイアログに退避)。「▶ 実行」「使用例」とも起動回数を加算し、失敗時はエラー回数も加算する。
+起動列2ボタン: 「▶ 実行」= 選択中の「実行PC」でワークフローを実行 (自機なら `SourceVaultRunWorkflowAsync[slug, "run"]` で非同期実行しFEをブロックしない・実行結果は `SourceVaultRunWorkflowResult` で取得; 他PCなら `SourceVaultEnqueueWorkflowRun[slug, runMachine]` でそのPC宛にキュー投入し、そのPCのスケジューラ `SourceVaultAutoTriggerStartScheduler` が拾って実行、完了/失敗は `SourceVaultAutoTriggerWatchRemoteRun` 経由で呼出元ノートに結果取得セル `SourceVaultRemoteWorkflowResult[...]` またはエラーレポートが書き戻される)。前提は [ClaudeRuntime](https://github.com/transreal/ClaudeRuntime)/[ClaudeOrchestrator](https://github.com/transreal/ClaudeOrchestrator) ロード済みかつ launch に `"run"` 形があること。「使用例」= `example.md` を実行可能セルとして新規ノートに展開 ([claudecode](https://github.com/transreal/claudecode) ロード時は `ClaudeCode`MarkdownToCells` に委譲し見出し/箇条書き/mermaid 図も変換; 定義が無い/リスト以外を返す場合は従来フォールバック。example.md が無ければ引数なし launch の報告ダイアログに退避)。ワークフロー読み込み検査で止まった (`SourceVaultLoadWorkflow` が `"LoadDenied"`、未受け入れの版など) 場合は、使用例の先頭に理由と次の手段の式のセル (workflowregistry の `iSVWFDenialCells`、評価はしない) を置く。example.md が無くても止まっていればこのセルのみのノートを開く。「▶ 実行」「使用例」とも起動回数を加算し、失敗時はエラー回数も加算する (実行は Status が `"Submitted"`/`"Enqueued"` 以外でエラー加算)。
 検索行に「実行PC:」PopupMenu (既定=自機 `$MachineName` サニタイズ tag、候補は `SourceVaultListRuntimeMachines` 由来の vault 共有 PC 一覧)。自機実行時はプロセスライセンス枠 (`SourceVaultDiagnosticsLicenseProbe` の `ProcessSlotsFree`) が 0 なら子プロセスが落ちるため事前に MessageDialog で警告し実行を止める (診断未ロードならガードしない)。
 行は「起動回数 - エラー回数」降順 (同点は名前昇順) で並ぶ。検索はキーワード/サマリー/Slug/Name の部分一致 (大文字小文字無視)。検索行右端「アーカイブ」ボタンで `SourceVaultWorkflowArchivePanel` を別ウインドウに開く。手動更新 (`UpdateInterval` 不使用、`TrackedSymbols` のみ)。行の算出は 60 秒の TimeConstrained で上限付けされ、失敗時は空リスト。
 

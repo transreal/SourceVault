@@ -28,7 +28,7 @@ privacy 伝達の正準層。「入力変数や内部でインポートしたデ
 ## 1. 評価スコープ透かし (runtime)
 
 ### SourceVaultNotePrivacy[pl] → Real
-現在の評価に PrivacyLevel を記録する (Max 伝搬)。評価セルが変わると透かしは遅延リセットされる (headless では単調累積)。FE があり `pl >= $SourceVaultPrivacyMarkThreshold` なら評価セルを同期で機密マークし、出力セルを **CellObject 同一性ベース**の遅延マーカーへ登録する (index 依存なし)。出力セルの flush は、`$SourceVaultPrivacyCellEpilog` が True なら評価セルに `CellEpilog :> SourceVaultMarkEvaluationPrivacyCells[]` を armed して評価完了直後に行うのが正規路。epilog を張れない環境 (False 設定・SetOptions 失敗) のときだけ従来の 0.4 秒 ScheduledTask 遅延 flush に戻る (2026-10-06: 長い評価中の tick ごとの FE 往復が本評価と取り合い「実行中のまま終わらない」症状になったため)。非数値/引数なし/複数引数は fail-closed で `$SourceVaultPrivacyDefaultLevel` 扱い。
+現在の評価に PrivacyLevel を記録する (Max 伝搬)。評価セルが変わると透かしは遅延リセットされる (headless では単調累積)。FE があり `pl >= $SourceVaultPrivacyMarkThreshold` なら評価セルを同期で機密マークし、出力セルを **CellObject 同一性ベース**の遅延マーカーへ登録する (index 依存なし)。FE と往復する区間 (セルの印付け・登録・stale flush・epilog 武装) は内部で `ClaudeCode`ClaudeHoldFrontEnd` (claudecode ロード時のみ。無ければそのまま評価) で包まれ、claudecode の共有 tick の FE probe と重ならない (2026-11-20)。出力セルの flush は、`$SourceVaultPrivacyCellEpilog` が True なら評価セルに `CellEpilog :> SourceVaultMarkEvaluationPrivacyCells[]` を armed して評価完了直後に行うのが正規路。epilog を張れない環境 (False 設定・SetOptions 失敗) のときだけ従来の 0.4 秒 ScheduledTask 遅延 flush に戻る (2026-10-06: 長い評価中の tick ごとの FE 往復が本評価と取り合い「実行中のまま終わらない」症状になったため)。非数値/引数なし/複数引数は fail-closed で `$SourceVaultPrivacyDefaultLevel` 扱い。
 NBAccess がロードされていれば同じ pl を `NBAccess`NBNoteEvaluationPrivacy` にも渡す (2026-09-18)。LLM が提案したコードは `NBExecuteHeldExpr` 内で評価され、結果を LLM に返すか (スキーマのみにするか) は NBAccess の透かし `EvaluationPrivacy` で決まるため、ここで合流しないと PL の高い View / record がクラウド LLM に渡る。
 → clip 後の pl
 
@@ -47,7 +47,7 @@ data (Association / 行リスト / snapshot 群) から PrivacyLevel を収集�
 → `<|"Value" -> 結果, "Privacy" -> スコープ内の最大 PL|>` 。外側の透かしは Max で更新される。適合テストの計測はこれで行う。
 
 ### SourceVaultMarkEvaluationPrivacyCells[nb] / SourceVaultMarkEvaluationPrivacyCells[] → List
-透かし由来の未処理マークを流し込む backstop。入力セルのテキストは一切見ない。nb を渡しても引数なし形でも現在の pending 全体を対象にする。`SourceVaultMarkConfidentialViewCells` の先頭・`NBMakeContextPacket` フック・評価セルの `CellEpilog` (`$SourceVaultPrivacyCellEpilog`) から呼ばれる。
+透かし由来の未処理マークを流し込む backstop。入力セルのテキストは一切見ない。nb を渡しても引数なし形でも現在の pending 全体を対象にする。`SourceVaultMarkConfidentialViewCells` の先頭・`NBMakeContextPacket` フック・評価セルの `CellEpilog` (`$SourceVaultPrivacyCellEpilog`) から呼ばれる。FE と往復するため内部で `ClaudeHoldFrontEnd` 相当 (iPHoldFE) に包まれる (2026-11-20)。
 → マークしたセルの記述リスト `<|"Cell", "Level", "MarkedOutputs"|>`
 
 ### SourceVaultPendingPrivacyMarks[] → List
@@ -57,7 +57,7 @@ data (Association / 行リスト / snapshot 群) から PrivacyLevel を収集�
 評価中は出力セルがまだ存在しないので、`SourceVaultNotePrivacy` は要求を積む。flush は (a) 評価セルの `CellEpilog` から FE が評価完了直後に一度実行 (正規路)、(b) epilog を張れない場合のみ `SessionSubmit[ScheduledTask[..., {0.4}]]` の one-shot を予約し、未処理が残る間だけ自分で次の一発を予約する (タスクが積み上がらない)、(c) 別セルの評価で `NotePrivacy` が呼ばれたとき他セルの未処理を 2 秒に 1 回まで流す (stale flush)。
 
 - 鍵は **CellObject**。index ではないのでセル挿入でずれない。
-- 評価セルの直後から `Output`/`Print`/`Message`/`MSG` を連続でマークし、**それ以外のスタイルが現れたら打ち切る** (無関係なセルを巻き込まない)。入力セル自身も保険で再マークする。
+- 評価セルの直後から `Output`/`Print`/`Message`/`MSG` を連続でマークし、**それ以外のスタイルが現れたら打ち切る** (無関係なセルを巻き込まない)。入力セル自身も保険で再マークする。様式は直後のセルから 1 つずつ `CurrentValue[c, CellStyle]` で読む (全セルの様式キャッシュを作らない。2026-11-20)。
 - PL は**上げるだけ**。既存 PL 以上なら何もしない (旧 `ClaudeCode`Confidential` の遅延マークが先に勝った場合も二重マークしない)。
 - 同一 CellObject の要求は 1 件に統合され Level は Max になる。
 - 出力セルが現れないまま `$svPPendingTTL` (20 秒) 経過した要求は破棄する (末尾 `;` の抑制評価で無限ポーリングしないため)。
@@ -145,7 +145,7 @@ SourceVault` 系シンボル (`SourceVault``, `Private``, `ContractsPrivate``, `
 ⚠️ 罠: `SourceVault`` が `$ContextPath` に載っていると `Names["SourceVault`*"]` は**短縮名**を返す。グラフの節点は必ず完全名へ正規化すること (しないと BFS が 1 歩も進まず監査が常に OK になる)。`DownValues` 等は HoldAll なので `With[{sym = Symbol[full]}, ...]` で実シンボルを注入すること。
 
 ### SourceVaultPrivacyReachesSource[symbolName] → Association
-1 関数がどの私的ストアに到達するかを返す (BFS 深さ 8)。symbolName は短縮名・完全名どちらも可。
+1 関数がどの私的ストアに到達するかを返す (BFS 深さ 8 固定)。symbolName は短縮名・完全名どちらも可。
 → `<|"Symbol" -> symbolName, "Sources" -> {到達したストア名...}|>`
 
 ### SourceVaultPrivacyReviewedSymbols[] → Association
@@ -223,3 +223,11 @@ Source モード監査で `mailbrowse` / `crosslink` / `oopsseed` の public 関
 以前の `SourceVaultEvaluationPrivacy[]` は `$svPMax` をそのまま返しており、リセットは次の `SourceVaultNotePrivacy` 呼び出しまで起きなかった。機密 View (PL 1.0) を表示したセルの後、別セルから ClaudeEval / ClaudeQuery を始めると、claudecode の関所への申告 (`iWebGuardContextPL`) が前セルの 1.0 を読み、何も読んでいない会話が「機密を読んだ会話」として始まった (外部検索が外れる)。対処として、`SourceVaultEvaluationPrivacy[]` は読む前に評価セルの切り替わりを見て (`iPSyncScope`)、別セルなら 0 から始める。`SourceVaultWithPrivacyScope` も評価前に外側スコープを現在のセルへ同期する (同期しないと、新セルの最初の操作がこの関数のとき、Block 終了時に前セルの鍵へ戻り外側への Max が前セルの値と混ざる)。FE の無いカーネルでは評価セルが無いため従来どおり単調累積する。
 
 2026-11-17: §7b の Internal 表に `SourceVaultMailBodyProfile` (保存本文の形状 = 件数とラベルのみ) と `SourceVaultMailBodyRepair` (修復 = 件数のみ) を追加 (いずれも `SourceVault_maildb.wl`、NoDataFlow 理由付き)。
+
+## 2026-11-20 の追補 (FE 往復と claudecode tick の衝突回避)
+
+claudecode の共有 tick (ScheduledTask) は評価に割り込み、handler の前に FE probe (`CurrentValue[$FrontEnd, "MachineID"]`) を送る。評価が FE と往復している最中にこれが重なると FE とカーネルが互いを待って止まる (TimeConstrained では切れない)。約 1,800 セルのノートで Zelkova 取得の入口 (`SourceVaultNotePrivacy` 経由) がこれで止まった。対処は 2 点。
+- FE と往復する区間 (セル印付け・pending 登録・stale flush・epilog 武装、および `SourceVaultMarkEvaluationPrivacyCells` の flush) を内部 `iPHoldFE` で包む。claudecode ロード時は `ClaudeCode`ClaudeHoldFrontEnd` で評価し、未ロードならそのまま評価する (名前は毎回引数から引き直す。直書き `Symbol["Ctx`x"]` は WL 15.0 で一度未評価だと固まる)。公開シンボル・戻り値は不変。
+- 出力セルの様式判定を `NBAccess`NBCellStyle` (初回に全セルの様式を FE へ 1 つずつ問い合わせてキャッシュ) から、直後のセルを 1 つずつ読む `iPCellStyleOf` (`CurrentValue[c, CellStyle]`、リストなら先頭) に変更。Output/Print/Message/MSG 以外で打ち切る挙動は同じ。1,800 セルのノートで他セル未処理 1 件あたり 1.4〜2.1 秒かかっていた入口が大幅に短縮された。
+
+新規 public 関数・オプションの追加はない。

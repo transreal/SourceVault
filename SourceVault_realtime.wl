@@ -56,7 +56,7 @@ BeginPackage["SourceVault`"];
 
 $SourceVaultRealtimeModel::usage =
   "$SourceVaultRealtimeModel は音声会話に使うモデル (既定 \"gpt-realtime-2.1\")。\n" <>
-  "\"gpt-live-1\" にすると GPT-Live (全二重・クライアント委譲) で会話する。候補は SourceVaultRealtimeModels[]。";
+  "\"gpt-live-1.1\" (または \"gpt-live-1\") にすると GPT-Live (全二重・クライアント委譲) で会話する。候補は SourceVaultRealtimeModels[]。";
 
 $SourceVaultRealtimeModels::usage =
   "$SourceVaultRealtimeModels は利用者が足す/上書きする音声会話モデル (既定 <||>)。\n" <>
@@ -121,7 +121,7 @@ SourceVaultRealtimeAudioCheckView::usage =
 (* ---- 会話の開始 / 停止 ---- *)
 
 SourceVaultRealtimeStart::usage =
-  "SourceVaultRealtimeStart[] はこの機械の既定のマイクとスピーカーで音声会話 (既定 gpt-realtime、\"Model\" -> \"gpt-live-1\" で GPT-Live) を開始する (非ブロック)。\n" <>
+  "SourceVaultRealtimeStart[] はこの機械の既定のマイクとスピーカーで音声会話 (既定 gpt-realtime、\"Model\" -> \"gpt-live-1.1\" で GPT-Live) を開始する (非ブロック)。\n" <>
   "経過はノートブックのウインドウステータスバーへ 1 行ずつ出る。宛先は \"Notebook\" (既定 Automatic = 評価中のノートブック)。\n" <>
   "そのノートブックが非公開 (Private) と宣言されていれば始めない (Failure[\"SourceVaultRealtimePrivateNotebook\"]。SourceVaultRealtimeRender も同じ)。\n" <>
   "主なオプション: \"Model\", \"API\" (既定 Automatic = モデルから決める), \"Voice\", \"Instructions\", \"InputDevice\", \"OutputDevice\", \"AllowBargeIn\" (既定 False = 応答中はマイクを送らない), \"StartMuted\" (接続だけ先にしてマイクは後から), \"TranscribeInput\" (既定 False = こちらの発話は文字にしない。GPT-Live は常に書き起こす), \"RequirePaidAPIApproval\" (既定 True), \"StatusBar\", \"PollSeconds\"。";
@@ -256,7 +256,11 @@ $iSVRTBuiltinModels = <|
     "Description" -> "gpt-realtime-2.1 の軽量・低価格版。"|>,
   "gpt-live-1" -> <|"Provider" -> "OpenAI", "API" -> "Live",
     "Label" -> "live-1",
-    "Description" -> "GPT-Live。全二重 (聞きながら話す)。作業はアプリ側へ委譲 (スライド操作 / SourceVault / 許可を得てウェブ)。音声 $0.05/分。"|>|>;
+    "Description" -> "GPT-Live。全二重 (聞きながら話す)。作業はアプリ側へ委譲 (スライド操作 / SourceVault / 許可を得てウェブ)。音声 $0.05/分。"|>,
+  (* 2026-11-21: gpt-live-1 では harema の声の高さが不安定 (男声並みに下がる)。1.1 では安定していた (CABLE-A の録音で測定) *)
+  "gpt-live-1.1" -> <|"Provider" -> "OpenAI", "API" -> "Live",
+    "Label" -> "live-1.1",
+    "Description" -> "GPT-Live 1.1。使い方は gpt-live-1 と同じ (全二重・アプリ側へ委譲)。声と訛りが gpt-live-1 より安定する。"|>|>;
 
 iSVRTModelRegistry[] := Join[$iSVRTBuiltinModels,
   If[AssociationQ[SourceVault`$SourceVaultRealtimeModels],

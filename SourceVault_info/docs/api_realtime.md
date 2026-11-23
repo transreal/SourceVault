@@ -7,6 +7,7 @@ Runs a live voice conversation with OpenAI's gpt-realtime model using this machi
 Privacy: this is a cloud path — mic audio and conversation text go to OpenAI. For privacy-sensitive material (PL >= 0.5), use the local Piper TTS in `SourceVault_voice` instead. `SourceVaultRealtimeStart` (and `SourceVaultRealtimeRender`) refuse to run unless `NBAccess\`NBProviderCanAccess["openai", 0.5]` allows it, and by default also require the target notebook's Paid API approval (`NBAccess\`NBGetNotebookPaidAPIAllowed`), overridable via `"RequirePaidAPIApproval" -> False`. If the target notebook is declared **Private** (`TaggingRules > SourceVault > CloudPublishable -> False`), both functions refuse with `Failure["SourceVaultRealtimePrivateNotebook", ...]` regardless of other settings (rule 61, 2026-10-31).
 Requires Python 3.10+ with `websocket-client` and `sounddevice`; `SourceVaultRealtimeInstall[]` provisions a dedicated venv under `%LOCALAPPDATA%/SourceVault/realtime/venv`.
 Undeclared kernel-side flags (no usage string): `$SourceVaultRealtimeHoldFE` (True = the status-bar poll skips its turn so a caller talking to the FE is not interrupted; set by SlideWorkflow buttons), `$SourceVaultRealtimeTrace` (True = diagnostic lines to `$TemporaryDirectory/slideworkflow-trace.log`).
+Privacy contracts registered at load (when `SourceVaultRegisterPrivacyContract` exists): Internal = AddContext / Render / AudioCheck / AudioCheckView; Public = Models / ModelAPI / `$SourceVaultRealtimeModels` / `$SourceVaultRealtimeInterruptWords` / `$SourceVaultRealtimeKeepAliveLevel`.
 
 ### Two APIs (chosen by the model)
 - `gpt-realtime-*` → Realtime API (`wss://api.openai.com/v1/realtime?model=...`). One model hears, reasons, calls the `show_slide` / `ask_sourcevault` functions and speaks.
@@ -25,7 +26,7 @@ On opening, the narration is suspended (playback dropped, its tail discarded), t
 ## Configuration variables
 ### $SourceVaultRealtimeModel
 型: String, 初期値: "gpt-realtime-2.1"
-Default model used by SourceVaultRealtimeStart when "Model" -> Automatic (also by SourceVaultRealtimeRender). "gpt-live-1" selects GPT-Live (client delegation).
+Default model used by SourceVaultRealtimeStart when "Model" -> Automatic (also by SourceVaultRealtimeRender). "gpt-live-1.1" / "gpt-live-1" select GPT-Live (client delegation).
 
 ### $SourceVaultRealtimeInterruptWords
 型: {String...}, 初期値: {"質問", "スライド"}
@@ -33,7 +34,7 @@ Words allowed to interrupt a GPT-Live talk in `"Interrupt" -> "Words"` (must be 
 
 ### $SourceVaultRealtimeModels
 型: Association, 初期値: <||>
-User additions/overrides to the built-in model registry: `<|"model" -> <|"Provider" -> "OpenAI", "API" -> "Realtime"|"Live", "Label" -> short name, "Description" -> text|>|>`. Built-ins: gpt-realtime-2.1, gpt-realtime-2.1-mini (Realtime), gpt-live-1 (Live).
+User additions/overrides to the built-in model registry: `<|"model" -> <|"Provider" -> "OpenAI", "API" -> "Realtime"|"Live", "Label" -> short name, "Description" -> text|>|>`. Built-ins: gpt-realtime-2.1, gpt-realtime-2.1-mini (Realtime), gpt-live-1, gpt-live-1.1 (Live; 1.1 added 2026-11-21, keeps the voice steadier than gpt-live-1).
 
 ### $SourceVaultRealtimeVoice
 型: String, 初期値: "marin"
@@ -76,7 +77,7 @@ Callback for voice-triggered document lookups. Receives `<|"id", "query", "allow
 説明: the registry, model name → `<|"Provider", "API", "Label", "Description"|>` (built-ins joined with $SourceVaultRealtimeModels).
 
 ### SourceVaultRealtimeModels["ByProvider"] → Association
-説明: provider → list of model names, e.g. `<|"OpenAI" -> {"gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-live-1"}|>`.
+説明: provider → list of model names, e.g. `<|"OpenAI" -> {"gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-live-1", "gpt-live-1.1"}|>`.
 
 ### SourceVaultRealtimeModels[provider_String] → {String...}
 説明: model names of one provider ({} if unknown).
@@ -98,11 +99,11 @@ Options: "Force" -> False (reinstall even if already usable), "BasePython" -> Au
 
 ### SourceVaultRealtimeAudioCheck[opts] → Association | Failure
 説明: connection test for the voice worker's devices, like Zoom's mic test (2026-10-19). Runs `SourceVault_realtime_audiocheck.py` with the worker's venv; devices are resolved by the worker's own function (name substring, 24 kHz, 20 ms blocks), so what passes is what the worker will open. **Output (the AI's voice)**: writes a test sound (three 880 Hz beeps, about 1.6 s) the way the worker writes speech; writes that never return = the device has stalled (seen after waking from Modern Standby: the laptop speaker took no audio and the worker played nothing). If the output is a VB-Audio cable ("CABLE Input", "CABLE-A Input", ...), its other end ("CABLE Output", ... = the device Zoom uses as its microphone) is recorded at the same time and the tone is found by a Goertzel filter. **Input (the AI's ears)**: records "ListenSeconds" with a level per 100 ms (a live meter in the FE); press Zoom's "Test speaker" or ask someone to talk meanwhile. Digital silence (a cable idles at 0..1 LSB) = nothing plays into the device. If a session is running, its actual devices, connection and mute are compared with what was tested.
-Keys: "Verdict" ("OK" | "Check" | "Problem"), "Findings" ({<|"Part" -> "Output"|"Input"|"Session"|"Speak", "Level" -> "OK"|"Check"|"Problem"|"Info", "Message" -> Japanese advice|>...}), "Output" (<|"Status" -> "Played"|"Stalled"|"Unpaced"|"NotFound"|"Error", "Device", "Loopback", "LoopbackStatus" -> "Arrived"|"Silent"|"OtherSound"|"Error"|None, "LatencyMilliseconds", "Pace", ...|>), "Input" (<|"Status" -> "Signal"|"Quiet"|"Zeros"|"NotFound"|"Stalled"|"Error", "Device", "PeakDB", "Levels" -> {{t, peak, rmsDB}...}|>), "Session", "Speak", "Audio" (what the input heard, an Audio object), "Date". Failure: "SourceVaultRealtimeUnavailable" | "SourceVaultRealtimeAudioCheckFailed" | "SourceVaultRealtimeAudioCheckTimeout".
-Options: "OutputDevice" / "InputDevice" -> Automatic (= the values of `SetOptions[SourceVaultRealtimeStart, ...]`, else the Windows default), "Tone" -> "Beep" ("Quiet" = -60 dBFS, still found through a bit-exact cable), "Loopback" -> Automatic (None / a capture device name), "ListenSeconds" -> 8, "Output" -> True, "Input" -> True, "Speak" -> False (True: asks the running session to say one short sentence via SourceVaultRealtimeSay and checks that the worker played it and that it came out of the cable's other end; the meeting hears it), "Audio" -> True, "Progress" -> Automatic (False: no meter).
+Keys: "Verdict" ("OK" | "Check" | "Problem"), "Findings" ({<|"Part" -> "Output"|"Input"|"Session"|"Speak", "Level" -> "OK"|"Check"|"Problem"|"Info", "Message" -> Japanese advice|>...}), "Output" (<|"Status" -> "Played"|"Stalled"|"Unpaced"|"NotFound"|"Error", "Device", "Loopback", "LoopbackStatus" -> "Arrived"|"Silent"|"OtherSound"|"Error"|None, "LatencyMilliseconds", "Pace", ...|>), "Input" (<|"Status" -> "Signal"|"Quiet"|"Zeros"|"NotFound"|"Stalled"|"Error", "Device", "PeakDB", "Levels" -> {{t, peak, rmsDB}...}|>), "Session" (<|"Running", "Connected", "Model", "OutputDevice", "InputDevice", "Muted", "OutputChunks", "OutputMatches", "InputMatches"|>), "Speak" (<|"Status" -> "OK"|"NotSent"|"Silent"|"NotHeard"|"NoSession"|"Error", "Spoke", "OutputChunks", "Loopback", "Heard"|> | None), "Audio" (what the input heard, an Audio object), "Error", "Date". Failure: "SourceVaultRealtimeUnavailable" | "SourceVaultRealtimeAudioCheckFailed" | "SourceVaultRealtimeAudioCheckTimeout".
+Options: "OutputDevice" / "InputDevice" -> Automatic (= the values of `SetOptions[SourceVaultRealtimeStart, ...]`, else the Windows default), "Tone" -> "Beep" ("Quiet" = -60 dBFS, still found through a bit-exact cable), "Loopback" -> Automatic (None / a capture device name), "ListenSeconds" -> 8 (clipped to 1..60), "Output" -> True, "Input" -> True, "Speak" -> False (True: asks the running session to say one short sentence via SourceVaultRealtimeSay and checks that the worker played it and that it came out of the cable's other end; the meeting hears it), "Audio" -> True, "Progress" -> Automatic (False: no meter).
 
 ### SourceVaultRealtimeAudioCheckView[opts] / SourceVaultRealtimeAudioCheckView[result] → Panel
-説明: runs SourceVaultRealtimeAudioCheck[opts] (or takes an existing result) and shows the verdict, one line per part with a mark (✓ / ⚠ / ×), the input level plot (-50 dBFS line = sound) and the recorded Audio.
+説明: runs SourceVaultRealtimeAudioCheck[opts] (or takes an existing result) and shows the verdict, one line per part with a mark (✓ / ⚠ / ×), the input level plot (-50 dBFS line = sound) and the recorded Audio. A Failure given as `result` is returned as is.
 
 ## Session control
 ### SourceVaultRealtimeStart[opts]
@@ -163,7 +164,7 @@ Options: "Model" -> Automatic ($SourceVaultRealtimeModel; GPT-Live not allowed),
 例: SourceVaultRealtimeRender[{<|"Id" -> "s1", "Text" -> t1, "File" -> "s1.wav"|>, <|"Id" -> "s2", "Text" -> t2, "File" -> "s2.wav"|>}, "Parallel" -> 2]
 
 ## Voice-triggered handlers (slide / ask)
-These pair with $SourceVaultRealtimeSlideHandler / $SourceVaultRealtimeAskHandler: the worker posts a request into the state file, the kernel's status-bar poll task dispatches it to the registered handler, and the result is sent back automatically. Manual result-posting is only needed for custom dispatch (e.g. a handler returning "Deferred").
+These pair with $SourceVaultRealtimeSlideHandler / $SourceVaultRealtimeAskHandler: the worker posts a request into the state file, the kernel's status-bar poll task dispatches it to the registered handler, and the result is sent back automatically. Manual result-posting is only needed for custom dispatch (e.g. a handler returning "Deferred"). With no handler registered, the poll answers with an error result at once.
 ### SourceVaultRealtimeSlideRequest[] → Association | None
 説明: pending slide-navigation request, if any.
 

@@ -40,6 +40,7 @@ action: "Accept" ("Via" -> "Notebook" | "Todo" | "Reply" | "Manual"), "Reject" (
 ### SourceVaultMailWorkAccept[ref, via]
 提案を採用し、実際の作業の入れ物を作る。台帳に Accept を記録し、項目は「処理中」になる。
 via "Notebook": 継承ノートブックを $onWork に作る。過去の回の関連資料の一覧付き。添付のあるメールと繰り返す業務の項目は、<日付>-<題名> のフォルダを作ってその中に置く。
+会議のように年に何度も開かれる業務(件名に開催日が書かれる。$SourceVaultSeriesEventMinPerYear)は、イベントごとのフォルダ <開催日>-<名前>(例 20261120-全学教授会)に置き、同じイベントのメール(再送・資料)だけが同じフォルダを使う。別の日のイベントのフォルダは使わない。
 via "Todo": 単独の todo を作る。
 via "Reply": 返信ノートブックを開く。
 
@@ -50,6 +51,16 @@ via "Reply": 返信ノートブックを開く。
 未処理の作業項目に、系列(定型業務)の照合・過去の回の一覧・前回の対応・対応の案を付けて返す。表示は SourceVaultMailTaskProposalsView。
 Options: SourceVaultMailWorkItems と同じ。ただし "States" の既定は "Open"。
 
+### SourceVaultWorkPathResolve[path] → String | Missing["NotFound"]
+ノートブックや台帳に書かれたパス(ファイルかフォルダ)が今どこにあるかを返す。見つからなければ Missing["NotFound"]。
+$onWork は未処理のノートや Todo が残っているあいだの置き場で、済んだものは $offWork の年度のフォルダ(名前の先頭の日付の年度、4 月始まり)へ移る。
+書かれた場所に無ければ、$onWork、$offWork のその年度、ほかの年度の順に同じ相対パスを探し、最後にファイル名で $onWork と $offWork を探す(フォルダへ移したノート)。
+ほかのコンピュータのパス(別のドライブ)は、根のフォルダの名前(On Work / Off Work)で読み替える。
+
+### SourceVaultWorkPathOpen[path]
+path を開く。書かれた場所に無ければ SourceVaultWorkPathResolve で今の場所を探して開き、見つからなければそう知らせる。
+タスクのノートブックの「イベント」「関連資料」「関連ファイル」のボタンはこれを呼ぶので、フォルダが $offWork へ移ってもリンクは切れない。
+
 ## 系列(定型業務)
 
 ### SourceVaultSeriesDiscover[opts]
@@ -59,6 +70,9 @@ Options: SourceVaultMailWorkItems と同じ。ただし "States" の既定は "O
 
 ### SourceVaultSeriesRelated[ref, opts]
 作業項目(RecordId か WorkId)に対応する過去の回、その回の対応(返信・ノート・todo・確認のみ)、題名の近い作業ノートを返す(文書 04 6.1 節)。確認していない系列による対応には "MatchStatus" -> "Proposed" が付く。
+"Event" は、このメールのイベント(件名の開催日と名前で決まる): <|"Kind" -> "Dated" | "Year", "Name", "Date", "Key", "Events"|>。
+"Dated"(年に何度も開かれる会議など)では "Events" に同じ名前のイベントを新しい順に並べ、それぞれの開催日・メール・フォルダ($onWork か $offWork の年度のフォルダ)を持つ。
+そのとき "OccurrenceKey" と "Previous" の "Key" は開催日(例 "2026-11-20")。
 
 ### SourceVaultSeriesConfirm[seriesId]
 系列の候補を所有者が確定する(L0 の記録)。
@@ -218,6 +232,11 @@ Re: でもこの日数より空いたら別の回にする。
 型: Association, 初期値: 状態名 -> <|"Label", "Short"|>
 状態名から表示名と短い印への対応。
 
+### $SourceVaultSeriesEventMinPerYear
+型: Integer, 初期値: 3
+業務の同じ名前のメールの件名が、1 つの年度にこの数以上の違う日付(開催日)を書いていれば、その業務を「日付のあるイベント」(会議のように年に何度も開かれるもの)として扱い、フォルダをイベントごと(<開催日>-<名前>)に作る。
+それより少ない業務(年に 1 度の共通テストなど)は、年度ごとに 1 つのフォルダを使う。
+
 ### $SourceVaultSeriesGenericTitleWords
 型: {String...}
 件名からこれらの語(と年度・番号・ひらがな・記号)を除いて 2 字未満しか残らなければ、その件名は用件を表さないとみなし、系列の鍵にしない。
@@ -271,3 +290,4 @@ Automatic なら、保存済みの業務のラベルを系列の結び付けに�
 - 台帳のイベント ID は "wev-" で始まり、時刻 → 機械内カウンタ → 乱数の順に整列する。
 - 埋め込みの保存先は LocalState/series/embeddings.wxf。ラベルの保存先は LocalState/series/labels.wxf。
 - 埋め込みは他モデルのベクトルを無効にし、モデルが使えないときは 10 分間は自動の再試行をしない。
+- 台帳やノートブックに書かれるパスは $onWork / $offWork 間の移動やドライブの違いで変わるため、開くときは SourceVaultWorkPathOpen(解決だけなら SourceVaultWorkPathResolve)を使う。

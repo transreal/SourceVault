@@ -403,7 +403,8 @@ Options: `"ExtractHeader"` -> True, `"ExtractTodos"` -> True, `"ForceReindex"` -
 Options: `"Recursive"` -> False, `"ExcludePatterns"` -> `{"*.bak.nb", "Untitled*.nb"}` (既定), `"ForceReindex"` -> False (True で mtime キャッシュを無視し全件再索引。notebook を編集したのに結果が古い場合に使う)
 ### SourceVaultExtractNotebookHeader[path]
 notebook の先頭 Input セルから Header Association を safe parse する。HoldComplete + whitelist で RunProcess / Get / Import 等の危険式を拒否する。
-→ `<|"ParseStatus" -> "OK"|"MissingHeader"|"UnsafeExpression", "Keywords" -> _, "Deadline" -> _, "NextReview" -> _, "Status" -> _|>`
+→ `<|"ParseStatus" -> "OK"|"MissingHeader"|"UnsafeExpression", "Keywords" -> _, "Deadline" -> _, "NextReview" -> _, "Eventdate" -> _, "Status" -> _|>`
+`"Eventdate"` はそのノートが扱うイベントの日付 (ヘッダキー `"EventDate"` も読む)。
 ### SourceVaultExtractNotebookTodos[path] → List
 notebook 内の TodoItem スタイルセルを列挙する。Status 判定は TaggingRules > FontVariations StrikeThrough + FontColor > Default の優先順位。
 - StrikeThrough なし → Open
@@ -414,20 +415,21 @@ notebook 内の TodoItem スタイルセルを列挙する。Status 判定は Ta
 ### SourceVaultFindNotebooks[opts]
 index 済み notebook を検索する。LLM 不要の deterministic query。
 → `{record, ...}` (各 record は Association)
-record キー: `"Path"` / `"OriginalPath"` (同値エイリアス), `"Title"`, `"NotebookRef"`, `"Header"` (Keywords/Deadline/NextReview/Status/Title), `"Todos"` (`{<|"Text", "Status"(Open|Done|Pass), ...|>, ...}`), `"TodoCount"` / `"OpenTodoCount"` / `"DoneTodoCount"` / `"PassTodoCount"`, `"ReviewState"` / `"DeadlineState"`, `"Lint"`
+record キー: `"Path"` / `"OriginalPath"` (同値エイリアス), `"Title"`, `"NotebookRef"`, `"Header"` (Keywords/Deadline/NextReview/Eventdate/Status/Title), `"Todos"` (`{<|"Text", "Status"(Open|Done|Pass), ...|>, ...}`), `"TodoCount"` / `"OpenTodoCount"` / `"DoneTodoCount"` / `"PassTodoCount"`, `"ReviewState"` / `"DeadlineState"`, `"Lint"`
 Options:
 - `"OpenTodos"` -> True | False (未完了 Todo を含む / 含まない notebook。既定 Missing[] = 絞り込まない)
 - `"NextReview"` -> `"Today"` | `"Overdue"` | `"ThisWeek"` | `"DueSoon"` | `<|"From" -> _, "To" -> _|>`  (`"Today"` は厳密に今日のみ、`"ThisWeek"`/`"DueSoon"` は今日±7 日以内で遠い過去は除外、`"Overdue"` は期限切れ全部。既定 Missing[])
 - `"Deadline"` -> `"Today"` | `"Overdue"` | `"ThisWeek"` | `"DueSoon"` | `<|"From" -> _, "To" -> _|>`
+- `"Eventdate"` -> `"Today"` | `"ThisWeek"` (今日から 7 日先まで) | `"Upcoming"` | `"Past"` | `<|"From" -> _, "To" -> _|>` (ノートが扱うイベントの日付で絞る)
 - `"Keywords"` -> `{_String, ...}` | String (部分一致 OR。検索対象: Header.Keywords + Header.Title + FileBaseName[Path] + 親フォルダ名)
 - `"Title"` -> String | `{_String, ...}` (`"Keywords"` と同じ検索プールを見るエイリアス)
 - `"Status"` -> `"Todo"` | `"Done"` | String
-- `"Scope"` -> `"Today"` 複合フィルタ: (NextReview==今日) | (Deadline==今日) | (Path に YYYYMMDD 形式で今日を含む) の OR。NoReviewDate / NoDeadline はレビュー不要扱いで含まれない
+- `"Scope"` -> `"Today"` 複合フィルタ: (NextReview==今日) | (Deadline==今日) | (Eventdate==今日) | (Path に YYYYMMDD 形式で今日を含む) の OR。NoReviewDate / NoDeadline はレビュー不要扱いで含まれない
 - `"ForceReindex"` -> False (True なら mtime/hash cache を無視し全 notebook を再 index。notebook を編集したのに結果が古い場合に使う)
 - `"Format"` -> False (True なら結果を SourceVaultFormatNotebookList でスケジュール表と同形式の Grid にして返す)
 Todo 項目自体を列挙したい場合は `record["Todos"]` を使う (SourceVaultExtractNotebookTodos[record["Path"]] でも取れるが再抽出になるため非推奨)。
 ### SourceVaultFindTodos[opts]
-条件に合う notebook の todo 項目をフラットな List で返す。SourceVaultFindNotebooks と同じ notebook 検索オプション (OpenTodos / NextReview / Deadline / Keywords / Title / Status / Scope) を受け、マッチした各 notebook の todo セルを 1 行 1 項目に展開する。「今週期限の todo をリスト」のような todo 単位の要求には FindNotebooks でなくこちらを使う。
+条件に合う notebook の todo 項目をフラットな List で返す。SourceVaultFindNotebooks と同じ notebook 検索オプション (OpenTodos / NextReview / Deadline / Eventdate / Keywords / Title / Status / Scope) を受け、マッチした各 notebook の todo セルを 1 行 1 項目に展開する。「今週期限の todo をリスト」のような todo 単位の要求には FindNotebooks でなくこちらを使う。
 → `{<|"Title", "Path", "NotebookRef", "Deadline", "NextReview", "ReviewState", "DeadlineState", "TodoText", "TodoStatus", "TodoStrikeThrough"|>, ...}` (Format->True で Grid)
 Options: `"TodoStatus"` -> `"Open"` (既定) | `"Done"` | `"Pass"` | All (展開後の todo を status で絞る), FindNotebooks 共通オプション (`"OpenTodos"` の既定はこちらでは True), `"Format"` -> False
 ### SourceVaultNotebookLint[record] → List

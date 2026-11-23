@@ -62,13 +62,20 @@ summary+action window only when the maildb UI layer is not loaded.";
 SourceVaultMailAgendaInherit::usage =
   "SourceVaultMailAgendaInherit[recordId, opts] creates an inheriting work notebook \
 in $onWork for the mail, laid out like Templates/SourceVault notebook template.nb: a \
-leading \"NotebookStatus\" style cell <|Keywords, Deadline (inferred, if any), \
-NextReview, Status->Todo, Title (subject), MailRecordId|>, then the content (Title \
+leading \"NotebookStatus\" style cell <|Keywords, Deadline, Eventdate, NextReview, \
+Status->Todo, MailRecordId|> (a \"Title\" key only when the option \"Title\" is given: the \
+header's Title is the owner's; the subject is in the file name <date>-<subject, 48 \
+characters>.nb, 2026-11-20), then the content (Title \
 cell + an open-original-mail button that resolves the notebook at click time via \
-ButtonNotebook[]). Records NotebookCreated in agenda.json (item leaves the agenda), \
+ButtonNotebook[]). The three dates come from SourceVaultTaskDates (2026-11-20): \
+Deadline from the classification's deadline, else the deadline the subject / summary \
+states (\"...\:307e\:3067\:306b\"), else the event date; Eventdate from the option, else \
+the event the subject / summary states (\"...\:958b\:50ac\"); NextReview the day before the \
+nearer of them (one week when there is none). Records NotebookCreated in agenda.json (item leaves the agenda), \
 emits an inheritance event to $SourceVaultMailAgendaEventSink (mining layer seam). \
 Options: \"Directory\" (Automatic -> Global`$onWork), \"Open\" (True -> SystemOpen), \
-\"Deadline\", \"Title\". Returns <|Status, NotebookPath, RecordId|>.";
+\"Deadline\", \"Title\", \"Eventdate\" (the date of the event when the caller knows it). \
+Returns <|Status, NotebookPath, RecordId, Deadline, Eventdate, NextReview|>.";
 
 SourceVaultMailAgendaInheritTodo::usage =
   "SourceVaultMailAgendaInheritTodo[recordId, opts] creates a STANDALONE TODO \
@@ -76,7 +83,9 @@ SourceVaultMailAgendaInheritTodo::usage =
 tasks too small to deserve a whole project notebook. The todo carries Source \
 \"mail\" + MailRecordId (back-navigation) and the mail's derived PrivacyLevel. \
 Records TodoCreated in agenda.json (item leaves the agenda) and emits an event. \
-Options: \"Deadline\", \"Title\". Returns <|Status, TodoId, RecordId|>.";
+The deadline and the event date are found as for SourceVaultMailAgendaInherit \
+(SourceVaultTaskDates); the todo carries \"Deadline\" and \"EventDate\". \
+Options: \"Deadline\", \"Title\", \"Eventdate\". Returns <|Status, TodoId, RecordId|>.";
 
 SourceVaultMailForNotebook::usage =
   "SourceVaultMailForNotebook[nbPathOrNotebookObject] reads the MailRecordId metadata \
@@ -509,10 +518,13 @@ SourceVault`SourceVaultMailAgendaItems[___] := <|"Items" -> {}, "PendingCount" -
 
 (* ---------------- inheritance notebook (R9-6) ---------------- *)
 
+(* The subject (an automatically made title) is carried by the FILE NAME, not by the header (owner, 2026-11-20: "the
+   automatic title goes into the file name; an explicit Title is the owner's"). It was cut at 24 characters, which cut
+   "...の開催について" to "...の開催に"; the agenda shows the file name when the header has no Title, so 48 now. *)
 iSVMASafeFileName[s_String] := Module[{t},
   t = StringReplace[s, {"/" -> "-", "\\" -> "-", ":" -> "-", "*" -> "-", "?" -> "-",
     "\"" -> "'", "<" -> "(", ">" -> ")", "|" -> "-", "\n" -> " ", "\r" -> ""}];
-  StringTrim[StringTake[t, UpTo[24]]]];
+  StringTrim[StringTake[t, UpTo[48]]]];
 
 iSVMAEmitEvent[ev_Association] :=
   If[MatchQ[$SourceVaultMailAgendaEventSink, _Function],
@@ -529,21 +541,46 @@ iSVMADateInputString[d_?DateObjectQ] :=
    editable input text (same convention as SourceVaultNewNotebook), and the
    non-evaluating readers re-parse it via ToExpression[..., HoldComplete], so
    DateObject[{y,m,d}] / Quantity[1,\"Weeks\"] stay in whitelist form. *)
-iSVMAStatusInputString[subject_String, rid_String, deadline_] :=
+(* title: the Title the caller gave explicitly (the option "Title"), else None -- the header's Title is the owner's;
+   the subject is in the file name (2026-11-20) *)
+iSVMAStatusInputString[title_, rid_String, deadline_] :=
   "<|\"Keywords\" -> {\"mail\"}" <>
   If[DateObjectQ[deadline],
     ", \"Deadline\" -> " <> iSVMADateInputString[deadline], ""] <>
   ", \"NextReview\" -> Quantity[1, \"Weeks\"], \"Status\" -> \"Todo\", " <>
-  "\"Title\" -> " <> ToString[subject, InputForm] <>
-  ", \"MailRecordId\" -> " <> ToString[rid, InputForm] <> "|>";
+  If[StringQ[title], "\"Title\" -> " <> ToString[title, InputForm] <> ", ", ""] <>
+  "\"MailRecordId\" -> " <> ToString[rid, InputForm] <> "|>";
+(* The three dates of a work note (owner, 2026-11-20: the header held NextReview only; the owner's notes carry Deadline
+   when the work has one, Eventdate when the note is about an event, and a NextReview before them). The dates come from
+   SourceVault_taskdates.wl (weakly bound): the subject, the summary and the deadline the mail classification found,
+   and the date of the event when the caller knows it (a meeting of a routine business). Without that layer the
+   header is the one above (Deadline from the classification, NextReview one week). *)
+iSVMATaskDatesReadyQ[] := Names["SourceVault`SourceVaultTaskDates"] =!= {} &&
+  Length[DownValues[Evaluate[Symbol[Identity["SourceVault`SourceVaultTaskDates"]]]]] > 0 &&
+  Length[DownValues[Evaluate[Symbol[Identity["SourceVault`SourceVaultTaskHeaderString"]]]]] > 0;
+iSVMATaskDates[subject_String, row_Association, deadline_, event_] := If[! iSVMATaskDatesReadyQ[],
+  <|"Deadline" -> If[DateObjectQ[deadline], deadline, Missing["None"]], "Eventdate" -> Missing["None"],
+    "NextReview" -> Quantity[1, "Weeks"], "Basis" -> <||>|>,
+  With[{r = Quiet@Check[Symbol[Identity["SourceVault`SourceVaultTaskDates"]][<|"Title" -> subject,
+      "Summary" -> Lookup[row, "Summary", Missing[]], "Deadline" -> deadline, "Eventdate" -> event,
+      "ReferenceDate" -> Lookup[row, "Date", Automatic]|>], $Failed]},
+    If[AssociationQ[r], r, <|"Deadline" -> If[DateObjectQ[deadline], deadline, Missing["None"]],
+      "Eventdate" -> Missing["None"], "NextReview" -> Quantity[1, "Weeks"], "Basis" -> <||>|>]]];
+iSVMAStatusInputString[title_, rid_String, dates_Association] := If[! iSVMATaskDatesReadyQ[],
+  iSVMAStatusInputString[title, rid, Lookup[dates, "Deadline", Missing[]]],
+  Symbol[Identity["SourceVault`SourceVaultTaskHeaderString"]][<|"Keywords" -> {"mail"},
+    "Deadline" -> Lookup[dates, "Deadline", Missing[]], "Eventdate" -> Lookup[dates, "Eventdate", Missing[]],
+    "NextReview" -> Lookup[dates, "NextReview", Quantity[1, "Weeks"]], "Status" -> "Todo",
+    "Title" -> If[StringQ[title], title, Missing[]], "MailRecordId" -> rid|>]];
 
 (* the inheriting notebook's cells: NotebookStatus FIRST, content after (the
    template's cell layout). The mail button must NOT capture a kernel symbol:
    it resolves its own notebook AT CLICK TIME via ButtonNotebook[] (a
    serialized Module-local path variable would be undefined after reopen,
-   leaving a button that silently does nothing). *)
-iSVMAInheritCells[subject_String, rid_String, deadline_] := {
-  Cell[BoxData[iSVMAStatusInputString[subject, rid, deadline]], "NotebookStatus"],
+   leaving a button that silently does nothing). The Title CELL (the heading of the
+   document) is the subject; the header's "Title" only when it was given explicitly. *)
+iSVMAInheritCells[subject_String, rid_String, deadline_, explicitTitle_ : None] := {
+  Cell[BoxData[iSVMAStatusInputString[explicitTitle, rid, deadline]], "NotebookStatus"],
   Cell[subject, "Title"],
   Cell[BoxData[ToBoxes[
     Button["\:2709 \:5143\:30e1\:30fc\:30eb\:30fb\:8fd4\:4fe1\:3092\:958b\:304f",
@@ -552,10 +589,10 @@ iSVMAInheritCells[subject_String, rid_String, deadline_] := {
 
 Options[SourceVault`SourceVaultMailAgendaInherit] = {
   "Directory" -> Automatic, "Open" -> True, "Deadline" -> Automatic,
-  "Title" -> Automatic};
+  "Title" -> Automatic, "Eventdate" -> Automatic};
 
 SourceVault`SourceVaultMailAgendaInherit[rid_String, OptionsPattern[]] := Module[
-  {dir, row, subject, deadline, dl = Missing["None"], nbPath, cells, res},
+  {dir, row, subject, deadline, dl = Missing["None"], nbPath, cells, res, dates},
   dir = With[{d = OptionValue["Directory"]},
     (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
     If[d === Automatic, Quiet@Check[Symbol[Identity["Global`$onWork"]], $Failed], d]];
@@ -578,7 +615,10 @@ SourceVault`SourceVaultMailAgendaInherit[rid_String, OptionsPattern[]] := Module
   If[FileExistsQ[nbPath],
     nbPath = StringReplace[nbPath, ".nb" ~~ EndOfString ->
       "-" <> ToString[UnixTime[]] <> ".nb"]];
-  cells = iSVMAInheritCells[subject, rid, dl];
+  (* Deadline / Eventdate / NextReview (2026-11-20): "Eventdate" is the date of the event when the caller knows it
+     (SourceVault_series.wl: the meeting of a routine business); else it is read from the subject and the summary *)
+  dates = iSVMATaskDates[subject, row, dl, With[{e = OptionValue["Eventdate"]}, If[e === Automatic, Missing[], e]]];
+  cells = iSVMAInheritCells[subject, rid, dates, With[{t = OptionValue["Title"]}, If[StringQ[t], t, None]]];
   (* privacy inheritance: the note embeds mail content (subject + a body
      link), so it explicitly declares itself non-publishable. Absent tagging
      already means PL 1.0 fail-safe; writing it makes the inheritance
@@ -596,7 +636,9 @@ SourceVault`SourceVaultMailAgendaInherit[rid_String, OptionsPattern[]] := Module
   iSVMAEmitEvent[<|"Type" -> "MailInheritedByNotebook", "RecordId" -> rid,
     "NotebookPath" -> nbPath, "At" -> DateString["ISODateTime"]|>];
   If[TrueQ[OptionValue["Open"]], Quiet[SystemOpen[nbPath]]];
-  <|"Status" -> "OK", "NotebookPath" -> nbPath, "RecordId" -> rid|>];
+  <|"Status" -> "OK", "NotebookPath" -> nbPath, "RecordId" -> rid,
+    "Deadline" -> Lookup[dates, "Deadline", Missing["None"]], "Eventdate" -> Lookup[dates, "Eventdate", Missing["None"]],
+    "NextReview" -> Lookup[dates, "NextReview", Missing["None"]]|>];
 SourceVault`SourceVaultMailAgendaInherit[___] :=
   <|"Status" -> "Failed", "Reason" -> "expects [recordId_String, opts]"|>;
 
@@ -612,10 +654,10 @@ iSVMATodoLayerReady[] :=
     Length[DownValues[sym]] > 0];
 
 Options[SourceVault`SourceVaultMailAgendaInheritTodo] = {
-  "Deadline" -> Automatic, "Title" -> Automatic};
+  "Deadline" -> Automatic, "Title" -> Automatic, "Eventdate" -> Automatic};
 
 SourceVault`SourceVaultMailAgendaInheritTodo[rid_String, OptionsPattern[]] :=
-  Module[{row, subject, deadline, dl = None, pl, res},
+  Module[{row, subject, deadline, dl = None, pl, res, dates},
     If[! iSVMATodoLayerReady[],
       Return[<|"Status" -> "Failed", "Reason" -> "TodoLayerUnavailable",
         "Hint" -> "SourceVault_todo.wl is not loaded."|>]];
@@ -637,10 +679,15 @@ SourceVault`SourceVaultMailAgendaInheritTodo[rid_String, OptionsPattern[]] :=
        the mail's derived PL (missing = 1.0 fail-safe) *)
     pl = With[{p = Lookup[row, "PrivacyLevel", Missing[]]},
       If[NumberQ[p], N[p], 1.0]];
+    (* the deadline and the event date as for the notebook (2026-11-20) *)
+    dates = iSVMATaskDates[subject, row, If[DateObjectQ[dl], dl, Missing[]],
+      With[{e = OptionValue["Eventdate"]}, If[e === Automatic, Missing[], e]]];
+    If[DateObjectQ[Lookup[dates, "Deadline", Missing[]]], dl = dates["Deadline"]];
     res = Quiet@Check[
       Symbol[Identity["SourceVault`SourceVaultNewTodo"]][<|
         "Title" -> subject,
         "Deadline" -> dl,
+        "EventDate" -> With[{e = Lookup[dates, "Eventdate", Missing[]]}, If[DateObjectQ[e], e, None]],
         "PrivacyLevel" -> pl,
         "Source" -> "mail",
         "MailRecordId" -> rid|>], $Failed];

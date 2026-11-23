@@ -492,25 +492,34 @@ SourceVaultSlideDeckLookup[query_] := Module[{entries, hit},
 
 (* ---------------- 発表シナリオ ---------------- *)
 
-iSDNormalizeSlideEntry[slide_, index_Integer, entry_] := Module[{s, n},
+iSDNormalizeSlideEntry[slide_, index_Integer, entry_] := Module[{s, n, sub},
   s = If[AssociationQ[slide], slide, <|"Text" -> ToString[slide]|>];
   n = Lookup[s, "Slide", Lookup[s, "slide", index]];
-  <|"Slide" -> If[IntegerQ[n] && n >= 1, n, index],
+  sub = Lookup[s, "Subtitle", Lookup[s, "subtitle", ""]];
+  Join[<|"Slide" -> If[IntegerQ[n] && n >= 1, n, index],
     "Title" -> ToString @ Lookup[s, "Title", Lookup[s, "title", ""]],
     "Seconds" -> With[{v = Lookup[s, "Seconds", Lookup[s, "seconds", Null]]},
       If[NumericQ[v] && N[v] > 0., N[v], Null]],
-    "Text" -> ToString @ Lookup[s, "Text", Lookup[s, "text", ""]]|>];
+    "Text" -> ToString @ Lookup[s, "Text", Lookup[s, "text", ""]]|>,
+    (* SlideWorkflow v1.72: 字幕の言語 (SubtitleLanguage) の文。無ければ持たない *)
+    If[StringQ[sub] && StringTrim[sub] =!= "", <|"Subtitle" -> sub|>, <||>]]];
+
+(* SlideWorkflow v1.72: 言語の項目 (コード "ja" / "en" / "jv" ...。空 = 指定なし) *)
+$iSDTalkLanguageKeys = {"SpeechLanguage", "SourceLanguage", "SubtitleLanguage", "SlideLanguage", "SecondaryLanguage",
+  "OpeningSubtitle", "ClosingSubtitle"};
 
 iSDNormalizeTalk[talkIn_Association, id_String, entry_] := Module[{slides},
   slides = Lookup[talkIn, "Slides", Lookup[talkIn, "slides", {}]];
   If[! ListQ[slides], slides = {}];
   slides = MapIndexed[iSDNormalizeSlideEntry[#1, First[#2], entry] &, slides];
-  <|"Version" -> 1, "Id" -> id,
+  Join[<|"Version" -> 1, "Id" -> id,
     "Title" -> ToString @ Lookup[talkIn, "Title", Lookup[entry, "Title", ""]],
     "Language" -> ToString @ Lookup[talkIn, "Language", "Japanese"],
     "Opening" -> ToString @ Lookup[talkIn, "Opening", Lookup[talkIn, "opening", ""]],
     "Closing" -> ToString @ Lookup[talkIn, "Closing", Lookup[talkIn, "closing", ""]],
-    "Slides" -> slides|>];
+    "Slides" -> slides|>,
+    Association[Cases[KeyValueMap[List, KeyTake[talkIn, $iSDTalkLanguageKeys]],
+      {k_, v_String} /; StringTrim[v] =!= "" :> (k -> v)]]]];
 
 iSDTalkPathOf[entry_Association, key_String] := Module[{rel},
   rel = Lookup[entry, key, None];
@@ -568,11 +577,19 @@ iSDReleasableQ[entry_Association] :=
 iSDCeiling[] := With[{c = SourceVault`$SourceVaultSlideDeckReleaseCeiling},
   If[NumericQ[c], N[c], 0.5]];
 
+(* SlideWorkflow v1.72: language = 音声の言語 (原稿 text はその言語)、subtitleLanguage + 各枚の subtitle = 字幕。
+   どちらも無い登録 (v1.71 まで) では language / subtitleLanguage は "" で、VRCRealtime は今までどおり日本語で読む *)
 iSDTalkPayload[talk_Association] := <|
   "opening" -> Lookup[talk, "Opening", ""],
   "closing" -> Lookup[talk, "Closing", ""],
-  "slides" -> (<|"slide" -> #["Slide"], "title" -> #["Title"],
-      "seconds" -> #["Seconds"], "text" -> #["Text"]|> & /@
+  "language" -> ToString @ Lookup[talk, "SpeechLanguage", ""],
+  "sourceLanguage" -> ToString @ Lookup[talk, "SourceLanguage", ""],
+  "subtitleLanguage" -> ToString @ Lookup[talk, "SubtitleLanguage", ""],
+  "openingSubtitle" -> ToString @ Lookup[talk, "OpeningSubtitle", ""],
+  "closingSubtitle" -> ToString @ Lookup[talk, "ClosingSubtitle", ""],
+  "slides" -> (Join[<|"slide" -> #["Slide"], "title" -> #["Title"],
+      "seconds" -> #["Seconds"], "text" -> #["Text"]|>,
+      If[StringQ[Lookup[#, "Subtitle", None]], <|"subtitle" -> #["Subtitle"]|>, <||>]] & /@
     Select[Lookup[talk, "Slides", {}],
       AssociationQ[#] && StringTrim[ToString[Lookup[#, "Text", ""]]] =!= "" &])|>;
 
@@ -592,6 +609,9 @@ iSDEntryPayload[entry_Association] := <|
   "narrationInstructions" -> ToString @ Lookup[entry, "NarrationInstructions", ""],
   "talkURI" -> ToString @ Lookup[entry, "TalkURI", ""],
   "posterTalkURI" -> ToString @ Lookup[entry, "PosterTalkURI", ""],
+  (* SlideWorkflow v1.72: 多言語 Sliden ワールド用の段重ねの mp4 と段の言語 (上から) *)
+  "multiLangUrl" -> ToString @ Lookup[entry, "MultiLangURL", ""],
+  "multiLangTracks" -> Select[Flatten[{Lookup[entry, "MultiLangTracks", {}]}], StringQ],
   "format" -> iSDFormatOf[entry],
   "matchedBy" -> ToString @ Lookup[entry, "MatchedBy", ""],
   "privacyLevel" -> iSDPrivacyOf[entry],

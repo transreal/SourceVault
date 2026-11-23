@@ -3692,13 +3692,34 @@ iSVISDateInputString[d_?DateObjectQ] :=
   "DateObject[{" <> StringRiffle[ToString /@ Round[DateList[d][[;; 3]]], ", "] <> "}]";
 
 (* NotebookStatus ヘッダー (template 準拠の生 InputForm 文字列: 編集可能形) *)
+(* 2026-11-20 (所有者): 作業ノートの Deadline・Eventdate・NextReview は予定と忘失の防止に使う値。題名と本文に書かれた〆切・開催日を
+   SourceVault_taskdates.wl (弱結合) で読み、〆切が書かれていなければ重要度による既定の〆切。NextReview はその前日。
+   その層が無ければ Missing (従来のヘッダー)。 *)
+iSVISTaskDatesReadyQ[] := Names["SourceVault`SourceVaultTaskDates"] =!= {} &&
+  Length[DownValues[Evaluate[Symbol[Identity["SourceVault`SourceVaultTaskDates"]]]]] > 0 &&
+  Length[DownValues[Evaluate[Symbol[Identity["SourceVault`SourceVaultTaskHeaderString"]]]]] > 0;
+iSVISHeaderDates[title_String, body_String, defaultDeadline_] := Module[{td},
+  If[! iSVISTaskDatesReadyQ[], Return[Missing["TaskDatesUnavailable"]]];
+  td = Quiet @ Check[Symbol[Identity["SourceVault`SourceVaultTaskDates"]][<|"Title" -> title, "Body" -> body|>], $Failed];
+  If[! AssociationQ[td], Return[Missing["TaskDatesFailed"]]];
+  If[! DateObjectQ[td["Deadline"]] && DateObjectQ[defaultDeadline],
+    td = Join[td, Symbol[Identity["SourceVault`SourceVaultTaskDates"]][<|"Title" -> title, "Body" -> body,
+      "Deadline" -> DateObject[Take[DateList[defaultDeadline], 3]], "Eventdate" -> td["Eventdate"]|>]]];
+  td];
+iSVISHeaderDates[___] := Missing["TaskDatesUnavailable"];
+(* 2026-11-20 (所有者): 自動で作った題名はファイル名に付け、ヘッダーの Title は所有者が書くもの。Issue の題名はノートの
+   ファイル名 (yyyymmdd-<題名>.nb) と本文の Title セルにあるので、ヘッダーには書かない *)
+iSVISStatusInputString[title_String, id_String, dates_Association] :=
+  Symbol[Identity["SourceVault`SourceVaultTaskHeaderString"]][<|"Keywords" -> {"issue"},
+    "Deadline" -> Lookup[dates, "Deadline", Missing[]], "Eventdate" -> Lookup[dates, "Eventdate", Missing[]],
+    "NextReview" -> Lookup[dates, "NextReview", Quantity[1, "Weeks"]], "Status" -> "Todo",
+    "IssueRecordId" -> id|>];
 iSVISStatusInputString[title_String, id_String, deadline_] :=
   "<|\"Keywords\" -> {\"issue\"}" <>
   If[DateObjectQ[deadline],
     ", \"Deadline\" -> " <> iSVISDateInputString[deadline], ""] <>
   ", \"NextReview\" -> Quantity[1, \"Weeks\"], \"Status\" -> \"Todo\", " <>
-  "\"Title\" -> " <> ToString[title, InputForm] <>
-  ", \"IssueRecordId\" -> " <> ToString[id, InputForm] <> "|>";
+  "\"IssueRecordId\" -> " <> ToString[id, InputForm] <> "|>";
 
 (* 仕様作成タスクの枠付けセル本文。spec ワークフローへは svIssueBody タグの
    セル群が「要件」として渡るため、生の Issue 本文だけを渡すと起草役が本文を
@@ -3774,7 +3795,7 @@ iSVISActionButtonsCell[url_String, githubQ_: False, pkg_String: ""] :=
       Nothing]}, Spacer[6]]]], "Output"]];
 
 iSVISNotebookCells[rec_Association] := Module[
-  {id, title, origin, author, url, deadline, info},
+  {id, title, origin, author, url, deadline, info, hd},
   id = Lookup[rec, "IssueId", ""];
   title = Lookup[rec, "Title", "issue"];
   origin = Replace[Lookup[rec, "Origin", <||>], Except[_Association] -> <||>];
@@ -3784,6 +3805,9 @@ iSVISNotebookCells[rec_Association] := Module[
     DatePlus[Now, Quantity[
       If[iSVISNum[Lookup[rec, "Importance", 0.]] >= 0.7, 14, 30], "Days"]],
     $Failed];
+  (* 2026-11-20 (所有者): 作業ノートの Deadline・Eventdate・NextReview は予定と忘失の防止に使う値。題名と本文に書かれた〆切・開催日を
+     SourceVault_taskdates.wl (弱結合) で読み、書かれていなければ重要度による既定の〆切。NextReview はその前日 *)
+  hd = iSVISHeaderDates[title, iSVISStr[Lookup[rec, "Body", ""]], deadline];
   info = StringRiffle[{
     "由来: " <> iSVISStr[Lookup[origin, "Kind", ""]] <> "  " <> url,
     "作成者: " <> iSVISStr[Lookup[author, "Login", ""]] <>
@@ -3793,8 +3817,8 @@ iSVISNotebookCells[rec_Association] := Module[
       "  状態: " <> iSVISStr[Lookup[rec, "Status", ""]],
     "登録: " <> iSVISStr[Lookup[rec, "RegisteredAt", ""]] <>
       "  IssueId: " <> id}, "\n"];
-  {Cell[BoxData[iSVISStatusInputString[title, id,
-      If[DateObjectQ[deadline], deadline, Missing[]]]], "NotebookStatus"],
+  {Cell[BoxData[If[AssociationQ[hd], iSVISStatusInputString[title, id, hd],
+      iSVISStatusInputString[title, id, If[DateObjectQ[deadline], deadline, Missing[]]]]], "NotebookStatus"],
    Cell[title, "Title"],
    Cell[info, "Text"],
    iSVISActionButtonsCell[url,

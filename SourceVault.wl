@@ -685,7 +685,8 @@ SourceVaultExtractNotebookHeader::usage =
   "SourceVaultExtractNotebookHeader[path] \:306f notebook \:306e\:5148\:982d Input \:30bb\:30eb\:304b\:3089 Header Association \:3092 safe parse \:3059\:308b\:3002\n" <>
   "HoldComplete + whitelist \:3067 RunProcess / Get / Import \:7b49\:306e\:5371\:967a\:5f0f\:3092\:62d2\:5426\:3002\n" <>
   "\:623b\:308a\:5024: <|\"ParseStatus\" -> \"OK\" | \"MissingHeader\" | \"UnsafeExpression\",\n" <>
-  "  \"Keywords\" -> _, \"Deadline\" -> _, \"NextReview\" -> _, \"Status\" -> _|>";
+  "  \"Keywords\" -> _, \"Deadline\" -> _, \"NextReview\" -> _, \"Eventdate\" -> _, \"Status\" -> _|>\n" <>
+  "  (\"Eventdate\" is the date of the event the note is about; the header key \"EventDate\" is read too)";
 
 SourceVaultExtractNotebookTodos::usage =
   "SourceVaultExtractNotebookTodos[path] \:306f notebook \:5185\:306e TodoItem \:30b9\:30bf\:30a4\:30eb\:30bb\:30eb\:3092\:5217\:6319\:3059\:308b\:3002\n" <>
@@ -703,6 +704,8 @@ SourceVaultFindNotebooks::usage =
   "  \"NextReview\" -> \"Today\" | \"Overdue\" | \"ThisWeek\" | \"DueSoon\" | <|\"From\" -> _, \"To\" -> _|>\n" <>
   "    \:203b \"Today\" \:306f\:53b3\:5bc6\:306b\:4eca\:65e5\:306e\:307f\:3001\"ThisWeek\"/\"DueSoon\" \:306f\:4eca\:65e5\[PlusMinus]7\:65e5\:4ee5\:5185 (\:4eca\:9031\:5185\:306b\:904e\:304e\:305f\:671f\:9650\:5207\:308c\:3082\:542b\:3080\:304c\:9060\:3044\:904e\:53bb\:306f\:9664\:5916)\:3001\"Overdue\" \:306f\:671f\:9650\:5207\:308c\:5168\:90e8\n" <>
   "  \"Deadline\" -> \"Today\" | \"Overdue\" | \"ThisWeek\" | \"DueSoon\" | <|\"From\" -> _, \"To\" -> _|>\n" <>
+  "  \"Eventdate\" -> \"Today\" | \"ThisWeek\" (today to 7 days ahead) | \"Upcoming\" | \"Past\" | <|\"From\" -> _, \"To\" -> _|>\n" <>
+  "    (the date of the event the note is about; \"Scope\" -> \"Today\" also takes the notes whose event is today)\n" <>
   "  \"Keywords\" -> {_String, ...} | _String -- \:90e8\:5206\:4e00\:81f4\:691c\:7d22\n" <>
   "    \:691c\:7d22\:5bfe\:8c61: Header.Keywords + Header.Title + FileBaseName[Path] + \:89aa\:30d5\:30a9\:30eb\:30c0\:540d\n" <>
   "    \:8907\:6570\:6307\:5b9a\:6642\:306f OR (\:3069\:308c\:304b\:306b\:90e8\:5206\:4e00\:81f4\:3057\:305f\:3089\:8a72\:5f53)\n" <>
@@ -900,6 +903,7 @@ SourceVaultNewNotebook::usage =
   "  \"Date\" -> Automatic | _DateObject    -- Deadline/NextReview \:306b\:5165\:308c\:308b\:65e5\:4ed8 (\:65e2\:5b9a: \:4eca\:65e5)\n" <>
   "  \"Keywords\" -> Automatic | {_String..} | _String -- NotebookStatus \:306e Keywords \:3092\:7f6e\:63db (\:65e2\:5b9a Automatic \:306f\:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:5024\:3092\:7dad\:6301)\n" <>
   "  \"SessionID\" -> Automatic | _String -- NotebookStatus \:306b capture session \:3078\:306e\:9006\:30ea\:30f3\:30af (SessionID) \:3092\:57cb\:3081\:8fbc\:3080 (\:65e2\:5b9a Automatic \:306f\:8ffd\:52a0\:3057\:306a\:3044)\n" <>
+  "  \"Eventdate\" -> None | _DateObject | {y, m, d} -- the date of the event the note is about: adds \"Eventdate\"; the Deadline is that day (unless \"Date\" is given) and NextReview the day before (not before today)\n" <>
   "\:623b\:308a\:5024: <|\"Status\" -> \"OK\", \"Notebook\" -> _NotebookObject, \"Date\" -> _, \"StatusCellReplaced\" -> _Bool, \"Saved\" -> False, ...|>\:3002\n" <>
   "\:526f\:4f5c\:7528: \:65b0\:898f\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:30a6\:30a3\:30f3\:30c9\:30a6\:3092\:958b\:304f (\:672a\:4fdd\:5b58)\:3002\:30e6\:30fc\:30b6\:304c\:660e\:793a\:7684\:306b\:4fdd\:5b58\:3059\:308b\:307e\:3067\:30c7\:30a3\:30b9\:30af\:306b\:306f\:66f8\:304b\:306a\:3044\:3002";
 
@@ -8586,6 +8590,8 @@ iNotebookHeaderParseFromInitialization[path_String] :=
       "Keywords" -> Lookup[assoc, "Keywords", Missing["NotSpecified"]],
       "Deadline" -> Lookup[assoc, "Deadline", Missing["NotSpecified"]],
       "NextReview" -> Lookup[assoc, "NextReview", Missing["NotSpecified"]],
+      (* the event the note is about (2026-11-20; "Eventdate" is the owner's spelling, "EventDate" also read) *)
+      "Eventdate" -> Lookup[assoc, "Eventdate", Lookup[assoc, "EventDate", Missing["NotSpecified"]]],
       "Status" -> Lookup[assoc, "Status", Missing["NotSpecified"]],
       "RawHeader" -> assoc,
       "Source" -> "Initialization"|>
@@ -8618,6 +8624,8 @@ iNotebookHeaderParseFromBoxes[nbExpr_HoldComplete] :=
       "Keywords" -> Lookup[assoc, "Keywords", Missing["NotSpecified"]],
       "Deadline" -> Lookup[assoc, "Deadline", Missing["NotSpecified"]],
       "NextReview" -> Lookup[assoc, "NextReview", Missing["NotSpecified"]],
+      (* the event the note is about (2026-11-20; "Eventdate" is the owner's spelling, "EventDate" also read) *)
+      "Eventdate" -> Lookup[assoc, "Eventdate", Lookup[assoc, "EventDate", Missing["NotSpecified"]]],
       "Status" -> Lookup[assoc, "Status", Missing["NotSpecified"]],
       "RawHeader" -> assoc,
       "Source" -> "MakeExpression"|>
@@ -8670,6 +8678,8 @@ iNotebookHeaderParseFromStatusCellExpr[nbExpr_HoldComplete] :=
         Lookup[assoc, "Deadline", Missing["NotSpecified"]]],
       "NextReview" -> iSVResolveRelativeDate[
         Lookup[assoc, "NextReview", Missing["NotSpecified"]]],
+      (* the event the note is about (2026-11-20; "Eventdate" is the owner's spelling, "EventDate" also read) *)
+      "Eventdate" -> Lookup[assoc, "Eventdate", Lookup[assoc, "EventDate", Missing["NotSpecified"]]],
       "Status" -> Lookup[assoc, "Status", Missing["NotSpecified"]],
       "RawHeader" -> assoc,
       "Source" -> "NotebookStatus"|>
@@ -9118,11 +9128,16 @@ iComputeNotebookLint[record_Association] :=
     lints
   ];
 
+(* days from today to the Eventdate of a header (negative = past), or Missing (2026-11-20) *)
+iSVEventdateDays[header_, today_] := With[{ev = Lookup[If[AssociationQ[header], header, <||>], "Eventdate", Missing[]]},
+  If[DateObjectQ[ev] && DateObjectQ[today],
+    Round[(AbsoluteTime[DateObject[ev, "Day"]] - AbsoluteTime[DateObject[today, "Day"]])/86400.], Missing["NoEventdate"]]];
+
 (* === FindNotebooks: query match === *)
 
 iNotebookRecordMatchesQuery[record_Association, query_Association,
   today_] :=
-  Module[{ok = True, openTodoQ, nextReviewQ, deadlineQ, keywordsQ, titleQ,
+  Module[{ok = True, openTodoQ, nextReviewQ, deadlineQ, eventQ, evDays, keywordsQ, titleQ,
           searchTerms, statusQ,
           openCount, header, reviewState, deadlineState, kws, hdrStatus,
           scopeQ},
@@ -9239,12 +9254,26 @@ iNotebookRecordMatchesQuery[record_Association, query_Association,
        \:300c\:30ec\:30d3\:30e5\:30fc\:4e0d\:8981\:300d\:3068\:307f\:306a\:3057\:542b\:3081\:306a\:3044 (\:30d5\:30a9\:30eb\:30c0\:540d/\:30d5\:30a1\:30a4\:30eb\:540d\:306b
        \:4eca\:65e5\:306e\:65e5\:4ed8\:3092\:542b\:3080\:3082\:306e\:306f\:5225\:9014\:6551\:3046)\:3002
        OpenTodos \:7b49\:306e\:4ed6\:30aa\:30d7\:30b7\:30e7\:30f3\:3068 AND \:3067\:7d44\:307f\:5408\:308f\:305b\:53ef\:80fd\:3002 *)
+    (* Eventdate (2026-11-20): "Today" | "ThisWeek" (today to 7 days ahead) | "Upcoming" (today or later) |
+       "Past" | <|"From" -> _, "To" -> _|> *)
+    eventQ = Lookup[query, "Eventdate", Missing[]];
+    If[ok && !MissingQ[eventQ],
+      evDays = iSVEventdateDays[header, today];
+      Which[
+        AssociationQ[eventQ], If[!iSVDateInRange[Lookup[header, "Eventdate", Missing[]], eventQ], ok = False],
+        eventQ === "Today", If[evDays =!= 0, ok = False],
+        MemberQ[{"ThisWeek", "DueSoon"}, eventQ], If[!(IntegerQ[evDays] && 0 <= evDays <= 7), ok = False],
+        eventQ === "Upcoming", If[!(IntegerQ[evDays] && evDays >= 0), ok = False],
+        eventQ === "Past", If[!(IntegerQ[evDays] && evDays < 0), ok = False],
+        True, Null]];
+
     scopeQ = Lookup[query, "Scope", Missing[]];
     If[ok && !MissingQ[scopeQ],
       Switch[scopeQ,
         "Today",
           If[!(reviewState === "DueToday" ||
                deadlineState === "DueToday" ||
+               iSVEventdateDays[header, today] === 0 ||
                iSVPathHasTodayDate[Lookup[record, "Path", ""], today]),
             ok = False],
         _, Null]];
@@ -9282,11 +9311,14 @@ Options[SourceVaultNewNotebook] = {
   "Title" -> Automatic,
   "Date" -> Automatic,
   "Keywords" -> Automatic,
-  "SessionID" -> Automatic
+  "SessionID" -> Automatic,
+  (* the date of the event the note is about (2026-11-20): a DateObject / {y, m, d} adds "Eventdate"; with it the
+     Deadline is that day too (unless "Date" is given) and NextReview the day before (not before today) *)
+  "Eventdate" -> None
 };
 
 SourceVaultNewNotebook[opts:OptionsPattern[]] :=
-  Module[{tmplPath, title, theDate, dateList, keywords, sessionId,
+  Module[{tmplPath, title, theDate, dateList, keywords, sessionId, evList, reviewList,
           nbExpr, replaced, found = False, newNb, nbObj},
     iEnsureRoots[];
     (* \:751f\:6210\:65e5 (\:65e2\:5b9a: \:4eca\:65e5) *)
@@ -9326,6 +9358,13 @@ SourceVaultNewNotebook[opts:OptionsPattern[]] :=
        NotebookStatus association, so a found notebook can recover its session
        events. Automatic (default) adds nothing. *)
     sessionId = OptionValue["SessionID"];
+    evList = With[{e = OptionValue["Eventdate"]}, Which[
+      DateObjectQ[e], Round /@ Take[DateList[e], 3],
+      MatchQ[e, {_Integer, _Integer, _Integer, ___}], Take[e, 3],
+      True, None]];
+    If[ListQ[evList] && OptionValue["Date"] === Automatic, dateList = evList];
+    reviewList = If[ListQ[evList],
+      Take[DateList[Max[AbsoluteTime[Take[DateList[], 3]], AbsoluteTime[evList] - 86400]], 3], dateList];
 
     (* \:30c6\:30f3\:30d7\:30ec\:30fc\:30c8\:3092\:5f0f\:3068\:3057\:3066\:8aad\:307f\:8fbc\:3080 (\:526f\:4f5c\:7528\:306a\:3057) *)
     nbExpr = Quiet[Import[tmplPath, "Notebook"]]; (* :PolicyWaiver: PRIV-NB-READ 新しいノートの雛形 (既定は $packageDirectory/Templates の同梱テンプレート) を複製元として読む。利用者のデータではない *)
@@ -9350,13 +9389,16 @@ SourceVaultNewNotebook[opts:OptionsPattern[]] :=
                \:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0\:306f\:885d\:7a81\:3057\:306a\:3044 ASCII \:30c8\:30fc\:30af\:30f3\:3002 *)
             newAssoc["Deadline"]   = "@@SV_DEADLINE_DATE@@";
             newAssoc["NextReview"] = "@@SV_NEXTREVIEW_DATE@@";
+            If[ListQ[evList], newAssoc = Association[Normal[KeyDrop[newAssoc, {"Eventdate", "EventDate"}]] /.
+              ("Deadline" -> d_) :> Sequence["Deadline" -> d, "Eventdate" -> "@@SV_EVENT_DATE@@"]]];
             If[MatchQ[keywords, {___String}], newAssoc["Keywords"] = keywords];
             If[StringQ[sessionId], newAssoc["SessionID"] = sessionId];
             inputStr = ToString[newAssoc, InputForm];
             (* \:30d7\:30ec\:30fc\:30b9\:30db\:30eb\:30c0 (\:30af\:30a9\:30fc\:30c8\:4ed8\:304d\:6587\:5b57\:5217\:3068\:3057\:3066\:51fa\:529b\:3055\:308c\:308b) \:3092\:5b9f DateObject \:5165\:529b\:5f0f\:306b *)
             inputStr = StringReplace[inputStr, {
               "\"@@SV_DEADLINE_DATE@@\""   -> iSVDateInputString[dateList],
-              "\"@@SV_NEXTREVIEW_DATE@@\"" -> iSVDateInputString[dateList]}];
+              "\"@@SV_NEXTREVIEW_DATE@@\"" -> iSVDateInputString[reviewList],
+              "\"@@SV_EVENT_DATE@@\"" -> If[ListQ[evList], iSVDateInputString[evList], "None"]}];
             found = True;
             (* \:5165\:529b\:5f0f\:6587\:5b57\:5217\:3092 box \:5316 (\:8a55\:4fa1\:305b\:305a)\:3002\:5931\:6557\:6642\:306f\:5143\:306e content \:3092\:6b8b\:3059 *)
             newBoxes = Quiet @ Check[
@@ -10063,6 +10105,7 @@ Options[SourceVaultFindNotebooks] = {
   "OpenTodos" -> Missing[],
   "NextReview" -> Missing[],
   "Deadline" -> Missing[],
+  "Eventdate" -> Missing[],
   "Keywords" -> Missing[],
   "Title" -> Missing[],
   "Status" -> Missing[],
@@ -10078,6 +10121,7 @@ SourceVaultFindNotebooks[opts:OptionsPattern[]] :=
       "OpenTodos" -> OptionValue["OpenTodos"],
       "NextReview" -> OptionValue["NextReview"],
       "Deadline" -> OptionValue["Deadline"],
+      "Eventdate" -> OptionValue["Eventdate"],
       "Keywords" -> OptionValue["Keywords"],
       "Title" -> OptionValue["Title"],
       "Status" -> OptionValue["Status"],
@@ -10141,6 +10185,7 @@ Options[SourceVaultFindTodos] = {
   "OpenTodos" -> True,
   "NextReview" -> Missing[],
   "Deadline" -> Missing[],
+  "Eventdate" -> Missing[],
   "Keywords" -> Missing[],
   "Title" -> Missing[],
   "Status" -> Missing[],
@@ -10157,6 +10202,7 @@ SourceVaultFindTodos[opts:OptionsPattern[]] :=
       "OpenTodos" -> OptionValue["OpenTodos"],
       "NextReview" -> OptionValue["NextReview"],
       "Deadline" -> OptionValue["Deadline"],
+      "Eventdate" -> OptionValue["Eventdate"],
       "Keywords" -> OptionValue["Keywords"],
       "Title" -> OptionValue["Title"],
       "Status" -> OptionValue["Status"],
@@ -11306,7 +11352,7 @@ iSVResolveReviewDate[value_, mtime_] :=
 
 (* record \:304c upcoming \:6761\:4ef6\:306b\:30de\:30c3\:30c1\:3059\:308b\:304b\:5224\:5b9a *)
 iSVUpcomingMatches[record_Association, today_, deadline_, includeOverdue_] :=
-  Module[{header, path, mtime, dl, nr, dlDate, nrDate},
+  Module[{header, path, mtime, dl, nr, dlDate, nrDate, evDate},
     header = Lookup[record, "Header", <||>];
     path = Lookup[record, "Path", Lookup[record, "OriginalPath", ""]];
 
@@ -11321,8 +11367,14 @@ iSVUpcomingMatches[record_Association, today_, deadline_, includeOverdue_] :=
     nr = Lookup[header, "NextReview", Missing[]];
     dlDate = iSVResolveReviewDate[dl, mtime];
     nrDate = iSVResolveReviewDate[nr, mtime];
+    (* the event the note is about (2026-11-20): in the window, or past and open with IncludeOverdue *)
+    evDate = iSVResolveReviewDate[Lookup[header, "Eventdate", Missing[]], mtime];
 
     Or[
+      Head[evDate] === DateObject &&
+        Quiet @ Check[(evDate >= today) && (evDate <= deadline), False],
+      TrueQ[includeOverdue] && Head[evDate] === DateObject &&
+        Quiet @ Check[evDate < today, False],
       (* Deadline \:304c\:671f\:9593\:5185 *)
       Head[dlDate] === DateObject &&
         Quiet @ Check[
@@ -11434,7 +11486,7 @@ Options[SourceVaultUpcomingSchedule] = {
 
   (* PromptRouter / notebook management extension (spec v11 6.1) *)
   "OpenTodos" -> Missing[],            (* True | False | Missing[] *)
-  "DateField" -> "Both",               (* "Both" | "Deadline" | "NextReview" *)
+  "DateField" -> "Both",               (* "Both" | "Deadline" | "NextReview" | "Eventdate" *)
   "FilterSpec" -> Missing[],           (* structured predicate Association, spec 5.4.2 *)
   "OutputFormat" -> "Dataset"          (* "Dataset" | "Rows" | "Records" *)
 };
@@ -11465,7 +11517,7 @@ iSVLightRecord[rec_] :=
       "Title" -> Lookup[rec, "Title", Missing[]],
       "Header" -> Module[{h = Lookup[rec, "Header", <||>]},
         If[AssociationQ[h],
-          KeyTake[h, {"Deadline", "NextReview", "Keywords",
+          KeyTake[h, {"Deadline", "Eventdate", "NextReview", "Keywords",
             "Status", "Title"}],
           <||>]],
       "OpenTodoCount" -> Lookup[rec, "OpenTodoCount", 0],
@@ -11613,6 +11665,9 @@ SourceVaultUpcomingSchedule[opts:OptionsPattern[]] :=
               Missing[]], iSVMTimeOf[Lookup[#, "Path",
                 Lookup[#, "OriginalPath", ""]]]]] ===
             DateObject &],
+      "Eventdate",
+        Select[todoFiltered,
+          DateObjectQ[Lookup[Lookup[#, "Header", <||>], "Eventdate", Missing[]]] &],
       _, todoFiltered];
 
     (* (6) FilterSpec (spec 5.4.2 / 5.4.3): a structured,
@@ -12004,6 +12059,10 @@ iSVRowFromRecord[record_Association, today_, refresh_, fallback_,
       Lookup[header, "Deadline", Missing[]], mtime];
     nrResolved = iSVResolveReviewDate[
       Lookup[header, "NextReview", Missing[]], mtime];
+    (* the event the note is about (2026-11-20): it sorts with the deadline and the review *)
+    With[{ev = iSVResolveReviewDate[Lookup[header, "Eventdate", Missing[]], mtime]},
+      If[Head[ev] === DateObject,
+        dlResolved = If[Head[dlResolved] === DateObject, If[AbsoluteTime[ev] < AbsoluteTime[dlResolved], ev, dlResolved], ev]]];
 
     sortKey = Which[
       Head[dlResolved] === DateObject &&
@@ -12017,6 +12076,8 @@ iSVRowFromRecord[record_Association, today_, refresh_, fallback_,
       row = <|
         "Deadline" -> iSVStyledDate[
           Lookup[header, "Deadline", Missing[]], mtime],
+        "Eventdate" -> If[DateObjectQ[Lookup[header, "Eventdate", Missing[]]],
+          iSVStyledDate[Lookup[header, "Eventdate", Missing[]], mtime], ""],
         "NextReview" -> iSVStyledDate[
           Lookup[header, "NextReview", Missing[]], mtime],
         "Title" -> iSVTitleButtonSym[
@@ -12286,7 +12347,7 @@ iSVFormatScheduleDataset[records_List, today_, refresh_, fallback_,
       records];
     rows = ReverseSortBy[rows, #["_SortKey"] &];
     rows = Map[KeyDrop[#, "_SortKey"] &, rows];
-    cols = {"Deadline", "NextReview", "Title", "Dir",
+    cols = {"Deadline", "Eventdate", "NextReview", "Title", "Dir",
             "OpenTodos", "Status", "Summary", "Publishable"};
     body = Map[
       Function[r, Map[Lookup[r, #, ""] &, cols]],
@@ -16242,6 +16303,9 @@ With[{svDir = Quiet @ Check[DirectoryName[$InputFileName], ""]},
           ロード済み) に依存し、core の読み書きから弱結合で呼ばれるので core の直後。 *)
        "SourceVault_atrest.wl",
        "SourceVault_simrun.wl",
+       (* 作業ノートの 3 つの日付 (Deadline・Eventdate・NextReview) の抽出とヘッダー (2026-11-20)。依存の無い純粋な関数なので早い位置。
+          mailagenda・issues・series・todo が弱結合で呼び、SystemDoctor の検査 "TaskDates" をここで登録する (diagnostics は先の段で読み込み済み)。 *)
+       "SourceVault_taskdates.wl",
        (* ローカル資産の解決層 (音声 / 視覚)。core の root 解決にすら依存せず
           $packageDirectory と LOCALAPPDATA だけを見るので、どの位置でもよい。
           利用側 (VRCRealtime の private TTS / 追尾) が起動時に問い合わせる。 *)

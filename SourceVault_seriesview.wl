@@ -208,8 +208,8 @@ iSVSVOpenMail[rid_String] := Which[
   Length[DownValues[SourceVault`SourceVaultMailAgendaOpen]] > 0, SourceVault`SourceVaultMailAgendaOpen[rid],
   Length[DownValues[SourceVault`SourceVaultMailShowBody]] > 0, SourceVault`SourceVaultMailShowBody[rid],
   True, Null];
-iSVSVOpenPath[path_String] := If[FileExistsQ[path], SystemOpen[path],
-  If[TrueQ[$Notebooks], Quiet @ MessageDialog["\:30ce\:30fc\:30c8\:30d6\:30c3\:30af\:304c\:898b\:3064\:304b\:308a\:307e\:305b\:3093: " <> path]]];
+(* a notebook path of the ledger: found again where it is now ($onWork, or archived in $offWork/<year>) *)
+iSVSVOpenPath[path_String] := If[FileExistsQ[path], SystemOpen[path], SourceVault`SourceVaultWorkPathOpen[path]];
 iSVSVOpenTodo[id_String] := If[Names["SourceVault`SourceVaultTodoShowSummary"] =!= {},
   Symbol[Identity["SourceVault`SourceVaultTodoShowSummary"]][id]];
 

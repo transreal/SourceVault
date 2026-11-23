@@ -57,7 +57,8 @@ todo id (notebook or standalone), or Missing[\"NotFound\"].";
 SourceVaultNewTodo::usage =
   "SourceVaultNewTodo[spec] creates a standalone todo (not belonging to any \
 notebook). spec keys: \"Title\" (required), \"Description\", \"Deadline\" \
-(DateObject | \"yyyy-mm-dd\" | None), \"PrivacyLevel\" (default 1.0 fail-\
+(DateObject | \"yyyy-mm-dd\" | None), \"EventDate\" (or \"Eventdate\": the date of \
+the event the todo is about; the agenda places a todo without a deadline on it), \"PrivacyLevel\" (default 1.0 fail-\
 safe), \"Source\" (default \"manual\"), \"MailRecordId\", \"LinkKind\"/\
 \"LinkId\" (attach to an existing summary), \"Recur\". \
 SourceVaultNewTodo[title] is shorthand. Returns <|\"Status\",\"TodoId\",...|>.";
@@ -886,6 +887,9 @@ iSVTDEffectiveItem[item_Association, nowAbs_] :=
       "StatusSource" -> "Item",
       "Deadline" -> If[DateObjectQ[deadline], deadline, Missing["None"]],
       "DeadlineSource" -> dlSrc,
+      (* the date of the event the todo is about (2026-11-20) *)
+      "EventDate" -> With[{e = iSVTDToDate[Lookup[item, "EventDate", Missing[]]]},
+        If[DateObjectQ[e], e, Missing["None"]]],
       "Recur" -> With[{r = Lookup[item, "Recur", Missing[]]},
         If[AssociationQ[r], r, Missing["None"]]],
       "DoneAt" -> Lookup[item, "DoneAt", Missing["None"]],
@@ -1045,6 +1049,9 @@ SourceVaultNewTodo[spec_Association] :=
         If[StringQ[a] && a =!= "", a, iSVTDIsoNow[]]]|>;
     If[StringQ[dl], rec["Deadline"] = dl;
       rec["DeadlineSource"] = "Explicit"];
+    (* the date of the event the todo is about (2026-11-20; "Eventdate" is the owner's spelling of the notebook header) *)
+    With[{ev = iSVTDIso[Lookup[spec, "EventDate", Lookup[spec, "Eventdate", Missing[]]]]},
+      If[StringQ[ev], rec["EventDate"] = ev]];
     With[{pv = Lookup[spec, "Priority", Missing[]]},
       If[NumericQ[pv], rec["Priority"] = iSVTDClip01[pv]]];
     passKeys = {"MailRecordId", "LinkKind", "LinkId", "Recur"};
@@ -1574,8 +1581,12 @@ SourceVaultTodoAgendaItems[OptionsPattern[]] :=
         <|"Kind" -> "Todo",
           "TodoId" -> Lookup[r, "TodoId", ""],
           "Label" -> Lookup[r, "Title", "(todo)"],
-          "DueT" -> With[{a = iSVTDDateAbs[Lookup[r, "Deadline", Missing[]]]},
-            If[NumberQ[a], a, Missing["None"]]],
+          (* the deadline, else the date of the event (2026-11-20): a todo about a meeting is due on its day *)
+          "DueT" -> With[{a = iSVTDDateAbs[Lookup[r, "Deadline", Missing[]]],
+              e = iSVTDDateAbs[Lookup[r, "EventDate", Missing[]]]},
+            Which[NumberQ[a], a, NumberQ[e], e, True, Missing["None"]]],
+          "EventT" -> With[{e = iSVTDDateAbs[Lookup[r, "EventDate", Missing[]]]},
+            If[NumberQ[e], e, Missing["None"]]],
           "HasDeadline" ->
             DateObjectQ[Lookup[r, "Deadline", Missing[]]],
           "State" -> "Open",

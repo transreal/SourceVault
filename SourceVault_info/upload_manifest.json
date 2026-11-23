@@ -61,7 +61,8 @@
 		"SourceVault_integrity.wl",
 		"SourceVault_provenance.wl",
 		"SourceVault_seriesview.wl",
-		"SourceVault_series.wl"
+		"SourceVault_series.wl",
+		"SourceVault_taskdates.wl"
 	],
 	"directories":[
 		"SourceVault_info",

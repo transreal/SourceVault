@@ -390,8 +390,9 @@ of a REMOTE catalog-workflow run (enqueued with SourceVaultEnqueueWorkflowRun \
 and executed on another PC). The executing PC publishes the external job's \
 output.wxf into the shared vault (autotrigger/results/) when it finishes; this \
 imports it from any PC. Returns the workflow result (e.g. a View), \
-Failure[\"CatalogRunFailed\", ...] when the run failed (Reason/MachineTag/\
-FinishedAtUTC), Missing[\"StillRunning\"|\"ResultSyncing\"|\"NotFinished\"|\
+Failure[\"CatalogRunFailed\", ...] when the run failed or the executing PC could \
+not submit it (Reason/MachineTag/FinishedAtUTC; a submit failure has Reason \
+\"SubmitFailed\" with \"Detail\" and, when given, a Japanese \"Message\"), Missing[\"StillRunning\"|\"ResultSyncing\"|\"NotFinished\"|\
 \"NotFound\", slot] otherwise. The requester's notebook receives an evaluatable \
 cell with this call automatically when the run completes (see \
 SourceVaultAutoTriggerWatchRemoteRun).";
@@ -403,7 +404,8 @@ the merged run logs and, when the executing PC publishes a terminal record, \
 writes into the originating notebook (meta \"Notebook\" -> NotebookObject) via \
 the NBAccess final-action queue (WriteNotebookCell; single committer, CellPrint \
 fallback): on completion an evaluatable SourceVaultRemoteWorkflowResult[slot] \
-cell, on failure / watch timeout ($iSVATRemoteWatchTTLSeconds, default 7200s) a \
+cell, on failure (including a submit failure on the executing PC, with its \
+reason and message) / watch timeout ($iSVATRemoteWatchTTLSeconds, default 7200s) a \
 red report cell. meta keys: \"Notebook\", \"Slug\", \"MachineTag\". The \
 workflow-list panel registers this automatically on remote \"\:5b9f\:884c\". \
 Watches are session-local (an FE restart drops them; the result itself is still \
@@ -2611,6 +2613,49 @@ SourceVaultAutoTriggerRunningWorkflows[] :=
 iSVATCatalogTargetQ[job_] :=
   Lookup[Lookup[job, "Target", <||>], "TargetType", ""] === "CatalogWorkflow";
 
+(* terminal run records of a catalog slot, as the requester reads them:
+   CatalogRunCompleted / CatalogRunFailed from the executor's finalize, and
+   the dispatch-time "Failed" (SubmitFailed / NoSlug) that
+   SourceVaultAutoTriggerDispatchCatalogRuns appends when the job never
+   started. 2026-11-20: the latter was not read as terminal, so the
+   requester's watch waited until $iSVATRemoteWatchTTLSeconds and
+   SourceVaultRemoteWorkflowResult said NotFinished. The record stays
+   "Failed" (not CatalogRunFailed): "Failed" is in iSVATCompletedSlots, so the
+   slot is not re-dispatched, and the reader-side fix also covers records
+   written by an executor PC that still runs the older code. *)
+iSVATCatalogFailedQ[rec_Association] :=
+  MemberQ[{"CatalogRunFailed", "Failed"}, Lookup[rec, "Status", ""]];
+iSVATCatalogFailedQ[_] := False;
+iSVATCatalogTerminalQ[rec_Association] :=
+  Lookup[rec, "Status", ""] === "CatalogRunCompleted" || iSVATCatalogFailedQ[rec];
+iSVATCatalogTerminalQ[_] := False;
+
+(* what SourceVaultRunWorkflowAsync returned instead of Submitted: the Status,
+   with the Reason when there is one (ClaudeSubmitExternalHeldExprJob returns
+   <|"Status" -> "Failed", "Reason" -> ...|>) *)
+iSVATSubmitFailDetail[res_] := Which[
+  AssociationQ[res],
+    With[{st = ToString[Lookup[res, "Status", ""]], rs = Lookup[res, "Reason", Missing[]]},
+      If[StringQ[rs] && rs =!= "", st <> ": " <> rs, st]],
+  (* _Failure, not FailureQ: FailureQ[$Failed] is True *)
+  MatchQ[res, _Failure], "Failure[" <> ToString[First[res]] <> "]",
+  True, ToString[Short[res, 2]]];
+
+(* the Japanese sentence of the return ("Message": RuntimeUnavailable,
+   LoadDenied, a Failure's message), to show in the requester's failure cell *)
+iSVATSubmitFailMessage[res_] := Module[{m = Which[
+    AssociationQ[res], Lookup[res, "Message", Missing[]],
+    (* a Failure: its "Message" key first (f["Message"] ignores the key and gives
+       a generic English sentence unless there is a "MessageTemplate") *)
+    MatchQ[res, _Failure],
+      With[{a = If[Length[res] >= 2 && AssociationQ[res[[2]]], res[[2]], <||>]},
+        Which[
+          StringQ[Lookup[a, "Message", Missing[]]], a["Message"],
+          KeyExistsQ[a, "MessageTemplate"], Quiet @ Check[res["Message"], Missing[]],
+          True, Missing[]]],
+    True, Missing[]]},
+  If[StringQ[m] && StringTrim[m] =!= "", <|"Message" -> m|>, <||>]];
+
 (* run the slug on THIS machine, non-blocking, via the existing external
    executor. Weak ref: SourceVaultRunWorkflowAsync lives in workflowregistry
    (loaded as part of SourceVault); reference it by full name at run time. *)
@@ -2645,12 +2690,22 @@ iSVATExecuteCatalogWorkflow[job_Association] :=
         "FinishedAtUTC" -> iSVATUTCNow[]|>]];
     (* Symbol[Identity[...]], not a literal Symbol["Ctx`name"]: a literal lookup that once came back unevaluated stays unevaluated on every later call (WL 15, 2026-10-30) *)
     runFn = Symbol[Identity["SourceVault`SourceVaultRunWorkflowAsync"]];
-    res = Quiet @ Check[runFn[slug, form], $Failed];
+    (* 2026-11-20: 投入前の読み込み検査はしない ("LoadPrecheck" -> False)。ここで止めると run 記録が "Failed" になり、
+       依頼元の見張り (CatalogRunCompleted / CatalogRunFailed を待つ) に届かず時間切れまで待たせる。子が検査し、
+       止まれば結果 (LoadFailed + 日本語の Message・NextExpression) が完了として依頼元に届く。
+       同日、投入失敗の "Failed" も依頼元が終了 (失敗) と読むように直した (iSVATCatalogFailedQ)。ここを True に戻すかは未定 *)
+    (* 2026-11-20: 結果の封印もしない ("Confidential" -> False)。封印はこの PC の鍵なので、共有の保管先へ写した結果を
+       依頼元の PC が復号できない。別 PC の結果は以前どおり平文で写る (残りの課題) *)
+    res = Quiet @ Check[runFn[slug, form, "LoadPrecheck" -> False, "Confidential" -> False], $Failed];
+    (* 投入そのものの失敗。run 記録は "Failed" のまま (iSVATCompletedSlots に入るので再配車しない)。
+       2026-11-20: 依頼元の見張り・SourceVaultRemoteWorkflowResult はこの記録も終了 (失敗) と読む (iSVATCatalogFailedQ)。
+       理由が読めるよう、戻りの Status に Reason を添えて "Detail" に、日本語の "Message" があれば記録にも残す *)
     If[!AssociationQ[res] || Lookup[res, "Status", ""] =!= "Submitted",
-      Return[<|"Status" -> "Failed", "Reason" -> "SubmitFailed",
-        "Detail" -> If[AssociationQ[res], Lookup[res, "Status", ""], ToString[res]],
+      Return[Join[<|"Status" -> "Failed", "Reason" -> "SubmitFailed",
+        "Detail" -> iSVATSubmitFailDetail[res],
         "Slug" -> slug, "Backend" -> "ExternalExecutor",
-        "StartedAtUTC" -> started, "FinishedAtUTC" -> iSVATUTCNow[]|>]];
+        "StartedAtUTC" -> started, "FinishedAtUTC" -> iSVATUTCNow[]|>,
+        iSVATSubmitFailMessage[res]]]];
     (* track the external job until it finishes, so completion/failure can be
        PUBLISHED to the shared vault (the requester may be another PC that
        cannot read this machine's local ClaudeRuntime job dir) *)
@@ -2932,16 +2987,24 @@ SourceVaultRemoteWorkflowResult[slot_String] :=
         Failure["ResultUnreadable", <|"Path" -> shared|>]]]];
     runs = iSVATReadRuns[];
     recs = Select[runs, Lookup[#, "DispatchSlotKey", ""] === slot &];
-    term = SelectFirst[recs,
-      MemberQ[{"CatalogRunCompleted", "CatalogRunFailed"},
-        Lookup[#, "Status", ""]] &, Missing[]];
+    (* the dispatch-time "Failed" (SubmitFailed) is terminal too (iSVATCatalogTerminalQ) *)
+    term = SelectFirst[recs, iSVATCatalogTerminalQ, Missing[]];
     Which[
-      AssociationQ[term] && term["Status"] === "CatalogRunFailed",
-        Failure["CatalogRunFailed", <|
+      AssociationQ[term] && iSVATCatalogFailedQ[term],
+        Failure["CatalogRunFailed", Join[<|
           "Reason" -> Lookup[term, "Reason", "?"],
           "MachineTag" -> Lookup[term, "MachineTag", "?"],
           "Slug" -> Lookup[term, "Slug", "?"],
-          "FinishedAtUTC" -> Lookup[term, "FinishedAtUTC", "?"]|>],
+          "FinishedAtUTC" -> Lookup[term, "FinishedAtUTC", "?"]|>,
+          KeyTake[term, {"Detail", "Message"}],
+          (* show the Japanese Message as the failure's message (f["Message"] and
+             the display): without "MessageTemplate" it is a generic English
+             sentence. Passed as a parameter, so backticks in it (context names)
+             are not read as template slots *)
+          With[{m = Lookup[term, "Message", Missing[]]},
+            If[StringQ[m] && StringTrim[m] =!= "",
+              <|"MessageTemplate" -> "`Message`",
+                "MessageParameters" -> <|"Message" -> m|>|>, <||>]]]],
       AssociationQ[term],   (* completed but result file not synced yet *)
         Missing["ResultSyncing", slot],
       AnyTrue[recs, Lookup[#, "Status", ""] === "CatalogRunSubmitted" &],
@@ -2978,11 +3041,11 @@ iSVATPollRemoteWatches[] :=
     runs = iSVATReadRuns[];
     KeyValueMap[
       Function[{slot, w},
-        Module[{recs, term, age, slug, mtag, cell, summary},
+        Module[{recs, term, age, slug, mtag, cell, summary, reason, msg},
           recs = Select[runs, Lookup[#, "DispatchSlotKey", ""] === slot &];
-          term = SelectFirst[recs,
-            MemberQ[{"CatalogRunCompleted", "CatalogRunFailed"},
-              Lookup[#, "Status", ""]] &, Missing[]];
+          (* 2026-11-20: the dispatch-time "Failed" (SubmitFailed: the job was never
+             started) is terminal too; before, it fell through to the watch timeout *)
+          term = SelectFirst[recs, iSVATCatalogTerminalQ, Missing[]];
           age = AbsoluteTime[] - Lookup[w, "StartedAbs", AbsoluteTime[]];
           slug = ToString[Lookup[w, "Slug", "?"]];
           mtag = ToString[Lookup[w, "MachineTag", "?"]];
@@ -2996,13 +3059,21 @@ iSVATPollRemoteWatches[] :=
                 "Input"];
               iSVATNotifyRequester[cell, w["Notebook"], summary];
               AppendTo[finalized, slot],
-            AssociationQ[term],   (* CatalogRunFailed *)
+            AssociationQ[term],   (* CatalogRunFailed, or the dispatch-time Failed (SubmitFailed) *)
+              (* reason = Reason (Detail): e.g. "SubmitFailed (RuntimeUnavailable)";
+                 the record's Japanese "Message" (when present) gets its own line *)
+              reason = ToString[Lookup[term, "Reason", "?"]] <>
+                With[{d = Lookup[term, "Detail", Missing[]]},
+                  If[StringQ[d] && d =!= "", " (" <> d <> ")", ""]];
+              msg = Lookup[term, "Message", Missing[]];
               summary = "remote workflow FAILED: " <> slug <> " @ " <> mtag <>
-                " (" <> ToString[Lookup[term, "Reason", "?"]] <> ")";
+                " (" <> reason <> ")";
               cell = Cell[
                 "\:26a0 \:30ea\:30e2\:30fc\:30c8\:5b9f\:884c\:5931\:6557: " <> slug <>
                   " @ " <> mtag <>
-                  "\n\:7406\:7531: " <> ToString[Lookup[term, "Reason", "?"]] <>
+                  "\n\:7406\:7531: " <> reason <>
+                  If[StringQ[msg] && StringTrim[msg] =!= "",
+                    "\n\:8aac\:660e: " <> msg, ""] <>
                   "\n\:6642\:523b: " <> ToString[Lookup[term, "FinishedAtUTC", "?"]] <>
                   "\n\:8a73\:7d30: SourceVaultRemoteWorkflowResult[\"" <> slot <> "\"]",
                 "Text", FontColor -> RGBColor[0.7, 0.1, 0.1]];
